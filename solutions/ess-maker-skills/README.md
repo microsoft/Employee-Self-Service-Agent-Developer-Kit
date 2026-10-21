@@ -225,6 +225,21 @@ native identity before dependent native reads, and independently maps a supplied
 Dataverse URL to the Power Platform environment. Legacy/custom-engine scopes and
 existing Workday DA lifecycle profile membership remain unchanged.
 
+Standalone onboarding can also use `--da-target-url <copilot-studio-url>
+--agent-schema-name <expected-schema> --validation-realm <dev|test|prod>`
+with `--scope full`, without `.local/config.json`. This ephemeral target uses
+the same live identity/realm checks and result contract; it never reads or
+replaces saved configuration. Both platform installers/bootstraps forward these
+inputs and bypass legacy Dataverse discovery/fetch. See
+[standalone DA onboarding](../../setup/README.md#standalone-da-onboarding).
+Existing selected DA configurations also skip the installer's Dataverse
+snapshot fetch. Maker `/flightcheck` remains local-only; standalone full does
+not widen maker scope or change Connect completion.
+DA local-only results carry additive `diagnostic_only: true` /
+`contract.diagnosticOnly: true` and explicitly say deployment readiness was
+not assessed in HTML/terminal output. Diagnostic statuses/exits and legacy
+local reports are unchanged.
+
 `scripts/flightcheck/da_contract.py` defines the DA coverage inventory and
 pure applicability planning. It separates existing evaluators, observations,
 manual requirements, DA-review gaps, conditional diagnostics and legacy-only
@@ -365,12 +380,12 @@ references. Telemetry adds only readiness enums and coverage counts, not evidenc
 details, references or revision fingerprints. Approval is scoped to the selected
 realm, not cross-realm promotion or organizational GA sign-off.
 
-This remains an incremental implementation; entrypoint alignment and integrated
-verification are subsequent work packages. DA full
+This remains an incremental implementation; integrated verification is the
+remaining work package. DA full
 rejects `--alm-import-probe` and `--runtime-reachability`; these remain separate,
 explicitly authorized operations.
 
-**What it checks (41+ automated checks across 8 categories):**
+**Legacy/custom-engine checks (not the DA full execution list):**
 
 | Category | What's validated |
 |----------|------------------|

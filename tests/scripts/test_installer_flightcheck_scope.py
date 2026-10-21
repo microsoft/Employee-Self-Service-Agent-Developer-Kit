@@ -21,6 +21,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -56,13 +57,19 @@ def shell(request: pytest.FixtureRequest) -> tuple[str, str]:
     return kind, path
 
 
-def run(shell, script, *, env=None, input_text=""):
+def run(shell, script, *, env=None, input_text="", script_path=None):
     kind, executable = shell
     process_env = dict(os.environ)
     for name in ("CI", "TF_BUILD", "GITHUB_ACTIONS", "FLIGHTCHECK_SCOPE", "FLIGHTCHECK_ONLY"):
         process_env.pop(name, None)
     process_env.update({"ESS_ADK_TELEMETRY": "off", **(env or {})})
-    if kind == "bash":
+    if script_path is not None:
+        script_path.write_text(script, encoding="utf-8" if kind == "bash" else "utf-8-sig")
+        command = (
+            [executable, str(script_path)] if kind == "bash" else
+            [executable, "-NoProfile", "-NonInteractive", "-File", str(script_path)]
+        )
+    elif kind == "bash":
         command = [executable, "-c", script]
     else:
         encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
@@ -95,7 +102,7 @@ def preflight(name):
     return TEXT[name].split(marker, 1)[0]
 
 
-def invoke_preflight(shell, name, *, argument=False, bootstrap_tail=False, extra_args=""):
+def invoke_preflight(shell, name, *, argument=False, bootstrap_tail=False, extra_args="", da_target=False):
     prefix = preflight(name)
     if shell[0] == "bash":
         args = 'set -- --scope "$TEST_SCOPE" ' if argument else "set -- "
@@ -113,7 +120,10 @@ def invoke_preflight(shell, name, *, argument=False, bootstrap_tail=False, extra
     args += extra_args
     if bootstrap_tail:
         tail = TEXT[name][TEXT[name].index("$installerArgs ="):]
-        prefix += "\n$scriptBlock = { param($Branch, $FlightCheckOnly, $Ring='prod', $FlightCheckScope, $InstallRoot) Write-Output ('FORWARDED:' + (@{Branch=$Branch; Ring=$Ring; Scope=$FlightCheckScope; Only=$FlightCheckOnly} | ConvertTo-Json -Compress)) }\n" + tail
+        if da_target:
+            prefix += "\n$scriptBlock = { param($Branch, $FlightCheckOnly, $Ring='prod', $FlightCheckScope, $InstallRoot, $DaTargetUrl, $AgentSchemaName, $ValidationRealm) Write-Output ('DA:' + (@($DaTargetUrl,$AgentSchemaName,$ValidationRealm) | ConvertTo-Json -Compress)) }\n" + tail
+        else:
+            prefix += "\n$scriptBlock = { param($Branch, $FlightCheckOnly, $Ring='prod', $FlightCheckScope, $InstallRoot) Write-Output ('FORWARDED:' + (@{Branch=$Branch; Ring=$Ring; Scope=$FlightCheckScope; Only=$FlightCheckOnly} | ConvertTo-Json -Compress)) }\n" + tail
     else:
         prefix += "\nWrite-Output ('SELECTED:' + $FlightCheckScope)"
     return "$ErrorActionPreference='Stop'\n& {\n" + prefix + "\n} " + args
@@ -251,27 +261,117 @@ def test_powershell_unavailable_prompt_fails_with_instructions(shell):
         assert "FLIGHTCHECK_SCOPE" in result.stdout + result.stderr
 
 
-def test_launch_commands_preserve_scope_telemetry_ring_and_targeting(shell):
+@pytest.mark.parametrize("da_target", [False, True])
+def test_launch_commands_preserve_scope_telemetry_ring_and_targeting(shell, da_target):
     name = names(shell)[0]
+    native_args = ["--da-target-url", "https://copilotstudio.microsoft.com/target",
+                   "--agent-schema-name", "gptagent_hr", "--validation-realm", "dev"] if da_target else []
     if shell[0] == "bash":
         line = next(line.strip() for line in TEXT[name].splitlines() if '"$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope' in line)
-        code = 'set -eu\ncapture() { printf "<%s>" "$@"; }\nFLIGHTCHECK_PYTHON=capture\nFLIGHTCHECK_SCOPE=workday\nRING=preprod\n' + line
+        array = "DA_TARGET_ARGS=(" + " ".join(native_args) + ")\n"
+        code = 'set -eu\ncapture() { printf "<%s>" "$@"; }\nFLIGHTCHECK_PYTHON=capture\nFLIGHTCHECK_SCOPE=workday\nRING=preprod\n' + array + line
         result = run(shell, code)
         assert result.returncode == 0, result.stderr
-        assert result.stdout == "<scripts/flightcheck/cli.py><--scope><workday><--invocation-source><installer><--select-targets><always><--ring><preprod>"
+        assert result.stdout == "<scripts/flightcheck/cli.py><--scope><workday><--invocation-source><installer><--select-targets><always><--ring><preprod>" + "".join(f"<{value}>" for value in native_args)
     else:
         lines = [line.strip() for line in TEXT[name].splitlines() if re.match(r"\s*& (?:py|\$pythonExe).* scripts/flightcheck/cli.py --scope", line)]
         assert len(lines) == 3
         for line in lines:
-            code = "function py { $args | ConvertTo-Json -Compress }\nfunction capture { $args | ConvertTo-Json -Compress }\n$pythonExe='capture'; $FlightCheckScope='workday'; $Ring='test'\n" + line
+            array = "$daTargetArgs=@(" + ",".join(f"'{value}'" for value in native_args) + ")\n"
+            code = "function py { $args | ConvertTo-Json -Compress }\nfunction capture { $args | ConvertTo-Json -Compress }\n$pythonExe='capture'; $FlightCheckScope='workday'; $Ring='test'\n" + array + line
             result = run(shell, code)
             assert result.returncode == 0, result.stderr
             args = json.loads(result.stdout)
             assert args[args.index("scripts/flightcheck/cli.py"):] == [
                 "scripts/flightcheck/cli.py", "--scope", "workday", "--invocation-source", "installer",
                 "--select-targets", "always", "--ring", "test",
-            ]
+            ] + native_args
         assert "--scope $FlightCheckScope --select-targets always --ring $Ring" in TEXT[name]
+
+
+def test_explicit_da_bootstrap_forwards_native_target_without_legacy_discovery(shell):
+    url = "https://copilotstudio.microsoft.com/environments/00000000-0000-0000-0000-000000002222/copilots/00000000-0000-0000-0000-000000003333"
+    extra = (
+        f'--da-target-url "{url}" --agent-schema-name gptagent_hr --validation-realm dev'
+        if shell[0] == "bash" else
+        f'-DaTargetUrl "{url}" -AgentSchemaName gptagent_hr -ValidationRealm dev'
+    )
+    result = run(shell, invoke_preflight(
+        shell, names(shell)[1], bootstrap_tail=True, extra_args=extra, da_target=True,
+    ), env={"FLIGHTCHECK_SCOPE": "full", "RING": "prod"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    if shell[0] == "bash":
+        assert f"--da-target-url {url} --agent-schema-name gptagent_hr --validation-realm dev" in result.stdout
+    else:
+        assert json.loads(re.search(r"DA:(\[.*\])", result.stdout).group(1)) == [url, "gptagent_hr", "dev"]
+
+
+def test_partial_da_onboarding_fails_before_installation(shell):
+    extra = "--da-target-url https://copilotstudio.microsoft.com" if shell[0] == "bash" else "-DaTargetUrl https://copilotstudio.microsoft.com"
+    for name in names(shell):
+        result = run(shell, invoke_preflight(shell, name, extra_args=extra),
+                     env={"FLIGHTCHECK_SCOPE": "full", "FLIGHTCHECK_ONLY": "true"})
+        assert result.returncode != 0
+        assert "onboarding requires" in result.stdout + result.stderr
+
+
+def test_explicit_da_installer_branch_skips_config_and_snapshot_writes(shell, tmp_path):
+    name = names(shell)[0]
+    url = "https://copilotstudio.microsoft.com/environments/00000000-0000-0000-0000-000000002222/copilots/00000000-0000-0000-0000-000000003333"
+    if shell[0] == "bash":
+        branch = TEXT[name].split("    DA_TARGET_ARGS=()", 1)[1].split("    # --- Run FlightCheck ---", 1)[0]
+        code = (
+            f'set -eu\nDA_TARGET_URL="{url}"\nAGENT_SCHEMA_NAME=gptagent_hr\nVALIDATION_REALM=dev\n'
+            'ok() { :; }\nDA_TARGET_ARGS=()\n' + branch
+            + '\nprintf "<%s>" "${DA_TARGET_ARGS[@]}"'
+        )
+    else:
+        branch = TEXT[name].split("    $daTargetArgs = @()", 1)[1].split("    # --- Run FlightCheck ---", 1)[0]
+        code = (
+            f"$ErrorActionPreference='Stop'\n$DaTargetUrl='{url}'; $AgentSchemaName='gptagent_hr'; $ValidationRealm='dev'\n"
+            "function Write-Ok { }\n$daTargetArgs=@()\n" + branch
+            + "\n$daTargetArgs | ConvertTo-Json -Compress"
+        )
+    result = run(shell, code, script_path=tmp_path / "native-branch.ps1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    expected = ["--da-target-url", url, "--agent-schema-name", "gptagent_hr", "--validation-realm", "dev"]
+    if shell[0] == "bash":
+        assert result.stdout == "".join(f"<{value}>" for value in expected)
+    else:
+        assert json.loads(result.stdout) == expected
+
+
+@pytest.mark.parametrize("da_target", [False, True])
+def test_installers_reuse_selected_agent_da_routing_for_saved_config(tmp_path, da_target):
+    config = {
+        "activeAgent": "hr", "dataverseEndpoint": "https://example.crm.dynamics.com",
+        "agents": [{"slug": "hr", "releaseLine": "da" if da_target else "ca"}],
+        "agent": {"slug": "other", "releaseLine": "ca" if da_target else "da"},
+    }
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    for name in (PS_INSTALLER, SH_INSTALLER):
+        snippet = re.search(r"import json,sys; sys.path.insert\(0,'scripts'\); from flightcheck.da_execution .*?'legacy'\)", TEXT[name]).group()
+        result = subprocess.run(
+            [sys.executable, "-c", snippet, str(path)], capture_output=True,
+            text=True, cwd=ROOT / "solutions" / "ess-maker-skills", timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == ("da" if da_target else "legacy")
+
+
+@pytest.mark.parametrize("exit_code", [0, 1, 2])
+def test_windows_installer_cannot_hide_non_ready_da_full_exit(shell, exit_code):
+    if shell[0] == "bash":
+        pytest.skip("Bash directly propagates the CLI process exit")
+    gate = re.search(
+        r'(?ms)^    if \(\$isDaTarget -and \$FlightCheckScope.*?^    \}',
+        TEXT[PS_INSTALLER],
+    ).group()
+    result = run(shell, f"$ErrorActionPreference='Stop'\n$isDaTarget=$true; $FlightCheckScope='full'; $flightCheckExit={exit_code}\n" + gate)
+    assert (result.returncode == 0) is (exit_code == 0)
+    if exit_code:
+        assert "did not establish READY" in result.stdout + result.stderr
 
 
 def test_non_flightcheck_mode_does_not_require_scope(shell):

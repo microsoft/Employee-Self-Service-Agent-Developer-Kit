@@ -27,6 +27,16 @@
 .PARAMETER SourceBaseUrl
     Where to fetch the installer files from. Defaults to the raw GitHub URL of
     the setup folder. Override for testing.
+
+.PARAMETER DaTargetUrl
+    Explicit Copilot Studio DA URL. Requires FlightCheckScope full,
+    AgentSchemaName and ValidationRealm; bypasses Dataverse discovery.
+
+.PARAMETER AgentSchemaName
+    Expected schema name for the explicit DA target.
+
+.PARAMETER ValidationRealm
+    Deployment realm (dev/test/prod), independent of the service Ring.
 #>
 
 [CmdletBinding()]
@@ -36,6 +46,10 @@ param(
     [ValidateSet('prod', 'preprod', 'test')]
     [string] $Ring = 'prod',
     [string] $FlightCheckScope = $env:FLIGHTCHECK_SCOPE,
+    [string] $DaTargetUrl,
+    [string] $AgentSchemaName,
+    [ValidateSet('dev', 'test', 'prod')]
+    [string] $ValidationRealm,
     [string] $SourceBaseUrl
 )
 
@@ -89,6 +103,12 @@ function Resolve-FlightCheckScope {
 }
 
 $FlightCheckScope = Resolve-FlightCheckScope -Scope $FlightCheckScope
+if ($DaTargetUrl -or $AgentSchemaName -or $ValidationRealm) {
+    if ($FlightCheckScope -ne 'full' -or -not $DaTargetUrl -or
+        -not $AgentSchemaName.Trim() -or -not $ValidationRealm) {
+        throw 'DA onboarding requires -FlightCheckScope full -DaTargetUrl <url> -AgentSchemaName <schema> -ValidationRealm <dev|test|prod>.'
+    }
+}
 
 # Derive SourceBaseUrl from $Branch so that passing -Branch also fetches the
 # installer files from that branch. If we hardcoded the default to `main` the
@@ -145,6 +165,11 @@ $scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
 $installerArgs = @{ Branch = $Branch; FlightCheckOnly = $true; FlightCheckScope = $FlightCheckScope }
+if ($DaTargetUrl) {
+    $installerArgs.DaTargetUrl = $DaTargetUrl
+    $installerArgs.AgentSchemaName = $AgentSchemaName
+    $installerArgs.ValidationRealm = $ValidationRealm.ToLowerInvariant()
+}
 if ($PSBoundParameters.ContainsKey('Ring')) { $installerArgs.Ring = $Ring }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 

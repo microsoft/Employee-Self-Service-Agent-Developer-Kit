@@ -169,6 +169,7 @@ class RunResult:
     validation_context: dict[str, Any] = field(default_factory=dict)
     client_availability: dict[str, dict[str, Any]] = field(default_factory=dict)
     da_assessment: dict[str, Any] = field(default_factory=dict)
+    diagnostic_only: bool = False
 
 
 _VALIDATION_REALMS = frozenset({"dev", "test", "prod"})
@@ -393,6 +394,7 @@ class FlightCheckRunner:
             skipped=sum(c.skipped for c in cat_map.values()),
             errors=total_errors,
             overall=overall,
+            diagnostic_only=self.scope == "local" and declarative,
         )
 
 
@@ -428,6 +430,7 @@ def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck
         "results": [asdict(r) for r in run_result.results],
         "contract": versioned_run_result_to_dict(run_result),
         **({"da_assessment": run_result.da_assessment} if run_result.da_assessment else {}),
+        **({"diagnostic_only": True} if run_result.diagnostic_only else {}),
     }
     with open(results_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -626,6 +629,7 @@ def versioned_run_result_to_dict(run_result: RunResult) -> dict[str, Any]:
             for result in run_result.results
         ],
         **({"daAssessment": run_result.da_assessment} if run_result.da_assessment else {}),
+        **({"diagnosticOnly": True} if run_result.diagnostic_only else {}),
     }
 
 
@@ -643,6 +647,9 @@ def _generate_html_report(r: RunResult) -> str:
     if r.da_assessment:
         verdict_headline = f"Diagnostics: {r.overall}"
         verdict_sub = "Diagnostic check statuses are unchanged; deployment readiness is assessed separately below."
+    elif r.diagnostic_only:
+        verdict_headline = f"Local diagnostics: {r.overall}"
+        verdict_sub = "Local files only; deployment readiness not assessed."
 
     categories = _group_by_category(r)
     sections_html = _render_sections(categories)
@@ -1506,6 +1513,7 @@ def _render_header(
     brand_title = (
         "Employee Self-Service FlightCheck \u00b7 "
         + ("DA assessment" if r.da_assessment else
+           "DA local diagnostics" if r.diagnostic_only else
            f"{_html_escape(r.scope.title())} deployment readiness")
     )
     return (

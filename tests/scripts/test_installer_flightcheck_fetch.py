@@ -41,6 +41,7 @@ def _run_fetch(
     agent_selected: bool = True,
     script_exists: bool = True,
     python_exists: bool = True,
+    da_target: bool = False,
 ) -> tuple[str, dict]:
     workspace = tmp_path / "maker's workspace"
     scripts = workspace / "scripts"
@@ -62,7 +63,7 @@ def _run_fetch(
         )
     source = INSTALLER.read_text(encoding="utf-8")
     section = source.split("# --- Fetch solution snapshot for local file checks ---", 1)[1]
-    section = section.split("# --- Run FlightCheck ---", 1)[0]
+    section = section.split("# End saved-target configuration.", 1)[0]
     python = sys.executable if python_exists else workspace / "missing-python.exe"
     harness = f"""
 $ErrorActionPreference = 'Stop'
@@ -87,6 +88,7 @@ $envUrl = 'https://orgmocktenant.crm.dynamics.com'
 $agentName = 'Mock ESS Agent'
 $schemaName = 'mock_agent'
 $isManaged = $true
+$isDaTarget = ${str(da_target).lower()}
 $originalLocation = (Get-Location).Path
 $caught = $null
 $reachedFlightCheck = $false
@@ -184,6 +186,14 @@ def test_python_launch_error_restores_state_without_claiming_success(
     assert state["preference"] == "Stop"
     assert state["spinnerStopped"] is True
     assert state["locationRestored"] is True
+
+
+def test_saved_da_target_never_fetches_a_dataverse_snapshot(powershell, tmp_path):
+    output, state = _run_fetch(powershell, tmp_path, da_target=True)
+    assert state["caught"] is None
+    assert state["fetchArgs"] == []
+    assert state["reachedFlightCheck"] is True
+    assert "DA target: skipping the Dataverse snapshot fetch" in output
 
 
 def test_installer_fetch_arguments_resolve_saved_environment(

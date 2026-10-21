@@ -55,8 +55,19 @@
 .PARAMETER FlightCheckOnly
     Install only the minimal toolchain needed to run FlightCheck (Python + Git +
     pip dependencies). Skips VS Code, extensions, and the full maker kit setup.
-    Prompts for your Dataverse environment URL and creates a minimal
-    .local/config.json so FlightCheck can authenticate without running /setup.
+    Uses saved configuration or Dataverse discovery by default. Explicit DA
+    target inputs bypass discovery and saved-config changes.
+
+.PARAMETER DaTargetUrl
+    Explicit Copilot Studio DA URL for -FlightCheckOnly -FlightCheckScope full.
+    Requires AgentSchemaName and ValidationRealm. Uses read-only validation.
+
+.PARAMETER AgentSchemaName
+    Expected schema name for the explicit DA target, verified live.
+
+.PARAMETER ValidationRealm
+    Deployment realm of the explicit DA target: dev, test, or prod.
+    This is independent of the Power Platform service Ring.
 
 .PARAMETER InstallMode
     Selects the VS Code experience: 'maker' (guided rail layout - was
@@ -99,6 +110,10 @@ param(
     [switch] $UseDsc,
     [switch] $FlightCheckOnly,
     [string] $FlightCheckScope = $env:FLIGHTCHECK_SCOPE,
+    [string] $DaTargetUrl,
+    [string] $AgentSchemaName,
+    [ValidateSet('dev', 'test', 'prod')]
+    [string] $ValidationRealm,
     [ValidateSet('prod', 'preprod', 'test')]
     [string] $Ring = 'prod',
     [ValidateSet('maker', 'developer', 'prompt', 'lite', 'standard')]
@@ -158,6 +173,12 @@ function Resolve-FlightCheckScope {
 # Require intent before toolchain installation, config writes, or telemetry.
 if ($FlightCheckOnly) {
     $FlightCheckScope = Resolve-FlightCheckScope -Scope $FlightCheckScope
+}
+if ($DaTargetUrl -or $AgentSchemaName -or $ValidationRealm) {
+    if (-not $FlightCheckOnly -or $FlightCheckScope -ne 'full' -or
+        -not $DaTargetUrl -or -not $AgentSchemaName.Trim() -or -not $ValidationRealm) {
+        throw 'DA onboarding requires -FlightCheckOnly -FlightCheckScope full -DaTargetUrl <url> -AgentSchemaName <schema> -ValidationRealm <dev|test|prod>.'
+    }
 }
 
 # Back-compat: -SkipMakerProfile forces developer mode even when
@@ -1328,6 +1349,13 @@ if ($FlightCheckOnly) {
         $pyCmd = $pythonExe; $pyBaseArgs = @()
     }
 
+    $daTargetArgs = @()
+    $isDaTarget = [bool]$DaTargetUrl
+    if ($DaTargetUrl) {
+        $daTargetArgs = @('--da-target-url', $DaTargetUrl, '--agent-schema-name', $AgentSchemaName,
+            '--validation-realm', $ValidationRealm.ToLowerInvariant())
+        Write-Ok 'Using the explicit DA target; saved configuration and local files will not be replaced.'
+    } else {
     $needsConfiguration = -not (Test-Path $configPath)
     if (-not $needsConfiguration) {
         $configState = Get-Content $configPath -Raw | ConvertFrom-Json
@@ -1571,6 +1599,15 @@ if ($FlightCheckOnly) {
     $json = $configState | ConvertTo-Json -Depth 20 -Compress:$false
     [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $false))
 
+    # --- Resolve saved target type ---
+    Push-Location $workspace
+    try {
+        $kindArgs = $pyBaseArgs + @('-c', "import json,sys; sys.path.insert(0,'scripts'); from flightcheck.da_execution import da_full_requested; print('da' if da_full_requested(json.load(open(sys.argv[1],encoding='utf-8'))) else 'legacy')", $configPath)
+        $targetKind = Invoke-Native { & $pyCmd @kindArgs }
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the saved FlightCheck target. Configuration was preserved.' }
+        $isDaTarget = ($targetKind -join '').Trim() -eq 'da'
+    } finally { Pop-Location }
+
     # --- Read config values if they came from an existing file ---
     if (-not $botId -and (Test-Path $configPath)) {
         $existingConfig = Get-Content $configPath -Raw | ConvertFrom-Json
@@ -1582,7 +1619,7 @@ if ($FlightCheckOnly) {
     }
 
     # --- Fetch solution snapshot for local file checks ---
-    if ($botId) {
+    if ($botId -and -not $isDaTarget) {
         Write-Step 'Fetching agent solution from Dataverse'
         $fetchPy = Join-Path $workspace 'scripts\fetch_and_setup.py'
         if (Test-Path $fetchPy) {
@@ -1617,9 +1654,14 @@ if ($FlightCheckOnly) {
         } else {
             Write-Warn2 "fetch_and_setup.py not found at $fetchPy. Local file checks will be skipped."
         }
+    } elseif ($isDaTarget) {
+        Write-Ok 'DA target: skipping the Dataverse snapshot fetch; FlightCheck verifies the selected DA read-only.'
     } else {
         Write-Host ''
         Write-Host '    [info] No agent selected - skipping solution fetch (local file checks will be skipped).' -ForegroundColor Gray
+    }
+
+    # End saved-target configuration.
     }
 
     # --- Run FlightCheck ---
@@ -1634,12 +1676,13 @@ if ($FlightCheckOnly) {
             $ErrorActionPreference = 'Continue'
             # Discovery, saved configuration, and the first check use the same ring.
             if ($pythonExe -eq 'py -3.12') {
-                & py -3.12 scripts/flightcheck/cli.py --scope $FlightCheckScope --invocation-source installer --select-targets always --ring $Ring
+                & py -3.12 scripts/flightcheck/cli.py --scope $FlightCheckScope --invocation-source installer --select-targets always --ring $Ring @daTargetArgs
             } elseif ($pythonExe -eq 'py -3') {
-                & py -3 scripts/flightcheck/cli.py --scope $FlightCheckScope --invocation-source installer --select-targets always --ring $Ring
+                & py -3 scripts/flightcheck/cli.py --scope $FlightCheckScope --invocation-source installer --select-targets always --ring $Ring @daTargetArgs
             } else {
-                & $pythonExe scripts/flightcheck/cli.py --scope $FlightCheckScope --invocation-source installer --select-targets always --ring $Ring
+                & $pythonExe scripts/flightcheck/cli.py --scope $FlightCheckScope --invocation-source installer --select-targets always --ring $Ring @daTargetArgs
             }
+            $flightCheckExit = $LASTEXITCODE
             $ErrorActionPreference = $prevEAP
         } finally { Pop-Location }
     } else {
@@ -1657,6 +1700,9 @@ if ($FlightCheckOnly) {
     # outcome has been emitted. (The FlightCheck run's own pass/fail verdict is
     # separate telemetry emitted by cli.py; this outcome is the install's.)
     Complete-EssInstallTelemetry -Outcome 'success'
+    if ($isDaTarget -and $FlightCheckScope -eq 'full' -and $flightCheckExit -ne 0) {
+        throw "DA full assessment did not establish READY (exit $flightCheckExit). Review the assessment output; installation itself completed."
+    }
     # ``return`` (not ``exit 0``) so the script ends without terminating
     # the PowerShell host. When this installer is invoked via
     # ``iex (irm .../bootstrap-flightcheck.ps1)`` from an interactive

@@ -596,7 +596,7 @@ Test 'Install-EssAdk.ps1 records success for a FlightCheck-only install before i
     # try before the normal-path success emit, so it must emit its own success
     # completion. Otherwise the finally net mislabels it 'cancelled' and the
     # Installer Outcomes / by-Platform tiles never receive a real completion.
-    if ($src -notmatch "(?s)Python not found\..*?Complete-EssInstallTelemetry -Outcome 'success'\s*\r?\n[^}]*?return") {
+    if ($src -notmatch "(?ms)Python not found\..*?^    Complete-EssInstallTelemetry -Outcome 'success'\s*\r?\n.*?^    return\s*$") {
         throw "FlightCheck-only branch must emit a 'success' completion before its early return"
     }
 }

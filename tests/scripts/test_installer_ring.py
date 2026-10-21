@@ -203,6 +203,10 @@ $caught = $null
 $source = [IO.File]::ReadAllText({_quote(INSTALLER)})
 $section = $source.Split(@("Write-Step 'Configuring FlightCheck environment'"), [StringSplitOptions]::None)[1]
 $section = $section.Split(@('# --- Fetch solution snapshot for local file checks ---'), [StringSplitOptions]::None)[0]
+$prefix = $section.Split(@('    $daTargetArgs = @()'), [StringSplitOptions]::None)[0]
+$savedSection = $section.Split(@('    $needsConfiguration = -not (Test-Path $configPath)'), [StringSplitOptions]::None)[1]
+$savedSection = $savedSection.Split(@('    # --- Resolve saved target type ---'), [StringSplitOptions]::None)[0]
+$section = $prefix + '    $needsConfiguration = -not (Test-Path $configPath)' + $savedSection
 try {{ . ([scriptblock]::Create($section)) }}
 catch {{ $caught = $_.Exception.Message }}
 Write-Output ('STATE:' + (@{{ring=$Ring; caught=$caught}} | ConvertTo-Json -Compress))
@@ -211,6 +215,10 @@ Write-Output ('STATE:' + (@{{ring=$Ring; caught=$caught}} | ConvertTo-Json -Comp
         source = (ROOT / "setup" / "install-ess-adk.sh").read_text(encoding="utf-8")
         section = source.split('    LOCAL_DIR=".local"', 1)[1]
         section = section.split("# --- Fetch solution snapshot for local file checks ---", 1)[0]
+        prefix = section.split("    DA_TARGET_ARGS=()", 1)[0]
+        saved_section = section.split("    # --- Config: reuse or create ---", 1)[1]
+        saved_section = saved_section.split("    TARGET_KIND=$(", 1)[0]
+        section = prefix + saved_section
         script_path = tmp_path / "configuration.sh"
         python_command = shlex.quote(Path(sys.executable).as_posix())
         if os.name == "nt":

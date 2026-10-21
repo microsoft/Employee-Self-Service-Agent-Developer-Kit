@@ -2175,6 +2175,39 @@ def _profile_checkpoint_contract_check(
     return check
 
 
+def _explicit_da_target_config(args) -> dict:
+    """Build an ephemeral expected target; the DA producers verify it live."""
+    from setup_existing_da import ExistingDASetupError, STUDIO_RING_BY_HOST, resolve_da_target
+
+    parsed = urlparse(args.da_target_url)
+    if (
+        parsed.scheme != "https" or parsed.hostname not in STUDIO_RING_BY_HOST
+        or parsed.username or parsed.password or parsed.port not in {None, 443}
+    ):
+        raise ValueError("--da-target-url requires a recognized HTTPS Copilot Studio agent URL.")
+    try:
+        target = resolve_da_target(
+            target_url=parsed._replace(query="", fragment="").geturl(),
+            environment_id=args.environment_id, ring=args.ring, require_agent=True,
+        )
+    except ExistingDASetupError as exc:
+        raise ValueError(str(exc)) from exc
+    if not args.validation_realm or not (args.agent_schema_name or "").strip():
+        raise ValueError("--da-target-url requires --agent-schema-name and --validation-realm.")
+    slug = args.agent_slug or "flightcheck-only"
+    agent = {
+        "slug": slug, "botId": target["agentId"],
+        "schemaName": args.agent_schema_name.strip(), "releaseLine": "da",
+    }
+    return {
+        "flightCheckOnly": True, "environmentId": target["environmentId"],
+        "ring": target["ring"], "realm": args.validation_realm,
+        "powerPlatformApiEndpoint": derive_environment_host(target["environmentId"], target["ring"]),
+        "activeAgent": slug, "agents": [agent], "agent": agent,
+        **({"tenantId": args.tenant_id} if args.tenant_id else {}),
+    }
+
+
 def _run_da_full(args, config):
     from flightcheck.da_execution import build_da_execution_plan
     from flightcheck.checks.da_integrations import workday_target_matches
@@ -2280,7 +2313,7 @@ def _run_profile(args, *, da_execution=None):
         sys.exit(2)
 
     config_path = os.path.join(".local", "config.json")
-    if not os.path.exists(config_path) and plan.requires_config:
+    if not os.path.exists(config_path) and plan.requires_config and da_execution is None:
         print("ERROR: .local/config.json not found. Run /setup first.")
         sys.exit(1)
 
@@ -2983,12 +3016,12 @@ def main():
     parser.add_argument(
         "--validation-realm",
         choices=["dev", "test", "prod"],
-        help="Realm for a --profile validation context. Required with --profile "
+        help="Deployment realm for DA full or a --profile validation context. Required with --profile "
              "unless .local/config.json supplies a \"realm\" value.",
     )
     parser.add_argument(
         "--agent-schema-name",
-        help="Agent schema name for a --profile validation context.",
+        help="Expected agent schema name for DA full or a --profile validation context.",
     )
     parser.add_argument(
         "--connect-config",
@@ -3104,7 +3137,17 @@ def main():
         "--da-evidence", default=None,
         help="Reviewed target/revision-bound evidence JSON for DA full deployment readiness only.",
     )
+    parser.add_argument(
+        "--da-target-url", default=None,
+        help="Explicit Copilot Studio DA URL for read-only full assessment without setup. "
+             "Requires --agent-schema-name and --validation-realm; does not read or replace saved config.",
+    )
     args = parser.parse_args()
+    if args.da_target_url and (
+        args.checkpoint or args.profile or args.list_checkpoints or args.list_targets
+        or args.scope not in {None, "full"}
+    ):
+        parser.error("--da-target-url is supported only with --scope full.")
     if args.da_evidence and (
         args.checkpoint or args.profile or args.list_checkpoints or args.list_targets
         or args.scope not in {None, "full"}
@@ -3174,8 +3217,17 @@ def main():
     # Load config
     config_path = os.path.join(".local", "config.json")
     explicit_connection_target = bool(args.agent_id)
+    if args.da_target_url:
+        try:
+            config = _explicit_da_target_config(args)
+        except ValueError as exc:
+            parser.error(str(exc))
+        _run_da_full(args, config)
+        return
     if not os.path.exists(config_path) and not explicit_connection_target:
-        print("ERROR: .local/config.json not found. Run /setup first.")
+        print("ERROR: .local/config.json not found. Run /setup, or use "
+              "--scope full --da-target-url <url> --agent-schema-name <schema> "
+              "--validation-realm <dev|test|prod> for standalone DA assessment.")
         sys.exit(1)
 
     config = {}
@@ -3867,6 +3919,9 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
               f"Satisfied: {counts['satisfied']} | Defects: {counts['defects']} | "
               f"Incomplete: {counts['incomplete']}")
         print("  Scope is this exact target/realm; skipped checks are not verified prerequisites.")
+    elif result.diagnostic_only:
+        print(f"  Local diagnostics: {result.overall}")
+        print("  Local files only; deployment readiness not assessed.")
     elif result.overall == "READY":
         print("  [READY] Ready for deployment")
         if manual:

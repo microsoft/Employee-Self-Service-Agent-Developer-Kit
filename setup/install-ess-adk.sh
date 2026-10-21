@@ -24,6 +24,9 @@ INSTALL_ROOT="${ESS_ADK_INSTALL_ROOT:-$HOME/source}"
 FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
 # Preserve whether the caller requested a ring so defaults cannot override a saved target.
 RING_EXPLICIT="${RING+x}"
+DA_TARGET_URL=""
+AGENT_SCHEMA_NAME=""
+VALIDATION_REALM=""
 
 # FLIGHTCHECK_SCOPE has no default. An explicit --scope overrides the env var.
 while [[ $# -gt 0 ]]; do
@@ -34,6 +37,17 @@ while [[ $# -gt 0 ]]; do
                 exit 2
             fi
             FLIGHTCHECK_SCOPE="$2"; shift 2 ;;
+        --da-target-url|--agent-schema-name|--validation-realm)
+            if [[ $# -lt 2 || -z "$2" ]]; then
+                echo "ERROR: $1 requires a value." >&2
+                exit 2
+            fi
+            case "$1" in
+                --da-target-url) DA_TARGET_URL="$2" ;;
+                --agent-schema-name) AGENT_SCHEMA_NAME="$2" ;;
+                --validation-realm) VALIDATION_REALM="$2" ;;
+            esac
+            shift 2 ;;
         *) shift ;;
     esac
 done
@@ -99,6 +113,15 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
         resolve_flightcheck_scope true
     else
         resolve_flightcheck_scope false
+    fi
+fi
+
+if [[ -n "$DA_TARGET_URL$AGENT_SCHEMA_NAME$VALIDATION_REALM" ]]; then
+    if [[ "$FLIGHTCHECK_ONLY" != "true" || "${FLIGHTCHECK_SCOPE:-}" != "full" ||
+          -z "$DA_TARGET_URL" || -z "${AGENT_SCHEMA_NAME//[[:space:]]/}" ||
+          ! "$VALIDATION_REALM" =~ ^(dev|test|prod)$ ]]; then
+        echo "ERROR: DA onboarding requires FlightCheck-only --scope full --da-target-url <url> --agent-schema-name <schema> --validation-realm <dev|test|prod>." >&2
+        exit 2
     fi
 fi
 
@@ -678,6 +701,11 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
     DISCOVER_PY="scripts/discover.py"
     FETCH_PY="scripts/fetch_and_setup.py"
 
+    DA_TARGET_ARGS=()
+    if [[ -n "$DA_TARGET_URL" ]]; then
+        DA_TARGET_ARGS=(--da-target-url "$DA_TARGET_URL" --agent-schema-name "$AGENT_SCHEMA_NAME" --validation-realm "$VALIDATION_REALM")
+        ok "Using the explicit DA target; saved configuration and local files will not be replaced."
+    else
     # --- Config: reuse or create ---
     BOT_ID=""
     ENV_URL=""
@@ -920,6 +948,8 @@ with open(path, 'w', encoding='utf-8') as f:
     json.dump(config, f, indent=4)
 " "$CONFIG_PATH" "$RING"
 
+    TARGET_KIND=$("$FLIGHTCHECK_PYTHON" -c "import json,sys; sys.path.insert(0,'scripts'); from flightcheck.da_execution import da_full_requested; print('da' if da_full_requested(json.load(open(sys.argv[1],encoding='utf-8'))) else 'legacy')" "$CONFIG_PATH")
+
     # --- Read config values if they came from an existing file ---
     if [[ -z "$BOT_ID" && -f "$CONFIG_PATH" ]]; then
         ENV_URL=$("$FLIGHTCHECK_PYTHON" -c "import sys,json; c=json.load(open('$CONFIG_PATH')); print(c.get('dataverseEndpoint',''))")
@@ -930,7 +960,7 @@ with open(path, 'w', encoding='utf-8') as f:
     fi
 
     # --- Fetch solution snapshot for local file checks ---
-    if [[ -n "$BOT_ID" ]]; then
+    if [[ -n "$BOT_ID" && "$TARGET_KIND" != "da" ]]; then
         step "Fetching agent solution from Dataverse"
         if [[ -f "$FETCH_PY" ]]; then
             # Config already records the chosen environment; --url would request a retarget.
@@ -947,16 +977,20 @@ with open(path, 'w', encoding='utf-8') as f:
         else
             warn "fetch_and_setup.py not found at $FETCH_PY. Local file checks will be skipped."
         fi
+    elif [[ "$TARGET_KIND" == "da" ]]; then
+        ok "DA target: skipping the Dataverse snapshot fetch; FlightCheck verifies the selected DA read-only."
     else
         echo ""
         echo "    [info] No agent selected — skipping solution fetch (local file checks will be skipped)."
+    fi
+
     fi
 
     # --- Run FlightCheck ---
     step "Running FlightCheck"
     ess_tel_complete success || true
     # Discovery, saved configuration, and the first check use the same ring.
-    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope "$FLIGHTCHECK_SCOPE" --invocation-source installer --select-targets always --ring "$RING"
+    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope "$FLIGHTCHECK_SCOPE" --invocation-source installer --select-targets always --ring "$RING" ${DA_TARGET_ARGS[@]+"${DA_TARGET_ARGS[@]}"}
     exit $?
 fi
 

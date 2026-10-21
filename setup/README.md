@@ -166,8 +166,79 @@ Available scopes match the existing command-line interface (CLI):
 Scopes are not litmus profiles: `--scope workday` is not `--profile workday-da`.
 This installer selection requirement does not change the CLI defaults or the full Maker/Developer installation modes.
 
-Installer discovery currently lists Dataverse-linked environments and their
-Dataverse-backed agents. It does not discover native Declarative Agents.
+### Standalone DA onboarding
+
+For a Declarative Agent, explicitly supply its Copilot Studio URL, expected
+schema name and deployment realm. Both bootstraps and direct installers support
+this path; it bypasses Dataverse-only discovery, saved-config changes and
+solution fetching. It is not foundation setup or an agent import. The supplied
+identity and realm are expectations, verified live by the same read-only DA
+full assessment used with existing DA setup.
+
+```powershell
+.\setup\Install-EssAdk.ps1 -FlightCheckOnly -FlightCheckScope full `
+  -DaTargetUrl 'https://copilotstudio.microsoft.com/environments/<environment-guid>/copilots/<agent-guid>' `
+  -AgentSchemaName 'gptagent_youragent' -ValidationRealm dev
+# The same target parameters are accepted by bootstrap-flightcheck.ps1.
+```
+
+```bash
+FLIGHTCHECK_ONLY=true /bin/bash setup/install-ess-adk.sh --scope full \
+  --da-target-url 'https://copilotstudio.microsoft.com/environments/<environment-guid>/copilots/<agent-guid>' \
+  --agent-schema-name gptagent_youragent --validation-realm dev
+# The same target parameters are accepted by bootstrap-flightcheck-mac.sh.
+```
+
+Use real GUIDs/schema; do not paste the illustrative placeholders. The explicit
+DA path supports `full` only and requires all three target inputs. Use `-Ring`
+(Windows) or the existing `RING` environment variable (macOS direct installer)
+for non-production service rings; bootstraps accept `-Ring` / `--ring`.
+The chosen ring must match the URL. **Service ring is not deployment realm**:
+a Dev agent can use the production service ring.
+
+Alternatively, from `solutions/ess-maker-skills`, run without installation or
+`.local/config.json`:
+
+```powershell
+python scripts\flightcheck\cli.py --scope full `
+  --da-target-url 'https://copilotstudio.microsoft.com/environments/<environment-guid>/copilots/<agent-guid>' `
+  --agent-schema-name 'gptagent_youragent' --validation-realm dev --no-open
+```
+
+The direct CLI derives the service ring from the recognized HTTPS Studio URL;
+an explicit conflicting `--ring` or `--environment-id` is rejected. It does not
+read or overwrite saved configuration or borrow another agent's metadata.
+Use `--preferred-username` and/or `--tenant-id` to require a particular account
+or tenant. Optional `--environment-url` still requires independent Dataverse
+mapping; optional `--connect-config` must match the exact DA target and realm.
+Explicit URL targets are ephemeral: repeat the arguments on subsequent runs.
+`--agent-slug` may select a local workspace for inspection; local identity is
+validated, never inferred to match the deployed agent.
+
+With existing DA configuration, omit the URL and use `--scope full` with the
+selected agent. This remains DA full even when Dataverse is configured.
+Installers skip legacy Dataverse snapshot fetching for selected DA targets;
+missing local material remains visible evidence, not a clean deployment pass.
+
+DA full produces `workspace/flightcheck/results.json` and `report.html`, including
+the versioned DA assessment and all expected/observed coverage definitions.
+It returns **0 only for deployment READY**, otherwise **1** for NOT_READY or
+INCOMPLETE (invalid arguments return **2**). The Windows installer surfaces an
+unsuccessful DA full decision as an error without terminating an interactive
+shell; installer completion is separate from deployment approval. Legacy exits
+and Workday Connect profiles are unchanged. See
+[the DA contract and reviewed-evidence format](../solutions/ess-maker-skills/README.md)
+for `--da-evidence`, validity windows and evidence trust boundaries.
+
+DA full is maker-first: administrator verification stays Skipped; no Graph
+authentication or administrator-role prompt is introduced. Workday maker
+Test-pane validation is distinct from published employee evidence. Normal full
+is read-only and rejects runtime-egress/import probes; it does not activate,
+publish or transact. DA maker `/flightcheck` remains local-only; standalone
+full availability does not widen the maker skill.
+
+Without explicit DA URL inputs, installer discovery lists Dataverse-linked
+environments and their Dataverse-backed agents.
 If agent discovery fails, you must explicitly choose environment-wide checks
 to continue without an agent. Invalid selections stop setup instead of silently
 changing the selected target or check coverage.

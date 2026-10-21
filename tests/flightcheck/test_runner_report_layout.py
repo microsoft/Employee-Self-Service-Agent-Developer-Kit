@@ -53,6 +53,39 @@ def _scripts_on_path():
             pass
 
 
+@pytest.mark.parametrize("declarative", [False, True])
+def test_da_local_reports_are_diagnostics_not_deployment_approval(tmp_path, capsys, declarative):
+    from flightcheck.cli import _print_prioritized_summary
+    from flightcheck.runner import FlightCheckRunner, save_results
+
+    runner = FlightCheckRunner(scope="local")
+    runner.config = {
+        "activeAgent": "hr", "dataverseEndpoint": "https://example.crm.dynamics.com",
+        "agents": [{"slug": "hr", "releaseLine": "da" if declarative else "ca"}],
+    }
+    runner.register("Local", lambda _runner: [_make_result("LOCAL-DOMAIN", "Passed")])
+    result = runner.run()
+    save_results(result, str(tmp_path))
+    _print_prioritized_summary(result)
+    terminal = capsys.readouterr().out
+    payload = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert result.overall == "READY"
+    if declarative:
+        assert result.diagnostic_only is True
+        assert payload["diagnostic_only"] is True
+        assert payload["contract"]["diagnosticOnly"] is True
+        assert "Local files only; deployment readiness not assessed." in html
+        assert "Local files only; deployment readiness not assessed." in terminal
+        assert "Ready for deployment" not in terminal
+        assert "DA local diagnostics" in html
+    else:
+        assert "diagnostic_only" not in payload
+        assert "diagnosticOnly" not in payload["contract"]
+        assert "Ready for deployment" in terminal
+        assert "Local deployment readiness" in html
+
+
 def _make_result(checkpoint_id, status, priority="High", category="Test"):
     """Lightweight CheckResult factory for layout tests."""
     from flightcheck.runner import CheckResult

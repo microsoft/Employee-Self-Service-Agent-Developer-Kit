@@ -271,8 +271,9 @@ def da_cli(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli, "save_results", save)
 
-    def run(*extra, no_open=True):
-        (local / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    def run(*extra, no_open=True, configured=True):
+        if configured:
+            (local / "config.json").write_text(json.dumps(config), encoding="utf-8")
         monkeypatch.setattr(
             "sys.argv",
             [
@@ -394,6 +395,59 @@ def test_invalid_evidence_file_fails_before_authentication(da_cli, tmp_path, cap
     path.write_text('{"schemaVersion":"unsupported","records":[]}', encoding="utf-8")
     assert da_cli.run("--da-evidence", str(path)) == 1
     assert "flightcheck.da.evidence.v1" in capsys.readouterr().out
+    da_cli.native_auth.assert_not_called()
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_explicit_da_url_uses_same_contract_without_reading_or_replacing_saved_target(da_cli, configured, tmp_path):
+    da_cli.config["environmentId"] = "00000000-0000-0000-0000-000000009999"
+    da_cli.config["dataverseEndpoint"] = "https://unrelated.crm.dynamics.com"
+    assert da_cli.run(
+        "--scope", "full", "--da-target-url",
+        f"https://copilotstudio.microsoft.com/environments/{ENV_ID}/copilots/{BOT_ID}/tools?agentBackend=cosmos",
+        "--agent-schema-name", "gptagent_hr", "--validation-realm", "dev",
+        configured=configured,
+    ) == 1
+    runner = _OrchestrationRunner.last
+    assert runner.config["environmentId"] == ENV_ID
+    assert runner.config["agent"]["botId"] == BOT_ID
+    assert runner.config.get("dataverseEndpoint") is None
+    assert runner.config["activeAgent"] == "flightcheck-only"
+    result = da_cli.captured["result"]
+    assert result.profile == "da:full"
+    assert result.da_assessment["counts"]["catalogDefinitions"] == len(DA_CATALOG)
+    assert da_cli.native_auth.call_args.kwargs["allow_write"] is False
+    path = tmp_path / ".local" / "config.json"
+    assert path.exists() is configured
+    if configured:
+        assert json.loads(path.read_text(encoding="utf-8")) == da_cli.config
+
+
+@pytest.mark.parametrize("extra", [
+    (), ("--agent-schema-name", "gptagent_hr"),
+    ("--agent-schema-name", "gptagent_hr", "--validation-realm", "dev", "--scope", "workday"),
+    ("--agent-schema-name", "gptagent_hr", "--validation-realm", "dev", "--ring", "test"),
+    ("--agent-schema-name", "gptagent_hr", "--validation-realm", "dev", "--environment-id", TENANT_ID),
+])
+def test_explicit_da_url_rejects_incomplete_or_conflicting_target_before_authentication(da_cli, extra):
+    assert da_cli.run(
+        "--da-target-url", f"https://copilotstudio.microsoft.com/environments/{ENV_ID}/copilots/{BOT_ID}",
+        *extra, configured=False,
+    ) == 2
+    da_cli.native_auth.assert_not_called()
+
+
+@pytest.mark.parametrize("url", [
+    f"http://copilotstudio.microsoft.com/environments/{ENV_ID}/copilots/{BOT_ID}",
+    f"https://example.test/?url=https://copilotstudio.microsoft.com/environments/{ENV_ID}/copilots/{BOT_ID}",
+    f"https://copilotstudio.microsoft.com/?target=environments/{ENV_ID}/copilots/{BOT_ID}",
+    f"https://copilotstudio.microsoft.com/environments/{ENV_ID}",
+])
+def test_explicit_da_url_requires_recognized_agent_path(da_cli, url):
+    assert da_cli.run(
+        "--da-target-url", url, "--agent-schema-name", "gptagent_hr",
+        "--validation-realm", "dev", configured=False,
+    ) == 2
     da_cli.native_auth.assert_not_called()
 
 
