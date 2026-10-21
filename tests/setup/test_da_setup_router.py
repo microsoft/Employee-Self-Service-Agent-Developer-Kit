@@ -144,6 +144,8 @@ def test_setup_seeds_shared_cache_once_and_reuses_flightcheck_account() -> None:
     )
     assert "once after the first authenticated account is established" in normalized
     assert "before the next setup operation" in normalized
+    assert "stop before the next setup operation" in normalized
+    assert "explain the reported problem, including any partial-completion note" in normalized
     assert "`already-exists`" in account_section
     assert "DA_AUTH_CACHE_SEED_JSON:" in account_section
     assert "No later account change repeats the copy" in normalized

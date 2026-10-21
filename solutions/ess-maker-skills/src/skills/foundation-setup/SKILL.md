@@ -213,7 +213,7 @@ python scripts/setup_existing_da.py seed-shared-cache --account "{SETUP_ACCOUNT}
 
 Parse `DA_AUTH_CACHE_SEED_JSON:`. `copied` means the workspace's AgentBuilder cache was copied into a new shared authentication cache. `already-exists` means the existing shared cache was left unchanged. The operation performs no sign-in. No later account change repeats the copy; each cache is maintained by the commands that use it.
 
-On failure, preserve the returned error and cleanup notes, report that the local authentication-cache copy could not complete, and stop before the next setup operation. Retain `{SETUP_ACCOUNT}`. Resolve the reported local cache problem before rerunning this operation; an existing shared cache remains unchanged. Continue using the selected account flag. A later command may still request Microsoft authorization for its own application or permissions.
+On failure, stop before the next setup operation and explain the reported problem, including any partial-completion note. Keep `{SETUP_ACCOUNT}` selected. Resolve the reported local cache problem before rerunning this operation. A later command may still request Microsoft authorization for its own application or permissions.
 
 Account selection does not prove that the maker holds a particular administrator role. Let each service operation validate its own permissions and preserve its specific authorization error instead of rejecting the selected account through a blanket local admin check.
 
