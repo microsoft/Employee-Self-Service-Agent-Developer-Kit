@@ -360,7 +360,12 @@ unknown feature use and unchecked requirements cannot produce a green tile.
 A three-column next-steps table shows the area, action and owner, initially
 showing three areas with an option to show the rest;
 tables stack into readable sections on mobile instead of squeezing the columns.
-Separate status totals and expandable results preserve the diagnostic detail.
+Action totals distinguish **Provide confirmation**, **Run a test** and
+**Administrator review**; **Information only** notes are separate and require no
+confirmation. Feature choices remain a distinct filter within confirmations.
+Accepted reviews no longer count as outstanding actions, even when their original
+diagnostic status remains Manual or Skipped. Original status totals and findings
+remain in the expandable check results; no result or readiness rule is rewritten.
 Shared reviews (licensing, billing, Workday connection settings and
 administrator handoffs) are grouped without losing their distinct assertions.
 Skipped is never counted as Passed, and Blocked is not labeled Failed.

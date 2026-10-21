@@ -18,6 +18,12 @@ from .runner import CheckResult, RunResult, _APP_ICON_DATA_URI, _REPORT_CSS, _ma
 
 
 _BASE_FIELDS = {"observedAt", "source", "reviewerRole", "configurationRevision"}
+_TEST_CHECKS = {"WD-DA-MAKER-001", "DA-RUNTIME-001", "DA-SN-RUNTIME-001", "QA-002", "INFRA-003"}
+_KIND_LABELS = {
+    "verification": "Investigate", "applicability": "Provide confirmation",
+    "evidence": "Provide confirmation", "test": "Run a test",
+    "administrator": "Administrator review", "information": "Information only",
+}
 _GROUPS = {
     "Confirm which features you use": ("DA-INTEGRATIONS-001",),
     "Licenses for automated tasks": ("LIC-FLOW-001", "LIC-FLOW-002"),
@@ -109,10 +115,10 @@ _ISSUES = {
 }
 _STATUS_LABELS = {
     "Failed": "Needs fixing", "Blocked": "Could not check", "Error": "Check could not finish",
-    "Warning": "Needs review", "Manual": "Review needed", "Skipped": "Not checked",
+    "Warning": "Needs review", "Skipped": "Not checked",
     "NotConfigured": "Not set up", "satisfied": "Confirmed", "defect": "Needs fixing",
     "incomplete": "More information needed", "unknown": "Please confirm",
-    "excluded": "Outside this review", "not_applicable": "Does not apply", "advisory": "For information",
+    "excluded": "Outside this review", "not_applicable": "Does not apply", "advisory": "Information only",
 }
 _CHECK_COPY = {
     "PRE-001": ("Employee licenses", "Ask your licensing owner to confirm that the employees who will use this agent have the required licenses."),
@@ -286,22 +292,48 @@ def _field_name(value: str) -> str:
     return re.sub(r"([a-z])([A-Z])", r"\1 \2", value).replace("_", " ").capitalize()
 
 
-def _badge(status: str) -> str:
+def _badge(status: str, *, label: str | None = None) -> str:
     color = {
         "Passed": "success", "satisfied": "success", "Failed": "danger", "defect": "danger",
         "Error": "danger", "Blocked": "attention", "Warning": "attention",
     }.get(status, "neutral")
-    return f'<span class="badge {color}">{_e(_STATUS_LABELS.get(status, status))}</span>'
+    return f'<span class="badge {color}">{_e(label or _STATUS_LABELS.get(status, status))}</span>'
 
 
 def _kind(entry: dict, rows: list) -> str:
+    if not entry["deploymentRequired"]:
+        return "information"
     if entry["coverageState"] == "unknown":
         return "applicability"
+    if entry["requiredEvidenceFields"] and entry["checkpointId"] in _TEST_CHECKS:
+        return "test"
     if any(row.evidence.get("administratorCheckDeferred") is True for row in rows):
         return "administrator"
     if entry["requiredEvidenceFields"]:
+        roles = set(entry["roles"])
+        administrator_roles = {
+            "Microsoft 365 Admin", "Power Platform Admin", "Entra Admin", "Workday Admin", "ServiceNow Admin",
+        }
+        if (roles and roles <= administrator_roles) or entry["checkpointId"] in {
+            "PUB-006", *_GROUPS["Ask your Workday administrator"],
+        }:
+            return "administrator"
         return "evidence"
     return "verification"
+
+
+def _result_badge(row: CheckResult, entry: dict | None) -> str:
+    label = _STATUS_LABELS.get(row.status, row.status)
+    if row.status in {"Manual", "Skipped"} and entry:
+        if not entry["deploymentRequired"]:
+            label = "Information only"
+        elif entry["evidenceState"] == "defect":
+            label = "Needs fixing"
+        elif entry["evidenceState"] == "satisfied":
+            label = "Review accepted"
+        else:
+            label = _KIND_LABELS[_kind(entry, [row])]
+    return _badge("defect" if label == "Needs fixing" else row.status, label=label)
 
 
 def _template(assessment: dict, entry: dict) -> str:
@@ -413,6 +445,29 @@ def _status_totals(r: RunResult) -> str:
     )
 
 
+def _action_totals(r: RunResult) -> str:
+    rows_by_id: dict[str, list[CheckResult]] = {}
+    for row in r.results:
+        rows_by_id.setdefault(row.checkpoint_id, []).append(row)
+    counts: Counter[str] = Counter()
+    for entry in r.da_assessment["coverage"]:
+        if entry["deploymentRequired"] and entry["evidenceState"] != "satisfied":
+            label = (
+                "Needs fixing" if entry["evidenceState"] == "defect"
+                else _KIND_LABELS[_kind(entry, rows_by_id.get(entry["checkpointId"], []))]
+            )
+            counts[label] += 1
+        elif not entry["deploymentRequired"] and entry["observed"] and entry["evidenceState"] == "advisory":
+            counts["Information only"] += 1
+    return "".join(
+        f'<span class="stat {"fail" if label == "Needs fixing" else "manual"}" '
+        f'aria-label="{counts[label]} {_e(label)}">'
+        f'<i class="dot {"red" if label == "Needs fixing" else "gray"}" aria-hidden="true"></i>'
+        f'<b>{counts[label]}</b> {_e(label)}</span>'
+        for label in dict.fromkeys(("Needs fixing", *_KIND_LABELS.values())) if counts[label]
+    )
+
+
 def _synopsis(r: RunResult) -> str:
     tiles = []
     for index, (name, entries) in enumerate(_stages(r.da_assessment).items(), start=1):
@@ -433,10 +488,11 @@ def _synopsis(r: RunResult) -> str:
         '<section id="readiness" class="panel synopsis" aria-label="Readiness at a glance">'
         '<div class="syn-head"><h2>Readiness at a glance</h2>'
         '<span class="hint">Select a category to open its checks and next steps.</span></div>'
-        f'<div class="syn-stats" aria-label="Recorded check totals">{_status_totals(r)}</div>'
+        f'<div class="syn-stats" aria-label="Outstanding action totals">{_action_totals(r)}</div>'
         '<div class="syn-grid">' + "".join(tiles) + '</div>'
-        '<p class="muted">Totals count recorded results. Category colors also include required reviews '
-        'and checks that could not run. Not checked does not mean Passed.</p></section>'
+        '<p class="muted">Action totals count outstanding required checks and reviews. '
+        'Information-only notes are separate and do not require confirmation. '
+        'Original check results are available below.</p></section>'
     )
 
 
@@ -450,7 +506,7 @@ def _requirement(
         connection_warning and key in {"ENV-004", "DA-CONN-001", "SN-CONN-001"}
         and not any(row.status in {"Failed", "Error"} for row in rows)
     )
-    observed = " ".join(_badge(status) for status in dict.fromkeys(row.status for row in rows))
+    observed = " ".join(dict.fromkeys(_result_badge(row, entry) for row in rows))
     reason = " ".join(
         _REASONS.get(code, "This check needs review. See the support details below.") for code in entry["reasonCodes"]
     )
@@ -461,6 +517,10 @@ def _requirement(
             reason = "This was not checked automatically. Your administrator's review is still needed."
         elif any(row.status in {"Blocked", "Error"} for row in rows):
             reason = "FlightCheck could not finish this check. Ask the owner to investigate before running it again."
+        elif kind == "test":
+            reason = "FlightCheck does not run this test. Completed test results are still needed."
+        elif kind == "evidence":
+            reason = "A completed confirmation is still needed. This does not mean the setup is incorrect."
     criteria = list(dict.fromkeys(
         row.evidence.get("acceptanceCriteria") or row.remediation
         for row in rows if row.evidence.get("acceptanceCriteria") or row.remediation
@@ -470,7 +530,7 @@ def _requirement(
     content = (
         f'<details class="requirement" id="chk-{_slug(key)}" data-kind="{kind}"{" open" if single else ""}>'
         f'<summary><span><strong>{_e("What needs to be checked" if single else title)}</strong></span>'
-        f'{_badge("unknown") if entry["coverageState"] == "unknown" else observed or _badge(entry["evidenceState"])}</summary>'
+        f'{_badge("unknown", label="Provide confirmation") if entry["coverageState"] == "unknown" else observed or _badge(entry["evidenceState"])}</summary>'
         '<div class="requirement-body">'
         f'<h4>What we found</h4><p>{_e(reason or ("A required check found a problem." if entry["evidenceState"] == "defect" else "This check still needs review."))}</p>'
         f'<p><b>Who can help:</b> {_e(", ".join(_role_name(role) for role in entry["roles"]))}</p>'
@@ -539,11 +599,12 @@ def _work_queue(r: RunResult) -> tuple[str, str, int]:
         entries = item[1]
         if any(entry["evidenceState"] == "defect" for entry, _ in entries):
             return 0
-        ranks = {"verification": 1, "applicability": 2, "administrator": 3, "evidence": 4}
+        ranks = {"verification": 1, "applicability": 2, "administrator": 3, "test": 4, "evidence": 5}
         return min(ranks[_kind(entry, rows)] for entry, rows in entries)
 
     for title, entries in sorted(groups.items(), key=urgency):
         kinds = sorted({_kind(entry, rows) for entry, rows in entries})
+        action_labels = list(dict.fromkeys(_KIND_LABELS[kind] for kind in kinds))
         owners = sorted({_role_name(role) for entry, _ in entries for role in entry["roles"]})
         defect = any(entry["evidenceState"] == "defect" for entry, _ in entries)
         label = title if title in _GROUPS or title == "Confirm which features you use" else _check_copy(title)[0]
@@ -554,14 +615,14 @@ def _work_queue(r: RunResult) -> tuple[str, str, int]:
             f'<tr class="summary-row" data-group="{group_id}">'
             f'<th scope="row" data-label="Area"><a href="#{group_id}">{_e(label)}</a>'
             f'<span class="advisory">{len(entries)} {"check" if len(entries) == 1 else "checks"} to review</span></th>'
-            f'<td data-label="Next step">{_prose(action)}</td>'
+            f'<td data-label="Next step"><b>{_e(" / ".join(action_labels))}</b><br>{_prose(action)}</td>'
             f'<td data-label="Who can help">{_e(owner_summary)}</td></tr>'
         )
         cards.setdefault(_stage(entries[0][0]), []).append(
             f'<details class="work-card sec" id="{group_id}" data-kinds="{_e(" ".join(kinds))}">'
             f'<summary><span class="group-title">{_e(label)}</span>'
             f'<span class="group-count">{len(entries)} {"check" if len(entries) == 1 else "checks"}</span>'
-            f'{_badge("defect" if defect else "Needs attention")}</summary><div class="sec-body">'
+            f'{_badge("defect" if defect else "neutral", label="Needs fixing" if defect else action_labels[0] if len(action_labels) == 1 else "Several actions")}</summary><div class="sec-body">'
             + "".join(_requirement(assessment, entry, rows, single=len(entries) == 1,
                                   connection_warning=shared_warning) for entry, rows in entries)
             + "</div></details>"
@@ -576,7 +637,8 @@ def _work_queue(r: RunResult) -> tuple[str, str, int]:
     for name, entries in _stages(assessment).items():
         color, label = _stage_summary(entries)
         complete = "".join(
-            f'<li><span>{_e(_check_copy(entry["checkpointId"])[0])}</span>'
+            f'<li data-kind="{"complete" if entry["deploymentRequired"] else "information"}">'
+            f'<span>{_e(_check_copy(entry["checkpointId"])[0])}</span>'
             f'{_badge(entry["evidenceState"])}</li>'
             for entry in entries if not entry["deploymentRequired"] or entry["evidenceState"] == "satisfied"
         )
@@ -656,16 +718,18 @@ def _diagnostics(r: RunResult) -> str:
     shared_warning = _connection_warning(r) is not None
     rows = []
     for row in r.results:
-        advisory = row.checkpoint_id in coverage and not coverage[row.checkpoint_id]["deploymentRequired"]
+        entry = coverage.get(row.checkpoint_id)
+        advisory = entry is not None and not entry["deploymentRequired"]
         shared_connection = (
             shared_warning and row.status not in {"Failed", "Error", "Passed"}
             and row.checkpoint_id in {"ENV-004", "ENV-004-COVERAGE", "DA-CONN-001", "SN-CONN-001"}
         )
         rows.append(
             f'<tr><th scope="row" data-label="Check">{_e(_check_copy(row.checkpoint_id)[0])}<br>'
-            f'{_badge(row.status)}<span class="advisory"><code>{_e(row.checkpoint_id)}</code></span>'
-            + ("<span class=\"advisory\">For information</span>" if advisory else "")
+            f'{_result_badge(row, entry)}<span class="advisory"><code>{_e(row.checkpoint_id)}</code></span>'
+            + ("<span class=\"advisory\">Not required for readiness</span>" if advisory else "")
             + '</th><td data-label="Findings"><details><summary>View findings and guidance</summary>'
+            + f'<p>Original check status: <code>{_e(row.status)}</code>.</p>'
             + ('<p>See the <a href="#dependency-detail">shared connection issue</a>. '
                'The original findings are in the <a href="results.json">downloadable report data</a>.</p>' if shared_connection
                else f"<p>{_prose(row.result)}</p>")
@@ -676,10 +740,10 @@ def _diagnostics(r: RunResult) -> str:
     return (
         '<section id="diagnostics" class="panel"><h2>Check results</h2>'
         '<p>These results show what FlightCheck could verify. Readiness also depends on the reviews listed above.</p>'
-        f'<div class="status-counts syn-stats">{_status_totals(r)}</div>'
         '<p>Not checked does not mean Passed. Could not check means the check was unable to finish, '
         'not that it found a problem. Information-only notes do not require a review.</p>'
         f'<details class="support-details"><summary>View all {len(r.results)} check results and support details</summary>'
+        f'<div class="status-counts syn-stats">{_status_totals(r)}</div>'
         '<div class="table-scroll">'
         '<table><caption>Results recorded during this check</caption><thead><tr><th scope="col">Check</th>'
         '<th scope="col">Findings</th><th scope="col">Who can help</th></tr></thead>'
@@ -746,6 +810,10 @@ def render_da_report(r: RunResult) -> str:
         'Administrator checks and required reviews must still be completed before readiness can be confirmed.</p>'
         '<p>Use the next-steps table to find the right owner, then open the related checks for instructions. '
         'Opening this report or copying a review form does not complete a check.</p>'
+        '<p><b>Provide confirmation:</b> record the requested information with its owner. '
+        '<b>Run a test:</b> perform the test and submit its results. '
+        '<b>Administrator review:</b> obtain the appropriate administrator\'s review. '
+        '<b>Information only:</b> no confirmation is required.</p>'
         '<p>This check does not change settings, publish your agent or submit employee requests.</p>'
         '<nav class="report-nav" aria-label="Report sections"><a href="#overview">Summary</a><a href="#work">Next steps</a>'
         '<a href="#readiness">Category tiles</a><a href="#check-details">Check details</a>'
@@ -766,13 +834,16 @@ def render_da_report(r: RunResult) -> str:
         '<div class="toolbar" hidden><div id="work-filter" class="filters" role="group" aria-label="Filter next steps">'
         '<button type="button" data-filter="all" aria-pressed="true">All</button>'
         '<button type="button" data-filter="verification" aria-pressed="false">Investigation</button>'
-        '<button type="button" data-filter="evidence" aria-pressed="false">Reviews</button>'
-        '<button type="button" data-filter="administrator" aria-pressed="false">Administrator help</button>'
+        '<button type="button" data-filter="evidence" aria-pressed="false">Provide confirmation</button>'
+        '<button type="button" data-filter="test" aria-pressed="false">Run a test</button>'
+        '<button type="button" data-filter="administrator" aria-pressed="false">Administrator review</button>'
         '<button type="button" data-filter="applicability" aria-pressed="false">Features to confirm</button>'
-        '<span class="fl-spacer"></span><button type="button" class="fold" id="expand-work">Expand all</button>'
-        '<button type="button" class="fold" id="collapse-work">Collapse all</button>'
+        '<button type="button" data-filter="information" aria-pressed="false">Information only</button>'
         '</div><label class="search-label">Search<input id="work-search" type="search" placeholder="Check, feature or owner"></label>'
-        '<span id="visible-work" role="status"></span></div>'
+        '<span id="visible-work" role="status"></span>'
+        '<div class="fold-controls" role="group" aria-label="Open or close check groups">'
+        '<button type="button" class="fold" id="expand-work">Expand all</button>'
+        '<button type="button" class="fold" id="collapse-work">Collapse all</button></div></div>'
         f'<div class="work-grid">{work}</div></section>'
         '<section id="evidence" class="panel"><h2>Record and submit reviews</h2><div class="evidence-grid"><div>'
         '<h3>How to complete a review</h3><ol><li>Collect the information listed under each check.</li>'
@@ -915,19 +986,42 @@ function filterWork() {
   const search = document.getElementById('work-search').value.trim().toLowerCase();
   let shown = 0;
   cards.forEach(card => {
-    card.hidden = !((selectedKind === 'all' || card.dataset.kinds.split(' ').includes(selectedKind)) &&
-      card.textContent.toLowerCase().includes(search));
-    document.querySelector('[data-group="' + card.id + '"]').hidden = card.hidden;
+    const requirements = Array.from(card.querySelectorAll('.requirement'));
+    const groupMatches = card.querySelector('.group-title').textContent.toLowerCase().includes(search);
+    requirements.forEach(requirement => {
+      const kind = requirement.dataset.kind;
+      const matchesKind = selectedKind === 'all' || kind === selectedKind ||
+        (selectedKind === 'evidence' && kind === 'applicability');
+      requirement.hidden = !matchesKind ||
+        !(groupMatches || requirement.textContent.toLowerCase().includes(search));
+    });
+    const visible = requirements.filter(requirement => !requirement.hidden).length;
+    card.hidden = visible === 0;
+    const countLabel = (visible === requirements.length ? String(visible) :
+      visible + ' of ' + requirements.length) + (requirements.length === 1 ? ' check' : ' checks');
+    card.querySelector('.group-count').textContent = countLabel;
+    const actionRow = document.querySelector('[data-group="' + card.id + '"]');
+    actionRow.hidden = card.hidden;
+    actionRow.querySelector('.advisory').textContent = countLabel + ' to review';
     if (!card.hidden) shown++;
   });
   let actionRows = 0;
   document.querySelectorAll('.summary-row').forEach(row => {
     if (!row.hidden) row.hidden = !showAllActions && actionRows++ >= 3;
   });
+  let informationShown = 0;
   categories.forEach(category => {
     const completed = category.querySelector('.completed-checks');
-    if (completed) completed.hidden = selectedKind !== 'all' ||
-      !completed.textContent.toLowerCase().includes(search);
+    if (completed) {
+      const notes = Array.from(completed.querySelectorAll('li'));
+      notes.forEach(note => {
+        note.hidden = !(selectedKind === 'all' ||
+          (selectedKind === 'information' && note.dataset.kind === 'information')) ||
+          !note.textContent.toLowerCase().includes(search);
+        if (!note.hidden && note.dataset.kind === 'information') informationShown++;
+      });
+      completed.hidden = !notes.some(note => !note.hidden);
+    }
     category.hidden = !Array.from(category.querySelectorAll('.work-card')).some(card => !card.hidden) &&
       !(completed && !completed.hidden);
     if (!category.hidden && (selectedKind !== 'all' || search)) category.open = true;
@@ -939,8 +1033,9 @@ function filterWork() {
   filterButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.filter === selectedKind)));
   const table = document.querySelector('.action-table');
   if (table) table.hidden = shown === 0;
-  document.getElementById('visible-work').textContent = shown + ' of ' + cards.length + ' groups';
-  document.getElementById('no-work-match').hidden = shown !== 0 || cards.length === 0;
+  document.getElementById('visible-work').textContent = shown + ' of ' + cards.length + ' groups; ' +
+    informationShown + ' information-only notes';
+  document.getElementById('no-work-match').hidden = shown !== 0 || informationShown !== 0 || cards.length === 0;
 }
 filterButtons.forEach(button => button.addEventListener('click', () => {
   selectedKind = button.dataset.filter;
@@ -987,7 +1082,9 @@ function openTarget(hash) {
     element = element.parentElement;
   }
   const card = target.closest('.work-card');
-  if ((card && card.hidden) || (target.matches('.category-section') && target.hidden)) {
+  const requirement = target.closest('.requirement');
+  if ((card && card.hidden) || (requirement && requirement.hidden) ||
+      (target.matches('.category-section') && target.hidden)) {
     selectedKind = 'all';
     document.getElementById('work-search').value = '';
     filterWork();

@@ -19,6 +19,7 @@ from flightcheck.checks._connection_dependencies import ConnectionAudit, Referen
 from flightcheck.checks.da_baseline import run_da_baseline_checks
 from flightcheck.checks.environment import run_connection_checks
 from flightcheck.checks.da_integrations import run_da_integration_checks
+from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.da_contract import (
     DAApplicability, DADisposition, DAFeature, DAFeatureEvidence, DA_REVIEWABLE_FEATURES,
     build_da_coverage_plan,
@@ -502,6 +503,70 @@ def test_da_report_groups_work_without_hiding_assertions_or_self_approving_templ
     assert case.result == before
 
 
+def test_report_separates_confirmations_tests_administrators_and_information(tmp_path):
+    case = _case("WD-CONN-013", "WD-DA-MAKER-001", "WD-ENTRA-SCOPE-001", "QA-001", "QA-002", "PUB-006", "PUB-011")
+    case.runner.da_full_assessment = True
+    requirements = run_da_baseline_checks(case.runner) + run_publishing_checks(case.runner)
+    keys = {row.checkpoint_id for row in requirements}
+    case.result.results = [row for row in case.result.results if row.checkpoint_id not in keys] + requirements
+    case.result.da_assessment = _assessment(case)
+    before = deepcopy(case.result)
+    save_results(case.result, str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    totals = re.search(r'aria-label="Outstanding action totals">(.*?)</div>', html, re.DOTALL)[1]
+    for count, label in ((1, "Provide confirmation"), (2, "Run a test"),
+                         (4, "Administrator review"), (1, "Information only")):
+        assert f'aria-label="{count} {label}"' in totals
+    assert 'id="chk-qa-001" data-kind="evidence"' in html
+    assert 'id="chk-wd-conn-013" data-kind="administrator"' in html
+    assert 'id="chk-wd-da-maker-001" data-kind="test"' in html
+    assert 'id="chk-qa-002" data-kind="test"' in html
+    assert 'id="chk-pub-006" data-kind="administrator"' in html
+    assert 'id="chk-wd-entra-scope-001" data-kind="administrator"' in html
+    assert 'id="chk-pub-011"' not in html
+    assert re.search(r'<li data-kind="information">.*?Time for Microsoft 365 Copilot rollout.*?Information only',
+                     html, re.DOTALL)
+    assert 'data-filter="test"' in html and 'data-filter="information"' in html
+    assert "Completed test results are still needed" in html
+    assert "A completed confirmation is still needed" in html
+    assert "Review needed" not in html
+    assert case.result == before
+    saved = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+    assert saved["da_assessment"] == before.da_assessment
+    assert {row["status"] for row in saved["results"] if row["checkpoint_id"] == "PUB-011"} == {"Manual"}
+
+
+def test_accepted_reviews_leave_raw_statuses_but_not_outstanding_actions(tmp_path):
+    case = _case("WD-ENTRA-SCOPE-001")
+    case.result.da_assessment = _assessment(case, [
+        _record(case), _record(case, "WD-ENTRA-SCOPE-001"),
+    ])
+    assert case.result.da_assessment["deploymentReadiness"] == "READY"
+    before = deepcopy(case.result)
+    save_results(case.result, str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    totals = re.search(r'aria-label="Outstanding action totals">(.*?)</div>', html, re.DOTALL)[1]
+    assert "Administrator review" not in totals and "Provide confirmation" not in totals
+    assert html.count(">Review accepted</span>") == 2
+    assert "Original check status: <code>Manual</code>" in html
+    assert "Original check status: <code>Skipped</code>" in html
+    assert "1 Not checked" in html
+    assert case.result == before
+
+
+def test_reviewed_defect_is_not_presented_as_an_unfinished_confirmation(tmp_path):
+    case = _case()
+    case.result.da_assessment = _assessment(case, [_record(case, outcome="defect")])
+    save_results(case.result, str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    totals = re.search(r'aria-label="Outstanding action totals">(.*?)</div>', html, re.DOTALL)[1]
+    assert 'aria-label="1 Needs fixing"' in totals
+    assert "Administrator review" not in totals
+    assert '<span class="badge danger">Needs fixing</span>' in html
+    assert "Original check status: <code>Manual</code>" in html
+    assert case.result.da_assessment["deploymentReadiness"] == "NOT_READY"
+
+
 @pytest.mark.parametrize("outcome,label", [
     (None, "More checks needed"),
     ("satisfied", "Ready for this environment"),
@@ -604,7 +669,7 @@ def test_category_tiles_link_to_details_without_counting_unchecked_requirements_
     for anchor in re.findall(r'class="syn-tile \w+" href="#([^"]+)"', html):
         assert f'class="category-section sec" id="{anchor}"' in html
     assert html.index('id="work"') < html.index('id="readiness"') < html.index('id="check-details"')
-    assert 'class="syn-stats" aria-label="Recorded check totals"' in html
+    assert 'class="syn-stats" aria-label="Outstanding action totals"' in html
 
 
 def test_report_groups_next_steps_in_a_three_column_table_without_repeating_connection_warnings(tmp_path):
