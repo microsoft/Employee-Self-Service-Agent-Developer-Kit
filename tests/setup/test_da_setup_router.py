@@ -244,7 +244,7 @@ def test_administrator_cleanup_requires_both_toolkit_caches() -> None:
     environment = " ".join(_DA_ENVIRONMENT_TARGET.read_text(encoding="utf-8").split())
     assert "both the AgentBuilder and shared toolkit caches" in environment
     assert "both `caches` entries" in environment
-    assert "the cleanup error and any per-cache completion notes" in environment
+    assert "explain any reported per-cache partial completion" in environment
     assert "It does not sign out browser or PAC sessions" in environment
 
 

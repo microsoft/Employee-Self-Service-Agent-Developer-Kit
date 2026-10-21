@@ -202,10 +202,10 @@ and never generate another UUID or dispatch another create command for the same
 maker confirmation. The command uses only the exact cached account established
 by the preceding read-only operation.
 
-Parse `DA_ENVIRONMENT_CREATE_JSON:` even when the command exits nonzero. Retain
-its request ID, outcome, operation status, returned environment identity, and
-evidence path. Preserve `DA_ENVIRONMENT_CREATE_ERROR_JSON:` and
-`DA_ENVIRONMENT_CREATE_ERROR_RESPONSE_JSON:` when present.
+Parse `DA_ENVIRONMENT_CREATE_JSON:` even when the command exits nonzero. Use
+its outcome, operation status, and environment identity below; retain the
+request ID and evidence path for reconciliation. If the command instead reports
+an error, follow the failure guidance below.
 
 When the result is `created` or `accepted`, rerun the same `list-environments`
 command under `{ENVIRONMENT_CREATION_ACCOUNT}`,
@@ -290,8 +290,8 @@ those statuses. Retain `{RETURN_SETUP_ACCOUNT}` as `{SETUP_ACCOUNT}` and say:
 > `{ENVIRONMENT_ADMIN_ACCOUNT}` is no longer in this workspace's
 > toolkit authentication caches.
 
-If cleanup fails, retain `{RETURN_SETUP_ACCOUNT}` as `{SETUP_ACCOUNT}`, preserve
-the cleanup error and any per-cache completion notes, and say:
+If cleanup fails, retain `{RETURN_SETUP_ACCOUNT}` as `{SETUP_ACCOUNT}` and
+explain any reported per-cache partial completion. Then say:
 
 > Switched back to `{RETURN_SETUP_ACCOUNT}`, but setup could not finish removing
 > `{ENVIRONMENT_ADMIN_ACCOUNT}` from this workspace's toolkit authentication
@@ -367,8 +367,8 @@ python scripts/setup_power_platform_environment.py list-roles \
 ```
 
 This read-only operation may establish authorization for the role API using the
-existing application. Parse `DA_ENVIRONMENT_ROLES_JSON:` and retain its complete
-response and evidence path. A qualifying assignment must identify the exact
+existing application. Parse `DA_ENVIRONMENT_ROLES_JSON:` and inspect the
+returned assignments. A qualifying assignment must identify the exact
 environment's `EnvironmentMaker` role and the exact returning user's object ID,
 tenant ID, and `User` principal type. An administrator's assignment, a different
 role, or another user's assignment does not qualify. If the assignment already
@@ -391,14 +391,14 @@ python scripts/setup_power_platform_environment.py grant-maker \
 The operation submits only this one user's Environment Maker assignment. It
 does not create a user, assign an administrator role, or add a PowerShell
 dependency. Parse `DA_ENVIRONMENT_MAKER_GRANT_JSON:` even when the command exits
-nonzero, and preserve any error markers and evidence path. An HTTP success alone
-does not establish the assignment. An `unconfirmed` outcome is not a completed
-grant.
+nonzero. An HTTP success alone does not establish the assignment. An
+`unconfirmed` outcome is not a completed grant.
 
 After a grant response or uncertain transport outcome, rerun only `list-roles`
 and inspect the exact assignment. Do not replay a grant because a response was
 lost, role readback failed, or the assignment is not yet visible. Keep the
-original request UUID and evidence; another write requires fresh confirmation.
+original request UUID and any returned evidence path for read-only
+reconciliation; another write requires fresh confirmation.
 An unreadable role response is not an empty role list.
 
 Confirm Environment Maker access only after readback contains the qualifying
@@ -423,7 +423,7 @@ result and offer **Check again**, **Ask an administrator**, and **Skip for now**
 Checking again performs only role inspection. Asking an administrator uses the
 existing forwardable Environment Maker request in `permission-guidance.md`.
 Skipping leaves the role unresolved and returns to the account-continuation
-question. Preserve the created environment and all service evidence.
+question; it does not delete the created environment.
 
 ## Retry setup with another target
 
