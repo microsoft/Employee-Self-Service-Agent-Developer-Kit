@@ -302,6 +302,11 @@ contradict observed dependencies, and expire with their target/version-bound
 review. Administrator checks remain Skipped/manual; do not request maker Graph
 authentication or run a promotion/import.
 
+Package export and movement between environments are deferred for DA full.
+`PUB-001` and `PUB-002` are outside this review, not unfinished checks. Do not
+ask for an exportable package, ALM enrollment/publication, promotion evidence or
+an `alm_promotion` feature choice. Existing installation identity checks remain.
+
 **Local-only override:** use "Local validation completed - deployment readiness
 not assessed", retaining the actual diagnostic status. Do not call local READY
 deployment approval.

@@ -205,6 +205,22 @@ def test_publishing_does_not_execute_unselected_import_or_manual_checks(monkeypa
     import_probe.assert_not_called()
 
 
+def test_da_publishing_never_exports_or_imports_even_with_a_broad_selector(monkeypatch):
+    export = Mock(side_effect=AssertionError("DA full must not export"))
+    import_probe = Mock(side_effect=AssertionError("DA full must not import"))
+    monkeypatch.setattr(publishing, "_check_pub_001_export", export)
+    monkeypatch.setattr(publishing, "_check_pub_002_import", import_probe)
+    runner = SimpleNamespace(
+        config=_config(), env_id=ENV_ID, agent_slug="hr", da_full_assessment=True,
+        should_execute=lambda _key: True,
+    )
+    rows = publishing.run_publishing_checks(runner)
+    assert {"PUB-001", "PUB-002"}.isdisjoint(row.checkpoint_id for row in rows)
+    assert {"QA-001", "PUB-003", "PUB-006"} <= {row.checkpoint_id for row in rows}
+    export.assert_not_called()
+    import_probe.assert_not_called()
+
+
 class _OrchestrationRunner(FlightCheckRunner):
     """Record producer registration without testing external API contracts."""
 
@@ -316,7 +332,7 @@ def test_all_supported_features_have_approved_required_dispatch():
     assert len(plan.coverage) == len(DA_CATALOG)
     assert not plan.pending
     assert "DA-CUSTOM-TOPICS-001" in plan.profile.checkpoint_ids
-    assert "PUB-002" in plan.profile.checkpoint_ids
+    assert {"PUB-001", "PUB-002"}.isdisjoint(plan.profile.checkpoint_ids)
     assert registry.GRAPH not in plan.requirements.clients
 
 
@@ -382,14 +398,13 @@ def _review_records(result, flags):
 
 
 @pytest.mark.parametrize("conditional_features", [False, True])
-def test_complete_catalog_cli_accepts_reviews_but_retains_real_export_failure(
+def test_complete_catalog_cli_reaches_ready_without_export_or_promotion(
     da_cli, monkeypatch, tmp_path, conditional_features,
 ):
-    """Real producers + captured reads; the recorded export defect must not turn green."""
+    """Real producers and captured reads verify the entire current DA scope."""
     require_validated_mock(pp)
     fixtures = Path(__file__).resolve().parents[2] / "fixtures" / "cassettes"
     native = yaml.safe_load((fixtures / "agentbuilder_readiness.yaml").read_text(encoding="utf-8"))
-    export = yaml.safe_load((fixtures / "agentbuilder_export.yaml").read_text(encoding="utf-8"))
     configure = next(item for item in native["interactions"] if "/configure?" in item["request"]["uri"])
     identity = json.loads(configure["response"]["body"]["string"])
     selected = da_cli.config["agents"][0]
@@ -415,7 +430,7 @@ def test_complete_catalog_cli_accepts_reviews_but_retains_real_export_failure(
     if conditional_features:
         flags.update({name: True for name in (
             "teams", "dataverse_customization", "knowledge", "graph_connector",
-            "handoff", "custom_topics", "external_endpoints", "alm_promotion",
+            "handoff", "custom_topics", "external_endpoints",
         )})
     evidence = tmp_path / "reviews.json"
 
@@ -425,7 +440,7 @@ def test_complete_catalog_cli_accepts_reviews_but_retains_real_export_failure(
         }), encoding="utf-8")
 
     with responses.RequestsMock() as http:
-        for item in [*native["interactions"], *export["interactions"]]:
+        for item in native["interactions"]:
             path = urlsplit(item["request"]["uri"]).path
             if "/connections" in path:
                 continue
@@ -449,34 +464,39 @@ def test_complete_catalog_cli_accepts_reviews_but_retains_real_export_failure(
         expanded = da_cli.captured["result"]
         save_reviews(_review_records(expanded, flags))
         before = len(http.calls)
-        assert da_cli.run("--scope", "full", "--da-evidence", str(evidence)) == 1
+        assert da_cli.run("--scope", "full", "--da-evidence", str(evidence)) == 0
         final = da_cli.captured["result"]
         assessment = final.da_assessment
         assert len(assessment["coverage"]) == len(DA_CATALOG)
         assert all(review["accepted"] for review in assessment["evidenceReviews"])
-        assert assessment["deploymentReadiness"] == "INCOMPLETE"
+        assert assessment["deploymentReadiness"] == "READY"
         unresolved = [
             entry["checkpointId"] for entry in assessment["coverage"]
             if entry["deploymentRequired"] and entry["evidenceState"] not in {
                 "satisfied", "not_applicable", "superseded", "out_of_scope",
             }
         ]
-        assert unresolved == ["PUB-001"]
-        exported = next(row for row in final.results if row.checkpoint_id == "PUB-001")
-        assert exported.status == "Warning"
-        assert "BadRequest" in exported.result
-        assert "confirm" in exported.remediation.lower()
+        assert unresolved == []
+        assert {"PUB-001", "PUB-002"}.isdisjoint(final.profile_checkpoints)
+        assert {"PUB-001", "PUB-002"}.isdisjoint(row.checkpoint_id for row in final.results)
+        for key in ("PUB-001", "PUB-002"):
+            entry = next(entry for entry in assessment["coverage"] if entry["checkpointId"] == key)
+            assert entry["evidenceState"] == "excluded"
+            assert entry["deploymentRequired"] is False
         paths = [urlsplit(call.request.url).path for call in http.calls[before:]]
         assert sum("/configure" in path for path in paths) == 1
         assert sum("/components" in path for path in paths) == 1
-        assert sum("/export" in path for path in paths) == 1
-        assert not any("/import" in path or "graph.microsoft.com" in call.request.url
+        assert not any("/export" in path or "/import" in path or "graph.microsoft.com" in call.request.url
                        for path, call in zip(paths, http.calls[before:]))
         if conditional_features:
             for key in ("EXT-002", "EXT-002-ACL"):
                 assert next(row for row in final.results if row.checkpoint_id == key).status == "Skipped"
-            assert next(row for row in final.results if row.checkpoint_id == "PUB-002").status == "Manual"
-        assert (da_cli.output / "report.html").exists()
+        saved = json.loads((da_cli.output / "results.json").read_text(encoding="utf-8"))
+        assert saved["da_assessment"]["deploymentReadiness"] == "READY"
+        html = (da_cli.output / "report.html").read_text(encoding="utf-8")
+        assert "Ready for this environment" in html
+        assert "Package export is outside the current DA setup and Workday review" in html
+        assert "alm_promotion" not in html
 
 
 @pytest.mark.parametrize("available", [True, False])

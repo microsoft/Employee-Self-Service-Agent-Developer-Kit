@@ -167,7 +167,7 @@ def test_da_publishing_manual_rows_do_not_become_automatic_quality_passes(monkey
     import_probe = Mock(side_effect=AssertionError("Full DA must not import"))
     monkeypatch.setattr(publishing, "_check_pub_002_import", import_probe)
     rows = publishing.run_publishing_checks(runner)
-    assert {row.checkpoint_id for row in rows} == {"QA-001", "PUB-002", "PUB-006"}
+    assert {row.checkpoint_id for row in rows} == {"QA-001", "PUB-006"}
     assert all(row.status == Status.MANUAL.value for row in rows)
     assert all(row.evidence["accepted"] is False for row in rows)
     assert "50" not in rows[0].description + rows[0].remediation

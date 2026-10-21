@@ -268,10 +268,10 @@ families and superseded IDs without counting execution guards as deployment
 requirements. `da_execution.py` schedules only approved, registered producers;
 it does not run the old broad categories and then filter away legacy results.
 Reviewed producers now cover exact native access/content, selected-workspace
-identity and inventory, dependency bindings, optional revision pins, ESS ALM
-metadata, allocation observations and read-only export integrity. Local content
-does not establish deployed freshness; ALM metadata and export integrity do not
-establish package signature, import success or employee execution.
+identity and inventory, dependency bindings, optional revision pins, ESS
+installation/configuration metadata and allocation observations. Local content
+does not establish deployed freshness; configuration metadata does not establish
+package signature, import success or employee execution.
 
 Licensing, effective access, billing, capacity sizing, effective connector policy,
 managed-runtime egress, native knowledge/handoff behavior and publication
@@ -284,13 +284,18 @@ unresolved. The current catalog has 150 definitions, including fixed DA
 handoff, feature-list, custom-conversation and maker Workday Test-pane reviews.
 Definitions are not a count of executable or mandatory deployment checks.
 
-**Current verification limit:** reviewed feature choices and approved required
-check paths are implemented. Complete-catalog CLI replay accepts reviewed scope
-and requirement evidence but retains an actual captured ALM export warning as
-`INCOMPLETE`. A successful export response has not been captured for that test
-target, so a healthy complete-catalog `READY` path is not yet verified end to end.
-Reduced-catalog classifier tests are not that proof. Do not publish, enroll or
-modify an agent merely to obtain a green assessment.
+**Current DA scope:** package export and movement between environments are
+deferred. `PUB-001` and `PUB-002` remain visible as outside this review, are not
+executed and do not block readiness. No exportable ZIP, promotion evidence or
+additional ALM enrollment/publication is required. Legacy export/import behavior
+is unchanged. Existing read-only installation identity/configuration metadata
+and explicitly configured revision pins are retained; these are not export or
+promotion operations.
+
+Complete-catalog CLI replay with real producers and grounded read contracts
+can reach `READY` after valid feature and owner reviews, without export or import.
+This verifies the supported assessment path, not a live deployment or a substitute
+for actual employee testing and administrator evidence.
 
 DA full first verifies exact-agent access/content, then discovers active direct
 and invoked-flow dependencies and recomposes the selected integration plan.
@@ -438,8 +443,7 @@ Its `details` contains:
     "graph_connector": null,
     "handoff": null,
     "custom_topics": null,
-    "external_endpoints": null,
-    "alm_promotion": null
+    "external_endpoints": null
   }
 }
 ```
@@ -458,7 +462,8 @@ is read once and reused to bind the review before conditional checks are planned
 The review is revalidated at the final decision; expiry or changed configuration
 removes its exclusions. Graph-source and Workday-administrator checks remain
 Skipped with external review requirements; the maker is not authenticated to
-Graph. Promotion evidence is reviewed without importing or promoting anything.
+Graph. Export and promotion are excluded from the feature-review form; do not
+submit an `alm_promotion` choice or promotion evidence for this DA assessment.
 
 Published employee evidence uses `evidenceKind: published_employee_runtime`:
 `DA-RUNTIME-001` requires `employeeTestRunIds`, and `DA-SN-RUNTIME-001` requires

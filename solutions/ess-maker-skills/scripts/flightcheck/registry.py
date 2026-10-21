@@ -782,7 +782,7 @@ for _key in ("CONFIG-007", "CONFIG-005", "TOPIC-011", "CONFIG-012", "CONFIG-014"
         key=_key, category_fn=run_da_local_file_checks, category_label="Local Files",
         roles=(Role.ESS_MAKER.value,),
     )
-for _key in ("QA-001", "QA-002", "QA-012", "PUB-002", "PUB-003", "PUB-006", "PUB-011"):
+for _key in ("QA-001", "QA-002", "QA-012", "PUB-003", "PUB-006", "PUB-011"):
     DA_CHECKPOINT_OVERRIDES[_key] = CheckpointSpec(
         key=_key, category_fn=run_publishing_checks, category_label="Publishing",
         roles=(Role.ESS_MAKER.value,),

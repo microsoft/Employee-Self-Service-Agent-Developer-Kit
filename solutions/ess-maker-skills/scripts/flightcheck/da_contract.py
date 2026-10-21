@@ -45,7 +45,7 @@ DA_REVIEWABLE_FEATURES = frozenset({
     DAFeature.TEAMS, DAFeature.DATAVERSE_CUSTOMIZATION,
     DAFeature.WORKDAY_CUSTOMIZATIONS, DAFeature.WORKDAY_WRITES,
     DAFeature.KNOWLEDGE, DAFeature.GRAPH_CONNECTOR, DAFeature.HANDOFF,
-    DAFeature.CUSTOM_TOPICS, DAFeature.EXTERNAL_ENDPOINTS, DAFeature.ALM_PROMOTION,
+    DAFeature.CUSTOM_TOPICS, DAFeature.EXTERNAL_ENDPOINTS,
 })
 
 
@@ -58,6 +58,7 @@ class DADisposition(str, Enum):
     SUPERSEDED = "superseded"
     LEGACY = "legacy_only"
     ENGINE = "execution_guard"
+    DEFERRED = "deferred"
 
 
 class DAApplicability(str, Enum):
@@ -356,16 +357,16 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _MAKER + _M365,
     ),
     *_group(
-        "PUB-001", "Publishing", DADisposition.EVALUATOR,
-        "Verify the selected agent's ALM export artifact; an API error is not "
-        "proof that export or deployment is ready.",
-        _MAKER,
+        "PUB-001", "Publishing", DADisposition.DEFERRED,
+        "Package export is outside the current DA setup and Workday review. "
+        "It does not establish installation or employee connectivity.",
+        _MAKER, required=False,
     ),
     *_group(
-        "PUB-002", "ALM promotion", DADisposition.MANUAL,
-        "A read-only full run cannot perform import. Promotion evidence comes "
-        "from a separately authorized test or attestation.",
-        _MAKER + _PP, feature=DAFeature.ALM_PROMOTION,
+        "PUB-002", "ALM promotion", DADisposition.DEFERRED,
+        "Moving packages between environments is outside the current DA review; "
+        "no promotion evidence or import probe is requested.",
+        _MAKER + _PP, required=False, feature=DAFeature.ALM_PROMOTION,
     ),
     *_group(
         "PUB-011", "Publishing", DADisposition.OBSERVATION,
@@ -582,6 +583,7 @@ def validate_da_catalog(catalog: Sequence[DACheckpoint] = DA_CATALOG) -> None:
     excluded = {
         DADisposition.DIAGNOSTIC, DADisposition.SUPERSEDED,
         DADisposition.LEGACY, DADisposition.ENGINE,
+        DADisposition.DEFERRED,
     }
     for spec in catalog:
         if not spec.key or spec.key in by_key:
@@ -684,6 +686,7 @@ def build_da_coverage_plan(
     excluded = {
         DADisposition.DIAGNOSTIC, DADisposition.SUPERSEDED,
         DADisposition.LEGACY, DADisposition.ENGINE,
+        DADisposition.DEFERRED,
     }
     for spec in catalog:
         source = ""

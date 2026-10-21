@@ -278,19 +278,13 @@ def _check_pub_001_export(runner, row: dict) -> CheckResult:
                 return _api_result(
                     checkpoint_id="PUB-001",
                     row=row,
-                    status=(
-                        Status.MANUAL if getattr(runner, "da_full_assessment", False) is True
-                        else Status.FAILED
-                    ),
+                    status=Status.FAILED,
                     result=(
                         f"AgentBuilder ALM export returned {ALM_NOT_OPTED_IN_CODE} "
                         f"for configured agent {bot_id}; the agent is not enrolled "
                         "in ALM."
                     ),
                     remediation=(
-                        "Record the approved source artifact and promotion evidence. "
-                        "Enroll in ALM only if required by the approved promotion workflow."
-                        if getattr(runner, "da_full_assessment", False) is True else
                         "Open the agent in Copilot Studio, go to Settings > ALM, "
                         "enroll the agent, then re-run PUB-001."
                     ),
@@ -812,31 +806,23 @@ def _build_checks(runner) -> list[dict]:
 
 
 def run_publishing_checks(runner) -> list[CheckResult]:
-    """Return publishing/QA checks, using AgentBuilder ALM where available.
+    """Return publishing/QA checks, preserving legacy opt-in ALM behavior.
 
-    PUB-001 validates export without mutating the environment. PUB-002 is
-    explicitly gated because import creates an agent in the target environment.
+    DA full excludes package export and promotion from its current scope.
+    Legacy PUB-002 remains opt-in because import creates an agent.
     """
     results: list[CheckResult] = []
     should_execute = getattr(runner, "should_execute", lambda _checkpoint_id: True)
     da_full = getattr(runner, "da_full_assessment", False) is True
     for c in _build_checks(runner):
+        if da_full and c["id"] in {"PUB-001", "PUB-002"}:
+            continue
         if not should_execute(c["id"]):
             continue
         if c["id"] == "PUB-001":
-            exported = _check_pub_001_export(runner, c)
-            if da_full:
-                exported.description = "Selected-agent export archive integrity"
-                exported.evidence.update({
-                    "evidenceBoundary": "export_archive_not_import_publication_or_employee_execution",
-                })
-                if exported.status == Status.MANUAL.value:
-                    exported.evidence.update(manual_evidence_requirement(
-                        runner, ("sourceArtifact", "promotionWorkflow"),
-                    ))
-            results.append(exported)
+            results.append(_check_pub_001_export(runner, c))
             continue
-        if c["id"] == "PUB-002" and not da_full:
+        if c["id"] == "PUB-002":
             results.append(_check_pub_002_import(runner, c))
             continue
         results.append(
@@ -847,19 +833,13 @@ def run_publishing_checks(runner) -> list[CheckResult]:
                 status=Status.MANUAL.value,
                 description=(
                     "Approved representative evaluation library"
-                    if da_full and c["id"] == "QA-001" else
-                    "Separately approved promotion evidence"
-                    if da_full and c["id"] == "PUB-002" else c["desc"]
+                    if da_full and c["id"] == "QA-001" else c["desc"]
                 ),
                 result=(
                     "This assessment has not accepted target-bound release evidence."
                     if da_full and c["id"] != "PUB-011" else c["result"]
                 ),
                 remediation=(
-                    "Review the separately authorized promotion's source artifact, "
-                    "source/destination realms, approval and result. This read-only "
-                    "assessment does not run an import probe or promote an agent."
-                    if da_full and c["id"] == "PUB-002" else
                     "Record stakeholder-approved intent, risk and permission coverage "
                     "for the selected release. Use the agreed quality and acceptance "
                     "criteria; prompt count alone does not establish coverage."
@@ -869,10 +849,7 @@ def run_publishing_checks(runner) -> list[CheckResult]:
                 roles=c["roles"],
                 evidence=(
                     manual_evidence_requirement(
-                        runner,
-                        ("sourceArtifact", "sourceRealm", "destinationRealm", "promotionApproval", "promotionResult")
-                        if c["id"] == "PUB-002" else
-                        ("publishedChannel", "releaseRevision", "testOrApprovalRecord", "outcome"),
+                        runner, ("publishedChannel", "releaseRevision", "testOrApprovalRecord", "outcome"),
                     ) if da_full and c["id"] != "PUB-011" else {}
                 ),
             )

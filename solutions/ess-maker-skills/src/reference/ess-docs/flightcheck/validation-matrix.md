@@ -95,13 +95,14 @@ evidence remains incomplete, not passed or silently excluded.
 | ENV-009 | Review custom Dataverse changes when present | Target/version-bound manual review |
 | EXT-002, EXT-002-ACL | Review Graph-source configuration and item access when used | Skipped for the maker; administrator evidence required, no maker Graph authentication; replaces per-source placeholder coverage |
 | WD-REF-001, WD-WF-CAT-001 | Review custom Workday configuration and enabled scenario coverage | Target/version-bound manual review, without employee transactions |
-| PUB-002 | Review a separately authorized promotion when applicable | Manual source/destination, artifact, approval and result evidence; no import probe |
+| PUB-001, PUB-002 | Package export and movement between environments are deferred | Outside current DA scope; no execution, export prerequisite, promotion review or import probe |
 
 Feature-list review controls applicability only. It cannot override observed
 dependencies or satisfy enabled features' other requirements. Accepted external
-reviews preserve original Manual/Skipped diagnostics. Successful full-catalog
-export/READY verification remains pending a captured successful export response;
-the captured missing-content export warning must remain incomplete.
+reviews preserve original Manual/Skipped diagnostics. Complete-catalog CLI
+replay verifies a READY path after accepted required reviews without export or
+promotion. Deferred ALM entries remain visible as exclusions, not passed checks.
+Legacy export/import behavior and existing installation identity reads remain.
 
 ## 2b. ESS Solution Installation (ESS-SOLN-xxx)
 

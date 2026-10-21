@@ -54,6 +54,19 @@ def test_explicitly_disabled_feature_retains_its_exclusion_evidence():
     assert entry.checkpoint.key in json.dumps(entry.to_dict())
 
 
+@pytest.mark.parametrize("enabled", [None, False, True])
+def test_package_export_and_promotion_remain_explicitly_outside_da_scope(enabled):
+    entries = _by_key({
+        DAFeature.ALM_PROMOTION: DAFeatureEvidence(enabled, "Domain scope input."),
+    })
+    for key in ("PUB-001", "PUB-002"):
+        entry = entries[key]
+        assert entry.applicability == DAApplicability.EXCLUDED
+        assert entry.checkpoint.disposition == DADisposition.DEFERRED
+        assert entry.checkpoint.required is False
+        assert "outside the current DA" in entry.applicability_reason
+
+
 def test_enabling_workday_does_not_enable_legacy_or_infer_other_integrations():
     entries = _by_key({
         DAFeature.WORKDAY: DAFeatureEvidence(True, "verified selected runtime"),
