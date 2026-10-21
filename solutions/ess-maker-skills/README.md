@@ -312,8 +312,13 @@ coverage reconciliation, not the Connect profile's resolved-family or skipped-
 checkpoint acceptance gates.
 
 DA HTML reports use a centered, offline Fluent-style layout with the kit's
-header icon, readiness summary tiles, tab-style filters and grouped expandable
-checks. A three-column next-steps table shows the area, action and owner;
+header icon, colored category tiles, tab-style filters and grouped expandable
+checks. It shares the standard report's Fluent styling, five-column desktop
+tile grid, status chips, compact action panel and category accordions.
+Tiles link to category details, including confirmed checks; required reviews,
+unknown feature use and unchecked requirements cannot produce a green tile.
+A three-column next-steps table shows the area, action and owner, initially
+showing three areas with an option to show the rest;
 tables stack into readable sections on mobile instead of squeezing the columns.
 Separate status totals and expandable results preserve the diagnostic detail.
 Shared reviews (licensing, billing, Workday connection settings and

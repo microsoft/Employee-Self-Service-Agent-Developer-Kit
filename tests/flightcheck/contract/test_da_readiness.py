@@ -341,6 +341,28 @@ def test_da_report_rerun_preserves_explicit_target_and_quotes_shell_arguments(tm
     assert "maker /flightcheck is local-only" not in html
 
 
+@pytest.mark.parametrize(("status", "color"), [
+    ("Passed", "green"), ("Skipped", "amber"), ("Blocked", "amber"), ("Failed", "red"),
+])
+def test_category_tiles_link_to_details_without_counting_unchecked_requirements_as_passed(tmp_path, status, color):
+    case = _case("WD-ENTRA-SCOPE-001", "CONFIG-013")
+    case.result.results = [
+        replace(row, status=status) if row.checkpoint_id == "ENV-004" else row
+        for row in case.result.results
+    ]
+    case.result.da_assessment = _assessment(case)
+    save_results(case.result, str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert f'class="syn-tile {color}" href="#cat-environment-and-connections"' in html
+    assert 'class="syn-tile green" href="#cat-agent-setup"' in html
+    assert 'class="syn-tile amber" href="#cat-workday"' in html
+    assert 'class="syn-tile amber" href="#cat-features-to-confirm"' in html
+    for anchor in re.findall(r'class="syn-tile \w+" href="#([^"]+)"', html):
+        assert f'class="category-section sec" id="{anchor}"' in html
+    assert html.index('id="work"') < html.index('id="readiness"') < html.index('id="check-details"')
+    assert 'class="syn-stats" aria-label="Recorded check totals"' in html
+
+
 def test_report_groups_next_steps_in_a_three_column_table_without_repeating_connection_warnings(tmp_path):
     case = _case("ENV-004-COVERAGE", "DA-CONN-001", "WD-ENTRA-SCOPE-001", "WD-ENTRA-CONSENT-001")
     warning = "; ".join(

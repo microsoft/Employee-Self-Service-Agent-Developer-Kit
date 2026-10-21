@@ -13,7 +13,7 @@ import re
 import shlex
 
 from .da_readiness import DA_EVIDENCE_SCHEMA
-from .runner import CheckResult, RunResult, _APP_ICON_DATA_URI, _mask_sensitive, _slug
+from .runner import CheckResult, RunResult, _APP_ICON_DATA_URI, _REPORT_CSS, _mask_sensitive, _slug
 
 
 _BASE_FIELDS = {"observedAt", "source", "reviewerRole", "configurationRevision"}
@@ -32,6 +32,10 @@ _GROUPS = {
     "Testing and approval": ("QA-001", "QA-002", "QA-012", "PUB-003", "PUB-006"),
 }
 _GROUP_BY_ID = {key: title for title, keys in _GROUPS.items() for key in keys}
+_STAGE_ORDER = (
+    "Agent setup", "Environment and connections", "Licenses and billing", "Conversations",
+    "Knowledge and transfers", "Workday", "Employee testing and release", "Features to confirm", "Other checks",
+)
 _GROUP_STEPS = {
     "Licenses for automated tasks": "Review task licensing and employee coverage.",
     "Workday connection settings": "Confirm sign-in, available tasks and sharing permissions.",
@@ -301,6 +305,100 @@ def _connection_warning(r: RunResult) -> CheckResult | None:
                  if row.checkpoint_id == "ENV-004-COVERAGE" and row.status != "Passed"), None)
 
 
+def _stage(entry: dict) -> str:
+    if entry["coverageState"] == "unknown":
+        return "Features to confirm"
+    group = _GROUP_BY_ID.get(entry["checkpointId"])
+    area = entry["area"]
+    if group == "Check the services your agent uses":
+        return "Environment and connections"
+    if area.startswith("Workday"):
+        return "Workday"
+    if area in {"Prerequisites", "Capacity", "Flow licensing"}:
+        return "Licenses and billing"
+    if area in {"Native agent", "ESS package"}:
+        return "Agent setup"
+    if area in {"Local files", "Custom topics"}:
+        return "Conversations"
+    if area in {"Knowledge", "Graph connector knowledge", "Handoff"}:
+        return "Knowledge and transfers"
+    if area in {"Publishing", "ALM promotion", "Employee runtime", "ServiceNow runtime"}:
+        return "Employee testing and release"
+    if area in {"Environment", "Connections", "Native connections", "Integration applicability",
+                "Dataverse customization", "DLP", "Network", "ServiceNow"}:
+        return "Environment and connections"
+    return "Other checks"
+
+
+def _stages(assessment: dict) -> dict[str, list[dict]]:
+    groups: dict[str, list[dict]] = {}
+    for entry in assessment["coverage"]:
+        if entry["deploymentRequired"] or (entry["observed"] and entry["evidenceState"] == "advisory"):
+            groups.setdefault(_stage(entry), []).append(entry)
+    return {name: groups[name] for name in _STAGE_ORDER if name in groups}
+
+
+def _stage_summary(entries: list[dict]) -> tuple[str, str]:
+    required = [entry for entry in entries if entry["deploymentRequired"]]
+    if any(entry["evidenceState"] == "defect" for entry in required):
+        return "red", "Needs fixing"
+    if any(entry["evidenceState"] != "satisfied" for entry in required):
+        return "amber", "More checks needed"
+    advisory_statuses = {
+        row["status"] for entry in entries if not entry["deploymentRequired"] for row in entry["observed"]
+    }
+    if advisory_statuses & {"Failed", "Error", "Warning"}:
+        return "amber", "Notes to review"
+    if advisory_statuses & {"Skipped", "Blocked", "NotConfigured"}:
+        return "gray", "Not fully checked"
+    if required:
+        return "green", "Required checks complete"
+    if advisory_statuses == {"Passed"}:
+        return "green", "Checks passed"
+    return "gray", "Information only"
+
+
+def _status_totals(r: RunResult) -> str:
+    counts = Counter(row.status for row in r.results)
+    return "".join(
+        f'<span class="stat {style}" aria-label="{counts[status]} {_e(_STATUS_LABELS.get(status, status))}">'
+        f'<i class="dot {dot}" aria-hidden="true"></i><b>{counts[status]}</b> '
+        f'{_e(_STATUS_LABELS.get(status, status))}</span>'
+        for status, style, dot in (
+            ("Passed", "pass", "green"), ("Failed", "fail", "red"), ("Blocked", "manual", "gray"),
+            ("Error", "fail", "red"), ("Warning", "warn", "amber"), ("Manual", "manual", "gray"),
+            ("Skipped", "na", "gray"), ("NotConfigured", "na", "gray"),
+        )
+    )
+
+
+def _synopsis(r: RunResult) -> str:
+    tiles = []
+    for index, (name, entries) in enumerate(_stages(r.da_assessment).items(), start=1):
+        color, label = _stage_summary(entries)
+        owners = sorted({
+            _role_name(role) for entry in entries
+            if entry["deploymentRequired"] and entry["evidenceState"] != "satisfied" for role in entry["roles"]
+        })
+        role = " + ".join(owners) if len(owners) <= 2 else "Several owners; see details"
+        tiles.append(
+            f'<a class="syn-tile {color}" href="#cat-{_slug(name)}">'
+            f'<div class="syn-no">Stage {index}</div><div class="syn-name">{_e(name)}</div>'
+            f'<div class="syn-role">{_e(label)}</div>'
+            + (f'<div class="syn-role act">{_e(role)}</div>' if role else "")
+            + '</a>'
+        )
+    return (
+        '<section id="readiness" class="panel synopsis" aria-label="Readiness at a glance">'
+        '<div class="syn-head"><h2>Readiness at a glance</h2>'
+        '<span class="hint">Select a category to open its checks and next steps.</span></div>'
+        f'<div class="syn-stats" aria-label="Recorded check totals">{_status_totals(r)}</div>'
+        '<div class="syn-grid">' + "".join(tiles) + '</div>'
+        '<p class="muted">Totals count recorded results. Category colors also include required reviews '
+        'and checks that could not run. Not checked does not mean Passed.</p></section>'
+    )
+
+
 def _requirement(
     assessment: dict, entry: dict, rows: list, *, single: bool = False, connection_warning: bool = False,
 ) -> str:
@@ -389,7 +487,7 @@ def _work_queue(r: RunResult) -> tuple[str, str, int]:
             _GROUP_BY_ID.get(entry["checkpointId"], entry["checkpointId"])
         )
         groups.setdefault(title, []).append((entry, rows))
-    cards = []
+    cards: dict[str, list[str]] = {}
     summary_rows = []
     def urgency(item):
         entries = item[1]
@@ -413,7 +511,7 @@ def _work_queue(r: RunResult) -> tuple[str, str, int]:
             f'<td data-label="Next step">{_prose(action)}</td>'
             f'<td data-label="Who can help">{_e(owner_summary)}</td></tr>'
         )
-        cards.append(
+        cards.setdefault(_stage(entries[0][0]), []).append(
             f'<details class="work-card sec" id="{group_id}" data-kinds="{_e(" ".join(kinds))}">'
             f'<summary><span class="group-title">{_e(label)}</span>'
             f'<span class="group-count">{len(entries)} {"check" if len(entries) == 1 else "checks"}</span>'
@@ -428,7 +526,23 @@ def _work_queue(r: RunResult) -> tuple[str, str, int]:
         '<thead><tr><th scope="col">Area</th><th scope="col">Next step</th><th scope="col">Who can help</th></tr></thead>'
         "<tbody>" + "".join(summary_rows) + "</tbody></table></div>"
     ) if summary_rows else ""
-    return "".join(cards), table, len(groups)
+    sections = []
+    for name, entries in _stages(assessment).items():
+        color, label = _stage_summary(entries)
+        complete = "".join(
+            f'<li><span>{_e(_check_copy(entry["checkpointId"])[0])}</span>'
+            f'{_badge(entry["evidenceState"])}</li>'
+            for entry in entries if not entry["deploymentRequired"] or entry["evidenceState"] == "satisfied"
+        )
+        sections.append(
+            f'<details class="category-section sec" id="cat-{_slug(name)}">'
+            f'<summary><span class="category-title">{_e(name)}</span>'
+            f'<span class="category-state {color}">{_e(label)}</span></summary><div class="sec-body">'
+            + "".join(cards.get(name, []))
+            + (f'<ul class="completed-checks">{complete}</ul>' if complete else "")
+            + '</div></details>'
+        )
+    return "".join(sections), table, len(groups)
 
 
 def _rerun(assessment: dict) -> str:
@@ -493,7 +607,6 @@ def _coverage(assessment: dict) -> str:
 
 def _diagnostics(r: RunResult) -> str:
     coverage = {entry["checkpointId"]: entry for entry in r.da_assessment["coverage"]}
-    counts = Counter(row.status for row in r.results)
     shared_warning = _connection_warning(r) is not None
     rows = []
     for row in r.results:
@@ -514,14 +627,10 @@ def _diagnostics(r: RunResult) -> str:
             + (f'<p>{_prose(f"[Documentation]({row.doc_link})")}</p>' if row.doc_link else "")
             + f'</details></td><td data-label="Who can help">{_e(", ".join(_role_name(role) for role in row.roles))}</td></tr>'
         )
-    stats = " ".join(
-        f'<span class="stat">{counts[status]} {_e(_STATUS_LABELS.get(status, status))}</span>'
-        for status in ("Passed", "Failed", "Blocked", "Error", "Warning", "Manual", "Skipped", "NotConfigured")
-    )
     return (
         '<section id="diagnostics" class="panel"><h2>Check results</h2>'
         '<p>These results show what FlightCheck could verify. Readiness also depends on the reviews listed above.</p>'
-        f'<div class="status-counts">{stats}</div>'
+        f'<div class="status-counts syn-stats">{_status_totals(r)}</div>'
         '<p>Not checked does not mean Passed. Could not check means the check was unable to finish, '
         'not that it found a problem. Information-only notes do not require a review.</p>'
         f'<details class="support-details"><summary>View all {len(r.results)} check results and support details</summary>'
@@ -543,13 +652,6 @@ def render_da_report(r: RunResult) -> str:
         "NOT_READY": ("Issues need fixing", "The checks found problems that need fixing before this agent is ready."),
         "INCOMPLETE": ("More checks needed", "We still need test results, reviews or information before we can confirm this agent is ready."),
     }[state]
-    metrics = "".join(
-        f'<div class="metric"><strong>{counts[key]}</strong><span>{label}</span></div>'
-        for key, label in (
-            ("requiredDefinitions", "Required checks and reviews"), ("satisfied", "Confirmed"),
-            ("defects", "Required checks needing fixes"), ("incomplete", "Still to confirm"),
-        )
-    )
     dependency = _connection_warning(r)
     root_cause = (
         '<aside class="root-cause" id="dependency-detail" aria-labelledby="connection-issue-title">'
@@ -579,45 +681,52 @@ def render_da_report(r: RunResult) -> str:
         f'<img class="app-icon" src="{_APP_ICON_DATA_URI}" alt="Employee Self-Service icon">'
         '<div class="brand-title">Employee Self-Service FlightCheck</div></div>'
         '<p class="eyebrow">Readiness for employee use</p>'
-        f'<h1>{_e(target["agentSlug"].replace("-", " ").replace("_", " ").title() or "Your agent")}</h1>'
-        '<dl class="target"><dt>Environment type</dt>'
+        '<h1>Full readiness report</h1>'
+        '<dl class="target"><dt>Agent</dt>'
+        f'<dd>{_e(target["agentSlug"].replace("-", " ").replace("_", " ").title() or "Your agent")}</dd>'
+        '<dt>Environment type</dt>'
         f'<dd>{_e({"dev": "Development", "test": "Test", "prod": "Production"}.get(target["realm"], target["realm"]))}</dd>'
         f'<dt>Checked on</dt><dd>{_e(r.started)}</dd><dt>Time taken</dt><dd>{r.duration_secs} seconds</dd></dl>'
         f'<div class="verdict"><span class="decision {state_class}">{_e(decision)}</span><p>{_e(explanation)}</p></div>'
+        f'<p class="readiness-counts">{counts["requiredDefinitions"]} required checks and reviews · '
+        f'{counts["satisfied"]} confirmed · {counts["defects"]} needing fixes · '
+        f'{counts["incomplete"]} still to confirm</p>'
         '<p class="overview-note">This result applies only to the agent, environment and version checked. '
         'Missing information does not mean something is broken.</p>'
         + (f'<div class="context-gaps"><h3>What we could not confirm</h3><ul>{issues}</ul></div>' if issues else "")
         + '</header>'
-        '<nav class="report-nav" aria-label="Report sections"><a href="#overview">Summary</a><a href="#work">Next steps</a>'
-        '<a href="#check-details">Check details</a><a href="#evidence">Submit reviews</a>'
-        '<a href="#diagnostics">All results</a><a href="#coverage">Full check list</a></nav>'
         '<details class="panel howto"><summary>How to read this report</summary><div class="howto-body">'
         '<p>Review any items marked Needs fixing first. Could not check and Not checked do not mean Passed. '
         'Administrator checks and required reviews must still be completed before readiness can be confirmed.</p>'
         '<p>Use the next-steps table to find the right owner, then open the related checks for instructions. '
         'Opening this report or copying a review form does not complete a check.</p>'
-        '<p>This check does not change settings, publish your agent or submit employee requests.</p></div></details>'
-        f'<section class="panel synopsis" aria-label="Readiness at a glance"><h2>Readiness at a glance</h2>'
-        f'<div class="metrics tiles">{metrics}</div></section>'
+        '<p>This check does not change settings, publish your agent or submit employee requests.</p>'
+        '<nav class="report-nav" aria-label="Report sections"><a href="#overview">Summary</a><a href="#work">Next steps</a>'
+        '<a href="#readiness">Category tiles</a><a href="#check-details">Check details</a>'
+        '<a href="#evidence">Submit reviews</a><a href="#diagnostics">All results</a>'
+        '<a href="#coverage">Full check list</a></nav></div></details>'
         '<section id="work" class="panel actions-panel"><div class="section-heading"><h2>What to do next</h2>'
         f'<p>{work_count} groups of next steps. {counts["incomplete"]} checks and reviews still need to be confirmed. '
         f'For {counts["unknownApplicability"]} checks, first confirm whether you use the feature. '
         'Select an area to open its instructions.</p></div>'
+        + root_cause
+        + (work_table if work_table else '<p>There are no required checks left to confirm.</p>')
+        + '<button type="button" class="ap-more" id="more-actions" aria-expanded="false" hidden></button>'
+        + '<p id="no-work-match" hidden>No next steps match this filter.</p></section>'
+        + _synopsis(r)
+        +
+        '<section id="check-details" class="panel checks-card"><div class="section-heading">'
+        '<h2>Check details</h2><p>Open an area for findings and numbered next steps.</p></div>'
         '<div class="toolbar" hidden><div id="work-filter" class="filters" role="group" aria-label="Filter next steps">'
         '<button type="button" data-filter="all" aria-pressed="true">All</button>'
         '<button type="button" data-filter="verification" aria-pressed="false">Investigation</button>'
         '<button type="button" data-filter="evidence" aria-pressed="false">Reviews</button>'
         '<button type="button" data-filter="administrator" aria-pressed="false">Administrator help</button>'
         '<button type="button" data-filter="applicability" aria-pressed="false">Features to confirm</button>'
+        '<span class="fl-spacer"></span><button type="button" class="fold" id="expand-work">Expand all</button>'
+        '<button type="button" class="fold" id="collapse-work">Collapse all</button>'
         '</div><label class="search-label">Search<input id="work-search" type="search" placeholder="Check, feature or owner"></label>'
         '<span id="visible-work" role="status"></span></div>'
-        + root_cause
-        + (work_table if work else '<p>There are no required checks left to confirm.</p>')
-        + '<p id="no-work-match" hidden>No next steps match this filter.</p></section>'
-        '<section id="check-details" class="panel checks-card"><div class="section-heading">'
-        '<h2>Check details</h2><p>Open an area for findings and numbered next steps.</p></div>'
-        '<div class="fold-controls" hidden><button type="button" id="expand-work">Expand groups</button>'
-        '<button type="button" id="collapse-work">Collapse groups</button></div>'
         f'<div class="work-grid">{work}</div></section>'
         '<section id="evidence" class="panel"><h2>Record and submit reviews</h2><div class="evidence-grid"><div>'
         '<h3>How to complete a review</h3><ol><li>Collect the information listed under each check.</li>'
@@ -648,7 +757,7 @@ def render_da_report(r: RunResult) -> str:
     )
 
 
-_CSS = """
+_CSS = _REPORT_CSS + """
 :root{font-family:'Segoe UI Variable','Segoe UI',system-ui,sans-serif;color-scheme:light dark;
  --bg:#f5f5f5;--surface:#fff;--ink:#242424;--muted:#616161;--line:#e0e0e0;--accent:#0f6cbd;
  --success:#0e6b0e;--success-bg:#dff6dd;--danger:#a4262c;--danger-bg:#fde7e9;
@@ -659,7 +768,7 @@ a{color:var(--accent);text-underline-offset:3px}button,input,select,textarea{fon
 button,select,input[type=search]{border:1px solid var(--line);border-radius:4px;padding:8px 10px;background:var(--surface);color:var(--ink)}
 button{cursor:pointer;color:var(--accent);font-weight:600}button:hover{background:var(--neutral-bg)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-[hidden]{display:none!important}.app{max-width:1240px;margin:auto;padding:24px 20px 64px}
+[hidden]{display:none!important}.app{max-width:1080px;margin:auto;padding:24px 20px 64px}
 .brand{display:flex;flex-direction:column;align-items:flex-start;gap:12px;margin-bottom:16px}
 .app-icon{display:block;width:56px;height:56px;filter:drop-shadow(0 2px 5px #0000002e)}
 .brand-title{font-size:24px;line-height:32px;font-weight:600}
@@ -669,19 +778,29 @@ button{cursor:pointer;color:var(--accent);font-weight:600}button:hover{backgroun
 main{min-width:0}section,header{scroll-margin-top:20px;margin-bottom:18px}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px}
 .report{border-top:6px solid var(--accent)}
-.eyebrow{font-weight:600;color:var(--muted);margin:0 0 8px}h1{font-size:28px;line-height:1.25;overflow-wrap:anywhere;margin:0 0 16px;font-weight:600}
+.eyebrow{font-weight:600;color:var(--muted);margin:0 0 8px}h1{font-size:32px;line-height:40px;overflow-wrap:anywhere;margin:8px 0 12px;font-weight:600}
 h2{font-size:24px;line-height:32px;margin:0 0 8px;font-weight:600}h3{font-size:16px;margin:0 0 8px;font-weight:600}h4{font-size:14px;margin:18px 0 6px}
 p{margin:8px 0 12px}.muted,.section-heading p{color:var(--muted);font-size:13px}.overview p{max-width:760px}
-.verdict{border-top:1px solid var(--line);margin-top:20px;padding-top:16px}
+.verdict{display:block;border-top:1px solid var(--line);margin-top:16px;padding-top:16px}
 .decision{display:inline-flex;font-size:24px;line-height:32px;font-weight:600}
 .decision.success,.decision.danger,.decision.attention{background:transparent}
-.verdict p{margin:8px 0 12px}
+.verdict p{margin:8px 0 12px;font-size:14px;font-weight:400;line-height:20px;color:var(--ink)}
 .success{color:var(--success);background:var(--success-bg)}.danger{color:var(--danger);background:var(--danger-bg)}
 .attention{color:var(--attention);background:var(--attention-bg)}.neutral{color:var(--muted);background:var(--neutral-bg)}
-.target{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:13px}
+.target{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:14px}
 dt{color:var(--muted)}dd{margin:0;font-weight:600}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:16px}
 .metric{padding:16px;border:1px solid var(--line);border-radius:4px}.metric strong{display:block;font-size:28px;line-height:1.3;font-weight:600}
 .metric span{color:var(--muted);font-size:13px}.overview-note{color:var(--muted);font-size:13px;margin:0}
+.readiness-counts{font-size:13px;color:var(--muted)}
+.category-title{flex:1}.category-state{font-size:12px;font-weight:600;border-radius:999px;padding:3px 10px}
+.category-state.green{color:var(--accent-ink);background:var(--tile-pass)}.category-state.red{color:var(--accent-ink);background:var(--tile-fail)}
+.category-state.amber{color:#242424;background:var(--pill-warn)}.category-state.gray{color:var(--ink);background:var(--neutral-bg)}
+.category-section>.sec-body{padding:0 0 8px 16px}.category-section .group-title{font-size:14px}
+.completed-checks{list-style:none;padding:0;margin:0}
+.completed-checks li{display:flex;align-items:start;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);font-size:14px}
+.completed-checks li:last-child{border-bottom:0}.syn-role{overflow-wrap:anywhere}
+.ap-more{background:var(--surface);color:var(--ink);border-color:var(--line)}
+.ap-more:hover{background:var(--neutral-bg)}
 .context-gaps{background:var(--attention-bg);padding:16px;border-radius:4px;margin-top:16px}
 .howto{padding:0;margin-bottom:18px}.howto>summary{padding:12px 18px;font-size:14px}
 .howto-body{padding:6px 18px 14px;border-top:1px solid var(--line);font-size:13px}
@@ -728,10 +847,11 @@ footer{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:12px;pad
  .brand-title{font-size:21px}.report-nav a{padding:6px 8px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
  .evidence-grid{grid-template-columns:1fr}.metric strong{font-size:26px}.sec-body{padding-left:0}
  .work-card>summary,.requirement>summary{flex-wrap:wrap}.group-title{flex-basis:100%}.group-count{flex:1}
+ .category-section>summary{flex-wrap:wrap}.category-title{flex-basis:100%}.category-section>.sec-body{padding-left:0}
  .requirement>summary>.badge{margin-left:28px}h1{font-size:24px}.requirement-body{padding-left:10px}
  table,tbody,tr,th,td{display:block;width:100%}thead,colgroup{display:none}tbody tr{padding:12px 0;border-bottom:1px solid var(--line)}
  tbody th,tbody td{border:0;padding:5px 0}td[data-label]::before{content:attr(data-label);display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:3px}}
-@media(prefers-color-scheme:dark){:root{--bg:#141414;--surface:#1f1f1f;--ink:#f5f5f5;--muted:#c2c2c2;--line:#424242;--accent:#75b6e7;
+@media(prefers-color-scheme:dark){:root{--bg:#141414;--surface:#292929;--ink:#fff;--muted:#adadad;--line:#525252;--accent:#479ef5;
  --success:#9fd89f;--success-bg:#052505;--danger:#f1bbbc;--danger-bg:#442726;--attention:#fce100;--attention-bg:#443b18;--neutral-bg:#292929}}
 @media print{.app{max-width:none;padding:0}.report-nav,.toolbar,.fold-controls,.copy-template{display:none}
  .panel{box-shadow:none}.work-card{break-inside:avoid;margin-bottom:12px}}
@@ -740,10 +860,11 @@ footer{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:12px;pad
 
 _SCRIPT = """
 document.querySelector('.toolbar').hidden = false;
-document.querySelector('.fold-controls').hidden = false;
 const cards = Array.from(document.querySelectorAll('.work-card'));
+const categories = Array.from(document.querySelectorAll('.category-section'));
 const filterButtons = Array.from(document.querySelectorAll('[data-filter]'));
 let selectedKind = 'all';
+let showAllActions = false;
 function filterWork() {
   const search = document.getElementById('work-search').value.trim().toLowerCase();
   let shown = 0;
@@ -753,6 +874,22 @@ function filterWork() {
     document.querySelector('[data-group="' + card.id + '"]').hidden = card.hidden;
     if (!card.hidden) shown++;
   });
+  let actionRows = 0;
+  document.querySelectorAll('.summary-row').forEach(row => {
+    if (!row.hidden) row.hidden = !showAllActions && actionRows++ >= 3;
+  });
+  categories.forEach(category => {
+    const completed = category.querySelector('.completed-checks');
+    if (completed) completed.hidden = selectedKind !== 'all' ||
+      !completed.textContent.toLowerCase().includes(search);
+    category.hidden = !Array.from(category.querySelectorAll('.work-card')).some(card => !card.hidden) &&
+      !(completed && !completed.hidden);
+    if (!category.hidden && (selectedKind !== 'all' || search)) category.open = true;
+  });
+  const more = document.getElementById('more-actions');
+  more.hidden = shown <= 3;
+  more.textContent = showAllActions ? 'Show fewer areas' : 'Show ' + (shown - 3) + ' more areas';
+  more.setAttribute('aria-expanded', String(showAllActions));
   filterButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.filter === selectedKind)));
   const table = document.querySelector('.action-table');
   if (table) table.hidden = shown === 0;
@@ -764,11 +901,17 @@ filterButtons.forEach(button => button.addEventListener('click', () => {
   filterWork();
 }));
 document.getElementById('work-search').addEventListener('input', filterWork);
+document.getElementById('more-actions').addEventListener('click', () => {
+  showAllActions = !showAllActions;
+  filterWork();
+});
 document.getElementById('expand-work').addEventListener('click', () => {
+  categories.filter(category => !category.hidden).forEach(category => category.open = true);
   cards.filter(card => !card.hidden).forEach(card => card.open = true);
 });
 document.getElementById('collapse-work').addEventListener('click', () => {
   cards.forEach(card => card.open = false);
+  categories.forEach(category => category.open = false);
 });
 document.getElementById('required-only').addEventListener('change', event => {
   document.querySelectorAll('#coverage tr[data-required]').forEach(row => {
@@ -798,10 +941,13 @@ function openTarget(hash) {
     element = element.parentElement;
   }
   const card = target.closest('.work-card');
-  if (card && card.hidden) {
+  if ((card && card.hidden) || (target.matches('.category-section') && target.hidden)) {
     selectedKind = 'all';
     document.getElementById('work-search').value = '';
     filterWork();
+  }
+  if (target.matches('.category-section')) {
+    target.querySelectorAll('.work-card:not([hidden])').forEach(group => group.open = true);
   }
   target.scrollIntoView({block: 'start'});
 }
