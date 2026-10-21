@@ -216,6 +216,22 @@ existence unverified; incomplete inventories cannot prove a connection is absent
 
 Explicit `--connect-config` input accepts Workday connect state versions 2 through the current schema (v12), or the provider-generated flat projection. Both forms normalize the Workday tenant, Entra application URI, and OAuth token endpoint for validation without replacing the foundation agent identity. Unsupported state versions and malformed nested sections are rejected instead of silently losing provider configuration.
 
+**DA full-contract implementation (in progress):**
+
+The native `full` scope currently runs native agent readiness, environment
+capacity, connection dependencies, local files and publishing. It does not
+execute every DA-relevant evaluator or the separate Workday DA lifecycle
+profiles. Its diagnostic verdict is not comprehensive deployment approval.
+
+`scripts/flightcheck/da_contract.py` defines the DA coverage inventory and
+pure applicability planning. It separates existing evaluators, observations,
+manual requirements, DA-review gaps, conditional diagnostics and legacy-only
+checks. Feature states need explicit provenance; missing feature evidence
+remains unknown, not disabled. The catalog also accounts for dynamic result
+families and superseded IDs without counting execution guards as deployment
+requirements. This initial contract does not yet change CLI dispatch, reports,
+exit codes or Connect acceptance.
+
 **What it checks (41+ automated checks across 8 categories):**
 
 | Category | What's validated |
