@@ -44,17 +44,13 @@ ENTRA_ADMIN_ENGAGEMENT_QUESTION = (
     "the Application Administrator or Cloud Application Administrator role?"
 )
 ENTRA_ADMIN_COMPLETION_QUESTION = (
-    "Has the Microsoft Entra app administrator completed this handoff, "
-    "including Grant admin consent (by a separate consent-capable "
-    "administrator only if tenant policy required one)?"
+    "Has the Microsoft Entra administrator completed their task?"
 )
 ENTRA_PRESERVATION_OUTCOMES = {
     "preserved",
     "remediated",
 }
 ENTRA_WORKSHEET_LABELS = (
-    "Directory name",
-    "Enterprise application",
     "Application ID",
     "Selected Reply URL",
     "NameID source",
@@ -66,6 +62,10 @@ ENTRA_WORKSHEET_LABELS = (
     "Authorized connector",
     "Permissions and consent",
     "Employee assignment",
+)
+_ENTRA_LEGACY_OPTIONAL_WORKSHEET_LABELS = (
+    "Directory name",
+    "Enterprise application",
     "Existing configuration",
 )
 ENTRA_WORKSHEET_LABEL_ALIASES = {
@@ -100,8 +100,12 @@ def parse_entra_return_worksheet(
 ) -> dict[str, Any]:
     values = _parse_labeled_worksheet(
         worksheet,
-        labels=ENTRA_WORKSHEET_LABELS,
+        labels=(
+            ENTRA_WORKSHEET_LABELS
+            + _ENTRA_LEGACY_OPTIONAL_WORKSHEET_LABELS
+        ),
         label="Microsoft Entra app administrator return worksheet",
+        optional_labels=frozenset(_ENTRA_LEGACY_OPTIONAL_WORKSHEET_LABELS),
         label_aliases=ENTRA_WORKSHEET_LABEL_ALIASES,
     )
     confirmed = {
@@ -112,14 +116,6 @@ def parse_entra_return_worksheet(
         "Permissions and consent",
         {
             "Yes, permissions and consent are confirmed": "confirmed",
-        },
-    )
-    preservation = _worksheet_choice(
-        values,
-        "Existing configuration",
-        {
-            "Preserved without changes": "preserved",
-            "Remediated without replacing unrelated configuration": "remediated",
         },
     )
     _worksheet_choice(values, "SAML configuration", confirmed)
@@ -154,30 +150,36 @@ def parse_entra_return_worksheet(
         "samlSigningOption": _administrator_attestation(
             observed_value=saml_signing,
         ),
-        "existingScopesPreserved": _administrator_attestation(
-            observed_value=preservation,
-        ),
-        "authorizedClientsPreserved": _administrator_attestation(
-            observed_value=preservation,
-        ),
-        "permissionsPreserved": _administrator_attestation(
-            observed_value=preservation,
-        ),
     }
+    preservation_value = values.get("Existing configuration", "").strip()
+    if preservation_value:
+        preservation = _worksheet_choice(
+            values,
+            "Existing configuration",
+            {
+                "Preserved without changes": "preserved",
+                "Remediated without replacing unrelated configuration": (
+                    "remediated"
+                ),
+            },
+        )
+        checks.update(
+            {
+                "existingScopesPreserved": _administrator_attestation(
+                    observed_value=preservation,
+                ),
+                "authorizedClientsPreserved": _administrator_attestation(
+                    observed_value=preservation,
+                ),
+                "permissionsPreserved": _administrator_attestation(
+                    observed_value=preservation,
+                ),
+            }
+        )
     if permissions != "confirmed":
         raise WorkdayConnectContractError("Permissions and consent are incomplete.")
-    return {
-        "selectedDirectory": {
-            "displayName": _safe_nonsecret_text(
-                values["Directory name"],
-                "Directory name",
-            ),
-        },
+    result = {
         "application": {
-            "displayName": _safe_nonsecret_text(
-                values["Enterprise application"],
-                "Enterprise application",
-            ),
             "appId": _safe_nonsecret_text(
                 values["Application ID"],
                 "Application ID",
@@ -204,6 +206,21 @@ def parse_entra_return_worksheet(
         },
         "checks": checks,
     }
+    directory_name = values.get("Directory name", "").strip()
+    if directory_name:
+        result["selectedDirectory"] = {
+            "displayName": _safe_nonsecret_text(
+                directory_name,
+                "Directory name",
+            ),
+        }
+    application_name = values.get("Enterprise application", "").strip()
+    if application_name:
+        result["application"]["displayName"] = _safe_nonsecret_text(
+            application_name,
+            "Enterprise application",
+        )
+    return result
 
 
 def _candidate(candidate: Any) -> dict[str, Any]:
@@ -349,15 +366,28 @@ def build_entra_handoff(
     )
     if guided:
         actions = [
-            "Identify the existing Workday SSO application by the expected "
-            "Service Provider ID and matching Application ID",
+            "Identify and reuse the existing Workday SSO enterprise "
+            "application by the expected Service Provider ID and matching "
+            "Application ID; create the gallery application only when no "
+            "authoritative application exists",
+            "Configure SAML with the expected Identifier, the Workday Reply "
+            "URL, the Microsoft Entra Login URL, the Workday-compatible "
+            "NameID source, and Sign SAML response and assertion",
+            "Download the active Base64 signing certificate and transfer it "
+            "through the approved customer channel for the Workday handoff",
+            "Keep the Workday Service Provider ID and the Entra Application "
+            "ID URI distinct",
+            "Match the enterprise application to its app registration by "
+            "Application ID rather than display name",
+            "Expose the user_impersonation scope and authorize the Workday "
+            f"connector application {WORKDAY_CONNECTOR_APP_ID}",
+            "Add openid, profile, and User.Read delegated permissions and "
+            "grant administrator consent",
+            "Assign the intended ESS employee group when user assignment is "
+            "required",
             "Reuse the existing Workday enterprise application when SSO is "
-            "already established; otherwise follow the Microsoft Learn "
-            "Workday SSO tutorial to add Workday from the application gallery",
-            "Configure and verify every setting in the administrator guide, "
-            "download the active Base64 signing certificate and transfer it "
-            "through the approved customer channel for the Workday phase, "
-            "then return the completed table",
+            "already established and preserve unrelated scopes, authorized "
+            "clients, permissions, and assignments",
         ]
     elif app is None:
         actions = [
@@ -421,27 +451,6 @@ def build_entra_handoff(
         "actions": actions,
         "captureInstructions": [
             {
-                "information": "Directory name",
-                "fields": ["selectedDirectoryDisplayName"],
-                "portalLocation": (
-                    "Microsoft Entra admin center -> Microsoft Entra ID -> Overview"
-                ),
-                "instruction": (
-                    "Record the exact display name of the deployment directory."
-                ),
-                "exampleValue": "Contoso",
-            },
-            {
-                "information": "Enterprise application",
-                "fields": ["applicationDisplayName"],
-                "portalLocation": (
-                    "Microsoft Entra ID -> Enterprise applications -> the "
-                    "exact Workday application -> Overview"
-                ),
-                "instruction": "Record the exact application display name.",
-                "exampleValue": "Workday",
-            },
-            {
                 "information": "Application ID",
                 "fields": ["applicationId"],
                 "portalLocation": (
@@ -451,7 +460,7 @@ def build_entra_handoff(
                 "instruction": (
                     "Record the Application ID. Do not record either Object ID."
                 ),
-                "exampleValue": "11111111-1111-1111-1111-111111111111",
+                "exampleValue": "XXXX",
             },
             {
                 "information": "Selected Reply URL",
@@ -590,41 +599,24 @@ def build_entra_handoff(
                     "Yes, access is confirmed or assignment is not required"
                 ),
             },
-            {
-                "information": "Existing configuration",
-                "fields": [
-                    "entraChecks.existingScopesPreserved",
-                    "entraChecks.authorizedClientsPreserved",
-                    "entraChecks.permissionsPreserved",
-                ],
-                "portalLocation": (
-                    "App registrations -> the exact Workday registration -> "
-                    "Expose an API and API permissions"
-                ),
-                "instruction": (
-                    "Confirm unrelated scopes, authorized clients, and "
-                    "permissions were preserved."
-                ),
-                "exampleValue": "Preserved without changes",
-            },
         ],
         "informationToReturn": [
-            "Selected directory display name and exact Workday application "
-            "display name and Application ID",
+            "Exact Workday application ID",
             "Reply URL and confirmation that the displayed Entity ID matches "
             "the expected Workday Service Provider ID",
             "Exact NameID source attribute and SAML signing option",
             "Active certificate thumbprint and expiration date, plus "
             "confirmation that its Base64 certificate was transferred through "
             "an approved customer channel",
-            "Connector scope, delegated permissions and consent, employee "
-            "assignment, and preservation outcomes",
+            "Connector scope, delegated permissions and consent, and employee "
+            "assignment",
         ],
         "responseForm": {
             "required": sorted(ADMINISTRATOR_REQUIRED_FIELDS["entra"]),
             "collection": {
-                "mode": "labeled-worksheet",
+                "mode": "xlsx-workbook",
                 "acceptedFormats": [
+                    "xlsx-workbook",
                     "five-column-markdown-table",
                     "labeled-worksheet",
                 ],
@@ -634,12 +626,12 @@ def build_entra_handoff(
                 "validator": "parse_entra_return_worksheet",
             },
             "note": (
-                "Collect the administrator values in one response. Do "
-                "not accept blank required values or ask for passwords, client "
-                "secrets, tokens, cookies, certificate contents, or private "
-                "keys. After submission, show the capture location and a "
-                "mini-template containing only values that are missing, "
-                "invalid, or inconsistent."
+                "Upload the completed administrator workbook. Do not accept "
+                "blank required values or ask for passwords, client secrets, "
+                "tokens, cookies, certificate contents, or private keys. "
+                "After validation, identify only cells that are missing, "
+                "invalid, or inconsistent and ask the administrator to "
+                "correct the same workbook."
             ),
         },
     }
@@ -654,10 +646,13 @@ _ENTRA_CHECKS = {
     "userAssignment",
     "nameId",
     "samlSigningOption",
+}
+_ENTRA_OPTIONAL_CHECKS = {
     "existingScopesPreserved",
     "authorizedClientsPreserved",
     "permissionsPreserved",
 }
+_ENTRA_ACCEPTED_CHECKS = _ENTRA_CHECKS | _ENTRA_OPTIONAL_CHECKS
 _ROLE_AWARE_GRAPH_ENTRA_CHECKS = _ENTRA_CHECKS - {
     "nameId",
     "samlSigningOption",
@@ -819,11 +814,9 @@ def validate_entra_verification(
             "Entra verification application must contain an object."
         )
     application = {
-        "displayName": _required_text(
-            application_value,
-            "displayName",
-            "Entra app display name",
-        ),
+        "displayName": str(
+            application_value.get("displayName") or ""
+        ).strip(),
         "appId": _required_text(
             application_value,
             "appId",
@@ -895,7 +888,9 @@ def validate_entra_verification(
             "Entra verification checks must contain an object."
         )
     supplied_checks = dict(checks)
-    unexpected_checks = sorted(supplied_checks.keys() - _ENTRA_CHECKS)
+    unexpected_checks = sorted(
+        supplied_checks.keys() - _ENTRA_ACCEPTED_CHECKS
+    )
     if unexpected_checks:
         raise WorkdayConnectContractError(
             "Entra verification contains unsupported checks: "
@@ -908,21 +903,23 @@ def validate_entra_verification(
         )
     normalized_checks = {
         name: _normalize_entra_check(name, supplied_checks[name])
-        for name in sorted(_ENTRA_CHECKS)
+        for name in sorted(supplied_checks)
     }
-    selected_directory = verification.get("selectedDirectory")
-    if not isinstance(selected_directory, Mapping):
+    selected_directory_value = verification.get("selectedDirectory")
+    if selected_directory_value is None:
+        selected_directory: Mapping[str, Any] = {}
+    elif isinstance(selected_directory_value, Mapping):
+        selected_directory = selected_directory_value
+    else:
         raise WorkdayConnectContractError(
             "The selected Microsoft Entra directory must contain an object."
         )
     selected_directory_id = str(
         selected_directory.get("tenantId") or expected_tenant_id
     ).strip()
-    selected_directory_name = _required_text(
-        selected_directory,
-        "displayName",
-        "Selected Microsoft Entra directory display name",
-    )
+    selected_directory_name = str(
+        selected_directory.get("displayName") or ""
+    ).strip()
     if selected_directory_id.casefold() != expected_tenant_id.casefold():
         raise WorkdayConnectContractError(
             "The selected Microsoft Entra directory does not match the "
@@ -996,9 +993,7 @@ def validate_entra_verification(
         identifiers["scopeGuid"] = scope_guid
     partial_evidence = {
         "selectedDirectoryId": selected_directory_id,
-        "selectedDirectoryDisplayName": selected_directory_name,
         "applicationId": application["appId"],
-        "applicationDisplayName": application["displayName"],
         "applicationIdentifierUris": (
             application["identifierUris"] or [expected_entity_id, expected_app_uri]
         ),
@@ -1011,16 +1006,27 @@ def validate_entra_verification(
         "samlSigningOption": normalized_checks["samlSigningOption"]["observedValue"],
         "certificateThumbprint": safe_certificate["thumbprint"],
         "certificateValidTo": safe_certificate["validTo"],
-        "scopePreservationOutcome": normalized_checks["existingScopesPreserved"][
-            "observedValue"
-        ],
-        "authorizedClientPreservationOutcome": normalized_checks[
-            "authorizedClientsPreserved"
-        ]["observedValue"],
-        "permissionPreservationOutcome": normalized_checks["permissionsPreserved"][
-            "observedValue"
-        ],
     }
+    if selected_directory_name:
+        partial_evidence["selectedDirectoryDisplayName"] = (
+            selected_directory_name
+        )
+    if application["displayName"]:
+        partial_evidence["applicationDisplayName"] = application[
+            "displayName"
+        ]
+    for check_name, field_name in (
+        ("existingScopesPreserved", "scopePreservationOutcome"),
+        (
+            "authorizedClientsPreserved",
+            "authorizedClientPreservationOutcome",
+        ),
+        ("permissionsPreserved", "permissionPreservationOutcome"),
+    ):
+        if check_name in normalized_checks:
+            partial_evidence[field_name] = normalized_checks[check_name][
+                "observedValue"
+            ]
     if certificate_valid_from:
         partial_evidence["certificateValidFrom"] = certificate_valid_from
     if application["objectId"]:
@@ -1029,15 +1035,21 @@ def validate_entra_verification(
         partial_evidence["servicePrincipalId"] = application["servicePrincipalId"]
     if scope_guid:
         partial_evidence["scopeGuid"] = scope_guid
+    selected_directory_evidence = {
+        "tenantId": selected_directory_id,
+    }
+    if selected_directory_name:
+        selected_directory_evidence["displayName"] = (
+            selected_directory_name
+        )
     return {
         "identifiers": identifiers,
         "evidence": {
             "tenantId": observed_tenant_id,
-            "selectedDirectory": {
-                "tenantId": selected_directory_id,
-                "displayName": selected_directory_name,
-            },
-            "applicationDisplayName": application["displayName"],
+            "selectedDirectory": selected_directory_evidence,
+            "applicationDisplayName": (
+                application["displayName"] or application["appId"]
+            ),
             "checks": normalized_checks,
         },
         "partialEvidence": partial_evidence,

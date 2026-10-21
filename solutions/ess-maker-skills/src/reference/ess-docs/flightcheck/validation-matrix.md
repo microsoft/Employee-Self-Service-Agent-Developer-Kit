@@ -220,7 +220,7 @@ not coupled to a Connect lifecycle.
 | `workday-da:setup-readiness`        | Live readiness of the selected ESS HR declarative agent and its materialized workspace content                                |
 | `workday-da:package-ready`          | Selected-agent Workday runtime package installation                                                                          |
 | `workday-da:dataverse-ready`        | Workday runtime package, Dataverse workflow inventory, and runtime connection-reference readiness                            |
-| `workday-da:external-prerequisites` | Entra, Workday tenant, permission, and network prerequisites                                                                 |
+| `workday-da:external-prerequisites` | Entra signing, Workday API-client and tenant prerequisites; network attestation remains a separate conditional diagnostic |
 | `workday-da:post-runtime`           | Reviewed runtime-flow inventory                                                                                              |
 | `workday-da:post-connection`        | Connection-reference, delegated authorization, and Workday endpoint readiness                                                |
 | `workday-da:post-agent-wiring`      | Workday topic, wiring, guided flow attachment, and endpoint validation for the selected DA                                   |

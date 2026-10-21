@@ -367,7 +367,8 @@ def test_external_profile_reconciles_manual_rows_from_controller_evidence():
 
     summary = evaluate_contract(contract, state, profile)
 
-    assert len(summary["acceptedSuppressions"]) == 4
+    assert len(summary["acceptedSuppressions"]) == 3
+    assert "WD-NET-001" not in summary["checkpointStatuses"]
 
 
 def test_external_profile_keeps_entra_failure_in_started_workday_phase():

@@ -32,12 +32,12 @@ it is not a customer-executed phase and must not be shown as an extra step.
   checked-in script evidence that produced the diagnosis.
 - Use structured `vscode_askQuestions` forms for choices and short customer
   evidence. The Entra and Workday administrator handoffs are the only
-  exception: collect all required administrator values in one response and
-  pass the untouched text to the controller's worksheet parser. Accept the
-  generated table or a recognizable labeled response without asking the
-  customer to reformat it. Accept only the resulting validated structured
-  payload. Reject missing, duplicate, or unknown labels; never infer an answer
-  or treat the raw text as evidence.
+  exception: share the checked-in workbook, collect the administrator's
+  completed `.xlsx` file in one upload, and pass that file to the controller's
+  worksheet parser. Accept only the resulting validated structured payload.
+  Reject missing, duplicate, or unknown labels, formulas, and unsafe workbook
+  content; never infer an answer or treat an upload as evidence before
+  validation.
 - Leave every option initially unset. Do not add `recommended`, `default`,
   “recommended” label text, or any equivalent preselection to approvals,
   factual observations, connection choices, or validation outcomes. Continue
@@ -110,9 +110,10 @@ work. Publishing and non-maker validation happen after this guided lifecycle.
   maker-authenticated Graph reread. Keep setup blocked until the exact target
   and tenant relationship can be verified.
 - Ask the administrator to repeat only missing, changed, or unhealthy settings.
-  A different environment, agent, or maker account may require current
-  confirmation, but it must not make the administrator repeat healthy tenant
-  configuration.
+  Outside the verified promotion path, every fresh Entra sign-off must be
+  followed by fresh Workday administrator confirmation and a completed
+  workbook. Matching a saved tenant foundation does not complete that phase.
+  Healthy settings may be confirmed without repeating configuration changes.
 - Never reuse foundation evidence across a different Entra tenant, Workday
   tenant, SAML Service Provider ID, Entra application, or signing certificate.
 - Preserve the full administrator guide even on the reuse path, but show only
@@ -279,8 +280,9 @@ from `nextPhaseId`:
 
 When `nextPhaseId` is `entra`, dispatch to `provision-entra-app.md` without the
 form below. That phase asks whether the maker has engaged the administrator,
-presents the guided handoff, and validates the returned non-secret evidence.
-It must not authenticate the maker to Graph or perform live Entra API checks.
+presents the guided handoff steps and checked-in workbook, asks whether the
+administrator completed the task, and validates the uploaded workbook. It
+must not authenticate the maker to Graph or perform live Entra API checks.
 
 When `nextPhaseId` is `workday-admin`, show only its row and use this exact
 `vscode_askQuestions` form before dispatching that phase:
@@ -299,8 +301,8 @@ When `nextPhaseId` is `workday-admin`, show only its row and use this exact
 ]
 ```
 
-For every other returned `nextPhaseId` except `entra`, show only its row and
-use this exact `vscode_askQuestions` form before dispatching that phase:
+When `nextPhaseId` is `preflight` or `runtime`, show only its row and use this
+exact `vscode_askQuestions` form before dispatching that phase:
 
 ```json
 [
@@ -316,20 +318,68 @@ use this exact `vscode_askQuestions` form before dispatching that phase:
 ]
 ```
 
-Leave the selection unset. This is an availability self-attestation for
-planning, not proof that the signed-in account has a required role. The
-phase-specific live checks or structured administrator evidence remain
-authoritative.
+When `nextPhaseId` is `connections`, show only its row and use this exact
+`vscode_askQuestions` form before dispatching that phase:
+
+```json
+[
+  {
+    "header": "Connection creation privilege",
+    "question": "Do you have the Power Platform Environment Maker privilege and package installation access to create the Workday connections?",
+    "options": [
+      { "label": "Yes, I have the required privilege and access" },
+      { "label": "No, I do not have the required privilege or access" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+When `nextPhaseId` is `maker-validation`, show only its row and use this exact
+`vscode_askQuestions` form before dispatching that phase:
+
+```json
+[
+  {
+    "header": "Maker validation privilege",
+    "question": "Do you have the Environment Maker privilege to perform maker validation in the Copilot Studio Test pane?",
+    "options": [
+      { "label": "Yes, I have the required privilege and access" },
+      { "label": "No, I do not have the required privilege or access" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave every selection unset. The Connections and Maker validation answers are
+privilege self-attestations for routing; the Preflight and Runtime answer is an
+availability self-attestation. None is proof that the signed-in account has
+the required role. The phase-specific live checks or structured administrator
+evidence remain authoritative.
+
+After the maker confirms the Workday administrator is engaged, the Workday
+phase presents the applicable steps in chat and shares the checked-in
+workbook. It tells the maker to have the administrator fill the workbook in
+parallel, asks whether the task is complete, then requests the completed
+`.xlsx` upload. It must not ask the maker to paste the worksheet table or
+retype the administrator values.
 Do not include people from completed phases or remediation-only roles that are
 not currently required. In particular, require the Workday Administrator only
 when `nextPhaseId` is `workday-admin`; a healthy reused tenant foundation
-continues at Connections without that role.
+on a controller-verified Test or Production promotion continues at Connections
+without that role. A regular Entra workbook return must not take this shortcut.
 
-If the maker selects either negative option, stop before dispatching the next
-phase. Explain that no phase progress or target configuration was changed and
-ask them to return when the required person can participate. Do not request
-the person's name, credentials, or other identifying information, and do not
-offer to bypass the role requirement.
+If the maker selects a negative administrator-engagement option, stop before
+dispatching the next phase and ask them to return when that administrator can
+participate. If the maker selects a negative maker-privilege option, stop and
+ask them to return after the required privilege or access is granted, or to
+rerun the skill using the authorized maker account. If the maker selects the
+negative generic availability option, ask them to return when the required
+people are available. In every case, explain that no phase progress or target
+configuration was changed. Do not request a person's name, credentials, or
+other identifying information, and do not offer to bypass the role
+requirement.
 
 If the maker selects either affirmative option, dispatch the next phase below.
 Within the same invocation, do not repeat the question while `nextPhaseId`

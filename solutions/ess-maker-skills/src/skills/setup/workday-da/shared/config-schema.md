@@ -131,9 +131,13 @@ These values are independent and must never be aliases:
 - A relevant scope, identifier, endpoint, or operator change invalidates the
   owning deployment phase and downstream state, evidence, blockers, and
   approvals. It does not delete a previously captured tenant foundation.
-- After a deployment reset, the exact Entra application must be reread. When
-  that evidence still matches `tenantFoundation`, the Workday administrator
-  phase is restored without asking the administrator to repeat configuration.
+- After a deployment reset, the exact Entra application must be reread.
+  Successful Entra sign-off always requires fresh Workday administrator
+  confirmation and a completed workbook, even when it matches
+  `tenantFoundation`. Existing healthy settings need confirmation, not changes.
+- On resume, older regular-flow `stored-tenant-foundation` reuse evidence
+  reopens Workday administrator and downstream phases. Entra evidence and the
+  saved foundation are retained; verified promotion reuse remains valid.
 - Tenant-foundation evidence is never reused across a different Entra tenant,
   Workday tenant, application, SAML Service Provider ID, signing certificate,
   or endpoint set.

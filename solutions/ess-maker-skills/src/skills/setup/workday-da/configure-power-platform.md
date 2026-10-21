@@ -336,36 +336,42 @@ Copilot Studio browser session are separate. If the browser shows another
 account, the maker must switch accounts or use a separate browser profile
 before selecting a connection.
 
-Connect both reviewed maker-visible Workday entries:
+Connect both maker-visible entries displayed as **Workday**. Do not show the
+maker the internal flow or component names.
 
-1. **ESS Workday Runtime**
-2. **ESS Workday Runtime REST Execution**
+For each **Workday** entry:
 
-For each entry, select **Manage**, choose the already-created Workday
-connection, and save or confirm the selection. The reviewed native agent
-contract marks **ESS Workday Runtime References** as `EmbeddedOnly`; it is not
-expected to require a separate maker-selected connection. For both exposed
-entries, enable **Allow permission to share parameters**. This prevents each
-employee from receiving an unexpected first-use connection prompt.
+1. Select **Connect**.
+2. Select the already-created Workday connection and confirm the selection.
+3. Select **Manage**.
+4. Enable **Allow permission to share parameters**.
+
+This prevents each employee from receiving an unexpected first-use connection
+prompt.
 
 Internal execution note—never show this implementation detail to the customer:
+the two maker-visible **Workday** entries map internally to **ESS Workday
+Runtime** and **ESS Workday Runtime REST Execution**. The reviewed native agent
+contract marks **ESS Workday Runtime References** as `EmbeddedOnly`; it is not
+expected to require a separate maker-selected connection.
 `connectionType: EmbeddedOnly` is separate from the Dataverse
 `delegatedauthorization` records created earlier. The former controls the
 agent-facing connection contract; the latter grants the Cosmos-backed agent
 principal access to the reviewed Dataverse workflows. Do not skip or scope the
 authorization stage solely from `connectionType`.
 
-Show the exact agent name and both reviewed agent-facing flows. Use
+Show the exact agent name and refer only to the two entries displayed as
+**Workday**. Do not expose their internal flow or component names. Use
 `vscode_askQuestions`:
 
 ```json
 [
   {
-    "header": "Confirm Workday flow connection",
-    "question": "In this exact agent, are ESS Workday Runtime and ESS Workday Runtime REST Execution both connected to the reviewed Workday connection, with parameter sharing enabled for both entries?",
+    "header": "Confirm Workday connection",
+    "question": "In this exact agent, are both entries displayed as Workday connected to the reviewed Workday connection, with Allow permission to share parameters enabled under Manage for both?",
     "options": [
       { "label": "Yes, confirmed" },
-      { "label": "No, review the agent connections" }
+      { "label": "No, review the Workday connection settings" }
     ],
     "allowFreeformInput": false
   }

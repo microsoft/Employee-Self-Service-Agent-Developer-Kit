@@ -55,7 +55,6 @@ from workday_connect_state_policy import (
     foundation_matches_current_entra as _foundation_matches_current_entra,
     invalidate_after_phase as _invalidate_after_phase,
     invalidate_from_phase as _invalidate_from_phase,
-    legacy_administrator_partial_evidence,
     normalize_lifecycle_history,
     reset_phase as _reset_phase,
     tenant_foundation_from_state as _tenant_foundation_from_state,
@@ -310,17 +309,39 @@ def _rotate_lifecycle(state: dict[str, Any]) -> None:
         _append_lifecycle_event(state, "invoked")
 
 
+def _reopen_unconfirmed_workday_administrator(state: dict[str, Any]) -> None:
+    phase = (state.get("phases") or {}).get("workday-admin") or {}
+    reuse = next(
+        (
+            record
+            for record in reversed(phase.get("evidence") or [])
+            if isinstance(record, Mapping)
+            and record.get("action") == "tenant-foundation-reused"
+        ),
+        {},
+    )
+    if reuse.get("provenance") != "stored-tenant-foundation":
+        return
+    _invalidate_from_phase(state, "workday-admin")
+    state["status"] = "in-progress"
+    if "deploymentStatus" in state:
+        state["deploymentStatus"] = "partially-configured"
+    state["updatedAt"] = utc_now()
+
+
 def _normalize_current_state(
     document: Mapping[str, Any],
 ) -> dict[str, Any]:
     state = copy.deepcopy(dict(document))
     discard_legacy_workday_admin_authorization(state)
     normalize_lifecycle_history(state)
+    _reopen_unconfirmed_workday_administrator(state)
     targets = state.get("targets")
     if isinstance(targets, dict):
         for target in targets.values():
             if isinstance(target, dict):
                 normalize_lifecycle_history(target)
+                _reopen_unconfirmed_workday_administrator(target)
     synchronize_active_target(state)
     return state
 
@@ -757,7 +778,7 @@ def _upgrade_or_migrate_state(
     workspace_root: Path,
 ) -> dict[str, Any]:
     try:
-        state = migrate_state(document)
+        state = _normalize_current_state(migrate_state(document))
         _refresh_migrated_profile_fingerprints(
             workspace_root,
             document,
@@ -1554,72 +1575,6 @@ class WorkdayConnectStore:
             reused = _initialize_promoted_target_from_foundation_in_state(
                 state
             )
-
-        state = self._mutate(mutation)
-        return state, reused
-
-    def restore_workday_foundation(self) -> tuple[dict[str, Any], bool]:
-        """Reuse Workday administrator evidence after a fresh Entra reread."""
-        reused = False
-
-        def mutation(state: dict[str, Any]) -> None:
-            nonlocal reused
-            foundation = state.get("tenantFoundation")
-            if not isinstance(foundation, Mapping):
-                return
-            if (
-                state["phases"]["preflight"]["status"] != PhaseStatus.COMPLETE.value
-                or state["phases"]["entra"]["status"] != PhaseStatus.COMPLETE.value
-            ):
-                return
-            if not _foundation_matches_current_entra(state, foundation):
-                return
-            foundation_identifiers = foundation.get("identifiers") or {}
-            for key in _WORKDAY_IDENTIFIER_KEYS:
-                if foundation_identifiers.get(key) is not None:
-                    state["identifiers"][key] = copy.deepcopy(
-                        foundation_identifiers[key]
-                    )
-            state["endpoints"].update(
-                copy.deepcopy(dict(foundation.get("endpoints") or {}))
-            )
-            snapshot = (foundation.get("phases") or {}).get("workday-admin")
-            if not isinstance(snapshot, Mapping):
-                return
-            phase = state["phases"]["workday-admin"]
-            _reset_phase(phase)
-            phase["status"] = PhaseStatus.ACTIVE.value
-            phase["completedActions"] = copy.deepcopy(
-                list(snapshot.get("completedActions") or [])
-            )
-            phase["evidence"] = copy.deepcopy(list(snapshot.get("evidence") or []))
-            snapshot_administrator = snapshot.get("administrator")
-            if isinstance(snapshot_administrator, Mapping):
-                phase["administrator"] = copy.deepcopy(
-                    dict(snapshot_administrator)
-                )
-            else:
-                phase["administrator"] = default_administrator_state()
-                phase["administrator"]["partialEvidence"] = (
-                    legacy_administrator_partial_evidence(
-                        state,
-                        "workday-admin",
-                    )
-                )
-            phase["administrator"]["substage"] = "collecting-evidence"
-            phase["administrator"]["invalidFields"] = []
-            phase["administrator"]["updatedAt"] = utc_now()
-            phase["evidence"].append(
-                {
-                    "action": "tenant-foundation-reused",
-                    "outcome": "verified",
-                    "provenance": "stored-tenant-foundation",
-                    "foundationCapturedAt": foundation["capturedAt"],
-                    "capturedAt": utc_now(),
-                }
-            )
-            phase["updatedAt"] = utc_now()
-            reused = True
 
         state = self._mutate(mutation)
         return state, reused

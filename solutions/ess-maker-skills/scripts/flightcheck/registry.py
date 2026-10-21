@@ -797,7 +797,6 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             # "WD-CONN-102",
             "WD-API-CLIENT-001",
             "WD-TENANT-001",
-            "WD-NET-001",
         ),
     ),
     ProfileSpec(
@@ -853,7 +852,6 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             "DV-CONN-001",
             "WD-REST-001",
             "WD-REST-002",
-            "WD-NET-001",
             "WD-DA-TOPIC-001",
             "WD-DA-WIRING-001",
             "WD-DA-ATTACH-001",
