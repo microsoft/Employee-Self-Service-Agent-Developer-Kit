@@ -14,6 +14,8 @@ import re
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from .agent_scope import active_agent
+from .checks.environment import _ENV004_GRS_EXPECTED_COMMIT_KEYS, _env004_pin_value
 from .da_contract import (
     DAApplicability, DACheckpoint, DADisposition, DAFeature, DAFeatureEvidence,
     DA_REVIEWABLE_FEATURES, build_da_coverage_plan, resolve_da_feature_evidence,
@@ -107,11 +109,17 @@ def _revision(runner, result: RunResult, target: dict) -> str | None:
          for ref in audit.references),
         key=lambda item: json.dumps(item),
     ) if audit is not None else []
+    config = getattr(runner, "config", None) or {}
+    pin = _env004_pin_value(
+        dict(config, agent=active_agent(config, target["agentSlug"])),
+        _ENV004_GRS_EXPECTED_COMMIT_KEYS,
+    )
     payload = {
         "target": target,
         "nativeSnapshot": {key: value for key, value in snapshot["changeset"].items() if key != "changeToken"},
         "bindings": references,
-        "alm": [
+        "releasePin": pin,
+        "installation": [
             {"status": row.status, "evidence": row.evidence}
             for row in result.results if row.checkpoint_id == "ESS-SOLN-001"
         ],

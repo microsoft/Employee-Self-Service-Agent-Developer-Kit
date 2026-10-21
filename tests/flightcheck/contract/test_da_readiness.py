@@ -394,6 +394,29 @@ def test_snapshot_change_invalidates_review_and_unverified_target_cannot_certify
     assert "verified_configuration_snapshot_unavailable" in actual["issues"]
 
 
+def test_selected_revision_pin_change_invalidates_existing_owner_review():
+    case = _case()
+    record = _record(case)
+    assert _assessment(case, [record])["deploymentReadiness"] == "READY"
+    case.runner.config["agents"][0]["expectedGrsCommitSha"] = "reviewed-new-release"
+    actual = _assessment(case, [record])
+    assert actual["configurationRevision"] != record["configurationRevision"]
+    assert actual["deploymentReadiness"] == "INCOMPLETE"
+    assert not actual["evidenceReviews"][0]["accepted"]
+
+
+def test_unrelated_sibling_revision_pin_does_not_invalidate_selected_review():
+    case = _case()
+    record = _record(case)
+    case.runner.config["agents"].append({
+        "slug": "sibling", "botId": "00000000-0000-0000-0000-000000009999",
+        "expectedGrsCommitSha": "unrelated-release",
+    })
+    actual = _assessment(case, [record])
+    assert actual["configurationRevision"] == record["configurationRevision"]
+    assert actual["deploymentReadiness"] == "READY"
+
+
 def test_missing_results_duplicate_buckets_and_dynamic_details_are_not_extra_requirements():
     case = _case("ENV-004-UR-*")
     record = _record(case)

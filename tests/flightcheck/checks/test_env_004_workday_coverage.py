@@ -326,6 +326,70 @@ def test_live_partial_topic_capture_preserves_verified_bindings(monkeypatch):
     assert "component state alone does not establish activation" in summary.remediation
 
 
+def test_da_partial_capture_excludes_only_proven_sap_only_topics(monkeypatch):
+    interactions = _captured(CASSETTE.with_name("env004_partial_topics.yaml"))
+    runner = _http_runner(monkeypatch, interactions)
+    runner.da_full_assessment = True
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as replay:
+        for item in interactions:
+            replay.add(
+                item["request"]["method"], item["request"]["uri"].split("?")[0],
+                json=_body(item), status=item["response"]["status"]["code"],
+            )
+        rows = _check_connections_and_refs(runner)
+    summary = next(row for row in rows if row.checkpoint_id == "ENV-004")
+    assert summary.status == "Passed"
+    assert "3 bound" in summary.result
+    assert "12 self-contained SAP-only" in summary.result
+    assert summary.remediation == ""
+    exclusions = summary.evidence["scopeExclusions"]
+    assert len(exclusions) == 12
+    assert all(item["activation"] == "unverified" for item in exclusions)
+    assert summary.evidence["dependencyCoverageComplete"] is True
+
+
+@pytest.mark.parametrize("change", ["mixed", "flow", "redirect", "unrecognized", "missing_reference", "duplicate_reference"])
+def test_da_unknown_activation_is_not_excluded_by_sap_name_or_partial_calls(change):
+    from flightcheck.checks._connection_dependencies import _dependencies
+
+    payload = _body(next(
+        item for item in _captured(CASSETTE.with_name("env004_partial_topics.yaml"))
+        if "/components?" in item["request"]["uri"]
+    ))
+    topic = deepcopy(next(
+        item for item in payload["botComponentChanges"]
+        if item["component"].get("status") is None
+    ))
+    topic["component"]["schemaName"] = "test.topic.SuccessFactors"
+    actions = topic["component"]["dialog"]["beginDialog"]["actions"]
+    sap = next(
+        item for item in payload["connectionReferenceChanges"]
+        if "shared_sapodata" in item["connectionReference"]["connectorId"]
+    )
+    if change == "mixed":
+        other = next(
+            item for item in payload["connectionReferenceChanges"]
+            if "shared_service-now" in item["connectionReference"]["connectorId"]
+        )
+        actions.append({
+            "$kind": "InvokeConnectorAction",
+            "connectionReference": other["connectionReference"]["connectionReferenceLogicalName"],
+        })
+    elif change in {"flow", "redirect", "unrecognized"}:
+        actions.append({"$kind": {"flow": "InvokeFlowAction", "redirect": "BeginDialog",
+                                 "unrecognized": "FutureAction"}[change]})
+    elif change == "missing_reference":
+        payload["connectionReferenceChanges"].remove(sap)
+    else:
+        payload["connectionReferenceChanges"].append(deepcopy(sap))
+    payload["botComponentChanges"] = [topic]
+    excluded = []
+    _, _, warnings = _dependencies(payload, excluded_topics=excluded)
+    assert excluded == []
+    assert len(warnings) == 1
+    assert "activation could not be verified" in warnings[0]
+
+
 def _workday_row(case):
     return next(row for row in case.rows
                 if row["connectionreferencelogicalname"] == "msdyn_sharedworkdaysoap_workdayruntime")

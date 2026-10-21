@@ -202,6 +202,12 @@ In DA full, unrelated additional connections do not downgrade a complete,
 healthy required-binding result or block readiness. Incomplete discovery and
 unverified required bindings still need investigation. Legacy connection
 reports retain their existing advisory Warning for additional connections.
+DA full excludes a self-contained conversation only when its actual connector
+references all resolve to SAP and its actions contain no flow calls, redirects,
+branches or unsupported operations. These exclusions are recorded with their
+actual or unverified activation state; neither the conversation name nor
+`state: Active` proves activation. Mixed, malformed or unresolved conversations
+still leave coverage incomplete. No SAP connection check is run for this scope.
 
 Native reads support the selected service ring. Flow administration and Dataverse environment discovery are currently verified only on the `prod` service ring; an affected dependency on another ring is reported as incomplete, never passed. The service ring is distinct from the agent's Dev/Test/Prod deployment realm. All calls are read-only. This checkpoint validates bindings and connection existence, not Workday credentials or business operations.
 
@@ -254,8 +260,9 @@ custom-engine-owned results retains its existing behavior.
 An optional DA release-commit pin is checked in the verified assessment realm,
 not a legacy ALM realm alias or an implicit Dev default. The returned ALM
 agent ID, schema and realm must match before comparing its commit.
-Evidence freshness binds the inspected native snapshot, connection bindings and
-ALM metadata, not the implementation bodies or versions of invoked flows.
+Evidence freshness binds the inspected native snapshot, connection bindings,
+native installation evidence and the selected agent's configured revision pin,
+not the implementation bodies or versions of invoked flows.
 Changes to those flow implementations are not independently version-pinned by
 this assessment.
 
@@ -269,9 +276,9 @@ requirements. `da_execution.py` schedules only approved, registered producers;
 it does not run the old broad categories and then filter away legacy results.
 Reviewed producers now cover exact native access/content, selected-workspace
 identity and inventory, dependency bindings, optional revision pins, ESS
-installation/configuration metadata and allocation observations. Local content
-does not establish deployed freshness; configuration metadata does not establish
-package signature, import success or employee execution.
+native ESS identity/content and allocation observations. Native identity/content
+does not establish package origin, package signature, release revision, import
+success or employee execution.
 
 Licensing, effective access, billing, capacity sizing, effective connector policy,
 managed-runtime egress, native knowledge/handoff behavior and publication
@@ -288,9 +295,11 @@ Definitions are not a count of executable or mandatory deployment checks.
 deferred. `PUB-001` and `PUB-002` remain visible as outside this review, are not
 executed and do not block readiness. No exportable ZIP, promotion evidence or
 additional ALM enrollment/publication is required. Legacy export/import behavior
-is unchanged. Existing read-only installation identity/configuration metadata
-and explicitly configured revision pins are retained; these are not export or
-promotion operations.
+is unchanged. `ESS-SOLN-001` reuses the verified native snapshot for exact ESS
+identity and content; it does not call ALM configure or require repository/commit
+provenance. Explicitly configured revision pins remain enforced separately and
+still require their exact-target ALM read. Changing the selected revision pin
+invalidates prior owner evidence; a sibling agent's pin does not.
 
 Complete-catalog CLI replay with real producers and grounded read contracts
 can reach `READY` after valid feature and owner reviews, without export or import.
@@ -457,8 +466,9 @@ ServiceNow use requires external-endpoint coverage. Contradictory declarations
 are rejected, not silently normalized.
 
 Feature review controls scope, not feature health: enabled features still need
-their separate checks and owner evidence. The required ALM metadata observation
-is read once and reused to bind the review before conditional checks are planned.
+their separate checks and owner evidence. Native installation evidence is
+reused to bind the review before conditional checks are planned; no additional
+ALM lookup is needed unless an explicit revision pin requires it.
 The review is revalidated at the final decision; expiry or changed configuration
 removes its exclusions. Graph-source and Workday-administrator checks remain
 Skipped with external review requirements; the maker is not authenticated to

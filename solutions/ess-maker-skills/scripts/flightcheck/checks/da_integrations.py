@@ -58,7 +58,7 @@ def discover_da_features(runner) -> dict[DAFeature, DAFeatureEvidence]:
     runner._da_connection_audit = audit
     complete = not (audit.blocked or audit.warnings or audit.failures)
     connectors = audit.discovered_connectors
-    source = "Exact selected-agent active topic/flow dependency audit."
+    source = "Exact selected-agent in-scope topic/flow dependency audit (SAP excluded)."
     features = {}
     for feature, present in (
         (DAFeature.WORKDAY, "shared_workdaysoap" in connectors),

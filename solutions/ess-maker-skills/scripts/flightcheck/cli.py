@@ -2277,14 +2277,14 @@ def _prepare_da_integration_execution(runner, args, execution):
     runner._da_observed_features = dict(features)
     records = getattr(args, "_da_evidence_records", None)
     if any(record["checkpointId"] == "DA-INTEGRATIONS-001" for record in records or []):
-        package_rows = execute_check(runner, "Solution", run_solution_checks)
-        runner._da_prepared_results = {run_solution_checks: package_rows}
+        installation_rows = execute_check(runner, "Solution", run_solution_checks)
+        runner._da_prepared_results = {run_solution_checks: installation_rows}
         review_rows = [
             row for row in run_da_integration_checks(runner)
             if row.checkpoint_id == "DA-INTEGRATIONS-001"
         ]
         interim = RunResult(
-            scope="full", started="", results=[*native_rows, *package_rows, *review_rows],
+            scope="full", started="", results=[*native_rows, *installation_rows, *review_rows],
             validation_context=runner.validation_context,
         )
         features = reviewed_da_features(execution, interim, runner, records)

@@ -96,13 +96,16 @@ evidence remains incomplete, not passed or silently excluded.
 | EXT-002, EXT-002-ACL | Review Graph-source configuration and item access when used | Skipped for the maker; administrator evidence required, no maker Graph authentication; replaces per-source placeholder coverage |
 | WD-REF-001, WD-WF-CAT-001 | Review custom Workday configuration and enabled scenario coverage | Target/version-bound manual review, without employee transactions |
 | PUB-001, PUB-002 | Package export and movement between environments are deferred | Outside current DA scope; no execution, export prerequisite, promotion review or import probe |
+| ESS-SOLN-001 | Confirm exact native ESS identity and authored content | Reuse the verified exact-agent snapshot; no mandatory ALM repository/commit provenance |
+| ENV-004 | Verify the selected agent's in-scope dependency bindings | SAP-only self-contained conversations are excluded by resolved calls, with activation uncertainty retained in scope evidence; mixed or unverifiable actions still block complete coverage |
 
 Feature-list review controls applicability only. It cannot override observed
 dependencies or satisfy enabled features' other requirements. Accepted external
 reviews preserve original Manual/Skipped diagnostics. Complete-catalog CLI
 replay verifies a READY path after accepted required reviews without export or
 promotion. Deferred ALM entries remain visible as exclusions, not passed checks.
-Legacy export/import behavior and existing installation identity reads remain.
+Legacy export/import behavior remains. Explicit revision pins still require
+their exact-target ALM verification and bind the freshness of owner evidence.
 
 ## 2b. ESS Solution Installation (ESS-SOLN-xxx)
 

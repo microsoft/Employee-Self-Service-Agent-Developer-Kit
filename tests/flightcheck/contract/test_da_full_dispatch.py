@@ -405,8 +405,8 @@ def test_complete_catalog_cli_reaches_ready_without_export_or_promotion(
     require_validated_mock(pp)
     fixtures = Path(__file__).resolve().parents[2] / "fixtures" / "cassettes"
     native = yaml.safe_load((fixtures / "agentbuilder_readiness.yaml").read_text(encoding="utf-8"))
-    configure = next(item for item in native["interactions"] if "/configure?" in item["request"]["uri"])
-    identity = json.loads(configure["response"]["body"]["string"])
+    components = next(item for item in native["interactions"] if "/components?" in item["request"]["uri"])
+    identity = json.loads(components["response"]["body"]["string"])["bot"]
     selected = da_cli.config["agents"][0]
     selected.update(botId=identity["cdsBotId"], schemaName=identity["schemaName"])
     workspace = tmp_path / "workspace" / "agents" / "hr"
@@ -442,7 +442,7 @@ def test_complete_catalog_cli_reaches_ready_without_export_or_promotion(
     with responses.RequestsMock() as http:
         for item in native["interactions"]:
             path = urlsplit(item["request"]["uri"]).path
-            if "/connections" in path:
+            if "/connections" in path or "/configure" in path:
                 continue
             http.add(
                 item["request"]["method"],
@@ -484,7 +484,7 @@ def test_complete_catalog_cli_reaches_ready_without_export_or_promotion(
             assert entry["evidenceState"] == "excluded"
             assert entry["deploymentRequired"] is False
         paths = [urlsplit(call.request.url).path for call in http.calls[before:]]
-        assert sum("/configure" in path for path in paths) == 1
+        assert not any("/configure" in path for path in paths)
         assert sum("/components" in path for path in paths) == 1
         assert not any("/export" in path or "/import" in path or "graph.microsoft.com" in call.request.url
                        for path, call in zip(paths, http.calls[before:]))

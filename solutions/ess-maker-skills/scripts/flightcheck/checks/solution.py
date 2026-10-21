@@ -4,15 +4,10 @@
 """
 ESS FlightCheck — ESS Solution Installation Validation (ESS-SOLN-xxx)
 
-Verifies that the base ESS declarative agent package is present in the target
-Power Platform environment (skill-2 ``install-ess``). The check reads the
-Copilot Studio minimalBots ALM configure surface so it works after the
-Declarative Agent re-point away from Dataverse solution-table state. Package
-presence is proven by ``grsRepositoryId`` + ``commitSha``; package *identity*
-(that the committed package is ESS, not some other product) is proven by the
-configure ``schemaName`` carrying the ESS token ``copilotforemployeeselfservice``
--- the DA analogue of the CA solution-uniquename prefix
-``msdyn_copilotforemployeeselfservice``.
+DA full reuses the verified native snapshot to check exact ESS identity and
+authored content. It does not require or establish ALM package provenance.
+Legacy scopes retain the minimalBots ALM configure check for repository,
+commit and ESS schema identity.
 """
 
 from __future__ import annotations
@@ -29,7 +24,6 @@ from agentbuilder import (
 
 from ..runner import CheckResult, Priority, Role, Status
 from .. import agent_scope
-from .da_baseline import manual_evidence_requirement
 
 _ESS_SOLN_DOC_LINK = (
     "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
@@ -61,14 +55,56 @@ def run_solution_checks(runner) -> list[CheckResult]:
     additional ESS-SOLN-* rows can be added without changing the registry /
     cli wiring.
     """
-    rows = _check_ess_solution_installed(runner)
     if getattr(runner, "da_full_assessment", False) is True:
-        for row in rows:
-            if row.status == Status.MANUAL.value:
-                row.evidence.update(manual_evidence_requirement(
-                    runner, ("packageOrigin", "packageRevision", "sourceArtifact"),
-                ))
-    return rows
+        return [_check_native_ess_identity(runner)]
+    return _check_ess_solution_installed(runner)
+
+
+def _check_native_ess_identity(runner) -> CheckResult:
+    snapshot = getattr(runner, "_da_native_snapshot", None)
+    selected = agent_scope.active_agent(
+        getattr(runner, "config", None), getattr(runner, "agent_slug", None),
+    )
+    expected_id = selected.get("botId")
+    expected_schema = selected.get("schemaName")
+    changeset = snapshot.get("changeset") if isinstance(snapshot, dict) else None
+    bot = changeset.get("bot") if isinstance(changeset, dict) else None
+    components = changeset.get("botComponentChanges") if isinstance(changeset, dict) else None
+    pairs = (
+        (snapshot.get("agentId") if isinstance(snapshot, dict) else None, expected_id),
+        (snapshot.get("environmentId") if isinstance(snapshot, dict) else None, getattr(runner, "env_id", None)),
+        (bot.get("cdsBotId") if isinstance(bot, dict) else None, expected_id),
+        (bot.get("schemaName") if isinstance(bot, dict) else None, expected_schema),
+    )
+    if (
+        any(not isinstance(actual, str) or not actual.strip()
+            or not isinstance(expected, str) or not expected.strip()
+            or actual.casefold() != expected.casefold() for actual, expected in pairs)
+        or not isinstance(components, list) or not components
+    ):
+        return _result(
+            Status.BLOCKED.value,
+            "Exact native ESS identity and content could not be confirmed for the selected agent.",
+            "Resolve the native agent access/content findings and refresh this exact target. "
+            "ALM enrollment or publication is not required for this installation check.",
+        )
+    if _ESS_SCHEMA_IDENTITY_TOKEN not in expected_schema.casefold():
+        return _result(
+            Status.FAILED.value,
+            f"The selected native agent schema '{expected_schema}' is not an ESS schema.",
+            "Select the intended Employee Self-Service agent and rerun the full check.",
+        )
+    row = _result(
+        Status.PASSED.value,
+        f"Confirmed native ESS schema {expected_schema} and authored content for the exact selected agent.",
+    )
+    row.description = "Selected native Employee Self-Service identity and content"
+    row.evidence = {
+        "agentId": expected_id, "environmentId": runner.env_id,
+        "agentSchemaName": expected_schema, "componentCount": len(components),
+        "evidenceBoundary": "native_identity_and_content_not_package_origin_revision_or_employee_execution",
+    }
+    return row
 
 
 def _check_ess_solution_installed(runner) -> list[CheckResult]:
@@ -112,13 +148,6 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
         config = agentbuilder.get_realm_configuration(bot_id, realm)
     except AgentBuilderHTTPError as exc:
         if _is_not_opted_into_alm_error(exc):
-            if getattr(runner, "da_full_assessment", False) is True:
-                return [_result(
-                    Status.MANUAL.value,
-                    "The selected agent is not enrolled in ALM; repository provenance was not read.",
-                    "Record target-bound package origin and revision evidence. "
-                    "Enable ALM only if required by the approved promotion workflow.",
-                )]
             return [_not_opted_into_alm_result(bot_id)]
         return [
             _result(
@@ -151,12 +180,6 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
     grs_repository_id = str(config.get("grsRepositoryId") or "").strip()
     commit_sha = str(config.get("commitSha") or "").strip()
     if not grs_repository_id or not commit_sha:
-        if getattr(runner, "da_full_assessment", False) is True:
-            return [_result(
-                Status.BLOCKED.value,
-                "ALM repository or commit metadata is unavailable; package provenance was not established.",
-                "Obtain target-bound source artifact and revision evidence before accepting package provenance.",
-            )]
         return [
             _result(
                 Status.FAILED.value,
@@ -174,26 +197,6 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
         ]
 
     schema_name = str(config.get("schemaName") or "").strip()
-    da_full = getattr(runner, "da_full_assessment", False) is True
-    if da_full:
-        selected = agent_scope.active_agent(
-            getattr(runner, "config", None), getattr(runner, "agent_slug", None),
-        )
-        expected_schema = str(selected.get("schemaName") or "").strip()
-        if not _alm_identity_matches(config, bot_id, realm, expected_schema):
-            return [_result(
-                Status.BLOCKED.value,
-                "ALM metadata did not match the exact selected agent ID, schema and realm.",
-                "Refresh the exact native target and resolve the ALM identity mismatch.",
-            )]
-        if any(
-            not isinstance(config.get(key), str) or not config[key].strip()
-            for key in ("grsRepositoryId", "commitSha")
-        ):
-            return [_result(
-                Status.BLOCKED.value, "ALM package provenance fields are unavailable or invalid.",
-                "Obtain the selected agent's repository and revision evidence before accepting package provenance.",
-            )]
     if schema_name:
         if _ESS_SCHEMA_IDENTITY_TOKEN not in schema_name.casefold():
             return [
@@ -222,17 +225,6 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
                     "package revision match pending US 7792604."
                 ),
             )
-        if da_full:
-            result.description = "Selected ESS package metadata"
-            result.result = (
-                f"Exact selected-agent ALM metadata identifies ESS schema {schema_name}, "
-                f"repository {grs_repository_id}, commit {commit_sha}."
-            )
-            result.evidence = {
-                "agentId": bot_id, "agentSchemaName": schema_name, "realm": realm,
-                "repositoryId": grs_repository_id, "commitSha": commit_sha,
-                "evidenceBoundary": "alm_metadata_not_package_signature_or_employee_execution",
-            }
         return [result]
 
     return [

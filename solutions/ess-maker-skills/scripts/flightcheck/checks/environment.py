@@ -763,6 +763,11 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     ]
     if unbound_refs:
         summary_parts.append(f"{len(unbound_refs)} unbound")
+    if audit.excluded_topics:
+        summary_parts.append(
+            f"{len(audit.excluded_topics)} self-contained SAP-only conversation(s) outside DA scope; "
+            "missing activation was not inferred"
+        )
     summary_parts.extend(audit.failures)
     if audit.additional_connections:
         summary_parts.append(
@@ -842,6 +847,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
             "requiredReferences": len(refs),
             "boundReferences": len(bound_refs),
             "flowCount": audit.flow_count,
+            "scopeExclusions": audit.excluded_topics,
             "evidenceBoundary": "inspected_dependency_bindings_not_employee_execution",
         } if da_full else {},
     ))

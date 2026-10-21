@@ -45,6 +45,7 @@ class ConnectionAudit:
     flow_count: int = 0
     discovered_connectors: set[str] = field(default_factory=set)
     has_direct_references: bool = False
+    excluded_topics: list[dict[str, str]] = field(default_factory=list)
 
 
 def selected_agent_ids(runner) -> tuple[str, ...]:
@@ -83,7 +84,51 @@ def _nodes(value: Any):
             yield from _nodes(item)
 
 
-def _dependencies(payload: dict) -> tuple[set[str], set[str], list[str]]:
+def _sap_only_topic(component: dict, payload: dict) -> bool:
+    """Only exclude self-contained SAP calls, never names or guessed activation."""
+    dialog = component.get("dialog")
+    if not isinstance(dialog, dict) or dialog.get("$kind") != "AdaptiveDialog":
+        return False
+    begin = dialog.get("beginDialog")
+    actions = begin.get("actions") if isinstance(begin, dict) else None
+    if not isinstance(actions, list) or not actions or any(
+        not isinstance(action, dict)
+        or action.get("$kind") not in {"InvokeConnectorAction", "SetVariable", "SendActivity"}
+        for action in actions
+    ):
+        return False
+    nodes = list(_nodes(dialog))
+    if any(
+        node.get("$kind") == "BeginDialog"
+        or (isinstance(node.get("$kind"), str) and node["$kind"].endswith("Action")
+            and node["$kind"] != "InvokeConnectorAction")
+        for node in nodes
+    ):
+        return False
+    calls = [node for node in nodes if node.get("$kind") == "InvokeConnectorAction"]
+    changes = payload.get("connectionReferenceChanges")
+    if not calls or not isinstance(changes, list):
+        return False
+    for call in calls:
+        name = call.get("connectionReference")
+        if not isinstance(name, str) or not name.strip():
+            return False
+        matches = [
+            change["connectionReference"] for change in changes
+            if isinstance(change, dict) and isinstance(change.get("connectionReference"), dict)
+            and isinstance(change["connectionReference"].get("connectionReferenceLogicalName"), str)
+            and change["connectionReference"]["connectionReferenceLogicalName"].casefold() == name.casefold()
+        ]
+        if len(matches) != 1 or not isinstance(matches[0].get("connectorId"), str):
+            return False
+        if _connector(matches[0]["connectorId"]) != "shared_sapodata":
+            return False
+    return True
+
+
+def _dependencies(
+    payload: dict, *, excluded_topics: list[dict[str, str]] | None = None,
+) -> tuple[set[str], set[str], list[str]]:
     changes = payload.get("botComponentChanges")
     if not isinstance(changes, list):
         raise ValueError("Component fetch omitted the topic collection.")
@@ -100,6 +145,12 @@ def _dependencies(payload: dict) -> tuple[set[str], set[str], list[str]]:
         subject = component.get("schemaName") or f"component {index}"
         status = component.get("status")
         if status == "Inactive":
+            continue
+        if excluded_topics is not None and _sap_only_topic(component, payload):
+            excluded_topics.append({
+                "topic": str(subject), "reason": "self_contained_sap_only_calls",
+                "activation": status if status == "Active" else "unverified",
+            })
             continue
         if status != "Active":
             warnings.append(
@@ -239,13 +290,21 @@ def audit_connections(runner) -> ConnectionAudit:
                 payload = runner.agentbuilder.fetch_components(agent_id)
             if not isinstance(payload, dict):
                 raise ValueError("Component fetch returned a malformed snapshot.")
-            direct, flow_ids, topic_warnings = _dependencies(payload)
-            audit.has_direct_references |= bool(direct)
+            da_full = getattr(runner, "da_full_assessment", False) is True
+            direct, flow_ids, topic_warnings = _dependencies(
+                payload, excluded_topics=audit.excluded_topics if da_full else None,
+            )
             audit.warnings.extend(
                 f"Agent {agent_id}: dependency discovery incomplete ({warning})."
                 for warning in topic_warnings
             )
             native = _direct_references(payload) if direct else {}
+            if da_full:
+                direct = {
+                    name for name in direct
+                    if name not in native or _connector(native[name]["connectorId"]) != "shared_sapodata"
+                }
+            audit.has_direct_references |= bool(direct)
         except READ_ERRORS as exc:
             audit.warnings.append(f"Agent {agent_id}: dependency discovery incomplete ({type(exc).__name__}: {exc}).")
             continue

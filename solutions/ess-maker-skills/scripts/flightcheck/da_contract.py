@@ -402,8 +402,9 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
     ),
     *_group(
         "ESS-SOLN-001", "ESS package", DADisposition.EVALUATOR,
-        "Validate the selected native agent's package identity independently of "
-        "environment-wide Dataverse solution inventory.",
+        "Validate exact native ESS identity and authored content, independently "
+        "of Dataverse inventory or ALM package provenance. Explicit revision pins "
+        "remain separate requirements.",
         _MAKER,
     ),
     *_group(

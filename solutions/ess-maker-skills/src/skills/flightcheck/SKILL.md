@@ -305,7 +305,14 @@ authentication or run a promotion/import.
 Package export and movement between environments are deferred for DA full.
 `PUB-001` and `PUB-002` are outside this review, not unfinished checks. Do not
 ask for an exportable package, ALM enrollment/publication, promotion evidence or
-an `alm_promotion` feature choice. Existing installation identity checks remain.
+an `alm_promotion` feature choice. Installation uses exact native ESS identity
+and content, not mandatory ALM provenance. An explicit release revision pin
+still requires its separate verification.
+
+For DA full, self-contained SAP-only conversations can be outside scope based
+on their resolved calls, never their names or presumed activation. Mixed,
+unreadable or unsupported conversation actions remain incomplete; do not
+manually suppress those findings to obtain readiness.
 
 **Local-only override:** use "Local validation completed - deployment readiness
 not assessed", retaining the actual diagnostic status. Do not call local READY

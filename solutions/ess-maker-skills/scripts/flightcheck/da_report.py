@@ -139,7 +139,7 @@ _CHECK_COPY = {
     "DA-CUSTOM-TOPICS-001": ("Custom conversations", "Review your custom conversations, when they start, the services they use and representative test results."),
     "DA-CONN-001": ("Agent connections", "Confirm that each service used directly by this agent has the right connection. See the shared connection issue above."),
     "SN-CONN-001": ("ServiceNow connections", "Confirm the ServiceNow connections used by this agent. See the shared connection issue above."),
-    "ESS-SOLN-001": ("Employee Self-Service installation", "Ask your administrator to confirm the installation and version details for this agent."),
+    "ESS-SOLN-001": ("Employee Self-Service installation", "Confirm that this is the intended ESS agent and refresh its content. Package export and version provenance are outside this review unless you configured a revision requirement."),
     "LIC-FLOW-001": ("Licensing for each automated task", "Ask your licensing owner to review each automated task and the services it uses, and record which licensing arrangement applies. Employee coverage is checked separately."),
     "LIC-FLOW-002": ("License coverage for your employees", "Using the agreed licensing arrangement, confirm that it covers the employees who will use these automated tasks. Your own license alone is not enough."),
     "WD-ENTRA-SCOPE-001": ("Application permissions", "Ask your Microsoft Entra administrator to record the permissions approved for the Workday application."),
