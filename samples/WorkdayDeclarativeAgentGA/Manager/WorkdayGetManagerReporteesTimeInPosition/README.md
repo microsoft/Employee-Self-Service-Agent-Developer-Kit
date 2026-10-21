@@ -12,7 +12,7 @@ This scenario enables managers to view their direct reports along with how long 
 | File | Description |
 |------|-------------|
 | `topic.yaml` | Copilot Studio topic definition with trigger phrases and Power Fx logic |
-| [Shared configuration topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) | All OSS Workday request templates; set up once for the agent |
+| [shared template-config setup topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) | Workday request templates; configure once for the agent |
 
 ## Prerequisites
 
@@ -78,7 +78,7 @@ The request template is optimized for performance by:
 
 ## Setup
 
-Create and wire the [single shared configuration topic](../../#set-up-the-shared-configuration-topic) once for your agent. Then follow [Add a scenario](../../#add-a-scenario): create a blank Copilot Studio topic, open **More > Open code editor**, and paste this folder's complete `topic.yaml`. No per-scenario XML configuration record in Power Apps or Dataverse is needed.
+Configure the [shared template-config setup topic](../../#set-up-the-shared-configuration-topic) once for your agent, then follow [Add a scenario](../../#add-a-scenario) for this folder's `topic.yaml`.
 
 Then finish wiring the topic:
 

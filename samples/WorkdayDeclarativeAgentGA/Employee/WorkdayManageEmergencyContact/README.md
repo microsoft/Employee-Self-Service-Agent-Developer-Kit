@@ -37,13 +37,13 @@ This topic enables employees to manage their emergency contacts in Workday throu
 | File | Description |
 |------|-------------|
 | `topic.yaml` | Copilot Studio topic definition with conversation flow |
-| [Shared configuration topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) | All OSS Workday request templates; set up once for the agent |
+| [shared template-config setup topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) | Workday request templates; configure once for the agent |
 
 ## Setup
 
-Create and wire the [single shared configuration topic](../../#set-up-the-shared-configuration-topic) once for your agent. Then follow [Add a scenario](../../#add-a-scenario): create a blank Copilot Studio topic, open **More > Open code editor**, and paste this folder's complete `topic.yaml`.
+Configure the [shared template-config setup topic](../../#set-up-the-shared-configuration-topic) once for your agent, then follow [Add a scenario](../../#add-a-scenario) for this folder's `topic.yaml`.
 
-The shared setup supplies all emergency-contact read, add, update, and delete templates. Do not create separate XML configuration records in Power Apps or Dataverse. Review tenant-specific choices below, save and enable the topic, and check confirmation/cancel behavior with approved test data in a new conversation before publishing.
+Review tenant-specific choices below, save and enable the topic, and check confirmation/cancel behavior with approved test data in a new conversation before publishing.
 
 ## Workday APIs Used
 

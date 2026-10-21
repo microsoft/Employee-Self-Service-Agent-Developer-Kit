@@ -34,13 +34,13 @@ This topic enables employees to view their existing dependents and add new depen
 | File | Description |
 |------|-------------|
 | `topic.yaml` | Copilot Studio topic definition with conversation flow |
-| [Shared configuration topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) | All OSS Workday request templates; set up once for the agent |
+| [shared template-config setup topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) | Workday request templates; configure once for the agent |
 
 ## Setup
 
-Create and wire the [single shared configuration topic](../../#set-up-the-shared-configuration-topic) once for your agent. Then follow [Add a scenario](../../#add-a-scenario): create a blank Copilot Studio topic, open **More > Open code editor**, and paste this folder's complete `topic.yaml`.
+Configure the [shared template-config setup topic](../../#set-up-the-shared-configuration-topic) once for your agent, then follow [Add a scenario](../../#add-a-scenario) for this folder's `topic.yaml`.
 
-The shared setup already supplies this scenario's request templates. Do not create separate XML configuration records in Power Apps or Dataverse. Review the tenant-specific values below, save and enable the topic, and test in a new conversation before publishing.
+Review the tenant-specific values below, save and enable the topic, and test in a new conversation before publishing.
 
 ## Workday APIs Used
 

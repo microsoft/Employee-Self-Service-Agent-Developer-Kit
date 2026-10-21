@@ -6,9 +6,9 @@ search_exclude: false
 
 Copilot Studio topics for employee self-service actions in Workday.
 
-Complete the [shared configuration setup](../#set-up-the-shared-configuration-topic) once, then [create only the scenario topics you need](../#add-a-scenario) by pasting each selected `topic.yaml` into a blank Copilot Studio topic. All 22 OSS templates are supplied by the shared setup, even if you use only one employee scenario. Do not create per-scenario XML configuration records in Power Apps or Dataverse for this DA GA folder.
+Configure the [shared template-config setup topic](../#set-up-the-shared-configuration-topic) once, then [create only the scenario topics you need](../#add-a-scenario) by pasting each selected `topic.yaml` into a blank Copilot Studio topic.
 
-Keep the existing HR Workday integration and employee-context initialization configured. Review tenant-specific values and test in a fresh conversation before publishing. The [DA Preview samples](../../WorkdayDeclarativeAgentPreview/) use a different configuration process.
+Keep the existing HR Workday integration and employee-context initialization configured. Review tenant-specific values and test in a fresh conversation before publishing.
 
 | Folder | Description |
 | --- | --- |

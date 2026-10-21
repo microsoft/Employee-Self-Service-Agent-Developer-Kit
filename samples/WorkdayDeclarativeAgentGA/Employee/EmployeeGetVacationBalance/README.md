@@ -39,13 +39,13 @@ The `EmployeeGetVacationBalance` topic allows employees to:
 | File | Description |
 |------|-------------|
 | `topic.yaml` | Main topic definition with conversation flow and Adaptive Card |
-| [Shared configuration topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) | All OSS Workday request templates; set up once for the agent |
+| [shared template-config setup topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) | Workday request templates; configure once for the agent |
 
 ## Setup
 
-Create and wire the [single shared configuration topic](../../#set-up-the-shared-configuration-topic) once for your agent. Then follow [Add a scenario](../../#add-a-scenario): create a blank Copilot Studio topic, open **More > Open code editor**, and paste this folder's complete `topic.yaml`.
+Configure the [shared template-config setup topic](../../#set-up-the-shared-configuration-topic) once for your agent, then follow [Add a scenario](../../#add-a-scenario) for this folder's `topic.yaml`.
 
-The vacation-balance template is already in the shared setup; there is no separate XML import or Dataverse configuration record. Keep employee context and the existing Workday runtime configured, save and enable the topic, and test in a new conversation before publishing.
+Keep employee context and the existing Workday runtime configured, save and enable the topic, and test in a new conversation before publishing.
 
 ## Workday APIs Used
 

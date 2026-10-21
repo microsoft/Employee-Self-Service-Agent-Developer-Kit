@@ -5,29 +5,19 @@ nav_order: 6
 ---
 # ESS Workday Scenarios — DA GA
 
-**Create one shared OSS setup topic, then add only the Workday scenarios you need.** Copy the supplied YAML into Copilot Studio; you do not create a separate template-configuration record for each XML file in Power Apps or Dataverse.
-
-{: .important }
-> Documentation draft for review. Confirm the prerequisites and scenario behavior in your environment before publishing. The screenshots illustrate authoring and wiring, not successful Workday execution.
-
-This folder is for **DA GA**. The [DA Preview samples](../WorkdayDeclarativeAgentPreview/) retain their original per-scenario XML and configuration-record instructions.
-
-| Step | DA Preview configuration model | DA GA model in this folder |
-|---|---|---|
-| Register request templates | Create the scenario's template-configuration records from individual XML files | Paste one complete shared setup topic containing all 22 OSS templates |
-| Add a scenario | Create a topic from the scenario YAML | Still create a topic from each selected scenario YAML |
-
-The simplification is configuration setup, not removal of Workday integration, permissions, tenant customization, or testing.
+**Create one shared template-config setup topic, then add only the Workday scenario topics you need.** Copy the supplied YAML into Copilot Studio and configure the selected scenarios for your environment.
 
 ## Contents
 
 | Folder | Description |
 |---|---|
-| [Shared configuration topic](./WorkdayOSSTemplateConfigurationSetup.yaml) | All 22 OSS Workday request templates and their lookup mappings |
+| [shared template-config setup topic](./WorkdayOSSTemplateConfigurationSetup.yaml) | Workday request templates and their lookup mappings |
 | [Employee](./Employee/) | 11 employee self-service scenarios |
 | [Manager](./Manager/) | 5 direct-report scenarios |
 
-## Set up the shared configuration topic
+<a id="set-up-the-shared-configuration-topic"></a>
+
+## Configure the shared template-config setup topic
 
 ### Before you start
 
@@ -36,24 +26,22 @@ Use an editable ESS HR DA GA agent with its Workday integration, authenticated c
 {: .warning }
 > Manager scenarios also require a compatible HR user-context initializer that populates `Global.ESS_UserContext_Is_Manager` and `Global.ESS_UserContext_ManagerOrganizationId`. If these are absent or the topic checker reports an unrecognized identifier, resolve the HR-template prerequisite before using manager scenarios. Do not work around it by hard-coding a manager flag or organization ID.
 
-### Create one setup topic
+### Create the topic
 
 1. In your agent, select **Topics > Add a topic > From blank**.
-2. Name it **WorkdayOSSTemplateConfigurationSetup**. The display name is your choice; the screenshot uses a different descriptive name for the same setup.
-3. Select **More > Open code editor**. Replace the blank topic's contents with the **entire** [shared configuration topic](./WorkdayOSSTemplateConfigurationSetup.yaml). If viewing the file on GitHub, use its raw contents, not the surrounding page. Do not paste individual XML values or fragments.
+2. Name it **WorkdayOSSTemplateConfigurationSetup**.
+3. Select **More > Open code editor**. Replace the blank topic's contents with the **entire** [shared template-config setup topic](./WorkdayOSSTemplateConfigurationSetup.yaml). If viewing the file on GitHub, copy its raw contents, not the surrounding page.
 4. Close the code editor to return to the canvas, save the topic, and ensure it is enabled.
 
-![Add a topic menu with the From blank option](./assets/oss-add-topic-menu.png)
+![Add a topic menu with the From blank option](./assets/01-oss-add-topic-menu.png)
 
-![Existing shared setup topic in the Copilot Studio code editor](./assets/oss-setup-code-editor.png)
+![The shared template-config setup topic in the Copilot Studio code editor](./assets/02-oss-setup-code-editor.png)
 
-The shared file already contains vacation balance and all emergency-contact add, update, and delete templates. There are no topic-specific configuration files or separate Dataverse configuration records to create for these GA samples.
-
-![Shared setup canvas with a redirect trigger and template variable assignment](./assets/oss-shared-setup-topic.png)
+![The shared template-config setup topic with a redirect trigger and template variable assignment](./assets/03-oss-shared-setup-topic.png)
 
 ### Run it from Conversation Start
 
-Open **Topics > System > Conversation Start** and add a call to the new setup topic **after** the existing call to **Workday [System] - 1: Set Runtime Template Configurations**, and before any Workday scenario executes. Select your newly created topic through the topic picker rather than assuming its generated schema name matches the sample.
+Open **Topics > System > Conversation Start** and call the shared template-config setup topic **after** the existing call to **Workday [System] - 1: Set Runtime Template Configurations**, and before any Workday scenario executes. Select it through the topic picker to use the schema name generated in your agent.
 
 ```text
 Conversation Start
@@ -62,30 +50,30 @@ Conversation Start
   -> selected Workday scenarios can use the global lookup
 ```
 
-![Existing Conversation Start calls the OOB initializer before the OSS setup topic](./assets/oss-conversation-start-order.png)
+![Conversation Start calls the OOB initializer before the shared template-config setup topic](./assets/04-oss-conversation-start-order.png)
 
 Alternatively, add the call inside **Workday [System] - 1: Set Runtime Template Configurations**, after its final assignment to `Global.ESS_WorkdayHCM_Template_Configurations`. Use **one wiring path, not both**. Run configuration initialization on every new conversation; do not put it behind a user-profile refresh cache.
 
 {: .important }
 > Ordering matters: initialize OOB configurations first, then OSS configurations. Running the OOB configuration initializer again afterwards can overwrite the OSS mappings.
 
-The shared topic creates 22 template variables, compiles their `{ Key, Value }` mappings, and merges them into `Global.ESS_WorkdayHCM_Template_Configurations`. For a matching key, the OSS XML replaces the existing value; unrelated OOB mappings are retained. Re-running the shared topic does not add duplicate OSS keys. Test any existing OOB scenarios that share overridden keys as well as your selected OSS scenarios.
+The shared template-config setup topic merges its templates into `Global.ESS_WorkdayHCM_Template_Configurations`. Matching keys replace existing values; unrelated OOB mappings are retained. Running it again does not add duplicate keys. Test existing OOB scenarios that share overridden keys as well as your selected OSS scenarios.
 
-Loading all templates is intentional, even if you use only a subset of scenarios. This does **not** create or enable the unused scenario topics, call Workday, or submit employee changes.
+The configuration covers all scenarios, even if you create only one. Running it does **not** create or enable unused scenario topics, call Workday, or submit employee changes.
 
 {: .note }
-> Contact Information also calls `msdyn_WorkdayHCMRuntimeEmployeeGetWorkAddress` and `msdyn_WorkdayHCMRuntimeEmployeeGetWorkContactInformation`. These two templates have no source XML in the OSS samples and remain dependencies on your existing OOB configuration.
+> Contact Information requires `msdyn_WorkdayHCMRuntimeEmployeeGetWorkAddress` and `msdyn_WorkdayHCMRuntimeEmployeeGetWorkContactInformation` from your existing OOB configuration.
 
 ## Add a scenario
 
-Choose any combination of the 11 [employee scenarios](./Employee/) and 5 [manager scenarios](./Manager/). You do not have to install all 16.
+Choose the [employee scenarios](./Employee/) and [manager scenarios](./Manager/) you need.
 
 1. Open the selected scenario folder and copy its complete `topic.yaml`.
 2. Create another blank topic with **Topics > Add a topic > From blank**, open **More > Open code editor**, and replace its contents with that YAML.
 3. Review tenant URLs, picklists, IDs, parameter bindings, and any scenario-specific instructions. Resolve child-topic references against the existing topics in your agent without changing their input/output contracts.
 4. Save and enable the selected scenario. Repeat only for the other scenarios you want.
 
-Keep the existing Workday execution, reference-data, access-check, and manager-check topics configured. Scenario topics pass a `scenarioName` to the existing runtime; the matching XML comes from the global lookup populated by the shared setup. You do not repeat configuration setup when adding another scenario.
+Keep the existing Workday execution, reference-data, access-check, and manager-check topics configured. All selected scenarios use the shared template-config setup topic; configure it once for the agent.
 
 ### Check the setup before publishing
 
@@ -107,11 +95,11 @@ Publish only after your normal review and validation. Start a fresh conversation
 
 ## Customize and update configurations
 
-Make template changes in **WorkdayOSSTemplateConfigurationSetup**. Keep each lookup `Key` aligned with the scenario topic's `scenarioName` and its XML variable mapping, and preserve Power Fx quote escaping in XML string values. Do not rename placeholder tokens or assume that every inner XML scenario name must be identical to its lookup key.
+Make template changes in **WorkdayOSSTemplateConfigurationSetup**. Keep each lookup `Key` aligned with the scenario topic's `scenarioName` and its XML variable mapping. Preserve Power Fx quote escaping and XML placeholder tokens.
 
-For future OSS or ESS updates, export or back up your current setup topic before replacing it. Compare the previous sample version, your customized version, and the incoming version; merge the changes you need rather than overwriting customer customizations. Compare decoded XML values with a local XML comparison tool, or an approved online XML comparison tool for sanitized, non-sensitive XML only. Do not upload credentials, tenant details, employee data, or proprietary configuration to a public comparison service.
+Back up the shared template-config setup topic before updating it, and merge incoming changes without overwriting your customizations. Compare decoded XML locally; do not upload credentials, tenant details, employee data, or proprietary configuration to a public comparison service.
 
-After merging, save and publish, start a new conversation, and check the scenarios you use. Pulling updates and resolving customization conflicts are maker-managed steps; this sample does not automatically update an agent.
+After updating, save, test in a new conversation, and publish after validation. Updates are maker-managed; this sample does not automatically update your agent.
 
 ## Scenarios
 

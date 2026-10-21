@@ -29,7 +29,7 @@ Before you start, make sure you have:
 - A Workday tenant with the **Absence_Management** module enabled
 - A Workday connector configured with **User**-level authentication in your Power Platform environment
 - The global variable **`Global.ESS_UserContext_Employee_Id`** populated at session start with the logged-in employee's Workday Employee ID
-- The [shared configuration topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) initialized before this scenario; it includes `msdyn_WorkdayHCMRuntimeEmployeeGetVacationBalance`
+- The [shared template-config setup topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) initialized before this scenario
 - Your organization's Workday Absence Plan IDs, Time Off Type IDs, and Reason IDs
 
 ## What's in this folder
@@ -37,14 +37,14 @@ Before you start, make sure you have:
 | File | Description | Do you need to edit it? |
 |------|-------------|------------------------|
 | `topic.yaml` | Conversation flow, Adaptive Card form, configuration tables, error handling | Yes — update tenant URL, Plan IDs, Reason IDs |
-| [Shared configuration topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) | All OSS Workday request templates, including time off and vacation balance; set up once for the agent | No |
+| [shared template-config setup topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) | Workday request templates, including time off and vacation balance; configure once for the agent | No |
 | `requestTimeOffAdapativeCard.png` | Screenshot of the Adaptive Card form | No |
 | `requestTimeOffSubmitted.png` | Screenshot of the confirmation card | No |
 | `README.md` | This file | No |
 
 ## Setup
 
-Create and wire the [single shared configuration topic](../../#set-up-the-shared-configuration-topic) once for your agent. It includes both time-off and vacation-balance templates, so no separate balance setup or per-scenario Power Apps/Dataverse configuration record is needed.
+Configure the [shared template-config setup topic](../../#set-up-the-shared-configuration-topic) once for your agent.
 
 Configure the values below, then follow [Add a scenario](../../#add-a-scenario) to paste this folder's complete `topic.yaml` into a blank topic's code editor.
 
@@ -129,7 +129,7 @@ Find the `set_workday_icon_url` node and replace the 1×1 pixel placeholder with
 
 1. In Copilot Studio, select **Topics > Add a topic > From blank**.
 2. Open **More > Open code editor** and replace the contents with your configured `topic.yaml`. Return to the canvas, save, and enable the topic.
-3. Start a **new** test conversation so the OOB initializer and OSS setup run in order, then try these with approved test data before publishing:
+3. Start a **new** test conversation so the OOB initializer and shared template-config setup topic run in order, then try these with approved test data before publishing:
 
 | What to test | What to expect |
 |-------------|---------------|
@@ -144,7 +144,7 @@ If balances show as empty but the form appears, your `PlanConfig` Plan IDs likel
 
 ## Request template reference
 
-The `msdyn_WorkdayHCMRuntimeEmployeeEnterTimeOff_MultiDay` template in the [shared configuration topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) is a SOAP template for the Workday `Enter_Time_Off_Request` operation. You usually don't need to edit it — placeholder tokens like `{Employee_ID}` and `{timeoff_Dates}` are filled at runtime.
+The `msdyn_WorkdayHCMRuntimeEmployeeEnterTimeOff_MultiDay` template in the [shared template-config setup topic](../../WorkdayOSSTemplateConfigurationSetup.yaml) is a SOAP template for the Workday `Enter_Time_Off_Request` operation. You usually don't need to edit it — placeholder tokens like `{Employee_ID}` and `{timeoff_Dates}` are filled at runtime.
 
 Two settings you might want to change:
 
@@ -182,9 +182,9 @@ Two settings you might want to change:
 
 This topic depends on three external components:
 
-- **Workday `Get_Time_Off_Plan_Balances`** — Absence_Management service, User-level auth. Uses the `msdyn_WorkdayHCMRuntimeEmployeeGetVacationBalance` template in the shared configuration topic. Called at topic start to show balances.
+- **Workday `Get_Time_Off_Plan_Balances`** — Absence_Management service, User-level auth. Uses the `msdyn_WorkdayHCMRuntimeEmployeeGetVacationBalance` template in the shared template-config setup topic. Called at topic start to show balances.
 
-- **Workday `Enter_Time_Off`** — Absence_Management v42.0, User-level auth. Uses the `msdyn_WorkdayHCMRuntimeEmployeeEnterTimeOff_MultiDay` template in the shared configuration topic. Called after form submission.
+- **Workday `Enter_Time_Off`** — Absence_Management v42.0, User-level auth. Uses the `msdyn_WorkdayHCMRuntimeEmployeeEnterTimeOff_MultiDay` template in the shared template-config setup topic. Called after form submission.
 
 - **`WorkdaySystemGetCommonExecution` dialog** — an existing HR DA GA system topic. Executes request templates against the Workday connector and must be configured before you add this scenario.
 
@@ -207,7 +207,7 @@ The `Switch()` expression in the success card doesn't match the dropdown values.
 
 ## Tips
 
-- Initialize the shared configuration topic **before** this scenario — the balance lookup runs at topic start and requires its mapping to be present.
+- Initialize the shared template-config setup topic **before** this scenario — the balance lookup runs at topic start and requires its mapping to be present.
 - Update `PlanConfig`, `TimeOffReasonConfig`, **and** the Adaptive Card `choices` together — they're interconnected but maintained separately.
 - Test with a real Workday employee ID that has leave balances.
 - Keep `ReasonKey` values as `full_day`, `half_day_am`, `half_day_pm` — they're bound to the Adaptive Card dropdown.
@@ -216,9 +216,7 @@ The `Switch()` expression in the success card doesn't match the dropdown values.
 
 When this repo publishes a new version of the topic:
 
-1. **Diff first.** Your customized tenant URL, Plan IDs, Reason IDs, and leave-type keywords will be overwritten if you re-import `topic.yaml`.
-2. **Merge.** Copy your config values from the current topic, pull the updated file, paste your values back, then import.
-3. Back up the shared setup topic and compare its previous sample version, your customized version, and the incoming version. Merge only the intended changes; replacing it affects every scenario that uses its keys. See [Customize and update configurations](../../#customize-and-update-configurations).
+Back up your topics and preserve your tenant URL, Plan IDs, Reason IDs, and leave-type keywords when applying updates. Update the shared template-config setup topic using [Customize and update configurations](../../#customize-and-update-configurations); its changes affect every scenario that uses the updated keys.
 
 ## Known limitations
 
