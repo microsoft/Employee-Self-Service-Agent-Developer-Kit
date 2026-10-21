@@ -34,6 +34,7 @@ from agentbuilder import (
     canonical_json,
     derive_environment_host,
     list_environments,
+    seed_shared_token_cache,
     validate_environment_host,
 )
 from alm_enrollment import AlmEnrollmentError, ensure_alm
@@ -2675,6 +2676,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="List cached AgentBuilder sign-in names without authenticating.",
     )
     cached_accounts.add_argument("--kit-root", type=Path, default=Path.cwd())
+    seed_shared_cache = commands.add_parser(
+        "seed-shared-cache",
+        help="Copy the AgentBuilder cache to a missing shared cache. No sign-in.",
+    )
+    seed_shared_cache.add_argument("--account", required=True)
+    seed_shared_cache.add_argument("--kit-root", type=Path, default=Path.cwd())
     maintain_flightcheck = commands.add_parser(
         "maintain-flightcheck",
         help="Apply one native FlightCheck result to canonical setup state.",
@@ -2889,6 +2896,18 @@ def main(argv: list[str] | None = None) -> int:
             result = {"accounts": cached_account_names(cache_path)}
             print(
                 "DA_AGENTBUILDER_ACCOUNTS_JSON:"
+                f"{json.dumps(result, ensure_ascii=True)}"
+            )
+            return 0
+        if args.command == "seed-shared-cache":
+            local_root = args.kit_root.resolve() / ".local"
+            result = seed_shared_token_cache(
+                args.account,
+                cache_path=local_root / ".agentbuilder_token_cache.bin",
+                shared_cache_path=local_root / ".token_cache.bin",
+            )
+            print(
+                "DA_AUTH_CACHE_SEED_JSON:"
                 f"{json.dumps(result, ensure_ascii=True)}"
             )
             return 0

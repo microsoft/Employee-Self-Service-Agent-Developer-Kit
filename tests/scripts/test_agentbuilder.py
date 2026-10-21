@@ -1601,6 +1601,237 @@ def test_cached_account_names_are_distinct_and_sorted(
     ]
 
 
+def _seed_cache_source(tmp_path: Path) -> tuple[Path, Path]:
+    source = tmp_path / ".agentbuilder_token_cache.bin"
+    destination = tmp_path / ".token_cache.bin"
+    cache = agentbuilder.msal.SerializableTokenCache()
+    account = {
+        "home_account_id": "local-account",
+        "environment": "login.microsoftonline.com",
+        "realm": "test-tenant",
+        "username": "maker@example.test",
+    }
+    cache.modify(
+        agentbuilder.msal.TokenCache.CredentialType.ACCOUNT,
+        account,
+        account,
+    )
+    content = json.loads(cache.serialize())
+    content["RefreshToken"] = {"synthetic": {"secret": "synthetic-test-token"}}
+    content["UnknownMetadata"] = {"preserve": True}
+    source.write_text(json.dumps(content), encoding="utf-8")
+    return source, destination
+
+
+def test_seed_shared_token_cache_copies_complete_cache_without_authenticating(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, destination = _seed_cache_source(tmp_path)
+
+    def reject_auth(*args, **kwargs):
+        pytest.fail("Local cache seeding must not instantiate an auth client.")
+
+    monkeypatch.setattr(agentbuilder.msal, "PublicClientApplication", reject_auth)
+
+    result = agentbuilder.seed_shared_token_cache(
+        "MAKER@example.test",
+        cache_path=source,
+        shared_cache_path=destination,
+    )
+
+    assert result == {
+        "outcome": "copied",
+        "account": "maker@example.test",
+        "sourceCache": str(source),
+        "sharedCache": str(destination),
+    }
+    assert destination.read_bytes() == source.read_bytes()
+    assert agentbuilder.cached_account_names(destination) == ["maker@example.test"]
+    snapshot = destination.read_bytes()
+    source.write_bytes(snapshot + b"\n")
+    assert destination.read_bytes() == snapshot
+    destination.write_text("independent shared cache", encoding="utf-8")
+    assert json.loads(source.read_text())["UnknownMetadata"] == {"preserve": True}
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        ".agentbuilder_token_cache.bin",
+        ".token_cache.bin",
+    ]
+
+
+def test_seed_shared_token_cache_preserves_existing_destination_without_source(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "missing-cache.bin"
+    destination = tmp_path / ".token_cache.bin"
+    destination.write_bytes(b"existing cache must not be read or overwritten")
+
+    result = agentbuilder.seed_shared_token_cache(
+        "maker@example.test",
+        cache_path=source,
+        shared_cache_path=destination,
+    )
+
+    assert result == {
+        "outcome": "already-exists",
+        "sharedCache": str(destination),
+    }
+    assert destination.read_bytes() == b"existing cache must not be read or overwritten"
+
+
+@pytest.mark.parametrize("account", ["", "   ", "other@example.test"])
+def test_seed_shared_token_cache_requires_selected_cached_account(
+    tmp_path: Path,
+    account: str,
+) -> None:
+    source, destination = _seed_cache_source(tmp_path)
+
+    with pytest.raises(ValueError, match="[Aa]ccount"):
+        agentbuilder.seed_shared_token_cache(
+            account,
+            cache_path=source,
+            shared_cache_path=destination,
+        )
+
+    assert not destination.exists()
+    assert list(tmp_path.iterdir()) == [source]
+
+
+@pytest.mark.parametrize("content", [None, b"not-json"])
+def test_seed_shared_token_cache_reports_missing_or_unreadable_source(
+    tmp_path: Path,
+    content: bytes | None,
+) -> None:
+    source = tmp_path / "source.bin"
+    destination = tmp_path / "destination.bin"
+    if content is not None:
+        source.write_bytes(content)
+
+    with pytest.raises((OSError, ValueError)):
+        agentbuilder.seed_shared_token_cache(
+            "maker@example.test",
+            cache_path=source,
+            shared_cache_path=destination,
+        )
+
+    assert not destination.exists()
+
+
+def test_seed_shared_token_cache_never_overwrites_concurrently_created_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, destination = _seed_cache_source(tmp_path)
+    real_link = agentbuilder.os.link
+
+    def competing_link(temporary: Path, target: Path) -> None:
+        assert temporary.read_bytes() == source.read_bytes()
+        assert not target.exists()
+        target.write_bytes(b"concurrent cache")
+        real_link(temporary, target)
+
+    monkeypatch.setattr(agentbuilder.os, "link", competing_link)
+
+    result = agentbuilder.seed_shared_token_cache(
+        "maker@example.test",
+        cache_path=source,
+        shared_cache_path=destination,
+    )
+
+    assert result["outcome"] == "already-exists"
+    assert destination.read_bytes() == b"concurrent cache"
+    assert len(list(tmp_path.iterdir())) == 2
+
+
+def test_seed_shared_token_cache_preserves_publication_failure_and_cleans_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, destination = _seed_cache_source(tmp_path)
+    failure = PermissionError("cache publication denied")
+
+    def reject_link(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(agentbuilder.os, "link", reject_link)
+
+    with pytest.raises(PermissionError) as caught:
+        agentbuilder.seed_shared_token_cache(
+            "maker@example.test",
+            cache_path=source,
+            shared_cache_path=destination,
+        )
+
+    assert caught.value is failure
+    assert list(tmp_path.iterdir()) == [source]
+
+
+def test_seed_shared_token_cache_never_publishes_incomplete_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, destination = _seed_cache_source(tmp_path)
+    failure = OSError("cache flush failed")
+
+    def reject_flush(*args):
+        assert not destination.exists()
+        raise failure
+
+    monkeypatch.setattr(agentbuilder.os, "fsync", reject_flush)
+
+    with pytest.raises(OSError) as caught:
+        agentbuilder.seed_shared_token_cache(
+            "maker@example.test",
+            cache_path=source,
+            shared_cache_path=destination,
+        )
+
+    assert caught.value is failure
+    assert list(tmp_path.iterdir()) == [source]
+
+
+@pytest.mark.parametrize("publication_fails", [True, False])
+def test_seed_shared_token_cache_keeps_cleanup_failure_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    publication_fails: bool,
+) -> None:
+    source, destination = _seed_cache_source(tmp_path)
+    real_unlink = Path.unlink
+    primary = PermissionError("cache publication denied")
+
+    def reject_link(*args, **kwargs):
+        raise primary
+
+    def reject_cleanup(path: Path, *args, **kwargs):
+        if path.suffix == ".tmp":
+            raise PermissionError("temporary cache cleanup denied")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", reject_cleanup)
+    if publication_fails:
+        monkeypatch.setattr(agentbuilder.os, "link", reject_link)
+
+    with pytest.raises(PermissionError) as caught:
+        agentbuilder.seed_shared_token_cache(
+            "maker@example.test",
+            cache_path=source,
+            shared_cache_path=destination,
+        )
+
+    if publication_fails:
+        assert caught.value is primary
+        assert "temporary cache cleanup denied" in caught.value.__notes__[0]
+        assert not destination.exists()
+    else:
+        assert "temporary cache cleanup denied" in str(caught.value)
+        assert "Shared cache was copied" in caught.value.__notes__[0]
+        assert destination.read_bytes() == source.read_bytes()
+    for path in tmp_path.iterdir():
+        if path.suffix == ".tmp":
+            real_unlink(path)
+
+
 def test_selected_tenant_authentication_prompts_for_multiple_cached_accounts(
     tmp_path,
     monkeypatch,

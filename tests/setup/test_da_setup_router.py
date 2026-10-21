@@ -132,6 +132,34 @@ def test_first_time_orientation_explains_setup_and_preserves_direct_routes() -> 
     assert "final\ncompletion choices" in orientation
 
 
+def test_setup_seeds_shared_cache_once_and_reuses_flightcheck_account() -> None:
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    account_section = foundation.split("## Choose the sign-in account", 1)[1].split(
+        "## Confirm people and role availability", 1
+    )[0]
+    normalized = " ".join(account_section.split())
+    assert (
+        'python scripts/setup_existing_da.py seed-shared-cache --account "{SETUP_ACCOUNT}"'
+        in account_section
+    )
+    assert "once after the first authenticated account is established" in normalized
+    assert "before the next setup operation" in normalized
+    assert "`already-exists`" in account_section
+    assert "DA_AUTH_CACHE_SEED_JSON:" in account_section
+    assert "No later account change repeats the copy" in normalized
+    assert '--preferred-username "{SETUP_ACCOUNT}"' in account_section
+
+    readiness = _DA_EXISTING_DEV.read_text(encoding="utf-8")
+    commands = [
+        line
+        for line in readiness.splitlines()
+        if line.startswith("python scripts/flightcheck/cli.py")
+    ]
+    assert len(commands) == 4
+    assert all('--preferred-username "{SETUP_ACCOUNT}"' in line for line in commands)
+    assert "including retries and rechecks" in readiness
+
+
 def test_administrator_handoffs_are_forwardable_and_evidence_gated() -> None:
     permission = _PERMISSION_GUIDANCE.read_text(encoding="utf-8")
     normalized_permission = " ".join(permission.split())

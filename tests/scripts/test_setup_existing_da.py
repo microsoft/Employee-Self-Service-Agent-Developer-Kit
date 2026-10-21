@@ -2080,6 +2080,7 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
         "list-environments",
         "list-agents",
         "maintain-flightcheck",
+        "seed-shared-cache",
         "select-agent",
         "validate-agent",
     }
@@ -2667,6 +2668,63 @@ def test_cached_accounts_command_reads_workspace_cache(
     assert json.loads(
         output.removeprefix("DA_AGENTBUILDER_ACCOUNTS_JSON:")
     ) == {"accounts": ["test.user@example.test"]}
+
+
+def test_seed_shared_cache_command_reports_bounded_local_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed: dict[str, Any] = {}
+    result = {"outcome": "already-exists", "sharedCache": "existing.bin"}
+
+    def seed(account: str, **kwargs: Any) -> dict[str, Any]:
+        observed.update(account=account, **kwargs)
+        return result
+
+    monkeypatch.setattr(setup_existing_da, "seed_shared_token_cache", seed)
+
+    assert setup_existing_da.main(
+        [
+            "seed-shared-cache",
+            "--account",
+            "maker@example.test",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+    assert observed == {
+        "account": "maker@example.test",
+        "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
+        "shared_cache_path": tmp_path / ".local" / ".token_cache.bin",
+    }
+    assert json.loads(
+        capsys.readouterr().out.removeprefix("DA_AUTH_CACHE_SEED_JSON:")
+    ) == result
+
+
+def test_seed_shared_cache_command_reports_failure_without_success_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def seed(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise PermissionError("cache publication denied")
+
+    monkeypatch.setattr(setup_existing_da, "seed_shared_token_cache", seed)
+
+    assert setup_existing_da.main(
+        [
+            "seed-shared-cache",
+            "--account",
+            "maker@example.test",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 1
+    captured = capsys.readouterr()
+    assert "PermissionError: cache publication denied" in captured.err
+    assert "DA_AUTH_CACHE_SEED_JSON:" not in captured.out
 
 
 def test_unknown_setup_state_uses_format_language(tmp_path: Path) -> None:

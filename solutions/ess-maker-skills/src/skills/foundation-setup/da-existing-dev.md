@@ -160,11 +160,13 @@ the **Capacity check** from `permission-guidance.md`.
 Run each checkpoint into its dedicated local evidence folder:
 
 ```text
-python scripts/flightcheck/cli.py --checkpoint DA-AGENT-001 --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-AGENT-001
-python scripts/flightcheck/cli.py --checkpoint ENV-CAPACITY-001 --power-platform-admin-origin "{POWER_PLATFORM_ADMIN_ORIGIN}" --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001
-python scripts/flightcheck/cli.py --checkpoint "DA-CONN-*" --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONN
-python scripts/flightcheck/cli.py --checkpoint DA-CONTENT-001 --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001
+python scripts/flightcheck/cli.py --checkpoint DA-AGENT-001 --preferred-username "{SETUP_ACCOUNT}" --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-AGENT-001
+python scripts/flightcheck/cli.py --checkpoint ENV-CAPACITY-001 --power-platform-admin-origin "{POWER_PLATFORM_ADMIN_ORIGIN}" --preferred-username "{SETUP_ACCOUNT}" --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001
+python scripts/flightcheck/cli.py --checkpoint "DA-CONN-*" --preferred-username "{SETUP_ACCOUNT}" --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONN
+python scripts/flightcheck/cli.py --checkpoint DA-CONTENT-001 --preferred-username "{SETUP_ACCOUNT}" --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001
 ```
+
+Retain `--preferred-username "{SETUP_ACCOUNT}"` on every setup-owned FlightCheck, including retries and rechecks. Use the current selected account after an account change.
 
 FlightCheck resolves the ring from the explicit ring persisted by setup and validates it against the canonical Power Platform environment endpoint using `ring_from_environment_host()`. If the ring is missing, malformed, or contradictory, do not assume production. Ask the maker to confirm whether the environment uses **prod**, **preprod**, or **test**, then rerun the affected checkpoint with `--ring "{CONFIRMED_RING}"`.
 

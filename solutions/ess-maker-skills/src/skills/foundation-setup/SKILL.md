@@ -191,6 +191,8 @@ For **Help me decide** on the multiple-account surface, follow the shared contra
 
 Retain a confirmed cached sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, `setup_alm_import.py`, and `reconcile_setup_agent.py` command in this invocation. Never infer a corp account.
 
+Pass `--preferred-username "{SETUP_ACCOUNT}"` to every setup-owned `flightcheck/cli.py` command, including retries and rechecks. Use the current `{SETUP_ACCOUNT}` after any account change.
+
 When no cached account exists, or the maker selects **Use a different user** or **Use the Microsoft account picker**, omit `--account` and append `--select-account` only to the first read-only command that can authenticate. Parse `DA_AGENTBUILDER_AUTH_JSON:` from that command's output, retain its non-empty `account` as `{SETUP_ACCOUNT}`, and use `--account "{SETUP_ACCOUNT}"` for every later command in this invocation. The picker establishes the identity once; later commands reuse its cached token and sign-in name.
 
 `reconcile_setup_agent.py` does not accept `--select-account`, and a command that may mutate remote state must not establish the selected identity. When reconciliation or a mutating operation would otherwise be the first authenticated command, first run `setup_existing_da.py list-environments --ring "{RING}" --select-account` only to establish `{SETUP_ACCOUNT}`. Do not use its environment rows to replace an already selected target. Parse `DA_AGENTBUILDER_AUTH_JSON:`, retain the selected account, and pass it to reconciliation or mutation with `--account "{SETUP_ACCOUNT}"`. Do not pass `--select-account` to `reconcile_setup_agent.py` or a mutating command.
@@ -202,6 +204,16 @@ authorization** in `permission-guidance.md` before retaining an account or
 using the read-only operation result.
 
 If the first authenticated command succeeds but does not return an account identity, run `setup_existing_da.py cached-accounts` again. Retain its sole account when exactly one is present. When no single identity can be established, state that setup could not retain the selected sign-in and rerun the Microsoft account picker before continuing.
+
+Run this local operation once after the first authenticated account is established as `{SETUP_ACCOUNT}`, before the next setup operation:
+
+```text
+python scripts/setup_existing_da.py seed-shared-cache --account "{SETUP_ACCOUNT}"
+```
+
+Parse `DA_AUTH_CACHE_SEED_JSON:`. `copied` means the workspace's AgentBuilder cache was copied into a new shared authentication cache. `already-exists` means the existing shared cache was left unchanged. The operation performs no sign-in. No later account change repeats the copy; each cache is maintained by the commands that use it.
+
+On failure, preserve the returned error and cleanup notes, report that the local authentication-cache copy could not complete, and stop before the next setup operation. Retain `{SETUP_ACCOUNT}`. Resolve the reported local cache problem before rerunning this operation; an existing shared cache remains unchanged. Continue using the selected account flag. A later command may still request Microsoft authorization for its own application or permissions.
 
 Account selection does not prove that the maker holds a particular administrator role. Let each service operation validate its own permissions and preserve its specific authorization error instead of rejecting the selected account through a blanket local admin check.
 
