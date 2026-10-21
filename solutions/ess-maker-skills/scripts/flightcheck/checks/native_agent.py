@@ -284,6 +284,12 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             environment_id=environment_id,
             agent_id=agent_id,
         )
+        expected_realm = (getattr(runner, "validation_context", None) or {}).get("realm")
+        if expected_realm and route.get("realm") != expected_realm:
+            raise ExistingDASetupError(
+                "Direct agent lookup resolved a different deployment realm "
+                "than the requested assessment target."
+            )
         route_alm = route.get("alm")
         is_enrolled = (
             route_alm.get("isEnrolled")
@@ -418,6 +424,10 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             ),
         )
     )
+
+    should_execute = getattr(runner, "should_execute", lambda _checkpoint_id: True)
+    if not should_execute("DA-CONN-001"):
+        return results
 
     try:
         references = _connection_references(changeset)

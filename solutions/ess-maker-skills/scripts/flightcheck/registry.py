@@ -1060,9 +1060,12 @@ def list_profiles() -> list[ProfileSpec]:
     return sorted(PROFILES.values(), key=lambda profile: profile.name)
 
 
-def profile_requirements(profile_name: str) -> ResolvedPlan:
+def profile_requirements(profile_name: str | ProfileSpec) -> ResolvedPlan:
     """Resolve a profile to the union of its checkpoint execution needs."""
-    profile = PROFILES.get(profile_name)
+    profile = (
+        profile_name if isinstance(profile_name, ProfileSpec)
+        else PROFILES.get(profile_name)
+    )
     if profile is None:
         raise RegistryError(f"Unknown profile {profile_name!r}.")
     if not profile.checkpoint_ids:
@@ -1112,17 +1115,25 @@ def profile_requirements(profile_name: str) -> ResolvedPlan:
     )
 
 
-def profile_matches(profile_name: str, emitted_id: str) -> bool:
+def profile_matches(profile_name: str | ProfileSpec, emitted_id: str) -> bool:
     """True when an emitted checkpoint ID belongs to a profile member."""
-    profile = PROFILES.get(profile_name)
+    profile = (
+        profile_name if isinstance(profile_name, ProfileSpec)
+        else PROFILES.get(profile_name)
+    )
     if profile is None:
         return False
     return any(matches(checkpoint_id, emitted_id) for checkpoint_id in profile.checkpoint_ids)
 
 
-def profile_family_contract(profile_name: str) -> dict[str, dict[str, int]]:
+def profile_family_contract(
+    profile_name: str | ProfileSpec,
+) -> dict[str, dict[str, int]]:
     """Return minimum emitted-row cardinality for each profile family."""
-    profile = PROFILES.get(profile_name)
+    profile = (
+        profile_name if isinstance(profile_name, ProfileSpec)
+        else PROFILES.get(profile_name)
+    )
     if profile is None:
         raise RegistryError(f"Unknown profile {profile_name!r}.")
     families: dict[str, dict[str, int]] = {}

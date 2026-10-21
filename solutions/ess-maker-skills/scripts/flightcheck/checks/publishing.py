@@ -811,7 +811,10 @@ def run_publishing_checks(runner) -> list[CheckResult]:
     explicitly gated because import creates an agent in the target environment.
     """
     results: list[CheckResult] = []
+    should_execute = getattr(runner, "should_execute", lambda _checkpoint_id: True)
     for c in _build_checks(runner):
+        if not should_execute(c["id"]):
+            continue
         if c["id"] == "PUB-001":
             results.append(_check_pub_001_export(runner, c))
             continue

@@ -2151,12 +2151,37 @@ def _profile_checkpoint_contract_check(
     return check
 
 
-def _run_profile(args):
-    """Run a named validation profile and emit the versioned result contract."""
+def _run_da_full(args, config):
+    from flightcheck.da_execution import build_da_execution_plan
+
+    try:
+        _profile_target_matches_config(args, config)
+        target_config = dict(config)
+        if args.environment_id:
+            target_config["environmentId"] = args.environment_id
+        execution = build_da_execution_plan(
+            target_config, getattr(args, "agent_slug", None),
+            environment_url=args.environment_url or "",
+        )
+        _resolve_environment_ring(
+            execution.config, explicit_ring=getattr(args, "ring", None),
+        )
+        _resolve_power_platform_admin_origin(
+            execution.config,
+            explicit_origin=getattr(args, "power_platform_admin_origin", None),
+        )
+    except ValueError as exc:
+        print(f"ERROR: Unable to plan the selected DA assessment: {exc}")
+        sys.exit(1)
+    _run_profile(args, da_execution=execution)
+
+
+def _run_profile(args, *, da_execution=None):
+    """Run a named or compiled DA profile with the versioned result contract."""
     from flightcheck import registry
 
-    profile_name = args.profile
-    profile = registry.resolve_profile(profile_name)
+    profile_name = da_execution.profile.name if da_execution else args.profile
+    profile = da_execution.profile if da_execution else registry.resolve_profile(profile_name)
     if profile is None:
         print(f"ERROR: Unknown profile {profile_name!r}.")
         print("Valid profiles:")
@@ -2164,18 +2189,20 @@ def _run_profile(args):
             print(f"  {item.name}")
         sys.exit(2)
 
-    plan = registry.profile_requirements(profile_name)
+    plan = da_execution.requirements if da_execution else registry.profile_requirements(profile_name)
+    profile_selector = profile if da_execution else profile_name
     needed = plan.clients
+    invocation_label = "DA --scope full" if da_execution else "--profile"
     if bool(getattr(args, "runtime_reachability", False)):
         print(
-            "ERROR: --runtime-reachability is not allowed with --profile. "
-            "Profiles are strictly read-only."
+            f"ERROR: --runtime-reachability is not allowed with {invocation_label}. "
+            "This assessment is strictly read-only."
         )
         sys.exit(2)
     if bool(getattr(args, "alm_import_probe", False)):
         print(
-            "ERROR: --alm-import-probe is not allowed with --profile. "
-            "Profiles are strictly read-only."
+            f"ERROR: --alm-import-probe is not allowed with {invocation_label}. "
+            "This assessment is strictly read-only."
         )
         sys.exit(2)
 
@@ -2185,15 +2212,18 @@ def _run_profile(args):
         sys.exit(1)
 
     try:
-        config = {}
-        if os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = json.load(f)
-            if not isinstance(config, dict):
-                raise ValueError(
-                    f"{config_path} must contain a JSON object"
-                )
-        config = _merge_connect_config(config, getattr(args, "connect_config", None))
+        if da_execution:
+            config = da_execution.config
+        else:
+            config = {}
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                if not isinstance(config, dict):
+                    raise ValueError(
+                        f"{config_path} must contain a JSON object"
+                    )
+            config = _merge_connect_config(config, getattr(args, "connect_config", None))
         _profile_target_matches_config(args, config)
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"ERROR: Unable to resolve the profile target: {e}")
@@ -2252,7 +2282,7 @@ def _run_profile(args):
     ).strip() or None
     canonical_username = preferred_username
     account_verification_required = (
-        preferred_username is not None or len(needed) > 1
+        da_execution is not None or preferred_username is not None or len(needed) > 1
     )
     client_availability: dict[str, dict[str, object]] = {
         client_name: {
@@ -2414,7 +2444,8 @@ def _run_profile(args):
 
     env_id = args.environment_id or config.get("environmentId") or None
     controller_binding = (
-        getattr(args, "invocation_source", None) == "connect"
+        da_execution is None
+        and getattr(args, "invocation_source", None) == "connect"
         and bool(getattr(args, "connect_config", None))
         and bool(getattr(args, "environment_id", None))
         and bool(getattr(args, "environment_url", None))
@@ -2464,7 +2495,11 @@ def _run_profile(args):
     if needed & {registry.AGENTBUILDER, registry.CONNECTIVITY}:
         native_host = config.get("powerPlatformApiEndpoint", "")
         native_config_error = None
-        if not native_host:
+        if da_execution and env_url and pp_admin is None:
+            native_config_error = (
+                "Dataverse URL has no independently verified Power Platform environment mapping"
+            )
+        elif not native_host:
             native_config_error = (
                 "powerPlatformApiEndpoint is missing from workspace config"
             )
@@ -2655,21 +2690,22 @@ def _run_profile(args):
         sys.exit(1)
 
     runner = FlightCheckRunner(
-        scope=f"profile:{profile_name}",
+        scope="full" if da_execution else f"profile:{profile_name}",
         target_matcher=lambda cid: (
-            registry.profile_matches(profile_name, cid)
+            (da_execution.matches(cid) if da_execution else registry.profile_matches(profile_name, cid))
             or cid.startswith("PROFILE-CLIENT-")
             or cid.startswith("PROFILE-FAMILY-")
             or cid.startswith("PROFILE-CHECKPOINT-")
         ),
     )
     runner.execution_targets = profile.checkpoint_ids
-    runner.workday_da_profile = profile_name.startswith("workday-da:")
+    runner.workday_da_profile = bool(da_execution) or profile_name.startswith("workday-da:")
     runner.config = config
     runner.agent_slug = validation_context.agent_slug
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id
+    runner.tenant_id = tenant_id
     runner.graph = graph
     runner.pp_admin = pp_admin
     runner.pva = pva
@@ -2682,11 +2718,26 @@ def _run_profile(args):
     runner.runtime_reachability = False
     runner.runtime_reachability_declined = False
     runner.preserve_workday_manual_rows = True
+    if da_execution:
+        runner.validation_context = validation_context.to_dict()
+        runner.ring = _resolve_environment_ring(
+            config, explicit_ring=getattr(args, "ring", None),
+        )
+        runner.power_platform_admin_origin = _resolve_power_platform_admin_origin(
+            config, explicit_origin=getattr(args, "power_platform_admin_origin", None),
+        )
+        runner.connection_agent_ids = (
+            str(uuid.UUID(validation_context.agent_id)),
+        )
+        if agentbuilder is not None:
+            _configure_connection_validation(runner, args, account=canonical_username)
     runner.results.extend(_profile_client_blockers(client_availability))
 
     for label, fn in plan.ordered_fns:
-        runner.register(label, fn)
-    family_contract = registry.profile_family_contract(profile_name)
+        runner.register(label, da_execution.guard_producer(fn) if da_execution else fn)
+    if da_execution:
+        runner.register("DA FlightCheck Coverage", da_execution.coverage_check)
+    family_contract = registry.profile_family_contract(profile_selector)
     if family_contract:
         runner.register(
             "FlightCheck Profile",
@@ -2709,6 +2760,8 @@ def _run_profile(args):
 
     _print_prioritized_summary(result, verbose_manual=True)
     save_results(result, args.output)
+    if da_execution and not getattr(args, "no_open", False):
+        open_report_in_browser(args.output)
 
     if not result.results:
         print(f"\nNOTE: profile {profile_name} produced no result rows.")
@@ -2718,7 +2771,8 @@ def _run_profile(args):
     # telemetry so they surface on the Aria dashboards alongside --scope and
     # --checkpoint runs (best-effort; never affects exit).
     _emit_run_telemetry(
-        result, args, config, graph, tenant_id, scope=f"profile:{profile_name}"
+        result, args, config, graph, tenant_id,
+        scope="full" if da_execution else f"profile:{profile_name}",
     )
 
     sys.exit(_run_exit_code(result))
@@ -3001,6 +3055,13 @@ def main():
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"ERROR: Unable to load --connect-config: {e}")
         sys.exit(1)
+
+    if args.scope == "full" and not explicit_connection_target:
+        from flightcheck.da_execution import da_full_requested
+
+        if da_full_requested(config, args.agent_slug):
+            _run_da_full(args, config)
+            return
 
     infra_only_scope = args.scope == "infrastructure"
     da_local_scope = args.scope == "local"

@@ -423,13 +423,6 @@ class TestAgentBuilderNativeScopes:
             "expected_filter",
         ),
         [
-            (
-                "full",
-                ["Native Agent", "Environment", "Connections", "Local Files", "Publishing"],
-                True,
-                True,
-                None,
-            ),
             ("environment", ["Environment", "Connections"], True, True, None),
             (
                 "servicenow",
@@ -558,9 +551,7 @@ class TestAgentBuilderNativeScopes:
 
         assert exc.value.code == 0
         expected_auth = {"include_connectivity": True, "allow_write": False}
-        if scope == "full":
-            expected_auth.update(return_account_identity=True, emit_account_identity=False)
-        elif scope == "environment":
+        if scope == "environment":
             expected_auth = {
                 "include_connectivity": True, "return_account_identity": True,
                 "emit_account_identity": False, "account_hint": None,
@@ -662,7 +653,7 @@ class _RecordingPVA:
 
 @pytest.fixture
 def hybrid_scope(tmp_path, monkeypatch):
-    """Exercise CLI dispatch, not HTTP contracts or injected runner clients."""
+    """Exercise compatibility scope dispatch; explicit DA full has its own contracts."""
     from unittest.mock import Mock
 
     environment_id = "00000000-0000-4000-8000-000000001111"
@@ -676,7 +667,7 @@ def hybrid_scope(tmp_path, monkeypatch):
             "1.environment.api.test.powerplatform.com"
         ),
         "activeAgent": "hr",
-        "agent": {"slug": "hr", "releaseLine": "da"},
+        "agent": {"slug": "hr", "releaseLine": "ca"},
     }
     local = tmp_path / ".local"
     local.mkdir()
