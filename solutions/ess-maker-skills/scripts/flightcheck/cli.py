@@ -1123,7 +1123,7 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
 
 
 def _run_exit_code(result) -> int:
-    """Map a completed run to a process exit code (1 = not ready, 0 = ready).
+    """DA full requires deployment READY; legacy callers retain diagnostic exits.
 
     BLOCKED is a hard release gate (it forces overall = NOT_READY), so it must
     fail the exit code alongside FAILED and ERROR. Centralizing the rule here
@@ -1131,6 +1131,9 @@ def _run_exit_code(result) -> int:
     blocked essential capability can never exit 0 and read as success to a
     CI/Connect caller keying on the exit code.
     """
+    assessment = getattr(result, "da_assessment", None)
+    if assessment:
+        return 0 if assessment.get("deploymentReadiness") == "READY" else 1
     return 1 if result.failed > 0 or result.blocked > 0 or result.errors > 0 else 0
 
 
@@ -2175,8 +2178,10 @@ def _profile_checkpoint_contract_check(
 def _run_da_full(args, config):
     from flightcheck.da_execution import build_da_execution_plan
     from flightcheck.checks.da_integrations import workday_target_matches
+    from flightcheck.da_readiness import load_da_evidence
 
     try:
+        args._da_evidence_records = load_da_evidence(getattr(args, "da_evidence", None))
         _profile_target_matches_config(args, config)
         target_config = dict(config)
         if args.environment_id:
@@ -2870,6 +2875,13 @@ def _run_profile(args, *, da_execution=None):
     result.validation_context = validation_context.to_dict()
     result.client_availability = client_availability
 
+    if da_execution:
+        from flightcheck.da_readiness import build_da_assessment
+
+        result.da_assessment = build_da_assessment(
+            da_execution, result, runner, getattr(args, "_da_evidence_records", None),
+        )
+
     _print_prioritized_summary(result, verbose_manual=True)
     save_results(result, args.output)
     if da_execution and not getattr(args, "no_open", False):
@@ -3088,7 +3100,16 @@ def main():
              "print candidate Workday SSO apps or ServiceNow connections as "
              "JSON, then exit without running any checks.",
     )
+    parser.add_argument(
+        "--da-evidence", default=None,
+        help="Reviewed target/revision-bound evidence JSON for DA full deployment readiness only.",
+    )
     args = parser.parse_args()
+    if args.da_evidence and (
+        args.checkpoint or args.profile or args.list_checkpoints or args.list_targets
+        or args.scope not in {None, "full"}
+    ):
+        parser.error("--da-evidence is supported only for selected DA --scope full.")
     if args.agent_id or args.token_cache:
         if args.checkpoint != "ENV-004" and args.scope != "environment":
             parser.error("--agent-id and --token-cache are supported only for ENV-004 or --scope environment.")
@@ -3175,6 +3196,8 @@ def main():
             _run_da_full(args, config)
             return
 
+    if args.da_evidence:
+        parser.error("--da-evidence requires an explicitly selected DA full assessment.")
     infra_only_scope = args.scope == "infrastructure"
     da_local_scope = args.scope == "local"
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
@@ -3821,7 +3844,8 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
     order: am I OK? what must I fix? what must I verify? — without
     having to read every passing row.
     """
-    buckets = bucket_results(result.results)
+    assessment = getattr(result, "da_assessment", None)
+    buckets = bucket_results(result.results, deferred_as_manual=bool(assessment))
     action = buckets[BUCKET_ACTION]
     manual = buckets[BUCKET_MANUAL]
     completed = buckets[BUCKET_PASSED]
@@ -3834,7 +3858,16 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
     print("=" * 64)
 
     # Verdict line — single most important signal in the terminal.
-    if result.overall == "READY":
+    if assessment:
+        counts = assessment["counts"]
+        print(f"  Deployment readiness [{assessment['target']['realm']}]: "
+              f"{assessment['deploymentReadiness']}")
+        print(f"  Diagnostics: {result.overall} (not deployment approval)")
+        print(f"  Required definitions: {counts['requiredDefinitions']} | "
+              f"Satisfied: {counts['satisfied']} | Defects: {counts['defects']} | "
+              f"Incomplete: {counts['incomplete']}")
+        print("  Scope is this exact target/realm; skipped checks are not verified prerequisites.")
+    elif result.overall == "READY":
         print("  [READY] Ready for deployment")
         if manual:
             print(f"          ({len(manual)} item(s) need manual "

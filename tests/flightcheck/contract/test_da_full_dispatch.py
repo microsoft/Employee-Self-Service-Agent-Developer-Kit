@@ -373,12 +373,36 @@ def test_full_cli_uses_verified_read_only_plan_and_persists_gaps(da_cli, dataver
         da_cli.admin_client.assert_not_called()
     assert all(state["authenticatedAccountVerified"] for state in result.client_availability.values())
     saved = json.loads((da_cli.output / "results.json").read_text(encoding="utf-8"))
+    assessment = saved["da_assessment"]
+    assert saved["contract"]["daAssessment"] == assessment
+    assert assessment["schemaVersion"] == "flightcheck.da.assessment.v1"
+    assert assessment["deploymentReadiness"] == "INCOMPLETE"
+    assert assessment["counts"]["catalogDefinitions"] == len(DA_CATALOG)
+    assert assessment["counts"]["observedRows"] == len(result.results)
     assert "DA-PLAN-COVERAGE" in json.dumps(saved)
     html = (da_cli.output / "report.html").read_text(encoding="utf-8")
     assert "DA-PLAN-COVERAGE" in html
     assert "Full DA dispatch remains incomplete" in html
+    assert "DA deployment readiness" in html
+    assert "Coverage reconciliation" in html
     assert da_cli.telemetry.call_args.kwargs["scope"] == "full"
     da_cli.licensing.authenticate.assert_called_once_with(preferred_username=ACCOUNT)
+
+
+def test_invalid_evidence_file_fails_before_authentication(da_cli, tmp_path, capsys):
+    path = tmp_path / "evidence.json"
+    path.write_text('{"schemaVersion":"unsupported","records":[]}', encoding="utf-8")
+    assert da_cli.run("--da-evidence", str(path)) == 1
+    assert "flightcheck.da.evidence.v1" in capsys.readouterr().out
+    da_cli.native_auth.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", [
+    ("--scope", "workday"), ("--profile", "workday-da:final"), ("--checkpoint", "ENV-004"),
+])
+def test_evidence_option_cannot_change_connect_or_other_scopes(da_cli, mode):
+    assert da_cli.run(*mode, "--da-evidence", "not-read.json") == 2
+    da_cli.native_auth.assert_not_called()
 
 
 @pytest.mark.parametrize("failure", ["missing", "error", "account", "environment"])

@@ -278,12 +278,95 @@ Connected candidates, legacy flow names and unrelated run history cannot prove
 an exact binding or employee execution. **SAP is excluded from DA coverage**,
 including when stale configuration suggests it is enabled.
 
-The combined JSON/HTML report includes a `DA-PLAN-COVERAGE` row with the complete
-versioned coverage manifest in JSON evidence. Required dispatch gaps block a
-successful full run instead of disappearing from the report. This is an
-incremental implementation: coverage reconciliation and separate
-deployment-readiness reporting are still pending. Inventory and a diagnostic
-verdict are not deployment approval; Connect acceptance is unchanged. DA full
+The combined JSON/HTML report reconciles every catalog definition against the
+observed result rows, including dynamic families, missing/ambiguous results,
+unsupported dispatch, unknown applicability, explicit exclusions and unaccepted
+manual requirements. Definitions, scheduled selectors and actual rows have
+separate counts; the inventory is not a count of passed checks.
+
+DA full adds `flightcheck.da.assessment.v1` at root `da_assessment` and nested
+`contract.daAssessment` without changing `flightcheck.result.v2` or diagnostic
+statuses. HTML and terminal summaries separately label diagnostics and deployment
+readiness. **READY** requires all required applicable evidence and verified
+assessment context; **NOT_READY** means a confirmed required defect; otherwise
+readiness is **INCOMPLETE**. A confirmed defect takes precedence over remaining
+gaps. Only deployment READY exits successfully for DA full. Legacy exits and
+Workday Connect acceptance remain unchanged. Administrator skips remain Skipped
+and visible with the other evidence requirements.
+
+**Reviewed external evidence (DA full only):** run once to obtain the report's
+exact `target`, `configurationRevision` and requirement-specific
+`requiredEvidenceFields`. After an authorized reviewer reviews the evidence,
+rerun the same selected target with `--da-evidence <path-to-evidence.json>`.
+Use this envelope, replacing all illustrative values with real reviewed evidence:
+
+```json
+{
+  "schemaVersion": "flightcheck.da.evidence.v1",
+  "records": [
+    {
+      "checkpointId": "PRE-005",
+      "target": {
+        "tenantId": "<report target.tenantId>",
+        "environmentId": "<report target.environmentId>",
+        "agentId": "<report target.agentId>",
+        "agentSchemaName": "<report target.agentSchemaName>",
+        "agentSlug": "<report target.agentSlug>",
+        "realm": "<report target.realm>",
+        "serviceRing": "<report target.serviceRing>"
+      },
+      "configurationRevision": "<report configurationRevision>",
+      "reviewed": true,
+      "reviewerRole": "Power Platform Admin",
+      "source": "<approved non-secret evidence reference>",
+      "observedAt": "<timezone-aware ISO timestamp>",
+      "reviewedAt": "<timezone-aware ISO timestamp>",
+      "validUntil": "<explicit timezone-aware expiry>",
+      "outcome": "satisfied",
+      "evidenceKind": "manual_attestation",
+      "details": {
+        "environmentBillingPolicy": "<reviewed policy>",
+        "billingRoute": "<reviewed route>",
+        "billingCoverage": "<reviewed coverage>"
+      }
+    }
+  ]
+}
+```
+
+Provide at most one record per checkpoint. The complete target must match,
+including deployment realm and service ring. The SHA256 configuration revision
+binds the verified native snapshot (excluding its read cursor), inspected
+connection bindings and ALM evidence; changed evidence invalidates the record.
+Require `observedAt <= reviewedAt <= assessment time < validUntil`; there is no
+inferred validity period. `reviewerRole` must be one of the requirement's owning
+roles. Populate every reported required field, placing `observedAt`, `source`,
+`reviewerRole` and `configurationRevision` in the envelope and other fields in
+`details`. Outcome is `satisfied` or `defect`. Evidence cannot replace automated
+verification, hide missing results, or override an automated failure.
+
+Published employee evidence uses `evidenceKind: published_employee_runtime`:
+`DA-RUNTIME-001` requires `employeeTestRunIds`, and `DA-SN-RUNTIME-001` requires
+`employeeTestRuns`. Each is a unique nonempty run-ID list, with an `outcomes`
+map containing exactly those IDs and `passed`/`failed` values, plus the other
+reported fields. All runs must pass for `satisfied`; failed runs require
+`defect`. A Copilot Studio Test-pane run cannot substitute for published
+employee execution. `WD-DA-MAKER-001` instead uses `maker_test_pane`, with
+`makerTestCategory: copilot_studio_test_pane`, its scenario, an aware
+`testTimestamp` no later than review, and a matching `passed`/`failed` outcome.
+
+These records are **reviewer-declared attestations**, not cryptographic proof,
+authenticated administrator-role verification or automatic validation of the
+referenced material. Accepted evidence affects only the separate deployment
+decision; original Manual/Skipped rows remain unchanged. Generic detail fields
+are presence-validated, not independently verified. Do not include secrets.
+JSON retains accepted references and validity windows; HTML masks/escapes
+references. Telemetry adds only readiness enums and coverage counts, not evidence
+details, references or revision fingerprints. Approval is scoped to the selected
+realm, not cross-realm promotion or organizational GA sign-off.
+
+This remains an incremental implementation; entrypoint alignment and integrated
+verification are subsequent work packages. DA full
 rejects `--alm-import-probe` and `--runtime-reachability`; these remain separate,
 explicitly authorized operations.
 
