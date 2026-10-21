@@ -4,7 +4,7 @@ You are working inside the `samples/` folder of the Employee Self-Service Agent 
 
 ## What this folder is
 
-Reference samples for the Microsoft Copilot Studio Employee Self-Service (ESS) agent. Each sample is a Copilot Studio **topic** plus its **ESS Template Configuration** XML(s). Samples are reference content — not a shipped product. See [`SUPPORT.md`](../SUPPORT.md).
+Reference samples for the Microsoft Copilot Studio Employee Self-Service (ESS) agent. Samples contain Copilot Studio **topics** and their integration configuration. Workday DA GA uses a single shared configuration topic; other areas use **ESS Template Configuration** XML(s). Samples are reference content — not a shipped product. See [`SUPPORT.md`](../SUPPORT.md).
 
 ## Layout (source of truth: this repo)
 
@@ -14,19 +14,22 @@ Top-level areas under `samples/` today:
 |---|---|---|
 | `Facilities/` | flat (`<TopicFolder>/` directly) | Office/dining/guest/vehicle topics. |
 | `WorkdayCustomEngineAgent/` | `Employee/`, `Manager/`, `Extended/` | Workday Custom Engine Agent (CEA) topics. |
-| `WorkdayDeclarativeAgent/` | `Employee/`, `Manager/` | Workday Declarative Agent (DA) topics. |
+| `WorkdayDeclarativeAgentGA/` | `Employee/`, `Manager/` | Workday DA GA topics, plus `WorkdayOSSTemplateConfigurationSetup.yaml` at the area root. |
+| `WorkdayDeclarativeAgentPreview/` | `Employee/`, `Manager/` | Original DA Preview topics and per-scenario XML template configurations. Preserve this legacy content when updating GA. |
 | `ServiceNow/` | empty placeholder | Currently empty. Only add a ServiceNow topic when an issue explicitly requests one and provides enough details. |
 
 Topic path patterns:
 
 - `samples/Facilities/<TopicFolder>/`
 - `samples/WorkdayCustomEngineAgent/{Employee|Manager|Extended}/<TopicFolder>/`
-- `samples/WorkdayDeclarativeAgent/{Employee|Manager}/<TopicFolder>/`
+- `samples/WorkdayDeclarativeAgentGA/{Employee|Manager}/<TopicFolder>/`
+- `samples/WorkdayDeclarativeAgentPreview/{Employee|Manager}/<TopicFolder>/`
 
 ## A topic folder typically contains
 
 - `topic.yaml` — Copilot Studio AdaptiveDialog (`kind: AdaptiveDialog`). Defines `inputs`, `modelDescription`, `beginDialog`, etc.
-- One or more `*.xml` files — ESS Template Configuration. Filenames start with `msdyn_` by convention.
+- For legacy sample areas, one or more `*.xml` files — ESS Template Configuration. Filenames start with `msdyn_` by convention.
+- Workday DA GA scenarios have no per-topic XML or partial file. Their templates are minified Power Fx strings in the area-level `WorkdayOSSTemplateConfigurationSetup.yaml`. Keep one setter and one lookup mapping per source template. Run this shared setup after OOB Workday configuration initialization; OSS mappings replace matching keys and preserve unrelated OOB entries.
 - `README.md` — *expected for new topics; preserved as-is for existing topics that already have one or don't.* See **README expectations** below.
 - Optional assets (screenshots, diagrams, sample payloads) referenced by the README. Use lowercase, hyphenated filenames (e.g., `get-vacation-balance.png`).
 
@@ -62,7 +65,7 @@ For **existing topics** without a README, do not retrofit one as part of an unre
 - Folders: PascalCase, action-oriented (`EmployeeGetVacationBalance`, `EmployeeInviteGuest`).
 - XML: `msdyn_<Area><Action>.xml`.
 - **Documented inconsistencies — do NOT "fix" these:**
-  - Some `WorkdayDeclarativeAgent/Employee` folders use lowercase / run-together names (e.g., `WorkdayEmployeesviewtheirjobtaxonomy`).
+  - Some employee folders in `WorkdayDeclarativeAgentGA` and `WorkdayDeclarativeAgentPreview` use lowercase / run-together names (e.g., `WorkdayEmployeesviewtheirjobtaxonomy`).
   - One Facilities file has a trailing dot (`msdyn_DiningGetMenusQuery..xml`).
   - Some XML files use lowercase prefixes (`msdyn_copilotforemployeeselfservice...`).
 
@@ -84,6 +87,8 @@ For **new** files, follow the PascalCase + `msdyn_<Area><Action>.xml` convention
 - One issue → one PR. No auto-merge. Human review required.
 - Diff must be confined to a single topic folder (or a single new topic folder) unless the issue explicitly requires more.
 - No edits to `solutions/`, `.github/`, or any path outside `samples/` — even if you believe the change is complementary or helpful. If a related change is needed elsewhere, note it in the PR description as a follow-up.
+
+An explicitly requested DA GA format migration can replace legacy XML configuration files with the shared setup topic without deleting the user-facing topics. Do not reintroduce per-topic partials or XML files for that area.
 
 ## When to stop and ask for clarification
 
@@ -113,6 +118,8 @@ Full procedure: [`.github/agents/skills/validate-sample-topic/SKILL.md`](../.git
 - Folder convention for **new** topic folders (PascalCase, contains `topic.yaml`, at least one `*.xml`, and `README.md`).
 - Diff scope limited to a single `samples/<Area>/.../<TopicFolder>/` (area-level docs allowed).
 - No secrets or internal URLs anywhere in touched files (the check scans full file contents, not just the diff).
+
+The validator's single-topic scope rule and new-folder XML requirement predate the shared DA GA setup format. Report those limitations explicitly for an authorized multi-topic migration; do not claim a clean aggregate validation result or edit paths outside `samples/` to bypass the rules.
 
 Neighbor-key parity against the sibling reference is your responsibility in step 1 of [`create-or-update-sample-topic`](../.github/agents/skills/create-or-update-sample-topic/SKILL.md) — record the neighbor path in the PR body.
 
