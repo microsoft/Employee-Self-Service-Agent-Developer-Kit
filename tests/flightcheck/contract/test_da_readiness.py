@@ -341,6 +341,42 @@ def test_da_report_rerun_preserves_explicit_target_and_quotes_shell_arguments(tm
     assert "maker /flightcheck is local-only" not in html
 
 
+def test_report_groups_next_steps_in_a_three_column_table_without_repeating_connection_warnings(tmp_path):
+    case = _case("ENV-004-COVERAGE", "DA-CONN-001", "WD-ENTRA-SCOPE-001", "WD-ENTRA-CONSENT-001")
+    warning = "; ".join(
+        f"Topic sampleTopic{index}: activation could not be verified (status must be Active or Inactive)."
+        for index in range(12)
+    )
+    case.result.results = [
+        row for row in case.result.results if row.checkpoint_id not in {"ENV-004-COVERAGE", "DA-CONN-001"}
+    ]
+    case.result.results.append(CheckResult(
+        "DA-CONN-001", "Environment", "High", "Failed", "Required connection", "Required Workday connection is missing.",
+    ))
+    case.result.results.append(CheckResult(
+        "ENV-004-COVERAGE", "Environment", "High", "Warning", "Connection dependency coverage", warning,
+    ))
+    case.result.da_assessment = _assessment(case)
+    before = deepcopy(case.result)
+    save_results(case.result, str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    table = re.search(r'<table class="action-table">.*?</table>', html, re.DOTALL)[0]
+    assert re.findall(r'<th scope="col">(.*?)</th>', table) == ["Area", "Next step", "Who can help"]
+    assert 'class="work-card sec"' in html and 'class="panel report"' in html
+    assert 'class="sidebar"' not in html
+    assert 'class="app-icon"' in html and "Readiness at a glance" in html
+    assert '<ol class="steps-list">' in html
+    assert 'data-filter="administrator"' in html and 'aria-pressed="true"' in html
+    assert html.count("Some connection checks are incomplete") == 1
+    assert "Required Workday connection is missing." in html
+    assert "activation could not be verified" not in html and "sampleTopic" not in html
+    root = re.search(r'<aside class="root-cause".*?</aside>', html, re.DOTALL)[0]
+    assert "SAP" not in root
+    saved = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+    assert warning == saved["results"][-1]["result"]
+    assert case.result == before
+
+
 def test_same_checkpoint_can_have_distinct_resource_status_buckets():
     case = _case()
     case.result.results.append(CheckResult("ENV-004", "Domain", "High", "Failed", "Other reference", "Unbound."))

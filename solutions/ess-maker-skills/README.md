@@ -311,9 +311,12 @@ and visible with the other evidence requirements. DA full uses its independent
 coverage reconciliation, not the Connect profile's resolved-family or skipped-
 checkpoint acceptance gates.
 
-DA HTML reports use an offline Fluent-style layout with responsive work-item
-cards, a navigation rail, separate status totals and an expandable diagnostic
-inventory. Shared reviews (licensing, billing, Workday connection settings and
+DA HTML reports use a centered, offline Fluent-style layout with the kit's
+header icon, readiness summary tiles, tab-style filters and grouped expandable
+checks. A three-column next-steps table shows the area, action and owner;
+tables stack into readable sections on mobile instead of squeezing the columns.
+Separate status totals and expandable results preserve the diagnostic detail.
+Shared reviews (licensing, billing, Workday connection settings and
 administrator handoffs) are grouped without losing their distinct assertions.
 Skipped is never counted as Passed, and Blocked is not labeled Failed.
 Informational observations remain in the inventory, not the required work queue.
@@ -331,6 +334,9 @@ Customer-facing summaries, next steps and review fields use plain language.
 Internal check references, original findings, exact evidence field names,
 version identifiers and rerun commands remain available in expandable support
 details. Friendly status labels do not change the JSON status or readiness policy.
+Repeated connection-discovery warnings are summarized once in the HTML.
+Their full original messages remain in the downloadable `results.json`, not
+a repeated paragraph or a separate task for every affected conversation.
 
 **Reviewed external evidence (DA full only):** run once to obtain the report's
 exact `target`, `configurationRevision` and requirement-specific

@@ -13,7 +13,7 @@ import re
 import shlex
 
 from .da_readiness import DA_EVIDENCE_SCHEMA
-from .runner import RunResult, _mask_sensitive, _slug
+from .runner import CheckResult, RunResult, _APP_ICON_DATA_URI, _mask_sensitive, _slug
 
 
 _BASE_FIELDS = {"observedAt", "source", "reviewerRole", "configurationRevision"}
@@ -32,6 +32,39 @@ _GROUPS = {
     "Testing and approval": ("QA-001", "QA-002", "QA-012", "PUB-003", "PUB-006"),
 }
 _GROUP_BY_ID = {key: title for title, keys in _GROUPS.items() for key in keys}
+_GROUP_STEPS = {
+    "Licenses for automated tasks": "Review task licensing and employee coverage.",
+    "Workday connection settings": "Confirm sign-in, available tasks and sharing permissions.",
+    "Ask your Microsoft Entra administrator": "Review Workday sign-in and application permissions.",
+    "Ask your Workday administrator": "Review the Workday application, security and network settings.",
+    "Billing and capacity review": "Confirm billing and capacity for expected employee usage.",
+    "Check the services your agent uses": "Review the incomplete connection checks with your administrator.",
+    "Testing and approval": "Complete the agreed tests and obtain release approvals.",
+    "Confirm which features you use": "Confirm which features you use before completing their checks.",
+}
+_REVIEW_STEPS = {
+    "LIC-FLOW-001": (
+        "Ask your licensing owner to list each automated task and the services it uses.",
+        "Record the licensing arrangement that applies to each task.",
+    ),
+    "LIC-FLOW-002": (
+        "Confirm which employees will use the automated tasks.",
+        "Ask your licensing owner to confirm that the agreed arrangement covers those employees.",
+    ),
+    "WD-CONN-013": (
+        "Open the agent's `Connection Settings` and find both Workday entries.",
+        "Confirm `Allow permission to share parameters` for each entry.",
+    ),
+    "WD-DA-MAKER-001": (
+        "Run the supported Workday tasks in the **Copilot Studio** `Test` pane.",
+        "Record each task, the date and time, the agent version and the result.",
+        "Keep these results separate from employee tests of the published agent.",
+    ),
+    "DA-RUNTIME-001": (
+        "Test the published agent with signed-in employees in the intended channel.",
+        "Record a reference and result for each test, including the published version.",
+    ),
+}
 _REASONS = {
     "required_evidence_unverified": "We still need the results of this check or a completed review.",
     "unknown_applicability": "Confirm whether you use this feature. If you do, it needs to be checked.",
@@ -263,14 +296,32 @@ def _template(assessment: dict, entry: dict) -> str:
     }, indent=2)
 
 
-def _requirement(assessment: dict, entry: dict, rows: list, *, single: bool = False) -> str:
+def _connection_warning(r: RunResult) -> CheckResult | None:
+    return next((row for row in r.results
+                 if row.checkpoint_id == "ENV-004-COVERAGE" and row.status != "Passed"), None)
+
+
+def _requirement(
+    assessment: dict, entry: dict, rows: list, *, single: bool = False, connection_warning: bool = False,
+) -> str:
     key = entry["checkpointId"]
     title, next_step = _check_copy(key)
     kind = _kind(entry, rows)
+    shared_connection = (
+        connection_warning and key in {"ENV-004", "DA-CONN-001", "SN-CONN-001"}
+        and not any(row.status in {"Failed", "Error"} for row in rows)
+    )
     observed = " ".join(_badge(status) for status in dict.fromkeys(row.status for row in rows))
     reason = " ".join(
         _REASONS.get(code, "This check needs review. See the support details below.") for code in entry["reasonCodes"]
     )
+    if entry["reasonCodes"] == ["required_evidence_unverified"]:
+        if shared_connection:
+            reason = "Some required connections could not be confirmed. Review the shared connection issue."
+        elif kind == "administrator":
+            reason = "This was not checked automatically. Your administrator's review is still needed."
+        elif any(row.status in {"Blocked", "Error"} for row in rows):
+            reason = "FlightCheck could not finish this check. Ask the owner to investigate before running it again."
     criteria = list(dict.fromkeys(
         row.evidence.get("acceptanceCriteria") or row.remediation
         for row in rows if row.evidence.get("acceptanceCriteria") or row.remediation
@@ -278,13 +329,15 @@ def _requirement(assessment: dict, entry: dict, rows: list, *, single: bool = Fa
     if not rows:
         criteria = [entry["applicabilityReason"]]
     content = (
-        f'<details class="requirement" id="chk-{_slug(key)}" data-kind="{kind}">'
+        f'<details class="requirement" id="chk-{_slug(key)}" data-kind="{kind}"{" open" if single else ""}>'
         f'<summary><span><strong>{_e("What needs to be checked" if single else title)}</strong></span>'
         f'{_badge("unknown") if entry["coverageState"] == "unknown" else observed or _badge(entry["evidenceState"])}</summary>'
         '<div class="requirement-body">'
-        f'<p class="muted">{_e(reason)}</p>'
+        f'<h4>What we found</h4><p>{_e(reason or ("A required check found a problem." if entry["evidenceState"] == "defect" else "This check still needs review."))}</p>'
         f'<p><b>Who can help:</b> {_e(", ".join(_role_name(role) for role in entry["roles"]))}</p>'
-        f'<p>{_prose(next_step)}</p>'
+        '<h4>What to do</h4><ol class="steps-list">'
+        + "".join(f"<li>{_prose(step)}</li>" for step in _REVIEW_STEPS.get(key, (next_step,)))
+        + "</ol>"
     )
     fields = entry["requiredEvidenceFields"]
     if fields:
@@ -298,11 +351,10 @@ def _requirement(assessment: dict, entry: dict, rows: list, *, single: bool = Fa
     content += (
         '<details class="support-details"><summary>Technical details for your administrator</summary>'
         f'<p>Check reference: <code>{_e(key)}</code></p>'
-        + "".join(f"<p>{_prose(action)}</p>" for action in criteria)
-        + "".join(f"<p>{_prose(row.result)}</p>" for row in rows
-                  if key not in {"ENV-004", "DA-CONN-001", "SN-CONN-001"})
+        + "".join(f"<p>{_prose(action)}</p>" for action in criteria if not shared_connection)
+        + "".join(f"<p>{_prose(row.result)}</p>" for row in rows if not shared_connection)
     )
-    if key in {"ENV-004", "DA-CONN-001", "SN-CONN-001"}:
+    if shared_connection:
         content += '<p>See <a href="#dependency-detail">the shared connection issue</a> and the check results below.</p>'
     if fields:
         content += (
@@ -318,8 +370,9 @@ def _requirement(assessment: dict, entry: dict, rows: list, *, single: bool = Fa
     return content + "</details></div></details>"
 
 
-def _work_queue(r: RunResult) -> tuple[str, int]:
+def _work_queue(r: RunResult) -> tuple[str, str, int]:
     assessment = r.da_assessment
+    shared_warning = _connection_warning(r) is not None
     groups: dict[str, list] = {}
     rows_by_id: dict[str, list] = {}
     for row in r.results:
@@ -337,6 +390,7 @@ def _work_queue(r: RunResult) -> tuple[str, int]:
         )
         groups.setdefault(title, []).append((entry, rows))
     cards = []
+    summary_rows = []
     def urgency(item):
         entries = item[1]
         if any(entry["evidenceState"] == "defect" for entry, _ in entries):
@@ -349,17 +403,32 @@ def _work_queue(r: RunResult) -> tuple[str, int]:
         owners = sorted({_role_name(role) for entry, _ in entries for role in entry["roles"]})
         defect = any(entry["evidenceState"] == "defect" for entry, _ in entries)
         label = title if title in _GROUPS or title == "Confirm which features you use" else _check_copy(title)[0]
-        cards.append(
-            f'<article class="work-card" data-kinds="{_e(" ".join(kinds))}">'
-            f'<div class="card-heading"><h3>{_e(label)}</h3>{_badge("defect" if defect else "Needs attention")}</div>'
-            f'<p class="muted">{len(entries)} {"check" if len(entries) == 1 else "checks"} · {_e(", ".join(owners))}</p>'
-            + ("<p>Work with the owners on this group. Each check still needs its own result.</p>" if len(entries) > 1 else "")
-            + (f'<details class="bundle"><summary>View {len(entries)} checks</summary>' if len(entries) > 3 else "")
-            + "".join(_requirement(assessment, entry, rows, single=len(entries) == 1) for entry, rows in entries)
-            + ("</details>" if len(entries) > 3 else "")
-            + "</article>"
+        group_id = "group-" + _slug(title)
+        action = _GROUP_STEPS[title] if title in _GROUP_STEPS else _check_copy(title)[1]
+        owner_summary = ", ".join(owners) if len(owners) <= 2 else "Several owners; see the individual checks"
+        summary_rows.append(
+            f'<tr class="summary-row" data-group="{group_id}">'
+            f'<th scope="row" data-label="Area"><a href="#{group_id}">{_e(label)}</a>'
+            f'<span class="advisory">{len(entries)} {"check" if len(entries) == 1 else "checks"} to review</span></th>'
+            f'<td data-label="Next step">{_prose(action)}</td>'
+            f'<td data-label="Who can help">{_e(owner_summary)}</td></tr>'
         )
-    return "".join(cards), len(groups)
+        cards.append(
+            f'<details class="work-card sec" id="{group_id}" data-kinds="{_e(" ".join(kinds))}">'
+            f'<summary><span class="group-title">{_e(label)}</span>'
+            f'<span class="group-count">{len(entries)} {"check" if len(entries) == 1 else "checks"}</span>'
+            f'{_badge("defect" if defect else "Needs attention")}</summary><div class="sec-body">'
+            + "".join(_requirement(assessment, entry, rows, single=len(entries) == 1,
+                                  connection_warning=shared_warning) for entry, rows in entries)
+            + "</div></details>"
+        )
+    table = (
+        '<div class="table-scroll"><table class="action-table"><caption>Next steps by area</caption>'
+        '<colgroup><col class="area-column"><col class="step-column"><col class="owner-column"></colgroup>'
+        '<thead><tr><th scope="col">Area</th><th scope="col">Next step</th><th scope="col">Who can help</th></tr></thead>'
+        "<tbody>" + "".join(summary_rows) + "</tbody></table></div>"
+    ) if summary_rows else ""
+    return "".join(cards), table, len(groups)
 
 
 def _rerun(assessment: dict) -> str:
@@ -397,10 +466,13 @@ def _coverage(assessment: dict) -> str:
             "not_applicable": "Does not apply",
         }.get(entry["applicability"], entry["applicability"])
         rows.append(
-            f'<tr data-required="{str(entry["deploymentRequired"]).lower()}"><th scope="row"><code>{_e(entry["checkpointId"])}</code></th>'
-            f'<td>{_e(applicability)}</td><td>{"Required" if entry["deploymentRequired"] else "Not required for readiness"}</td>'
-            f'<td>{_e(observed)}</td><td>{_badge(entry["evidenceState"])}</td>'
-            f'<td>{_e(reason or entry["applicabilityReason"])}</td></tr>'
+            f'<tr data-required="{str(entry["deploymentRequired"]).lower()}">'
+            f'<th scope="row" data-label="Check reference"><code>{_e(entry["checkpointId"])}</code></th>'
+            f'<td data-label="Recorded results">{_e(observed)}</td>'
+            f'<td data-label="Review status">{_badge(entry["evidenceState"])}'
+            f'<span class="advisory">{_e(applicability)} · '
+            f'{"Required" if entry["deploymentRequired"] else "Not required for readiness"}</span>'
+            f'<details><summary>Explanation</summary><p>{_e(reason or entry["applicabilityReason"])}</p></details></td></tr>'
         )
     counts = assessment["counts"]
     return (
@@ -412,8 +484,9 @@ def _coverage(assessment: dict) -> str:
         f'{counts["scheduledSelectors"]} checks or check groups selected for this run; '
         f'{counts["observedRows"]} results recorded. These are not counts of passed checks.</p>'
         '<label class="coverage-toggle"><input id="required-only" type="checkbox"> Show required checks only</label>'
-        '<div class="table-scroll"><table><thead><tr><th>Check reference</th><th>Does it apply?</th><th>Required?</th>'
-        '<th>Results</th><th>Review status</th><th>Explanation</th></tr></thead><tbody>'
+        '<div class="table-scroll"><table><caption>All checks and their review status</caption><thead><tr>'
+        '<th scope="col">Check reference</th><th scope="col">Recorded results</th>'
+        '<th scope="col">Review status</th></tr></thead><tbody>'
         + "".join(rows) + "</tbody></table></div></details></section>"
     )
 
@@ -421,19 +494,25 @@ def _coverage(assessment: dict) -> str:
 def _diagnostics(r: RunResult) -> str:
     coverage = {entry["checkpointId"]: entry for entry in r.da_assessment["coverage"]}
     counts = Counter(row.status for row in r.results)
+    shared_warning = _connection_warning(r) is not None
     rows = []
     for row in r.results:
         advisory = row.checkpoint_id in coverage and not coverage[row.checkpoint_id]["deploymentRequired"]
+        shared_connection = (
+            shared_warning and row.status not in {"Failed", "Error", "Passed"}
+            and row.checkpoint_id in {"ENV-004", "ENV-004-COVERAGE", "DA-CONN-001", "SN-CONN-001"}
+        )
         rows.append(
-            f"<tr><th scope=\"row\">{_e(_check_copy(row.checkpoint_id)[0])}<br><code>{_e(row.checkpoint_id)}</code>"
+            f'<tr><th scope="row" data-label="Check">{_e(_check_copy(row.checkpoint_id)[0])}<br>'
+            f'{_badge(row.status)}<span class="advisory"><code>{_e(row.checkpoint_id)}</code></span>'
             + ("<span class=\"advisory\">For information</span>" if advisory else "")
-            + f"</th><td>{_badge(row.status)}</td><td><details><summary>View technical findings and guidance</summary>"
-            + f"<p>{_e(row.description)}</p>"
-            + ('<p><a href="#dependency-detail">Shared connection issue</a></p>' if row.checkpoint_id in {"ENV-004", "ENV-004-COVERAGE"}
+            + '</th><td data-label="Findings"><details><summary>View findings and guidance</summary>'
+            + ('<p>See the <a href="#dependency-detail">shared connection issue</a>. '
+               'The original findings are in the <a href="results.json">downloadable report data</a>.</p>' if shared_connection
                else f"<p>{_prose(row.result)}</p>")
-            + (f"<p>{_prose(row.remediation)}</p>" if row.remediation else "")
+            + (f"<p>{_prose(row.remediation)}</p>" if row.remediation and not shared_connection else "")
             + (f'<p>{_prose(f"[Documentation]({row.doc_link})")}</p>' if row.doc_link else "")
-            + f"</details></td><td>{_e(', '.join(_role_name(role) for role in row.roles))}</td></tr>"
+            + f'</details></td><td data-label="Who can help">{_e(", ".join(_role_name(role) for role in row.roles))}</td></tr>'
         )
     stats = " ".join(
         f'<span class="stat">{counts[status]} {_e(_STATUS_LABELS.get(status, status))}</span>'
@@ -447,7 +526,8 @@ def _diagnostics(r: RunResult) -> str:
         'not that it found a problem. Information-only notes do not require a review.</p>'
         f'<details class="support-details"><summary>View all {len(r.results)} check results and support details</summary>'
         '<div class="table-scroll">'
-        '<table><thead><tr><th>Check</th><th>Status</th><th>Findings and next steps</th><th>Who can help</th></tr></thead>'
+        '<table><caption>Results recorded during this check</caption><thead><tr><th scope="col">Check</th>'
+        '<th scope="col">Findings</th><th scope="col">Who can help</th></tr></thead>'
         "<tbody>" + "".join(rows) + "</tbody></table></div></details></section>"
     )
 
@@ -455,7 +535,7 @@ def _diagnostics(r: RunResult) -> str:
 def render_da_report(r: RunResult) -> str:
     assessment = r.da_assessment
     counts, target = assessment["counts"], assessment["target"]
-    work, work_count = _work_queue(r)
+    work, work_table, work_count = _work_queue(r)
     state = assessment["deploymentReadiness"]
     state_class = {"READY": "success", "NOT_READY": "danger"}.get(state, "attention")
     decision, explanation = {
@@ -470,16 +550,13 @@ def render_da_report(r: RunResult) -> str:
             ("defects", "Required checks needing fixes"), ("incomplete", "Still to confirm"),
         )
     )
-    dependency = next((row for row in r.results if row.checkpoint_id == "ENV-004-COVERAGE"), None)
+    dependency = _connection_warning(r)
     root_cause = (
-        '<details class="root-cause" id="dependency-detail"><summary>Some connections could not be fully checked</summary>'
-        '<p>FlightCheck could not confirm which services are used by every conversation. '
-        'Ask your agent owner to review which conversations are turned on and which services they use. '
-        'Until then, some connection checks cannot finish.</p>'
-        '<p>SAP is not part of this review. However, a conversation name alone does not tell us whether '
-        'it is turned off or uses other services.</p>'
-        f'<details class="support-details"><summary>Connection details for your administrator</summary>'
-        f'<p>{_prose(dependency.result)}</p></details></details>'
+        '<aside class="root-cause" id="dependency-detail" aria-labelledby="connection-issue-title">'
+        '<h3 id="connection-issue-title">Some connection checks are incomplete</h3>'
+        '<p>FlightCheck could not confirm every service this agent uses. Ask your agent owner and administrator '
+        'to review the affected conversations and connections.</p>'
+        '<a href="results.json">Download details for support</a></aside>'
     ) if dependency else ""
     reviews = "".join(
         f'<li>{_e(_check_copy(review["checkpointId"])[0])}: '
@@ -497,37 +574,51 @@ def render_da_report(r: RunResult) -> str:
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         '<meta name="color-scheme" content="light dark"><title>Employee Self-Service readiness report</title>'
         f"<style>{_CSS}</style></head><body>"
-        '<a class="skip-link" href="#overview">Skip to summary</a><div class="app">'
-        '<aside class="sidebar"><div class="brand"><span class="brand-icon" aria-hidden="true">✓</span>'
-        '<div>Employee Self-Service<br><strong>FlightCheck</strong></div></div>'
-        '<nav aria-label="Report sections"><a href="#overview">Summary</a><a href="#work">What to do next</a>'
-        '<a href="#evidence">Record and submit reviews</a><a href="#diagnostics">Check results</a>'
-        '<a href="#coverage">Full check list</a></nav>'
-        '<p class="sidebar-note">This check does not change settings, publish your agent or submit employee requests.</p></aside>'
-        '<main><header id="overview" class="panel overview"><div><p class="eyebrow">Readiness for employee use</p>'
+        '<a class="skip-link" href="#overview">Skip to summary</a><div class="app wrap"><main>'
+        '<header id="overview" class="panel report"><div class="brand">'
+        f'<img class="app-icon" src="{_APP_ICON_DATA_URI}" alt="Employee Self-Service icon">'
+        '<div class="brand-title">Employee Self-Service FlightCheck</div></div>'
+        '<p class="eyebrow">Readiness for employee use</p>'
         f'<h1>{_e(target["agentSlug"].replace("-", " ").replace("_", " ").title() or "Your agent")}</h1>'
-        f'<span class="decision {state_class}">{_e(decision)}</span><p>{_e(explanation)}</p></div>'
         '<dl class="target"><dt>Environment type</dt>'
         f'<dd>{_e({"dev": "Development", "test": "Test", "prod": "Production"}.get(target["realm"], target["realm"]))}</dd>'
         f'<dt>Checked on</dt><dd>{_e(r.started)}</dd><dt>Time taken</dt><dd>{r.duration_secs} seconds</dd></dl>'
-        f'<div class="metrics">{metrics}</div>'
+        f'<div class="verdict"><span class="decision {state_class}">{_e(decision)}</span><p>{_e(explanation)}</p></div>'
         '<p class="overview-note">This result applies only to the agent, environment and version checked. '
-        'Missing information does not mean something is broken. Administrator checks and required reviews '
-        'must still be completed before readiness can be confirmed.</p>'
+        'Missing information does not mean something is broken.</p>'
         + (f'<div class="context-gaps"><h3>What we could not confirm</h3><ul>{issues}</ul></div>' if issues else "")
         + '</header>'
-        '<section id="work"><div class="section-heading"><div><h2>What to do next</h2>'
+        '<nav class="report-nav" aria-label="Report sections"><a href="#overview">Summary</a><a href="#work">Next steps</a>'
+        '<a href="#check-details">Check details</a><a href="#evidence">Submit reviews</a>'
+        '<a href="#diagnostics">All results</a><a href="#coverage">Full check list</a></nav>'
+        '<details class="panel howto"><summary>How to read this report</summary><div class="howto-body">'
+        '<p>Review any items marked Needs fixing first. Could not check and Not checked do not mean Passed. '
+        'Administrator checks and required reviews must still be completed before readiness can be confirmed.</p>'
+        '<p>Use the next-steps table to find the right owner, then open the related checks for instructions. '
+        'Opening this report or copying a review form does not complete a check.</p>'
+        '<p>This check does not change settings, publish your agent or submit employee requests.</p></div></details>'
+        f'<section class="panel synopsis" aria-label="Readiness at a glance"><h2>Readiness at a glance</h2>'
+        f'<div class="metrics tiles">{metrics}</div></section>'
+        '<section id="work" class="panel actions-panel"><div class="section-heading"><h2>What to do next</h2>'
         f'<p>{work_count} groups of next steps. {counts["incomplete"]} checks and reviews still need to be confirmed. '
         f'For {counts["unknownApplicability"]} checks, first confirm whether you use the feature. '
-        'Related checks are grouped so you can work with the right owner.</p></div></div>'
-        '<div class="toolbar" hidden><label>Show<select id="work-filter"><option value="all">All next steps</option>'
-        '<option value="evidence">Reviews and test results</option><option value="administrator">Help from an administrator</option>'
-        '<option value="verification">Checks needing investigation</option><option value="applicability">Features to confirm</option>'
-        '</select></label><label class="search-label">Search<input id="work-search" type="search" placeholder="Check, feature or owner"></label>'
+        'Select an area to open its instructions.</p></div>'
+        '<div class="toolbar" hidden><div id="work-filter" class="filters" role="group" aria-label="Filter next steps">'
+        '<button type="button" data-filter="all" aria-pressed="true">All</button>'
+        '<button type="button" data-filter="verification" aria-pressed="false">Investigation</button>'
+        '<button type="button" data-filter="evidence" aria-pressed="false">Reviews</button>'
+        '<button type="button" data-filter="administrator" aria-pressed="false">Administrator help</button>'
+        '<button type="button" data-filter="applicability" aria-pressed="false">Features to confirm</button>'
+        '</div><label class="search-label">Search<input id="work-search" type="search" placeholder="Check, feature or owner"></label>'
         '<span id="visible-work" role="status"></span></div>'
         + root_cause
-        + (f'<div class="work-grid">{work}</div>' if work else '<div class="panel">There are no required checks left to confirm.</div>')
+        + (work_table if work else '<p>There are no required checks left to confirm.</p>')
         + '<p id="no-work-match" hidden>No next steps match this filter.</p></section>'
+        '<section id="check-details" class="panel checks-card"><div class="section-heading">'
+        '<h2>Check details</h2><p>Open an area for findings and numbered next steps.</p></div>'
+        '<div class="fold-controls" hidden><button type="button" id="expand-work">Expand groups</button>'
+        '<button type="button" id="collapse-work">Collapse groups</button></div>'
+        f'<div class="work-grid">{work}</div></section>'
         '<section id="evidence" class="panel"><h2>Record and submit reviews</h2><div class="evidence-grid"><div>'
         '<h3>How to complete a review</h3><ol><li>Collect the information listed under each check.</li>'
         '<li>Ask the appropriate owner to review it and record the result, supporting reference, '
@@ -561,87 +652,124 @@ _CSS = """
 :root{font-family:'Segoe UI Variable','Segoe UI',system-ui,sans-serif;color-scheme:light dark;
  --bg:#f5f5f5;--surface:#fff;--ink:#242424;--muted:#616161;--line:#e0e0e0;--accent:#0f6cbd;
  --success:#0e6b0e;--success-bg:#dff6dd;--danger:#a4262c;--danger-bg:#fde7e9;
- --attention:#835b00;--attention-bg:#fff4ce;--neutral-bg:#f0f0f0;--radius:8px}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.55}
+ --attention:#835b00;--attention-bg:#fff4ce;--neutral-bg:#f0f0f0;--radius:4px;
+ --shadow:0 2px 4px #00000024,0 0 2px #0000001f}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.5}
 a{color:var(--accent);text-underline-offset:3px}button,input,select,textarea{font:inherit}
 button,select,input[type=search]{border:1px solid var(--line);border-radius:4px;padding:8px 10px;background:var(--surface);color:var(--ink)}
 button{cursor:pointer;color:var(--accent);font-weight:600}button:hover{background:var(--neutral-bg)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-[hidden]{display:none!important}.app{display:grid;grid-template-columns:232px minmax(0,1fr);max-width:1920px;margin:auto}
-.sidebar{position:sticky;top:0;height:100vh;padding:28px 18px;border-right:1px solid var(--line)}
-.brand{display:flex;align-items:center;gap:12px;font-size:13px;margin:0 8px 28px}
-.brand strong{font-size:20px}.brand-icon{display:grid;place-items:center;width:38px;height:38px;border-radius:8px;background:var(--accent);color:white;font-size:23px}
-nav{display:grid;gap:5px}nav a{padding:10px 14px;color:var(--ink);text-decoration:none;border-radius:4px}
-nav a:hover{background:var(--surface);color:var(--accent)}.sidebar-note{margin:32px 12px;font-size:12px;color:var(--muted)}
-main{padding:28px 36px;min-width:0}section,header{scroll-margin-top:20px;margin-bottom:28px}
-.panel,.work-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 2px 4px #00000005}
-.panel{padding:24px}.overview{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:20px 32px;border-top:3px solid var(--accent)}
+[hidden]{display:none!important}.app{max-width:1240px;margin:auto;padding:24px 20px 64px}
+.brand{display:flex;flex-direction:column;align-items:flex-start;gap:12px;margin-bottom:16px}
+.app-icon{display:block;width:56px;height:56px;filter:drop-shadow(0 2px 5px #0000002e)}
+.brand-title{font-size:24px;line-height:32px;font-weight:600}
+.report-nav{display:flex;flex-wrap:wrap;gap:4px;margin:0 0 16px}
+.report-nav a{padding:6px 12px;color:var(--ink);text-decoration:none;border-radius:4px;font-size:13px}
+.report-nav a:hover{background:var(--surface);color:var(--accent)}
+main{min-width:0}section,header{scroll-margin-top:20px;margin-bottom:18px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px}
+.report{border-top:6px solid var(--accent)}
 .eyebrow{font-weight:600;color:var(--muted);margin:0 0 8px}h1{font-size:28px;line-height:1.25;overflow-wrap:anywhere;margin:0 0 16px;font-weight:600}
-h2{font-size:21px;line-height:1.35;margin:0 0 8px;font-weight:600}h3{font-size:16px;margin:0 0 8px;font-weight:600}h4{font-size:14px;margin:18px 0 6px}
+h2{font-size:24px;line-height:32px;margin:0 0 8px;font-weight:600}h3{font-size:16px;margin:0 0 8px;font-weight:600}h4{font-size:14px;margin:18px 0 6px}
 p{margin:8px 0 12px}.muted,.section-heading p{color:var(--muted);font-size:13px}.overview p{max-width:760px}
-.decision{display:inline-flex;border-radius:4px;padding:5px 14px;font-size:17px;font-weight:600}
+.verdict{border-top:1px solid var(--line);margin-top:20px;padding-top:16px}
+.decision{display:inline-flex;font-size:24px;line-height:32px;font-weight:600}
+.decision.success,.decision.danger,.decision.attention{background:transparent}
+.verdict p{margin:8px 0 12px}
 .success{color:var(--success);background:var(--success-bg)}.danger{color:var(--danger);background:var(--danger-bg)}
 .attention{color:var(--attention);background:var(--attention-bg)}.neutral{color:var(--muted);background:var(--neutral-bg)}
-.target{display:grid;grid-template-columns:auto auto;gap:6px 18px;align-content:start;font-size:13px}
-dt{color:var(--muted)}dd{margin:0;font-weight:600}.metrics{grid-column:1/-1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-.metric{padding:16px;border:1px solid var(--line);border-radius:6px}.metric strong{display:block;font-size:30px;line-height:1.3;font-weight:600}
-.metric span{color:var(--muted);font-size:13px}.overview-note{grid-column:1/-1;color:var(--muted);font-size:13px;margin:0}
-.context-gaps{grid-column:1/-1;background:var(--attention-bg);padding:16px;border-radius:4px}
-.toolbar{display:flex;gap:16px;align-items:end;flex-wrap:wrap;margin:18px 0}.toolbar label{display:grid;gap:4px;font-size:12px;color:var(--muted)}
-.search-label{flex:1;min-width:180px}.toolbar input{width:100%}#visible-work{color:var(--muted);font-size:12px;padding-bottom:8px}
-.work-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start}
-.work-card{padding:20px;min-width:0}.card-heading{display:flex;align-items:start;justify-content:space-between;gap:12px}
-.badge{display:inline-block;white-space:nowrap;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600}
+.target{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:13px}
+dt{color:var(--muted)}dd{margin:0;font-weight:600}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:16px}
+.metric{padding:16px;border:1px solid var(--line);border-radius:4px}.metric strong{display:block;font-size:28px;line-height:1.3;font-weight:600}
+.metric span{color:var(--muted);font-size:13px}.overview-note{color:var(--muted);font-size:13px;margin:0}
+.context-gaps{background:var(--attention-bg);padding:16px;border-radius:4px;margin-top:16px}
+.howto{padding:0;margin-bottom:18px}.howto>summary{padding:12px 18px;font-size:14px}
+.howto-body{padding:6px 18px 14px;border-top:1px solid var(--line);font-size:13px}
+.toolbar{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin:18px 0}.toolbar label{display:grid;gap:4px;font-size:12px;color:var(--muted)}
+.filters{display:flex;flex:1 1 100%;flex-wrap:wrap;border-bottom:1px solid var(--line);gap:2px}
+.filters button{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;padding:10px 12px;color:var(--muted)}
+.filters button[aria-pressed=true]{border-bottom-color:var(--accent);color:var(--accent);font-weight:600}
+.search-label{flex:1;min-width:180px;max-width:420px}.toolbar input{width:100%}#visible-work{color:var(--muted);font-size:12px;padding-bottom:8px}
+.work-grid{display:block}.work-card{border-bottom:1px solid var(--line);min-width:0}
+.work-card:last-child{border-bottom:0}.work-card>summary{display:flex;align-items:center;gap:12px;padding:16px 0}
+.group-title{flex:1;font-size:16px}.group-count{color:var(--muted);font-size:12px;white-space:nowrap;font-weight:400}
+.sec-body{padding:0 0 12px 18px}.fold-controls{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.badge{display:inline-block;white-space:nowrap;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600}
+.badge.success{background:#107c10;color:#fff}.badge.danger{background:#c50f1f;color:#fff}
+.badge.attention{background:#f7630c;color:#242424}
 summary{cursor:pointer;font-weight:600;padding:10px 0;overflow-wrap:anywhere}details[open]>summary{margin-bottom:4px}
-.requirement{border-top:1px solid var(--line);margin-top:12px}.requirement summary{display:flex;align-items:start;justify-content:space-between;gap:12px}
-.requirement summary>span:first-child{min-width:0}.requirement summary strong{font-size:13px;font-weight:600}
-.requirement summary code{display:block;color:var(--muted);font-size:11px;font-weight:400;margin-top:3px}
-.requirement summary::before{content:'+';color:var(--accent);font-size:17px;line-height:1.2}
-.requirement[open]>summary::before{content:'−'}.requirement summary>span:first-of-type{flex:1}
+.requirement{border-top:1px solid var(--line);margin-top:4px}.requirement>summary{display:flex;align-items:start;justify-content:space-between;gap:12px}
+.requirement>summary>span:first-child{min-width:0}.requirement>summary strong{font-size:14px;font-weight:600}
+.requirement>summary::before{content:'+';color:var(--accent);font-size:17px;line-height:1.2}
+.requirement[open]>summary::before{content:'−'}.requirement>summary>span:first-of-type{flex:1}
 .requirement-body{font-size:13px;padding:0 0 8px 20px}.field-list{padding-left:18px}.field-list code{font-size:11px;color:var(--muted)}
+.steps-list{list-style:none;counter-reset:step;padding:0;margin:10px 0}
+.steps-list li{counter-increment:step;position:relative;padding:8px 0 8px 36px}
+.steps-list li::before{content:counter(step);position:absolute;left:0;top:7px;width:24px;height:24px;border-radius:50%;
+ display:grid;place-items:center;background:var(--neutral-bg);color:var(--muted);font-size:12px;font-weight:600}
 .root-cause{background:var(--attention-bg);border:1px solid var(--line);border-left:3px solid var(--attention);padding:8px 18px;border-radius:6px;margin:16px 0}
 .root-cause p{font-size:13px;overflow-wrap:anywhere}.evidence-grid{display:grid;grid-template-columns:1fr 1fr;gap:32px}
 pre,textarea{font-family:Consolas,ui-monospace,monospace;font-size:12px;line-height:1.6}
 pre{padding:16px;background:var(--neutral-bg);border-radius:4px;white-space:pre-wrap;overflow-wrap:anywhere}
 code{font-family:Consolas,ui-monospace,monospace;font-size:.9em;overflow-wrap:anywhere}
 textarea{display:block;width:100%;min-height:240px;resize:vertical;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:12px;margin:10px 0}
-.copy-status{font-size:12px;margin-left:10px}.table-scroll{overflow:auto;max-width:100%}table{width:100%;border-collapse:collapse;font-size:12px;text-align:left}
-th,td{padding:12px;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
-thead{background:var(--neutral-bg)}tbody th{font-weight:600;min-width:180px}td details{min-width:180px;max-width:680px}
+.copy-status{font-size:12px;margin-left:10px}.table-scroll{overflow:auto;max-width:100%}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}
+caption{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%)}
+th,td{padding:14px 12px;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:anywhere;line-height:1.55}
+thead{background:var(--neutral-bg)}thead th{font-weight:600}tbody th{font-weight:600}td details{max-width:680px}
+.action-table{table-layout:fixed}.area-column{width:34%}.step-column{width:43%}.owner-column{width:23%}
+.action-table tbody th a{font-size:14px;font-weight:600;text-decoration:none}
+.action-table tbody th a:hover{text-decoration:underline}.action-table tbody tr:hover{background:var(--bg)}
 .status-counts{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.stat{padding:5px 10px;background:var(--neutral-bg);border-radius:4px;font-size:12px}
 .advisory{display:block;font-size:11px;color:var(--muted);font-weight:400}.coverage-toggle{display:block;margin:12px 0}
 footer{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:12px;padding-bottom:16px}
 .skip-link{position:absolute;left:12px;top:-100px;padding:10px;background:var(--surface);z-index:10}.skip-link:focus{top:12px}
-@media(min-width:1700px){.work-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:1100px){.app{grid-template-columns:190px minmax(0,1fr)}main{padding:24px}.work-grid{grid-template-columns:1fr}}
-@media(max-width:760px){.app{display:block}.sidebar{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:16px}
- .brand{margin:0 0 12px}nav{display:flex;flex-wrap:wrap;gap:0}nav a{padding:6px 10px;font-size:12px}.sidebar-note{display:none}
- main{padding:16px}.panel,.work-card{padding:18px}.overview{grid-template-columns:1fr}.target{justify-content:start}
- .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.evidence-grid{grid-template-columns:1fr}.metric strong{font-size:26px}
- .card-heading{flex-wrap:wrap}.requirement summary{flex-wrap:wrap}.requirement summary>.badge{margin-left:28px}h1{font-size:24px}}
+@media(max-width:760px){.app{padding:16px 12px 40px}.panel{padding:16px}.howto{padding:0}
+ .brand-title{font-size:21px}.report-nav a{padding:6px 8px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .evidence-grid{grid-template-columns:1fr}.metric strong{font-size:26px}.sec-body{padding-left:0}
+ .work-card>summary,.requirement>summary{flex-wrap:wrap}.group-title{flex-basis:100%}.group-count{flex:1}
+ .requirement>summary>.badge{margin-left:28px}h1{font-size:24px}.requirement-body{padding-left:10px}
+ table,tbody,tr,th,td{display:block;width:100%}thead,colgroup{display:none}tbody tr{padding:12px 0;border-bottom:1px solid var(--line)}
+ tbody th,tbody td{border:0;padding:5px 0}td[data-label]::before{content:attr(data-label);display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:3px}}
 @media(prefers-color-scheme:dark){:root{--bg:#141414;--surface:#1f1f1f;--ink:#f5f5f5;--muted:#c2c2c2;--line:#424242;--accent:#75b6e7;
  --success:#9fd89f;--success-bg:#052505;--danger:#f1bbbc;--danger-bg:#442726;--attention:#fce100;--attention-bg:#443b18;--neutral-bg:#292929}}
-@media print{.app{display:block}.sidebar,.toolbar,.copy-template{display:none}main{padding:0}.work-grid{display:block}.work-card{break-inside:avoid;margin-bottom:12px}}
+@media print{.app{max-width:none;padding:0}.report-nav,.toolbar,.fold-controls,.copy-template{display:none}
+ .panel{box-shadow:none}.work-card{break-inside:avoid;margin-bottom:12px}}
 """
 
 
 _SCRIPT = """
 document.querySelector('.toolbar').hidden = false;
+document.querySelector('.fold-controls').hidden = false;
 const cards = Array.from(document.querySelectorAll('.work-card'));
+const filterButtons = Array.from(document.querySelectorAll('[data-filter]'));
+let selectedKind = 'all';
 function filterWork() {
-  const kind = document.getElementById('work-filter').value;
   const search = document.getElementById('work-search').value.trim().toLowerCase();
   let shown = 0;
   cards.forEach(card => {
-    card.hidden = !((kind === 'all' || card.dataset.kinds.split(' ').includes(kind)) &&
+    card.hidden = !((selectedKind === 'all' || card.dataset.kinds.split(' ').includes(selectedKind)) &&
       card.textContent.toLowerCase().includes(search));
+    document.querySelector('[data-group="' + card.id + '"]').hidden = card.hidden;
     if (!card.hidden) shown++;
   });
-  document.getElementById('visible-work').textContent = shown + ' of ' + cards.length + ' work items';
-  document.getElementById('no-work-match').hidden = shown !== 0;
+  filterButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.filter === selectedKind)));
+  const table = document.querySelector('.action-table');
+  if (table) table.hidden = shown === 0;
+  document.getElementById('visible-work').textContent = shown + ' of ' + cards.length + ' groups';
+  document.getElementById('no-work-match').hidden = shown !== 0 || cards.length === 0;
 }
-document.getElementById('work-filter').addEventListener('change', filterWork);
+filterButtons.forEach(button => button.addEventListener('click', () => {
+  selectedKind = button.dataset.filter;
+  filterWork();
+}));
 document.getElementById('work-search').addEventListener('input', filterWork);
+document.getElementById('expand-work').addEventListener('click', () => {
+  cards.filter(card => !card.hidden).forEach(card => card.open = true);
+});
+document.getElementById('collapse-work').addEventListener('click', () => {
+  cards.forEach(card => card.open = false);
+});
 document.getElementById('required-only').addEventListener('change', event => {
   document.querySelectorAll('#coverage tr[data-required]').forEach(row => {
     row.hidden = event.target.checked && row.dataset.required !== 'true';
@@ -671,7 +799,7 @@ function openTarget(hash) {
   }
   const card = target.closest('.work-card');
   if (card && card.hidden) {
-    document.getElementById('work-filter').value = 'all';
+    selectedKind = 'all';
     document.getElementById('work-search').value = '';
     filterWork();
   }
