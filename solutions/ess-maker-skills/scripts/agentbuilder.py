@@ -27,6 +27,15 @@ CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 DEFAULT_API_VERSION = "2024-10-01"
 NATIVE_ALM_API_VERSION = "2022-03-01-preview"
 COPILOT_STUDIO_CLIENT_NAME = "CopilotStudio"
+ENVIRONMENT_ROLE_API_VERSION = "2016-11-01"
+ENVIRONMENT_ROLE_SCOPE = "https://service.powerapps.com/.default"
+# Microsoft.PowerApps.Administration.PowerShell endpoint configuration:
+# https://www.powershellgallery.com/packages/Microsoft.PowerApps.Administration.PowerShell/2.0.219
+ENVIRONMENT_ROLE_HOSTS = {
+    "prod": "https://api.bap.microsoft.com",
+    "preprod": "https://tip1.api.bap.microsoft.com",
+    "test": "https://tip2.api.bap.microsoft.com",
+}
 AGENT_LIST_CREATION_SOURCES = ("CopilotStudio", "AgentBuilder")
 DEFAULT_TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 DEV_REALM = 0
@@ -348,6 +357,230 @@ def list_environments(
     raise AgentBuilderError("Environment listing exceeded 20 pages.")
 
 
+def list_provisioning_locations(
+    token: str,
+    ring: str,
+    *,
+    api_version: str = DEFAULT_API_VERSION,
+    session: requests.Session | None = None,
+) -> dict[str, Any]:
+    """List tenant-supported locations for environment provisioning."""
+    host = _ring_api_host(ring)
+    client = session or requests.Session()
+    if session is None:
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET", "HEAD", "OPTIONS"}),
+            respect_retry_after_header=True,
+        )
+        client.mount("https://", HTTPAdapter(max_retries=retry))
+    response = client.request(
+        "GET",
+        f"{host}/environmentmanagement/provisioning/locations",
+        params={"api-version": api_version},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "x-ms-client-name": COPILOT_STUDIO_CLIENT_NAME,
+        },
+        timeout=120,
+    )
+    if not response.ok:
+        _response_error(response, "Environment provisioning-location listing")
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise AgentBuilderError(
+            "Environment provisioning-location listing returned a non-JSON "
+            "response."
+        ) from exc
+    if not isinstance(body, dict):
+        raise AgentBuilderError(
+            "Environment provisioning-location listing returned an invalid "
+            "shape."
+        )
+    collection = body.get("collection")
+    macro_regions = body.get("macroRegions")
+    selection_mode = body.get("locationSelectionMode")
+    if (
+        not isinstance(collection, list)
+        or not all(isinstance(item, dict) for item in collection)
+        or not isinstance(macro_regions, list)
+        or not all(isinstance(item, dict) for item in macro_regions)
+        or selection_mode not in ("Region", "MacroRegion")
+    ):
+        raise AgentBuilderError(
+            "Environment provisioning-location listing returned an invalid "
+            "shape."
+        )
+    return body
+
+
+def provision_environment(
+    token: str,
+    ring: str,
+    *,
+    request_body: dict[str, Any],
+    client_request_id: str,
+    api_version: str = DEFAULT_API_VERSION,
+    session: requests.Session | None = None,
+) -> dict[str, Any]:
+    """Submit one non-redirected environment-provisioning request."""
+    try:
+        normalized_request_id = str(uuid.UUID(client_request_id))
+    except ValueError as exc:
+        raise ValueError("Client request ID must be a GUID.") from exc
+    host = _ring_api_host(ring)
+    client = session or requests.Session()
+    response = client.request(
+        "POST",
+        f"{host}/environmentmanagement/provisioning/environments",
+        params={"api-version": api_version},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "x-ms-client-name": COPILOT_STUDIO_CLIENT_NAME,
+            "x-ms-client-request-id": normalized_request_id,
+            "x-ms-return-client-request-id": "true",
+        },
+        json=request_body,
+        timeout=120,
+        allow_redirects=False,
+    )
+    if response.status_code not in (201, 202):
+        _response_error(response, "Environment provisioning")
+    try:
+        body: Any = response.json()
+    except ValueError:
+        body = None
+    if body is not None and not isinstance(body, dict):
+        raise AgentBuilderError(
+            "Environment provisioning returned an invalid response shape."
+        )
+    return {
+        "statusCode": response.status_code,
+        "requestId": next(
+            (
+                response.headers.get(name)
+                for name in (
+                    "x-ms-service-request-id",
+                    "x-ms-request-id",
+                    "request-id",
+                    "x-ms-client-request-id",
+                )
+                if response.headers.get(name)
+            ),
+            normalized_request_id,
+        ),
+        "operationLocation": (
+            response.headers.get("Operation-Location")
+            or response.headers.get("Location")
+        ),
+        "response": body,
+        **(
+            {"responseText": response.text}
+            if body is None and response.text
+            else {}
+        ),
+    }
+
+
+def _environment_role_prefix(environment_id: str) -> str:
+    normalized = str(uuid.UUID(environment_id))
+    return (
+        "/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/"
+        f"{normalized}"
+    )
+
+
+def environment_role_request(
+    token: str,
+    ring: str,
+    *,
+    environment_id: str,
+    principal_id: str | None = None,
+    principal_email: str | None = None,
+    client_request_id: str,
+    api_version: str = ENVIRONMENT_ROLE_API_VERSION,
+    session: requests.Session | None = None,
+) -> requests.Response:
+    """Read roles, or submit one non-retried grant for an explicit user."""
+    if ring not in ENVIRONMENT_ROLE_HOSTS:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    prefix = _environment_role_prefix(environment_id)
+    request_id = str(uuid.UUID(client_request_id))
+    body = None
+    if principal_id is None and principal_email is not None:
+        raise ValueError("A grant requires the receiving user's object ID.")
+    if principal_id is not None:
+        normalized_principal = str(uuid.UUID(principal_id))
+        email = str(principal_email or "").strip()
+        if not email:
+            raise ValueError("The receiving user's sign-in name is required.")
+        body = {
+            "add": [{
+                "properties": {
+                    "roleDefinition": {
+                        "id": f"{prefix}/roleDefinitions/EnvironmentMaker",
+                    },
+                    "principal": {
+                        "email": email,
+                        "id": normalized_principal,
+                        "type": "User",
+                        "tenantId": "null",
+                    },
+                },
+            }],
+        }
+    client = session or requests.Session()
+    suffix = "roleAssignments" if body is None else "modifyRoleAssignments"
+    response = client.request(
+        "GET" if body is None else "POST",
+        f"{ENVIRONMENT_ROLE_HOSTS[ring]}{prefix}/{suffix}",
+        params={"api-version": api_version},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "x-ms-client-request-id": request_id,
+        },
+        json=body,
+        timeout=120,
+        allow_redirects=False,
+    )
+    if not 200 <= response.status_code < 300:
+        _response_error(response, "Environment role assignment")
+    return response
+
+
+def is_environment_maker_assignment(
+    assignment: Any,
+    *,
+    environment_id: str,
+    principal_id: str,
+    tenant_id: str,
+) -> bool:
+    """Match the exact environment, role, user, and tenant in role evidence."""
+    if not isinstance(assignment, dict):
+        return False
+    properties = assignment.get("properties")
+    if not isinstance(properties, dict):
+        return False
+    principal = properties.get("principal")
+    role = properties.get("roleDefinition")
+    if not isinstance(principal, dict) or not isinstance(role, dict):
+        return False
+    return (
+        str(role.get("id") or "").casefold()
+        == f"{_environment_role_prefix(environment_id)}/roleDefinitions/EnvironmentMaker".casefold()
+        and str(principal.get("id") or "").casefold() == principal_id.casefold()
+        and str(principal.get("tenantId") or "").casefold() == tenant_id.casefold()
+        and principal.get("type") == "User"
+    )
+
+
 def _persist_token_cache(cache: msal.SerializableTokenCache, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, temporary = tempfile.mkstemp(
@@ -379,7 +612,7 @@ def _load_token_cache(path: Path) -> msal.SerializableTokenCache:
             cache.deserialize(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise AgentBuilderError(
-                f"AgentBuilder token cache is unreadable: {path}"
+                f"Token cache is unreadable: {path}"
             ) from exc
     return cache
 
@@ -533,6 +766,112 @@ def seed_shared_token_cache(
                 raise
 
 
+def forget_cached_account(
+    account_hint: str,
+    *,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    shared_cache_path: Path | None = None,
+) -> dict[str, Any]:
+    """Remove one identity's credentials across clients in the supplied caches."""
+    wanted = str(account_hint or "").strip()
+    if not wanted:
+        raise ValueError("Account sign-in name is required.")
+    paths = list(dict.fromkeys(
+        [cache_path] + ([shared_cache_path] if shared_cache_path is not None else [])
+    ))
+    caches = {path: _load_token_cache(path) for path in paths}
+    kinds = msal.TokenCache.CredentialType
+    credential_types = (
+        kinds.ACCOUNT, kinds.ACCESS_TOKEN, kinds.REFRESH_TOKEN, kinds.ID_TOKEN,
+    )
+    # MSAL searches can evict unrelated expired access tokens.
+    snapshots = {
+        path: json.loads(cache.serialize()) for path, cache in caches.items()
+    }
+    for path, snapshot in snapshots.items():
+        if not isinstance(snapshot, dict):
+            raise AgentBuilderError(f"Token cache has an invalid structure: {path}")
+        for kind in credential_types:
+            entries = snapshot.get(kind, {})
+            if not isinstance(entries, dict) or not all(
+                isinstance(entry, dict) for entry in entries.values()
+            ):
+                raise AgentBuilderError(f"Token cache has an invalid {kind} section: {path}")
+
+    def identity(entry: dict[str, Any]) -> tuple[str, str]:
+        return (
+            str(entry.get("environment") or "").casefold(),
+            str(entry.get("home_account_id") or "").casefold(),
+        )
+
+    matches = [
+        account
+        for snapshot in snapshots.values()
+        for account in snapshot.get(kinds.ACCOUNT, {}).values()
+        if any(
+            identifier.casefold() == wanted.casefold()
+            for identifier in _account_identifiers(account)
+        )
+    ]
+    identities = {identity(account) for account in matches}
+    if any(not all(key) for key in identities):
+        raise AgentBuilderError(
+            "The requested cached account has an incomplete identity. "
+            "No account was removed."
+        )
+    if len(identities) > 1:
+        raise AgentBuilderError(
+            "The requested sign-in name matches multiple cached identities. "
+            "No account was removed."
+        )
+    selected = next(iter(identities), None)
+    account_paths = {
+        path for path, snapshot in snapshots.items()
+        if any(identity(account) == selected
+               for account in snapshot.get(kinds.ACCOUNT, {}).values())
+    }
+    changed: set[Path] = set()
+    for path, snapshot in snapshots.items():
+        for kind in credential_types:
+            entries = snapshot.get(kind, {})
+            for key, entry in list(entries.items()):
+                if identity(entry) == selected:
+                    del entries[key]
+                    changed.add(path)
+        if path in changed:
+            caches[path].deserialize(json.dumps(snapshot))
+
+    # Retain an account record until caches without one are saved, so retries
+    # can still resolve the sign-in name after a failed write.
+    completed: list[Path] = []
+    for path in sorted(
+        (path for path in paths if path in changed),
+        key=lambda path: path in account_paths,
+    ):
+        try:
+            _persist_token_cache(caches[path], path)
+        except OSError as exc:
+            for saved in completed:
+                exc.add_note(f"Account credentials removed from {saved}.")
+            exc.add_note(
+                f"Account cleanup was not confirmed for {path}; "
+                "no later cache writes were attempted."
+            )
+            raise
+        completed.append(path)
+    return {
+        "account": _account_identifiers(matches[0])[0] if matches else wanted,
+        "status": "removed" if changed else "already-absent",
+        "caches": [
+            {
+                "cachePath": str(path),
+                "status": "removed" if path in changed else "already-absent",
+            }
+            for path in paths
+        ],
+    }
+
+
 def _interactive_token(
     app: msal.PublicClientApplication,
     scopes: list[str],
@@ -547,13 +886,14 @@ def _interactive_token(
     return app.acquire_token_interactive(**arguments)
 
 
-def tenant_id_from_access_token(token: str) -> str:
-    """Return the issuing tenant ID from an AgentBuilder access token."""
+def _access_token_claims(token: str) -> dict[str, Any]:
     try:
         payload = token.split(".")[1]
         payload += "=" * (-len(payload) % 4)
         claims = json.loads(base64.urlsafe_b64decode(payload))
-        return str(uuid.UUID(str(claims.get("tid") or "")))
+        if not isinstance(claims, dict):
+            raise ValueError("Token claims must be an object.")
+        return claims
     except (
         IndexError,
         TypeError,
@@ -565,6 +905,44 @@ def tenant_id_from_access_token(token: str) -> str:
         raise AgentBuilderError(
             "AgentBuilder authentication returned an unreadable tenant identity."
         ) from exc
+
+
+def tenant_id_from_access_token(token: str) -> str:
+    """Return the issuing tenant ID from an AgentBuilder access token."""
+    try:
+        return str(uuid.UUID(str(_access_token_claims(token).get("tid") or "")))
+    except ValueError as exc:
+        raise AgentBuilderError(
+            "AgentBuilder authentication returned an unreadable tenant identity."
+        ) from exc
+
+
+def authenticated_user_identity(
+    token: str,
+    account: str,
+    *,
+    audience: str | None = None,
+) -> dict[str, str]:
+    """Return the authenticated user's tenant-local identity, never token data."""
+    claims = _access_token_claims(token)
+    if audience is not None and str(claims.get("aud") or "").rstrip("/") != audience.rstrip("/"):
+        raise AgentBuilderError("Authentication returned a token for a different audience.")
+    try:
+        object_id = str(uuid.UUID(str(claims.get("oid") or "")))
+    except ValueError as exc:
+        raise AgentBuilderError(
+            "Authentication did not return a tenant-local user object ID."
+        ) from exc
+    claimed_account = claims.get("preferred_username") or claims.get("upn")
+    if claimed_account and str(claimed_account).casefold() != account.casefold():
+        raise AgentBuilderError(
+            "The authenticated user differs from the requested sign-in name."
+        )
+    return {
+        "account": account,
+        "objectId": object_id,
+        "tenantId": tenant_id_from_access_token(token),
+    }
 
 
 def _acquire_token(
@@ -676,6 +1054,91 @@ def authenticate_selected_tenant(
     return token, tenant_id_from_access_token(token)
 
 
+def authenticate_cached_account(
+    ring: str,
+    *,
+    account_hint: str,
+    tenant_id: str | None = None,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    scopes: tuple[str, ...] | None = None,
+) -> tuple[str, str, str]:
+    """Acquire a token silently for one exact cached account."""
+    wanted = str(account_hint or "").strip()
+    if not wanted:
+        raise ValueError("Account sign-in name is required.")
+    if tenant_id:
+        try:
+            normalized_tenant = str(uuid.UUID(tenant_id))
+        except ValueError as exc:
+            raise ValueError("Tenant ID must be a GUID.") from exc
+        authority = f"https://login.microsoftonline.com/{normalized_tenant}"
+    else:
+        normalized_tenant = None
+        authority = "https://login.microsoftonline.com/organizations"
+    cache = _load_token_cache(cache_path)
+    app = msal.PublicClientApplication(
+        CLIENT_ID,
+        authority=authority,
+        token_cache=cache,
+    )
+    selected_account = _select_cached_account(app.get_accounts(), wanted)
+    if selected_account is None:
+        raise AgentBuilderError(
+            "The requested account is not available as one unambiguous cached "
+            "AgentBuilder sign-in. Complete read-only account selection first."
+        )
+    result = app.acquire_token_silent(
+        list(scopes or (minimal_bot_scope(ring),)),
+        account=selected_account,
+    )
+    token = result.get("access_token") if result else None
+    if not token:
+        error = result.get("error", "interaction_required") if result else (
+            "interaction_required"
+        )
+        raise AgentBuilderError(
+            "Cached AgentBuilder authorization is unavailable "
+            f"({error}). Complete read-only account selection first."
+        )
+    if cache.has_state_changed:
+        _persist_token_cache(cache, cache_path)
+    account_name = _authenticated_account_name(result, selected_account)
+    if not account_name:
+        raise AgentBuilderError(
+            "Cached AgentBuilder authorization did not identify the account."
+        )
+    return (
+        token,
+        normalized_tenant or tenant_id_from_access_token(token),
+        account_name,
+    )
+
+
+def authenticate_environment_roles(
+    tenant_id: str,
+    ring: str,
+    *,
+    account_hint: str,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    force_account_selection: bool = False,
+) -> tuple[str, str]:
+    """Establish role-API authorization through a read-only operation."""
+    if ring not in ENVIRONMENT_ROLE_HOSTS:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    token, account = _acquire_token(
+        authority=f"https://login.microsoftonline.com/{str(uuid.UUID(tenant_id))}",
+        ring=ring,
+        cache_path=cache_path,
+        force_account_selection=force_account_selection,
+        account_hint=account_hint,
+        scopes=(ENVIRONMENT_ROLE_SCOPE,),
+        return_account_identity=True,
+    )
+    if not account:
+        raise AgentBuilderError("Role authorization did not identify the account.")
+    return token, account
+
+
 def authenticate_agent_inventory(
     ring: str,
     *,
@@ -748,7 +1211,16 @@ def _response_error(response: requests.Response, operation: str) -> None:
     if isinstance(body, dict):
         error = body.get("error") or body.get("Error") or body
         if isinstance(error, dict):
-            candidate = error.get("code") or error.get("Code")
+            error_detail = error.get("errorDetail")
+            candidate = (
+                error.get("code")
+                or error.get("Code")
+                or (
+                    error_detail.get("code")
+                    if isinstance(error_detail, dict)
+                    else None
+                )
+            )
             if isinstance(candidate, str):
                 error_code = candidate
         elif isinstance(error, str):
