@@ -2219,6 +2219,57 @@ def test_list_environments_preserves_empty_result(
     assert result["ring"] == "prod"
 
 
+def test_list_environments_preserves_non_guid_service_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    service_id = "service-environment-id-with-43-characters-0001"
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: ("token", TENANT_ID),
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        lambda token, ring, *, api_version: [
+            {
+                "id": ENVIRONMENT_ID,
+                "displayName": "Standard Environment",
+                "type": "Sandbox",
+                "state": "Ready",
+            },
+            {
+                "id": service_id,
+                "displayName": "Service Environment",
+                "type": "Production",
+                "state": "Ready",
+            },
+        ],
+    )
+
+    assert setup_existing_da.main(
+        [
+            "list-environments",
+            "--ring",
+            "prod",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+    result = json.loads(
+        capsys.readouterr().out.removeprefix(
+            "DA_ENVIRONMENT_LIST_JSON:"
+        )
+    )
+
+    assert [item["id"] for item in result["environments"]] == [
+        service_id,
+        ENVIRONMENT_ID,
+    ]
+
+
 @pytest.mark.parametrize("status_code", [401, 403])
 def test_list_environments_preserves_authorization_failure(
     status_code: int,

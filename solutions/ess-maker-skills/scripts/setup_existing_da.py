@@ -2553,9 +2553,15 @@ def summarize_environments(
     """Return stable maker-selection fields for visible environments."""
     choices: list[dict[str, Any]] = []
     for environment in environments:
-        environment_id = _normalize_environment_id(
-            str(environment.get("id") or "")
-        )
+        service_environment_id = str(environment.get("id") or "").strip()
+        if not service_environment_id:
+            continue
+        try:
+            environment_id = _normalize_environment_id(
+                service_environment_id
+            )
+        except ExistingDASetupError:
+            environment_id = service_environment_id
         display_name = str(
             environment.get("displayName") or environment_id
         ).strip()
