@@ -109,7 +109,7 @@ def _revision(runner, result: RunResult, target: dict) -> str | None:
         "nativeSnapshot": {key: value for key, value in snapshot["changeset"].items() if key != "changeToken"},
         "bindings": references,
         "alm": [
-            {"status": row.status, "assertion": row.result, "evidence": row.evidence}
+            {"status": row.status, "evidence": row.evidence}
             for row in result.results if row.checkpoint_id == "ESS-SOLN-001"
         ],
     }

@@ -189,11 +189,27 @@ def test_missing_results_duplicate_buckets_and_dynamic_details_are_not_extra_req
 
 def test_alm_package_revision_change_invalidates_attestation():
     case = _case()
-    alm = CheckResult("ESS-SOLN-001", "Domain", "High", "Passed", "Origin", "Package commit one.")
+    alm = CheckResult(
+        "ESS-SOLN-001", "Domain", "High", "Passed", "Origin", "Package metadata.",
+        evidence={"repositoryId": "domain-repository", "commitSha": "one"},
+    )
     case.result.results.append(alm)
     record = _record(case)
-    alm.result = "Package commit two."
+    alm.evidence["commitSha"] = "two"
     assert "evidence_revision_mismatch" in _assessment(case, [record])["evidenceReviews"][0]["reasonCodes"]
+
+
+@pytest.mark.parametrize("status", ["Warning", "Blocked", "Manual"])
+def test_alm_diagnostic_text_does_not_invalidate_unchanged_configuration(status):
+    case = _case("ESS-SOLN-001")
+    alm = next(row for row in case.result.results if row.checkpoint_id == "ESS-SOLN-001")
+    alm.status = status
+    alm.result = "Package metadata unavailable [request first-read]."
+    record = _record(case)
+    alm.result = "Package metadata unavailable [request second-read]."
+    actual = _assessment(case, [record])
+    assert actual["evidenceReviews"][0]["accepted"] is True
+    assert actual["deploymentReadiness"] == "INCOMPLETE"
 
 
 def test_same_checkpoint_can_have_distinct_resource_status_buckets():

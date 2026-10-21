@@ -398,6 +398,28 @@ def test_invalid_evidence_file_fails_before_authentication(da_cli, tmp_path, cap
     da_cli.native_auth.assert_not_called()
 
 
+def test_da_full_reconciles_coverage_without_applying_connect_acceptance(da_cli, monkeypatch):
+    family_gate = Mock(side_effect=AssertionError("DA full must not apply Connect family acceptance."))
+    checkpoint_gate = Mock(side_effect=AssertionError("DA full must not apply Connect checkpoint acceptance."))
+    monkeypatch.setattr(cli, "_profile_family_cardinality_check", family_gate)
+    monkeypatch.setattr(cli, "_profile_checkpoint_contract_check", checkpoint_gate)
+    da_cli.prepare.side_effect = lambda runner, args, execution: (
+        build_da_execution_plan(
+            execution.config,
+            features={DAFeature.WORKDAY: DAFeatureEvidence(True, "selected dependency discovery")},
+        ), None,
+    )
+    assert da_cli.run("--scope", "full") == 1
+    result = da_cli.captured["result"]
+    assert "WD-ENTRA-SCOPE-001" in result.profile_checkpoints
+    assert result.da_assessment["counts"]["catalogDefinitions"] == len(DA_CATALOG)
+    assert result.da_assessment["deploymentReadiness"] == "INCOMPLETE"
+    assert not any(row.checkpoint_id.startswith(("PROFILE-FAMILY-", "PROFILE-CHECKPOINT-"))
+                   for row in result.results)
+    family_gate.assert_not_called()
+    checkpoint_gate.assert_not_called()
+
+
 @pytest.mark.parametrize("configured", [False, True])
 def test_explicit_da_url_uses_same_contract_without_reading_or_replacing_saved_target(da_cli, configured, tmp_path):
     da_cli.config["environmentId"] = "00000000-0000-0000-0000-000000009999"

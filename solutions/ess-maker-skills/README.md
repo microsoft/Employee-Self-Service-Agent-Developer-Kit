@@ -307,12 +307,16 @@ assessment context; **NOT_READY** means a confirmed required defect; otherwise
 readiness is **INCOMPLETE**. A confirmed defect takes precedence over remaining
 gaps. Only deployment READY exits successfully for DA full. Legacy exits and
 Workday Connect acceptance remain unchanged. Administrator skips remain Skipped
-and visible with the other evidence requirements.
+and visible with the other evidence requirements. DA full uses its independent
+coverage reconciliation, not the Connect profile's resolved-family or skipped-
+checkpoint acceptance gates.
 
 **Reviewed external evidence (DA full only):** run once to obtain the report's
 exact `target`, `configurationRevision` and requirement-specific
 `requiredEvidenceFields`. After an authorized reviewer reviews the evidence,
 rerun the same selected target with `--da-evidence <path-to-evidence.json>`.
+The revision includes native configuration, inspected bindings and structured
+ALM provenance/status, not diagnostic wording, request IDs or read cursors.
 Use this envelope, replacing all illustrative values with real reviewed evidence:
 
 ```json

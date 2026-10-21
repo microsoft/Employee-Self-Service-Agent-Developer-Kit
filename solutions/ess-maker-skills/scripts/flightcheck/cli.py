@@ -2885,18 +2885,20 @@ def _run_profile(args, *, da_execution=None):
             runner.register(label, prepared_native)
         else:
             runner.register(label, da_execution.guard_producer(fn) if da_execution else fn)
+    family_contract = {}
     if da_execution:
         runner.register("DA FlightCheck Coverage", da_execution.coverage_check)
-    family_contract = registry.profile_family_contract(profile_selector)
-    if family_contract:
+    else:
+        family_contract = registry.profile_family_contract(profile_selector)
+        if family_contract:
+            runner.register(
+                "FlightCheck Profile",
+                _profile_family_cardinality_check(family_contract),
+            )
         runner.register(
             "FlightCheck Profile",
-            _profile_family_cardinality_check(family_contract),
+            _profile_checkpoint_contract_check(profile),
         )
-    runner.register(
-        "FlightCheck Profile",
-        _profile_checkpoint_contract_check(profile),
-    )
 
     if not quiet_auth:
         print("\nRunning profile...\n")
