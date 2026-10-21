@@ -191,9 +191,21 @@ When a definitive create response returns HTTP 401 or 403, preserve its evidence
 Say setup stopped only after reconciliation cannot prove an identity and the
 maker selects a stop or escalation action.
 
-When the annotations report `outcome: created`, keep the distinction between `catalogPackageVersion` and `templateVersion` in diagnostic evidence; do not explain those internal version concepts to the maker. Say that the new agent was created and setup is not complete.
+When the annotations report `outcome: created`, keep the distinction between `catalogPackageVersion` and `templateVersion` in diagnostic evidence; do not explain those internal version concepts to the maker.
 
-The successful native create result is authoritative identity and environment-scoped installation evidence. Record its exact package, catalog, returned schema, environment, and ring through `da_product_registry.py observe` with source `setup_mos_starter.py create`, then run the parent's selected-agent product-line reconciliation with the returned identity and `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before the enable-ALM operation.
+Build `{ACTUAL_AGENT_URL}` as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/{RETURNED_AGENT_ID}/details?agentBackend=cosmos`, using the origin retained by **Resolve the service ring** and the exact environment and agent IDs from the successful create result. An explicit Preview target keeps its Preview origin even though its logical ring is `prod`.
+
+Immediately show the successful creation result before recording product evidence, running reconciliation, inspecting the authoring route, or performing another operation:
+
+**Message:**
+
+The agent was created. Setup is not complete yet.
+
+> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
+
+**End message.**
+
+The successful native create result is authoritative identity and environment-scoped installation evidence. Record its exact package, catalog, returned schema, environment, and ring through `da_product_registry.py observe` with source `setup_mos_starter.py create`, then run the parent's selected-agent product-line reconciliation with the returned identity and `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before route inspection.
 
 When the annotations report `outcome: collision`, preserve the exact selected package ID and catalog name. Do not render an intermediate collision message. Before listing or validating collision candidates, complete the parent checkpoint for the current existing-agent path, environment, and Microsoft login and use **Existing-agent setup** from `permission-guidance.md`. When `list-agents` or `validate-agent` returns an authentication or authorization failure, follow **Existing-agent discovery and access** there; do not recommend **Environment Maker** as remediation for existing-agent access. First record and reconcile all available evidence, then render exactly one outcome-specific message immediately followed by the choice set it explains. A collision message must never be separated from its next interactive choice set by another operation or maker-facing message.
 
@@ -250,18 +262,6 @@ For **Use a Microsoft Copilot Studio URL**, ask for the exact Microsoft Copilot 
 For **Go back**, preserve the collided create result and its client request UUID, then render the complete action-oriented catalog composed from every selectable row in the latest successful catalog result and latest agent-list attempt. The collided product must render as the applicable **Resolve** row above, not as **Create** or **Installation status unconfirmed**. Do not display another standalone collision message before the catalog. A later create is available only if fresh evidence removes the resolution state and the catalog projection again produces a **Create** row; every such create uses a new client request UUID and never repeats the collided request.
 
 ## Prepare the authoring route
-
-Build `{ACTUAL_AGENT_URL}` as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/{RETURNED_AGENT_ID}/details?agentBackend=cosmos`, using the origin retained by **Resolve the service ring** and the exact environment and agent IDs from the successful create result. An explicit Preview target keeps its Preview origin even though its logical ring is `prod`.
-
-After a successful create, show:
-
-**Message:**
-
-The agent was created.
-
-> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
-
-**End message.**
 
 Inspect the service-owned authoring route before offering enrollment:
 

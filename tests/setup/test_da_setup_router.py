@@ -160,6 +160,59 @@ def test_setup_seeds_shared_cache_once_and_reuses_flightcheck_account() -> None:
     assert "including retries and rechecks" in readiness
 
 
+def test_alm_enrollment_confirmation_follows_verified_enrollment() -> None:
+    text = _ALM_ENROLLMENT.read_text(encoding="utf-8")
+    enrollment = text.split("## Continue with enrollment", 1)[1].split(
+        "## Skip enrollment", 1,
+    )[0]
+    inspection = enrollment.index("python scripts/setup_existing_da.py inspect-agent")
+    interpretation = enrollment.index("Interpret `DA_AGENT_ROUTE_JSON:`")
+    message = enrollment.index("**Message:**")
+    continuation = enrollment.index("- For resolved `dev`")
+    assert inspection < interpretation < message < continuation
+    boundary = " ".join(enrollment[interpretation:message].split())
+    assert "`routeStatus: resolved`, `alm.isEnrolled: true`" in boundary
+    assert "realm `dev` or `prod`" in boundary
+    assert "immediately show this standalone chat message before" in boundary
+    assert "returning to the caller, attaching, or performing another operation" in (
+        boundary
+    )
+    result, after = enrollment.split("**Message:**", 1)[1].split(
+        "**End message.**", 1,
+    )
+    assert result.strip() == (
+        "ALM enrollment is confirmed for this agent. Setup is not complete yet."
+    )
+    assert (
+        "An accepted update or `persistedValue: true` alone does not trigger "
+        "this confirmation"
+    ) in " ".join(after.split())
+    assert "skipped enrollment, unresolved metadata, or a failed inspection" in (
+        " ".join(after.split())
+    )
+
+
+def test_skipped_alm_enrollment_is_announced_before_local_continuation() -> None:
+    text = _ALM_ENROLLMENT.read_text(encoding="utf-8")
+    skipped = text.split("## Skip enrollment", 1)[1]
+    boundary, remainder = skipped.split("**Message:**", 1)
+    assert (
+        "When the maker selects **Skip enrollment**, immediately show this "
+        "standalone chat message before returning to the caller, attaching, "
+        "or performing another operation"
+    ) in " ".join(boundary.split())
+    message, continuation = remainder.split("**End message.**", 1)
+    assert message.strip().startswith(
+        "ALM enrollment skipped. The agent was not changed. "
+        "Setup is not complete yet."
+    )
+    assert "Local authoring does not require ALM enrollment." in message
+    assert "ALM enrollment is confirmed" not in message
+    assert "return to the caller's exact attachment command" in continuation
+    assert "setup_existing_da.py attach" in continuation
+    assert "setup_existing_da.py ensure-alm" not in skipped
+
+
 def test_administrator_handoffs_are_forwardable_and_evidence_gated() -> None:
     permission = _PERMISSION_GUIDANCE.read_text(encoding="utf-8")
     normalized_permission = " ".join(permission.split())
@@ -1421,7 +1474,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "Do not invoke create concurrently or automatically" in normalized
     assert "diagnostic evidence only" in normalized
     assert "do not explain those internal version concepts to the maker" in normalized
-    assert "The agent was created." in text
+    assert "The agent was created. Setup is not complete yet." in text
     assert "Preparing its local authoring workspace..." not in text
     assert (
         "{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/"
@@ -1431,7 +1484,17 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         "> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) "
         "in Classic Copilot Studio.**"
     )
-    assert created_agent_link in text
+    assert text.count(created_agent_link) == 1
+    created_outcome = text.index("When the annotations report `outcome: created`")
+    created_link = text.index(created_agent_link, created_outcome)
+    product_observation = text.index("da_product_registry.py observe", created_outcome)
+    route_inspection = text.index("setup_existing_da.py inspect-agent", created_outcome)
+    assert created_outcome < created_link < product_observation < route_inspection
+    assert (
+        "Immediately show the successful creation result before recording product "
+        "evidence, running reconciliation, inspecting the authoring route, or "
+        "performing another operation"
+    ) in normalized
     assert "{PRODUCT_COUNT} agent templates are available" in text
     assert "Loading available agent templates for **{environment name}**..." in text
     assert "no agent templates are currently available in the selected environment" in (
