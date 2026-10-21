@@ -196,6 +196,8 @@ No setup skill or `.local/config.json` is required. Repeat `--agent-id` to valid
 
 ENV-004 follows active topics to their direct connector references and invoked Power Automate flows, then checks only the logical references those flows require. Inactive topics and references belonging to unrelated applications are excluded. Missing or unbound required references, wrong connectors, and admin-confirmed missing physical connections fail. Incomplete reads warn, and a missing exact target blocks the checkpoint. Additional connections for the same connectors are advisory, not proof that those connections are unused.
 
+Topics with missing or unknown activation status, malformed dialogs, or unreadable dependency identities produce coverage warnings without discarding dependencies verified in other topics. Component `state: Active` does not substitute for an explicit topic `status`; unverified topics cannot establish a clean connection verdict.
+
 Native reads support the selected service ring. Flow administration and Dataverse environment discovery are currently verified only on the `prod` service ring; an affected dependency on another ring is reported as incomplete, never passed. The service ring is distinct from the agent's Dev/Test/Prod deployment realm. All calls are read-only. This checkpoint validates bindings and connection existence, not Workday credentials or business operations.
 
 `--scope environment` also accepts these standalone target flags. Other scope checks retain their own prerequisites. Configured runs without explicit agent IDs remain supported, including their existing optional release-commit comparison.
@@ -211,6 +213,8 @@ omitted from a passing sibling's result. Mapping read errors also leave native
 validation unavailable without preventing independent scope checks. Malformed,
 conflicting or repeated admin continuation links leave physical connection
 existence unverified; incomplete inventories cannot prove a connection is absent.
+
+Explicit `--connect-config` input accepts Workday connect state versions 2 through the current schema (v12), or the provider-generated flat projection. Both forms normalize the Workday tenant, Entra application URI, and OAuth token endpoint for validation without replacing the foundation agent identity. Unsupported state versions and malformed nested sections are rejected instead of silently losing provider configuration.
 
 **What it checks (41+ automated checks across 8 categories):**
 

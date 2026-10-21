@@ -80,6 +80,7 @@ from agentbuilder import (
     ring_from_environment_host,
     validate_environment_host,
 )
+from workday_connect_model import STATE_SCHEMA_VERSION
 
 # Check modules
 from flightcheck.checks.prerequisites import run_prerequisites_checks
@@ -1052,7 +1053,13 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
     if not isinstance(overlay, dict):
         raise ValueError(f"{connect_config_path} must contain a JSON object")
 
-    if overlay.get("schemaVersion") in {2, 3, 4, 5, 6, 7}:
+    if "schemaVersion" in overlay:
+        version = overlay["schemaVersion"]
+        if not isinstance(version, int) or not 2 <= version <= STATE_SCHEMA_VERSION:
+            raise ValueError(
+                f"{connect_config_path} has unsupported Workday connect "
+                f"schemaVersion; expected an integer from 2 to {STATE_SCHEMA_VERSION}"
+            )
         scope = overlay.get("scope", {})
         identifiers = overlay.get("identifiers", {})
         endpoints = overlay.get("endpoints", {})
@@ -1070,16 +1077,18 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
             **overlay,
             **identifiers,
             **endpoints,
-            "tenant": scope.get("workdayTenant"),
+            "workdayTenant": scope.get("workdayTenant"),
             "tenantId": scope.get("entraTenantId"),
             "sidecarDataverseEndpoint": scope.get("dataverseUrl"),
-            "appIdUri": identifiers.get("entraAppIdUri"),
-            "tokenEndpoint": (
-                endpoints.get("tokenEndpoint")
-                or endpoints.get("oauthTokenUrl")
-                or overlay.get("tokenEndpoint")
-            ),
         }
+
+    for canonical, alias in (
+        ("tenant", "workdayTenant"),
+        ("appIdUri", "entraAppIdUri"),
+        ("tokenEndpoint", "oauthTokenUrl"),
+    ):
+        if canonical not in overlay and alias in overlay:
+            overlay[canonical] = overlay[alias]
 
     for key in _PROVIDER_CONNECT_CONFIG_KEYS:
         if key in overlay:

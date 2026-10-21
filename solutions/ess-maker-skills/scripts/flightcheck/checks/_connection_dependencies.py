@@ -81,31 +81,44 @@ def _nodes(value: Any):
             yield from _nodes(item)
 
 
-def _dependencies(payload: dict) -> tuple[set[str], set[str]]:
+def _dependencies(payload: dict) -> tuple[set[str], set[str], list[str]]:
     changes = payload.get("botComponentChanges")
     if not isinstance(changes, list):
         raise ValueError("Component fetch omitted the topic collection.")
     direct: set[str] = set()
     flows: set[str] = set()
-    for change in changes:
+    warnings: list[str] = []
+    for index, change in enumerate(changes, 1):
         component = change.get("component") if isinstance(change, dict) else None
         if not isinstance(component, dict):
-            raise ValueError("Component fetch returned a malformed component.")
+            warnings.append(f"Component {index}: malformed component.")
+            continue
         if component.get("$kind") != "DialogComponent":
             continue
+        subject = component.get("schemaName") or f"component {index}"
         status = component.get("status")
         if status == "Inactive":
             continue
-        if status != "Active" or not isinstance(component.get("dialog"), dict):
-            raise ValueError("Topic activation or dialog could not be verified.")
+        if status != "Active":
+            warnings.append(
+                f"Topic {subject}: activation could not be verified "
+                "(status must be Active or Inactive; component state is not activation evidence)."
+            )
+            continue
+        if not isinstance(component.get("dialog"), dict):
+            warnings.append(f"Topic {subject}: dialog could not be verified.")
+            continue
         for node in _nodes(component["dialog"]):
-            if node.get("$kind") == "InvokeFlowAction":
-                flows.add(str(UUID(_identity(node.get("flowId"), "flowId"))))
-            elif node.get("$kind") == "InvokeConnectorAction":
-                direct.add(_identity(
-                    node.get("connectionReference"), "connectionReference"
-                ).casefold())
-    return direct, flows
+            try:
+                if node.get("$kind") == "InvokeFlowAction":
+                    flows.add(str(UUID(_identity(node.get("flowId"), "flowId"))))
+                elif node.get("$kind") == "InvokeConnectorAction":
+                    direct.add(_identity(
+                        node.get("connectionReference"), "connectionReference"
+                    ).casefold())
+            except ValueError as exc:
+                warnings.append(f"Topic {subject}: dependency could not be verified ({exc}).")
+    return direct, flows, warnings
 
 
 def _direct_references(payload: dict) -> dict[str, dict]:
@@ -213,7 +226,11 @@ def audit_connections(runner) -> ConnectionAudit:
             payload = runner.agentbuilder.fetch_components(agent_id)
             if not isinstance(payload, dict):
                 raise ValueError("Component fetch returned a malformed snapshot.")
-            direct, flow_ids = _dependencies(payload)
+            direct, flow_ids, topic_warnings = _dependencies(payload)
+            audit.warnings.extend(
+                f"Agent {agent_id}: dependency discovery incomplete ({warning})."
+                for warning in topic_warnings
+            )
             native = _direct_references(payload) if direct else {}
         except READ_ERRORS as exc:
             audit.warnings.append(f"Agent {agent_id}: dependency discovery incomplete ({type(exc).__name__}: {exc}).")

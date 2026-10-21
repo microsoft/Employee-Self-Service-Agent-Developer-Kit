@@ -301,7 +301,7 @@ class TestGates:
             "url": "https://foundation.example"
         }
 
-    @pytest.mark.parametrize("schema_version", [2, 3, 4, 5, 6, 7])
+    @pytest.mark.parametrize("schema_version", range(2, 13))
     def test_connect_config_flattens_workday_state(
         self, tmp_path: Path, schema_version: int
     ) -> None:
@@ -344,6 +344,9 @@ class TestGates:
             "https://acme.crm.dynamics.com"
         )
         assert merged["entraAppId"] == "app-id"
+        assert merged["restBaseUrl"] == (
+            "https://wd2-impl-services1.workday.com/ccx/api"
+        )
         assert merged["appIdUri"] == "api://app-id"
         assert merged["workdaySamlEntityId"] == (
             "http://www.workday.com/acme_impl"
@@ -352,6 +355,56 @@ class TestGates:
             "https://wd2-impl-services1.workday.com/"
             "ccx/oauth2/acme_impl/token"
         )
+
+    def test_connect_config_normalizes_flat_provider_projection(
+        self, tmp_path: Path
+    ) -> None:
+        overlay = tmp_path / "projection.json"
+        overlay.write_text(json.dumps({
+            "workdayTenant": "acme_impl",
+            "entraAppIdUri": "api://app-id",
+            "oauthTokenUrl": "https://workday.example/token",
+            "agent": {"slug": "wrong"},
+        }), encoding="utf-8")
+
+        merged = cli._merge_connect_config(
+            {"agent": {"slug": "selected"}}, str(overlay)
+        )
+
+        assert merged["tenant"] == "acme_impl"
+        assert merged["appIdUri"] == "api://app-id"
+        assert merged["tokenEndpoint"] == "https://workday.example/token"
+        assert merged["agent"] == {"slug": "selected"}
+
+    @pytest.mark.parametrize("value", ["canonical", "", None])
+    def test_connect_config_explicit_canonical_fields_win_over_aliases(
+        self, tmp_path: Path, value: str | None
+    ) -> None:
+        overlay = tmp_path / "projection.json"
+        overlay.write_text(json.dumps({
+            "tenant": value, "workdayTenant": "alias",
+            "appIdUri": value, "entraAppIdUri": "alias",
+            "tokenEndpoint": value, "oauthTokenUrl": "alias",
+        }), encoding="utf-8")
+
+        merged = cli._merge_connect_config({}, str(overlay))
+
+        assert merged["tenant"] == value
+        assert merged["appIdUri"] == value
+        assert merged["tokenEndpoint"] == value
+
+    @pytest.mark.parametrize("version", [1, 13, "12", None, True])
+    def test_connect_config_rejects_unsupported_state_versions(
+        self, tmp_path: Path, version
+    ) -> None:
+        overlay = tmp_path / "unsupported.json"
+        overlay.write_text(
+            json.dumps({"schemaVersion": version, "endpoints": {}}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="unsupported Workday connect schemaVersion"):
+            cli._merge_connect_config({}, str(overlay))
 
     @pytest.mark.parametrize(
         "agent_slug",
@@ -432,15 +485,17 @@ class TestGates:
         with pytest.raises(ValueError, match="must contain a JSON object"):
             cli._merge_connect_config({}, str(overlay))
 
+    @pytest.mark.parametrize("version", [7, 12])
     @pytest.mark.parametrize("field", ["scope", "identifiers", "endpoints"])
     def test_connect_config_rejects_non_object_versioned_sections(
         self,
         tmp_path: Path,
         field: str,
+        version: int,
     ) -> None:
         overlay = tmp_path / "invalid-section.json"
         overlay.write_text(
-            json.dumps({"schemaVersion": 7, field: []}),
+            json.dumps({"schemaVersion": version, field: []}),
             encoding="utf-8",
         )
 

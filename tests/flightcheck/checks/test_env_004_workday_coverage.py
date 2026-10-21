@@ -29,8 +29,8 @@ CASSETTE = Path(__file__).resolve().parents[2] / "fixtures" / "cassettes" / "env
 SECOND_AGENT = "00000000-0000-0000-0000-000000009999"
 
 
-def _captured():
-    return yaml.safe_load(CASSETTE.read_text(encoding="utf-8"))["interactions"]
+def _captured(path=CASSETTE):
+    return yaml.safe_load(path.read_text(encoding="utf-8"))["interactions"]
 
 
 def _body(interaction):
@@ -143,12 +143,7 @@ def test_missing_canonical_subject_warns_without_substituting_compatibility_agen
     case.native.get_agent.assert_called_once_with(case.agent_id)
 
 
-@pytest.mark.parametrize("maker_visible,malformed_collection", [
-    (True, None), (False, None), (True, "dataverse"), (False, "admin"),
-    (False, "admin_nextlink"), (False, "admin_odata_nextlink"),
-])
-def test_actual_http_capture_exercises_the_check(monkeypatch, maker_visible, malformed_collection):
-    interactions = _captured()
+def _http_runner(monkeypatch, interactions):
     agent_id = _body(interactions[0])["botId"]
     environment = next(_body(item) for item in interactions
                        if "api.bap." in item["request"]["uri"])
@@ -172,6 +167,16 @@ def test_actual_http_capture_exercises_the_check(monkeypatch, maker_visible, mal
     # The captured host is deliberately redacted, so bypass only its DNS-label
     # validator, never the check's target or connection identity checks.
     runner.agentbuilder.host = "https://mockenv.00.environment.api.powerplatform.com"
+    return runner
+
+
+@pytest.mark.parametrize("maker_visible,malformed_collection", [
+    (True, None), (False, None), (True, "dataverse"), (False, "admin"),
+    (False, "admin_nextlink"), (False, "admin_odata_nextlink"),
+])
+def test_actual_http_capture_exercises_the_check(monkeypatch, maker_visible, malformed_collection):
+    interactions = _captured()
+    runner = _http_runner(monkeypatch, interactions)
     with responses.RequestsMock(assert_all_requests_are_fired=False) as replay:
         for item in interactions:
             body = _body(item)
@@ -208,6 +213,28 @@ def test_actual_http_capture_exercises_the_check(monkeypatch, maker_visible, mal
     assert "2 bound" in summary.result
     assert "unverified" not in summary.result
     assert summary.remediation == ""
+
+
+def test_live_partial_topic_capture_preserves_verified_bindings(monkeypatch):
+    interactions = _captured(CASSETTE.with_name("env004_partial_topics.yaml"))
+    runner = _http_runner(monkeypatch, interactions)
+
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as replay:
+        for item in interactions:
+            replay.add(
+                item["request"]["method"],
+                item["request"]["uri"].split("?")[0],
+                json=_body(item), status=item["response"]["status"]["code"],
+            )
+        rows = _check_connections_and_refs(runner)
+
+    summary = next(row for row in rows if row.checkpoint_id == "ENV-004")
+    assert summary.status == "Warning"
+    assert "3 required reference(s) from 3 active flow call(s)" in summary.result
+    assert "3 bound" in summary.result
+    assert "activation could not be verified" in summary.result
+    assert summary.result.count("activation could not be verified") == 12
+    assert "component state alone does not establish activation" in summary.remediation
 
 
 def _workday_row(case):
@@ -249,6 +276,76 @@ def test_inactive_servicenow_topics_do_not_require_their_unbound_reference(depen
 
     assert row.status == "Passed"
     assert "service-now" not in row.result
+
+
+@pytest.mark.parametrize("status", [None, "Unknown", ""])
+def test_unverified_topic_activation_preserves_known_dependencies(dependency_case, status):
+    case = dependency_case
+    topic = deepcopy(next(
+        change for change in case.payload["botComponentChanges"]
+        if "InvokeConnectorAction" in json.dumps(change)
+    ))
+    component = topic["component"]
+    component["schemaName"] = "test.topic.Unverified"
+    component["state"] = "Active"
+    if status is None:
+        component.pop("status", None)
+    else:
+        component["status"] = status
+    case.payload["botComponentChanges"].insert(0, topic)
+
+    row = _summary(case)
+
+    assert row.status == "Warning"
+    assert "test.topic.Unverified" in row.result
+    assert "activation could not be verified" in row.result
+    assert "2 required reference(s) from 3 active flow call(s)" in row.result
+    assert "2 bound" in row.result
+    assert "component state alone does not establish activation" in row.remediation
+    case.query.assert_called_once()
+    assert case.runner.pp_admin.get_flow.call_count == 3
+
+
+def test_unverified_topic_does_not_hide_a_known_unbound_reference(dependency_case):
+    case = dependency_case
+    case.payload["botComponentChanges"].append({
+        "component": {"$kind": "DialogComponent", "state": "Active", "dialog": {}},
+    })
+    _workday_row(case)["connectionid"] = None
+
+    row = _summary(case)
+
+    assert row.status == "Failed"
+    assert "msdyn_sharedworkdaysoap_workdayruntime is unbound" in row.result
+    assert "activation could not be verified" in row.result
+    assert "bind" in row.remediation
+
+
+@pytest.mark.parametrize("invalid_topic", ["component", "dialog", "flow"])
+def test_malformed_topic_preserves_other_verified_dependencies(dependency_case, invalid_topic):
+    case = dependency_case
+    change = deepcopy(next(
+        change for change in case.payload["botComponentChanges"]
+        if change["component"].get("status") == "Active"
+        and change["component"].get("$kind") == "DialogComponent"
+    ))
+    if invalid_topic == "component":
+        change["component"] = None
+    elif invalid_topic == "dialog":
+        change["component"]["dialog"] = []
+    else:
+        change["component"]["dialog"] = {
+            "$kind": "InvokeFlowAction", "flowId": "not-a-guid",
+        }
+    case.payload["botComponentChanges"].append(change)
+
+    row = _summary(case)
+
+    assert row.status == "Warning"
+    assert "dependency discovery incomplete" in row.result
+    assert "2 bound" in row.result
+    assert "Restore read access" in row.remediation
+    assert case.runner.pp_admin.get_flow.call_count == 3
 
 
 def test_active_direct_topic_requires_its_native_reference(dependency_case):

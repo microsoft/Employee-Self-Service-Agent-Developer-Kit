@@ -671,7 +671,11 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
                 "in .local/config.json. "
                 "Restore read access to the selected agent's components, "
                 "invoked flows, required Dataverse references, and physical "
-                "connections, then re-run FlightCheck."
+                "connections, then re-run FlightCheck. "
+                "For unverified topic activation or dialogs, inspect the listed "
+                "topics in Copilot Studio. Their dependencies remain unverified "
+                "until the service returns explicit activation and dialog metadata; "
+                "component state alone does not establish activation."
             ),
         )
 

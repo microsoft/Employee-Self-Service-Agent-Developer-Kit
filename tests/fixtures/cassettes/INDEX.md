@@ -359,7 +359,7 @@ The response bodies are structural projections of actual responses. Topic
 text, global variables, connector definitions, connection parameters, account
 metadata, and auth headers are omitted before writing. The canonical
 `tests/captures/_redact.py` redactor is then applied. Distinct GUID and
-32-hex identities are temporarily shielded and replaced with distinct fake
+32-hex identities (plus 16-hex connection suffixes) are temporarily shielded and replaced with distinct fake
 identities after redaction, preserving joins rather than collapsing every
 connection or flow into one ID. Host names remain canonically redacted.
 
@@ -368,6 +368,18 @@ which ENV-004 must ignore. Active Workday topics invoke flows requiring two
 bound logical references. These observations establish this capture's scope,
 not a claim about every deployment. Native and Flow APIs remain `validated`;
 the existing documented-tier BAP and Dataverse contracts are unchanged.
+
+### `env004_partial_topics.yaml`: incomplete activation metadata
+
+Recorded with the same read-only recorder after observing topics whose
+`status` is absent. The snapshot contains 62 projected dialogs, including
+12 without status, plus three invoked-flow details and connection inventories.
+The HTTP replay verifies that ENV-004 retains three verified, bound references
+while warning about the 12 topics whose activation cannot be established.
+Missing status is preserved as absent, not replaced with a default. Component
+state is omitted from the projection and is not used as activation evidence.
+Topic content and credentials are excluded, and the canonical redactor and
+distinct-identity substitution described above are applied.
 
 ## `flightcheck_flow_licensing.yaml` — flow licensing pre-flight (LIC-FLOW-001 / 002)
 

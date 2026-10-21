@@ -62,9 +62,11 @@ def _projection(url, body):
             if component.get("$kind") != "DialogComponent":
                 continue
             projected = {
-                "$kind": component["$kind"], "status": component["status"],
+                "$kind": component["$kind"],
                 "dialog": _topic_actions(component["dialog"]),
             }
+            if "status" in component:
+                projected["status"] = component["status"]
             changes.append({"$kind": change["$kind"], "component": projected})
         refs = []
         for change in body.get("connectionReferenceChanges", []):
@@ -166,7 +168,9 @@ def main():
     if agent["botId"].casefold() != agent_id.casefold():
         raise ValueError("The recorder received a different agent.")
     components = client.fetch_components(agent_id)
-    _, flow_ids = _dependencies(components)
+    _, flow_ids, warnings = _dependencies(components)
+    if warnings:
+        print(f"Component discovery has {len(warnings)} incomplete topic(s); capturing known dependencies.")
     for flow_id in sorted(flow_ids):
         pp.get_flow(environment_id, flow_id)
     environment = pp.get_environment(environment_id)
@@ -188,7 +192,7 @@ def main():
     # destroys the dependency joins this capture is intended to demonstrate.
     text = yaml.safe_dump({"version": 1, "interactions": interactions})
     identifiers = sorted(set(re.findall(
-        r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|\b[0-9a-fA-F]{32}\b",
+        r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|\b[0-9a-fA-F]{32}\b|\b[0-9a-fA-F]{16}\b",
         text,
     )))
     for index, value in enumerate(identifiers, 1):
@@ -200,7 +204,10 @@ def main():
         redact_cassette(source, redacted)
         text = redacted.read_text(encoding="utf-8")
     for index, value in enumerate(identifiers, 1):
-        fake = f"{index:032d}" if len(value) == 32 else f"00000000-0000-0000-0000-{index:012d}"
+        fake = (
+            f"{index:0{len(value)}d}" if len(value) in (16, 32)
+            else f"00000000-0000-0000-0000-{index:012d}"
+        )
         text = text.replace(f"ENV004_ID_{index}_ALIAS", fake)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
