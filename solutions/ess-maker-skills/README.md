@@ -233,16 +233,29 @@ remains unknown, not disabled. The catalog also accounts for dynamic result
 families and superseded IDs without counting execution guards as deployment
 requirements. `da_execution.py` schedules only approved, registered producers;
 it does not run the old broad categories and then filter away legacy results.
-Currently these producers cover native authoring access/content, connection
-dependencies, ESS package identity and read-only export. Unreviewed producers,
-missing selectors and unknown integration applicability remain explicit gaps.
+Reviewed producers now cover exact native access/content, selected-workspace
+identity and inventory, dependency bindings, optional revision pins, ESS ALM
+metadata, allocation observations and read-only export integrity. Local content
+does not establish deployed freshness; ALM metadata and export integrity do not
+establish package signature, import success or employee execution.
+
+Licensing, effective access, billing, capacity sizing, effective connector policy,
+managed-runtime egress, native knowledge/handoff behavior and publication
+approvals remain explicit target-bound manual evidence requirements where
+applicable. These include required evidence fields and `accepted: false`; setup
+completion, skip overrides and inventory counts cannot satisfy them. Dataverse
+provisioning is conditional on an actual Dataverse runtime dependency, not a
+universal native authoring prerequisite. Unknown feature applicability remains
+unresolved. The current catalog has 147 definitions: the original 142, four
+earlier additions and an explicit DA handoff requirement replacing the historical
+PVA handoff family.
 
 The combined JSON/HTML report includes a `DA-PLAN-COVERAGE` row with the complete
 versioned coverage manifest in JSON evidence. Required dispatch gaps block a
 successful full run instead of disappearing from the report. This is an
-incremental implementation: selected-agent local validation, expanded baseline
-and integration evaluators, discovery of feature applicability, and separate
-deployment-readiness reporting are still pending. Inventory and a diagnostic
+incremental implementation: integration composition, discovery of feature
+applicability, coverage reconciliation and separate deployment-readiness
+reporting are still pending. Inventory and a diagnostic
 verdict are not deployment approval; Connect acceptance is unchanged. DA full
 rejects `--alm-import-probe` and `--runtime-reachability`; these remain separate,
 explicitly authorized operations.

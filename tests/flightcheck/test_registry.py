@@ -207,7 +207,9 @@ class TestTransitiveRequirements:
         assert registry.AGENTBUILDER in plan.clients
         assert plan.requires_dataverse_endpoint is False
         assert plan.requires_config is False
-        assert registry.resolve("ENV-004-GRS") is None
+        pin = registry.transitive_requirements("ENV-004-GRS")
+        assert pin.clients == frozenset({registry.AGENTBUILDER})
+        assert pin.requires_dataverse_endpoint is False
         assert registry.resolve("ENV-004-UR-001") is None
 
     def test_native_agent_checkpoints_use_only_native_read_clients(self):

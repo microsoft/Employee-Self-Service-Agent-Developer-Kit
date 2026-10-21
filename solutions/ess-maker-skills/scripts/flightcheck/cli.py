@@ -2362,17 +2362,22 @@ def _run_profile(args, *, da_execution=None):
                 )
                 sys.exit(1)
         else:
-            if not configured_tenant_id:
+            native_tenant_bootstrap = (
+                da_execution is not None
+                and needed <= {registry.AGENTBUILDER, registry.CONNECTIVITY, registry.POWERPLATFORM}
+            )
+            if not configured_tenant_id and not native_tenant_bootstrap:
                 print(
                     "ERROR: A concrete tenantId is required for this "
                     "profile when no Dataverse endpoint is configured."
                 )
                 sys.exit(1)
-            try:
-                tenant_id = str(uuid.UUID(configured_tenant_id))
-            except ValueError:
-                print("ERROR: Configured tenantId must be a GUID.")
-                sys.exit(1)
+            if configured_tenant_id:
+                try:
+                    tenant_id = str(uuid.UUID(configured_tenant_id))
+                except ValueError:
+                    print("ERROR: Configured tenantId must be a GUID.")
+                    sys.exit(1)
 
     if registry.DATAVERSE in needed and env_url:
         from auth import authenticate
@@ -2564,6 +2569,8 @@ def _run_profile(args, *, da_execution=None):
                     native_tenant_id,
                     native_username,
                 ) = native_auth
+                if da_execution:
+                    native_tenant_id = str(uuid.UUID(native_tenant_id))
                 verified_native_username = verified_account(
                     "Native AgentBuilder APIs",
                     native_username,
@@ -2651,7 +2658,9 @@ def _run_profile(args, *, da_execution=None):
             mark_unavailable(registry.PVA, e)
             pva = None
 
-    if registry.POWERPLATFORM in needed:
+    if registry.POWERPLATFORM in needed and not tenant_id:
+        mark_unavailable(registry.POWERPLATFORM, "No independently authenticated tenant is available")
+    elif registry.POWERPLATFORM in needed:
         if not quiet_auth:
             print("Authenticating to Power Platform API (capacity allocation)...")
         powerplatform = PowerPlatformClient(tenant_id)
@@ -2699,6 +2708,7 @@ def _run_profile(args, *, da_execution=None):
         ),
     )
     runner.execution_targets = profile.checkpoint_ids
+    runner.da_full_assessment = da_execution is not None
     runner.workday_da_profile = bool(da_execution) or profile_name.startswith("workday-da:")
     runner.config = config
     runner.agent_slug = validation_context.agent_slug

@@ -8,11 +8,17 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from functools import wraps
 from types import SimpleNamespace
 
 from . import registry
 from .agent_scope import active_agent, is_declarative_agent, validate_agent_slug
 from .checks.environment import run_connection_checks
+from .checks.environment import (
+    run_da_capacity_check, _ENV004_GRS_EXPECTED_COMMIT_KEYS, _env004_pin_value,
+)
+from .checks.da_baseline import run_da_baseline_checks
+from .checks.local_files import run_da_local_file_checks
 from .checks.native_agent import run_native_agent_checks
 from .checks.publishing import run_publishing_checks
 from .checks.solution import run_solution_checks
@@ -38,6 +44,8 @@ from .runner import (
 _APPROVED_PRODUCERS = frozenset({
     run_native_agent_checks, run_connection_checks,
     run_solution_checks, run_publishing_checks,
+    run_da_baseline_checks, run_da_local_file_checks, run_da_capacity_check,
+    registry.DA_CHECKPOINT_OVERRIDES["ENV-004-GRS"].category_fn,
 })
 
 
@@ -88,13 +96,15 @@ class DAExecutionPlan:
         native_ids = tuple(
             checkpoint_id
             for checkpoint_id in self.profile.checkpoint_ids
-            if (spec := registry.resolve(checkpoint_id)) is not None
+            if (spec := registry.DA_CHECKPOINT_OVERRIDES.get(checkpoint_id)
+                or registry.resolve(checkpoint_id)) is not None
             and spec.category_fn is fn
             and spec.clients & {registry.AGENTBUILDER, registry.CONNECTIVITY}
         )
         if fn is run_native_agent_checks or not native_ids:
             return fn
 
+        @wraps(fn)
         def check(runner) -> list[CheckResult]:
             if any(
                 row.checkpoint_id == "DA-AGENT-001"
@@ -196,7 +206,18 @@ def build_da_execution_plan(
     for key in ("realm", "ring", "powerPlatformApiEndpoint", "agentBuilderApiVersion"):
         if subject.get(key) is not None:
             scoped_config[key] = subject[key]
-    coverage = build_da_coverage_plan(features or {})
+    feature_evidence = dict(features or {})
+    pin = _env004_pin_value(scoped_config, _ENV004_GRS_EXPECTED_COMMIT_KEYS)
+    pin_enabled = pin is not None and pin != ""
+    supplied_pin = feature_evidence.get(DAFeature.REVISION_PIN)
+    if supplied_pin is not None and supplied_pin.enabled is not None and (
+        supplied_pin.enabled != pin_enabled
+    ):
+        raise ValueError("Revision-pin applicability conflicts with the selected agent's configured policy.")
+    feature_evidence[DAFeature.REVISION_PIN] = DAFeatureEvidence(
+        pin_enabled, "Selected-agent revision-pin policy, with workspace defaults by presence.",
+    )
+    coverage = build_da_coverage_plan(feature_evidence)
     targets: list[str] = []
     pending: list[tuple[str, str]] = []
     for entry in coverage:
@@ -208,12 +229,16 @@ def build_da_execution_plan(
             reason = entry.applicability_reason
         elif spec.disposition == DADisposition.REVIEW:
             reason = spec.reason
-        elif spec.disposition in {DADisposition.EVALUATOR, DADisposition.MANUAL}:
-            registered = registry.resolve(spec.key)
+        elif spec.disposition in {
+            DADisposition.EVALUATOR, DADisposition.MANUAL, DADisposition.OBSERVATION,
+        }:
+            registered = registry.DA_CHECKPOINT_OVERRIDES.get(spec.key) or registry.resolve(spec.key)
             if registered is None or registered.key != spec.key or registered.is_family:
                 reason = "No exact registered DA selector."
             else:
-                requirements = registry.transitive_requirements(spec.key)
+                requirements = registry.transitive_requirements(
+                    spec.key, overrides=registry.DA_CHECKPOINT_OVERRIDES,
+                )
                 if any(fn not in _APPROVED_PRODUCERS for _, fn in requirements.ordered_fns):
                     reason = "Producer requires selected-agent DA dispatch review."
                 else:
@@ -226,7 +251,9 @@ def build_da_execution_plan(
         checkpoint_ids=tuple(sorted(targets)),
         description="Read-only full DA assessment for exactly one selected agent.",
     )
-    requirements = registry.profile_requirements(profile)
+    requirements = registry.profile_requirements(
+        profile, overrides=registry.DA_CHECKPOINT_OVERRIDES,
+    )
     ordered = requirements.ordered_fns
     requirements = replace(
         requirements,

@@ -29,6 +29,7 @@ from agentbuilder import (
 
 from ..runner import CheckResult, Priority, Role, Status
 from .. import agent_scope
+from .da_baseline import manual_evidence_requirement
 
 _ESS_SOLN_DOC_LINK = (
     "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
@@ -60,7 +61,14 @@ def run_solution_checks(runner) -> list[CheckResult]:
     additional ESS-SOLN-* rows can be added without changing the registry /
     cli wiring.
     """
-    return _check_ess_solution_installed(runner)
+    rows = _check_ess_solution_installed(runner)
+    if getattr(runner, "da_full_assessment", False) is True:
+        for row in rows:
+            if row.status == Status.MANUAL.value:
+                row.evidence.update(manual_evidence_requirement(
+                    runner, ("packageOrigin", "packageRevision", "sourceArtifact"),
+                ))
+    return rows
 
 
 def _check_ess_solution_installed(runner) -> list[CheckResult]:
@@ -104,6 +112,13 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
         config = agentbuilder.get_realm_configuration(bot_id, realm)
     except AgentBuilderHTTPError as exc:
         if _is_not_opted_into_alm_error(exc):
+            if getattr(runner, "da_full_assessment", False) is True:
+                return [_result(
+                    Status.MANUAL.value,
+                    "The selected agent is not enrolled in ALM; repository provenance was not read.",
+                    "Record target-bound package origin and revision evidence. "
+                    "Enable ALM only if required by the approved promotion workflow.",
+                )]
             return [_not_opted_into_alm_result(bot_id)]
         return [
             _result(
@@ -136,6 +151,12 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
     grs_repository_id = str(config.get("grsRepositoryId") or "").strip()
     commit_sha = str(config.get("commitSha") or "").strip()
     if not grs_repository_id or not commit_sha:
+        if getattr(runner, "da_full_assessment", False) is True:
+            return [_result(
+                Status.BLOCKED.value,
+                "ALM repository or commit metadata is unavailable; package provenance was not established.",
+                "Obtain target-bound source artifact and revision evidence before accepting package provenance.",
+            )]
         return [
             _result(
                 Status.FAILED.value,
@@ -153,6 +174,34 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
         ]
 
     schema_name = str(config.get("schemaName") or "").strip()
+    da_full = getattr(runner, "da_full_assessment", False) is True
+    if da_full:
+        selected = agent_scope.active_agent(
+            getattr(runner, "config", None), getattr(runner, "agent_slug", None),
+        )
+        expected_schema = str(selected.get("schemaName") or "").strip()
+        returned_id = config.get("cdsBotId")
+        if (
+            not isinstance(returned_id, str)
+            or returned_id.casefold() != bot_id.casefold()
+            or _parse_alm_realm(config.get("realm")) != realm
+            or not expected_schema
+            or not isinstance(config.get("schemaName"), str)
+            or schema_name.casefold() != expected_schema.casefold()
+        ):
+            return [_result(
+                Status.BLOCKED.value,
+                "ALM metadata did not match the exact selected agent ID, schema and realm.",
+                "Refresh the exact native target and resolve the ALM identity mismatch.",
+            )]
+        if any(
+            not isinstance(config.get(key), str) or not config[key].strip()
+            for key in ("grsRepositoryId", "commitSha")
+        ):
+            return [_result(
+                Status.BLOCKED.value, "ALM package provenance fields are unavailable or invalid.",
+                "Obtain the selected agent's repository and revision evidence before accepting package provenance.",
+            )]
     if schema_name:
         if _ESS_SCHEMA_IDENTITY_TOKEN not in schema_name.casefold():
             return [
@@ -172,8 +221,7 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
                     ),
                 )
             ]
-        return [
-            _result(
+        result = _result(
                 Status.PASSED.value,
                 (
                     "Agent runs the ESS base package "
@@ -182,7 +230,18 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
                     "package revision match pending US 7792604."
                 ),
             )
-        ]
+        if da_full:
+            result.description = "Selected ESS package metadata"
+            result.result = (
+                f"Exact selected-agent ALM metadata identifies ESS schema {schema_name}, "
+                f"repository {grs_repository_id}, commit {commit_sha}."
+            )
+            result.evidence = {
+                "agentId": bot_id, "agentSchemaName": schema_name, "realm": realm,
+                "repositoryId": grs_repository_id, "commitSha": commit_sha,
+                "evidenceBoundary": "alm_metadata_not_package_signature_or_employee_execution",
+            }
+        return [result]
 
     return [
         _result(
@@ -247,6 +306,9 @@ def _first_present(*values: Any) -> Any:
 
 
 def _alm_realm(runner) -> int | None:
+    if getattr(runner, "da_full_assessment", False) is True:
+        realm = (getattr(runner, "validation_context", None) or {}).get("realm")
+        return _ALM_REALMS.get(realm) if isinstance(realm, str) else None
     config = getattr(runner, "config", None) or {}
     single = config.get("agent") or {}
     raw = _first_present(
@@ -260,6 +322,10 @@ def _alm_realm(runner) -> int | None:
     )
     if raw is None:
         raw = _DEFAULT_ALM_REALM
+    return _parse_alm_realm(raw)
+
+
+def _parse_alm_realm(raw: Any) -> int | None:
     if type(raw) is int and raw in REALM_NAMES:
         return raw
     if isinstance(raw, str):

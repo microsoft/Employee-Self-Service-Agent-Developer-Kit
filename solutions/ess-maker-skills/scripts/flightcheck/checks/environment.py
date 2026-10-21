@@ -8,6 +8,7 @@ Checks Power Platform environment, Dataverse, DLP policies, and related config.
 """
 
 import uuid
+from dataclasses import replace
 
 from ..agent_scope import configured_agents
 from ..runner import CheckResult, Priority, Role, Status
@@ -20,6 +21,7 @@ from .licensing import (
     _env_mcs_entitlement_observation,
     classify_copilot_studio_capacity,
 )
+from .da_baseline import manual_evidence_requirement
 from auth import query_all, dataverse_get, AuthExpiredError  # scripts/auth.py, on path via cli.py
 
 from ..documentation import DOC_BASE
@@ -524,6 +526,36 @@ def run_capacity_check(runner) -> list[CheckResult]:
     return _check_copilot_studio_capacity_provisioned(runner)
 
 
+def run_da_capacity_check(runner) -> list[CheckResult]:
+    """Observe allocation without certifying billing coverage or audience sizing."""
+    rows = run_capacity_check(runner)
+    return [
+        replace(
+            row,
+            status=(
+                Status.BLOCKED.value if row.status in {Status.FAILED.value, Status.ERROR.value}
+                else Status.MANUAL.value
+            ),
+            severity="",
+            automation_type="manual",
+            description="Environment allocation and deployment billing evidence",
+            result=row.result + " Deployment billing coverage and audience sizing were not verified.",
+            remediation=(
+                f"Review the observed allocation in {_capacity_portal(runner)}, then "
+                "reconcile the environment billing route and intended audience. "
+                "Record current target-bound administrator evidence; setup skip "
+                "overrides do not satisfy deployment readiness."
+            ),
+            evidence={
+                **manual_evidence_requirement(
+                    runner, ("environmentAllocation", "billingRoute", "audienceSizing"),
+                ),
+                "allocationObservation": row.evidence,
+            },
+        )
+        for row in rows
+    ]
+
 def _env_capacity(
     status: str,
     result: str,
@@ -685,11 +717,14 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     # The GRS commit pin is a distinct ENV-004 sub-check; fold its verdict into
     # the summary status so a targeted run (which filters the detail row) still
     # surfaces a GRS failure.
-    grs_result = _env004_grs_commit_pin_result(runner)
+    da_full = getattr(runner, "da_full_assessment", False) is True
+    grs_result = (
+        None if da_full else _env004_grs_commit_pin_result(runner)
+    )
 
-    if audit.failures or grs_result.status == Status.FAILED.value:
+    if audit.failures or (grs_result is not None and grs_result.status == Status.FAILED.value):
         overall_status = Status.FAILED.value
-    elif (grs_result.status == Status.WARNING.value or coverage_warning is not None
+    elif ((grs_result is not None and grs_result.status == Status.WARNING.value) or coverage_warning is not None
           or audit.additional_connections):
         overall_status = Status.WARNING.value
     else:
@@ -707,11 +742,11 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
             f"{audit.additional_connections} additional connection(s) for the "
             "same connectors; these may serve other agents"
         )
-    grs_nonpass = grs_result.status in (
+    grs_nonpass = grs_result is not None and grs_result.status in (
         Status.FAILED.value,
         Status.WARNING.value,
     )
-    if grs_result.status != Status.SKIPPED.value:
+    if grs_result is not None and grs_result.status != Status.SKIPPED.value:
         summary_parts.append(f"GRS commit pin: {grs_result.status}")
     # Fold the GRS reason into the summary result. A targeted
     # `--checkpoint ENV-004` run filters out the ENV-004-GRS detail row, so
@@ -775,6 +810,13 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         result=" | ".join(summary_parts),
         remediation=remediation,
         doc_link=summary_doc_link,
+        evidence={
+            "dependencyCoverageComplete": not audit.warnings,
+            "requiredReferences": len(refs),
+            "boundReferences": len(bound_refs),
+            "flowCount": audit.flow_count,
+            "evidenceBoundary": "inspected_dependency_bindings_not_employee_execution",
+        } if da_full else {},
     ))
 
     # --- Detail: unbound references (no connectionId set) ---
@@ -798,7 +840,8 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         results.append(coverage_warning)
 
     # --- Detail: GRS commit pin (also folded into the summary status above) ---
-    results.append(grs_result)
+    if grs_result is not None:
+        results.append(grs_result)
 
     return results
 

@@ -14,7 +14,8 @@ from pathlib import Path
 
 import yaml
 
-from ..runner import CheckResult, Priority, Role, Status
+from ..runner import BLOCK_REASON_CHECKPOINT_CONTRACT, CheckResult, Priority, Role, Status
+from ..agent_scope import active_agent, resolve_agent_directory
 
 from ..documentation import DOC_BASE
 STUDIO_BASE = "https://copilotstudio.microsoft.com"
@@ -112,6 +113,44 @@ def run_local_file_checks(runner) -> list[CheckResult]:
     return results
 
 
+def run_da_local_file_checks(runner) -> list[CheckResult]:
+    """Read only the exact selected workspace; do not run legacy topic heuristics."""
+    config = getattr(runner, "config", None) or {}
+    selected = active_agent(config, getattr(runner, "agent_slug", None))
+    slug = selected.get("slug")
+    try:
+        path = resolve_agent_directory(Path("workspace") / "agents", slug)
+    except ValueError as exc:
+        return [CheckResult(
+            "CONFIG-007", "Local Files", Priority.HIGH.value, Status.BLOCKED.value,
+            "Selected DA local content", str(exc),
+            "Resolve the exact selected agent workspace before rerunning.",
+            roles=[Role.ESS_MAKER.value],
+            block_reason=BLOCK_REASON_CHECKPOINT_CONTRACT,
+        )]
+    if not path.is_dir() or not (path / "agent.mcs.yml").is_file():
+        return [CheckResult(
+            "CONFIG-007", "Local Files", Priority.HIGH.value, Status.BLOCKED.value,
+            "Selected DA local content", "The selected agent's extracted identity file is unavailable.",
+            "Extract or refresh this selected agent's workspace; do not use a sibling's files.",
+            evidence={"agentSlug": slug, "evidenceBoundary": "local_authored_content"},
+            roles=[Role.ESS_MAKER.value],
+            block_reason=BLOCK_REASON_CHECKPOINT_CONTRACT,
+        )]
+    label = slug.replace("-", " ").title()
+    rows = _check_agent_identity(path, label, runner, slug)
+    rows.extend(_check_topic_inventory(path, label))
+    rows.extend(_check_variables(path, label))
+    rows.extend(_check_topic_descriptions(path, label, runner, slug))
+    for row in rows:
+        row.evidence.update({
+            "agentSlug": slug,
+            "evidenceBoundary": "local_authored_content",
+            "deploymentFreshnessVerified": False,
+        })
+    return rows
+
+
 def _check_single_agent(agent_path: Path, agent_name: str, runner=None) -> list[CheckResult]:
     """Run all local file checks for a single agent."""
     results: list[CheckResult] = []
@@ -192,11 +231,24 @@ def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name:
         ))
         return results
 
+    da_full = getattr(runner, "da_full_assessment", False) is True
+    if da_full and (
+        not isinstance(parsed.get("displayName"), str)
+        or not parsed["displayName"].strip()
+    ):
+        return [CheckResult(
+            "CONFIG-007", f"Configuration ({label})", Priority.CRITICAL.value,
+            Status.FAILED.value, f"{label}: Authored agent identity",
+            "The extracted identity has no non-empty displayName.",
+            "Repair or refresh the selected agent's authored identity.",
+            roles=[Role.ESS_MAKER.value],
+        )]
+
     instructions_value = parsed.get("instructions")
     instruction_text = instructions_value.strip() if isinstance(instructions_value, str) else ""
     if instruction_text:
         word_count = len(instruction_text.split())
-        if word_count >= 50:
+        if da_full or word_count >= 50:
             results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id="CONFIG-007", category=f"Configuration ({label})",
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,

@@ -15,7 +15,7 @@ from setup_existing_da import (
     validate_existing_dev_connection,
 )
 
-from ..runner import CheckResult, Priority, Role, Status
+from ..runner import BLOCK_REASON_CHECKPOINT_CONTRACT, CheckResult, Priority, Role, Status
 from ..agent_scope import active_agent
 from .connections import get_connection_status
 
@@ -39,6 +39,7 @@ def _result(
             Role.ESS_MAKER.value,
             Role.POWER_PLATFORM_ADMIN.value,
         ],
+        block_reason=BLOCK_REASON_CHECKPOINT_CONTRACT if status == Status.BLOCKED.value else "",
     )
 
 
@@ -284,7 +285,14 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             environment_id=environment_id,
             agent_id=agent_id,
         )
+        da_full = getattr(runner, "da_full_assessment", False) is True
         expected_realm = (getattr(runner, "validation_context", None) or {}).get("realm")
+        if da_full and route.get("realm") is None:
+            return [_result(
+                "DA-AGENT-001", Status.BLOCKED.value, "Native agent access",
+                "Direct native lookup did not establish a deployment realm.",
+                "Establish the exact target realm before accepting this assessment.",
+            )]
         if expected_realm and route.get("realm") != expected_realm:
             raise ExistingDASetupError(
                 "Direct agent lookup resolved a different deployment realm "
@@ -296,7 +304,9 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             if isinstance(route_alm, dict)
             else None
         )
-        if is_enrolled is False:
+        if da_full:
+            allow_unenrolled_authoring = False
+        elif is_enrolled is False:
             allow_unenrolled_authoring = True
         elif is_enrolled is True and route.get("realm") == "dev":
             allow_unenrolled_authoring = False
@@ -305,16 +315,20 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
                 "Direct agent lookup did not identify an editable Dev or "
                 "unenrolled authoring target."
             )
-        connection = validate_existing_dev_connection(
-            client,
-            environment_id=environment_id,
-            agent_id=agent_id,
-            selection_source="flightcheck",
-            require_alm_family=False,
-            expected_schema_name=str(agent.get("schemaName") or "") or None,
-            allow_missing_schema=True,
-            allow_unenrolled_authoring=allow_unenrolled_authoring,
-        )
+        if da_full:
+            # inspect_agent_route verifies the exact ID in this environment.
+            connection = {"agent": {"name": agent.get("name") or agent.get("schemaName")}}
+        else:
+            connection = validate_existing_dev_connection(
+                client,
+                environment_id=environment_id,
+                agent_id=agent_id,
+                selection_source="flightcheck",
+                require_alm_family=False,
+                expected_schema_name=str(agent.get("schemaName") or "") or None,
+                allow_missing_schema=True,
+                allow_unenrolled_authoring=allow_unenrolled_authoring,
+            )
     except AgentBuilderHTTPError as exc:
         status = (
             Status.FAILED.value
@@ -348,9 +362,20 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             Status.PASSED.value,
             "Native agent access",
             f"Exact native agent '{connection['agent']['name']}' is "
-            "accessible for authoring.",
+            + ("accessible through the native read API." if da_full else "accessible for authoring."),
         )
     ]
+    if da_full:
+        results[0].evidence.update({
+            "agentId": route["agentId"],
+            "environmentId": route["environmentId"],
+            "realm": route["realm"],
+            "evidenceBoundary": "exact_native_access_not_employee_publication",
+        })
+
+    should_execute = getattr(runner, "should_execute", lambda _checkpoint_id: True)
+    if not should_execute("DA-CONTENT-001") and not should_execute("DA-CONN-001"):
+        return results
 
     try:
         changeset = client.fetch_components(str(uuid.UUID(str(agent_id))))
@@ -382,6 +407,14 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             raise ValueError(
                 "Component fetch did not return botComponentChanges."
             )
+        if da_full and any(
+            not isinstance(change, dict)
+            or not isinstance(change.get("component"), dict)
+            or not isinstance(change["component"].get("$kind"), str)
+            or not change["component"]["$kind"].strip()
+            for change in components
+        ):
+            raise ValueError("Component fetch returned a malformed authored component.")
     except AgentBuilderHTTPError as exc:
         results.append(
             _result(
@@ -425,7 +458,13 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
         )
     )
 
-    should_execute = getattr(runner, "should_execute", lambda _checkpoint_id: True)
+    if da_full:
+        results[-1].evidence.update({
+            "agentId": str(agent_id), "agentSchemaName": fetched_schema,
+            "componentCount": len(components),
+            "evidenceBoundary": "authored_components_not_employee_execution",
+        })
+
     if not should_execute("DA-CONN-001"):
         return results
 

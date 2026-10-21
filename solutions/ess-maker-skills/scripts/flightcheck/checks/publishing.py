@@ -28,6 +28,7 @@ from typing import Any
 from agentbuilder import AgentBuilderHTTPError
 
 from ..runner import CheckResult, Role, Status
+from .da_baseline import manual_evidence_requirement
 
 from ..documentation import DOC_BASE
 STUDIO_BASE = "https://copilotstudio.microsoft.com"
@@ -277,13 +278,19 @@ def _check_pub_001_export(runner, row: dict) -> CheckResult:
                 return _api_result(
                     checkpoint_id="PUB-001",
                     row=row,
-                    status=Status.FAILED,
+                    status=(
+                        Status.MANUAL if getattr(runner, "da_full_assessment", False) is True
+                        else Status.FAILED
+                    ),
                     result=(
                         f"AgentBuilder ALM export returned {ALM_NOT_OPTED_IN_CODE} "
                         f"for configured agent {bot_id}; the agent is not enrolled "
                         "in ALM."
                     ),
                     remediation=(
+                        "Record the approved source artifact and promotion evidence. "
+                        "Enroll in ALM only if required by the approved promotion workflow."
+                        if getattr(runner, "da_full_assessment", False) is True else
                         "Open the agent in Copilot Studio, go to Settings > ALM, "
                         "enroll the agent, then re-run PUB-001."
                     ),
@@ -812,13 +819,24 @@ def run_publishing_checks(runner) -> list[CheckResult]:
     """
     results: list[CheckResult] = []
     should_execute = getattr(runner, "should_execute", lambda _checkpoint_id: True)
+    da_full = getattr(runner, "da_full_assessment", False) is True
     for c in _build_checks(runner):
         if not should_execute(c["id"]):
             continue
         if c["id"] == "PUB-001":
-            results.append(_check_pub_001_export(runner, c))
+            exported = _check_pub_001_export(runner, c)
+            if da_full:
+                exported.description = "Selected-agent export archive integrity"
+                exported.evidence.update({
+                    "evidenceBoundary": "export_archive_not_import_publication_or_employee_execution",
+                })
+                if exported.status == Status.MANUAL.value:
+                    exported.evidence.update(manual_evidence_requirement(
+                        runner, ("sourceArtifact", "promotionWorkflow"),
+                    ))
+            results.append(exported)
             continue
-        if c["id"] == "PUB-002":
+        if c["id"] == "PUB-002" and not da_full:
             results.append(_check_pub_002_import(runner, c))
             continue
         results.append(
@@ -827,11 +845,27 @@ def run_publishing_checks(runner) -> list[CheckResult]:
                 category="Publishing",
                 priority=c["p"],
                 status=Status.MANUAL.value,
-                description=c["desc"],
-                result=c["result"],
-                remediation=c["remediation"],
+                description=(
+                    "Approved representative evaluation library"
+                    if da_full and c["id"] == "QA-001" else c["desc"]
+                ),
+                result=(
+                    "This assessment has not accepted target-bound release evidence."
+                    if da_full and c["id"] != "PUB-011" else c["result"]
+                ),
+                remediation=(
+                    "Record stakeholder-approved intent, risk and permission coverage "
+                    "for the selected release. Use the agreed quality and acceptance "
+                    "criteria; prompt count alone does not establish coverage."
+                    if da_full and c["id"] == "QA-001" else c["remediation"]
+                ),
                 doc_link=c["doc_link"],
                 roles=c["roles"],
+                evidence=(
+                    manual_evidence_requirement(
+                        runner, ("publishedChannel", "releaseRevision", "testOrApprovalRecord", "outcome"),
+                    ) if da_full and c["id"] != "PUB-011" else {}
+                ),
             )
         )
     return results

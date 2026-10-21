@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from flightcheck.runner import Priority, Role
+from flightcheck.da_contract import DA_CATALOG
 from flightcheck.checks.entra_app import run_entra_app_checks
 from flightcheck.checks.environment import (
     run_capacity_check,
@@ -53,6 +54,9 @@ from flightcheck.checks.environment import (
     run_preferred_solution_check,
 )
 from flightcheck.checks.native_agent import run_native_agent_checks
+from flightcheck.checks.da_baseline import DA_MANUAL_REQUIREMENTS, run_da_baseline_checks
+from flightcheck.checks.local_files import run_da_local_file_checks
+from flightcheck.checks.environment import run_da_capacity_check, _env004_grs_commit_pin_result
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
@@ -102,6 +106,7 @@ CATEGORY_ORDER = [
     "Infrastructure",
     "Environment",
     "Native Agent",
+    "DA Baseline",
     "Solution",
     "Authentication",
     "Entra App",
@@ -749,7 +754,39 @@ _SPECS: list[CheckpointSpec] = [
     ),
 ]
 
+DA_CHECKPOINT_OVERRIDES: dict[str, CheckpointSpec] = {
+    key: CheckpointSpec(
+        key=key, category_fn=run_da_baseline_checks, category_label="DA Baseline",
+        roles=next(item.owners for item in DA_CATALOG if item.key == key),
+    )
+    for key in (*DA_MANUAL_REQUIREMENTS, "ENV-001")
+}
+DA_CHECKPOINT_OVERRIDES["ENV-CAPACITY-001"] = CheckpointSpec(
+    key="ENV-CAPACITY-001", category_fn=run_da_capacity_check,
+    category_label="Environment", clients=frozenset({POWERPLATFORM}),
+    roles=(Role.POWER_PLATFORM_ADMIN.value,),
+)
+DA_CHECKPOINT_OVERRIDES["ENV-004-GRS"] = CheckpointSpec(
+    key="ENV-004-GRS",
+    category_fn=lambda runner: [_env004_grs_commit_pin_result(runner)],
+    category_label="Environment", clients=frozenset({AGENTBUILDER}),
+    roles=(Role.ESS_MAKER.value,),
+)
+for _key in ("CONFIG-007", "CONFIG-005", "TOPIC-011", "CONFIG-012", "CONFIG-014"):
+    DA_CHECKPOINT_OVERRIDES[_key] = CheckpointSpec(
+        key=_key, category_fn=run_da_local_file_checks, category_label="Local Files",
+        roles=(Role.ESS_MAKER.value,),
+    )
+for _key in ("QA-001", "QA-002", "QA-012", "PUB-003", "PUB-006", "PUB-011"):
+    DA_CHECKPOINT_OVERRIDES[_key] = CheckpointSpec(
+        key=_key, category_fn=run_publishing_checks, category_label="Publishing",
+        roles=(Role.ESS_MAKER.value,),
+    )
+
 REGISTRY: dict[str, CheckpointSpec] = {spec.key: spec for spec in _SPECS}
+REGISTRY.update({
+    key: spec for key, spec in DA_CHECKPOINT_OVERRIDES.items() if key not in REGISTRY
+})
 
 
 _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
@@ -962,8 +999,10 @@ def resolve(checkpoint_id: str) -> Optional[CheckpointSpec]:
     return best
 
 
-def _resolve_or_raise(checkpoint_id: str) -> CheckpointSpec:
-    spec = resolve(checkpoint_id)
+def _resolve_or_raise(
+    checkpoint_id: str, overrides: dict[str, CheckpointSpec] | None = None,
+) -> CheckpointSpec:
+    spec = (overrides or {}).get(checkpoint_id) or resolve(checkpoint_id)
     if spec is None:
         raise RegistryError(
             f"Checkpoint {checkpoint_id!r} does not resolve to any registered "
@@ -972,14 +1011,17 @@ def _resolve_or_raise(checkpoint_id: str) -> CheckpointSpec:
     return spec
 
 
-def _closure(checkpoint_id: str, _seen: Optional[set] = None) -> list[CheckpointSpec]:
+def _closure(
+    checkpoint_id: str, _seen: Optional[set] = None,
+    *, overrides: dict[str, CheckpointSpec] | None = None,
+) -> list[CheckpointSpec]:
     """Return every spec in the transitive prerequisite closure of a target,
     target included. Raises RegistryError on an unresolved prereq or a cycle.
     """
     if _seen is None:
         _seen = set()
 
-    spec = _resolve_or_raise(checkpoint_id)
+    spec = _resolve_or_raise(checkpoint_id, overrides)
     if spec.key in _seen:
         # Already collected on this walk — guard against cycles. validate_registry
         # proves the whole graph is acyclic at load; this is belt-and-braces.
@@ -988,12 +1030,14 @@ def _closure(checkpoint_id: str, _seen: Optional[set] = None) -> list[Checkpoint
 
     specs: list[CheckpointSpec] = []
     for prereq in spec.prereqs:
-        specs.extend(_closure(prereq, _seen))
+        specs.extend(_closure(prereq, _seen, overrides=overrides))
     specs.append(spec)
     return specs
 
 
-def transitive_requirements(checkpoint_id: str) -> ResolvedPlan:
+def transitive_requirements(
+    checkpoint_id: str, *, overrides: dict[str, CheckpointSpec] | None = None,
+) -> ResolvedPlan:
     """Resolve a target to its full execution plan.
 
     Walks the transitive prerequisite closure and returns the **union** of
@@ -1003,8 +1047,8 @@ def transitive_requirements(checkpoint_id: str) -> ResolvedPlan:
     register on the runner — ordered by CATEGORY_ORDER so cross-category
     shared state hydrates correctly.
     """
-    target_spec = _resolve_or_raise(checkpoint_id)
-    closure = _closure(checkpoint_id)
+    target_spec = _resolve_or_raise(checkpoint_id, overrides)
+    closure = _closure(checkpoint_id, overrides=overrides)
 
     clients: frozenset = frozenset()
     pp_admin_flow_required = False
@@ -1060,7 +1104,10 @@ def list_profiles() -> list[ProfileSpec]:
     return sorted(PROFILES.values(), key=lambda profile: profile.name)
 
 
-def profile_requirements(profile_name: str | ProfileSpec) -> ResolvedPlan:
+def profile_requirements(
+    profile_name: str | ProfileSpec,
+    *, overrides: dict[str, CheckpointSpec] | None = None,
+) -> ResolvedPlan:
     """Resolve a profile to the union of its checkpoint execution needs."""
     profile = (
         profile_name if isinstance(profile_name, ProfileSpec)
@@ -1081,7 +1128,7 @@ def profile_requirements(profile_name: str | ProfileSpec) -> ResolvedPlan:
     unique: list[tuple] = []
 
     for checkpoint_id in profile.checkpoint_ids:
-        plan = transitive_requirements(checkpoint_id)
+        plan = transitive_requirements(checkpoint_id, overrides=overrides)
         clients = clients | plan.clients
         pp_admin_flow_required = (
             pp_admin_flow_required or plan.pp_admin_flow_required
@@ -1106,7 +1153,7 @@ def profile_requirements(profile_name: str | ProfileSpec) -> ResolvedPlan:
 
     return ResolvedPlan(
         target=profile.name,
-        spec=_resolve_or_raise(profile.checkpoint_ids[0]),
+        spec=_resolve_or_raise(profile.checkpoint_ids[0], overrides),
         clients=clients,
         pp_admin_flow_required=pp_admin_flow_required,
         requires_config=requires_config,

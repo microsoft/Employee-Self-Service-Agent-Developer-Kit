@@ -26,6 +26,7 @@ class DAFeature(str, Enum):
     NATIVE_CONNECTIONS = "native_connections"
     POWER_AUTOMATE = "power_automate"
     DATAVERSE_CUSTOMIZATION = "dataverse_customization"
+    DATAVERSE_RUNTIME = "dataverse_runtime"
     WORKDAY = "workday"
     WORKDAY_CUSTOMIZATIONS = "workday_customizations"
     WORKDAY_WRITES = "workday_writes"
@@ -144,13 +145,13 @@ def _group(
 DA_CATALOG: tuple[DACheckpoint, ...] = (
     *_group(
         "PRE-001 PRE-002 PRE-004 PRE-005 PRE-006", "Prerequisites",
-        DADisposition.REVIEW,
-        "Tenant inventory and legacy audience sizing do not establish the "
-        "selected DA population's licensing and environment billing coverage.",
+        DADisposition.MANUAL,
+        "Require target-bound audience, maker entitlement, sizing and billing "
+        "evidence; tenant SKU inventory and Dataverse bot sharing are not substitutes.",
         _M365 + _PP,
     ),
     *_group(
-        "PRE-003", "Prerequisites", DADisposition.REVIEW,
+        "PRE-003", "Prerequisites", DADisposition.MANUAL,
         "Validate licensing against the intended Teams deployment audience.",
         _M365, feature=DAFeature.TEAMS,
     ),
@@ -174,10 +175,16 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _M365, required=False,
     ),
     *_group(
-        "ENV-001 ENV-002", "Environment", DADisposition.REVIEW,
-        "Environment identity and backend provisioning must be evaluated for "
-        "the selected native target, not inferred from a legacy bot lookup.",
+        "ENV-001", "Environment", DADisposition.EVALUATOR,
+        "Verify exact native environment access through selected-agent reads, "
+        "without asserting database provisioning, SKU or billing coverage.",
         _PP,
+    ),
+    *_group(
+        "ENV-002", "Environment", DADisposition.MANUAL,
+        "Verify successful database provisioning only when the selected runtime "
+        "requires Dataverse; a database type cannot override explicit failure.",
+        _PP, feature=DAFeature.DATAVERSE_RUNTIME,
     ),
     *_group(
         "ENV-003 ENV-008", "Environment", DADisposition.OBSERVATION,
@@ -213,7 +220,7 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _PP, feature=DAFeature.DATAVERSE_CUSTOMIZATION,
     ),
     *_group(
-        "ENV-CAPACITY-001", "Capacity", DADisposition.REVIEW,
+        "ENV-CAPACITY-001", "Capacity", DADisposition.MANUAL,
         "An allocation observation must be reconciled with applicable billing "
         "and deployment population; zero allocation alone does not establish failure.",
         _PP,
@@ -258,7 +265,7 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _PP, feature=DAFeature.EXTERNAL_ENDPOINTS,
     ),
     *_group(
-        "INFRA-006", "DLP", DADisposition.REVIEW,
+        "INFRA-006", "DLP", DADisposition.MANUAL,
         "Resolve the selected DA's direct and flow connectors before evaluating "
         "effective policies; legacy Dataverse discovery is insufficient.",
         _PP, feature=DAFeature.CONNECTORS,
@@ -295,7 +302,7 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _MAKER, required=False,
     ),
     *_group(
-        "CONFIG-013", "Knowledge", DADisposition.REVIEW,
+        "CONFIG-013", "Knowledge", DADisposition.MANUAL,
         "No local knowledge directory is not verified native absence; live "
         "indexing requires a validated native source and runtime contract.",
         _MAKER + _M365, feature=DAFeature.KNOWLEDGE,
@@ -307,7 +314,7 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _MAKER,
     ),
     *_group(
-        "DA-RUNTIME-001", "Employee runtime", DADisposition.REVIEW,
+        "DA-RUNTIME-001", "Employee runtime", DADisposition.MANUAL,
         "Require fresh target-bound signed-in employee evidence for the intended "
         "published channel; authored content and evaluation checklists are not substitutes.",
         _MAKER + _M365,
@@ -484,9 +491,16 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _M365, feature=DAFeature.GRAPH_CONNECTOR, kind="family",
     ),
     *_group(
-        "TOPIC-020-NNN", "Handoff", DADisposition.REVIEW,
-        "Validate native active handoff targets rather than legacy PVA-only discovery.",
-        _MAKER, feature=DAFeature.HANDOFF, kind="family",
+        "TOPIC-020-NNN", "Handoff", DADisposition.SUPERSEDED,
+        "DA handoff evidence is owned by the selected-agent requirement, not "
+        "unvalidated legacy per-target PVA discovery.",
+        _MAKER, required=False, kind="family", replacements=("DA-HANDOFF-001",),
+    ),
+    *_group(
+        "DA-HANDOFF-001", "Handoff", DADisposition.MANUAL,
+        "Require the selected DA's enabled handoff inventory, exact targets, "
+        "permissions and intended-user tests; no native API proof is assumed.",
+        _MAKER, feature=DAFeature.HANDOFF,
     ),
     *_group(
         "TOPIC-TRIGGER-NNN TOPIC-INTEGRATION-NNN", "Custom topics",

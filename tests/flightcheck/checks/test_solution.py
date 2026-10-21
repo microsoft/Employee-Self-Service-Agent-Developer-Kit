@@ -10,12 +10,20 @@ The check consumes the validated AgentBuilder Minimal Bot API
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
+import responses
+import yaml
 
-from agentbuilder import AgentBuilderHTTPError, DEV_REALM, PROD_REALM, TEST_REALM
+from agentbuilder import (
+    AgentBuilderClient, AgentBuilderHTTPError, DEV_REALM, PROD_REALM, TEST_REALM,
+    derive_environment_host,
+)
 from flightcheck.checks.solution import _alm_realm, _check_ess_solution_installed
 from flightcheck.runner import Status
 from tests.conftest import require_validated_mock
@@ -114,6 +122,70 @@ def test_warns_when_schema_name_missing() -> None:
     assert ab.MOCK_ENV_ID in result.result
     assert ab.MOCK_COMMIT_SHA in result.result
     assert "returns a schemaName" in result.remediation
+
+
+@pytest.mark.parametrize("field,value", [
+    ("schemaName", "gptagent_copilotforemployeeselfserviceit"),
+    ("cdsBotId", "00000000-0000-0000-0000-000000009999"),
+    ("realm", PROD_REALM),
+    ("realm", False),
+    ("realm", "unknown"),
+    ("grsRepositoryId", {"unexpected": "object"}),
+    ("commitSha", 42),
+])
+def test_full_da_package_metadata_cannot_pass_for_wrong_or_malformed_identity(field, value):
+    payload = ab.configuration()
+    payload[field] = value
+    config = _config()
+    config["agents"][0]["schemaName"] = ab.MOCK_SCHEMA_NAME
+    runner = _Runner(agentbuilder=_FakeAgentBuilder(payload), config=config)
+    runner.da_full_assessment = True
+    runner.validation_context = {"realm": "dev"}
+    assert _check_ess_solution_installed(runner)[0].status == Status.BLOCKED.value
+
+
+def test_full_da_package_uses_assessed_realm_not_stale_global_pin_realm():
+    config = _config()
+    config["agents"][0]["schemaName"] = ab.MOCK_SCHEMA_NAME
+    config["almRealm"] = "prod"
+    runner = _Runner(agentbuilder=_FakeAgentBuilder(), config=config)
+    runner.da_full_assessment = True
+    runner.validation_context = {"realm": "dev"}
+    row = _check_ess_solution_installed(runner)[0]
+    assert row.status == Status.PASSED.value
+    assert row.evidence["agentId"] == ab.MOCK_AGENT_ID
+    assert row.evidence["realm"] == DEV_REALM
+    assert "not_package_signature" in row.evidence["evidenceBoundary"]
+    assert runner.agentbuilder.calls == [(ab.MOCK_AGENT_ID, DEV_REALM)]
+
+
+def test_full_da_package_replays_captured_configure_string_realm():
+    path = Path(__file__).resolve().parents[2] / "fixtures" / "cassettes" / "agentbuilder_readiness.yaml"
+    interaction = next(
+        item for item in yaml.safe_load(path.read_text(encoding="utf-8"))["interactions"]
+        if item["request"]["method"] == "GET" and "/configure" in item["request"]["uri"]
+    )
+    payload = json.loads(interaction["response"]["body"]["string"])
+    assert payload["realm"] == "Dev"
+    parsed = urlsplit(interaction["request"]["uri"])
+    host = derive_environment_host(ab.MOCK_ENV_ID, "prod")
+    uri = parsed._replace(netloc=urlsplit(host).netloc).geturl()
+    client = AgentBuilderClient(
+        host, "test-token", ring="prod", tenant_id=ab.MOCK_ENV_ID,
+        api_version=parse_qs(parsed.query)["api-version"][0],
+    )
+    config = _config(bot_id=payload["cdsBotId"])
+    config["agents"][0]["schemaName"] = payload["schemaName"]
+    runner = _Runner(agentbuilder=client, config=config)
+    runner.da_full_assessment = True
+    runner.validation_context = {"realm": "dev"}
+    with responses.RequestsMock() as http:
+        http.add(responses.GET, uri, json=payload, status=200)
+        row = _check_ess_solution_installed(runner)[0]
+        assert row.status == Status.PASSED.value
+        assert "Exact selected-agent ALM metadata" in row.result
+        assert row.remediation == ""
+        assert len(http.calls) == 1
 
 
 @pytest.mark.parametrize(

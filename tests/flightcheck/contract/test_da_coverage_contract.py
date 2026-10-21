@@ -39,7 +39,7 @@ def test_unknown_features_remain_visible_without_hiding_baseline():
     assert workday.evidence_source == ""
     assert entries["DA-CONN-002+"].applicability == DAApplicability.UNKNOWN
     assert entries["DA-RUNTIME-001"].applicability == DAApplicability.APPLICABLE
-    assert entries["DA-RUNTIME-001"].checkpoint.disposition == DADisposition.REVIEW
+    assert entries["DA-RUNTIME-001"].checkpoint.disposition == DADisposition.MANUAL
     assert entries["DA-SAP-RUNTIME-001"].applicability == DAApplicability.UNKNOWN
 
 

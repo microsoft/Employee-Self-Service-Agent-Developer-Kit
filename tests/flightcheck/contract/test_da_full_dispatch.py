@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import replace
+from inspect import unwrap
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -70,7 +71,9 @@ def test_planning_keeps_exact_subject_and_registry_independent_of_dataverse():
     hybrid = build_da_execution_plan(_config(dataverse=True))
 
     assert native.profile.checkpoint_ids == hybrid.profile.checkpoint_ids
-    assert native.requirements.clients == {registry.AGENTBUILDER, registry.CONNECTIVITY}
+    assert native.requirements.clients == {
+        registry.AGENTBUILDER, registry.CONNECTIVITY, registry.POWERPLATFORM,
+    }
     assert hybrid.requirements.clients == native.requirements.clients | {registry.PP_ADMIN}
     assert native.config["agents"] == [config["agents"][0]]
     assert native.config["agent"]["botId"] == BOT_ID
@@ -201,14 +204,17 @@ class _OrchestrationRunner(FlightCheckRunner):
         self.producers = []
 
     def register(self, category, fn):
-        if category in {"Native Agent", "Environment", "Solution", "Publishing"}:
+        if category in {"Native Agent", "Environment", "DA Baseline", "Solution", "Local Files", "Publishing"}:
             self.producers.append(category)
 
             def dispatch_rows(runner):
                 return [
                     _passed(checkpoint_id)
                     for checkpoint_id in runner.execution_targets
-                    if registry.resolve(checkpoint_id).category_label == category
+                    if (
+                        registry.DA_CHECKPOINT_OVERRIDES.get(checkpoint_id)
+                        or registry.resolve(checkpoint_id)
+                    ).category_fn is unwrap(fn)
                 ]
 
             super().register(category, dispatch_rows)
@@ -228,17 +234,20 @@ def da_cli(tmp_path, monkeypatch):
     admin = Mock(signed_in_username=ACCOUNT)
     admin.find_environment_id_by_dataverse_url.return_value = ENV_ID
     admin_client = Mock(return_value=admin)
+    licensing = Mock(signed_in_username=ACCOUNT)
+    licensing_client = Mock(return_value=licensing)
     monkeypatch.setattr(cli, "authenticate_flightcheck", native_auth)
     monkeypatch.setattr(cli, "AgentBuilderClient", native_client)
     monkeypatch.setattr(cli, "ConnectivityClient", connectivity_client)
     monkeypatch.setattr(cli, "PPAdminClient", admin_client)
+    monkeypatch.setattr(cli, "PowerPlatformClient", licensing_client)
     monkeypatch.setattr(cli, "FlightCheckRunner", _OrchestrationRunner)
     monkeypatch.setattr(auth, "discover_tenant", lambda _url: TENANT_ID)
 
     def forbidden(*_args, **_kwargs):
         pytest.fail("DA full must not use legacy discovery or unrelated clients")
 
-    for name in ("GraphClient", "PVAClient", "AzureArmClient", "PowerPlatformClient"):
+    for name in ("GraphClient", "PVAClient", "AzureArmClient"):
         monkeypatch.setattr(cli, name, forbidden)
     monkeypatch.setattr(auth, "authenticate", forbidden)
     monkeypatch.setattr(cli, "_resolve_target_selection", forbidden)
@@ -275,7 +284,7 @@ def da_cli(tmp_path, monkeypatch):
         config=config, run=run, captured=captured, native_auth=native_auth,
         native_client=native_client, connectivity_client=connectivity_client,
         admin=admin, admin_client=admin_client, telemetry=telemetry, browser=browser,
-        output=tmp_path / "out",
+        output=tmp_path / "out", licensing=licensing, licensing_client=licensing_client,
     )
 
 
@@ -293,7 +302,10 @@ def test_full_cli_uses_verified_read_only_plan_and_persists_gaps(da_cli, dataver
     assert result.profile == "da:full"
     assert result.overall == "NOT_READY"
     runner = _OrchestrationRunner.last
-    assert runner.producers == ["Native Agent", "Environment", "Solution", "Publishing"]
+    assert runner.producers == [
+        "Native Agent", "Environment", "Environment", "DA Baseline",
+        "Solution", "Local Files", "Publishing",
+    ]
     assert runner.config["agents"] == [da_cli.config["agents"][0]]
     assert runner.connection_agent_ids == (BOT_ID,)
     assert runner.connection_dependency_token.keywords["account_hint"] == ACCOUNT
@@ -312,8 +324,8 @@ def test_full_cli_uses_verified_read_only_plan_and_persists_gaps(da_cli, dataver
     assert runner.runtime_reachability is False
     assert runner.alm_import_probe is False
     assert set(result.client_availability) == (
-        {registry.AGENTBUILDER, registry.CONNECTIVITY, registry.PP_ADMIN}
-        if dataverse else {registry.AGENTBUILDER, registry.CONNECTIVITY}
+        {registry.AGENTBUILDER, registry.CONNECTIVITY, registry.PP_ADMIN, registry.POWERPLATFORM}
+        if dataverse else {registry.AGENTBUILDER, registry.CONNECTIVITY, registry.POWERPLATFORM}
     )
     if dataverse:
         da_cli.admin.authenticate.assert_called_once_with(
@@ -331,6 +343,7 @@ def test_full_cli_uses_verified_read_only_plan_and_persists_gaps(da_cli, dataver
     assert "DA-PLAN-COVERAGE" in html
     assert "Full DA dispatch remains incomplete" in html
     assert da_cli.telemetry.call_args.kwargs["scope"] == "full"
+    da_cli.licensing.authenticate.assert_called_once_with(preferred_username=ACCOUNT)
 
 
 @pytest.mark.parametrize("failure", ["missing", "error", "account", "environment"])
@@ -385,3 +398,10 @@ def test_canonical_setup_per_agent_realm_does_not_require_global_duplicate(da_cl
 def test_full_da_preserves_default_report_opening(da_cli):
     assert da_cli.run(no_open=False) == 1
     da_cli.browser.assert_called_once_with(str(da_cli.output))
+
+
+def test_capacity_auth_uses_native_verified_tenant_when_setup_has_no_tenant_id(da_cli):
+    da_cli.config.pop("tenantId")
+    assert da_cli.run() == 1
+    da_cli.licensing_client.assert_called_once_with(TENANT_ID)
+    assert da_cli.captured["result"].client_availability["powerplatform"]["available"] is True
