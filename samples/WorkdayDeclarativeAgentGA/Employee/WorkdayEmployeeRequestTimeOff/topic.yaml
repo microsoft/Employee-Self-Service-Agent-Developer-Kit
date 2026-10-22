@@ -544,7 +544,7 @@ beginDialog:
                 allowInterruption: false
 
               variable: Topic.retryDateChoice
-              prompt: Would you like to try with different dates?
+              prompt: Would you like to try with different dates (Yes/No)?
               entity: BooleanPrebuiltEntity
 
             - kind: ConditionGroup
@@ -700,7 +700,7 @@ beginDialog:
                 allowInterruption: false
 
               variable: Topic.retryChoice
-              prompt: Would you like to try with different dates?
+              prompt: Would you like to try with different dates (Yes/No)?
               entity: BooleanPrebuiltEntity
 
             - kind: ConditionGroup
