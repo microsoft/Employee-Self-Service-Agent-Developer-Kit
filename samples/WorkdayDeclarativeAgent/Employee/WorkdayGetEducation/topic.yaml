@@ -42,7 +42,7 @@ beginDialog:
       input:
         binding:
           parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
-          scenarioName: ="msdyn_HRWorkdayHCMEmployeeGetEducation"
+          scenarioName: msdyn_HRWorkdayHCMEmployeeGetEducation
 
       dialog: msdyn_copilotforemployeeselfservicedahr.topic.WorkdaySystemGetCommonExecution
       output:
@@ -70,13 +70,13 @@ beginDialog:
                         type:
                           kind: Record
                           properties:
-                      "@Descriptor": String
-                      ID:
-                        type:
-                          kind: Table
-                          properties:
-                            "@type": String
-                            "#text": String
+                            "@Descriptor": String
+                            ID:
+                              type:
+                                kind: Table
+                                properties:
+                                  "@type": String
+                                  "#text": String
 
                       Date_Degree_Received: String
                       Degree_Completed_Reference:
@@ -143,6 +143,10 @@ beginDialog:
                           kind: Table
                           properties:
                             "@type": String
+                            "#text": String
+
+      value: =Topic.workdayResponse
+
     - kind: BeginDialog
       id: M8G7as
       displayName: Refresh country name reference data
@@ -214,6 +218,23 @@ beginDialog:
                 )
             )
         )
+
+    - kind: ConditionGroup
+      id: conditionGroup_PLj70M
+      conditions:
+        - id: conditionItem_TCBTE7
+          condition: =IsEmpty(Topic.parsedWorkdayResponse.EducationData)
+          actions:
+            - kind: SendActivity
+              id: sendActivity_jPX7sn
+              activity: There is no education information listed for you in the system. If this information should be included, you can update it directly in Workday or reach out to HR for assistance.
+
+      elseActions:
+        - kind: SendActivity
+          id: sendActivity_educationResponse
+          activity: |-
+            Here is your education information:
+            {Topic.FinalizedEducationData}
 
 inputType:
   properties:
