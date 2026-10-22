@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import sys
 import textwrap
+import subprocess
 from pathlib import Path
 
+import pytest
 
 # Make repo-root tools/ package importable for tests without altering pyproject.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +24,10 @@ from tools.validate_samples.checks import (  # noqa: E402
     ChangedFile,
     Status,
     run_all_checks,
+)
+from tools.validate_samples.cli import (  # noqa: E402
+    _git_changed,
+    _preserved_workday_migration,
 )
 
 VALID_TOPIC_YAML = textwrap.dedent(
@@ -326,3 +332,188 @@ def test_new_json_connector_bad_filename_fails(tmp_path: Path) -> None:
     _write(tmp_path, rel, '{"Scenario": "x"}')
     results = run_all_checks(tmp_path, [ChangedFile(rel, "A")], whitelist={})
     assert _by_name(results)["Filename convention (new)"].status is Status.FAIL
+
+
+GA_ROOT = "samples/WorkdayDeclarativeAgentGA"
+PREVIEW_ROOT = "samples/WorkdayDeclarativeAgentPreview"
+SHARED_CONFIG = f"{GA_ROOT}/WorkdayOSSTemplateConfigurationSetup.yaml"
+VALID_SHARED_CONFIG = "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnRedirect\n  actions: []\n"
+
+
+def _new_ga_topic(repo: Path, name: str = "EmployeeGetThing") -> list[ChangedFile]:
+    topic = f"{GA_ROOT}/Employee/{name}"
+    _write(repo, f"{topic}/topic.yaml", VALID_TOPIC_YAML)
+    _write(repo, f"{topic}/README.md", VALID_README)
+    _write(repo, SHARED_CONFIG, VALID_SHARED_CONFIG)
+    return [
+        ChangedFile(f"{topic}/topic.yaml", "A"),
+        ChangedFile(f"{topic}/README.md", "A"),
+        ChangedFile(SHARED_CONFIG, "A"),
+    ]
+
+
+@pytest.mark.parametrize("area", ["WorkdayDeclarativeAgentGA", "WorkdayDeclarativeAgentPreview"])
+def test_new_workday_areas_resolve_real_topic_not_subgroup(tmp_path: Path, area: str) -> None:
+    subgroup = f"samples/{area}/Employee/README.md"
+    topic = f"samples/{area}/Employee/EmployeeGetThing/topic.yaml"
+    _write(tmp_path, subgroup, VALID_README)
+    _write(tmp_path, topic, VALID_TOPIC_YAML)
+    results = run_all_checks(tmp_path, [
+        ChangedFile(subgroup, "M"), ChangedFile(topic, "M"),
+    ])
+    assert _by_name(results)["Diff scope (samples/ only)"].status is Status.PASS
+
+
+def test_ga_topic_uses_shared_config_instead_of_per_topic_xml(tmp_path: Path) -> None:
+    results = run_all_checks(tmp_path, _new_ga_topic(tmp_path))
+    assert all(result.status is not Status.FAIL for result in results)
+
+
+@pytest.mark.parametrize("config", [None, "kind: Record\n", "kind: AdaptiveDialog\nbeginDialog: {}\n"])
+def test_ga_topic_missing_or_invalid_shared_config_fails(tmp_path: Path, config: str | None) -> None:
+    changed = _new_ga_topic(tmp_path)
+    if config is None:
+        (tmp_path / SHARED_CONFIG).unlink()
+    else:
+        _write(tmp_path, SHARED_CONFIG, config)
+    results = run_all_checks(tmp_path, changed)
+    assert _by_name(results)["Folder convention (new, incl. README.md)"].status is Status.FAIL
+
+
+def test_ga_new_topic_still_requires_readme(tmp_path: Path) -> None:
+    changed = _new_ga_topic(tmp_path)
+    (tmp_path / GA_ROOT / "Employee/EmployeeGetThing/README.md").unlink()
+    results = run_all_checks(tmp_path, changed)
+    assert _by_name(results)["Folder convention (new, incl. README.md)"].status is Status.FAIL
+
+
+def test_shared_topic_is_checked_even_without_scenario_changes(tmp_path: Path) -> None:
+    _write(tmp_path, SHARED_CONFIG, "kind: Record\n")
+    results = run_all_checks(tmp_path, [ChangedFile(SHARED_CONFIG, "M")])
+    assert _by_name(results)["AdaptiveDialog kind"].status is Status.FAIL
+    assert _by_name(results)["Diff scope (samples/ only)"].status is Status.PASS
+
+
+def test_shared_topic_rejects_non_redirect_trigger(tmp_path: Path) -> None:
+    _write(tmp_path, SHARED_CONFIG, VALID_TOPIC_YAML)
+    results = run_all_checks(tmp_path, [ChangedFile(SHARED_CONFIG, "M")])
+    assert _by_name(results)["AdaptiveDialog kind"].status is Status.FAIL
+
+
+def test_ga_assets_are_not_topics_and_arbitrary_area_yaml_is_rejected(tmp_path: Path) -> None:
+    changed = _new_ga_topic(tmp_path)
+    asset = f"{GA_ROOT}/assets/01-setup.png"
+    _write(tmp_path, asset, "image")
+    results = run_all_checks(tmp_path, [*changed, ChangedFile(asset, "A")])
+    assert _by_name(results)["Diff scope (samples/ only)"].status is Status.PASS
+    results = run_all_checks(tmp_path, [*changed, ChangedFile(f"{GA_ROOT}/unexpected.yaml", "A")])
+    assert _by_name(results)["Diff scope (samples/ only)"].status is Status.FAIL
+
+
+def test_ga_name_exemption_does_not_exempt_missing_readme(tmp_path: Path) -> None:
+    changed = _new_ga_topic(tmp_path, "WorkdayManagersdirect-CostCenter")
+    topic = f"{GA_ROOT}/Employee/WorkdayManagersdirect-CostCenter"
+    whitelist = {"folder_name_exemptions": [topic]}
+    results = run_all_checks(tmp_path, changed, whitelist)
+    assert _by_name(results)["Folder convention (new, incl. README.md)"].status is Status.PASS
+    (tmp_path / topic / "README.md").unlink()
+    results = run_all_checks(tmp_path, changed, whitelist)
+    assert _by_name(results)["Folder convention (new, incl. README.md)"].status is Status.FAIL
+
+
+def test_preview_new_topic_still_requires_local_xml_and_readme(tmp_path: Path) -> None:
+    topic = f"{PREVIEW_ROOT}/Employee/EmployeeGetThing"
+    _write(tmp_path, f"{topic}/topic.yaml", VALID_TOPIC_YAML)
+    results = run_all_checks(tmp_path, [ChangedFile(f"{topic}/topic.yaml", "A")])
+    folder = _by_name(results)["Folder convention (new, incl. README.md)"]
+    assert folder.status is Status.FAIL
+    assert any("connector config" in detail for detail in folder.details)
+    assert any("README" in detail for detail in folder.details)
+
+
+def _migration_repo(repo: Path) -> str:
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+    legacy = "samples/WorkdayDeclarativeAgent/Employee/legacy-name/topic.yaml"
+    _write(repo, legacy, VALID_TOPIC_YAML)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run([
+        "git", "-C", str(repo), "-c", "user.name=Validator Test",
+        "-c", "user.email=validator@example.invalid", "-c", "commit.gpgsign=false",
+        "commit", "--quiet", "-m", "Baseline",
+    ], check=True)
+    base = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True,
+    ).strip()
+    subprocess.run([
+        "git", "-C", str(repo), "mv",
+        "samples/WorkdayDeclarativeAgent", PREVIEW_ROOT,
+    ], check=True)
+    _new_ga_topic(repo)
+    _new_ga_topic(repo, "EmployeeGetOther")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run([
+        "git", "-C", str(repo), "-c", "user.name=Validator Test",
+        "-c", "user.email=validator@example.invalid", "-c", "commit.gpgsign=false",
+        "commit", "--quiet", "-m", "Split samples",
+    ], check=True)
+    return base
+
+
+def test_complete_preserved_split_passes_without_weakening_normal_scope(tmp_path: Path) -> None:
+    base = _migration_repo(tmp_path)
+    changed = _git_changed(tmp_path, base)
+    preserved = _preserved_workday_migration(tmp_path, base)
+    assert preserved == frozenset({f"{PREVIEW_ROOT}/Employee/legacy-name/topic.yaml"})
+    results = run_all_checks(tmp_path, changed, preserved_workday_paths=preserved)
+    assert all(result.status is not Status.FAIL for result in results)
+    assert _by_name(run_all_checks(tmp_path, changed))["Diff scope (samples/ only)"].status is Status.FAIL
+
+
+@pytest.mark.parametrize("mutation", ["changed", "missing", "extra", "legacy-retained"])
+def test_split_exception_requires_complete_unchanged_preview(tmp_path: Path, mutation: str) -> None:
+    base = _migration_repo(tmp_path)
+    preview = f"{PREVIEW_ROOT}/Employee/legacy-name/topic.yaml"
+    if mutation == "changed":
+        _write(tmp_path, preview, VALID_TOPIC_YAML + "# modified\n")
+    elif mutation == "missing":
+        (tmp_path / preview).unlink()
+    elif mutation == "extra":
+        _write(tmp_path, f"{PREVIEW_ROOT}/extra.txt", "extra")
+    else:
+        _write(tmp_path, "samples/WorkdayDeclarativeAgent/README.md", VALID_README)
+    assert not _preserved_workday_migration(tmp_path, base)
+
+
+def test_preserved_split_does_not_allow_unrelated_sample_topic(tmp_path: Path) -> None:
+    base = _migration_repo(tmp_path)
+    changed = _git_changed(tmp_path, base)
+    preserved = _preserved_workday_migration(tmp_path, base)
+    other = "samples/Facilities/EmployeeGetThing/topic.yaml"
+    _write(tmp_path, other, VALID_TOPIC_YAML)
+    results = run_all_checks(
+        tmp_path, [*changed, ChangedFile(other, "M")], preserved_workday_paths=preserved,
+    )
+    assert _by_name(results)["Diff scope (samples/ only)"].status is Status.FAIL
+
+
+def test_validator_repairs_do_not_bypass_scope_or_secret_checks(tmp_path: Path) -> None:
+    changed = _new_ga_topic(tmp_path)
+    maintainer = ChangedFile("tools/validate_samples/checks.py", "M")
+    results = run_all_checks(tmp_path, [*changed, maintainer])
+    assert _by_name(results)["Diff scope (samples/ only)"].status is Status.PASS
+    results = run_all_checks(tmp_path, [
+        *changed, maintainer, ChangedFile("solutions/unrelated.py", "M"),
+    ])
+    assert _by_name(results)["Diff scope (samples/ only)"].status is Status.FAIL
+    _write(tmp_path, f"{GA_ROOT}/Employee/EmployeeGetThing/README.md",
+           "# Internal\nhttps://host.corp.microsoft.com/private\n")
+    results = run_all_checks(tmp_path, [*changed, maintainer])
+    assert _by_name(results)["Secrets / internal URLs"].status is Status.FAIL
+
+
+def test_workflow_runs_validation_for_sample_and_validator_edits() -> None:
+    workflow = (
+        _REPO_ROOT / ".github" / "workflows" / "validate-samples.yml"
+    ).read_text(encoding="utf-8")
+    assert "self_edit" not in workflow
+    assert '--diff-base "$BASE_SHA"' in workflow

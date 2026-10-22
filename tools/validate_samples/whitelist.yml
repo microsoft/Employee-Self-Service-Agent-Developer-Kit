@@ -21,3 +21,10 @@ filename_exemption_substrings:
 # Exact relative folder paths exempt from PascalCase folder convention.
 folder_exemptions:
   - samples/WorkdayDeclarativeAgent/Employee/WorkdayEmployeesviewtheirjobtaxonomy
+
+# Preserved scenario names documented in samples/AGENTS.md. Only spelling is
+# exempt; README.md, topic.yaml and the shared GA configuration remain required.
+folder_name_exemptions:
+  - samples/WorkdayDeclarativeAgentGA/Manager/WorkdayManagersdirect-CompanyCode
+  - samples/WorkdayDeclarativeAgentGA/Manager/WorkdayManagersdirect-CostCenter
+  - samples/WorkdayDeclarativeAgentGA/Manager/WorkdayManagersdirect-Jobtaxanomy

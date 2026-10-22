@@ -66,6 +66,7 @@ For **existing topics** without a README, do not retrofit one as part of an unre
 - XML: `msdyn_<Area><Action>.xml`.
 - **Documented inconsistencies — do NOT "fix" these:**
   - Some employee folders in `WorkdayDeclarativeAgentGA` and `WorkdayDeclarativeAgentPreview` use lowercase / run-together names (e.g., `WorkdayEmployeesviewtheirjobtaxonomy`).
+  - The existing manager folders `WorkdayManagersdirect-CompanyCode`, `WorkdayManagersdirect-CostCenter`, and `WorkdayManagersdirect-Jobtaxanomy` retain hyphens and their original spelling. GA name exemptions do not waive README/topic/shared-configuration requirements.
   - One Facilities file has a trailing dot (`msdyn_DiningGetMenusQuery..xml`).
   - Some XML files use lowercase prefixes (`msdyn_copilotforemployeeselfservice...`).
 
@@ -115,11 +116,17 @@ Full procedure: [`.github/agents/skills/validate-sample-topic/SKILL.md`](../.git
 - `topic.yaml` has top-level `kind: AdaptiveDialog`.
 - XML well-formedness (changed `*.xml`).
 - Filename convention for **new** XML files (`msdyn_` prefix).
-- Folder convention for **new** topic folders (PascalCase, contains `topic.yaml`, at least one `*.xml`, and `README.md`).
+- Folder convention for **new** topic folders (PascalCase, `topic.yaml`, `README.md`, and XML/JSON connector configuration; Workday GA uses the area-level shared configuration topic instead).
 - Diff scope limited to a single `samples/<Area>/.../<TopicFolder>/` (area-level docs allowed).
 - No secrets or internal URLs anywhere in touched files (the check scans full file contents, not just the diff).
 
-The validator's single-topic scope rule and new-folder XML requirement predate the shared DA GA setup format. Report those limitations explicitly for an authorized multi-topic migration; do not claim a clean aggregate validation result or edit paths outside `samples/` to bypass the rules.
+The validator understands the GA/Preview subgroup layout and the GA shared
+configuration topic. Its single-topic rule has a narrow exception for the
+initial Workday split: `--diff-base` must verify that every legacy file is
+preserved unchanged in Preview and that the old tree has been removed. Missing,
+modified or extra Preview files do not qualify. Do not use unrelated validator
+changes as a bypass; its checks still run on maintainer edits. See
+[`tools/validate_samples/README.md`](../tools/validate_samples/README.md).
 
 Neighbor-key parity against the sibling reference is your responsibility in step 1 of [`create-or-update-sample-topic`](../.github/agents/skills/create-or-update-sample-topic/SKILL.md) — record the neighbor path in the PR body.
 

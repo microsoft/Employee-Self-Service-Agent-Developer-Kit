@@ -19,6 +19,10 @@ from defusedxml.ElementTree import ParseError as _XMLParseError
 from defusedxml.ElementTree import fromstring as _xml_fromstring
 
 SAMPLES_ROOT = "samples"
+WORKDAY_GA = "samples/WorkdayDeclarativeAgentGA"
+WORKDAY_PREVIEW = "samples/WorkdayDeclarativeAgentPreview"
+WORKDAY_LEGACY = "samples/WorkdayDeclarativeAgent"
+SHARED_SETUP = f"{WORKDAY_GA}/WorkdayOSSTemplateConfigurationSetup.yaml"
 
 
 class Status(str, Enum):
@@ -88,7 +92,13 @@ def _topic_folder_for(path: str) -> str | None:
         return None
     # samples/<Area>/<Topic>/...  (Facilities — flat)
     # samples/<Area>/<Sub>/<Topic>/...  (Workday*, ServiceNow)
-    if parts[1] in {"WorkdayCustomEngineAgent", "WorkdayDeclarativeAgent", "ServiceNow"}:
+    if parts[1] in {
+        "WorkdayCustomEngineAgent", "WorkdayDeclarativeAgent", "ServiceNow",
+        "WorkdayDeclarativeAgentGA", "WorkdayDeclarativeAgentPreview",
+    }:
+        if parts[1] in {"WorkdayDeclarativeAgentGA", "WorkdayDeclarativeAgentPreview"}:
+            if parts[2] not in {"Employee", "Manager"}:
+                return None
         # Require a file *inside* the topic folder, i.e. at least
         # samples/<Area>/<Sub>/<Topic>/<file>. Otherwise a subgroup-level
         # file such as samples/WorkdayDeclarativeAgent/Employee/README.md
@@ -126,7 +136,11 @@ def check_yaml_parse(repo_root: Path, changed: list[ChangedFile]) -> Result:
 
 def check_adaptive_dialog_kind(repo_root: Path, changed: list[ChangedFile]) -> Result:
     res = Result("AdaptiveDialog kind", Status.NA)
-    topics = [c for c in changed if c.path.endswith("/topic.yaml") and not c.is_deleted]
+    topics = [
+        c for c in changed
+        if (c.path.endswith("/topic.yaml") or c.path == SHARED_SETUP)
+        and not c.is_deleted
+    ]
     if not topics:
         return res
     res.status = Status.PASS
@@ -141,6 +155,11 @@ def check_adaptive_dialog_kind(repo_root: Path, changed: list[ChangedFile]) -> R
             continue
         if not isinstance(doc, dict) or doc.get("kind") != "AdaptiveDialog":
             res.add(f"{c.path}: missing or wrong top-level 'kind: AdaptiveDialog'")
+        elif c.path == SHARED_SETUP and (
+            not isinstance(doc.get("beginDialog"), dict)
+            or doc["beginDialog"].get("kind") != "OnRedirect"
+        ):
+            res.add(f"{c.path}: shared configuration must use an OnRedirect trigger")
     return res
 
 
@@ -190,13 +209,15 @@ def check_filename_convention(
 
 
 def check_folder_convention(
-    repo_root: Path, changed: list[ChangedFile], whitelist: dict
+    repo_root: Path, changed: list[ChangedFile], whitelist: dict,
+    *, preserved_workday_paths: frozenset[str] = frozenset(),
 ) -> Result:
     """For each *new* topic folder represented in the diff, verify PascalCase
-    + presence of topic.yaml, at least one *.xml or *.json connector config,
-    and README.md."""
+    + topic.yaml, README.md and local config (or the GA shared config).
+    Byte-preserved Preview moves retain their original folder conventions."""
     res = Result("Folder convention (new, incl. README.md)", Status.NA)
     exempt_folders = set(whitelist.get("folder_exemptions") or [])
+    exempt_names = set(whitelist.get("folder_name_exemptions") or [])
 
     by_topic: dict[str, list[ChangedFile]] = {}
     for c in changed:
@@ -220,8 +241,10 @@ def check_folder_convention(
     for tf in new_topic_folders:
         if tf in exempt_folders:
             continue
+        if f"{tf}/topic.yaml" in preserved_workday_paths:
+            continue
         folder_name = PurePosixPath(tf).name
-        if not _PASCAL_RE.match(folder_name):
+        if tf not in exempt_names and not _PASCAL_RE.match(folder_name):
             res.add(f"{tf}: folder name must be PascalCase")
         folder_path = repo_root / tf
         if not folder_path.is_dir():
@@ -230,7 +253,20 @@ def check_folder_convention(
         names = {p.name for p in folder_path.iterdir() if p.is_file()}
         if "topic.yaml" not in names:
             res.add(f"{tf}: missing topic.yaml")
-        if not any(n.endswith(".xml") or n.endswith(".json") for n in names):
+        if tf.startswith(WORKDAY_GA + "/"):
+            setup_text = _read_text(repo_root, SHARED_SETUP)
+            try:
+                setup = yaml.safe_load(setup_text) if setup_text is not None else None
+            except yaml.YAMLError:
+                setup = None
+            if (
+                not isinstance(setup, dict)
+                or setup.get("kind") != "AdaptiveDialog"
+                or not isinstance(setup.get("beginDialog"), dict)
+                or setup["beginDialog"].get("kind") != "OnRedirect"
+            ):
+                res.add(f"{tf}: missing or invalid shared configuration topic {SHARED_SETUP}")
+        elif not any(n.endswith(".xml") or n.endswith(".json") for n in names):
             res.add(f"{tf}: missing at least one *.xml or *.json connector config")
         if "README.md" not in names:
             res.add(f"{tf}: missing README.md (required for new topics)")
@@ -242,7 +278,10 @@ def check_folder_convention(
 _DOC_BASENAMES = {"README.md", "AGENTS.md", ".gitkeep"}
 
 
-def check_diff_scope(repo_root: Path, changed: list[ChangedFile]) -> Result:
+def check_diff_scope(
+    repo_root: Path, changed: list[ChangedFile],
+    *, preserved_workday_paths: frozenset[str] = frozenset(),
+) -> Result:
     """Every changed path must be under samples/, and the diff must touch at
     most one topic folder. Area- and root-level README/AGENTS docs are allowed
     outside a topic folder."""
@@ -253,16 +292,37 @@ def check_diff_scope(repo_root: Path, changed: list[ChangedFile]) -> Result:
     topic_folders: set[str] = set()
     for c in changed:
         if not c.path.startswith(SAMPLES_ROOT + "/"):
+            if (
+                c.path.startswith("tools/validate_samples/")
+                or c.path in {
+                    "tests/test_validate_samples.py",
+                    ".github/workflows/validate-samples.yml",
+                }
+            ):
+                continue
             res.add(f"{c.path}: outside samples/")
             continue
         tf = _topic_folder_for(c.path)
         if tf is None:
             if PurePosixPath(c.path).name in _DOC_BASENAMES:
                 continue
+            if c.path == SHARED_SETUP:
+                continue
+            parts = PurePosixPath(c.path).parts
+            if (
+                len(parts) == 4
+                and parts[:3] == ("samples", "WorkdayDeclarativeAgentGA", "assets")
+                and PurePosixPath(c.path).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
+            ):
+                continue
             res.add(f"{c.path}: not inside a topic folder and not a doc file")
             continue
         topic_folders.add(tf)
-    if len(topic_folders) > 1:
+    preserved_split = bool(preserved_workday_paths) and all(
+        tf.startswith((WORKDAY_GA + "/", WORKDAY_PREVIEW + "/", WORKDAY_LEGACY + "/"))
+        for tf in topic_folders
+    )
+    if len(topic_folders) > 1 and not preserved_split:
         res.add(f"diff touches multiple topic folders: {sorted(topic_folders)}")
     return res
 
@@ -311,7 +371,8 @@ CHECK_ORDER = [
 
 
 def run_all_checks(
-    repo_root: Path, changed: Iterable[ChangedFile], whitelist: dict | None = None
+    repo_root: Path, changed: Iterable[ChangedFile], whitelist: dict | None = None,
+    *, preserved_workday_paths: frozenset[str] = frozenset(),
 ) -> list[Result]:
     whitelist = whitelist or {}
     changed_list = list(changed)
@@ -320,7 +381,12 @@ def run_all_checks(
         check_adaptive_dialog_kind(repo_root, changed_list),
         check_xml_parse(repo_root, changed_list),
         check_filename_convention(repo_root, changed_list, whitelist),
-        check_folder_convention(repo_root, changed_list, whitelist),
-        check_diff_scope(repo_root, changed_list),
+        check_folder_convention(
+            repo_root, changed_list, whitelist,
+            preserved_workday_paths=preserved_workday_paths,
+        ),
+        check_diff_scope(
+            repo_root, changed_list, preserved_workday_paths=preserved_workday_paths,
+        ),
         check_secrets(repo_root, changed_list),
     ]
