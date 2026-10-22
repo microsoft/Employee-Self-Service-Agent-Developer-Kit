@@ -4,6 +4,15 @@ A monorepo of solutions, samples, and tooling for the Microsoft Employee Self-Se
 
 > **This repo is intended as an example or learning tool.** It is not a Microsoft product or a supported service. See [SUPPORT.md](SUPPORT.md) for the support model and [SECURITY.md](SECURITY.md) for reporting security issues.
 
+## Branch guidance
+
+Choose the branch that matches your agent version:
+
+| Branch | Content |
+|---|---|
+| [`main`](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/tree/main) | Declarative Agent (DA) general availability (GA) content and post-GA updates. |
+| [`main-ca`](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/tree/main-ca) | DA preview and Custom Engine Agent (CEA) content and related updates. |
+
 ## Getting started
 
 This repo is a **monorepo of solutions** under [`solutions/`](solutions/). Each solution is a self-contained tool with its own purpose, dependencies, and instructions.
