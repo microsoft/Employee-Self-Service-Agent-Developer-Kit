@@ -73,13 +73,14 @@ verification when an authoritative recheck is available.
 
 ## Setup-path people and role walkthrough
 
-After the setup path, target environment, and Microsoft login are known,
-but before the first agent inventory, exact-agent inspection, or agent-template
-listing, render the matching walkthrough below. Render it once per setup path in
-the invocation. Render it again when the effective setup path changes, including
-an existing-agent path entering creation or a fresh-agent collision entering
-existing-agent adoption, or when the maker changes the target environment or
-login.
+After the setup path and Microsoft login are known, render the matching
+walkthrough below before the first protected operation. Existing-agent and
+fresh-agent walkthroughs also require the target environment to be known.
+Environment creation runs before that target exists. Render a walkthrough once
+per setup path in the invocation. Render it again when the effective setup path
+changes, including an existing-agent path entering creation or a fresh-agent
+collision entering existing-agent adoption, or when the maker changes the
+target environment or login.
 
 The availability answer is planning input, not proof that the selected account
 has a role or can perform an operation. The later service operation remains
@@ -90,12 +91,76 @@ After rendering either path table, ask exactly:
 
 > Are the required people present?
 
-Present **Yes, the required people are present**, **No, one or more required
-people are unavailable**, and **Help me decide** with no preselected choice.
+Unless the selected walkthrough defines another choice set, present **Yes, the
+required people are present**, **No, one or more required people are
+unavailable**, and **Help me decide** with no preselected choice.
 The question applies only to rows marked **Required now**. A conditional person
 does not need to be present unless setup reaches the operation that needs them.
 
 For **Help me decide**, follow the shared contract in `SKILL.md`. Explain which table rows are **Required now** and which are conditional, then ask which listed login or person is currently available. Recommend **Yes, the required people are present** only when every required-now row is available; recommend **No, one or more required people are unavailable** when any required-now row is unavailable. A conditional administrator row alone does not support recommending **No**.
+
+### Environment-creation setup
+
+**Message:**
+
+**People and access for environment creation**
+
+| Person or access                                      | Why setup needs them                                      | When          |
+| ----------------------------------------------------- | --------------------------------------------------------- | ------------- |
+| Microsoft login for a **Power Platform administrator** | Authorize creation of the new Power Platform environment | Required now  |
+| Microsoft login that will continue fresh-agent setup  | Create the ESS agent after the environment is ready       | Required later |
+
+Setup is currently using `{SETUP_ACCOUNT}`. Power Platform will verify the
+account used for environment creation.
+
+**End message.**
+
+Ask exactly:
+
+> Are the required people present?
+
+Present **Yes, the required people are present**, **Yes, but we need to switch
+accounts**, **No, one or more required people are unavailable**, and **Help me
+decide** with no preselected choice.
+
+For **Yes, the required people are present**, retain `{SETUP_ACCOUNT}` as the
+environment-creation account and return control to the owning route.
+
+For **Yes, but we need to switch accounts**, retain the current account as
+`{RETURN_SETUP_ACCOUNT}`. The owning route must establish the administrator
+identity through its next read-only operation and retain the selected identity
+as `{ENVIRONMENT_ADMIN_ACCOUNT}` before dispatching environment creation.
+
+For **No, one or more required people are unavailable**, say:
+
+**Message:**
+
+Setup paused before creating the environment.
+
+Return here when a Power Platform administrator is available, or go back to
+choose another environment path.
+
+**End message.**
+
+Present **A Power Platform administrator is now available** and **Go back**.
+
+- For **A Power Platform administrator is now available**, ask:
+
+  > Which account should setup use for environment creation?
+
+  Present **Continue with {SETUP_ACCOUNT}**, **Switch to the administrator's
+  account**, and **Go back**. Continuing retains the current account. Switching
+  retains the current account as `{RETURN_SETUP_ACCOUNT}` and returns control
+  to the owning route's read-only account-selection operation.
+- For **Go back**, return to the environment-selection surface that offered
+  **Create a Power Platform environment**. Preserve the selected account and
+  service ring.
+
+For **Help me decide**, follow the shared contract in `SKILL.md`. Explain that a
+Power Platform administrator is required now, the account used for later
+fresh-agent setup can be different, and setup can switch back and remove the
+temporary administrator account from the workspace authentication cache after
+the environment is created.
 
 ### Existing-agent setup
 
@@ -146,7 +211,7 @@ access.
 | Person or access                                                                     | Why setup may need them                                                                                                    | When         |
 | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | ------------ |
 | Microsoft login with the **Environment Maker** security role in `{ENVIRONMENT_NAME}` | Create the fresh agent                                                                                                     | Required now |
-| **Power Platform administrator**                                                     | Create an environment, assign **Environment Maker**, or change Copilot Studio capacity if setup reaches one of those needs | Conditional  |
+| **Power Platform administrator**                                                     | Assign **Environment Maker** or change Copilot Studio capacity if setup reaches one of those needs | Conditional  |
 
 Setup will let the creation operation verify the selected account. Confirming
 that someone is available does not grant the role or prove authorization.
@@ -247,11 +312,10 @@ Use another Microsoft login, provide the environment URL, or restart setup with 
 
 Then use the existing environment-discovery recovery choices. Do not tell the maker to request **Environment Maker** or an administrator role for this read.
 
-When the maker selects **Create a Power Platform environment**, explain that
-environment creation is a **Power Platform administrator** operation. Show the
-ring-correct Power Platform admin center instructions from the owning route and
-stop until the maker confirms that the environment is ready or provides its
-environment URL.
+When the maker selects **Create a Power Platform environment**, render
+**Environment-creation setup** above. The owning route controls account
+selection, confirmation, environment creation, ring-correct portal links, and
+the return to fresh-agent setup.
 
 ## Existing-agent discovery and access
 

@@ -2591,26 +2591,28 @@ def write_environment_list_evidence(
     ring: str,
     environments: list[dict[str, Any]],
 ) -> Path:
-    """Persist the complete service response outside the picker payload."""
+    """Persist an observation and refresh the shared latest inventory."""
+    evidence_directory = kit_root.resolve() / ".local" / "setup"
     evidence_path = (
-        kit_root.resolve()
-        / ".local"
-        / "setup"
-        / f"environment-list-{ring}.json"
+        evidence_directory
+        / "environment-lists"
+        / f"{ring}-{uuid.uuid4()}.json"
     )
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
-    evidence_path.write_text(
-        json.dumps(
-            {
-                "tenantId": tenant_id,
-                "ring": ring,
-                "environments": environments,
-            },
-            indent=2,
-            ensure_ascii=False,
-        )
-        + "\n",
-        encoding="utf-8",
+    evidence_json = json.dumps(
+        {
+            "tenantId": tenant_id,
+            "ring": ring,
+            "environments": environments,
+        },
+        indent=2,
+        ensure_ascii=False,
+    ) + "\n"
+    with evidence_path.open("x", encoding="utf-8") as evidence_file:
+        evidence_file.write(evidence_json)
+    # Workday connection preflight reads the shared latest inventory.
+    (evidence_directory / f"environment-list-{ring}.json").write_text(
+        evidence_json, encoding="utf-8"
     )
     return evidence_path
 

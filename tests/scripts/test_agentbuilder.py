@@ -181,6 +181,7 @@ class FakeResponse:
     status_code: int = 200
     headers: dict[str, str] = field(default_factory=dict)
     content: bytes = b""
+    text: str = ""
     closed: bool = False
     close_error: Exception | None = None
 
@@ -221,6 +222,253 @@ class FakeSession:
         if isinstance(response, requests.RequestException):
             raise response
         return response
+
+
+@pytest.mark.parametrize(
+    ("ring", "host"),
+    [
+        ("prod", "https://api.bap.microsoft.com"),
+        ("preprod", "https://tip1.api.bap.microsoft.com"),
+        ("test", "https://tip2.api.bap.microsoft.com"),
+    ],
+)
+@pytest.mark.parametrize("grant", [False, True])
+def test_environment_roles_use_scoped_rest_contract(
+    ring: str, host: str, grant: bool,
+) -> None:
+    response = FakeResponse({"futureServiceField": {"preserved": True}})
+    session = FakeSession([response])
+    request_id = "00000000-0000-4000-8000-000000003333"
+
+    assert agentbuilder.environment_role_request(
+        "fake-token", ring,
+        environment_id=ENVIRONMENT_ID,
+        principal_id=AGENT_ID if grant else None,
+        principal_email="maker@example.test" if grant else None,
+        client_request_id=request_id,
+        session=session,
+    ) is response
+
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    prefix = (
+        f"{host}/providers/Microsoft.BusinessAppPlatform/scopes/admin/"
+        f"environments/{ENVIRONMENT_ID}"
+    )
+    assert call["method"] == ("POST" if grant else "GET")
+    assert call["url"] == prefix + (
+        "/modifyRoleAssignments" if grant else "/roleAssignments"
+    )
+    assert call["params"] == {"api-version": "2016-11-01"}
+    assert call["allow_redirects"] is False
+    assert call["headers"]["x-ms-client-request-id"] == request_id
+    if grant:
+        assert call["json"] == {
+            "add": [{
+                "properties": {
+                    "roleDefinition": {
+                        "id": prefix.removeprefix(host) + "/roleDefinitions/EnvironmentMaker",
+                    },
+                    "principal": {
+                        "email": "maker@example.test",
+                        "id": AGENT_ID,
+                        "type": "User",
+                        "tenantId": "null",
+                    },
+                },
+            }],
+        }
+    else:
+        assert call["json"] is None
+
+
+def test_environment_role_grant_does_not_retry_transport_failure() -> None:
+    failure = requests.ReadTimeout("synthetic role-request timeout")
+    session = FakeSession([failure])
+    with pytest.raises(requests.ReadTimeout) as caught:
+        agentbuilder.environment_role_request(
+            "fake-token", "prod",
+            environment_id=ENVIRONMENT_ID,
+            principal_id=AGENT_ID,
+            principal_email="maker@example.test",
+            client_request_id=AGENT_ID,
+            session=session,
+        )
+    assert caught.value is failure
+    assert len(session.calls) == 1
+
+
+def test_environment_role_error_preserves_service_response() -> None:
+    response = FakeResponse(
+        {"error": {"code": "Forbidden", "futureField": "preserved"}},
+        status_code=403,
+        headers={"x-ms-request-id": "role-service-request"},
+    )
+    with pytest.raises(agentbuilder.AgentBuilderHTTPError) as caught:
+        agentbuilder.environment_role_request(
+            "fake-token", "prod",
+            environment_id=ENVIRONMENT_ID,
+            client_request_id=AGENT_ID,
+            session=FakeSession([response]),
+        )
+    assert caught.value.response is response
+    assert caught.value.request_id == "role-service-request"
+    assert caught.value.error_code == "Forbidden"
+
+
+def test_lists_environment_provisioning_locations() -> None:
+    response_body = {
+        "locationSelectionMode": "Region",
+        "collection": [
+            {
+                "name": "unitedstates",
+                "code": "NA",
+                "displayName": "United States",
+                "isDefault": True,
+                "isDisabled": False,
+            }
+        ],
+        "macroRegions": [],
+        "futureServiceField": {"preserved": True},
+    }
+    session = FakeSession([FakeResponse(response_body)])
+
+    assert agentbuilder.list_provisioning_locations(
+        "fake-token",
+        "test",
+        session=session,
+    ) == response_body
+    assert session.calls == [
+        {
+            "method": "GET",
+            "url": (
+                "https://api.test.powerplatform.com/"
+                "environmentmanagement/provisioning/locations"
+            ),
+            "params": {"api-version": "2024-10-01"},
+            "headers": {
+                "Authorization": "Bearer fake-token",
+                "Accept": "application/json",
+                "x-ms-client-name": "CopilotStudio",
+            },
+            "timeout": 120,
+        }
+    ]
+
+
+def test_rejects_invalid_environment_provisioning_locations() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "locationSelectionMode": "Region",
+                    "collection": {},
+                    "macroRegions": [],
+                }
+            )
+        ]
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="invalid shape",
+    ):
+        agentbuilder.list_provisioning_locations(
+            "fake-token",
+            "test",
+            session=session,
+        )
+
+
+def test_provisions_environment_without_following_redirects() -> None:
+    request_id = "00000000-0000-4000-8000-000000003333"
+    response_body = {
+        "status": "Succeeded",
+        "updatedEnvironment": {
+            "environmentId": ENVIRONMENT_ID,
+            "displayName": "ESS Development",
+        },
+    }
+    session = FakeSession(
+        [
+            FakeResponse(
+                response_body,
+                status_code=201,
+                headers={"x-ms-request-id": "service-request"},
+            )
+        ]
+    )
+
+    result = agentbuilder.provision_environment(
+        "fake-token",
+        "test",
+        request_body={
+            "displayName": "ESS Development",
+            "environmentSku": "Sandbox",
+            "location": "unitedstates",
+        },
+        client_request_id=request_id,
+        session=session,
+    )
+
+    assert result == {
+        "statusCode": 201,
+        "requestId": "service-request",
+        "operationLocation": None,
+        "response": response_body,
+    }
+    assert session.calls == [
+        {
+            "method": "POST",
+            "url": (
+                "https://api.test.powerplatform.com/"
+                "environmentmanagement/provisioning/environments"
+            ),
+            "params": {"api-version": "2024-10-01"},
+            "headers": {
+                "Authorization": "Bearer fake-token",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "x-ms-client-name": "CopilotStudio",
+                "x-ms-client-request-id": request_id,
+                "x-ms-return-client-request-id": "true",
+            },
+            "json": {
+                "displayName": "ESS Development",
+                "environmentSku": "Sandbox",
+                "location": "unitedstates",
+            },
+            "timeout": 120,
+            "allow_redirects": False,
+        }
+    ]
+
+
+def test_environment_provisioning_preserves_error_detail_code() -> None:
+    response = FakeResponse(
+        {"errorDetail": {"code": "AuthorizationFailed"}},
+        status_code=403,
+        headers={"x-ms-request-id": "request-123"},
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderHTTPError,
+        match="AuthorizationFailed",
+    ) as error:
+        agentbuilder.provision_environment(
+            "fake-token",
+            "prod",
+            request_body={
+                "displayName": "ESS Development",
+                "environmentSku": "Sandbox",
+                "location": "unitedstates",
+            },
+            client_request_id="00000000-0000-4000-8000-000000003333",
+            session=FakeSession([response]),
+        )
+
+    assert error.value.request_id == "request-123"
+    assert error.value.response is response
 
 
 def _non_auth_headers(call: dict[str, Any]) -> dict[str, str]:
@@ -1830,6 +2078,278 @@ def test_seed_shared_token_cache_keeps_cleanup_failure_evidence(
     for path in tmp_path.iterdir():
         if path.suffix == ".tmp":
             real_unlink(path)
+
+
+@pytest.mark.parametrize("scopes", [None, (agentbuilder.ENVIRONMENT_ROLE_SCOPE,)])
+def test_authenticate_cached_account_never_prompts(
+    tmp_path,
+    monkeypatch,
+    scopes,
+) -> None:
+    tenant_id = "00000000-0000-4000-8000-000000009999"
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": tenant_id}).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    token = f"header.{payload}.signature"
+    selected = {"username": "admin@example.test"}
+    observed: dict[str, Any] = {}
+
+    class FakeCache:
+        has_state_changed = False
+
+    class FakeApp:
+        def __init__(self, _client_id, *, authority, token_cache) -> None:
+            observed["authority"] = authority
+            observed["cache"] = token_cache
+
+        def get_accounts(self):
+            return [{"username": "maker@example.test"}, selected]
+
+        def acquire_token_silent(self, scopes, *, account):
+            observed["scopes"] = scopes
+            observed["account"] = account
+            return {"access_token": token}
+
+        def acquire_token_interactive(self, **_kwargs):
+            raise AssertionError("a mutating operation must not prompt")
+
+    monkeypatch.setattr(
+        agentbuilder,
+        "_load_token_cache",
+        lambda _path: FakeCache(),
+    )
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    assert agentbuilder.authenticate_cached_account(
+        "prod",
+        account_hint="admin@example.test",
+        cache_path=tmp_path / "token-cache.bin",
+        scopes=scopes,
+    ) == (token, tenant_id, "admin@example.test")
+    assert observed["account"] is selected
+    assert observed["scopes"] == (list(scopes) if scopes else [
+        "https://api.powerplatform.com/"
+        "CopilotStudio.MinimalBot.ReadWrite"
+    ])
+
+
+def test_role_authorization_can_prompt_on_a_read_with_the_existing_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = "00000000-0000-4000-8000-000000009999"
+    observed: dict[str, Any] = {}
+
+    class FakeApp:
+        def __init__(self, client_id, *, authority, token_cache):
+            observed.update(client_id=client_id, authority=authority)
+
+        def get_accounts(self):
+            return [{"username": "admin@example.test"}]
+
+        def acquire_token_silent(self, scopes, *, account):
+            return None
+
+        def acquire_token_interactive(self, **kwargs):
+            observed["interactive"] = kwargs
+            return {
+                "access_token": "synthetic-role-token",
+                "id_token_claims": {"preferred_username": "admin@example.test"},
+            }
+
+    monkeypatch.setattr(agentbuilder.msal, "PublicClientApplication", FakeApp)
+    assert agentbuilder.authenticate_environment_roles(
+        tenant_id, "preprod", account_hint="admin@example.test",
+        cache_path=tmp_path / "cache.bin",
+    ) == ("synthetic-role-token", "admin@example.test")
+    assert observed["client_id"] == agentbuilder.CLIENT_ID
+    assert observed["authority"] == f"https://login.microsoftonline.com/{tenant_id}"
+    assert observed["interactive"] == {
+        "scopes": ["https://service.powerapps.com/.default"],
+        "login_hint": "admin@example.test",
+    }
+
+
+def _write_forget_cache(
+    path: Path,
+    *,
+    admin_home: str | None = "admin-home",
+    admin_account: bool = True,
+) -> dict[str, Any]:
+    cache = agentbuilder.msal.SerializableTokenCache()
+    kinds = agentbuilder.msal.TokenCache.CredentialType
+    for name, home in (("maker", "maker-home"), ("admin", admin_home)):
+        if home is None:
+            continue
+        for realm in ("tenant", "guest-tenant"):
+            account = {
+                "home_account_id": home,
+                "environment": "login.microsoftonline.com",
+                "realm": realm,
+                "username": f"{name}@example.test",
+                "local_account_id": f"{name}-{realm}",
+                "authority_type": "MSSTS",
+            }
+            if name != "admin" or admin_account:
+                cache.modify(kinds.ACCOUNT, account, account)
+            for client in (agentbuilder.CLIENT_ID, "other-client"):
+                for kind in (kinds.ACCESS_TOKEN, kinds.REFRESH_TOKEN, kinds.ID_TOKEN):
+                    entry = {
+                        "home_account_id": home,
+                        "environment": account["environment"],
+                        "realm": realm,
+                        "client_id": client,
+                        "credential_type": kind,
+                        "target": "test-scope",
+                        "secret": f"synthetic-{name}-{kind}",
+                        "expires_on": "0",
+                        "family_id": "other-family",
+                    }
+                    if kind == kinds.ACCESS_TOKEN and client == "other-client":
+                        entry["ext_cache_key"] = "extended-key"
+                    cache.modify(kind, entry, entry)
+    state = json.loads(cache.serialize())
+    state["AppMetadata"] = {"shared-app": {"family_id": "other-family"}}
+    state["UnknownMetadata"] = {"preserve": True}
+    path.write_text(json.dumps(state), encoding="utf-8")
+    return state
+
+
+@pytest.mark.parametrize("account_cache", ["both", "primary", "shared"])
+def test_forget_cached_account_clears_both_caches_across_clients_and_realms(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    account_cache: str,
+) -> None:
+    primary, shared = tmp_path / "primary.bin", tmp_path / "shared.bin"
+    original = {
+        primary: _write_forget_cache(primary, admin_account=account_cache != "shared"),
+        shared: _write_forget_cache(shared, admin_account=account_cache != "primary"),
+    }
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        lambda *args, **kwargs: pytest.fail("Forgetting must not authenticate."),
+    )
+
+    result = agentbuilder.forget_cached_account(
+        "ADMIN@example.test", cache_path=primary, shared_cache_path=shared,
+    )
+
+    assert result["status"] == "removed"
+    assert {row["cachePath"] for row in result["caches"]} == {str(primary), str(shared)}
+    for path, before in original.items():
+        after = json.loads(path.read_text())
+        for kind in ("Account", "AccessToken", "RefreshToken", "IdToken"):
+            assert after[kind] == {
+                key: entry for key, entry in before[kind].items()
+                if entry["home_account_id"] == "maker-home"
+            }
+        assert after["AppMetadata"] == before["AppMetadata"]
+        assert after["UnknownMetadata"] == before["UnknownMetadata"]
+
+
+@pytest.mark.parametrize("absent_cache", ["primary", "shared", "both"])
+@pytest.mark.parametrize("existing_cache", [False, True])
+def test_forget_cached_account_handles_absence_per_cache(
+    tmp_path: Path, absent_cache: str, existing_cache: bool,
+) -> None:
+    primary, shared = tmp_path / "primary.bin", tmp_path / "shared.bin"
+    for name, path in (("primary", primary), ("shared", shared)):
+        if name != absent_cache and absent_cache != "both":
+            _write_forget_cache(path)
+        elif existing_cache:
+            _write_forget_cache(path, admin_home=None)
+    original = {path: path.read_bytes() for path in (primary, shared) if path.exists()}
+
+    result = agentbuilder.forget_cached_account(
+        "admin@example.test", cache_path=primary, shared_cache_path=shared,
+    )
+
+    assert result["status"] == ("already-absent" if absent_cache == "both" else "removed")
+    for name, path in (("primary", primary), ("shared", shared)):
+        row = next(row for row in result["caches"] if row["cachePath"] == str(path))
+        assert row["status"] == (
+            "already-absent" if name == absent_cache or absent_cache == "both" else "removed"
+        )
+        if row["status"] == "already-absent":
+            if path in original:
+                assert path.read_bytes() == original[path]
+            else:
+                assert not path.exists()
+
+
+@pytest.mark.parametrize(
+    "shared_problem",
+    ["unreadable", "ambiguous", "invalid-structure", "incomplete-identity"],
+)
+def test_forget_cached_account_preflights_both_caches_before_writing(
+    tmp_path: Path, shared_problem: str,
+) -> None:
+    primary, shared = tmp_path / "primary.bin", tmp_path / "shared.bin"
+    _write_forget_cache(primary)
+    if shared_problem == "unreadable":
+        shared.write_text("not-json", encoding="utf-8")
+    elif shared_problem == "ambiguous":
+        _write_forget_cache(shared, admin_home="different-admin-home")
+    elif shared_problem == "invalid-structure":
+        shared.write_text('{"AccessToken":[]}', encoding="utf-8")
+    else:
+        shared.write_text(
+            '{"Account":{"incomplete":{"username":"admin@example.test"}}}',
+            encoding="utf-8",
+        )
+    original = {path: path.read_bytes() for path in (primary, shared)}
+
+    with pytest.raises(agentbuilder.AgentBuilderError):
+        agentbuilder.forget_cached_account(
+            "admin@example.test", cache_path=primary, shared_cache_path=shared,
+        )
+
+    assert {path: path.read_bytes() for path in original} == original
+
+
+@pytest.mark.parametrize("shared_account", [True, False])
+def test_forget_cached_account_preserves_partial_failure_and_can_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    shared_account: bool,
+) -> None:
+    primary, shared = tmp_path / "primary.bin", tmp_path / "shared.bin"
+    _write_forget_cache(primary)
+    _write_forget_cache(shared, admin_account=shared_account)
+    original = {path: path.read_bytes() for path in (primary, shared)}
+    persist = agentbuilder._persist_token_cache
+    failure = PermissionError("synthetic shared-cache write failure")
+
+    def fail_shared(cache, path):
+        if path == shared:
+            raise failure
+        persist(cache, path)
+
+    monkeypatch.setattr(agentbuilder, "_persist_token_cache", fail_shared)
+    with pytest.raises(PermissionError) as caught:
+        agentbuilder.forget_cached_account(
+            "admin@example.test", cache_path=primary, shared_cache_path=shared,
+        )
+    assert caught.value is failure
+    assert str(shared) in "\n".join(caught.value.__notes__)
+    assert shared.read_bytes() == original[shared]
+    if shared_account:
+        assert primary.read_bytes() != original[primary]
+        assert str(primary) in "\n".join(caught.value.__notes__)
+    else:
+        assert primary.read_bytes() == original[primary]
+
+    monkeypatch.setattr(agentbuilder, "_persist_token_cache", persist)
+    assert agentbuilder.forget_cached_account(
+        "admin@example.test", cache_path=primary, shared_cache_path=shared,
+    )["status"] == "removed"
+    for path in (primary, shared):
+        assert "admin-home" not in path.read_text()
 
 
 def test_selected_tenant_authentication_prompts_for_multiple_cached_accounts(
