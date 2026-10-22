@@ -20,4 +20,4 @@ filename_exemption_substrings:
 
 # Exact relative folder paths exempt from PascalCase folder convention.
 folder_exemptions:
-  - samples/WorkdayDeclarativeAgent/Employee/WorkdayEmployeesviewtheirjobtaxonomy
+  - samples/WorkdayDeclarativeAgentPreview/Employee/WorkdayEmployeesviewtheirjobtaxonomy

@@ -1,24 +1,27 @@
 kind: AdaptiveDialog
 modelDescription: |-
-  Use this topic when a MANAGER asks about the COMPANY CODE / company name / legal entity / employing entity of THEIR DIRECT REPORTS in Workday. ONLY for direct reports (people who report to the user) — NOT for self, manager, peers, spouse, sibling, or any non-direct-report.
+  Use this topic when a MANAGER asks about the JOB FUNCTION / job family / job profile / job classification / job taxonomy / job code / external title / internal title / job category of THEIR DIRECT REPORTS in Workday. ONLY for direct reports — NOT for self, manager, peers, spouse, sibling, or any non-direct-report.
 
   Triggers:
-  - "What is the company code of my direct reports?"
-  - "What's the company / legal entity for my reports?"
-  - "Show the employing company of my team"
-  - "Direct reports' company code"
-  - "My reportees' company / legal entity"
-  - "Which company is each of my reports employed by?"
+  - "What is the external title of my direct reports?"
+  - "What is [EmployeeName]'s job title?"
+  - "Job function / job family for my reports"
+  - "Show job classifications for my team"
+  - "Direct reports' job taxonomy"
 
-  do NOT trigger for self-company-code questions belong to the WorkdayCompanyCode topic.
+  Result data is a list of direct reports with their job function fields.
+
+  do NOT trigger for self-job-taxonomy questions belong to the ViewJobTaxonomy topic.
 
   Output rules:
   - Output MUST be a nested list in markdown
   - Use ONLY data from {Topic.workdayResponseTable}
+  - Do NOT return data if you don't have enough info
+
 inputs:
   - kind: AutomaticTaskInput
     propertyName: EmployeeName
-    description: Employee name whose company code needs to be fetched
+    description: Employee name whose job data needs to be retrieved
     entity: PersonNamePrebuiltEntity
     shouldPromptUser: false
     inputSettings:
@@ -30,23 +33,32 @@ beginDialog:
   id: main
   intent:
     triggerQueries:
-      - Show me my team’s Company codes? 
-      - What are the company codes for my reports? 
-      - What company codes are mapped to my team members?
+      - Show me my team's job title?
+      - What is the internal title of my direct report X?
+      - What is the job function of my team?
+      - What job profile is mapped to my team members?
+      - What are the external titles of my team members?
+      - What is the internal title of my direct report [EmployeeName]?
+      - Show me my team's job taxonomy?
+      - What is the job function of my team?
+      - What job profile is mapped to my team members?
+      - What are the external titles of my team members?
+      - Get job data for [EmployeeName].
+      - What is the job title of [EmployeeName]?
 
   actions:
     - kind: BeginDialog
-      id: dAhS4T
+      id: Y8gqWh
       displayName: Check manager status
       dialog: msdyn_copilotforemployeeselfservicedahr.topic.WorkdayManagerCheck
 
     - kind: BeginDialog
-      id: Gt044B
+      id: 7Va4UU
       displayName: Redirect to Workday Get Common Execution
       input:
         binding:
           parameters: ="{""params"":[{""key"":""{ManagerOrgId}"",""value"":""" & Global.ESS_UserContext_ManagerOrganizationId & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
-          scenarioName: msdyn_HRWorkdayHCMManagerDirectCompanyCode
+          scenarioName: msdyn_HRWorkdayHCMManagerJobTaxonomy
 
       dialog: msdyn_copilotforemployeeselfservicedahr.topic.WorkdaySystemGetCommonExecution
       output:
@@ -56,25 +68,37 @@ beginDialog:
           workdayResponse: Topic.workdayResponse
 
     - kind: ParseValue
-      id: aIxWzK
-      displayName: Parse value to a table
+      id: mq6jr0
+      displayName: Parse workdayResponse into table
       variable: Topic.WorkdayResponseRecord
       valueType:
         kind: Record
         properties:
-          CompanyCode:
-            type:
-              kind: Table
-              properties:
-                Value: String
-
-          CompanyName:
+          BusinessTitle:
             type:
               kind: Table
               properties:
                 Value: String
 
           FirstName:
+            type:
+              kind: Table
+              properties:
+                Value: String
+
+          JobFamilyId:
+            type:
+              kind: Table
+              properties:
+                Value: String
+
+          JobProfile:
+            type:
+              kind: Table
+              properties:
+                Value: String
+
+          JobTitle:
             type:
               kind: Table
               properties:
@@ -94,8 +118,18 @@ beginDialog:
 
       value: =Topic.workdayResponse
 
+    - kind: BeginDialog
+      id: QdE53O
+      displayName: Refresh JobFamily reference data
+      input:
+        binding:
+          IsTableEmpty: =IsBlank(Global.JobFamilyLookupTable)
+          ReferenceDataKey: Job_Family_ID
+
+      dialog: msdyn_copilotforemployeeselfservicedahr.topic.WorkdaySystemRefreshReferenceData
+
     - kind: SetVariable
-      id: HC2h7w
+      id: setVariable_EFFdlM
       displayName: Merge all records in table
       variable: Topic.workdayResponseTable
       value: |-
@@ -104,8 +138,12 @@ beginDialog:
             {
                 FirstName: Last(FirstN(Topic.WorkdayResponseRecord.FirstName, Value)).Value,
                 LastName: Last(FirstN(Topic.WorkdayResponseRecord.LastName, Value)).Value,
-                CompanyCode: Last(FirstN(Topic.WorkdayResponseRecord.CompanyCode, Value)).Value,
-                CompanyName: Last(FirstN(Topic.WorkdayResponseRecord.CompanyName, Value)).Value
+                JobTitle: Last(FirstN(Topic.WorkdayResponseRecord.JobTitle, Value)).Value,
+                BusinessTitle: Last(FirstN(Topic.WorkdayResponseRecord.BusinessTitle, Value)).Value,
+                JobProfile: Last(FirstN(Topic.WorkdayResponseRecord.JobProfile, Value)).Value,
+                JobFamily: LookUp(Global.JobFamilyLookupTable,
+                            ID = Last(FirstN(Topic.WorkdayResponseRecord.JobFamilyId, Value)).Value
+                        ).Referenced_Object_Descriptor
             }
         )
 
@@ -137,7 +175,7 @@ beginDialog:
                   displayName: Check is filtered data empty
                   actions:
                     - kind: SendActivity
-                      id: SN9frD
+                      id: sendActivity_m8xRtz
                       displayName: Respond with no access message
                       activity: It looks like you don't have access to this information. Try making a new request.
 
@@ -148,13 +186,19 @@ beginDialog:
                       value: =""
 
                     - kind: EndDialog
-                      id: xVALae
+                      id: xa93ze
+
+    - kind: SendActivity
+      id: sendActivity_DHNIyX
+      activity: |-
+        Here is your team's job information:
+        {Topic.workdayResponseTable}
 
 inputType:
   properties:
     EmployeeName:
       displayName: EmployeeName
-      description: Employee name whose company code needs to be fetched
+      description: Employee name whose job data needs to be retrieved
       type: String
 
 outputType:
@@ -164,7 +208,9 @@ outputType:
       type:
         kind: Table
         properties:
-          CompanyCode: String
-          CompanyName: String
+          BusinessTitle: String
           FirstName: String
+          JobFamily: String
+          JobProfile: String
+          JobTitle: String
           LastName: String
