@@ -1,8 +1,9 @@
 # Employee Self-Service Agent Developer Kit
 
-> **Authentication validation blocked (2026-10-22):** this workaround branch is
-> **not ready for customer use**. An approved fresh-authentication flow with
-> `CopilotStudio.MinimalBot.ReadWrite` must be verified first. See the
+> **Authentication update (2026-10-22):** the ADK's existing browser-based
+> MSAL Python flow passed fresh sign-in and a read-only native-agent API check
+> in our test tenant. The standalone MSAL.PS/device-code alternative did not.
+> Customer-tenant authentication and retrieval still require validation. See the
 > [authentication status](solutions/ess-maker-skills/SHAREPOINT-LIBRARY-WORKAROUND.md#authentication-status).
 
 > **SharePoint library workaround branch:** use the

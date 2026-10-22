@@ -2,18 +2,20 @@
 
 # Add a SharePoint library
 
-## Authentication hold
+## Authentication
 
-This customer workflow is blocked pending an approved authentication route.
-Read the authentication-status section of `SHAREPOINT-LIBRARY-WORKAROUND.md`
-for the observed sign-in and delegated-permission failures. Do not present this branch as
-customer-ready or begin the procedure below while the blocker is unresolved.
+Use the ADK's existing MSAL Python browser authentication. This flow passed
+fresh sign-in with an empty cache and a read-only native-agent API check in
+the test tenant on 2026-10-22. Read the authentication-status section of
+`SHAREPOINT-LIBRARY-WORKAROUND.md` for the distinction from the failed standalone
+MSAL.PS device-code and Azure PowerShell routes. Do not substitute those routes
+or claim customer-tenant authentication has already been validated.
 Do not try arbitrary client IDs, request a Microsoft-owned application's
-secret, or alter tenant consent or Conditional Access settings. Explain that
-the API owner's approved authentication route must be validated first.
+secret, or alter tenant consent or Conditional Access settings.
 
-Resume the procedure below only after the approved route has passed fresh
-sign-in and a read-only native-agent API check.
+If customer sign-in or the read-only preview fails, report the actual error
+and stop before any update. Resolve access through the tenant administrator
+or API owner without weakening policies.
 
 This branch contains a targeted workaround for a native ESS DA GA knowledge
 picker that returns **No results** for a library-root URL. This adds a source,

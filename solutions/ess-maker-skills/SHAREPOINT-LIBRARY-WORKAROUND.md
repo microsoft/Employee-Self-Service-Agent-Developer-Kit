@@ -2,13 +2,19 @@
 
 ## Authentication status
 
-**Blocked pending an approved authentication route. Do not distribute this
-branch as a ready-to-run customer workaround.** Fresh sign-in validation on
-2026-10-22 found:
+**Use the ADK's existing MSAL Python browser sign-in, not the standalone
+MSAL.PS/device-code alternative.** On 2026-10-22, the unchanged ADK
+`agentbuilder.authenticate` flow completed fresh sign-in using a new, empty
+token cache and successfully read the test agent's native components. No
+agent updates or publication were performed. This validates that flow in our
+test tenant, not customer-tenant sign-in, consent, or retrieval.
 
-- The shared client copied from existing ADK code failed MSAL.PS device-code
+The earlier authentication failures concerned different flows:
+
+- The same ADK client ID failed MSAL.PS device-code
   authentication with `AADSTS7000218` (client assertion or secret required).
   Successful device-code initiation did not establish that sign-in could finish.
+  That error did not establish that the ADK's browser flow was unusable.
 - The documented Azure PowerShell resource-token flow completed sign-in, but
   the agent API rejected the token with `InsufficientDelegatedPermissions`:
   `CopilotStudio.MinimalBot.ReadWrite` was missing.
@@ -16,15 +22,18 @@ branch as a ready-to-run customer workaround.** Fresh sign-in validation on
   client failed with `AADSTS65002`, requiring API-owner preauthorization
   between the Microsoft-owned client and resource.
 
-Changing to device-code authentication alone is therefore not a verified fix.
-Do not request a secret for a Microsoft-owned application, try arbitrary client
-IDs, or weaken tenant policies. Obtain the API owner's approved client and
-authentication flow, or confirmation that a properly consented tenant-owned
-public-client registration is supported. Then validate fresh sign-in and the
-agent API read before resuming the customer procedure below.
+The standalone PowerShell authentication instructions remain on hold.
+The ADK uses MSAL Python's `acquire_token_interactive` browser flow with its
+existing client and the native delegated scope; it does not use device-code
+authentication or the Azure PowerShell client. Do not substitute those flows,
+request a secret for a Microsoft-owned application, try arbitrary client IDs,
+or weaken tenant policies. If the ADK cannot sign in or read the selected
+customer agent, stop and resolve that tenant-specific blocker before applying
+the workaround.
 
-The earlier component insertion and authoring retrieval test remain valid;
-they used an existing token and did not establish a fresh customer sign-in flow.
+The earlier component insertion and authoring retrieval test used an existing
+token. The new empty-cache test separately establishes fresh ADK authentication
+and a read-only API check, not another insertion or a customer retrieval test.
 
 This branch adds `/add-sharepoint-library` for an **existing native ESS DA GA**
 agent when a direct SharePoint library URL returns **No results** in Configure.
@@ -33,7 +42,8 @@ knowledge source through the native authoring API; it does not fix the picker.
 
 ## Customer flow
 
-**On hold until the authentication blocker above is resolved.**
+Use the ADK flow below. Confirm customer-tenant access during setup and preview
+before approving any update.
 
 ### 1. Install this branch
 
