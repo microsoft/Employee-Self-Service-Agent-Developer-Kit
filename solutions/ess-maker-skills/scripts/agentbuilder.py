@@ -1133,6 +1133,29 @@ class AgentBuilderClient:
             allow_redirects=False,
         )
 
+    def insert_component(
+        self,
+        agent_id: str,
+        change_token: str,
+        component: dict[str, Any],
+    ) -> Any:
+        """Insert one component using the caller's freshly fetched change token."""
+        return self._json(
+            "PUT",
+            f"/copilotstudio/minimalBots/api/{agent_id}/components",
+            "Component insert",
+            params={"api-version": NATIVE_ALM_API_VERSION},
+            body={
+                "changeToken": change_token,
+                "botComponentChanges": [
+                    {"$kind": "BotComponentInsert", "component": component}
+                ],
+                "connectionReferenceChanges": [],
+                "connectorDefinitionChanges": [],
+            },
+            timeout=180,
+        )
+
     def import_package(
         self,
         package_path: Path,

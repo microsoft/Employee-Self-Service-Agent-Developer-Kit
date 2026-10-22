@@ -61,6 +61,12 @@ environment. Type `/setup` to get started — it only takes a couple minutes.
   is intentionally not a prerequisite because `/connect` is the workflow that
   resolves product-extension connection gaps. If materialization is incomplete,
   use the setup-required Message block above and finish the request.
+- If the user typed `/add-sharepoint-library` or explicitly asked to apply
+  this branch's SharePoint library-picker workaround, read
+  `src/skills/add-sharepoint-library/SKILL.md`. It requires the matching
+  canonical setup-materialized native agent (`schema_version: 4`, workspace
+  evidence and `SETUP-07.state: "done"`), not unrelated connector readiness.
+  The skill and script enforce that gate before a remote change.
 
 **Except for the cases above, this gate applies to ALL user messages** —
 including "hello", "hi", "help",
@@ -444,6 +450,7 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | User intent                                                                                             | Skill to read                                                                                 |
 | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Run common ESS foundation setup (`/setup`)                                                              | `src/skills/foundation-setup/SKILL.md`                                                        |
+| Add a SharePoint library using this branch's picker workaround (`/add-sharepoint-library`)                | `src/skills/add-sharepoint-library/SKILL.md`                                                  |
 | Provision/connect Workday for the active ESS HR agent (`/connect workday` or `/connect-workday`)        | `src/skills/connect/SKILL.md`                                                                 |
 | Connect to Workday                                                                                      | `src/skills/connect/SKILL.md`                                                                 |
 | Create a topic                                                                                          | Stop: topic creation is not yet available; do not read a topic-authoring skill or write files |

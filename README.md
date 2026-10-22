@@ -1,5 +1,10 @@
 # Employee Self-Service Agent Developer Kit
 
+> **SharePoint library workaround branch:** use the
+> [branch-specific installation and usage guide](solutions/ess-maker-skills/SHAREPOINT-LIBRARY-WORKAROUND.md)
+> for **installer -> `/setup` -> `/add-sharepoint-library`**. The standard
+> `main` installer below does not include this workaround.
+
 A monorepo of solutions, samples, and tooling for the Microsoft Employee Self-Service (ESS) agent built on Microsoft Copilot Studio.
 
 > **This repo is intended as an example or learning tool.** It is not a Microsoft product or a supported service. See [SUPPORT.md](SUPPORT.md) for the support model and [SECURITY.md](SECURITY.md) for reporting security issues.
