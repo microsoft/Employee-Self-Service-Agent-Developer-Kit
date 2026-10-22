@@ -2219,12 +2219,12 @@ def test_list_environments_preserves_empty_result(
     assert result["ring"] == "prod"
 
 
-def test_list_environments_preserves_non_guid_service_ids(
+def test_list_environments_preserves_multiple_guid_service_ids(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    service_id = "service-environment-id-with-43-characters-0001"
+    service_id = "00000000-0000-4000-8000-000000004444"
     monkeypatch.setattr(
         setup_existing_da,
         "_authentication_from_args",
