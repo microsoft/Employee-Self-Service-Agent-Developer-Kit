@@ -6,6 +6,10 @@
 > Customer-tenant authentication and retrieval still require validation. See the
 > [authentication status](solutions/ess-maker-skills/SHAREPOINT-LIBRARY-WORKAROUND.md#authentication-status).
 
+> **No GitHub Copilot license?** Use the
+> [standalone PowerShell option](solutions/ess-maker-skills/SHAREPOINT-LIBRARY-WORKAROUND.md#standalone-powershell-option-no-adk-or-copilot-license).
+> It requires PowerShell 7, Python 3.12 and MSAL, not the ADK or Copilot.
+
 > **SharePoint library workaround branch:** use the
 > [branch-specific installation and usage guide](solutions/ess-maker-skills/SHAREPOINT-LIBRARY-WORKAROUND.md)
 > for **installer -> `/setup` -> `/add-sharepoint-library`**. The standard

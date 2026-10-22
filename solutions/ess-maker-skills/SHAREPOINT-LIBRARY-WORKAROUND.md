@@ -22,7 +22,7 @@ The earlier authentication failures concerned different flows:
   client failed with `AADSTS65002`, requiring API-owner preauthorization
   between the Microsoft-owned client and resource.
 
-The standalone PowerShell authentication instructions remain on hold.
+The old MSAL.PS authentication instructions remain on hold.
 The ADK uses MSAL Python's `acquire_token_interactive` browser flow with its
 existing client and the native delegated scope; it does not use device-code
 authentication or the Azure PowerShell client. Do not substitute those flows,
@@ -35,10 +35,63 @@ The earlier component insertion and authoring retrieval test used an existing
 token. The new empty-cache test separately establishes fresh ADK authentication
 and a read-only API check, not another insertion or a customer retrieval test.
 
+The new standalone PowerShell option below also uses MSAL Python, not
+MSAL.PS. Its complete script passed fresh browser authentication and a live
+`-WhatIf` run against the test agent on 2026-10-22. It recognized the already
+configured SitePages source and made no changes.
+
 This branch adds `/add-sharepoint-library` for an **existing native ESS DA GA**
 agent when a direct SharePoint library URL returns **No results** in Configure.
 It is not for DA Preview or CEA agents. It bypasses the picker by adding one
 knowledge source through the native authoring API; it does not fix the picker.
+
+## Standalone PowerShell option (no ADK or Copilot license)
+
+This option needs **PowerShell 7, Python 3.12 and MSAL Python**. It does not
+need the ADK, VS Code, a GitHub Copilot license, MSAL.PS, Azure PowerShell,
+a client secret, or a new application registration. The maker still needs
+access to the intended agent and any required tenant consent.
+
+Install Python 3.12, ensure `python --version` selects it, then:
+
+```powershell
+python -m pip install msal==1.37.0
+Invoke-RestMethod 'https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/users/amilandin/sharepoint-library-workaround/solutions/ess-maker-skills/scripts/Add-EssSitePagesSource.ps1' -OutFile '.\Add-EssSitePagesSource.ps1'
+```
+
+Review the saved script. Confirm the target values with the customer, then
+set them explicitly; do not copy IDs from a different tenant or environment:
+
+```powershell
+$target = @{
+    TenantId = '<confirmed tenant GUID>'
+    EnvironmentId = '<confirmed environment GUID>'
+    AgentId = '<confirmed agent GUID>'
+    LibraryUrl = 'https://contoso.sharepoint.com/sites/HR/SitePages/'
+}
+.\Add-EssSitePagesSource.ps1 @target -WhatIf
+```
+
+The script opens browser sign-in using MSAL Python's form-post callback and
+a new in-memory token cache. Select the maker account for the confirmed tenant.
+It does not save tokens to disk or require the maker to copy a bearer token.
+Do not use `-DeviceCode`; the old MSAL.PS authentication path is not used.
+If Python is not on PATH, pass `-PythonExecutable '<full path to python.exe>'`
+and install MSAL with that same interpreter. `-Account '<maker sign-in>'`
+optionally supplies a sign-in hint; the returned tenant is still checked.
+
+Inspect the preview. Only after explicitly approving the target and change:
+
+```powershell
+.\Add-EssSitePagesSource.ps1 @target -Confirm
+```
+
+The standalone script accepts **SitePages library URLs only**. For other
+library types, use the ADK skill below. It backs up the current configuration,
+uses a fresh change token, inserts one source, checks its readback, skips
+duplicates, and does not publish. The retrieval checks and failure-handling
+cautions below also apply. Customer-tenant sign-in and retrieval still need
+validation; the successful test-tenant run is not proof of either.
 
 ## Customer flow
 
