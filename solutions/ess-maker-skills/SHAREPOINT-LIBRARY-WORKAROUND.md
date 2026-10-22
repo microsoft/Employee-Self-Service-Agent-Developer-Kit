@@ -1,11 +1,39 @@
 # SharePoint library knowledge-picker workaround
 
+## Authentication status
+
+**Blocked pending an approved authentication route. Do not distribute this
+branch as a ready-to-run customer workaround.** Fresh sign-in validation on
+2026-10-22 found:
+
+- The shared client copied from existing ADK code failed MSAL.PS device-code
+  authentication with `AADSTS7000218` (client assertion or secret required).
+  Successful device-code initiation did not establish that sign-in could finish.
+- The documented Azure PowerShell resource-token flow completed sign-in, but
+  the agent API rejected the token with `InsufficientDelegatedPermissions`:
+  `CopilotStudio.MinimalBot.ReadWrite` was missing.
+- Requesting that scope explicitly through the Microsoft Azure PowerShell
+  client failed with `AADSTS65002`, requiring API-owner preauthorization
+  between the Microsoft-owned client and resource.
+
+Changing to device-code authentication alone is therefore not a verified fix.
+Do not request a secret for a Microsoft-owned application, try arbitrary client
+IDs, or weaken tenant policies. Obtain the API owner's approved client and
+authentication flow, or confirmation that a properly consented tenant-owned
+public-client registration is supported. Then validate fresh sign-in and the
+agent API read before resuming the customer procedure below.
+
+The earlier component insertion and authoring retrieval test remain valid;
+they used an existing token and did not establish a fresh customer sign-in flow.
+
 This branch adds `/add-sharepoint-library` for an **existing native ESS DA GA**
 agent when a direct SharePoint library URL returns **No results** in Configure.
 It is not for DA Preview or CEA agents. It bypasses the picker by adding one
 knowledge source through the native authoring API; it does not fix the picker.
 
 ## Customer flow
+
+**On hold until the authentication blocker above is resolved.**
 
 ### 1. Install this branch
 

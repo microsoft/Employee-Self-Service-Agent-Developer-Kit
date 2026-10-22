@@ -2,6 +2,19 @@
 
 # Add a SharePoint library
 
+## Authentication hold
+
+This customer workflow is blocked pending an approved authentication route.
+Read the authentication-status section of `SHAREPOINT-LIBRARY-WORKAROUND.md`
+for the observed sign-in and delegated-permission failures. Do not present this branch as
+customer-ready or begin the procedure below while the blocker is unresolved.
+Do not try arbitrary client IDs, request a Microsoft-owned application's
+secret, or alter tenant consent or Conditional Access settings. Explain that
+the API owner's approved authentication route must be validated first.
+
+Resume the procedure below only after the approved route has passed fresh
+sign-in and a read-only native-agent API check.
+
 This branch contains a targeted workaround for a native ESS DA GA knowledge
 picker that returns **No results** for a library-root URL. This adds a source,
 not a platform/UI code fix. Do not use general `/push`, package replacement,
