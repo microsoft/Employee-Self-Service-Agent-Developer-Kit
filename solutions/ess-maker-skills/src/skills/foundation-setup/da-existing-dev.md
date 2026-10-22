@@ -212,7 +212,7 @@ Present these standard choices:
 - **Not yet**
 - **Help me decide**
 
-For **Check again**, rerun `ENV-CAPACITY-001` before applying capacity state and follow the new result. If it is still `Warning`, state that the check found 0 allocated credits and present the same four choices.
+For **Check again**, rerun `ENV-CAPACITY-001` before applying capacity state and follow the new result. If it is still `Warning`, rerender the Warning Message block above and present the same four choices.
 
 For **Help me decide**, follow the shared contract in `SKILL.md`. Recommend **Check again** when the administrator has allocated credits or the maker wants fresh evidence. Recommend **Continue with administrator-attested skip** only when an appropriate administrator is present and accepts that Setup will complete without a verified positive allocation. Recommend **Not yet** otherwise. This conversation does not apply the attestation.
 
@@ -356,7 +356,7 @@ Use the same five rows and order in every runtime-readiness table. Map the three
 
 Each evidence summary states whether the check ran, its target, and the result file's `started` observation time when available. Preserve the row's safe `serviceStatus`, `requestId`, `outcome`, and other non-secret evidence when a check is unavailable. Do not expose tokens, authorization headers, or customer content.
 
-Use concise factual details:
+Use the following exact evidence-summary templates, substituting only their documented placeholders:
 
 - Agent access: **Access to {agent display name} was verified. Observed at {observation time}.**
 - Environment capacity after an automatic pass: **{allocated credits} credits are allocated to {environment display name}. Observed at {observation time}.**

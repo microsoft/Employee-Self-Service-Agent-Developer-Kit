@@ -2,8 +2,12 @@
 
 # ESS Foundation Setup
 
-Every **Message** block is exact user-facing text. Do not expose internal step IDs,
-checkpoint IDs, state paths, or tool narration.
+Render every **Message** block in this file and every delegated setup file
+using its fixed wording and structure. Replace documented placeholders with
+resolved evidence and send only the block contents. Surrounding instructions
+remain internal.
+
+Do not expose internal step IDs, checkpoint IDs, state paths, or tool narration.
 
 Follow `src/reference/ui-formatting-guidelines.md` for every user-facing
 instruction in this flow. Resolve its examples with the actual environment,

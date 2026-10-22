@@ -65,6 +65,29 @@ def test_public_setup_routes_to_da_foundation_module() -> None:
     assert "Do not route to Dataverse foundation or onboarding playbooks" in prompt
 
 
+def test_setup_messages_use_fixed_templates_including_delegated_files() -> None:
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    contract = " ".join(foundation.split("## Setup state sources", 1)[0].split())
+    assert (
+        "Render every **Message** block in this file and every delegated setup file"
+    ) in contract
+    assert "using its fixed wording and structure" in contract
+    assert "Replace documented placeholders with resolved evidence" in contract
+    assert "send only the block contents" in contract
+    assert "Surrounding instructions remain internal" in contract
+
+    formatting = " ".join(_UI_FORMATTING.read_text(encoding="utf-8").split())
+    assert (
+        "When an owning skill supplies an exact **Message** block or fixed "
+        "response template, render its wording and structure"
+    ) in formatting
+    assert "documented placeholders resolved from runtime context" in formatting
+    assert (
+        "When the owning skill supplies no fixed copy, compose UI guidance "
+        "from runtime context"
+    ) in formatting
+
+
 def test_help_me_decide_uses_chat_view_follow_up_messages() -> None:
     foundation = _FOUNDATION.read_text(encoding="utf-8")
     help_contract = foundation.split("### Help me decide", 1)[1].split(
@@ -204,12 +227,7 @@ def test_skipped_alm_enrollment_is_announced_before_local_continuation() -> None
         "or performing another operation"
     ) in " ".join(boundary.split())
     message, continuation = remainder.split("**End message.**", 1)
-    assert message.strip().startswith(
-        "ALM enrollment skipped. The agent was not changed. "
-        "Setup is not complete yet."
-    )
-    assert "Local authoring does not require ALM enrollment." in message
-    assert "ALM enrollment is confirmed" not in message
+    assert message.strip() == "ALM enrollment skipped."
     assert "return to the caller's exact attachment command" in continuation
     assert "setup_existing_da.py attach" in continuation
     assert "setup_existing_da.py ensure-alm" not in skipped
@@ -345,8 +363,7 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     assert "python scripts/setup_existing_da.py ensure-alm" in enrollment
     assert "DA_ALM_ENROLLMENT_JSON:" in enrollment
     assert "stop without another write or attachment" in normalized_enrollment
-    assert "ALM enrollment skipped. The agent was not changed." in enrollment
-    assert "Local authoring does not require ALM enrollment." in enrollment
+    assert "ALM enrollment skipped." in enrollment
     assert "--allow-unenrolled-authoring" in enrollment
     assert (
         "cannot prepare a local authoring workspace without an ALM authoring route"
@@ -1477,6 +1494,14 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "diagnostic evidence only" in normalized
     assert "do not explain those internal version concepts to the maker" in normalized
     assert "The agent was created. Setup is not complete yet." in text
+    created_message = text.split(
+        "When the annotations report `outcome: created`", 1
+    )[1].split("**Message:**", 1)[1].split("**End message.**", 1)[0]
+    assert created_message.strip() == (
+        "The agent was created. Setup is not complete yet.\n\n"
+        "> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) "
+        "in Classic Copilot Studio.**"
+    )
     assert "Preparing its local authoring workspace..." not in text
     assert (
         "{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/"
@@ -2387,6 +2412,11 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert "- **Help me decide**" in warning_choices
     assert "> ⚠️ **Administrator consent required**" in warning_choices
     assert "The original zero-allocation result remains the recorded evidence." in warning_choices
+    assert "rerender the Warning Message block above" in warning_choices
+    assert (
+        "Use the following exact evidence-summary templates, substituting only "
+        "their documented placeholders"
+    ) in normalized
     assert "A capacity check of {environment display name}" in text
     assert "A recheck of {environment display name}" not in text
     assert (

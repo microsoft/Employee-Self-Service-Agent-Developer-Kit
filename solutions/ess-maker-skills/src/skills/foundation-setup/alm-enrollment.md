@@ -84,9 +84,7 @@ operation:
 
 **Message:**
 
-ALM enrollment skipped. The agent was not changed. Setup is not complete yet.
-
-Local authoring does not require ALM enrollment. Setup will validate the exact agent and component identity before preparing this workspace. Enrollment will still be required later for ALM lifecycle operations such as import, export, promotion, or realm-family management.
+ALM enrollment skipped.
 
 **End message.**
 
