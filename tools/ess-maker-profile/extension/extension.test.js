@@ -147,6 +147,17 @@ test('no duplicate action ids', () => {
     assert.strictEqual(ids.length, new Set(ids).size);
 });
 
+test('landing-page tutorial offers only supported settings', () => {
+    const getTutorialHtml = eval(`(${_extractFn('getTutorialHtml')})`);
+    const section = getTutorialHtml().match(/<section id="landing-page">([\s\S]*?)<\/section>/);
+    assert.ok(section, 'landing-page tutorial section is missing');
+    assert.deepStrictEqual(
+        [...section[1].matchAll(/<li><strong>([^<]+)<\/strong>/g)].map(match => match[1]),
+        ['Categorized starter prompts', 'Accent colors', 'Quick links', 'Stay up to date'],
+    );
+    assert.doesNotMatch(section[1], /quick access|isQuickAccessEnabled/i);
+});
+
 console.log('\nCustomization tree:');
 
 test('customization order matches every action after setup', () => {
@@ -310,9 +321,9 @@ test('activates during startup so the guided layout is ready before startup sett
 });
 
 test('package version matches the current Maker artifact release', () => {
-    assert.strictEqual(pkg.version, '0.4.36');
+    assert.strictEqual(pkg.version, '0.4.37');
     assert.ok(fs.existsSync(path.join(__dirname, `ess-maker-profile-${pkg.version}.vsix`)));
-    assert.ok(!fs.existsSync(path.join(__dirname, 'ess-maker-profile-0.4.35.vsix')));
+    assert.ok(!fs.existsSync(path.join(__dirname, 'ess-maker-profile-0.4.36.vsix')));
 });
 
 test('updates layout settings concurrently during startup', () => {
