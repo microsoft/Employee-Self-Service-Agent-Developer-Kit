@@ -170,6 +170,26 @@ class PPAdminClient:
         self._flow_token: str | None = None
         self.signed_in_username: str | None = None
 
+    @property
+    def has_flow_token(self) -> bool:
+        return self._flow_token is not None
+
+    @property
+    def has_powerapps_token(self) -> bool:
+        return self._token is not None
+
+    def set_read_tokens(
+        self, *, powerapps_token: str | None = None, flow_token: str | None = None
+    ) -> None:
+        """Use already-authenticated delegated read tokens without another login."""
+        for token in (powerapps_token, flow_token):
+            if token is not None and (not isinstance(token, str) or not token.strip()):
+                raise ValueError("A delegated read token must be a non-empty string.")
+        if powerapps_token is not None:
+            self._token = powerapps_token
+        if flow_token is not None:
+            self._flow_token = flow_token
+
     def authenticate(
         self,
         *,
@@ -345,7 +365,7 @@ class PPAdminClient:
         resp.raise_for_status()
         return resp.json()
 
-    def _get_all(self, base: str, path: str, params: dict | None = None, *, use_flow_token: bool = False) -> list | dict:
+    def _get_all(self, base: str, path: str, params: dict | None = None, *, use_flow_token: bool = False, strict_collection: bool = False) -> list | dict:
         """Paginate through results.
 
         On 401/403 returns a structured ``{"_error": ...}`` dict (matching
@@ -364,6 +384,10 @@ class PPAdminClient:
                 return {"_error": "insufficient_permissions", "_status": resp.status_code}
             resp.raise_for_status()
             data = resp.json()
+            if strict_collection and (
+                not isinstance(data, dict) or not isinstance(data.get("value"), list)
+            ):
+                raise ValueError("Power Platform administration returned an invalid collection.")
             items.extend(data.get("value", []))
             next_url = data.get("nextLink") or data.get("@odata.nextLink")
             url = (
@@ -589,12 +613,13 @@ class PPAdminClient:
 
     # ----- Connection APIs -----
 
-    def get_connections(self, env_id: str) -> list:
-        """List all connections in an environment (admin scope)."""
+    def get_connections(self, env_id: str, *, strict_collection: bool = False) -> list:
+        """List connections, optionally rejecting malformed collection responses."""
         return self._get_all(
             POWERAPPS_BASE,
             f"/providers/Microsoft.PowerApps/scopes/admin/environments/{env_id}/connections",
             params={"api-version": "2016-11-01"},
+            strict_collection=strict_collection,
         )
 
     def get_connector_connections(

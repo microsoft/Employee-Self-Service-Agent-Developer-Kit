@@ -16,7 +16,7 @@ import yaml
 
 from ..runner import CheckResult, Priority, Role, Status
 
-DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+from ..documentation import DOC_BASE
 STUDIO_BASE = "https://copilotstudio.microsoft.com"
 
 
@@ -139,6 +139,10 @@ def _check_single_agent(agent_path: Path, agent_name: str, runner=None) -> list[
 
     # ---- Knowledge source readiness ----
     results.extend(_check_knowledge_sources(agent_path, label, runner, agent_name))
+
+    # This producer inspects siblings too; labels are not stable subject IDs.
+    for result in results:
+        result.evidence["agentSlug"] = agent_name
 
     return results
 

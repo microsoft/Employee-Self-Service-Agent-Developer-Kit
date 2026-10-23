@@ -1,292 +1,524 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Tests for ENV-004 Workday hybrid connection coverage.
+"""Target dependency tests grounded in env004_dependencies.yaml.
 
-The minimalBots components API never surfaces Workday's SOAP connection
-reference: it is flow-scoped (bound on the WorkdayRESTExecution Power Automate
-flow inside the Dataverse solution, not on any bot topic). A components-only
-read therefore reports a false clean on a Workday install. ENV-004 closes that
-gap by also reading the environment's Dataverse ``connectionreference`` table
-and unioning in any Workday SOAP reference.
-
-These tests stub the Dataverse read (``environment.query_all``) exactly as
-``test_environment_basics._stub_query_all`` does, so they stay offline. The
-Dataverse ``connectionreferences`` GET is a ``documented``-tier endpoint
-already exercised by WD-PKG-001 (see ``tests/fixtures/cassettes/INDEX.md``).
-
-Per tests/AGENTS.md, every GOOD/BAD/WARNING assertion pins a phrase from both
-``result`` and ``remediation``.
+The baseline replays actual HTTP responses through the production clients.
+Boundary cases mutate that captured structural contract, not invented API
+shapes. No Workday business operation or tenant mutation is performed.
 """
 
-from __future__ import annotations
-
-import sys
+from copy import deepcopy
+import json
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlparse
+from unittest.mock import Mock
 
 import pytest
+import responses
+import yaml
 
-from tests.conftest import require_validated_mock
-from tests.mocks import agentbuilder_connectivity as ab
-
-require_validated_mock(ab)
-
-
-@pytest.fixture(autouse=True)
-def _scripts_on_path():
-    """Make ``flightcheck.*`` importable from the kit's scripts dir."""
-    repo_root = Path(__file__).resolve().parents[2]
-    scripts_dir = repo_root / "solutions" / "ess-maker-skills" / "scripts"
-    sys.path.insert(0, str(scripts_dir))
-    try:
-        yield
-    finally:
-        try:
-            sys.path.remove(str(scripts_dir))
-        except ValueError:
-            pass
+from agentbuilder import AgentBuilderClient, ConnectivityClient
+from flightcheck.checks import _connection_dependencies as dependencies
+from flightcheck.checks.environment import _check_connections_and_refs
+from flightcheck.pp_admin_client import PPAdminClient
 
 
-class _FakeAgentBuilder:
-    def __init__(self, components):
-        self._components = components
-
-    def fetch_components(self, _agent_id):
-        return self._components
-
-    def get_realm_configuration(self, _agent_id, realm):
-        if type(realm) is not int:
-            raise ValueError("Realm must be the numeric Dev/Test/Prod value.")
-        return None
+CASSETTE = Path(__file__).resolve().parents[2] / "fixtures" / "cassettes" / "env004_dependencies.yaml"
+SECOND_AGENT = "00000000-0000-0000-0000-000000009999"
 
 
-def _servicenow_only():
-    """Components read with a single bound ServiceNow reference.
-
-    Workday is deliberately absent from the components changeset, mirroring the
-    live finding that the components API never carries the Workday SOAP ref.
-    """
-    return ab.components_with_references(
-        references=[
-            ab.connection_reference_change(
-                connector="shared_service-now", connection_id="conn-sn"
-            )
-        ]
-    )
+def _captured():
+    return yaml.safe_load(CASSETTE.read_text(encoding="utf-8"))["interactions"]
 
 
-def _runner(*, components, dv_rows_or_error, env_url="https://x.crm.dynamics.com",
-            dv_token="t", config_extra=None):
-    config = {"agent": {"botId": ab.MOCK_AGENT_ID}}
-    if config_extra:
-        config.update(config_extra)
-    return SimpleNamespace(
-        agentbuilder=_FakeAgentBuilder(components),
-        config=config,
-        env_id="env-wd",
-        env_url=env_url,
-        dv_token=dv_token,
-        _dv=dv_rows_or_error,
-    )
-
-
-def _dv_row(*, logical_name, connectorid, connection_id):
-    return {
-        "connectionreferenceid": "ref-guid",
-        "connectionreferencelogicalname": logical_name,
-        "connectionreferencedisplayname": "Workday SOAP",
-        "connectorid": connectorid,
-        "connectionid": connection_id,
-        "statuscode": 1,
-    }
-
-
-_WD_CONNECTOR = "/providers/Microsoft.PowerApps/apis/shared_workdaysoap"
+def _body(interaction):
+    return json.loads(interaction["response"]["body"]["string"])
 
 
 @pytest.fixture
-def _patch_query_all(monkeypatch):
-    """Route ``environment.query_all`` at runner._dv (rows list or exception)."""
-    from flightcheck.checks import environment as env_mod
-
-    def _fake(env_url, token, entity_set, select, *a, **kw):
-        # The rows/error are carried on the runner, but query_all takes no
-        # runner; stash the active runner's payload via a closure set per test.
-        payload = _fake.payload
-        if isinstance(payload, Exception):
-            raise payload
-        return payload
-
-    monkeypatch.setattr(env_mod, "query_all", _fake)
-    return _fake
-
-
-def _check(runner, patch):
-    from flightcheck.checks.environment import _check_connections_and_refs
-
-    patch.payload = runner._dv
-    return _check_connections_and_refs(runner)
-
-
-def _by_id(results):
-    return {r.checkpoint_id: r for r in results}
-
-
-def test_workday_ref_bound_via_dataverse_passes(_patch_query_all):
-    runner = _runner(
-        components=_servicenow_only(),
-        dv_rows_or_error=[
-            _dv_row(
-                logical_name="gptagent_ess.shared_workdaysoap",
-                connectorid=_WD_CONNECTOR,
-                connection_id="conn-wd",
-            )
-        ],
+def dependency_case(monkeypatch):
+    interactions = _captured()
+    agent = _body(interactions[0])
+    payload = _body(interactions[1])
+    flows = {
+        urlparse(item["request"]["uri"]).path.rsplit("/", 1)[-1]: _body(item)
+        for item in interactions if "/flows/" in item["request"]["uri"]
+    }
+    dv = next(_body(item)["value"] for item in interactions
+              if "/connectionreferences?" in item["request"]["uri"])
+    inventory = next(_body(item)["value"] for item in interactions
+                     if "/connectivity/" in item["request"]["uri"])
+    environment = next(_body(item) for item in interactions
+                       if "api.bap." in item["request"]["uri"])
+    bound = {row["connectionid"].casefold() for row in dv
+             if row["connectionid"] and row["connectionreferencelogicalname"].endswith("_workdayruntime")}
+    case = SimpleNamespace(
+        agent_id=agent["botId"], payload=payload, flows=flows, rows=dv,
+        full_inventory=inventory,
+        inventory=[row for row in inventory if row["name"].casefold() in bound],
+        interactions=interactions,
     )
+    case.native = Mock()
+    case.native.get_agent.side_effect = lambda agent_id: {"botId": agent_id}
+    case.native.fetch_components.side_effect = lambda _agent_id: case.payload
+    case.native.get_realm_configuration.return_value = None
+    pp = Mock()
+    pp.get_flow.side_effect = lambda _env, flow_id: case.flows[flow_id]
+    pp.get_connections.side_effect = lambda _env, **_kwargs: case.inventory
+    pp.get_environment.return_value = environment
+    case.runner = SimpleNamespace(
+        config={}, connection_agent_ids=(case.agent_id,), agentbuilder=case.native,
+        env_id=environment["name"], env_url="https://orgmocktenant.crm.dynamics.com",
+        dv_token="REDACTED_TOKEN", pp_admin=pp, ring="prod",
+        tenant_id="00000000-0000-0000-0000-000000001111",
+        connectivity=Mock(),
+    )
+    case.runner.connectivity.list_connections.side_effect = lambda _env: case.inventory
+    case.query = Mock(side_effect=lambda *_args, **_kwargs: case.rows)
+    monkeypatch.setattr(dependencies, "query_all", case.query)
+    return case
 
-    by_id = _by_id(_check(runner, _patch_query_all))
-    summary = by_id["ENV-004"]
 
+def _summary(case):
+    return next(row for row in _check_connections_and_refs(case.runner)
+                if row.checkpoint_id == "ENV-004")
+
+
+def test_active_workday_dependencies_pass_without_setup_config(dependency_case):
+    row = _summary(dependency_case)
+
+    assert row.status == "Passed"
+    assert "2 required reference(s) from 3 active flow call(s)" in row.result
+    assert "2 bound" in row.result
+    assert row.remediation == ""
+    query = dependency_case.query.call_args.args
+    assert query[2] == "connectionreferences"
+    assert query[4] == (
+        "connectionreferencelogicalname eq 'msdyn_sharedcommondataserviceforapps_workdayruntime' or "
+        "connectionreferencelogicalname eq 'msdyn_sharedworkdaysoap_workdayruntime'"
+    )
+    dependency_case.native.get_agent.assert_called_once_with(dependency_case.agent_id)
+
+
+@pytest.mark.parametrize("maker_visible,malformed_collection", [
+    (True, None), (False, None), (True, "dataverse"), (False, "admin"),
+])
+def test_actual_http_capture_exercises_the_check(monkeypatch, maker_visible, malformed_collection):
+    interactions = _captured()
+    agent_id = _body(interactions[0])["botId"]
+    environment = next(_body(item) for item in interactions
+                       if "api.bap." in item["request"]["uri"])
+    token = "REDACTED_TOKEN"
+    pp = PPAdminClient("00000000-0000-0000-0000-000000001111")
+    pp.set_read_tokens(powerapps_token=token, flow_token=token)
+    tenant_id = "00000000-0000-0000-0000-000000001111"
+    monkeypatch.setattr(dependencies, "discover_tenant", lambda _url: tenant_id)
+    monkeypatch.setattr("agentbuilder.validate_environment_host", lambda host, _ring: host)
+    runner = SimpleNamespace(
+        config={}, connection_agent_ids=(agent_id,), env_id=environment["name"],
+        env_url="https://orgmocktenant.crm.dynamics.com", dv_token=token, ring="prod",
+        pp_admin=pp,
+        tenant_id=tenant_id, connection_dependency_token=lambda _scope: token,
+        agentbuilder=AgentBuilderClient(
+            "https://mockenv.00.environment.api.powerplatform.com", token,
+            ring="prod", tenant_id="00000000-0000-0000-0000-000000001111",
+        ),
+        connectivity=ConnectivityClient(token, ring="prod"),
+    )
+    # The captured host is deliberately redacted, so bypass only its DNS-label
+    # validator, never the check's target or connection identity checks.
+    runner.agentbuilder.host = "https://mockenv.00.environment.api.powerplatform.com"
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as replay:
+        for item in interactions:
+            body = _body(item)
+            if not maker_visible and "/connectivity/" in item["request"]["uri"]:
+                body["value"] = []
+            if (
+                malformed_collection == "dataverse" and "/connectionreferences?" in item["request"]["uri"]
+                or malformed_collection == "admin" and "api.powerapps." in item["request"]["uri"]
+            ):
+                del body["value"]
+            replay.add(
+                item["request"]["method"],
+                item["request"]["uri"].split("?")[0],
+                json=body, status=item["response"]["status"]["code"],
+            )
+        rows = _check_connections_and_refs(runner)
+        assert len(replay.calls) == (
+            7 if malformed_collection == "dataverse" else 8 if maker_visible else 9
+        )
+    summary = next(row for row in rows if row.checkpoint_id == "ENV-004")
+    if malformed_collection:
+        assert summary.status == "Warning"
+        assert "invalid collection" in summary.result
+        assert "does not exist" not in summary.result
+        return
     assert summary.status == "Passed"
-    assert "2 reference(s) declared by the agent(s)" in summary.result
     assert "2 bound" in summary.result
-    assert "unbound" not in summary.result
-    assert "ENV-004-WD" not in by_id
+    assert "unverified" not in summary.result
+    assert summary.remediation == ""
 
 
-def test_workday_ref_unbound_via_dataverse_fails(_patch_query_all):
-    runner = _runner(
-        components=_servicenow_only(),
-        dv_rows_or_error=[
-            _dv_row(
-                logical_name="gptagent_ess.shared_workdaysoap",
-                connectorid=_WD_CONNECTOR,
-                connection_id=None,
-            )
-        ],
-    )
-
-    by_id = _by_id(_check(runner, _patch_query_all))
-    summary = by_id["ENV-004"]
-
-    assert summary.status == "Failed"
-    assert "1 unbound" in summary.result
-    detail = by_id["ENV-004-UR-001"]
-    assert detail.status == "Failed"
-    assert "shared_workdaysoap" in detail.description
-    assert "No connection bound to this reference" in detail.result
-    assert "Connection references" in detail.remediation
+def _workday_row(case):
+    return next(row for row in case.rows
+                if row["connectionreferencelogicalname"] == "msdyn_sharedworkdaysoap_workdayruntime")
 
 
-def test_non_workday_dataverse_rows_are_not_unioned(_patch_query_all):
-    """Only the flow-scoped Workday SOAP ref is unioned from Dataverse.
+@pytest.mark.parametrize("binding", [None, ""])
+def test_required_unbound_reference_fails(dependency_case, binding):
+    _workday_row(dependency_case)["connectionid"] = binding
 
-    Arbitrary environment-wide references (e.g. a SharePoint connection) are
-    NOT pulled in, so ENV-004 does not reintroduce env-wide noise or re-report
-    references the components API already owns.
-    """
-    runner = _runner(
-        components=_servicenow_only(),
-        dv_rows_or_error=[
-            _dv_row(
-                logical_name="gptagent_ess.shared_sharepointonline",
-                connectorid=(
-                    "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
-                ),
-                connection_id=None,
-            )
-        ],
-    )
+    row = _summary(dependency_case)
 
-    summary = _by_id(_check(runner, _patch_query_all))["ENV-004"]
-
-    assert summary.status == "Passed"
-    assert "1 reference(s) declared by the agent(s)" in summary.result
-    assert "1 bound" in summary.result
+    assert row.status == "Failed"
+    assert "msdyn_sharedworkdaysoap_workdayruntime is unbound" in row.result
+    assert "Connection references" in row.remediation
 
 
-def test_dataverse_unavailable_warns_without_false_clean(_patch_query_all):
-    """A Dataverse read failure degrades to WARNING, never a silent PASS.
+def test_required_missing_reference_fails(dependency_case):
+    dependency_case.rows.remove(_workday_row(dependency_case))
 
-    ServiceNow (component-sourced) is still classified, so the failure to reach
-    Dataverse does not collapse the whole check.
-    """
-    runner = _runner(
-        components=_servicenow_only(),
-        dv_rows_or_error=RuntimeError("boom"),
-    )
+    row = _summary(dependency_case)
 
-    by_id = _by_id(_check(runner, _patch_query_all))
-    summary = by_id["ENV-004"]
-
-    assert summary.status == "Warning"
-    # ServiceNow still judged.
-    assert "1 bound" in summary.result
-    assert "Workday connection coverage unverified" in summary.result
-    # Dedicated detail row names the impact and the fix.
-    wd = by_id["ENV-004-WD"]
-    assert wd.status == "Warning"
-    assert "Workday connection health was not judged" in wd.result
-    assert "RuntimeError: boom" in wd.result
-    assert "Dataverse read access" in wd.remediation
+    assert row.status == "Failed"
+    assert "required flow reference msdyn_sharedworkdaysoap_workdayruntime is missing" in row.result
+    assert "Repair the missing" in row.remediation
 
 
-def test_no_dataverse_creds_on_workday_install_warns_not_false_clean(
-    _patch_query_all,
+def test_unrelated_unbound_workday_reference_is_ignored(dependency_case):
+    unrelated = deepcopy(_workday_row(dependency_case))
+    unrelated.update(connectionreferencelogicalname="another_application_workday", connectionid=None)
+    dependency_case.rows.append(unrelated)
+
+    assert _summary(dependency_case).status == "Passed"
+
+
+def test_inactive_servicenow_topics_do_not_require_their_unbound_reference(dependency_case):
+    row = _summary(dependency_case)
+
+    assert row.status == "Passed"
+    assert "service-now" not in row.result
+
+
+def test_active_direct_topic_requires_its_native_reference(dependency_case):
+    topic = next(change["component"] for change in dependency_case.payload["botComponentChanges"]
+                 if "InvokeConnectorAction" in json.dumps(change))
+    topic["status"] = "Active"
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Failed"
+    assert "shared_service-now is unbound" in row.result
+    assert "Connection references" in row.remediation
+
+
+def test_missing_active_native_reference_fails(dependency_case):
+    topic = next(change["component"] for change in dependency_case.payload["botComponentChanges"]
+                 if "InvokeConnectorAction" in json.dumps(change))
+    topic["status"] = "Active"
+    dependency_case.payload["connectionReferenceChanges"] = []
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Failed"
+    assert "required native reference" in row.result and "is missing" in row.result
+    assert "Repair" in row.remediation
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_agent_local_references_are_never_deduplicated_across_agents(dependency_case, reverse):
+    payload = dependency_case.payload
+    topic = next(change for change in payload["botComponentChanges"]
+                 if "InvokeConnectorAction" in json.dumps(change))
+    topic["component"]["status"] = "Active"
+    payload["botComponentChanges"] = [topic]
+    ref = payload["connectionReferenceChanges"][0]["connectionReference"]
+    ref["connectionId"] = "connection-for-first-agent"
+    dependency_case.inventory = [{
+        "name": ref["connectionId"], "properties": {"apiId": ref["connectorId"]}
+    }]
+    second = deepcopy(payload)
+    second["connectionReferenceChanges"][0]["connectionReference"]["connectionId"] = None
+    payloads = {dependency_case.agent_id: payload, SECOND_AGENT: second}
+    ids = list(payloads)
+    dependency_case.runner.connection_agent_ids = tuple(reversed(ids)) if reverse else tuple(ids)
+    dependency_case.native.fetch_components.side_effect = payloads.__getitem__
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Failed"
+    assert "2 required reference(s)" in row.result
+    assert f"Agent {SECOND_AGENT}:" in row.result
+    assert "1 unbound" in row.result
+    assert "bind" in row.remediation
+    dependency_case.query.assert_not_called()
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("state", ["passed", "denied", "malformed"])
+def test_shared_flow_is_read_once_without_losing_agent_coverage(
+    dependency_case, reverse, state,
 ):
-    """Creds-absent on a Workday install degrades to WARNING, never PASS.
+    ids = [dependency_case.agent_id, SECOND_AGENT]
+    dependency_case.runner.connection_agent_ids = tuple(reversed(ids)) if reverse else tuple(ids)
+    shared_flow = sorted(dependency_case.flows)[0]
+    if state == "malformed":
+        dependency_case.flows[shared_flow]["properties"]["connectionReferences"] = []
+    elif state == "denied":
+        def read_flow(_env, flow_id):
+            if flow_id == shared_flow:
+                raise RuntimeError("Shared flow read denied")
+            return dependency_case.flows[flow_id]
+        dependency_case.runner.pp_admin.get_flow.side_effect = read_flow
 
-    Native Declarative Agent runs authenticate no Dataverse token, so the
-    flow-scoped Workday SOAP reference cannot be read and the components API
-    cannot see it. A components-only PASS would be a false clean on a Workday
-    install. The local config's Workday REST base URL marks the install as
-    Workday, so ENV-004 must WARN rather than silently PASS.
-    """
-    runner = _runner(
-        components=_servicenow_only(),
-        dv_rows_or_error=[],
-        env_url=None,
-        dv_token=None,
-        config_extra={"restBaseUrl": "https://wd.example.com/ccx/api"},
+    row = _summary(dependency_case)
+
+    reads = dependency_case.runner.pp_admin.get_flow.call_args_list
+    assert len(reads) == len(dependency_case.flows)
+    assert {call.args[1] for call in reads} == set(dependency_case.flows)
+    assert "6 active flow call(s)" in row.result
+    assert dependency_case.native.fetch_components.call_count == 2
+    if state == "passed":
+        assert row.status == "Passed"
+        assert "4 required reference(s)" in row.result
+        assert row.remediation == ""
+    else:
+        assert row.status == "Warning"
+        assert all(f"Agent {agent_id}, flow {shared_flow}" in row.result for agent_id in ids)
+        assert ("Shared flow read denied" if state == "denied" else
+                "Flow detail omitted its connection-reference map") in row.result
+        assert "Restore read access" in row.remediation
+
+
+def test_shared_flow_cache_is_limited_to_one_audit(dependency_case):
+    first = _summary(dependency_case)
+    dependency_case.runner.pp_admin.get_flow.reset_mock()
+    _workday_row(dependency_case)["connectionid"] = None
+
+    second = _summary(dependency_case)
+
+    assert first.status == "Passed"
+    assert second.status == "Failed"
+    assert "unbound" in second.result
+    assert "bind" in second.remediation
+    assert dependency_case.runner.pp_admin.get_flow.call_count == len(dependency_case.flows)
+
+
+def test_different_agent_response_is_not_substituted(dependency_case):
+    dependency_case.native.get_agent.side_effect = None
+    dependency_case.native.get_agent.return_value = {"botId": SECOND_AGENT}
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Warning"
+    assert "different subject" in row.result
+    assert "Restore read access" in row.remediation
+    dependency_case.native.fetch_components.assert_not_called()
+
+
+@pytest.mark.parametrize("target", [(), ("not-an-agent-guid",)])
+def test_missing_or_invalid_subject_is_blocked(dependency_case, target):
+    dependency_case.runner.connection_agent_ids = target
+    dependency_case.runner.config = {"agents": [{"botId": SECOND_AGENT}]}
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Blocked"
+    assert "--agent-id" in row.remediation
+    dependency_case.native.get_agent.assert_not_called()
+
+
+def test_known_failure_wins_over_partial_flow_read(dependency_case):
+    _workday_row(dependency_case)["connectionid"] = None
+    dependency_case.runner.pp_admin.get_flow.side_effect = (
+        lambda _env, flow_id: dependency_case.flows[flow_id]
+        if flow_id != sorted(dependency_case.flows)[1]
+        else (_ for _ in ()).throw(RuntimeError("Flow read denied"))
     )
 
-    by_id = _by_id(_check(runner, _patch_query_all))
-    summary = by_id["ENV-004"]
+    row = _summary(dependency_case)
 
-    assert summary.status == "Warning"
-    # ServiceNow (component-sourced) is still judged.
-    assert "1 bound" in summary.result
-    assert "Workday connection coverage unverified" in summary.result
-    assert "Dataverse read access" in summary.remediation
-    # Dedicated detail row names the impact and the fix.
-    wd = by_id["ENV-004-WD"]
-    assert wd.status == "Warning"
-    assert "Workday connection health was not judged" in wd.result
-    assert "Dataverse was not available" in wd.result
-    assert "Dataverse read access" in wd.remediation
+    assert row.status == "Failed"
+    assert "unbound" in row.result and "Flow read denied" in row.result
+    assert "Restore read access" in row.remediation
 
 
-def test_no_dataverse_creds_on_non_workday_install_passes_quietly(
-    _patch_query_all,
-):
-    """Creds-absent on a non-Workday install stays PASS with no Workday noise.
+def test_dataverse_denied_is_incomplete_not_empty_or_passed(dependency_case):
+    dependency_case.query.side_effect = RuntimeError("Reference read denied")
 
-    A ServiceNow-only install has no Workday REST/SOAP base URL configured, so
-    there is no Workday coverage to warn about and ENV-004 must not emit a
-    false WARNING.
-    """
-    runner = _runner(
-        components=_servicenow_only(),
-        dv_rows_or_error=[],
-        env_url=None,
-        dv_token=None,
-    )
+    row = _summary(dependency_case)
 
-    by_id = _by_id(_check(runner, _patch_query_all))
-    summary = by_id["ENV-004"]
+    assert row.status == "Warning"
+    assert "Flow reference bindings unverified" in row.result
+    assert "Reference read denied" in row.result
+    assert "Restore read access" in row.remediation
 
-    assert summary.status == "Passed"
-    assert "1 reference(s) declared by the agent(s)" in summary.result
-    assert "1 bound" in summary.result
-    assert "ENV-004-WD" not in by_id
+
+@pytest.mark.parametrize("where", ["reference", "physical"])
+def test_wrong_connector_fails(dependency_case, where):
+    if where == "reference":
+        _workday_row(dependency_case)["connectorid"] = "shared_service-now"
+    else:
+        dependency_case.inventory[0]["properties"]["apiId"] = "shared_service-now"
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Failed"
+    assert "wrong connector" in row.result
+    assert "Repair" in row.remediation
+
+
+def test_confirmed_missing_physical_connection_fails(dependency_case):
+    dependency_case.inventory = []
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Failed"
+    assert "bound physical connection does not exist" in row.result
+    assert "Repair" in row.remediation
+    dependency_case.runner.pp_admin.get_connections.assert_called_once()
+
+
+def test_maker_invisible_without_admin_access_warns_not_missing(dependency_case):
+    dependency_case.inventory = []
+    dependency_case.runner.pp_admin.get_connections.side_effect = RuntimeError("Admin access denied")
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Warning"
+    assert "not maker-visible" in row.result
+    assert "does not exist" not in row.result
+    assert "Restore read access" in row.remediation
+
+
+def test_admin_visible_connection_is_not_reported_missing(dependency_case):
+    authoritative = deepcopy(dependency_case.inventory)
+    dependency_case.inventory = []
+    dependency_case.runner.pp_admin.get_connections.side_effect = lambda _env, **_kwargs: authoritative
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Passed"
+    assert row.remediation == ""
+
+
+def test_additional_same_connector_connection_is_advisory_only(dependency_case):
+    extra = deepcopy(dependency_case.inventory[0])
+    extra["name"] = "another-agents-connection"
+    dependency_case.inventory.append(extra)
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Warning"
+    assert "1 additional connection(s)" in row.result
+    assert "may serve other agents" in row.result
+    assert row.remediation == ""
+
+
+@pytest.mark.parametrize("value", [0, False, [], "   "])
+def test_invalid_falsy_connection_identity_is_not_resolved_to_another_value(dependency_case, value):
+    _workday_row(dependency_case)["connectionid"] = value
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Warning"
+    assert "malformed physical connection identity" in row.result
+    assert "Restore read access" in row.remediation
+
+
+@pytest.mark.parametrize("field,value", [
+    ("botComponentChanges", None),
+    ("botComponentChanges", [None]),
+    ("botComponentChanges", [{"component": {"$kind": "DialogComponent", "status": "Unknown"}}]),
+])
+def test_invalid_component_shapes_warn(dependency_case, field, value):
+    dependency_case.payload[field] = value
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Warning"
+    assert "dependency discovery incomplete" in row.result
+    assert "Restore read access" in row.remediation
+
+
+@pytest.mark.parametrize("detail", [
+    None, {"properties": None}, {"properties": {"connectionReferences": []}},
+    {"properties": {"connectionReferences": {"x": {"apiDefinition": 4}}}},
+])
+def test_invalid_flow_shapes_warn(dependency_case, detail):
+    dependency_case.runner.pp_admin.get_flow.side_effect = lambda *_args: detail
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Warning"
+    assert "dependencies unverified" in row.result
+    assert "Restore read access" in row.remediation
+
+
+@pytest.mark.parametrize("inventory", [None, [None], [{"name": "x", "properties": []}]])
+def test_invalid_inventory_shapes_warn(dependency_case, inventory):
+    dependency_case.inventory = inventory
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Warning"
+    assert "Physical connection existence unverified" in row.result
+    assert "Restore read access" in row.remediation
+
+
+def test_duplicate_physical_identity_warns(dependency_case):
+    dependency_case.inventory.append(deepcopy(dependency_case.inventory[0]))
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Warning"
+    assert "Duplicate physical connection identity" in row.result
+    assert "Restore read access" in row.remediation
+
+
+def test_unsupported_flow_admin_ring_warns_without_using_prod_hosts(dependency_case):
+    dependency_case.runner.ring = "test"
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Warning"
+    assert "only verified on the prod service ring" in row.result
+    assert "Restore read access" in row.remediation
+    dependency_case.runner.pp_admin.get_flow.assert_not_called()
+
+
+def test_no_active_dependencies_passes_without_flow_or_dataverse_access(dependency_case):
+    dependency_case.payload["botComponentChanges"] = []
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Passed"
+    assert "0 required reference(s)" in row.result
+    assert row.remediation == ""
+    dependency_case.query.assert_not_called()
+    dependency_case.runner.pp_admin.get_flow.assert_not_called()
+
+
+@pytest.mark.parametrize("mismatch", ["environment", "tenant", "url"])
+def test_lazy_dataverse_access_refuses_other_subjects(dependency_case, monkeypatch, mismatch):
+    runner = dependency_case.runner
+    runner.connection_dependency_token = Mock(return_value="REDACTED_TOKEN")
+    pp = runner.pp_admin
+    pp.has_flow_token = True
+    pp.has_powerapps_token = True
+    monkeypatch.setattr(dependencies, "PPAdminClient", lambda *_args: pp)
+    monkeypatch.setattr(dependencies, "discover_tenant", lambda _url: (
+        SECOND_AGENT if mismatch == "tenant" else runner.tenant_id
+    ))
+    runner.env_url = "" if mismatch != "url" else "https://other.crm.dynamics.com"
+    if mismatch == "environment":
+        pp.get_environment.return_value["name"] = SECOND_AGENT
+
+    row = _summary(dependency_case)
+
+    assert row.status == "Warning"
+    assert "different" in row.result
+    assert "Restore read access" in row.remediation
+    dependency_case.query.assert_not_called()

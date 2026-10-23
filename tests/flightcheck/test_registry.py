@@ -201,14 +201,12 @@ class TestTransitiveRequirements:
         spec = registry.resolve("ENV-004")
         assert spec is not None and spec.key == "ENV-004"
         assert spec.category_label == "Environment"
-        assert spec.clients == frozenset({registry.AGENTBUILDER})
-        # ENV-004 was re-pointed off the Dataverse connectionreference table to
-        # the Declarative Agent minimalBots components API, so it must not
-        # require a Dataverse endpoint, and its detail rows must not resolve.
+        assert spec.clients == frozenset({registry.AGENTBUILDER, registry.CONNECTIVITY})
+        # Flow and Dataverse audiences are discovered lazily from active topics.
         plan = registry.transitive_requirements("ENV-004")
         assert registry.AGENTBUILDER in plan.clients
         assert plan.requires_dataverse_endpoint is False
-        assert plan.requires_config is True
+        assert plan.requires_config is False
         assert registry.resolve("ENV-004-GRS") is None
         assert registry.resolve("ENV-004-UR-001") is None
 

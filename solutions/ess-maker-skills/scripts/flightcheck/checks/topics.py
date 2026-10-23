@@ -55,10 +55,7 @@ from pathlib import Path
 
 from ..runner import CheckResult, Priority, Role, Status
 
-DOC_BASE = (
-    "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
-    "employee-self-service"
-)
+from ..documentation import DOC_BASE
 _DOC_TOPICS = f"{DOC_BASE}/workday#topics"
 
 _CATEGORY = "Workday Topics"

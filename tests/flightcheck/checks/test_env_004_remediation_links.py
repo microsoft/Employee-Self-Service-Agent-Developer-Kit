@@ -26,6 +26,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from copy import deepcopy
 
 import pytest
 
@@ -57,6 +58,31 @@ def _scripts_on_path():
 # ─────────────────────────────────────────────────────────────────────
 
 _MISSING = object()
+_BOT_IDS = {
+    "hr": "00000000-0000-4000-8000-00000000aaaa",
+    "it": "00000000-0000-4000-8000-00000000bbbb",
+}
+
+
+def _active_components(payload):
+    """Remediation-only mutations of the captured native action contract.
+
+    End-to-end response-shape coverage lives in test_env_004_workday_coverage
+    and replays env004_dependencies.yaml through the real HTTP clients.
+    """
+    payload = deepcopy(payload)
+    references = payload.get("connectionReferenceChanges")
+    if isinstance(references, list):
+        payload["botComponentChanges"] = [{
+            "component": {
+                "$kind": "DialogComponent", "status": "Active",
+                "dialog": {"actions": [{
+                    "$kind": "InvokeConnectorAction",
+                    "connectionReference": row["connectionReference"]["connectionReferenceLogicalName"],
+                } for row in references]},
+            },
+        }]
+    return payload
 
 
 class _FakeAgentBuilder:
@@ -76,7 +102,10 @@ class _FakeAgentBuilder:
         self._configure_error = configure_error
 
     def fetch_components(self, _agent_id):
-        return self._components
+        return _active_components(self._components)
+
+    def get_agent(self, agent_id):
+        return {"botId": agent_id}
 
     def get_realm_configuration(self, _agent_id, realm):
         # Mirror the real client's contract so a test can't pass an int-typed
@@ -100,11 +129,16 @@ class _PerBotAgentBuilder:
         self._components = components
         self._configs = configs or {}
         self._errors = errors or {}
+        self.configure_calls = []
 
     def fetch_components(self, _agent_id):
-        return self._components
+        return _active_components(self._components)
+
+    def get_agent(self, agent_id):
+        return {"botId": agent_id}
 
     def get_realm_configuration(self, agent_id, realm):
+        self.configure_calls.append((agent_id, realm))
         if type(realm) is not int:
             raise ValueError("Realm must be the numeric Dev/Test/Prod value.")
         if agent_id in self._errors:
@@ -113,6 +147,19 @@ class _PerBotAgentBuilder:
 
 
 def _runner(*, agentbuilder=None, config=_MISSING, env_id="env-deeplinks"):
+    references = (
+        agentbuilder._components.get("connectionReferenceChanges", [])
+        if agentbuilder is not None else []
+    )
+    physical = {}
+    if isinstance(references, list):
+        for row in references:
+            ref = row["connectionReference"]
+            if ref.get("connectionId") is not None:
+                physical[ref["connectionId"]] = {
+                    "name": ref["connectionId"],
+                    "properties": {"apiId": ref["connectorId"]},
+                }
     return SimpleNamespace(
         agentbuilder=agentbuilder,
         config=(
@@ -121,6 +168,7 @@ def _runner(*, agentbuilder=None, config=_MISSING, env_id="env-deeplinks"):
             else config
         ),
         env_id=env_id,
+        connectivity=SimpleNamespace(list_connections=lambda _env: list(physical.values())),
     )
 
 
@@ -152,14 +200,14 @@ def _unbound(connector="shared_service-now"):
 class TestConnectionReferences:
     def test_all_bound_passes(self):
         components = ab.components_with_references(
-            references=[_bound(), _bound(connector="shared_workdaysoap")]
+            references=[_bound(), _bound(connector="shared_workdaysoap", connection_id="conn-workday")]
         )
         runner = _runner(agentbuilder=_FakeAgentBuilder(components=components))
 
         summary = _by_id(_check(runner))["ENV-004"]
 
         assert summary.status == "Passed"
-        assert "2 reference(s) declared by the agent(s)" in summary.result
+        assert "2 required reference(s)" in summary.result
         assert "2 bound" in summary.result
         assert "unbound" not in summary.result
 
@@ -211,9 +259,9 @@ class TestConnectionReferences:
     def test_no_agentbuilder_client_skips(self):
         summary = _by_id(_check(_runner(agentbuilder=None)))["ENV-004"]
 
-        assert summary.status == "Skipped"
-        assert "AgentBuilder client or agent botId not available" in summary.result
-        assert "AgentBuilder" in summary.remediation
+        assert summary.status == "Blocked"
+        assert "exact agent target and AgentBuilder read access" in summary.result
+        assert "--agent-id" in summary.remediation
 
     def test_no_configured_botid_skips(self):
         runner = _runner(
@@ -221,8 +269,8 @@ class TestConnectionReferences:
         )
         summary = _by_id(_check(runner))["ENV-004"]
 
-        assert summary.status == "Skipped"
-        assert "not available" in summary.result
+        assert summary.status == "Blocked"
+        assert "exact agent target" in summary.result
 
     def test_malformed_changeset_degrades_to_warning(self):
         runner = _runner(
@@ -233,13 +281,12 @@ class TestConnectionReferences:
         summary = _by_id(_check(runner))["ENV-004"]
 
         assert summary.status == "Warning"
-        assert "Unable to read the agent's connection references" in summary.result
+        assert "dependency discovery incomplete" in summary.result
         assert "ValueError" in summary.result
-        assert "AgentBuilder" in summary.remediation
+        assert "Restore read access" in summary.remediation
 
     def test_references_unioned_across_configured_agents(self):
-        # Two agents, each declaring the SAME logical name — the union must
-        # de-dupe so the shared ref is judged once, not twice.
+        # A logical name is local to an agent, never a cross-agent dedup key.
         shared = ab.connection_reference_change(
             connector="shared_service-now",
             connection_id=None,
@@ -248,23 +295,23 @@ class TestConnectionReferences:
 
         class _TwoAgent(_FakeAgentBuilder):
             def fetch_components(self, _agent_id):
-                return ab.components_with_references(references=[shared])
+                return _active_components(ab.components_with_references(references=[shared]))
 
         runner = _runner(
             agentbuilder=_TwoAgent(),
             config={
                 "agents": [
-                    {"botId": "bot-a"},
-                    {"botId": "bot-b"},
+                    {"botId": "00000000-0000-0000-0000-000000001001"},
+                    {"botId": "00000000-0000-0000-0000-000000001002"},
                 ]
             },
         )
         results = _check(runner)
         by_id = _by_id(results)
 
-        assert by_id["ENV-004"].result.startswith("1 reference(s)")
+        assert by_id["ENV-004"].result.startswith("2 required reference(s)")
         assert "ENV-004-UR-001" in by_id
-        assert "ENV-004-UR-002" not in by_id
+        assert "ENV-004-UR-002" in by_id
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -273,6 +320,265 @@ class TestConnectionReferences:
 
 
 class TestGrsCommitPin:
+    @pytest.mark.parametrize("compatibility", [
+        {"slug": "hr", "botId": _BOT_IDS["it"], "expectedGrsCommitSha": "stale"},
+        {"slug": "hr", "expectedGrsCommitSha": "stale"},
+        {"slug": "hr", "botId": _BOT_IDS["hr"].upper(), "expectedGrsCommitSha": "stale"},
+    ])
+    def test_canonical_slug_excludes_stale_compatibility_pin(self, compatibility):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+            configs={_BOT_IDS["hr"]: ab.configuration(commit_sha="aaaa")},
+        )
+        runner = _runner(agentbuilder=client, config={
+            "agents": [{
+                "slug": "hr", "botId": _BOT_IDS["hr"],
+                "expectedGrsCommitSha": "aaaa", "grsRealm": "Test",
+            }],
+            "agent": compatibility,
+        })
+
+        results = _by_id(_check(runner))
+
+        assert results["ENV-004-GRS"].status == "Passed"
+        assert client.configure_calls == [(_BOT_IDS["hr"], 1)]
+        assert "aaaa" in results["ENV-004-GRS"].result
+        assert results["ENV-004-GRS"].remediation == ""
+        assert results["ENV-004"].status == "Passed"
+
+    @pytest.mark.parametrize("duplicate_id", [
+        _BOT_IDS["hr"], _BOT_IDS["hr"].upper(), f" {_BOT_IDS['hr']} ",
+    ])
+    def test_duplicate_bot_ids_are_judged_once_with_canonical_settings(self, duplicate_id):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+            configs={_BOT_IDS["hr"]: ab.configuration(commit_sha="aaaa")},
+        )
+        runner = _runner(agentbuilder=client, config={
+            "agents": [
+                {"slug": "hr", "botId": _BOT_IDS["hr"],
+                 "expectedGrsCommitSha": "aaaa", "grsRealm": 0},
+                {"botId": duplicate_id, "expectedGrsCommitSha": "stale", "grsRealm": 2},
+            ],
+        })
+
+        grs = _by_id(_check(runner))["ENV-004-GRS"]
+
+        assert grs.status == "Passed"
+        assert client.configure_calls == [(_BOT_IDS["hr"], 0)]
+        assert "aaaa" in grs.result
+        assert grs.remediation == ""
+
+    def test_unrepresented_compatibility_subject_retains_own_pin_and_realm(self):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+            configs={
+                _BOT_IDS["hr"]: ab.configuration(commit_sha="aaaa"),
+                _BOT_IDS["it"]: ab.configuration(commit_sha="bbbb"),
+            },
+        )
+        runner = _runner(agentbuilder=client, config={
+            "agents": [{"slug": "hr", "botId": _BOT_IDS["hr"],
+                        "expectedGrsCommitSha": "aaaa", "grsRealm": 0}],
+            "agent": {"slug": "it", "botId": _BOT_IDS["it"],
+                      "expectedGrsCommitSha": "bbbb", "grsRealm": 2},
+        })
+
+        grs = _by_id(_check(runner))["ENV-004-GRS"]
+
+        assert grs.status == "Passed"
+        assert client.configure_calls == [(_BOT_IDS["hr"], 0), (_BOT_IDS["it"], 2)]
+        assert "aaaa" in grs.result and "bbbb" in grs.result
+        assert grs.remediation == ""
+
+    @pytest.mark.parametrize("active_slug", ["hr", "it"])
+    def test_each_agent_uses_its_own_pin_and_realm(self, active_slug):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+            configs={
+                _BOT_IDS["hr"]: ab.configuration(commit_sha="aaaa"),
+                _BOT_IDS["it"]: ab.configuration(commit_sha="bbbb"),
+            },
+        )
+        runner = _runner(agentbuilder=client, config={
+            "activeAgent": active_slug,
+            "agents": [
+                {"slug": "hr", "botId": _BOT_IDS["hr"],
+                 "expectedGrsCommitSha": "aaaa", "grsRealm": "Dev"},
+                {"slug": "it", "botId": _BOT_IDS["it"],
+                 "expectedGrsCommitSha": "bbbb", "grsRealm": "Prod"},
+            ],
+        })
+
+        grs = _by_id(_check(runner))["ENV-004-GRS"]
+
+        assert grs.status == "Passed"
+        assert client.configure_calls == [(_BOT_IDS["hr"], 0), (_BOT_IDS["it"], 2)]
+        assert "aaaa" in grs.result and "bbbb" in grs.result
+        assert grs.remediation == ""
+
+    @pytest.mark.parametrize("pinned_slug", ["hr", "it"])
+    def test_agent_pin_does_not_opt_in_unpinned_sibling(self, pinned_slug):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+            configs={_BOT_IDS[pinned_slug]: ab.configuration()},
+        )
+        agents = [
+            {"slug": slug, "botId": _BOT_IDS[slug]} for slug in ("hr", "it")
+        ]
+        next(a for a in agents if a["slug"] == pinned_slug)[
+            "expectedGrsCommitSha"
+        ] = ab.COMMIT_SHA
+
+        grs = _by_id(_check(_runner(agentbuilder=client, config={
+            "activeAgent": "hr", "agents": agents,
+        })))["ENV-004-GRS"]
+
+        assert grs.status == "Passed"
+        assert client.configure_calls == [(_BOT_IDS[pinned_slug], 0)]
+        assert "not judged" in grs.result
+        assert grs.remediation == ""
+
+    def test_agent_override_and_global_default_are_independent(self):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+            configs={
+                _BOT_IDS["hr"]: ab.configuration(commit_sha="aaaa"),
+                _BOT_IDS["it"]: ab.configuration(commit_sha="bbbb"),
+            },
+        )
+
+        grs = _by_id(_check(_runner(agentbuilder=client, config={
+            "expectedGrsCommitSha": "bbbb", "grsRealm": "Prod",
+            "agents": [
+                {"botId": _BOT_IDS["hr"], "expectedGrsCommitSha": "aaaa", "grsRealm": 0},
+                {"botId": _BOT_IDS["it"]},
+            ],
+        })))["ENV-004-GRS"]
+
+        assert grs.status == "Passed"
+        assert client.configure_calls == [(_BOT_IDS["hr"], 0), (_BOT_IDS["it"], 2)]
+        assert "realm Dev" in grs.result and "realm Prod" in grs.result
+        assert grs.remediation == ""
+
+    @pytest.mark.parametrize("realm", [0, 1, 2])
+    def test_numeric_agent_realm_overrides_global(self, realm):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+            configs={_BOT_IDS["hr"]: ab.configuration()},
+        )
+
+        grs = _by_id(_check(_runner(agentbuilder=client, config={
+            "expectedGrsCommitSha": ab.COMMIT_SHA, "grsRealm": "Prod",
+            "agent": {"botId": _BOT_IDS["hr"], "minimalBotsAlmRealm": realm},
+        })))["ENV-004-GRS"]
+
+        assert grs.status == "Passed"
+        assert client.configure_calls == [(_BOT_IDS["hr"], realm)]
+        assert ab.COMMIT_SHA in grs.result
+        assert grs.remediation == ""
+
+    @pytest.mark.parametrize("value", ["", False, 3])
+    def test_invalid_present_realm_does_not_fall_back(self, value):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+            configs={_BOT_IDS["hr"]: ab.configuration()},
+        )
+
+        grs = _by_id(_check(_runner(agentbuilder=client, config={
+            "expectedGrsCommitSha": ab.COMMIT_SHA, "grsRealm": "Prod",
+            "agent": {"botId": _BOT_IDS["hr"], "minimalBotsAlmRealm": value},
+        })))["ENV-004-GRS"]
+
+        assert grs.status == "Failed"
+        assert client.configure_calls == []
+        assert "is invalid" in grs.result
+        assert "Dev, Test, or Prod" in grs.remediation
+
+    def test_empty_agent_pin_does_not_inherit_global_pin(self):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+        )
+
+        grs = _by_id(_check(_runner(agentbuilder=client, config={
+            "expectedGrsCommitSha": ab.COMMIT_SHA,
+            "agent": {"botId": _BOT_IDS["hr"], "expectedGrsCommitSha": ""},
+        })))["ENV-004-GRS"]
+
+        assert grs.status == "Skipped"
+        assert client.configure_calls == []
+        assert "No expected GRS commit SHA" in grs.result
+
+    def test_null_agent_settings_allow_shared_defaults(self):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+            configs={_BOT_IDS["hr"]: ab.configuration(), _BOT_IDS["it"]: ab.configuration()},
+        )
+
+        grs = _by_id(_check(_runner(agentbuilder=client, config={
+            "expectedGrsCommitSha": ab.COMMIT_SHA, "grsRealm": "Test",
+            "agents": [
+                {"botId": _BOT_IDS["hr"], "expectedGrsCommitSha": None, "grsRealm": None},
+                {"botId": _BOT_IDS["it"]},
+            ],
+        })))["ENV-004-GRS"]
+
+        assert grs.status == "Passed"
+        assert client.configure_calls == [(_BOT_IDS["hr"], 1), (_BOT_IDS["it"], 1)]
+        assert ab.COMMIT_SHA in grs.result
+        assert grs.remediation == ""
+
+    @pytest.mark.parametrize("value", [False, 0])
+    def test_invalid_present_pin_does_not_inherit_global_pin(self, value):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+        )
+
+        grs = _by_id(_check(_runner(agentbuilder=client, config={
+            "expectedGrsCommitSha": ab.COMMIT_SHA,
+            "agent": {"botId": _BOT_IDS["hr"], "expectedGrsCommitSha": value},
+        })))["ENV-004-GRS"]
+
+        assert grs.status == "Failed"
+        assert client.configure_calls == []
+        assert "commit SHA must be a string" in grs.result
+        assert "expectedGrsCommitSha" in grs.remediation
+
+    def test_missing_subject_id_never_borrows_sibling(self):
+        from flightcheck.checks.environment import _env004_grs_commit_pin_result
+
+        client = _PerBotAgentBuilder(components=ab.components_with_references())
+        runner = _runner(agentbuilder=client, config={
+            "activeAgent": "hr",
+            "agents": [
+                {"slug": "hr", "expectedGrsCommitSha": ab.COMMIT_SHA},
+                {"slug": "it", "botId": _BOT_IDS["it"]},
+            ],
+        })
+
+        grs = _env004_grs_commit_pin_result(runner)
+
+        assert grs.status == "Warning"
+        assert client.configure_calls == []
+        assert "hr" in grs.result and "botId not available" in grs.result
+        assert "records the agent botId" in grs.remediation
+
+    def test_single_agent_copy_does_not_override_canonical_sibling(self):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+            configs={_BOT_IDS["hr"]: ab.configuration(commit_sha="aaaa")},
+        )
+
+        grs = _by_id(_check(_runner(agentbuilder=client, config={
+            "agents": [{"botId": _BOT_IDS["hr"], "expectedGrsCommitSha": "aaaa"}],
+            "agent": {"botId": _BOT_IDS["hr"].upper(), "expectedGrsCommitSha": "stale"},
+        })))["ENV-004-GRS"]
+
+        assert grs.status == "Passed"
+        assert client.configure_calls == [(_BOT_IDS["hr"], 0)]
+        assert "aaaa" in grs.result
+        assert grs.remediation == ""
+
     def test_pin_skipped_and_omitted_from_summary_when_no_expected_sha(self):
         components = ab.components_with_references(references=[_bound()])
         runner = _runner(agentbuilder=_FakeAgentBuilder(components=components))
@@ -346,13 +652,13 @@ class TestGrsCommitPin:
         runner = _runner(
             agentbuilder=_PerBotAgentBuilder(
                 components=components,
-                configs={"bot-mismatch": ab.configuration(commit_sha="deadbeef")},
-                errors={"bot-readfail": RuntimeError("boom")},
+                configs={"00000000-0000-0000-0000-000000001001": ab.configuration(commit_sha="deadbeef")},
+                errors={"00000000-0000-0000-0000-000000001002": RuntimeError("boom")},
             ),
             config={
                 "agents": [
-                    {"slug": "hr", "botId": "bot-mismatch"},
-                    {"slug": "it", "botId": "bot-readfail"},
+                    {"slug": "hr", "botId": "00000000-0000-0000-0000-000000001001"},
+                    {"slug": "it", "botId": "00000000-0000-0000-0000-000000001002"},
                 ],
                 "expectedGrsCommitSha": ab.COMMIT_SHA,
             },

@@ -60,10 +60,7 @@ from auth import query_all
 from ..runner import CheckResult, Priority, Role, Status
 from ..agent_scope import resolve_agent_directory, validate_agent_slug
 
-DOC_BASE = (
-    "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
-    "employee-self-service"
-)
+from ..documentation import DOC_BASE
 _DOC_SIMPLIFIED = f"{DOC_BASE}/workday-simplified-setup"
 
 _CATEGORY = "Workday Extension"
@@ -402,11 +399,13 @@ def _check_connection_auth(runner) -> list[CheckResult]:
 
     if len(auth_refs) > 1:
         result = (
-            "Confirm in the portal — multiple Workday connection references "
-            "match the runtime and legacy package fingerprints, so FlightCheck "
-            "cannot determine which connection is active. Remove the obsolete "
-            "package references, then verify the remaining connection uses "
-            "'Microsoft Entra ID Integrated'."
+            "Found multiple Workday connection references: "
+            + ", ".join(sorted(
+                str(ref.get("connectionreferencelogicalname"))
+                for ref in auth_refs
+            ))
+            + ". Their coexistence does not establish that either reference is obsolete. "
+            "FlightCheck has not confirmed the authentication type of each bound connection."
         )
     elif observed_auth:
         result = (
@@ -444,11 +443,15 @@ def _check_connection_auth(runner) -> list[CheckResult]:
         description=_CONN_AUTH_DESC,
         result=result,
         remediation=(
-            "In Copilot Studio (or the Power Platform Connections list), open "
-            "the Workday connection and confirm its authentication is "
+            "In Power Apps, open Solutions and inspect each Workday connection "
+            "reference using Show dependencies; confirm its consuming flows "
+            "and connection owner. In the Power Platform Connections list, "
+            "open each bound connection and confirm its authentication is "
             "'Microsoft Entra ID Integrated'. If it uses a different auth type, "
-            "delete the connection, re-create it choosing 'Microsoft Entra ID "
-            "Integrated', and re-bind the connection reference."
+            "coordinate a replacement connection with its owner, re-bind the "
+            "affected references, and validate their consumers before retiring "
+            "the existing connection. Do not remove references solely because "
+            "multiple packages are installed."
         ),
         doc_link=_DOC_SIMPLIFIED,
     )]
