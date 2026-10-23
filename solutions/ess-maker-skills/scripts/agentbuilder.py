@@ -443,13 +443,94 @@ def cached_account_names(
     cache_path: Path = DEFAULT_TOKEN_CACHE,
 ) -> list[str]:
     """Return distinct cached sign-in names without acquiring a token."""
-    cache = _load_token_cache(cache_path)
+    return _cached_account_names(_load_token_cache(cache_path))
+
+
+def _cached_account_names(cache: msal.SerializableTokenCache) -> list[str]:
     names: dict[str, str] = {}
     for account in cache.find(msal.TokenCache.CredentialType.ACCOUNT):
         username = str(account.get("username") or "").strip()
         if username:
             names.setdefault(username.casefold(), username)
     return sorted(names.values(), key=str.casefold)
+
+
+def seed_shared_token_cache(
+    account_hint: str,
+    *,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    shared_cache_path: Path = Path(".local/.token_cache.bin"),
+) -> dict[str, Any]:
+    """Copy a selected account's cache once, without auth or replacement."""
+    wanted = str(account_hint or "").strip()
+    if not wanted:
+        raise ValueError("Account sign-in name is required.")
+    existing = {
+        "outcome": "already-exists",
+        "sharedCache": str(shared_cache_path),
+    }
+    if os.path.lexists(shared_cache_path):
+        return existing
+
+    content = cache_path.read_bytes()
+    cache = msal.SerializableTokenCache()
+    cache.deserialize(content.decode("utf-8"))
+    account = next(
+        (
+            name
+            for name in _cached_account_names(cache)
+            if name.casefold() == wanted.casefold()
+        ),
+        None,
+    )
+    if account is None:
+        raise ValueError("Selected account is absent from the AgentBuilder cache.")
+
+    shared_cache_path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(
+        prefix=f"{shared_cache_path.name}.",
+        suffix=".tmp",
+        dir=shared_cache_path.parent,
+    )
+    temporary_path = Path(temporary)
+    failure: BaseException | None = None
+    copied = False
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            # Publish complete bytes without replacing a competing cache.
+            os.link(temporary_path, shared_cache_path)
+        except FileExistsError:
+            return existing
+        copied = True
+        return {
+            "outcome": "copied",
+            "account": account,
+            "sourceCache": str(cache_path),
+            "sharedCache": str(shared_cache_path),
+        }
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        try:
+            temporary_path.unlink()
+        except OSError as cleanup_error:
+            if failure is not None:
+                failure.add_note(
+                    f"Temporary cache cleanup failed: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            else:
+                if copied:
+                    cleanup_error.add_note(
+                        f"Shared cache was copied to {shared_cache_path} "
+                        "before temporary cache cleanup failed."
+                    )
+                raise
 
 
 def _interactive_token(

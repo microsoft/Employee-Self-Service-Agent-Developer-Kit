@@ -57,6 +57,20 @@ python scripts/setup_existing_da.py inspect-agent \
 
 Interpret `DA_AGENT_ROUTE_JSON:`:
 
+When direct inspection reports `routeStatus: resolved`, `alm.isEnrolled: true`,
+and realm `dev` or `prod`, immediately show this standalone chat message before
+returning to the caller, attaching, or performing another operation:
+
+**Message:**
+
+ALM enrollment is confirmed for this agent. Setup is not complete yet.
+
+**End message.**
+
+An accepted update or `persistedValue: true` alone does not trigger this
+confirmation. Do not show it for skipped enrollment, unresolved metadata, or a
+failed inspection. Then follow the applicable route:
+
 - For resolved `dev`, return to the caller's exact Dev continuation. Use `da-existing-dev.md` unless the caller defines a narrower attachment or replacement continuation.
 - For resolved `prod`, continue through `da-prod-to-dev.md`.
 - For `not-established`, state that the ALM setting persisted but direct metadata has not established enrollment or an authoring realm. Stop without retrying enrollment, attaching, or publishing.
@@ -64,13 +78,13 @@ Interpret `DA_AGENT_ROUTE_JSON:`:
 
 ## Skip enrollment
 
-Show:
+When the maker selects **Skip enrollment**, immediately show this standalone
+chat message before returning to the caller, attaching, or performing another
+operation:
 
 **Message:**
 
-ALM enrollment skipped. The agent was not changed.
-
-Local authoring does not require ALM enrollment. Setup will validate the exact agent and component identity before preparing this workspace. Enrollment will still be required later for ALM lifecycle operations such as import, export, promotion, or realm-family management.
+ALM enrollment skipped.
 
 **End message.**
 

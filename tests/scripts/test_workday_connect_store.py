@@ -1215,6 +1215,24 @@ def test_promoted_target_reuses_complete_tenant_foundation(
         for evidence in initialized["phases"]["entra"]["evidence"]
     )
 
+    initialized["targets"]["dev"]["phases"]["workday-admin"]["evidence"].append(
+        {
+            "action": "tenant-foundation-reused",
+            "outcome": "verified",
+            "provenance": "stored-tenant-foundation",
+        }
+    )
+    store.config_path.write_text(json.dumps(initialized), encoding="utf-8")
+    resumed = store.load()
+
+    assert resumed["activeTargetRealm"] == "test"
+    assert resumed["phases"]["workday-admin"]["status"] == "complete"
+    assert resumed["targets"]["test"]["phases"]["workday-admin"]["status"] == "complete"
+    assert resumed["targets"]["dev"]["phases"]["entra"]["status"] == "complete"
+    assert resumed["targets"]["dev"]["phases"]["workday-admin"]["status"] == "pending"
+    assert resumed["targets"]["dev"]["deploymentStatus"] == "partially-configured"
+    assert json.loads(store.config_path.read_text(encoding="utf-8")) == resumed
+
 
 def test_promoted_target_foundation_failure_is_atomic(
     tmp_path: Path,
@@ -2664,7 +2682,7 @@ def test_profile_result_is_rejected_after_target_changes(
         store.record_validation_profile("preflight", summary)
 
 
-def test_matching_foundation_restores_workday_after_entra_reread(
+def test_matching_foundation_keeps_workday_pending_after_entra_reread(
     tmp_path: Path,
 ) -> None:
     import workday_connect_model as model
@@ -2719,19 +2737,16 @@ def test_matching_foundation_restores_workday_after_entra_reread(
         "entra",
         set(model.PHASE_REQUIRED_ACTIONS["entra"]),
     )
-    restored, reused = store.restore_workday_foundation()
+    restored = store.load()
 
-    assert reused is True
-    assert restored["phases"]["workday-admin"]["status"] == "active"
+    assert restored["tenantFoundation"] is not None
+    assert restored["phases"]["workday-admin"]["status"] == "pending"
     assert (
         restored["phases"]["workday-admin"]["administrator"]["substage"]
-        == "collecting-evidence"
+        == "not-started"
     )
     assert restored["phases"]["connections"]["status"] == "pending"
-    assert any(
-        evidence["action"] == "tenant-foundation-reused"
-        for evidence in restored["phases"]["workday-admin"]["evidence"]
-    )
+    assert restored["phases"]["workday-admin"]["evidence"] == []
 
 
 def test_foundation_is_not_reused_for_a_different_workday_tenant(
@@ -2759,11 +2774,60 @@ def test_foundation_is_not_reused_for_a_different_workday_tenant(
     store.capture_tenant_foundation()
 
     store.merge_section("scope", {"workdayTenant": "fabrikam"})
-    restored, reused = store.restore_workday_foundation()
+    restored = store.load()
 
-    assert reused is False
     assert restored["tenantFoundation"] is None
     assert restored["phases"]["workday-admin"]["status"] == "pending"
+
+
+@pytest.mark.parametrize("schema_version", [11, 12])
+@pytest.mark.parametrize("operation", ["load", "initialize"])
+def test_old_automatic_workday_completion_reopens_on_resume(
+    tmp_path: Path,
+    schema_version: int,
+    operation: str,
+) -> None:
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "scope",
+        {"entraTenantId": "tenant-id", "workdayTenant": "contoso"},
+    )
+    _set_foundation_data(store)
+    for definition in model.PHASE_DEFINITIONS:
+        phase_id = definition.identifier.value
+        _complete_phase(store, phase_id, set(model.PHASE_REQUIRED_ACTIONS[phase_id]))
+    state = store.capture_tenant_foundation()
+    entra = state["phases"]["entra"]
+    foundation = state["tenantFoundation"]
+    state["schemaVersion"] = schema_version
+    state["phases"]["workday-admin"]["evidence"].append(
+        {
+            "action": "tenant-foundation-reused",
+            "outcome": "verified",
+            "provenance": "stored-tenant-foundation",
+        }
+    )
+    store.config_path.write_text(json.dumps(state), encoding="utf-8")
+
+    resumed = getattr(store, operation)()
+
+    assert resumed["status"] == "in-progress"
+    assert resumed["phases"]["preflight"]["status"] == "complete"
+    assert resumed["phases"]["entra"] == entra
+    assert resumed["tenantFoundation"] == foundation
+    for phase_id in ("workday-admin", "connections", "runtime", "maker-validation"):
+        assert resumed["phases"][phase_id]["status"] == "pending"
+        assert resumed["phases"][phase_id]["completedActions"] == []
+        assert resumed["phases"][phase_id]["evidence"] == []
+        assert resumed["phases"][phase_id]["validationProfiles"] == {}
+    assert resumed["phases"]["workday-admin"]["administrator"]["partialEvidence"] == {}
+    assert store.status()["nextPhaseId"] == "workday-admin"
+    assert store.load() == resumed
+    assert json.loads(store.config_path.read_text(encoding="utf-8")) == resumed
 
 
 def test_workday_endpoint_drift_clears_tenant_foundation(

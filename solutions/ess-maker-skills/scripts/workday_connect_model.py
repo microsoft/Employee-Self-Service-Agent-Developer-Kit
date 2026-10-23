@@ -288,9 +288,7 @@ ADMINISTRATOR_PARTIAL_FIELDS = {
 ADMINISTRATOR_REQUIRED_FIELDS = {
     Phase.ENTRA.value: frozenset(
         {
-            "selectedDirectoryDisplayName",
             "applicationId",
-            "applicationDisplayName",
             "replyUrl",
             "entraChecks",
             "nameIdSource",
@@ -304,6 +302,8 @@ ADMINISTRATOR_REQUIRED_FIELDS = {
         - {
             "certificateValidFrom",
             "employeeSecurityGroup",
+            "networkReadinessOutcome",
+            "apiClientOutcome",
             "optionalDomains",
         }
     ),

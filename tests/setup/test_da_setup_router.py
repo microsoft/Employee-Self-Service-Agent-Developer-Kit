@@ -65,6 +65,29 @@ def test_public_setup_routes_to_da_foundation_module() -> None:
     assert "Do not route to Dataverse foundation or onboarding playbooks" in prompt
 
 
+def test_setup_messages_use_fixed_templates_including_delegated_files() -> None:
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    contract = " ".join(foundation.split("## Setup state sources", 1)[0].split())
+    assert (
+        "Render every **Message** block in this file and every delegated setup file"
+    ) in contract
+    assert "using its fixed wording and structure" in contract
+    assert "Replace documented placeholders with resolved evidence" in contract
+    assert "send only the block contents" in contract
+    assert "Surrounding instructions remain internal" in contract
+
+    formatting = " ".join(_UI_FORMATTING.read_text(encoding="utf-8").split())
+    assert (
+        "When an owning skill supplies an exact **Message** block or fixed "
+        "response template, render its wording and structure"
+    ) in formatting
+    assert "documented placeholders resolved from runtime context" in formatting
+    assert (
+        "When the owning skill supplies no fixed copy, compose UI guidance "
+        "from runtime context"
+    ) in formatting
+
+
 def test_help_me_decide_uses_chat_view_follow_up_messages() -> None:
     foundation = _FOUNDATION.read_text(encoding="utf-8")
     help_contract = foundation.split("### Help me decide", 1)[1].split(
@@ -130,6 +153,84 @@ def test_first_time_orientation_explains_setup_and_preserves_direct_routes() -> 
     assert "**What does setup do?**" not in account_section
     assert "administrator handoffs" in orientation
     assert "final\ncompletion choices" in orientation
+
+
+def test_setup_seeds_shared_cache_once_and_reuses_flightcheck_account() -> None:
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    account_section = foundation.split("## Choose the sign-in account", 1)[1].split(
+        "## Confirm people and role availability", 1
+    )[0]
+    normalized = " ".join(account_section.split())
+    assert (
+        'python scripts/setup_existing_da.py seed-shared-cache --account "{SETUP_ACCOUNT}"'
+        in account_section
+    )
+    assert "once after the first authenticated account is established" in normalized
+    assert "before the next setup operation" in normalized
+    assert "stop before the next setup operation" in normalized
+    assert "explain the reported problem, including any partial-completion note" in normalized
+    assert "`already-exists`" in account_section
+    assert "DA_AUTH_CACHE_SEED_JSON:" in account_section
+    assert "No later account change repeats the copy" in normalized
+    assert '--preferred-username "{SETUP_ACCOUNT}"' in account_section
+
+    readiness = _DA_EXISTING_DEV.read_text(encoding="utf-8")
+    commands = [
+        line
+        for line in readiness.splitlines()
+        if line.startswith("python scripts/flightcheck/cli.py")
+    ]
+    assert len(commands) == 4
+    assert all('--preferred-username "{SETUP_ACCOUNT}"' in line for line in commands)
+    assert "including retries and rechecks" in readiness
+
+
+def test_alm_enrollment_confirmation_follows_verified_enrollment() -> None:
+    text = _ALM_ENROLLMENT.read_text(encoding="utf-8")
+    enrollment = text.split("## Continue with enrollment", 1)[1].split(
+        "## Skip enrollment", 1,
+    )[0]
+    inspection = enrollment.index("python scripts/setup_existing_da.py inspect-agent")
+    interpretation = enrollment.index("Interpret `DA_AGENT_ROUTE_JSON:`")
+    message = enrollment.index("**Message:**")
+    continuation = enrollment.index("- For resolved `dev`")
+    assert inspection < interpretation < message < continuation
+    boundary = " ".join(enrollment[interpretation:message].split())
+    assert "`routeStatus: resolved`, `alm.isEnrolled: true`" in boundary
+    assert "realm `dev` or `prod`" in boundary
+    assert "immediately show this standalone chat message before" in boundary
+    assert "returning to the caller, attaching, or performing another operation" in (
+        boundary
+    )
+    result, after = enrollment.split("**Message:**", 1)[1].split(
+        "**End message.**", 1,
+    )
+    assert result.strip() == (
+        "ALM enrollment is confirmed for this agent. Setup is not complete yet."
+    )
+    assert (
+        "An accepted update or `persistedValue: true` alone does not trigger "
+        "this confirmation"
+    ) in " ".join(after.split())
+    assert "skipped enrollment, unresolved metadata, or a failed inspection" in (
+        " ".join(after.split())
+    )
+
+
+def test_skipped_alm_enrollment_is_announced_before_local_continuation() -> None:
+    text = _ALM_ENROLLMENT.read_text(encoding="utf-8")
+    skipped = text.split("## Skip enrollment", 1)[1]
+    boundary, remainder = skipped.split("**Message:**", 1)
+    assert (
+        "When the maker selects **Skip enrollment**, immediately show this "
+        "standalone chat message before returning to the caller, attaching, "
+        "or performing another operation"
+    ) in " ".join(boundary.split())
+    message, continuation = remainder.split("**End message.**", 1)
+    assert message.strip() == "ALM enrollment skipped."
+    assert "return to the caller's exact attachment command" in continuation
+    assert "setup_existing_da.py attach" in continuation
+    assert "setup_existing_da.py ensure-alm" not in skipped
 
 
 def test_administrator_handoffs_are_forwardable_and_evidence_gated() -> None:
@@ -262,8 +363,7 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     assert "python scripts/setup_existing_da.py ensure-alm" in enrollment
     assert "DA_ALM_ENROLLMENT_JSON:" in enrollment
     assert "stop without another write or attachment" in normalized_enrollment
-    assert "ALM enrollment skipped. The agent was not changed." in enrollment
-    assert "Local authoring does not require ALM enrollment." in enrollment
+    assert "ALM enrollment skipped." in enrollment
     assert "--allow-unenrolled-authoring" in enrollment
     assert (
         "cannot prepare a local authoring workspace without an ALM authoring route"
@@ -1393,7 +1493,15 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "Do not invoke create concurrently or automatically" in normalized
     assert "diagnostic evidence only" in normalized
     assert "do not explain those internal version concepts to the maker" in normalized
-    assert "The agent was created." in text
+    assert "The agent was created. Setup is not complete yet." in text
+    created_message = text.split(
+        "When the annotations report `outcome: created`", 1
+    )[1].split("**Message:**", 1)[1].split("**End message.**", 1)[0]
+    assert created_message.strip() == (
+        "The agent was created. Setup is not complete yet.\n\n"
+        "> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) "
+        "in Classic Copilot Studio.**"
+    )
     assert "Preparing its local authoring workspace..." not in text
     assert (
         "{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/"
@@ -1403,7 +1511,17 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         "> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) "
         "in Classic Copilot Studio.**"
     )
-    assert created_agent_link in text
+    assert text.count(created_agent_link) == 1
+    created_outcome = text.index("When the annotations report `outcome: created`")
+    created_link = text.index(created_agent_link, created_outcome)
+    product_observation = text.index("da_product_registry.py observe", created_outcome)
+    route_inspection = text.index("setup_existing_da.py inspect-agent", created_outcome)
+    assert created_outcome < created_link < product_observation < route_inspection
+    assert (
+        "Immediately show the successful creation result before recording product "
+        "evidence, running reconciliation, inspecting the authoring route, or "
+        "performing another operation"
+    ) in normalized
     assert "{PRODUCT_COUNT} agent templates are available" in text
     assert "Loading available agent templates for **{environment name}**..." in text
     assert "no agent templates are currently available in the selected environment" in (
@@ -2270,11 +2388,37 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert "--manual-attested" not in text
     assert "--manual-overridden" not in text
     assert "requires an observed allocation greater than zero" in normalized
-    assert (
-        "Apply the first `Warning` without a skip flag to record that zero allocation"
-        in normalized
+    assert "The first eligible result can be used for administrator attestation" in normalized
+    shared_capacity = " ".join(
+        _PERMISSION_GUIDANCE.read_text(encoding="utf-8").split(
+            "## Capacity verification and administration", 1,
+        )[1].split()
     )
-    assert "the recheck still found 0 allocated credits" in normalized
+    assert "after the first successful zero-allocation result" in shared_capacity
+    assert "**Check again** is optional" in shared_capacity
+    assert "after a second successful zero-allocation result" not in shared_capacity
+    assert (
+        "`Failed` and `Error` are not eligible for administrator-attested skip"
+        in shared_capacity
+    )
+    assert "after a second zero-allocation result" not in text
+    assert "**Check again before overriding**" not in text
+    warning_choices = text.split("For `Warning`, present:", 1)[1].split(
+        "When the status is `Manual`", 1
+    )[0]
+    assert "- **Check again**" in warning_choices
+    assert "- **Continue with administrator-attested skip**" in warning_choices
+    assert "- **Not yet**" in warning_choices
+    assert "- **Help me decide**" in warning_choices
+    assert "> ⚠️ **Administrator consent required**" in warning_choices
+    assert "The original zero-allocation result remains the recorded evidence." in warning_choices
+    assert "rerender the Warning Message block above" in warning_choices
+    assert (
+        "Use the following exact evidence-summary templates, substituting only "
+        "their documented placeholders"
+    ) in normalized
+    assert "A capacity check of {environment display name}" in text
+    assert "A recheck of {environment display name}" not in text
     assert (
         "Never treat the maker's statement that capacity was allocated as verification"
         in normalized

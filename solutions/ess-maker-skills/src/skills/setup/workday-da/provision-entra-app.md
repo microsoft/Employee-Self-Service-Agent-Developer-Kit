@@ -108,6 +108,12 @@ After **Yes**, record the engagement boundary:
 python scripts/workday_connect.py administrator-stage --phase entra --substage administrator-engaged
 ```
 
+Then tell the maker:
+
+> I am preparing the Microsoft Entra configuration steps and workbook. Ask the
+> Entra administrator to follow the steps, fill the workbook in parallel, and
+> return the completed workbook to you.
+
 Then generate the guided handoff packet:
 
 ```powershell
@@ -118,37 +124,30 @@ This command reads only the recorded lifecycle state. It does not authenticate
 to Microsoft Graph, discover applications, or make an Entra change. Use the
 returned `packet` for every packet-driven value below.
 
-Render one standalone section titled **Microsoft Entra app administrator handoff -
-share this whole section**. It must contain the administrator role, canonical
-tenant ID, expected Workday Service Provider ID, the capture table, and the
-numbered tasks below. The administrator identifies the selected directory and
-exact enterprise application/app-registration identity. The maker must be able
-to forward that one section without copying values from earlier chat messages.
+Render one standalone section titled **Microsoft Entra app administrator
+handoff - share these steps and the workbook**. It must contain the
+administrator role, canonical tenant ID, expected Workday Service Provider ID,
+and the numbered tasks below. The administrator identifies the selected
+directory and exact enterprise application/app-registration identity. The
+maker must be able to forward that section without copying values from earlier
+chat messages.
 
 Before the numbered tasks, tell the administrator:
 
 > Required role: {packet.administratorRole}
 >
-> Complete the **Your tenant values** column while performing the tasks, then
-> return the completed table to the maker. The maker will paste it back into
-> the agent chat. Return only non-secret values; never include credentials,
-> tokens, certificate contents, or private keys.
+> Fill every cell in the **Your tenant values** column of the supplied
+> workbook while performing the tasks, then return the same `.xlsx` file to
+> the maker. Return only non-secret values; never include credentials, tokens,
+> certificate contents, or private keys.
 
-Render every entry from the packet's `captureInstructions` as one table with
-these exact columns, in this order:
-
-| Information to capture | Where to find it | What to record | Example value | Your tenant values |
-| ---------------------- | ---------------- | -------------- | ------------- | ------------------ |
-
-Use each entry's `information`, `portalLocation`, `instruction`, and
-`exampleValue` values for the first four columns. Leave every cell in **Your
-tenant values** blank. Escape literal table pipes as `\|` and use `<br>` for a
-line break inside a cell. Never show internal `fields` names or state keys.
-This table is both the capture guide and the return worksheet; do not render a
-second checklist or worksheet after the numbered tasks. Keep the numbered
-tasks focused on actions and avoid repeating table locations or capture
-instructions unless they are required to perform the change. Do not ask for a
-field after completion unless it appeared as a row in the shareable table.
+Share `workbookFile` from the command result as the downloadable administrator
+workbook. It must resolve to the checked-in
+`[Entra administrator workbook](assets/entra-admin-handoff.xlsx)`. Tell the
+maker to send a copy to the administrator and not to edit the repository
+template itself. Do not render `packet.captureInstructions` as a chat table;
+the workbook is the single capture worksheet. Keep the numbered tasks focused
+on actions.
 
 After rendering the complete handoff, persist the presentation and waiting
 boundaries:
@@ -228,7 +227,7 @@ by display name alone.
    used by the tenant, commonly `user.mail` or `user.userPrincipalName`.
 
 End the shareable handoff after the numbered tasks. Do not repeat an
-**Information to return to the maker** checklist: the five-column table already
+**Information to return to the maker** checklist: the workbook already
 contains every required value, location, instruction, and allowed example.
 
 After `record-entra` succeeds, the Entra app administrator sign-off is complete.
@@ -236,11 +235,9 @@ The next phase must consume the recorded identifiers and transferred
 certificate without asking the maker to re-engage the Entra app administrator.
 Only an explicit controller-detected Entra target change may reopen this phase.
 
-After the worksheet, ask exactly:
+After the steps and workbook are shared, ask exactly:
 
-**Has the Microsoft Entra app administrator completed this handoff, including
-Grant admin consent (by a separate consent-capable administrator only if
-tenant policy required one)?**
+**Has the Microsoft Entra administrator completed their task?**
 
 Do not treat the answer as a broad "everything is done" confirmation or as
 configuration evidence. It is only the coordination boundary before answer
@@ -257,30 +254,16 @@ After **Yes**, run:
 python scripts/workday_connect.py administrator-stage --phase entra --substage completion-confirmed
 ```
 
-Then collect the Entra app administrator's values in one response. Object IDs, the
-scope GUID, derived tenant URLs, and complete URI lists are not required. A
-reply such as "done", "all good", "continue", or "proceed" is not evidence and
-must not be converted into administrator attestation.
+Then tell the maker:
 
-The VS Code question UI renders an array of questions as a sequential wizard.
-Do not submit one question per worksheet field. Use one
-`vscode_askQuestions` call containing exactly one free-form question:
+> Upload the completed Microsoft Entra administrator workbook file in this
+> chat.
 
-```json
-[
-  {
-    "header": "Microsoft Entra app administrator details",
-    "question": "Paste the completed Microsoft Entra app administrator details in one response. Do not include credentials, tokens, certificate contents, or private keys."
-  }
-]
-```
-
-Preserve the response unchanged. The controller recognizes the generated table
-and common customer-facing labels and capitalization, rejects missing,
-duplicate, or unknown labels, maps only the listed successful choices, and
-validates the structured verification payload. Do not ask the customer to
-reformat a recognizable response. Never infer a missing answer or treat
-unlabeled prose as evidence.
+Use the uploaded `.xlsx` file directly. Do not ask the maker to paste the
+worksheet, retype the values, or hand-author JSON. Object IDs, the scope GUID,
+derived tenant URLs, and complete URI lists are not required. A reply such as
+"done", "all good", "continue", or "proceed" is not evidence and must not be
+converted into administrator attestation.
 
 For the certificate expiration, accept the date exactly as the administrator
 copies it from the portal. Do not ask for an ISO timestamp or require a time or
@@ -289,32 +272,19 @@ month-name formats and ignores any time component. If an all-numeric date is
 inherently ambiguous, preserve the displayed date rather than guessing a
 different locale.
 
-After submission, validate the complete worksheet once. If fields are missing,
-invalid, or internally inconsistent, retain every safe valid answer and ask
-for one revised worksheet containing only the returned `invalidFields` and
-`outstandingFields`. Do not replay the full worksheet or revert to one-by-one
-chat questions. Before the retry question, repeat the applicable
-`captureInstructions` portal location and render a fill-in template containing
-only the missing or invalid customer-facing labels. For example:
+After submission, validate the complete workbook once. If fields are missing,
+invalid, or internally inconsistent, retain every safe valid answer, name the
+returned `invalidFields` and `outstandingFields`, repeat their applicable
+`captureInstructions` portal locations, and ask the administrator to correct
+those cells in the same workbook. Ask the maker to upload the corrected
+`.xlsx` file. Do not replay the full worksheet or revert to one-by-one chat
+questions.
 
-```text
-Find both values at:
-Enterprise applications -> the exact Workday application -> Single sign-on
--> SAML -> SAML Signing Certificate -> active certificate row
-
-Certificate thumbprint:
-Certificate expiration date:
-```
-
-Then ask for that completed mini-template in one free-form response. Do not
-say only "paste a revised worksheet" without the location and template.
-
-Do not perform a maker-authenticated Graph reread after the administrator
-submits the response. Role-aware execution will perform those real API checks
+Do not perform a maker-authenticated Graph reread after the maker uploads the
+completed workbook. Role-aware execution will perform those real API checks
 later.
 
-Persist the selected directory display name, application display name and
-Application ID, derived `entraAppIdUri`, derived
+Persist the Application ID, derived `entraAppIdUri`, derived
 `workdaySamlEntityId`, derived `microsoftEntraIdentifier`, derived
 `entraLoginUrl`, the selected `replyUrl`, and safe certificate metadata. Object
 IDs and the scope GUID are optional future role-aware verification evidence;
@@ -336,12 +306,16 @@ On resume, use the Entra app administrator entry returned by `status`. Do not
 redisplay a completed handoff; collect only its `invalidFields` and
 `outstandingFields`.
 
-Write the administrator's exact response directly to
-`.local/connect/workday-da/entra-return-worksheet.txt`, then run:
+Pass the uploaded workbook path directly:
 
 ```powershell
-python scripts/workday_connect.py record-entra --verification-worksheet-file ".local\connect\workday-da\entra-return-worksheet.txt"
+python scripts/workday_connect.py record-entra --verification-worksheet-file "<uploaded-entra-workbook-path>"
 ```
+
+Successful Entra validation completes only the Entra administrator phase.
+Continue with fresh Workday administrator engagement, completion confirmation,
+and the completed Workday administrator workbook. Matching saved tenant
+settings do not waive that handoff or establish Workday-side completion.
 
 If an exact replay matches the persisted evidence, the controller returns
 `replayed: true`. If a completed phase now returns `driftDetected: true`, the
@@ -349,21 +323,17 @@ controller has reopened Entra and invalidated downstream deployment state.
 Repeat the guided administrator handoff for the changed target; do not
 continue from the stale tenant foundation.
 
-The JSON must contain the administrator-confirmed directory display name,
-Workday application display name and Application ID, selected Reply URL, safe
-certificate metadata, and one evidence object for each check. The controller
-adds the already verified tenant ID and derives the Entity ID, Application ID
-URI, Microsoft Entra Identifier, and Login URL. Object IDs and the scope GUID
-are optional and must not be invented when they were not collected:
+The JSON must contain the Workday application ID, selected Reply URL, safe
+certificate metadata, and one evidence object for each required check. The
+controller adds the already verified tenant ID and derives the Entity ID,
+Application ID URI, Microsoft Entra Identifier, and Login URL. Directory and
+application display names, object IDs, and the scope GUID are not required and
+must not be requested:
 
 ```json
 {
-  "selectedDirectory": {
-    "displayName": "Contoso"
-  },
   "application": {
-    "displayName": "Workday",
-    "appId": "11111111-1111-1111-1111-111111111111"
+    "appId": "XXXX"
   },
   "replyUrl": "https://{approved-workday-reply-url}",
   "certificate": {
@@ -404,21 +374,6 @@ are optional and must not be invented when they were not collected:
       "outcome": "confirmed",
       "provenance": "administrator-attestation",
       "observedValue": "Sign SAML response and assertion"
-    },
-    "existingScopesPreserved": {
-      "outcome": "confirmed",
-      "provenance": "administrator-attestation",
-      "observedValue": "preserved"
-    },
-    "authorizedClientsPreserved": {
-      "outcome": "confirmed",
-      "provenance": "administrator-attestation",
-      "observedValue": "preserved"
-    },
-    "permissionsPreserved": {
-      "outcome": "confirmed",
-      "provenance": "administrator-attestation",
-      "observedValue": "preserved"
     }
   }
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 import sys
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
@@ -26,6 +27,7 @@ from workday_connect_contracts import (  # noqa: E402
     validate_workday_admin_response,
 )
 import workday_connect_contracts as contracts  # noqa: E402
+from generate_workday_admin_workbooks import generate_workbooks  # noqa: E402
 from workday_connect_entra_contracts import (  # noqa: E402
     ENTRA_ADMIN_COMPLETION_QUESTION,
     ENTRA_ADMIN_CONSENT_NOTE,
@@ -35,6 +37,16 @@ from workday_connect_entra_contracts import (  # noqa: E402
 from workday_connect_model import (  # noqa: E402
     ADMINISTRATOR_REQUIRED_FIELDS,
     default_state,
+)
+from workday_connect_workbook import (  # noqa: E402
+    ENTRA_ADMIN_WORKBOOK_PATH,
+    STEPS_SHEET_NAME,
+    WORKDAY_ADMIN_WORKBOOK_PATH,
+    WORKSHEET_HEADERS,
+    WORKSHEET_SHEET_NAME,
+    WorkdayConnectWorkbookError,
+    read_administrator_workbook,
+    write_administrator_workbook,
 )
 
 
@@ -183,7 +195,6 @@ def _workday_response(**overrides):
         "certificateSelectionOutcome": "entra-signing-certificate-selected",
         "certificateValidityOutcome": "matches-verified-entra-certificate",
         "oauthClientId": "safe-client-id",
-        "apiClientOutcome": "existing-client-verified",
         "clientGrantType": "saml-bearer",
         "includeWorkdayOwnedScope": "yes",
         "identityProviderSsoServiceUrl": (
@@ -197,7 +208,6 @@ def _workday_response(**overrides):
         "restBaseUrl": "https://example.workday.com/ccx/api",
         "soapBaseUrl": "https://example.workday.com/ccx/service",
         "authenticationPolicyOutcome": "existing-active-policy",
-        "networkReadinessOutcome": "confirmed-hosts-allowed",
         "rolloutType": "limited-or-test",
         "employeeSecurityGroup": "ESS Workday Pilot Employees",
         "publicWorkerReportsOutcome": "get-permission-verified",
@@ -208,16 +218,13 @@ def _workday_response(**overrides):
             "Staffing",
             "Time Off and Leave",
         ],
-        "optionalDomains": [],
     }
     response.update(overrides)
     return response
 
 
 def _entra_worksheet() -> str:
-    return """Directory name: Contoso
-Enterprise application: Workday exact
-Application ID: 44444444-4444-4444-4444-444444444444
+    return """Application ID: 44444444-4444-4444-4444-444444444444
 Selected Reply URL: https://www.workday.com/saml/acs
 NameID source: user.userPrincipalName
 SAML signing: Sign SAML response and assertion
@@ -228,7 +235,6 @@ Signing certificate: Yes, confirmed
 Authorized connector: Yes, confirmed
 Permissions and consent: Yes, permissions and consent are confirmed
 Employee assignment: Yes, access is confirmed or assignment is not required
-Existing configuration: Preserved without changes
 """
 
 
@@ -237,16 +243,13 @@ def _workday_worksheet() -> str:
 Certificate: The certificate transferred from the completed Entra handoff
 Certificate expiration: Yes, the expiration date matches exactly
 OAuth client ID: safe-client-id
-API client: An existing approved client was verified
 OAuth token URL: https://example.workday.com/ccx/oauth2/contoso_impl/token
 REST base URL: https://example.workday.com/ccx/api
 SOAP base URL: https://example.workday.com/ccx/service
-Authentication policy: An existing active policy allows SAML
-Network readiness: Both Workday hosts are allowed
+Authentication policy: An existing active policy scopes the ESS OAuth client and allows SAML for the intended employees
 Rollout: Entire workforce - All Employees access is configured
 API client access: Yes, SAML Bearer, Workday Owned Scope, and all four required functional areas are configured
 Required employee access: Yes, Get permission is verified for Public Worker Reports and Integration Permissions
-Additional scenario domains: No additional scenario domains are required
 """
 
 
@@ -300,6 +303,330 @@ def _worksheet_table(packet: dict, worksheet: str) -> str:
             + " |"
         )
     return "\n".join(lines)
+
+
+def _worksheet_answers(worksheet: str) -> dict[str, str]:
+    return {
+        label.strip(): value.strip()
+        for line in worksheet.splitlines()
+        for label, separator, value in [line.partition(":")]
+        if separator
+    }
+
+
+def _rewrite_workbook_member(
+    path: Path,
+    member_name: str,
+    transform,
+) -> None:
+    with ZipFile(path) as archive:
+        members = {
+            member.filename: archive.read(member.filename)
+            for member in archive.infolist()
+        }
+    members[member_name] = transform(members[member_name])
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in members.items():
+            archive.writestr(name, content)
+
+
+def test_checked_in_administrator_workbooks_match_current_contracts() -> None:
+    pairs = (
+        (ENTRA_ADMIN_WORKBOOK_PATH, build_entra_handoff(_state())),
+        (
+            WORKDAY_ADMIN_WORKBOOK_PATH,
+            build_workday_admin_packet(_workday_state()),
+        ),
+    )
+    for path, packet in pairs:
+        assert path.is_file()
+        assert path.stat().st_size > 0
+        worksheet = read_administrator_workbook(path)
+        lines = worksheet.splitlines()
+        assert [line.partition(":")[0] for line in lines] == (
+            packet["responseForm"]["collection"]["labels"]
+        )
+        assert all(not line.partition(":")[2].strip() for line in lines)
+        with ZipFile(path) as archive:
+            assert "xl/worksheets/sheet1.xml" in archive.namelist()
+            assert "xl/worksheets/sheet2.xml" in archive.namelist()
+            workbook_xml = archive.read("xl/workbook.xml").decode("utf-8")
+            all_xml = "\n".join(
+                archive.read(name).decode("utf-8")
+                for name in archive.namelist()
+                if name.endswith(".xml")
+            )
+        assert f'name="{STEPS_SHEET_NAME}"' in workbook_xml
+        assert f'name="{WORKSHEET_SHEET_NAME}"' in workbook_xml
+        if path == ENTRA_ADMIN_WORKBOOK_PATH:
+            assert "XXXX" in all_xml
+        assert "11111111-1111-1111-1111-111111111111" not in all_xml
+
+
+def test_checked_in_administrator_workbooks_are_reproducible(
+    tmp_path: Path,
+) -> None:
+    generated_entra, generated_workday = generate_workbooks(tmp_path)
+
+    assert generated_entra.read_bytes() == ENTRA_ADMIN_WORKBOOK_PATH.read_bytes()
+    assert (
+        generated_workday.read_bytes()
+        == WORKDAY_ADMIN_WORKBOOK_PATH.read_bytes()
+    )
+
+
+@pytest.mark.parametrize(
+    ("filename", "state", "packet", "worksheet", "parser", "validator"),
+    [
+        (
+            "entra.xlsx",
+            _state(),
+            build_entra_handoff(_state()),
+            _entra_worksheet(),
+            parse_entra_return_worksheet,
+            validate_entra_verification,
+        ),
+        (
+            "workday.xlsx",
+            _workday_state(),
+            build_workday_admin_packet(_workday_state()),
+            _workday_worksheet(),
+            parse_workday_admin_return_worksheet,
+            validate_workday_admin_response,
+        ),
+    ],
+)
+def test_completed_administrator_workbook_round_trips_through_contract(
+    tmp_path: Path,
+    filename: str,
+    state: dict,
+    packet: dict,
+    worksheet: str,
+    parser,
+    validator,
+) -> None:
+    path = write_administrator_workbook(
+        tmp_path / filename,
+        title="Administrator handoff",
+        administrator_role=packet["administratorRole"],
+        actions=packet["actions"],
+        capture_instructions=packet["captureInstructions"],
+        answers=_worksheet_answers(worksheet),
+    )
+
+    parsed = parser(state, read_administrator_workbook(path))
+    result = validator(state, parsed)
+
+    assert result["identifiers"]
+
+
+def test_administrator_workbook_rejects_changed_headers(
+    tmp_path: Path,
+) -> None:
+    packet = build_entra_handoff(_state())
+    path = write_administrator_workbook(
+        tmp_path / "changed-header.xlsx",
+        title="Administrator handoff",
+        administrator_role=packet["administratorRole"],
+        actions=packet["actions"],
+        capture_instructions=packet["captureInstructions"],
+    )
+    _rewrite_workbook_member(
+        path,
+        "xl/worksheets/sheet2.xml",
+        lambda content: content.replace(
+            WORKSHEET_HEADERS[0].encode(),
+            b"Changed heading",
+            1,
+        ),
+    )
+
+    with pytest.raises(
+        WorkdayConnectWorkbookError,
+        match="headers were changed",
+    ):
+        read_administrator_workbook(path)
+
+
+@pytest.mark.parametrize(
+    "member_name", ["xl/workbook.xml", "xl/worksheets/sheet2.xml"]
+)
+def test_administrator_workbook_reports_corrupt_member_as_validation_error(
+    tmp_path: Path,
+    member_name: str,
+) -> None:
+    packet = build_entra_handoff(_state())
+    path = write_administrator_workbook(
+        tmp_path / "corrupt.xlsx",
+        title="Administrator handoff",
+        administrator_role=packet["administratorRole"],
+        actions=packet["actions"],
+        capture_instructions=packet["captureInstructions"],
+    )
+    with ZipFile(path) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+    with ZipFile(path, "w") as archive:
+        for name, content in members.items():
+            archive.writestr(name, content)
+    with ZipFile(path) as archive:
+        member = archive.getinfo(member_name)
+    payload = bytearray(path.read_bytes())
+    offset = member.header_offset + 30 + len(member.filename.encode("utf-8"))
+    payload[offset] ^= 1
+    path.write_bytes(payload)
+
+    with pytest.raises(WorkdayConnectWorkbookError, match="corrupt"):
+        read_administrator_workbook(path)
+
+
+@pytest.mark.parametrize(
+    ("label", "answer", "field", "outcome"),
+    [
+        (
+            "Authentication policy",
+            "A reviewed policy scoped to the ESS OAuth client was activated",
+            "authenticationPolicyOutcome",
+            "reviewed-policy-activated",
+        ),
+        (
+            "Rollout",
+            "Entire workforce - All Employees access is configured",
+            "rolloutType",
+            "entire-workforce",
+        ),
+    ],
+)
+def test_workday_workbook_explains_alternative_successful_answers(
+    tmp_path: Path,
+    label: str,
+    answer: str,
+    field: str,
+    outcome: str,
+) -> None:
+    _, path = generate_workbooks(tmp_path)
+    with ZipFile(path) as archive:
+        worksheet_xml = archive.read("xl/worksheets/sheet2.xml").decode("utf-8")
+    assert answer in worksheet_xml
+    packet = build_workday_admin_packet(_workday_state())
+    answers = _worksheet_answers(_workday_worksheet())
+    answers[label] = answer
+    write_administrator_workbook(
+        path,
+        title="Administrator handoff",
+        administrator_role=packet["administratorRole"],
+        actions=packet["actions"],
+        capture_instructions=packet["captureInstructions"],
+        answers=answers,
+    )
+    response = parse_workday_admin_return_worksheet(
+        _workday_state(), read_administrator_workbook(path),
+    )
+    result = validate_workday_admin_response(_workday_state(), response)
+    assert result["evidence"][field] == outcome
+
+
+def test_administrator_workbook_accepts_absolute_package_relationships(
+    tmp_path: Path,
+) -> None:
+    packet = build_entra_handoff(_state())
+    path = write_administrator_workbook(
+        tmp_path / "absolute-relationship.xlsx",
+        title="Administrator handoff",
+        administrator_role=packet["administratorRole"],
+        actions=packet["actions"],
+        capture_instructions=packet["captureInstructions"],
+    )
+    _rewrite_workbook_member(
+        path,
+        "xl/_rels/workbook.xml.rels",
+        lambda content: content.replace(
+            b'Target="worksheets/sheet2.xml"',
+            b'Target="/xl/worksheets/sheet2.xml"',
+        ),
+    )
+
+    worksheet = read_administrator_workbook(path)
+
+    assert worksheet.startswith("Application ID: ")
+
+
+def test_administrator_workbook_rejects_formulas(
+    tmp_path: Path,
+) -> None:
+    packet = build_entra_handoff(_state())
+    path = write_administrator_workbook(
+        tmp_path / "formula.xlsx",
+        title="Administrator handoff",
+        administrator_role=packet["administratorRole"],
+        actions=packet["actions"],
+        capture_instructions=packet["captureInstructions"],
+        answers={"Application ID": "44444444-4444-4444-4444-444444444444"},
+    )
+
+    def add_formula(content: bytes) -> bytes:
+        text = content.decode("utf-8")
+        start = text.index('<c r="E2"')
+        end = text.index("</c>", start) + len("</c>")
+        return (
+            text[:start]
+            + '<c r="E2"><f>1+1</f><v>2</v></c>'
+            + text[end:]
+        ).encode("utf-8")
+
+    _rewrite_workbook_member(
+        path,
+        "xl/worksheets/sheet2.xml",
+        add_formula,
+    )
+
+    with pytest.raises(WorkdayConnectWorkbookError, match="formulas"):
+        read_administrator_workbook(path)
+
+
+def test_administrator_workbook_rejects_unsupported_columns(
+    tmp_path: Path,
+) -> None:
+    packet = build_entra_handoff(_state())
+    path = write_administrator_workbook(
+        tmp_path / "extra-column.xlsx",
+        title="Administrator handoff",
+        administrator_role=packet["administratorRole"],
+        actions=packet["actions"],
+        capture_instructions=packet["captureInstructions"],
+    )
+
+    def add_column(content: bytes) -> bytes:
+        text = content.decode("utf-8")
+        marker = '<row r="2"'
+        row_start = text.index(marker)
+        row_end = text.index("</row>", row_start)
+        extra_cell = (
+            '<c r="F2" t="inlineStr"><is><t>unexpected</t></is></c>'
+        )
+        return (text[:row_end] + extra_cell + text[row_end:]).encode("utf-8")
+
+    _rewrite_workbook_member(
+        path,
+        "xl/worksheets/sheet2.xml",
+        add_column,
+    )
+
+    with pytest.raises(
+        WorkdayConnectWorkbookError,
+        match="unsupported columns",
+    ):
+        read_administrator_workbook(path)
+
+
+def test_administrator_workbook_rejects_unsafe_archive_paths(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "unsafe.xlsx"
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("../unsafe.xml", b"<unsafe/>")
+
+    with pytest.raises(WorkdayConnectWorkbookError, match="unsafe file path"):
+        read_administrator_workbook(path)
 
 
 def test_entra_handoff_selects_only_exact_service_provider_id():
@@ -399,25 +726,24 @@ def test_entra_handoff_can_request_explicit_creation():
         "entraChecks.userAssignment",
         "entraChecks.nameId",
         "entraChecks.samlSigningOption",
-        "entraChecks.existingScopesPreserved",
-        "entraChecks.authorizedClientsPreserved",
-        "entraChecks.permissionsPreserved",
     } <= capture_by_field.keys()
+    assert "selectedDirectoryDisplayName" not in capture_by_field
+    assert "applicationDisplayName" not in capture_by_field
+    assert "entraChecks.existingScopesPreserved" not in capture_by_field
     assert set(handoff["responseForm"]["required"]) == (
         ADMINISTRATOR_REQUIRED_FIELDS["entra"]
     )
-    assert len(handoff["responseForm"]["required"]) == 9
-    assert handoff["responseForm"]["collection"]["mode"] == (
-        "labeled-worksheet"
-    )
+    assert len(handoff["responseForm"]["required"]) == 7
+    assert handoff["responseForm"]["collection"]["mode"] == "xlsx-workbook"
     assert handoff["responseForm"]["collection"]["validator"] == (
         "parse_entra_return_worksheet"
     )
     assert handoff["responseForm"]["collection"]["acceptedFormats"] == [
+        "xlsx-workbook",
         "five-column-markdown-table",
         "labeled-worksheet",
     ]
-    assert "administrator values in one response" in (
+    assert "Upload the completed administrator workbook" in (
         handoff["responseForm"]["note"]
     )
     assert "Basic SAML Configuration" in capture_by_field[
@@ -523,14 +849,25 @@ Existing configuration: Preserved without changes
         "d64a50b6-f92c-43af-be17-53132d75b94d"
     )
     assert parsed["certificate"]["validTo"] == "2028-06-23"
+    assert parsed["checks"]["existingScopesPreserved"]["observedValue"] == (
+        "preserved"
+    )
 
 
 @pytest.mark.parametrize(
     "worksheet",
     [
         _entra_worksheet().replace(
-            "Directory name: Contoso\n",
-            "Directory name: Contoso\nDirectory name: Other\n",
+            (
+                "Application ID: "
+                "44444444-4444-4444-4444-444444444444\n"
+            ),
+            (
+                "Application ID: "
+                "44444444-4444-4444-4444-444444444444\n"
+                "Application ID: "
+                "55555555-5555-5555-5555-555555555555\n"
+            ),
         ),
         _entra_worksheet() + "Unknown field: value\n",
         _entra_worksheet().replace(
@@ -873,20 +1210,22 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     assert packet["actions"][0].startswith(
         "Identify which sign-in provider the enabled Workday SAML row"
     )
-    assert any("REST and SOAP hosts" in action for action in packet["actions"])
+    assert not any(
+        "network readiness" in action.casefold()
+        for action in packet["actions"]
+    )
     assert any(
         "already transferred during the completed Entra handoff" in action
         for action in packet["actions"]
     )
     assert "certificateName" not in packet["responseForm"]["required"]
     assert "client secrets" in packet["responseForm"]["note"]
-    assert packet["responseForm"]["collection"]["mode"] == (
-        "labeled-worksheet"
-    )
+    assert packet["responseForm"]["collection"]["mode"] == "xlsx-workbook"
     assert packet["responseForm"]["collection"]["validator"] == (
         "parse_workday_admin_return_worksheet"
     )
     assert packet["responseForm"]["collection"]["acceptedFormats"] == [
+        "xlsx-workbook",
         "five-column-markdown-table",
         "labeled-worksheet",
     ]
@@ -932,7 +1271,24 @@ def test_workday_labeled_worksheet_parses_to_validated_evidence() -> None:
 
     assert result["identifiers"]["oauthClientId"] == "safe-client-id"
     assert result["evidence"]["rolloutType"] == "entire-workforce"
-    assert result["evidence"]["optionalDomains"] == []
+    assert "optionalDomains" not in result["evidence"]
+
+
+def test_workday_legacy_authentication_policy_choice_remains_accepted() -> None:
+    worksheet = _workday_worksheet().replace(
+        (
+            "An existing active policy scopes the ESS OAuth client and allows "
+            "SAML for the intended employees"
+        ),
+        "An existing active policy allows SAML",
+    )
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        worksheet,
+    )
+
+    assert parsed["authenticationPolicyOutcome"] == "existing-active-policy"
 
 
 def test_workday_phase_three_worksheet_excludes_runtime_authorization() -> None:
@@ -942,13 +1298,26 @@ def test_workday_phase_three_worksheet_excludes_runtime_authorization() -> None:
 
     assert "API client access" in labels
     assert "Required employee access" in labels
-    assert "Additional scenario domains" in labels
+    assert "API client" not in labels
+    assert "Network readiness" not in labels
+    assert "Additional scenario domains" not in labels
+    assert "apiClientOutcome" not in required
+    assert "networkReadinessOutcome" not in required
     assert "optionalDomains" not in required
     assert "optionalDomains" not in ADMINISTRATOR_REQUIRED_FIELDS[
         "workday-admin"
     ]
     assert not any("authorization" in label.casefold() for label in labels)
     assert not any("retest" in label.casefold() for label in labels)
+    authentication_instruction = next(
+        row
+        for row in packet["captureInstructions"]
+        if row["information"] == "Authentication policy"
+    )
+    assert "ESS OAuth client identity" in (
+        authentication_instruction["portalLocation"]
+    )
+    assert "intended employees" in authentication_instruction["instruction"]
 
 
 def test_workday_customer_labeled_response_accepts_common_labels() -> None:
@@ -997,11 +1366,13 @@ def test_workday_completed_capture_table_parses_to_validated_evidence() -> None:
     assert result["identifiers"]["oauthClientId"] == "safe-client-id"
 
 
-def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
-    worksheet = _workday_worksheet().replace(
-        "Additional scenario domains: No additional scenario domains are required\n",
-        "Additional scenario domains: Worker Data | custom worker lookup\n"
-        "Absence | custom leave lookup\n",
+def test_workday_legacy_optional_fields_remain_accepted() -> None:
+    worksheet = (
+        _workday_worksheet()
+        + "API client: An existing approved client was verified\n"
+        + "Network readiness: Both Workday hosts are allowed\n"
+        + "Additional scenario domains: Worker Data | custom worker lookup\n"
+        + "Absence | custom leave lookup\n"
     )
 
     parsed = parse_workday_admin_return_worksheet(
@@ -1009,6 +1380,8 @@ def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
         worksheet,
     )
 
+    assert parsed["apiClientOutcome"] == "existing-client-verified"
+    assert parsed["networkReadinessOutcome"] == "confirmed-hosts-allowed"
     assert parsed["optionalDomains"] == [
         {
             "domain": "Worker Data",
@@ -1021,76 +1394,13 @@ def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
     ]
 
 
-@pytest.mark.parametrize(
-    "worksheet",
-    [
-        _workday_worksheet().replace(
-            (
-                "Additional scenario domains: "
-                "No additional scenario domains are required\n"
-            ),
-            "",
-        ),
-        _workday_worksheet().replace(
-            (
-                "Additional scenario domains: "
-                "No additional scenario domains are required"
-            ),
-            "Additional scenario domains:",
-        ),
-    ],
-)
-def test_workday_optional_domains_may_be_omitted_or_blank(
-    worksheet: str,
-) -> None:
-    parsed = parse_workday_admin_return_worksheet(
-        _workday_state(),
-        worksheet,
-    )
-
-    assert parsed["optionalDomains"] == []
-
-
-def test_workday_capture_table_parses_multiline_optional_domains() -> None:
-    worksheet = _workday_worksheet().replace(
-        "Additional scenario domains: No additional scenario domains are required\n",
-        "Additional scenario domains: Worker Data | custom worker lookup\n"
-        "Absence | custom leave lookup\n",
-    )
+def test_workday_generated_capture_table_omits_legacy_optional_fields() -> None:
     packet = build_workday_admin_packet(_workday_state())
 
-    parsed = parse_workday_admin_return_worksheet(
-        _workday_state(),
-        _worksheet_table(packet, worksheet),
-    )
-
-    assert parsed["optionalDomains"] == [
-        {
-            "domain": "Worker Data",
-            "scenario": "custom worker lookup",
-        },
-        {
-            "domain": "Absence",
-            "scenario": "custom leave lookup",
-        },
-    ]
-
-
-def test_workday_capture_table_may_omit_optional_domains_row() -> None:
-    packet = build_workday_admin_packet(_workday_state())
-    table = _worksheet_table(packet, _workday_worksheet())
-    table = "\n".join(
-        line
-        for line in table.splitlines()
-        if not line.startswith("| Additional scenario domains |")
-    )
-
-    parsed = parse_workday_admin_return_worksheet(
-        _workday_state(),
-        table,
-    )
-
-    assert parsed["optionalDomains"] == []
+    labels = packet["responseForm"]["collection"]["labels"]
+    assert "API client" not in labels
+    assert "Network readiness" not in labels
+    assert "Additional scenario domains" not in labels
 
 
 @pytest.mark.parametrize(
@@ -1223,17 +1533,19 @@ def test_workday_admin_response_enforces_limited_rollout_group():
         )
 
 
-def test_workday_admin_response_defaults_omitted_optional_domains() -> None:
-    response = _workday_response()
-    response.pop("optionalDomains")
-
+def test_workday_admin_response_omits_unrequested_optional_evidence() -> None:
     result = validate_workday_admin_response(
         _workday_state(),
-        response,
+        _workday_response(),
     )
 
-    assert result["evidence"]["optionalDomains"] == []
-    assert result["partialEvidence"]["optionalDomains"] == []
+    for field in (
+        "apiClientOutcome",
+        "networkReadinessOutcome",
+        "optionalDomains",
+    ):
+        assert field not in result["evidence"]
+        assert field not in result["partialEvidence"]
 
 
 def test_workday_admin_response_requires_exact_functional_area_scopes():
