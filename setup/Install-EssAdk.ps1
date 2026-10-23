@@ -48,11 +48,26 @@
     PowerShell modules from the Microsoft Store). Default is the direct install
     path, which works on any GA winget without that opt-in.
 
+.PARAMETER FlightCheckScope
+    Validation scope for -FlightCheckOnly. Prompts with no default when
+    interactive; unattended runs must supply this or FLIGHTCHECK_SCOPE.
+
 .PARAMETER FlightCheckOnly
     Install only the minimal toolchain needed to run FlightCheck (Python + Git +
     pip dependencies). Skips VS Code, extensions, and the full maker kit setup.
-    Prompts for your Dataverse environment URL and creates a minimal
-    .local/config.json so FlightCheck can authenticate without running /setup.
+    Uses saved configuration or Dataverse discovery by default. Explicit DA
+    target inputs bypass discovery and saved-config changes.
+
+.PARAMETER DaTargetUrl
+    Explicit Copilot Studio DA URL for -FlightCheckOnly -FlightCheckScope full.
+    Requires AgentSchemaName and ValidationRealm. Uses read-only validation.
+
+.PARAMETER AgentSchemaName
+    Expected schema name for the explicit DA target, verified live.
+
+.PARAMETER ValidationRealm
+    Deployment realm of the explicit DA target: dev, test, or prod.
+    This is independent of the Power Platform service Ring.
 
 .PARAMETER InstallMode
     Selects the VS Code experience: 'maker' (guided rail layout - was
@@ -94,12 +109,77 @@ param(
     [switch] $SkipLaunch,
     [switch] $UseDsc,
     [switch] $FlightCheckOnly,
+    [string] $FlightCheckScope = $env:FLIGHTCHECK_SCOPE,
+    [string] $DaTargetUrl,
+    [string] $AgentSchemaName,
+    [ValidateSet('dev', 'test', 'prod')]
+    [string] $ValidationRealm,
     [ValidateSet('prod', 'preprod', 'test')]
     [string] $Ring = 'prod',
     [ValidateSet('maker', 'developer', 'prompt', 'lite', 'standard')]
     [string] $InstallMode = 'prompt',
     [switch] $SkipMakerProfile
 )
+
+function Resolve-FlightCheckScope {
+    param(
+        [string] $Scope,
+        [bool] $Interactive = (
+            [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and
+            -not ([Environment]::GetCommandLineArgs() -match '^-NonI(nteractive)?$')
+        )
+    )
+    # Keep this preflight self-contained: bootstrap runs it before downloading.
+    # Scope names mirror cli.py, not its separate litmus profiles.
+    $scopes = [ordered]@{
+        full = 'All applicable validation categories'
+        prerequisites = 'Prerequisite access and setup'
+        infrastructure = 'Infrastructure and connectivity'
+        environment = 'Power Platform environment'
+        solution = 'Installed solution configuration'
+        authentication = 'Authentication configuration'
+        entraapp = 'Microsoft Entra application'
+        workdaytenant = 'Workday tenant configuration'
+        external = 'External system configuration'
+        workday = 'External system and Workday checks'
+        workdayextension = 'Workday checks and extension'
+        workdayda = 'Workday declarative-agent package'
+        topics = 'Workday topics'
+        graphconnector = 'External system and Graph connector knowledge'
+        handoff = 'Agent handoff topics'
+        servicenow = 'External system and ServiceNow checks'
+        local = 'Local agent files'
+        publishing = 'Agent publishing'
+        licensing = 'Licensing'
+        cloudpolicy = 'Cloud policies'
+    }
+    $instructions = 'Specify -FlightCheckScope <scope> or set FLIGHTCHECK_SCOPE. Full requires explicit selection.'
+    if ([string]::IsNullOrWhiteSpace($Scope)) {
+        if (-not $Interactive -or $env:CI -or $env:TF_BUILD -or $env:GITHUB_ACTIONS) {
+            throw "FlightCheck scope is required for unattended installation. $instructions Allowed: $($scopes.Keys -join ', ')."
+        }
+        Write-Host 'Choose a FlightCheck scope (no default):'
+        foreach ($name in $scopes.Keys) { Write-Host "  $name - $($scopes[$name])" }
+        try { $Scope = Read-Host 'Enter a scope name' } catch {
+            throw "FlightCheck scope input is unavailable. $instructions"
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($Scope) -or -not $scopes.Contains($Scope.Trim().ToLowerInvariant())) {
+        throw "A valid FlightCheck scope is required; empty input does not select Full. $instructions Allowed: $($scopes.Keys -join ', ')."
+    }
+    return $Scope.Trim().ToLowerInvariant()
+}
+
+# Require intent before toolchain installation, config writes, or telemetry.
+if ($FlightCheckOnly) {
+    $FlightCheckScope = Resolve-FlightCheckScope -Scope $FlightCheckScope
+}
+if ($DaTargetUrl -or $AgentSchemaName -or $ValidationRealm) {
+    if (-not $FlightCheckOnly -or $FlightCheckScope -ne 'full' -or
+        -not $DaTargetUrl -or -not $AgentSchemaName.Trim() -or -not $ValidationRealm) {
+        throw 'DA onboarding requires -FlightCheckOnly -FlightCheckScope full -DaTargetUrl <url> -AgentSchemaName <schema> -ValidationRealm <dev|test|prod>.'
+    }
+}
 
 # Back-compat: -SkipMakerProfile forces developer mode even when
 # -InstallMode is passed. This preserves the old behaviour where the
@@ -111,6 +191,7 @@ if ($SkipMakerProfile) { $InstallMode = 'developer' }
 # uses argparse `choices=["prod","preprod","test"]` (case-sensitive)
 # and would reject the mixed-case value. Lowercase up-front so the
 # forwarded --ring literal always matches cli.py's contract.
+$ringExplicit = $PSBoundParameters.ContainsKey('Ring')
 $Ring = $Ring.ToLowerInvariant()
 
 # Back-compat: legacy value aliases from the pre-rename installer
@@ -225,6 +306,36 @@ function Invoke-Native {
 # installer updates the VSIX/settings, so the new guided layout may not appear
 # until the old processes exit. Never close it silently: unsaved editor state
 # may be lost when the operator confirms.
+function Get-FlightCheckConfigRing {
+    param($Config)
+    $savedRing = ([string]$Config.ring).Trim().ToLowerInvariant()
+    $endpointRing = ''
+    $endpoint = ([string]$Config.powerPlatformApiEndpoint).Trim()
+    if ($endpoint) {
+        $uri = $null
+        if (-not [Uri]::TryCreate($endpoint, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'https') {
+            throw 'Existing config has an invalid Power Platform API endpoint. Reconfigure before running checks.'
+        }
+        if ($uri.Host -match '(^|[.])api[.]test[.]powerplatform[.]com$') {
+            $endpointRing = 'test'
+        } elseif ($uri.Host -match '(^|[.])api[.]preprod[.]powerplatform[.]com$') {
+            $endpointRing = 'preprod'
+        } elseif ($uri.Host -match '(^|[.])api[.]powerplatform[.]com$') {
+            $endpointRing = 'prod'
+        } else {
+            throw 'Existing config has an unrecognized Power Platform API endpoint.'
+        }
+    }
+    if ($savedRing -and $savedRing -notin @('prod', 'preprod', 'test')) {
+        throw "Existing config has unsupported Power Platform ring '$savedRing'."
+    }
+    if ($savedRing -and $endpointRing -and $savedRing -ne $endpointRing) {
+        throw 'Existing config ring conflicts with its Power Platform API endpoint. Reconfigure before running checks.'
+    }
+    if ($savedRing) { return $savedRing }
+    return $endpointRing
+}
+
 function Confirm-StopRunningCode {
     $running = @(Get-Process -Name 'Code', 'Code-insiders' -ErrorAction SilentlyContinue)
     if (-not $running) { return }
@@ -1238,17 +1349,54 @@ if ($FlightCheckOnly) {
         $pyCmd = $pythonExe; $pyBaseArgs = @()
     }
 
-    if (Test-Path $configPath) {
+    $daTargetArgs = @()
+    $isDaTarget = [bool]$DaTargetUrl
+    if ($DaTargetUrl) {
+        $daTargetArgs = @('--da-target-url', $DaTargetUrl, '--agent-schema-name', $AgentSchemaName,
+            '--validation-realm', $ValidationRealm.ToLowerInvariant())
+        Write-Ok 'Using the explicit DA target; saved configuration and local files will not be replaced.'
+    } else {
+    $needsConfiguration = -not (Test-Path $configPath)
+    if (-not $needsConfiguration) {
+        $configState = Get-Content $configPath -Raw | ConvertFrom-Json
+        $savedRing = ''
+        $configRingError = $null
+        try {
+            $savedRing = Get-FlightCheckConfigRing $configState
+        } catch {
+            $configRingError = $_.Exception.Message
+            Write-Warn2 $configRingError
+        }
         Write-Host ''
         Write-Host "    Config already exists at $configPath" -ForegroundColor White
-        Write-Host '    Would you like to reconfigure? (Y/N)' -ForegroundColor Gray
-        Write-Host ''
-        $reconfigure = Read-Host '    Reconfigure'
-        if ($reconfigure -notmatch '^[Yy]') {
-            Write-Ok 'Keeping existing config'
+        if ($ringExplicit -and $savedRing -and $Ring -ne $savedRing) {
+            Write-Warn2 "Requested ring '$Ring' differs from saved ring '$savedRing'."
+            Write-Host "    Switch to $Ring and select a new environment and agent? (y/N)" -ForegroundColor Gray
+            $reconfigure = Read-Host '    Switch ring'
         } else {
-            Remove-Item $configPath -Force
-            Write-Ok 'Removed existing config - starting fresh'
+            Write-Host '    Would you like to reconfigure? (y/N)' -ForegroundColor Gray
+            $reconfigure = Read-Host '    Reconfigure'
+        }
+        $needsConfiguration = $reconfigure -match '^[Yy]$|^[Yy][Ee][Ss]$'
+        if (-not $needsConfiguration) {
+            if ($configRingError) {
+                throw 'Cannot keep a target with invalid ring or endpoint settings. Reconfigure to select a new target.'
+            }
+            if (-not $savedRing) {
+                Write-Warn2 'The saved target has no recorded ring. No ring will be assumed.'
+                Write-Host '    Confirm the saved target ring: prod, preprod, or test (blank cancels).' -ForegroundColor Gray
+                $savedRing = ([string](Read-Host '    Saved target ring')).Trim().ToLowerInvariant()
+                if ($savedRing -notin @('prod', 'preprod', 'test')) {
+                    throw 'A valid saved target ring must be explicitly confirmed. Configuration was not changed.'
+                }
+                if ($ringExplicit -and $Ring -ne $savedRing) {
+                    Write-Warn2 "Requested ring '$Ring' differs from confirmed saved ring '$savedRing'. Keeping the saved target in its confirmed ring."
+                }
+            }
+            $Ring = $savedRing
+            Write-Ok "Keeping existing config and ring '$Ring'"
+        } elseif (-not $ringExplicit -and $savedRing) {
+            $Ring = $savedRing
         }
     }
 
@@ -1299,7 +1447,7 @@ if ($FlightCheckOnly) {
         }
     }
 
-    if (-not (Test-Path $configPath)) {
+    if ($needsConfiguration) {
         $scriptsDir = Join-Path $workspace 'scripts'
         $discoverPy = Join-Path $scriptsDir 'discover.py'
 
@@ -1309,15 +1457,16 @@ if ($FlightCheckOnly) {
 
         # --- Step 1: List environments and let user pick ---
         Write-Host ''
-        Write-Host '    Listing Power Platform environments in your tenant...' -ForegroundColor White
+        Write-Host "    Listing Power Platform environments in ring '$Ring'..." -ForegroundColor White
         Write-Host '    A browser window will open for sign-in.' -ForegroundColor Gray
         Write-Host ''
 
         # Run discover.py --list-environments (interactive - shows table to user)
         Push-Location $workspace
         try {
-            $discoverArgs = $pyBaseArgs + @($discoverPy, '--list-environments')
+            $discoverArgs = $pyBaseArgs + @($discoverPy, '--list-environments', '--ring', $Ring)
             $output = Invoke-Native { & $pyCmd @discoverArgs }
+            $discoveryExit = $LASTEXITCODE
             # Filter out the machine-parseable JSON dump lines that discover.py
             # emits for programmatic consumers (skills read these; a maker
             # running the installer just sees an unreadable wall of JSON).
@@ -1325,29 +1474,25 @@ if ($FlightCheckOnly) {
                 if ($line -match '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):') { continue }
                 Write-Host $line
             }
-            if ($LASTEXITCODE -ne 0) {
+            if ($discoveryExit -ne 0) {
                 throw 'Environment listing failed.'
             }
+            $envJsonLines = @($output | Where-Object { $_ -match '^ENVIRONMENT_LIST_JSON:' })
+            if ($envJsonLines.Count -ne 1) { throw 'Could not parse environment list output.' }
+            $environments = ConvertFrom-Json -InputObject ($envJsonLines[0] -replace '^ENVIRONMENT_LIST_JSON:', '')
 
             Write-Host ''
             $envChoice = Read-Host '    Select environment number from the list above'
             if ($envChoice) { $envChoice = $envChoice.Trim() }
-            if (-not $envChoice -or $envChoice -notmatch '^\d+$') {
+            $envIndex = 0
+            if (-not [int]::TryParse($envChoice, [ref]$envIndex) -or $envIndex -lt 1 -or $envIndex -gt $environments.Count) {
                 throw 'Invalid selection. Please re-run and pick a number from the list.'
             }
 
-            # Re-run with --select to get machine-parseable JSON
-            $selectArgs = $pyBaseArgs + @($discoverPy, '--list-environments', '--select', $envChoice)
-            $envOutput = Invoke-Native { & $pyCmd @selectArgs }
-            if ($LASTEXITCODE -ne 0) {
-                throw "Environment selection failed: $envOutput"
-            }
-            $envJsonLine = ($envOutput | Where-Object { $_ -match '^SELECTED_ENV_JSON:' }) -replace '^SELECTED_ENV_JSON:', ''
-            if (-not $envJsonLine) {
-                throw 'Could not parse environment selection output.'
-            }
-            $selectedEnv = $envJsonLine | ConvertFrom-Json
-            $envUrl = $selectedEnv.instanceUrl.TrimEnd('/')
+            # Select from the displayed snapshot, not a second inventory whose order can change.
+            $selectedEnv = $environments[$envIndex - 1]
+            if (-not $selectedEnv.id) { throw 'Selected environment has no environment ID.' }
+            $envUrl = ([string]$selectedEnv.instanceUrl).TrimEnd('/')
 
             if (-not $envUrl) {
                 throw 'Selected environment has no linked Dataverse URL.'
@@ -1362,12 +1507,17 @@ if ($FlightCheckOnly) {
 
             $agentListArgs = $pyBaseArgs + @($discoverPy, '--url', $envUrl)
             $output = Invoke-Native { & $pyCmd @agentListArgs }
+            $agentDiscoveryExit = $LASTEXITCODE
             foreach ($line in $output) {
                 if ($line -match '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):') { continue }
                 Write-Host $line
             }
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warn2 'Agent discovery failed. Config will be created without a bot ID.'
+            if ($agentDiscoveryExit -ne 0) {
+                Write-Warn2 'Agent discovery failed. Agent-specific checks cannot be configured.'
+                $continueWithoutAgent = Read-Host '    Run environment-wide checks only? (y/N)'
+                if ($continueWithoutAgent -notmatch '^[Yy]$|^[Yy][Ee][Ss]$') {
+                    throw 'Agent discovery failed. Existing config was preserved.'
+                }
                 $botId = ''
                 $agentName = 'FlightCheck-only (no agent selected)'
                 $schemaName = ''
@@ -1377,31 +1527,21 @@ if ($FlightCheckOnly) {
                 $agentChoice = Read-Host '    Select agent number (or press Enter to run environment-wide checks only)'
                 if ($agentChoice) { $agentChoice = $agentChoice.Trim() }
 
-                if ($agentChoice -and $agentChoice -match '^\d+$') {
-                    $agentSelectArgs = $pyBaseArgs + @($discoverPy, '--url', $envUrl, '--select', $agentChoice)
-                    $agentOutput = Invoke-Native { & $pyCmd @agentSelectArgs }
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-Warn2 "Agent selection failed. Continuing without bot ID."
-                        $botId = ''
-                        $agentName = 'FlightCheck-only (no agent selected)'
-                        $schemaName = ''
-                        $isManaged = $true
-                    } else {
-                        $agentJsonLine = ($agentOutput | Where-Object { $_ -match '^SELECTED_AGENT_JSON:' }) -replace '^SELECTED_AGENT_JSON:', ''
-                        if ($agentJsonLine) {
-                            $selectedAgent = $agentJsonLine | ConvertFrom-Json
-                            $botId = $selectedAgent.botid
-                            $agentName = $selectedAgent.name
-                            $schemaName = $selectedAgent.schemaname
-                            $isManaged = [bool]$selectedAgent.ismanaged
-                            Write-Ok "Agent: $agentName"
-                        } else {
-                            $botId = ''
-                            $agentName = 'FlightCheck-only (no agent selected)'
-                            $schemaName = ''
-                            $isManaged = $true
-                        }
+                if ($agentChoice) {
+                    $agentJsonLines = @($output | Where-Object { $_ -match '^AGENT_DISCOVERY_JSON:' })
+                    if ($agentJsonLines.Count -ne 1) { throw 'Could not parse agent list output.' }
+                    $discoveredAgents = ConvertFrom-Json -InputObject ($agentJsonLines[0] -replace '^AGENT_DISCOVERY_JSON:', '')
+                    $agentIndex = 0
+                    if (-not [int]::TryParse($agentChoice, [ref]$agentIndex) -or $agentIndex -lt 1 -or $agentIndex -gt $discoveredAgents.Count) {
+                        throw 'Invalid agent selection. Please re-run and pick a number from the list.'
                     }
+                    $selectedAgent = $discoveredAgents[$agentIndex - 1]
+                    if (-not $selectedAgent.botid) { throw 'Selected agent has no bot ID.' }
+                    $botId = $selectedAgent.botid
+                    $agentName = $selectedAgent.name
+                    $schemaName = $selectedAgent.schemaname
+                    $isManaged = [bool]$selectedAgent.ismanaged
+                    Write-Ok "Agent: $agentName"
                 } else {
                     Write-Warn2 'Skipping agent selection. Some agent-specific checks will be skipped.'
                     $botId = ''
@@ -1440,6 +1580,7 @@ if ($FlightCheckOnly) {
             configVersion      = 1
             setup              = 'flightcheck-only'
             dataverseEndpoint  = $envUrl
+            environmentId      = $selectedEnv.id
             ring               = $Ring
             flightCheckOnly    = $true
             agent              = $agentEntry
@@ -1452,32 +1593,20 @@ if ($FlightCheckOnly) {
         Write-Ok "Created $configPath"
     }
 
-    # Reuse the retained config's ring when it has one, infer it from a saved
-    # environment API endpoint when possible, and migrate legacy configs that
-    # had neither. This keeps the explicit --ring argument consistent with the
-    # durable config instead of letting the installer's default prod conflict
-    # with a retained preprod/test workspace.
+    # Persist only the ring chosen above; never relabel a retained target.
     $configState = Get-Content $configPath -Raw | ConvertFrom-Json
-    $effectiveRing = [string]$configState.ring
-    if (-not $effectiveRing) {
-        $endpoint = ([string]$configState.powerPlatformApiEndpoint).ToLowerInvariant()
-        if ($endpoint -match 'api[.]test[.]powerplatform[.]com') {
-            $effectiveRing = 'test'
-        } elseif ($endpoint -match 'api[.]preprod[.]powerplatform[.]com') {
-            $effectiveRing = 'preprod'
-        } elseif ($endpoint -match 'api[.]powerplatform[.]com') {
-            $effectiveRing = 'prod'
-        }
-    }
-    if (-not $effectiveRing) { $effectiveRing = $Ring }
-    $effectiveRing = $effectiveRing.Trim().ToLowerInvariant()
-    if ($effectiveRing -notin @('prod', 'preprod', 'test')) {
-        throw "Existing config has unsupported Power Platform ring '$effectiveRing'. Reconfigure and choose prod, preprod, or test."
-    }
-    $Ring = $effectiveRing
     $configState | Add-Member -NotePropertyName ring -NotePropertyValue $Ring -Force
     $json = $configState | ConvertTo-Json -Depth 20 -Compress:$false
     [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $false))
+
+    # --- Resolve saved target type ---
+    Push-Location $workspace
+    try {
+        $kindArgs = $pyBaseArgs + @('-c', "import json,sys; sys.path.insert(0,'scripts'); from flightcheck.da_execution import da_full_requested; print('da' if da_full_requested(json.load(open(sys.argv[1],encoding='utf-8'))) else 'legacy')", $configPath)
+        $targetKind = Invoke-Native { & $pyCmd @kindArgs }
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the saved FlightCheck target. Configuration was preserved.' }
+        $isDaTarget = ($targetKind -join '').Trim() -eq 'da'
+    } finally { Pop-Location }
 
     # --- Read config values if they came from an existing file ---
     if (-not $botId -and (Test-Path $configPath)) {
@@ -1490,25 +1619,30 @@ if ($FlightCheckOnly) {
     }
 
     # --- Fetch solution snapshot for local file checks ---
-    if ($botId) {
+    if ($botId -and -not $isDaTarget) {
         Write-Step 'Fetching agent solution from Dataverse'
         $fetchPy = Join-Path $workspace 'scripts\fetch_and_setup.py'
         if (Test-Path $fetchPy) {
             Push-Location $workspace
             try {
+                # Config already records the chosen environment; --url would request a retarget.
                 $fetchArgs = $pyBaseArgs + @(
                     $fetchPy,
-                    '--url', $envUrl,
                     '--bot-id', $botId,
                     '--name', $agentName,
-                    '--schema', $schemaName
+                    '--schema', $schemaName,
+                    '--refresh'
                 )
                 if ($isManaged) { $fetchArgs += '--managed' }
 
                 Start-Spinner "fetching agent solution"
-                $fetchOutput = & $pyCmd @fetchArgs 2>&1
-                $fetchExit = $LASTEXITCODE
-                Stop-Spinner "fetching agent solution"
+                try {
+                    # PS 5.1 must capture stderr without aborting before exit handling.
+                    $fetchOutput = Invoke-Native { & $pyCmd @fetchArgs }
+                    $fetchExit = $LASTEXITCODE
+                } finally {
+                    Stop-Spinner
+                }
 
                 if ($fetchExit -eq 0) {
                     Write-Ok 'Agent solution fetched and extracted'
@@ -1520,9 +1654,14 @@ if ($FlightCheckOnly) {
         } else {
             Write-Warn2 "fetch_and_setup.py not found at $fetchPy. Local file checks will be skipped."
         }
+    } elseif ($isDaTarget) {
+        Write-Ok 'DA target: skipping the Dataverse snapshot fetch; FlightCheck verifies the selected DA read-only.'
     } else {
         Write-Host ''
         Write-Host '    [info] No agent selected - skipping solution fetch (local file checks will be skipped).' -ForegroundColor Gray
+    }
+
+    # End saved-target configuration.
     }
 
     # --- Run FlightCheck ---
@@ -1535,25 +1674,21 @@ if ($FlightCheckOnly) {
             # but let output stream directly to console (FlightCheck is interactive)
             $prevEAP = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
-            # --ring <ring>: the FlightCheck-only installer discovers
-            # environments via BAP prod (api.bap.microsoft.com) by default,
-            # so we target the prod service ring unless the caller (typically
-            # a PM validating a preprod/test environment) overrode -Ring.
-            # Persisting the ring supports later /flightcheck runs; forwarding
-            # it explicitly also covers this first run and older configs.
+            # Discovery, saved configuration, and the first check use the same ring.
             if ($pythonExe -eq 'py -3.12') {
-                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
+                & py -3.12 scripts/flightcheck/cli.py --scope $FlightCheckScope --invocation-source installer --select-targets always --ring $Ring @daTargetArgs
             } elseif ($pythonExe -eq 'py -3') {
-                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
+                & py -3 scripts/flightcheck/cli.py --scope $FlightCheckScope --invocation-source installer --select-targets always --ring $Ring @daTargetArgs
             } else {
-                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
+                & $pythonExe scripts/flightcheck/cli.py --scope $FlightCheckScope --invocation-source installer --select-targets always --ring $Ring @daTargetArgs
             }
+            $flightCheckExit = $LASTEXITCODE
             $ErrorActionPreference = $prevEAP
         } finally { Pop-Location }
     } else {
         Write-Warn2 'Python not found. Open a new terminal and run:'
         Write-Warn2 "  cd $workspace"
-        Write-Warn2 "  python scripts/flightcheck/cli.py --scope full --select-targets always --ring $Ring"
+        Write-Warn2 "  python scripts/flightcheck/cli.py --scope $FlightCheckScope --select-targets always --ring $Ring"
     }
     # Record the FlightCheck-only install as a success HERE, before the early
     # return below. This branch returns from inside the top-level try well
@@ -1565,6 +1700,9 @@ if ($FlightCheckOnly) {
     # outcome has been emitted. (The FlightCheck run's own pass/fail verdict is
     # separate telemetry emitted by cli.py; this outcome is the install's.)
     Complete-EssInstallTelemetry -Outcome 'success'
+    if ($isDaTarget -and $FlightCheckScope -eq 'full' -and $flightCheckExit -ne 0) {
+        throw "DA full assessment did not establish READY (exit $flightCheckExit). Review the assessment output; installation itself completed."
+    }
     # ``return`` (not ``exit 0``) so the script ends without terminating
     # the PowerShell host. When this installer is invoked via
     # ``iex (irm .../bootstrap-flightcheck.ps1)`` from an interactive

@@ -184,7 +184,326 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 Re-run the same command to change your environment or agent. See [`setup/README.md`](../../setup/README.md) for details.
 
-**What it checks (41+ automated checks across 8 categories):**
+**Standalone connection validation without setup:**
+
+From this solution's directory, supply the exact Power Platform environment and agent:
+
+```powershell
+python scripts\flightcheck\cli.py --checkpoint ENV-004 --environment-id "<environment GUID>" --agent-id "<agent GUID>" --ring prod --no-open
+```
+
+No setup skill or `.local/config.json` is required. Repeat `--agent-id` to validate multiple agents in the same environment. These explicit targets ignore any local setup config, including its optional release-commit policy. Add `--preferred-username "<Microsoft work account>"` to select a cached account, or `--token-cache "<original native authentication cache path>"` to reuse an existing native cache without copying it. The default cache is the native AgentBuilder cache under the kit's `.local` directory.
+
+ENV-004 follows active topics to their direct connector references and invoked Power Automate flows, then checks only the logical references those flows require. Inactive topics and references belonging to unrelated applications are excluded. Missing or unbound required references, wrong connectors, and admin-confirmed missing physical connections fail. Incomplete reads warn, and a missing exact target blocks the checkpoint. Additional connections for the same connectors are advisory, not proof that those connections are unused.
+
+Topics with missing or unknown activation status, malformed dialogs, or unreadable dependency identities produce coverage warnings without discarding dependencies verified in other topics. Component `state: Active` does not substitute for an explicit topic `status`; unverified topics cannot establish a clean connection verdict.
+
+In DA full, unrelated additional connections do not downgrade a complete,
+healthy required-binding result or block readiness. Incomplete discovery and
+unverified required bindings still need investigation. Legacy connection
+reports retain their existing advisory Warning for additional connections.
+DA full excludes a self-contained conversation only when its actual connector
+references all resolve to SAP and its actions contain no flow calls, redirects,
+branches or unsupported operations. These exclusions are recorded with their
+actual or unverified activation state; neither the conversation name nor
+`state: Active` proves activation. Mixed, malformed or unresolved conversations
+still leave coverage incomplete. No SAP connection check is run for this scope.
+
+Native reads support the selected service ring. Flow administration and Dataverse environment discovery are currently verified only on the `prod` service ring; an affected dependency on another ring is reported as incomplete, never passed. The service ring is distinct from the agent's Dev/Test/Prod deployment realm. All calls are read-only. This checkpoint validates bindings and connection existence, not Workday credentials or business operations.
+
+`--scope environment` also accepts these standalone target flags. Other scope checks retain their own prerequisites. Configured runs without explicit agent IDs remain supported, including their existing optional release-commit comparison.
+
+Configured Dataverse-backed runs require a configured native endpoint and an
+independently verified environment/account match before combining native and
+Dataverse evidence. Failed mapping or a missing native endpoint cannot trigger
+a late native fallback; independent checks remain available. The canonical
+`agents` records take precedence over stale same-slug compatibility `agent`
+copies for both connection audits and release-commit comparisons. A canonical
+agent missing its `botId` is reported as incomplete coverage, not silently
+omitted from a passing sibling's result. Mapping read errors also leave native
+validation unavailable without preventing independent scope checks. Malformed,
+conflicting or repeated admin continuation links leave physical connection
+existence unverified; incomplete inventories cannot prove a connection is absent.
+
+Explicit `--connect-config` input accepts Workday connect state versions 2 through the current schema (v12), or the provider-generated flat projection. Both forms normalize the Workday tenant, Entra application URI, and OAuth token endpoint for validation without replacing the foundation agent identity. Unsupported state versions and malformed nested sections are rejected instead of silently losing provider configuration.
+Version-tagged flat projections retain their tenant and sidecar values when
+those fields are absent from nested scope; explicitly supplied canonical
+fields still take precedence over aliases.
+
+**DA full assessment:**
+
+For an explicitly selected DA, standalone `--scope full` now compiles an
+exact-agent, read-only plan independently of whether Dataverse is configured.
+It reuses the registry's client requirements and account verification, checks
+native identity before dependent native reads, and independently maps a supplied
+Dataverse URL to the Power Platform environment. Legacy/custom-engine scopes and
+existing Workday DA lifecycle profile membership remain unchanged.
+
+Standalone onboarding can also use `--da-target-url <copilot-studio-url>
+--agent-schema-name <expected-schema> --validation-realm <dev|test|prod>`
+with `--scope full`, without `.local/config.json`. This ephemeral target uses
+the same live identity/realm checks and result contract; it never reads or
+replaces saved configuration. Both platform installers/bootstraps forward these
+inputs and bypass legacy Dataverse discovery/fetch. See
+[standalone DA onboarding](../../setup/README.md#standalone-da-onboarding).
+Existing selected DA configurations also skip the installer's Dataverse
+snapshot fetch. Maker `/flightcheck` remains local-only; standalone full does
+not widen maker scope or change Connect completion.
+DA local-only results carry additive `diagnostic_only: true` /
+`contract.diagnosticOnly: true` and explicitly say deployment readiness was
+not assessed in HTML/terminal output. Diagnostic statuses/exits and legacy
+local reports are unchanged.
+This boundary also applies to mixed local reports containing DA-owned results,
+even when a custom-engine agent is active. A report containing only
+custom-engine-owned results retains its existing behavior.
+
+An optional DA release-commit pin is checked in the verified assessment realm,
+not a legacy ALM realm alias or an implicit Dev default. The returned ALM
+agent ID, schema and realm must match before comparing its commit.
+Evidence freshness binds the inspected native snapshot, connection bindings,
+native installation evidence and the selected agent's configured revision pin,
+not the implementation bodies or versions of invoked flows.
+Changes to those flow implementations are not independently version-pinned by
+this assessment.
+
+`scripts/flightcheck/da_contract.py` defines the DA coverage inventory and
+pure applicability planning. It separates existing evaluators, observations,
+manual requirements, DA-review gaps, conditional diagnostics and legacy-only
+checks. Feature states need explicit provenance; missing feature evidence
+remains unknown, not disabled. The catalog also accounts for dynamic result
+families and superseded IDs without counting execution guards as deployment
+requirements. `da_execution.py` schedules only approved, registered producers;
+it does not run the old broad categories and then filter away legacy results.
+Reviewed producers now cover exact native access/content, selected-workspace
+identity and inventory, dependency bindings, optional revision pins, ESS
+native ESS identity/content and allocation observations. Native identity/content
+does not establish package origin, package signature, release revision, import
+success or employee execution.
+
+Licensing, effective access, billing, capacity sizing, effective connector policy,
+managed-runtime egress, native knowledge/handoff behavior and publication
+approvals remain explicit target-bound manual evidence requirements where
+applicable. These include required evidence fields and `accepted: false`; setup
+completion, skip overrides and inventory counts cannot satisfy them. Dataverse
+provisioning is conditional on an actual Dataverse runtime dependency, not a
+universal native authoring prerequisite. Unknown feature applicability remains
+unresolved. The current catalog has 150 definitions, including fixed DA
+handoff, feature-list, custom-conversation and maker Workday Test-pane reviews.
+Definitions are not a count of executable or mandatory deployment checks.
+
+**Current DA scope:** package export and movement between environments are
+deferred. `PUB-001` and `PUB-002` remain visible as outside this review, are not
+executed and do not block readiness. No exportable ZIP, promotion evidence or
+additional ALM enrollment/publication is required. Legacy export/import behavior
+is unchanged. `ESS-SOLN-001` reuses the verified native snapshot for exact ESS
+identity and content; it does not call ALM configure or require repository/commit
+provenance. Explicitly configured revision pins remain enforced separately and
+still require their exact-target ALM read. Changing the selected revision pin
+invalidates prior owner evidence; a sibling agent's pin does not.
+
+Complete-catalog CLI replay with real producers and grounded read contracts
+can reach `READY` after valid feature and owner reviews, without export or import.
+This verifies the supported assessment path, not a live deployment or a substitute
+for actual employee testing and administrator evidence.
+
+DA full first verifies exact-agent access/content, then discovers active direct
+and invoked-flow dependencies and recomposes the selected integration plan.
+Partial reads preserve known dependencies without proving other integrations
+absent. An exact agent/environment/realm match in the existing Workday Connect
+state also establishes installation intent before activation; saved completion
+flags are not fresh validation. The state adapter is read-only, selects the
+matching realm target, and does not migrate lifecycle state. Explicit mismatched
+Workday state is rejected; another agent's automatically discovered state is not
+merged.
+
+Workday coverage follows foundation setup and the DA Workday Connect lifecycle:
+reviewed package/flow configuration, delegated authorization, exact bindings,
+selected topic activation/wiring and User Context redirect. Connection attachment
+and parameter sharing remain explicit evidence requirements. Maker Test-pane
+smoke-test evidence is separate from published signed-in employee execution;
+publishing and flow run-history correlation are not added to Connect acceptance.
+Administrator-only Entra/Graph and Workday verification is **Skipped** by default:
+maker administrator permissions are not assumed, no Graph authentication or role
+question is introduced, and skips do not verify those prerequisites. A later
+role-aware change may opt administrators into additional checks.
+
+Manually configured ServiceNow receives selected-dependency binding diagnostics
+and explicit scenario/runtime evidence requirements, not a guided installer.
+Connected candidates, legacy flow names and unrelated run history cannot prove
+an exact binding or employee execution. **SAP is excluded from DA coverage**,
+including when stale configuration suggests it is enabled.
+
+The combined JSON/HTML report reconciles every catalog definition against the
+observed result rows, including dynamic families, missing/ambiguous results,
+unsupported dispatch, unknown applicability, explicit exclusions and unaccepted
+manual requirements. Definitions, scheduled selectors and actual rows have
+separate counts; the inventory is not a count of passed checks.
+
+DA full adds `flightcheck.da.assessment.v1` at root `da_assessment` and nested
+`contract.daAssessment` without changing `flightcheck.result.v2` or diagnostic
+statuses. HTML and terminal summaries separately label diagnostics and deployment
+readiness. **READY** requires all required applicable evidence and verified
+assessment context; **NOT_READY** means a confirmed required defect; otherwise
+readiness is **INCOMPLETE**. A confirmed defect takes precedence over remaining
+gaps. Only deployment READY exits successfully for DA full. Legacy exits and
+Workday Connect acceptance remain unchanged. Administrator skips remain Skipped
+and visible with the other evidence requirements. DA full uses its independent
+coverage reconciliation, not the Connect profile's resolved-family or skipped-
+checkpoint acceptance gates.
+
+DA HTML reports use a centered, offline Fluent-style layout with the kit's
+header icon, colored category tiles, tab-style filters and grouped expandable
+checks. It shares the standard report's Fluent styling, five-column desktop
+tile grid, status chips, compact action panel and category accordions.
+Tiles link to category details, including confirmed checks; required reviews,
+unknown feature use and unchecked requirements cannot produce a green tile.
+A three-column next-steps table shows the area, action and owner, initially
+showing three areas with an option to show the rest;
+tables stack into readable sections on mobile instead of squeezing the columns.
+Action totals distinguish **Provide confirmation**, **Run a test** and
+**Administrator review**; **Information only** notes are separate and require no
+confirmation. Feature choices remain a distinct filter within confirmations.
+Accepted reviews no longer count as outstanding actions, even when their original
+diagnostic status remains Manual or Skipped. Original status totals and findings
+remain in the expandable check results; no result or readiness rule is rewritten.
+Shared reviews (licensing, billing, Workday connection settings and
+administrator handoffs) are grouped without losing their distinct assertions.
+Skipped is never counted as Passed, and Blocked is not labeled Failed.
+Informational observations remain in the inventory, not the required work queue.
+Each evidence requirement exposes its acceptance criteria, required fields and
+an explicitly **unreviewed** copyable JSON template. Copying a template does not
+verify anything. Full CLI reports record their original arguments, shell and
+resolved target guards for a target-preserving rerun. The DA-only
+`--expected-agent-id` guard rejects a changed native agent before authentication;
+environment, tenant, schema, slug, realm and ring guards are retained as well.
+These remain in the private report/JSON, never telemetry.
+No external UI assets, tracking or additional runtime dependency is required.
+Previously generic evidence may need checkpoint-specific details; use the
+current report's required fields rather than reusing an incomplete old record.
+Customer-facing summaries, next steps and review fields use plain language.
+Internal check references, original findings, exact evidence field names,
+version identifiers and rerun commands remain available in expandable support
+details. Friendly status labels do not change the JSON status or readiness policy.
+Repeated connection-discovery warnings are summarized once in the HTML.
+Their full original messages remain in the downloadable `results.json`, not
+a repeated paragraph or a separate task for every affected conversation.
+
+**Reviewed external evidence (DA full only):** run once to obtain the report's
+exact `target`, `configurationRevision` and requirement-specific
+`requiredEvidenceFields`. After an authorized reviewer reviews the evidence,
+rerun the same selected target with `--da-evidence <path-to-evidence.json>`.
+The revision includes native configuration, inspected bindings and structured
+ALM provenance/status, not diagnostic wording, request IDs or read cursors.
+Use this envelope, replacing all illustrative values with real reviewed evidence:
+
+```json
+{
+  "schemaVersion": "flightcheck.da.evidence.v1",
+  "records": [
+    {
+      "checkpointId": "PRE-005",
+      "target": {
+        "tenantId": "<report target.tenantId>",
+        "environmentId": "<report target.environmentId>",
+        "agentId": "<report target.agentId>",
+        "agentSchemaName": "<report target.agentSchemaName>",
+        "agentSlug": "<report target.agentSlug>",
+        "realm": "<report target.realm>",
+        "serviceRing": "<report target.serviceRing>"
+      },
+      "configurationRevision": "<report configurationRevision>",
+      "reviewed": true,
+      "reviewerRole": "Power Platform Admin",
+      "source": "<approved non-secret evidence reference>",
+      "observedAt": "<timezone-aware ISO timestamp>",
+      "reviewedAt": "<timezone-aware ISO timestamp>",
+      "validUntil": "<explicit timezone-aware expiry>",
+      "outcome": "satisfied",
+      "evidenceKind": "manual_attestation",
+      "details": {
+        "environmentBillingPolicy": "<reviewed policy>",
+        "billingRoute": "<reviewed route>",
+        "billingCoverage": "<reviewed coverage>"
+      }
+    }
+  ]
+}
+```
+
+Provide at most one record per checkpoint. The complete target must match,
+including deployment realm and service ring. The SHA256 configuration revision
+binds the verified native snapshot (excluding its read cursor), inspected
+connection bindings and ALM evidence; changed evidence invalidates the record.
+Require `observedAt <= reviewedAt <= assessment time < validUntil`; there is no
+inferred validity period. `reviewerRole` must be one of the requirement's owning
+roles. Populate every reported required field, placing `observedAt`, `source`,
+`reviewerRole` and `configurationRevision` in the envelope and other fields in
+`details`. Outcome is `satisfied` or `defect`. Evidence cannot replace automated
+verification, hide missing results, or override an automated failure.
+
+**Feature choices:** `DA-INTEGRATIONS-001` uses the same envelope with
+`evidenceKind: feature_applicability`. The report supplies an unreviewed form;
+complete its owner, reference, target/version and validity fields as above.
+Its `details` contains:
+
+```json
+{
+  "features": {
+    "teams": null,
+    "dataverse_customization": null,
+    "workday_customizations": null,
+    "workday_writes": null,
+    "knowledge": null,
+    "graph_connector": null,
+    "handoff": null,
+    "custom_topics": null,
+    "external_endpoints": null
+  }
+}
+```
+
+Use boolean `true` for used and `false` for confirmed unused; `null` or an
+omitted choice stays unknown. Strings such as `"false"` are invalid. Reviewed
+choices cannot contradict observed dependencies or declare Workday, ServiceNow,
+connector, flow, Dataverse-runtime or revision-pin facts. A confirmed absent
+parent excludes its children; an unknown parent does not. Known Workday or
+ServiceNow use requires external-endpoint coverage. Contradictory declarations
+are rejected, not silently normalized.
+
+Feature review controls scope, not feature health: enabled features still need
+their separate checks and owner evidence. Native installation evidence is
+reused to bind the review before conditional checks are planned; no additional
+ALM lookup is needed unless an explicit revision pin requires it.
+The review is revalidated at the final decision; expiry or changed configuration
+removes its exclusions. Graph-source and Workday-administrator checks remain
+Skipped with external review requirements; the maker is not authenticated to
+Graph. Export and promotion are excluded from the feature-review form; do not
+submit an `alm_promotion` choice or promotion evidence for this DA assessment.
+
+Published employee evidence uses `evidenceKind: published_employee_runtime`:
+`DA-RUNTIME-001` requires `employeeTestRunIds`, and `DA-SN-RUNTIME-001` requires
+`employeeTestRuns`. Each is a unique nonempty run-ID list, with an `outcomes`
+map containing exactly those IDs and `passed`/`failed` values, plus the other
+reported fields. All runs must pass for `satisfied`; failed runs require
+`defect`. A Copilot Studio Test-pane run cannot substitute for published
+employee execution. `WD-DA-MAKER-001` instead uses `maker_test_pane`, with
+`makerTestCategory: copilot_studio_test_pane`, its scenario, an aware
+`testTimestamp` no later than review, and a matching `passed`/`failed` outcome.
+
+These records are **reviewer-declared attestations**, not cryptographic proof,
+authenticated administrator-role verification or automatic validation of the
+referenced material. Accepted evidence affects only the separate deployment
+decision; original Manual/Skipped rows remain unchanged. Generic detail fields
+are presence-validated, not independently verified. Do not include secrets.
+JSON retains accepted references and validity windows; HTML masks/escapes
+references. Telemetry adds only readiness enums and coverage counts, not evidence
+details, references or revision fingerprints. Approval is scoped to the selected
+realm, not cross-realm promotion or organizational GA sign-off.
+
+DA full rejects `--alm-import-probe` and `--runtime-reachability`; these remain separate,
+explicitly authorized operations.
+
+**Legacy/custom-engine checks (not the DA full execution list):**
 
 | Category | What's validated |
 |----------|------------------|

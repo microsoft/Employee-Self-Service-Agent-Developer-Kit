@@ -1041,6 +1041,30 @@ def derive_connector_from_category(category: str) -> str:
     return ""
 
 
+def _da_assessment_data(run_result: Any) -> dict[str, Any]:
+    assessment = getattr(run_result, "da_assessment", None)
+    if not isinstance(assessment, dict) or not assessment:
+        return {}
+    state = assessment.get("deploymentReadiness")
+    fields = {
+        "deploymentReadiness": state if state in ("READY", "NOT_READY", "INCOMPLETE") else "INCOMPLETE",
+    }
+    counts = assessment.get("counts")
+    for field, key in (
+        ("daCatalogDefinitions", "catalogDefinitions"),
+        ("daRequiredDefinitions", "requiredDefinitions"),
+        ("daSatisfiedRequirements", "satisfied"),
+        ("daConfirmedDefects", "defects"),
+        ("daIncompleteRequirements", "incomplete"),
+        ("daUnknownApplicability", "unknownApplicability"),
+        ("daMissingResults", "missingResults"),
+        ("daAssessmentGaps", "assessmentGaps"),
+    ):
+        value = counts.get(key) if isinstance(counts, dict) else None
+        fields[field] = value if type(value) is int and value >= 0 else 0
+    return fields
+
+
 def _run_data(
     run_result: Any,
     *,
@@ -1090,6 +1114,7 @@ def _run_data(
         "errors": getattr(run_result, "errors", 0),
         "pythonVersion": platform.python_version(),
         "os": platform.system(),
+        **_da_assessment_data(run_result),
     }
 
 

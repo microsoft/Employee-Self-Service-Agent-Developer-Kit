@@ -28,8 +28,9 @@ from typing import Any
 from agentbuilder import AgentBuilderHTTPError
 
 from ..runner import CheckResult, Role, Status
+from .da_baseline import manual_evidence_requirement
 
-DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+from ..documentation import DOC_BASE
 STUDIO_BASE = "https://copilotstudio.microsoft.com"
 M365_INTEGRATED_APPS_URL = (
     "https://admin.microsoft.com/Adminportal/Home#/Settings/IntegratedApps"
@@ -805,13 +806,19 @@ def _build_checks(runner) -> list[dict]:
 
 
 def run_publishing_checks(runner) -> list[CheckResult]:
-    """Return publishing/QA checks, using AgentBuilder ALM where available.
+    """Return publishing/QA checks, preserving legacy opt-in ALM behavior.
 
-    PUB-001 validates export without mutating the environment. PUB-002 is
-    explicitly gated because import creates an agent in the target environment.
+    DA full excludes package export and promotion from its current scope.
+    Legacy PUB-002 remains opt-in because import creates an agent.
     """
     results: list[CheckResult] = []
+    should_execute = getattr(runner, "should_execute", lambda _checkpoint_id: True)
+    da_full = getattr(runner, "da_full_assessment", False) is True
     for c in _build_checks(runner):
+        if da_full and c["id"] in {"PUB-001", "PUB-002"}:
+            continue
+        if not should_execute(c["id"]):
+            continue
         if c["id"] == "PUB-001":
             results.append(_check_pub_001_export(runner, c))
             continue
@@ -824,11 +831,27 @@ def run_publishing_checks(runner) -> list[CheckResult]:
                 category="Publishing",
                 priority=c["p"],
                 status=Status.MANUAL.value,
-                description=c["desc"],
-                result=c["result"],
-                remediation=c["remediation"],
+                description=(
+                    "Approved representative evaluation library"
+                    if da_full and c["id"] == "QA-001" else c["desc"]
+                ),
+                result=(
+                    "This assessment has not accepted target-bound release evidence."
+                    if da_full and c["id"] != "PUB-011" else c["result"]
+                ),
+                remediation=(
+                    "Record stakeholder-approved intent, risk and permission coverage "
+                    "for the selected release. Use the agreed quality and acceptance "
+                    "criteria; prompt count alone does not establish coverage."
+                    if da_full and c["id"] == "QA-001" else c["remediation"]
+                ),
                 doc_link=c["doc_link"],
                 roles=c["roles"],
+                evidence=(
+                    manual_evidence_requirement(
+                        runner, ("publishedChannel", "releaseRevision", "testOrApprovalRecord", "outcome"),
+                    ) if da_full and c["id"] != "PUB-011" else {}
+                ),
             )
         )
     return results

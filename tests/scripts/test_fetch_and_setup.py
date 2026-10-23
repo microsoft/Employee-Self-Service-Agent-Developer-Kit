@@ -151,8 +151,9 @@ class TestFetchComponents:
         calls = []
 
         def fake_query_all(
-            env_url, token, entity_set, select, filter_expr=None,
+            env_url, token, entity_set, select, filter_expr=None, *, strict_collection=False,
         ):
+            assert strict_collection is True
             calls.append(filter_expr)
             return [{
                 "botcomponentid": "parent",

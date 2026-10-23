@@ -10,13 +10,21 @@ The check consumes the validated AgentBuilder Minimal Bot API
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
+import responses
+import yaml
 
-from agentbuilder import AgentBuilderHTTPError, DEV_REALM, PROD_REALM, TEST_REALM
-from flightcheck.checks.solution import _alm_realm, _check_ess_solution_installed
+from agentbuilder import (
+    AgentBuilderClient, AgentBuilderHTTPError, DEV_REALM, PROD_REALM, TEST_REALM,
+    derive_environment_host,
+)
+from flightcheck.checks.solution import _alm_realm, _check_ess_solution_installed, run_solution_checks
 from flightcheck.runner import Status
 from tests.conftest import require_validated_mock
 from tests.mocks import agentbuilder_connectivity as ab
@@ -114,6 +122,95 @@ def test_warns_when_schema_name_missing() -> None:
     assert ab.MOCK_ENV_ID in result.result
     assert ab.MOCK_COMMIT_SHA in result.result
     assert "returns a schemaName" in result.remediation
+
+
+def _native_runner():
+    path = Path(__file__).resolve().parents[2] / "fixtures" / "cassettes" / "agentbuilder_readiness.yaml"
+    interaction = next(
+        item for item in yaml.safe_load(path.read_text(encoding="utf-8"))["interactions"]
+        if "/components?" in item["request"]["uri"]
+    )
+    payload = json.loads(interaction["response"]["body"]["string"])
+    bot = payload["bot"]
+    config = _config()
+    config["agents"][0].update(botId=bot["cdsBotId"], schemaName=bot["schemaName"])
+    runner = _Runner(agentbuilder=_FakeAgentBuilder(error=AssertionError("DA must not read ALM")), config=config)
+    runner.env_id = ab.MOCK_ENV_ID
+    runner.da_full_assessment = True
+    runner.validation_context = {"realm": "dev"}
+    runner._da_native_snapshot = {
+        "agentId": bot["cdsBotId"], "environmentId": ab.MOCK_ENV_ID,
+        "changeset": payload,
+    }
+    return runner
+
+
+def test_full_da_confirms_exact_native_ess_content_without_alm_provenance():
+    runner = _native_runner()
+    runner.config["almRealm"] = "prod"
+    row = run_solution_checks(runner)[0]
+    assert row.status == Status.PASSED.value
+    assert "Confirmed native ESS schema" in row.result
+    assert row.evidence["agentId"] == runner._da_native_snapshot["agentId"]
+    assert "not_package_origin_revision" in row.evidence["evidenceBoundary"]
+    assert row.remediation == ""
+    assert runner.agentbuilder.calls == []
+
+
+@pytest.mark.parametrize("mismatch", ["agent", "environment", "bot", "schema", "missing_content", "missing_snapshot"])
+def test_full_da_native_installation_requires_exact_identity_and_content(mismatch):
+    runner = _native_runner()
+    snapshot = runner._da_native_snapshot
+    if mismatch in {"agent", "environment"}:
+        snapshot["agentId" if mismatch == "agent" else "environmentId"] = "different"
+    elif mismatch in {"bot", "schema"}:
+        snapshot["changeset"]["bot"]["cdsBotId" if mismatch == "bot" else "schemaName"] = "different"
+    elif mismatch == "missing_content":
+        snapshot["changeset"]["botComponentChanges"] = []
+    else:
+        del runner._da_native_snapshot
+    row = run_solution_checks(runner)[0]
+    assert row.status == Status.BLOCKED.value
+    assert "could not be confirmed" in row.result
+    assert "Resolve the native agent access/content findings" in row.remediation
+    assert runner.agentbuilder.calls == []
+
+
+def test_full_da_does_not_accept_a_non_ess_native_agent_as_ess():
+    runner = _native_runner()
+    runner.config["agents"][0]["schemaName"] = "gptagent_otherproduct"
+    runner._da_native_snapshot["changeset"]["bot"]["schemaName"] = "gptagent_otherproduct"
+    row = run_solution_checks(runner)[0]
+    assert row.status == Status.FAILED.value
+    assert "not an ESS schema" in row.result
+    assert "Select the intended Employee Self-Service agent" in row.remediation
+
+
+def test_legacy_package_replays_captured_configure_string_realm():
+    path = Path(__file__).resolve().parents[2] / "fixtures" / "cassettes" / "agentbuilder_readiness.yaml"
+    interaction = next(
+        item for item in yaml.safe_load(path.read_text(encoding="utf-8"))["interactions"]
+        if item["request"]["method"] == "GET" and "/configure" in item["request"]["uri"]
+    )
+    payload = json.loads(interaction["response"]["body"]["string"])
+    assert payload["realm"] == "Dev"
+    parsed = urlsplit(interaction["request"]["uri"])
+    host = derive_environment_host(ab.MOCK_ENV_ID, "prod")
+    uri = parsed._replace(netloc=urlsplit(host).netloc).geturl()
+    client = AgentBuilderClient(
+        host, "test-token", ring="prod", tenant_id=ab.MOCK_ENV_ID,
+        api_version=parse_qs(parsed.query)["api-version"][0],
+    )
+    config = _config(bot_id=payload["cdsBotId"])
+    config["agents"][0]["schemaName"] = payload["schemaName"]
+    runner = _Runner(agentbuilder=client, config=config)
+    with responses.RequestsMock() as http:
+        http.add(responses.GET, uri, json=payload, status=200)
+        row = _check_ess_solution_installed(runner)[0]
+        assert row.status == Status.PASSED.value
+        assert "Agent runs the ESS base package" in row.result
+        assert row.remediation == ""
+        assert len(http.calls) == 1
 
 
 @pytest.mark.parametrize(

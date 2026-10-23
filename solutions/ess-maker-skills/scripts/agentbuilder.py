@@ -676,6 +676,40 @@ def authenticate_selected_tenant(
     return token, tenant_id_from_access_token(token)
 
 
+def authenticate_flightcheck_dependency(
+    scope: str,
+    *,
+    tenant_id: str,
+    ring: str,
+    account_hint: str,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+) -> str:
+    """Acquire one dependency-read audience for the already selected operator.
+
+    ENV-004 requests Flow or Dataverse access only after discovering an active
+    flow dependency. A different or unverifiable account must not satisfy that
+    dependency on behalf of the selected agent.
+    """
+    if not account_hint:
+        raise ValueError("Dependency reads require a verified account identity.")
+    tenant_id = str(uuid.UUID(tenant_id))
+    token, account = _acquire_token(
+        authority=f"https://login.microsoftonline.com/{tenant_id}",
+        ring=ring,
+        cache_path=cache_path,
+        force_account_selection=False,
+        account_hint=account_hint,
+        scopes=(scope,),
+        emit_account_identity=False,
+        return_account_identity=True,
+    )
+    if not account or account.casefold() != account_hint.casefold():
+        raise AgentBuilderError("Dependency authentication selected a different or unverifiable account.")
+    if tenant_id_from_access_token(token).casefold() != tenant_id.casefold():
+        raise AgentBuilderError("Dependency authentication selected a different tenant.")
+    return token
+
+
 def authenticate_agent_inventory(
     ring: str,
     *,

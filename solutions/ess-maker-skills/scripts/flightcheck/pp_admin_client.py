@@ -170,6 +170,26 @@ class PPAdminClient:
         self._flow_token: str | None = None
         self.signed_in_username: str | None = None
 
+    @property
+    def has_flow_token(self) -> bool:
+        return self._flow_token is not None
+
+    @property
+    def has_powerapps_token(self) -> bool:
+        return self._token is not None
+
+    def set_read_tokens(
+        self, *, powerapps_token: str | None = None, flow_token: str | None = None
+    ) -> None:
+        """Use already-authenticated delegated read tokens without another login."""
+        for token in (powerapps_token, flow_token):
+            if token is not None and (not isinstance(token, str) or not token.strip()):
+                raise ValueError("A delegated read token must be a non-empty string.")
+        if powerapps_token is not None:
+            self._token = powerapps_token
+        if flow_token is not None:
+            self._flow_token = flow_token
+
     def authenticate(
         self,
         *,
@@ -345,7 +365,7 @@ class PPAdminClient:
         resp.raise_for_status()
         return resp.json()
 
-    def _get_all(self, base: str, path: str, params: dict | None = None, *, use_flow_token: bool = False) -> list | dict:
+    def _get_all(self, base: str, path: str, params: dict | None = None, *, use_flow_token: bool = False, strict_collection: bool = False) -> list | dict:
         """Paginate through results.
 
         On 401/403 returns a structured ``{"_error": ...}`` dict (matching
@@ -357,20 +377,47 @@ class PPAdminClient:
         """
         items: list = []
         url = f"{base}{path}"
+        collection_path = urlparse(url).path
+        seen_urls: set[str] = set()
         h = self.flow_headers if use_flow_token else self.headers
         while url:
+            if strict_collection:
+                seen_urls.add(url)
             resp = _SESSION.get(url, headers=h, params=params, timeout=60)
             if resp.status_code in (401, 403):
                 return {"_error": "insufficient_permissions", "_status": resp.status_code}
             resp.raise_for_status()
             data = resp.json()
+            if strict_collection and (
+                not isinstance(data, dict) or not isinstance(data.get("value"), list)
+            ):
+                raise ValueError("Power Platform administration returned an invalid collection.")
             items.extend(data.get("value", []))
-            next_url = data.get("nextLink") or data.get("@odata.nextLink")
-            url = (
-                _same_origin_pagination_url(next_url, base)
-                if next_url
-                else None
-            )
+            if strict_collection:
+                continuations = set()
+                for key in ("nextLink", "@odata.nextLink"):
+                    next_url = data.get(key)
+                    if next_url is None:
+                        continue
+                    if not isinstance(next_url, str) or not next_url.strip():
+                        raise ValueError("Power Platform administration returned an invalid continuation.")
+                    next_url = _same_origin_pagination_url(next_url, base)
+                    parsed = urlparse(next_url)
+                    if parsed.path != collection_path or parsed.fragment:
+                        raise ValueError("Power Platform administration returned an invalid continuation.")
+                    if next_url in seen_urls:
+                        raise ValueError("Power Platform administration returned a repeated continuation.")
+                    continuations.add(next_url)
+                if len(continuations) > 1:
+                    raise ValueError("Power Platform administration returned conflicting continuations.")
+                url = next(iter(continuations), None)
+            else:
+                next_url = data.get("nextLink") or data.get("@odata.nextLink")
+                url = (
+                    _same_origin_pagination_url(next_url, base)
+                    if next_url
+                    else None
+                )
             params = None
         return items
 
@@ -589,12 +636,13 @@ class PPAdminClient:
 
     # ----- Connection APIs -----
 
-    def get_connections(self, env_id: str) -> list:
-        """List all connections in an environment (admin scope)."""
+    def get_connections(self, env_id: str, *, strict_collection: bool = False) -> list:
+        """List connections, optionally rejecting malformed collection responses."""
         return self._get_all(
             POWERAPPS_BASE,
             f"/providers/Microsoft.PowerApps/scopes/admin/environments/{env_id}/connections",
             params={"api-version": "2016-11-01"},
+            strict_collection=strict_collection,
         )
 
     def get_connector_connections(

@@ -2647,5 +2647,10 @@ def test_flightcheck_preserves_standalone_and_configured_scope_modes() -> None:
 
     assert "flightCheckOnly: true" in instructions
     assert "scope selection supported by the active configuration" in normalized
-    assert "supported scopes are `full`, `environment`" in skill
+    normalized_skill = " ".join(skill.split())
+    assert "**DA maker boundary:**" in skill
+    assert "supports `local` only." in normalized_skill
+    assert "**Standalone DA:**" in skill
+    assert "offer only Full check and Local files only here." in normalized_skill
+    assert "Do not offer remote scopes" in normalized_skill
     assert "scope fixed to `local`" not in normalized

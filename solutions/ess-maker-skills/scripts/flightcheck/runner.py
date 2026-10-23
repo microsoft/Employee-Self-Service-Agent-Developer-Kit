@@ -15,6 +15,8 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any, Callable
 
+from .agent_scope import is_declarative_agent
+from .documentation import apply_documentation_context
 
 FLIGHTCHECK_RESULT_SCHEMA_VERSION = "flightcheck.result.v2"
 
@@ -118,6 +120,7 @@ class CheckResult:
     block_reason: str = ""
 
     def __post_init__(self) -> None:
+        apply_documentation_context(self, declarative=False)
         if not self.severity:
             self.severity = _default_severity(self.status, self.priority)
         if not self.automation_type:
@@ -165,6 +168,8 @@ class RunResult:
     requested_validation_context: dict[str, Any] = field(default_factory=dict)
     validation_context: dict[str, Any] = field(default_factory=dict)
     client_availability: dict[str, dict[str, Any]] = field(default_factory=dict)
+    da_assessment: dict[str, Any] = field(default_factory=dict)
+    diagnostic_only: bool = False
 
 
 _VALIDATION_REALMS = frozenset({"dev", "test", "prod"})
@@ -228,6 +233,29 @@ def _default_severity(status: str, priority: str) -> str:
     return "info"
 
 
+def execute_check(runner, category: str, fn: Callable, *, sequence: int = 0) -> list[CheckResult]:
+    """Use the same explicit error contract for staged and registered producers."""
+    try:
+        return fn(runner) or []
+    except Exception as e:
+        traceback.print_exc()
+        return [CheckResult(
+            checkpoint_id=(
+                f"EXEC-{sequence:03d}-"
+                f"{''.join(ch for ch in category.upper() if ch.isalnum())[:24]}-ERR"
+            ),
+            category=category,
+            priority=Priority.HIGH.value,
+            status=Status.ERROR.value,
+            description=f"{category} validation",
+            result=f"Check failed with error: {e}",
+            remediation="Review permissions and retry. See terminal output for details.",
+            remediation_id="FLIGHTCHECK-EXECUTION-ERROR",
+            evidence={"executionError": True, "category": category},
+            roles=[Role.ESS_MAKER.value],
+        )]
+
+
 class FlightCheckRunner:
     """Executes registered check functions and aggregates results."""
 
@@ -270,31 +298,7 @@ class FlightCheckRunner:
             self._check_fns,
             start=1,
         ):
-            try:
-                results = fn(self)
-                if results:
-                    self.results.extend(results)
-            except Exception as e:
-                self.results.append(CheckResult(
-                    checkpoint_id=(
-                        f"EXEC-{category_index:03d}-"
-                        f"{''.join(ch for ch in category.upper() if ch.isalnum())[:24]}"
-                        "-ERR"
-                    ),
-                    category=category,
-                    priority=Priority.HIGH.value,
-                    status=Status.ERROR.value,
-                    description=f"{category} validation",
-                    result=f"Check failed with error: {e}",
-                    remediation="Review permissions and retry. See terminal output for details.",
-                    remediation_id="FLIGHTCHECK-EXECUTION-ERROR",
-                    evidence={
-                        "executionError": True,
-                        "category": category,
-                    },
-                    roles=[Role.ESS_MAKER.value],
-                ))
-                traceback.print_exc()
+            self.results.extend(execute_check(self, category, fn, sequence=category_index))
 
         duration = time.time() - start
 
@@ -310,6 +314,20 @@ class FlightCheckRunner:
                 if self._target_matcher(r.checkpoint_id)
                 or r.evidence.get("executionError") is True
             ]
+
+        declarative = is_declarative_agent(self)
+        includes_declarative = declarative and not self.results
+        for result in self.results:
+            result_declarative = declarative
+            if "agentSlug" in result.evidence:
+                subject_slug = result.evidence["agentSlug"]
+                result_declarative = (
+                    isinstance(subject_slug, str)
+                    and subject_slug != ""
+                    and is_declarative_agent(self, subject_slug=subject_slug)
+                )
+            includes_declarative = includes_declarative or result_declarative
+            apply_documentation_context(result, declarative=result_declarative)
 
         # Build category summaries
         cat_map: dict[str, CategorySummary] = {}
@@ -377,6 +395,7 @@ class FlightCheckRunner:
             skipped=sum(c.skipped for c in cat_map.values()),
             errors=total_errors,
             overall=overall,
+            diagnostic_only=self.scope == "local" and includes_declarative,
         )
 
 
@@ -411,6 +430,8 @@ def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck
         "categories": [asdict(c) for c in run_result.categories],
         "results": [asdict(r) for r in run_result.results],
         "contract": versioned_run_result_to_dict(run_result),
+        **({"da_assessment": run_result.da_assessment} if run_result.da_assessment else {}),
+        **({"diagnostic_only": True} if run_result.diagnostic_only else {}),
     }
     with open(results_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -522,6 +543,8 @@ def _sort_key(r: CheckResult) -> tuple:
 
 def bucket_results(
     results: list[CheckResult],
+    *,
+    deferred_as_manual: bool = False,
 ) -> dict[str, list[CheckResult]]:
     """Group results into action_required / manual_verification / passed
     buckets, each sorted by priority then status then checkpoint_id.
@@ -538,6 +561,8 @@ def bucket_results(
     }
     for r in results:
         bucket = _STATUS_TO_BUCKET.get(r.status, BUCKET_ACTION)
+        if deferred_as_manual and r.status == Status.SKIPPED.value and r.evidence.get("administratorCheckDeferred") is True:
+            bucket = BUCKET_MANUAL
         buckets[bucket].append(r)
     for key in buckets:
         buckets[key].sort(key=_sort_key)
@@ -604,20 +629,23 @@ def versioned_run_result_to_dict(run_result: RunResult) -> dict[str, Any]:
             check_result_contract_dict(result)
             for result in run_result.results
         ],
+        **({"daAssessment": run_result.da_assessment} if run_result.da_assessment else {}),
+        **({"diagnosticOnly": True} if run_result.diagnostic_only else {}),
     }
 
 
 def _generate_html_report(r: RunResult) -> str:
-    """Generate the category-grouped HTML report.
+    """Render the DA work queue or legacy categories without changing results."""
+    if r.da_assessment:
+        from .da_report import render_da_report
 
-    The report is presentation-only: all content is derived from ``RunResult``
-    and existing render helpers. The Fluent 2 shell wraps category sections in
-    one checks card, but it does not change which checks run or how statuses
-    are computed.
-    """
+        return render_da_report(r)
     buckets = bucket_results(r.results)
 
     verdict_class, verdict_icon, verdict_headline, verdict_sub = _verdict_text(r)
+    if r.diagnostic_only:
+        verdict_headline = f"Local diagnostics: {r.overall}"
+        verdict_sub = "Local files only; deployment readiness not assessed."
 
     categories = _group_by_category(r)
     sections_html = _render_sections(categories)
@@ -1385,6 +1413,8 @@ def _render_header(
         }
     )
     agent_meta = ", ".join(agents) if agents else "Not specified by this RunResult"
+    if r.da_assessment:
+        agent_meta = r.da_assessment["target"]["agentSlug"]
     # Verdict glyph matches the mockup: a state-appropriate Fluent icon
     # inline with the headline, coloured by the verdict-* class.
     verdict_svgs = {
@@ -1411,7 +1441,9 @@ def _render_header(
     verdict_svg = verdict_svgs.get(verdict_class, "")
     brand_title = (
         "Employee Self-Service FlightCheck \u00b7 "
-        f"{_html_escape(r.scope.title())} deployment readiness"
+        + ("DA assessment" if r.da_assessment else
+           "DA local diagnostics" if r.diagnostic_only else
+           f"{_html_escape(r.scope.title())} deployment readiness")
     )
     return (
         '  <header class="report">\n'
@@ -1725,7 +1757,7 @@ def _render_check_card(res: CheckResult) -> str:
     pill_class, label, data_s = _STATUS_STYLE.get(
         res.status, ("na", res.status, "na")
     )
-    actionable = res.status not in (
+    actionable = res.evidence.get("administratorCheckDeferred") is True or res.status not in (
         Status.PASSED.value, Status.SKIPPED.value
     )
     role_txt = (

@@ -35,8 +35,11 @@ import os
 import sys
 import uuid
 import webbrowser
+from functools import partial, wraps
 from pathlib import Path
 from urllib.parse import urlparse
+
+from requests import RequestException
 
 # Ensure scripts/ is on the path so we can import auth
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -44,6 +47,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from flightcheck.runner import (
     CheckResult,
     FlightCheckRunner,
+    RunResult,
+    execute_check,
     Priority,
     Role,
     ValidationContext,
@@ -68,17 +73,23 @@ from agentbuilder import (
     AgentBuilderClient,
     ConnectivityClient,
     DEFAULT_API_VERSION,
+    DEFAULT_TOKEN_CACHE,
     authenticate_flightcheck,
+    authenticate_flightcheck_dependency,
     derive_environment_host,
     environment_id_from_host,
     normalize_environment_id,
     ring_from_environment_host,
     validate_environment_host,
 )
+from workday_connect_model import STATE_SCHEMA_VERSION
 
 # Check modules
 from flightcheck.checks.prerequisites import run_prerequisites_checks
-from flightcheck.checks.environment import run_capacity_check, run_environment_checks
+from flightcheck.checks.environment import (
+    run_capacity_check, run_connection_checks, run_environment_checks,
+)
+from flightcheck.checks._da_connection_refs import agent_bot_ids
 from flightcheck.checks.authentication import run_authentication_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
@@ -162,10 +173,14 @@ NATIVE_NO_DATAVERSE_SCOPE_MAP = {
     "full": [
         ("Native Agent", run_native_agent_checks),
         ("Environment", run_capacity_check),
+        ("Connections", run_connection_checks),
         ("Local Files", run_local_file_checks),
         ("Publishing", run_publishing_checks),
     ],
-    "environment": [("Environment", run_capacity_check)],
+    "environment": [
+        ("Environment", run_capacity_check),
+        ("Connections", run_connection_checks),
+    ],
     "servicenow": [("Native Agent", run_native_agent_checks)],
     "workday": [("Native Agent", run_native_agent_checks)],
     "publishing": [("Publishing", run_publishing_checks)],
@@ -735,6 +750,59 @@ def _create_alm_import_target(
     )
 
 
+def _create_hybrid_scope_clients(
+    args, config, verified_env_id, tenant_id, dv_username,
+):
+    """Add native clients without substituting the Dataverse target or account."""
+    ring = _resolve_environment_ring(config, explicit_ring=args.ring)
+    host = validate_environment_host(config["powerPlatformApiEndpoint"], ring)
+    host_env_id = environment_id_from_host(host, ring)
+    if (
+        not verified_env_id or not host_env_id
+        or uuid.UUID(host_env_id) != uuid.UUID(verified_env_id)
+    ):
+        raise ValueError("AgentBuilder host does not match the Dataverse scope environment.")
+    if (
+        args.environment_id
+        and uuid.UUID(args.environment_id) != uuid.UUID(verified_env_id)
+    ):
+        raise ValueError(
+            "--environment-id does not match the verified Dataverse environment."
+        )
+    if not dv_username:
+        raise ValueError("Dataverse could not verify the authenticated account.")
+    preferred = getattr(args, "preferred_username", None)
+    if preferred and preferred.casefold() != dv_username.casefold():
+        raise ValueError("Dataverse authenticated a different account than requested.")
+
+    needs_connection_inventory = args.scope in {"full", "environment"}
+    token, native_tenant, native_username = authenticate_flightcheck(
+        ring,
+        account_hint=dv_username,
+        include_connectivity=needs_connection_inventory,
+        allow_write=bool(args.alm_import_probe),
+        emit_account_identity=False,
+        return_account_identity=True,
+    )
+    if uuid.UUID(native_tenant) != uuid.UUID(tenant_id):
+        raise ValueError("AgentBuilder authenticated a different tenant than Dataverse.")
+    if not native_username or native_username.casefold() != dv_username.casefold():
+        raise ValueError("AgentBuilder authenticated a different account than Dataverse.")
+    api_version = config.get("agentBuilderApiVersion", DEFAULT_API_VERSION)
+    agentbuilder = AgentBuilderClient(
+        host, token, ring=ring, tenant_id=native_tenant, api_version=api_version,
+    )
+    target = _create_alm_import_target(
+        args, source_host=host, token=token, tenant_id=native_tenant,
+        ring=ring, api_version=api_version,
+    )
+    connectivity = (
+        ConnectivityClient(token, ring=ring, api_version=api_version)
+        if needs_connection_inventory else None
+    )
+    return agentbuilder, target, connectivity
+
+
 def _validation_context_from_args(
     args,
     config: dict,
@@ -742,9 +810,16 @@ def _validation_context_from_args(
     env_id: str | None,
 ) -> ValidationContext:
     explicit_slug = str(getattr(args, "agent_slug", "") or "").strip()
-    configured_slug = str(config.get("activeAgent") or "").strip()
-    active = _active_agent_config(config, explicit_slug or None)
+    configured_slug = str(
+        config.get("activeAgent") or (config.get("agent") or {}).get("slug") or ""
+    ).strip()
     selected_slug = explicit_slug or configured_slug
+    if config.get("agents") and not selected_slug:
+        raise ValueError(
+            "Select an agent with --agent-slug or activeAgent before running "
+            "a profile; the first configured agent is not a selected target."
+        )
+    active = _active_agent_config(config, explicit_slug or None)
     if selected_slug and not active:
         raise ValueError(
             f"Selected agent {selected_slug!r} does not resolve to a "
@@ -980,8 +1055,29 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
     if not isinstance(overlay, dict):
         raise ValueError(f"{connect_config_path} must contain a JSON object")
 
-    if overlay.get("schemaVersion") in {2, 3, 4, 5, 6, 7}:
+    if "schemaVersion" in overlay:
+        version = overlay["schemaVersion"]
+        if not isinstance(version, int) or not 2 <= version <= STATE_SCHEMA_VERSION:
+            raise ValueError(
+                f"{connect_config_path} has unsupported Workday connect "
+                f"schemaVersion; expected an integer from 2 to {STATE_SCHEMA_VERSION}"
+            )
         scope = overlay.get("scope", {})
+        selected = active_agent(merged)
+        realm = selected.get("realm", merged.get("realm"))
+        targets = overlay.get("targets")
+        target = targets.get(realm) if isinstance(targets, dict) else None
+        if isinstance(target, dict) and isinstance(target.get("scope"), dict):
+            target_scope = target["scope"]
+            if (
+                isinstance(target_scope.get("agent"), dict)
+                and target_scope["agent"].get("botId") == selected.get("botId")
+                and target_scope.get("environmentId") == merged.get("environmentId")
+            ):
+                scope = target_scope
+                overlay = dict(
+                    overlay, activeTargetRealm=realm, phases=target.get("phases", {}),
+                )
         identifiers = overlay.get("identifiers", {})
         endpoints = overlay.get("endpoints", {})
         for section_name, section in (
@@ -998,16 +1094,28 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
             **overlay,
             **identifiers,
             **endpoints,
-            "tenant": scope.get("workdayTenant"),
-            "tenantId": scope.get("entraTenantId"),
-            "sidecarDataverseEndpoint": scope.get("dataverseUrl"),
-            "appIdUri": identifiers.get("entraAppIdUri"),
-            "tokenEndpoint": (
-                endpoints.get("tokenEndpoint")
-                or endpoints.get("oauthTokenUrl")
-                or overlay.get("tokenEndpoint")
-            ),
         }
+        for field, scope_field in (
+            ("workdayTenant", "workdayTenant"),
+            ("tenantId", "entraTenantId"),
+            ("sidecarDataverseEndpoint", "dataverseUrl"),
+        ):
+            if scope_field in scope:
+                overlay[field] = scope[scope_field]
+        merged["_connectConfigScope"] = scope
+        merged["_connectConfigRealm"] = overlay.get("activeTargetRealm")
+        merged["_connectConfigPhases"] = overlay.get("phases", {})
+        merged["_connectConfigFoundationTenant"] = merged.get(
+            "_connectConfigFoundationTenant", merged.get("tenantId"),
+        )
+
+    for canonical, alias in (
+        ("tenant", "workdayTenant"),
+        ("appIdUri", "entraAppIdUri"),
+        ("tokenEndpoint", "oauthTokenUrl"),
+    ):
+        if canonical not in overlay and alias in overlay:
+            overlay[canonical] = overlay[alias]
 
     for key in _PROVIDER_CONNECT_CONFIG_KEYS:
         if key in overlay:
@@ -1021,7 +1129,7 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
 
 
 def _run_exit_code(result) -> int:
-    """Map a completed run to a process exit code (1 = not ready, 0 = ready).
+    """DA full requires deployment READY; legacy callers retain diagnostic exits.
 
     BLOCKED is a hard release gate (it forces overall = NOT_READY), so it must
     fail the exit code alongside FAILED and ERROR. Centralizing the rule here
@@ -1029,6 +1137,9 @@ def _run_exit_code(result) -> int:
     blocked essential capability can never exit 0 and read as success to a
     CI/Connect caller keying on the exit code.
     """
+    assessment = getattr(result, "da_assessment", None)
+    if assessment:
+        return 0 if assessment.get("deploymentReadiness") == "READY" else 1
     return 1 if result.failed > 0 or result.blocked > 0 or result.errors > 0 else 0
 
 
@@ -1142,6 +1253,61 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
         pass
 
 
+def _configure_connection_validation(runner, args, *, account: str | None = None):
+    """Attach explicit targets and account-pinned reads at the configured API version."""
+    explicit_ids = getattr(args, "agent_id", None)
+    if explicit_ids is not None:
+        runner.connection_agent_ids = tuple(str(uuid.UUID(value)) for value in explicit_ids)
+    if not explicit_ids and not agent_bot_ids(runner.config):
+        return
+    cache_path = Path(getattr(args, "token_cache", None) or DEFAULT_TOKEN_CACHE)
+    ring = getattr(args, "ring", None) or runner.config.get("ring") or "prod"
+    host = runner.config.get("powerPlatformApiEndpoint")
+    if host:
+        ring = ring_from_environment_host(host)
+        if getattr(args, "ring", None) not in (None, ring):
+            raise ValueError("The requested service ring conflicts with the configured host.")
+    elif runner.env_id:
+        host = derive_environment_host(runner.env_id, ring)
+    else:
+        raise ValueError("Connection validation requires --environment-id.")
+    host = validate_environment_host(host, ring)
+    if str(uuid.UUID(runner.env_id)) != environment_id_from_host(host, ring):
+        raise ValueError("The native endpoint belongs to a different Power Platform environment.")
+    needs_native_auth = runner.agentbuilder is None or account is None
+    tenant_id = runner.tenant_id
+    if needs_native_auth:
+        token, tenant_id, account = authenticate_flightcheck(
+            ring, cache_path=cache_path,
+            account_hint=getattr(args, "preferred_username", None),
+            include_connectivity=True, emit_account_identity=False,
+            return_account_identity=True,
+        )
+    preferred = getattr(args, "preferred_username", None)
+    if not account or (preferred and account.casefold() != preferred.casefold()):
+        raise ValueError("Native authentication selected a different or unverifiable account.")
+    expected_tenant = getattr(args, "tenant_id", None) or runner.config.get("tenantId")
+    if expected_tenant and str(uuid.UUID(expected_tenant)).casefold() != tenant_id.casefold():
+        raise ValueError("Authentication selected a different tenant.")
+    if needs_native_auth:
+        api_version = runner.config.get("agentBuilderApiVersion", DEFAULT_API_VERSION)
+        runner.agentbuilder = AgentBuilderClient(
+            host, token, ring=ring, tenant_id=tenant_id, api_version=api_version,
+        )
+        runner.connectivity = ConnectivityClient(
+            token, ring=ring, api_version=api_version,
+        )
+        runner.tenant_id = tenant_id
+    runner.ring = ring
+    runner.connection_dependency_token = partial(
+        authenticate_flightcheck_dependency,
+        tenant_id=runner.tenant_id,
+        ring=runner.ring,
+        account_hint=account,
+        cache_path=cache_path,
+    )
+
+
 def _run_single_checkpoint(args):
     """Run exactly one checkpoint (or family) by ID and report only its result.
 
@@ -1181,7 +1347,9 @@ def _run_single_checkpoint(args):
 
     try:
         config = {}
-        if os.path.exists(config_path):
+        if os.path.exists(config_path) and not (
+            target == "ENV-004" and getattr(args, "agent_id", None)
+        ):
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
             if not isinstance(config, dict):
@@ -1452,6 +1620,13 @@ def _run_single_checkpoint(args):
 
     if needed & {registry.AGENTBUILDER, registry.CONNECTIVITY}:
         native_host = config.get("powerPlatformApiEndpoint", "")
+        if target == "ENV-004" and not native_host and env_id:
+            native_host = derive_environment_host(
+                env_id, getattr(args, "ring", None) or "prod",
+            )
+        if not native_host and target == "ENV-004":
+            print("ERROR: ENV-004 requires --environment-id and --agent-id, or an optional configured target.")
+            sys.exit(1)
         if not native_host:
             print(
                 "  Native AgentBuilder APIs: WARNING — no "
@@ -1460,6 +1635,8 @@ def _run_single_checkpoint(args):
             )
         try:
             native_ring = ring_from_environment_host(native_host)
+            if getattr(args, "ring", None) not in (None, native_ring):
+                raise ValueError("The requested service ring conflicts with the native host.")
             native_host = validate_environment_host(native_host, native_ring)
             if env_id:
                 native_environment_id = environment_id_from_host(
@@ -1484,6 +1661,9 @@ def _run_single_checkpoint(args):
         if not quiet_auth:
             print("Authenticating to native AgentBuilder APIs...")
         try:
+            cache_options = {}
+            if getattr(args, "token_cache", None):
+                cache_options["cache_path"] = Path(args.token_cache)
             native_auth = authenticate_flightcheck(
                 native_ring,
                 account_hint=canonical_username,
@@ -1491,6 +1671,7 @@ def _run_single_checkpoint(args):
                 allow_write=bool(getattr(args, "alm_import_probe", False)),
                 emit_account_identity=False,
                 return_account_identity=True,
+                **cache_options,
             )
             (
                 native_token,
@@ -1634,6 +1815,12 @@ def _run_single_checkpoint(args):
     runner.agentbuilder = agentbuilder
     runner.alm_import_target = alm_import_target
     runner.connectivity = connectivity
+    runner.tenant_id = tenant_id
+    if target == "ENV-004" and agentbuilder is not None:
+        runner.ring = native_ring
+        _configure_connection_validation(runner, args, account=canonical_username)
+    elif target == "ENV-004" and getattr(args, "agent_id", None):
+        runner.connection_agent_ids = tuple(args.agent_id)
     runner.alm_import_probe = bool(getattr(args, "alm_import_probe", False))
     runner.results.extend(
         _client_blockers(client_availability, "CHECKPOINT")
@@ -1994,12 +2181,141 @@ def _profile_checkpoint_contract_check(
     return check
 
 
-def _run_profile(args):
-    """Run a named validation profile and emit the versioned result contract."""
+def _explicit_da_target_config(args) -> dict:
+    """Build an ephemeral expected target; the DA producers verify it live."""
+    from setup_existing_da import ExistingDASetupError, STUDIO_RING_BY_HOST, resolve_da_target
+
+    parsed = urlparse(args.da_target_url)
+    if (
+        parsed.scheme != "https" or parsed.hostname not in STUDIO_RING_BY_HOST
+        or parsed.username or parsed.password or parsed.port not in {None, 443}
+    ):
+        raise ValueError("--da-target-url requires a recognized HTTPS Copilot Studio agent URL.")
+    try:
+        target = resolve_da_target(
+            target_url=parsed._replace(query="", fragment="").geturl(),
+            environment_id=args.environment_id, ring=args.ring, require_agent=True,
+        )
+    except ExistingDASetupError as exc:
+        raise ValueError(str(exc)) from exc
+    if not args.validation_realm or not (args.agent_schema_name or "").strip():
+        raise ValueError("--da-target-url requires --agent-schema-name and --validation-realm.")
+    slug = args.agent_slug or "flightcheck-only"
+    agent = {
+        "slug": slug, "botId": target["agentId"],
+        "schemaName": args.agent_schema_name.strip(), "releaseLine": "da",
+    }
+    return {
+        "flightCheckOnly": True, "environmentId": target["environmentId"],
+        "ring": target["ring"], "realm": args.validation_realm,
+        "powerPlatformApiEndpoint": derive_environment_host(target["environmentId"], target["ring"]),
+        "activeAgent": slug, "agents": [agent], "agent": agent,
+        **({"tenantId": args.tenant_id} if args.tenant_id else {}),
+    }
+
+
+def _run_da_full(args, config):
+    from flightcheck.da_execution import build_da_execution_plan
+    from flightcheck.checks.da_integrations import workday_target_matches
+    from flightcheck.da_readiness import load_da_evidence
+
+    try:
+        args._da_evidence_records = load_da_evidence(getattr(args, "da_evidence", None))
+        _profile_target_matches_config(args, config)
+        target_config = dict(config)
+        if args.environment_id:
+            target_config["environmentId"] = args.environment_id
+        execution = build_da_execution_plan(
+            target_config, getattr(args, "agent_slug", None),
+            environment_url=args.environment_url or "",
+        )
+        expected_agent = getattr(args, "expected_agent_id", None)
+        configured_agent = execution.config["agent"].get("botId")
+        if expected_agent and (
+            not isinstance(configured_agent, str) or uuid.UUID(expected_agent) != uuid.UUID(configured_agent)
+        ):
+            raise ValueError("--expected-agent-id does not match the selected DA.")
+        if getattr(args, "connect_config", None):
+            execution = build_da_execution_plan(
+                _merge_connect_config(execution.config, args.connect_config),
+                environment_url=args.environment_url or "",
+            )
+            if execution.config.get("_connectConfigScope") is not None and not workday_target_matches(execution.config):
+                raise ValueError("The Workday Connect state does not match the selected agent, environment and realm.")
+        else:
+            state_path = Path(".local") / "connect" / "workday-da" / "config.json"
+            if state_path.is_file():
+                candidate = _merge_connect_config(execution.config, str(state_path))
+                if workday_target_matches(candidate):
+                    execution = build_da_execution_plan(candidate, environment_url=args.environment_url or "")
+        _resolve_environment_ring(
+            execution.config, explicit_ring=getattr(args, "ring", None),
+        )
+        _resolve_power_platform_admin_origin(
+            execution.config,
+            explicit_origin=getattr(args, "power_platform_admin_origin", None),
+        )
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: Unable to plan the selected DA assessment: {exc}")
+        sys.exit(1)
+    _run_profile(args, da_execution=execution)
+
+
+def _prepare_da_integration_execution(runner, args, execution):
+    """Read the selected DA once before composing additional integration clients."""
+    from flightcheck import registry
+    from flightcheck.checks._connection_dependencies import _Access, READ_ERRORS
+    from flightcheck.checks.da_integrations import discover_da_features, run_da_integration_checks
+    from flightcheck.da_execution import build_da_execution_plan
+    from flightcheck.da_readiness import reviewed_da_features
+
+    native_rows = execute_check(runner, "Native Agent", run_native_agent_checks)
+    passed = {row.checkpoint_id for row in native_rows if row.status == Status.PASSED.value}
+    if not {"DA-AGENT-001", "DA-CONTENT-001"} <= passed:
+        return execution, native_rows
+    features = discover_da_features(runner)
+    runner._da_observed_features = dict(features)
+    records = getattr(args, "_da_evidence_records", None)
+    if any(record["checkpointId"] == "DA-INTEGRATIONS-001" for record in records or []):
+        installation_rows = execute_check(runner, "Solution", run_solution_checks)
+        runner._da_prepared_results = {run_solution_checks: installation_rows}
+        review_rows = [
+            row for row in run_da_integration_checks(runner)
+            if row.checkpoint_id == "DA-INTEGRATIONS-001"
+        ]
+        interim = RunResult(
+            scope="full", started="", results=[*native_rows, *installation_rows, *review_rows],
+            validation_context=runner.validation_context,
+        )
+        features = reviewed_da_features(execution, interim, runner, records)
+        runner._da_feature_evidence = features
+    execution = build_da_execution_plan(
+        runner.config, runner.agent_slug, features=features, environment_url=runner.env_url,
+    )
+    if registry.DATAVERSE in execution.requirements.clients and not runner.dv_token:
+        try:
+            binding = getattr(runner, "_da_dependency_dataverse", None)
+            if binding is None:
+                access = _Access(runner)
+                env_url, token = access.dataverse()
+                binding = env_url, token, access.pp
+            runner.env_url, runner.dv_token, runner.pp_admin = binding
+        except READ_ERRORS as exc:
+            runner._da_dataverse_error = _safe_client_error_reason(exc)
+    if runner.env_url and runner.dv_token:
+        config = dict(execution.config, dataverseEndpoint=runner.env_url)
+        execution = build_da_execution_plan(
+            config, runner.agent_slug, features=features, environment_url=runner.env_url,
+        )
+    return execution, native_rows
+
+
+def _run_profile(args, *, da_execution=None):
+    """Run a named or compiled DA profile with the versioned result contract."""
     from flightcheck import registry
 
-    profile_name = args.profile
-    profile = registry.resolve_profile(profile_name)
+    profile_name = da_execution.profile.name if da_execution else args.profile
+    profile = da_execution.profile if da_execution else registry.resolve_profile(profile_name)
     if profile is None:
         print(f"ERROR: Unknown profile {profile_name!r}.")
         print("Valid profiles:")
@@ -2007,43 +2323,48 @@ def _run_profile(args):
             print(f"  {item.name}")
         sys.exit(2)
 
-    plan = registry.profile_requirements(profile_name)
+    plan = da_execution.requirements if da_execution else registry.profile_requirements(profile_name)
+    profile_selector = profile if da_execution else profile_name
     needed = plan.clients
+    invocation_label = "DA --scope full" if da_execution else "--profile"
     if bool(getattr(args, "runtime_reachability", False)):
         print(
-            "ERROR: --runtime-reachability is not allowed with --profile. "
-            "Profiles are strictly read-only."
+            f"ERROR: --runtime-reachability is not allowed with {invocation_label}. "
+            "This assessment is strictly read-only."
         )
         sys.exit(2)
     if bool(getattr(args, "alm_import_probe", False)):
         print(
-            "ERROR: --alm-import-probe is not allowed with --profile. "
-            "Profiles are strictly read-only."
+            f"ERROR: --alm-import-probe is not allowed with {invocation_label}. "
+            "This assessment is strictly read-only."
         )
         sys.exit(2)
 
     config_path = os.path.join(".local", "config.json")
-    if not os.path.exists(config_path) and plan.requires_config:
+    if not os.path.exists(config_path) and plan.requires_config and da_execution is None:
         print("ERROR: .local/config.json not found. Run /setup first.")
         sys.exit(1)
 
     try:
-        config = {}
-        if os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = json.load(f)
-            if not isinstance(config, dict):
-                raise ValueError(
-                    f"{config_path} must contain a JSON object"
-                )
-        config = _merge_connect_config(config, getattr(args, "connect_config", None))
+        if da_execution:
+            config = da_execution.config
+        else:
+            config = {}
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                if not isinstance(config, dict):
+                    raise ValueError(
+                        f"{config_path} must contain a JSON object"
+                    )
+            config = _merge_connect_config(config, getattr(args, "connect_config", None))
         _profile_target_matches_config(args, config)
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"ERROR: Unable to resolve the profile target: {e}")
         sys.exit(1)
 
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
-    if plan.requires_dataverse_endpoint and not env_url:
+    if plan.requires_dataverse_endpoint and not env_url and da_execution is None:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
     try:
@@ -2095,7 +2416,7 @@ def _run_profile(args):
     ).strip() or None
     canonical_username = preferred_username
     account_verification_required = (
-        preferred_username is not None or len(needed) > 1
+        da_execution is not None or preferred_username is not None or len(needed) > 1
     )
     client_availability: dict[str, dict[str, object]] = {
         client_name: {
@@ -2175,17 +2496,25 @@ def _run_profile(args):
                 )
                 sys.exit(1)
         else:
-            if not configured_tenant_id:
+            native_tenant_bootstrap = (
+                da_execution is not None
+                and needed <= {
+                    registry.AGENTBUILDER, registry.CONNECTIVITY, registry.POWERPLATFORM,
+                    registry.DATAVERSE, registry.PP_ADMIN,
+                }
+            )
+            if not configured_tenant_id and not native_tenant_bootstrap:
                 print(
                     "ERROR: A concrete tenantId is required for this "
                     "profile when no Dataverse endpoint is configured."
                 )
                 sys.exit(1)
-            try:
-                tenant_id = str(uuid.UUID(configured_tenant_id))
-            except ValueError:
-                print("ERROR: Configured tenantId must be a GUID.")
-                sys.exit(1)
+            if configured_tenant_id:
+                try:
+                    tenant_id = str(uuid.UUID(configured_tenant_id))
+                except ValueError:
+                    print("ERROR: Configured tenantId must be a GUID.")
+                    sys.exit(1)
 
     if registry.DATAVERSE in needed and env_url:
         from auth import authenticate
@@ -2257,7 +2586,8 @@ def _run_profile(args):
 
     env_id = args.environment_id or config.get("environmentId") or None
     controller_binding = (
-        getattr(args, "invocation_source", None) == "connect"
+        da_execution is None
+        and getattr(args, "invocation_source", None) == "connect"
         and bool(getattr(args, "connect_config", None))
         and bool(getattr(args, "environment_id", None))
         and bool(getattr(args, "environment_url", None))
@@ -2307,7 +2637,11 @@ def _run_profile(args):
     if needed & {registry.AGENTBUILDER, registry.CONNECTIVITY}:
         native_host = config.get("powerPlatformApiEndpoint", "")
         native_config_error = None
-        if not native_host:
+        if da_execution and env_url and pp_admin is None:
+            native_config_error = (
+                "Dataverse URL has no independently verified Power Platform environment mapping"
+            )
+        elif not native_host:
             native_config_error = (
                 "powerPlatformApiEndpoint is missing from workspace config"
             )
@@ -2372,6 +2706,8 @@ def _run_profile(args):
                     native_tenant_id,
                     native_username,
                 ) = native_auth
+                if da_execution:
+                    native_tenant_id = str(uuid.UUID(native_tenant_id))
                 verified_native_username = verified_account(
                     "Native AgentBuilder APIs",
                     native_username,
@@ -2459,7 +2795,9 @@ def _run_profile(args):
             mark_unavailable(registry.PVA, e)
             pva = None
 
-    if registry.POWERPLATFORM in needed:
+    if registry.POWERPLATFORM in needed and not tenant_id:
+        mark_unavailable(registry.POWERPLATFORM, "No independently authenticated tenant is available")
+    elif registry.POWERPLATFORM in needed:
         if not quiet_auth:
             print("Authenticating to Power Platform API (capacity allocation)...")
         powerplatform = PowerPlatformClient(tenant_id)
@@ -2498,27 +2836,23 @@ def _run_profile(args):
         sys.exit(1)
 
     runner = FlightCheckRunner(
-        scope=f"profile:{profile_name}",
+        scope="full" if da_execution else f"profile:{profile_name}",
         target_matcher=lambda cid: (
-            registry.profile_matches(profile_name, cid)
+            (da_execution.matches(cid) if da_execution else registry.profile_matches(profile_name, cid))
             or cid.startswith("PROFILE-CLIENT-")
             or cid.startswith("PROFILE-FAMILY-")
             or cid.startswith("PROFILE-CHECKPOINT-")
         ),
     )
     runner.execution_targets = profile.checkpoint_ids
-    runner.workday_da_profile = profile_name.startswith("workday-da:")
+    runner.da_full_assessment = da_execution is not None
+    runner.workday_da_profile = bool(da_execution) or profile_name.startswith("workday-da:")
     runner.config = config
-    # ValidationContext may use the legacy first-record fallback, not a selection.
-    runner.agent_slug = (
-        str(getattr(args, "agent_slug", "") or "").strip()
-        or config.get("activeAgent")
-        or (config.get("agent") or {}).get("slug")
-        or ""
-    )
+    runner.agent_slug = validation_context.agent_slug
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id
+    runner.tenant_id = tenant_id
     runner.graph = graph
     runner.pp_admin = pp_admin
     runner.pva = pva
@@ -2531,20 +2865,71 @@ def _run_profile(args):
     runner.runtime_reachability = False
     runner.runtime_reachability_declined = False
     runner.preserve_workday_manual_rows = True
+    if da_execution:
+        runner.validation_context = validation_context.to_dict()
+        runner.ring = _resolve_environment_ring(
+            config, explicit_ring=getattr(args, "ring", None),
+        )
+        runner.power_platform_admin_origin = _resolve_power_platform_admin_origin(
+            config, explicit_origin=getattr(args, "power_platform_admin_origin", None),
+        )
+        runner.connection_agent_ids = (
+            str(uuid.UUID(validation_context.agent_id)),
+        )
+        if agentbuilder is not None:
+            _configure_connection_validation(runner, args, account=canonical_username)
+    native_rows = None
+    if da_execution:
+        da_execution, native_rows = _prepare_da_integration_execution(runner, args, da_execution)
+        profile = da_execution.profile
+        profile_selector = profile
+        plan = da_execution.requirements
+        needed = plan.clients
+        config = da_execution.config
+        runner.config = config
+        runner.execution_targets = profile.checkpoint_ids
+        env_url, dv_token, pp_admin = runner.env_url, runner.dv_token, runner.pp_admin
+        validation_context = _validation_context_from_args(
+            args, dict(config, tenantId=tenant_id), env_url, env_id,
+        )
+        runner.validation_context = validation_context.to_dict()
+        for name in needed:
+            if name not in client_availability:
+                client_availability[name] = {
+                    "required": True, "available": False,
+                    "reason": getattr(runner, "_da_dataverse_error", "Required integration client is unavailable."),
+                }
+        if dv_token and registry.DATAVERSE in needed:
+            mark_available(registry.DATAVERSE, canonical_username)
+        if pp_admin and registry.PP_ADMIN in needed:
+            mark_available(registry.PP_ADMIN, canonical_username)
     runner.results.extend(_profile_client_blockers(client_availability))
 
+    prepared_results = dict(getattr(runner, "_da_prepared_results", {}))
+    if native_rows is not None:
+        prepared_results[run_native_agent_checks] = native_rows
     for label, fn in plan.ordered_fns:
-        runner.register(label, fn)
-    family_contract = registry.profile_family_contract(profile_name)
-    if family_contract:
+        if fn in prepared_results:
+            @wraps(fn)
+            def prepared_check(_runner, rows=prepared_results[fn]):
+                return rows
+            runner.register(label, prepared_check)
+        else:
+            runner.register(label, da_execution.guard_producer(fn) if da_execution else fn)
+    family_contract = {}
+    if da_execution:
+        runner.register("DA FlightCheck Coverage", da_execution.coverage_check)
+    else:
+        family_contract = registry.profile_family_contract(profile_selector)
+        if family_contract:
+            runner.register(
+                "FlightCheck Profile",
+                _profile_family_cardinality_check(family_contract),
+            )
         runner.register(
             "FlightCheck Profile",
-            _profile_family_cardinality_check(family_contract),
+            _profile_checkpoint_contract_check(profile),
         )
-    runner.register(
-        "FlightCheck Profile",
-        _profile_checkpoint_contract_check(profile),
-    )
 
     if not quiet_auth:
         print("\nRunning profile...\n")
@@ -2556,8 +2941,34 @@ def _run_profile(args):
     result.validation_context = validation_context.to_dict()
     result.client_availability = client_availability
 
+    if da_execution:
+        from flightcheck.da_readiness import build_da_assessment
+
+        result.da_assessment = build_da_assessment(
+            da_execution, result, runner, getattr(args, "_da_evidence_records", None),
+        )
+        rerun_arguments = list(sys.argv[1:])
+        for option, value in (
+            ("scope", "full"),
+            ("expected-agent-id", result.da_assessment["target"]["agentId"]),
+            ("environment-id", result.da_assessment["target"]["environmentId"]),
+            ("tenant-id", result.da_assessment["target"]["tenantId"]),
+            ("agent-schema-name", result.da_assessment["target"]["agentSchemaName"]),
+            ("agent-slug", result.da_assessment["target"]["agentSlug"]),
+            ("validation-realm", result.da_assessment["target"]["realm"]),
+            ("ring", result.da_assessment["target"]["serviceRing"]),
+        ):
+            if value and not getattr(args, option.replace("-", "_"), None):
+                rerun_arguments.extend((f"--{option}", value))
+        result.da_assessment["rerun"] = {
+            "arguments": rerun_arguments,
+            "shell": "powershell" if os.name == "nt" else "sh",
+        }
+
     _print_prioritized_summary(result, verbose_manual=True)
     save_results(result, args.output)
+    if da_execution and not getattr(args, "no_open", False):
+        open_report_in_browser(args.output)
 
     if not result.results:
         print(f"\nNOTE: profile {profile_name} produced no result rows.")
@@ -2567,7 +2978,8 @@ def _run_profile(args):
     # telemetry so they surface on the Aria dashboards alongside --scope and
     # --checkpoint runs (best-effort; never affects exit).
     _emit_run_telemetry(
-        result, args, config, graph, tenant_id, scope=f"profile:{profile_name}"
+        result, args, config, graph, tenant_id,
+        scope="full" if da_execution else f"profile:{profile_name}",
     )
 
     sys.exit(_run_exit_code(result))
@@ -2599,6 +3011,16 @@ def main():
     parser.add_argument(
         "--environment-id",
         help="Override the Power Platform environment ID (used by environment_picker.py)",
+    )
+    parser.add_argument(
+        "--agent-id", action="append",
+        help="Exact agent GUID for ENV-004. Repeat for multiple agents. Requires "
+             "--environment-id. Supported with --checkpoint ENV-004 or --scope environment.",
+    )
+    parser.add_argument(
+        "--token-cache",
+        help="Original native authentication cache path for ENV-004; no setup "
+             "config or credential copying is required.",
     )
     parser.add_argument(
         "--tenant-id",
@@ -2644,12 +3066,16 @@ def main():
     parser.add_argument(
         "--validation-realm",
         choices=["dev", "test", "prod"],
-        help="Realm for a --profile validation context. Required with --profile "
+        help="Deployment realm for DA full or a --profile validation context. Required with --profile "
              "unless .local/config.json supplies a \"realm\" value.",
     )
     parser.add_argument(
         "--agent-schema-name",
-        help="Agent schema name for a --profile validation context.",
+        help="Expected agent schema name for DA full or a --profile validation context.",
+    )
+    parser.add_argument(
+        "--expected-agent-id",
+        help="DA full rerun guard: reject a changed selected native agent before authentication.",
     )
     parser.add_argument(
         "--connect-config",
@@ -2761,7 +3187,44 @@ def main():
              "print candidate Workday SSO apps or ServiceNow connections as "
              "JSON, then exit without running any checks.",
     )
+    parser.add_argument(
+        "--da-evidence", default=None,
+        help="Reviewed target/revision-bound evidence JSON for DA full deployment readiness only.",
+    )
+    parser.add_argument(
+        "--da-target-url", default=None,
+        help="Explicit Copilot Studio DA URL for read-only full assessment without setup. "
+             "Requires --agent-schema-name and --validation-realm; does not read or replace saved config.",
+    )
     args = parser.parse_args()
+    if args.da_target_url and (
+        args.checkpoint or args.profile or args.list_checkpoints or args.list_targets
+        or args.scope not in {None, "full"}
+    ):
+        parser.error("--da-target-url is supported only with --scope full.")
+    if args.da_evidence and (
+        args.checkpoint or args.profile or args.list_checkpoints or args.list_targets
+        or args.scope not in {None, "full"}
+    ):
+        parser.error("--da-evidence is supported only for selected DA --scope full.")
+    if args.expected_agent_id and (
+        args.checkpoint or args.profile or args.list_checkpoints or args.list_targets
+        or args.scope not in {None, "full"}
+    ):
+        parser.error("--expected-agent-id is supported only for selected DA --scope full.")
+    if args.agent_id or args.token_cache:
+        if args.checkpoint != "ENV-004" and args.scope != "environment":
+            parser.error("--agent-id and --token-cache are supported only for ENV-004 or --scope environment.")
+        if args.agent_id:
+            if not args.environment_id:
+                parser.error("--agent-id requires --environment-id.")
+            if args.connect_config:
+                parser.error("Explicit agent targets cannot merge --connect-config identity.")
+            try:
+                args.agent_id = [str(uuid.UUID(value)) for value in args.agent_id]
+                args.environment_id = str(uuid.UUID(args.environment_id))
+            except ValueError:
+                parser.error("--agent-id and --environment-id must be GUIDs.")
     if args.alm_import_probe and not args.alm_import_target_environment_id:
         parser.error(
             "--alm-import-target-environment-id is required with "
@@ -2812,12 +3275,24 @@ def main():
 
     # Load config
     config_path = os.path.join(".local", "config.json")
-    if not os.path.exists(config_path):
-        print("ERROR: .local/config.json not found. Run /setup first.")
+    explicit_connection_target = bool(args.agent_id)
+    if args.da_target_url:
+        try:
+            config = _explicit_da_target_config(args)
+        except ValueError as exc:
+            parser.error(str(exc))
+        _run_da_full(args, config)
+        return
+    if not os.path.exists(config_path) and not explicit_connection_target:
+        print("ERROR: .local/config.json not found. Run /setup, or use "
+              "--scope full --da-target-url <url> --agent-schema-name <schema> "
+              "--validation-realm <dev|test|prod> for standalone DA assessment.")
         sys.exit(1)
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
+    config = {}
+    if not explicit_connection_target:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
 
     try:
         config = _merge_connect_config(config, args.connect_config)
@@ -2825,13 +3300,36 @@ def main():
         print(f"ERROR: Unable to load --connect-config: {e}")
         sys.exit(1)
 
+    if args.scope == "full" and not explicit_connection_target:
+        from flightcheck.da_execution import da_full_requested
+
+        if da_full_requested(config, args.agent_slug):
+            _run_da_full(args, config)
+            return
+
+    if args.da_evidence or args.expected_agent_id:
+        parser.error("--da-evidence and --expected-agent-id require an explicitly selected DA full assessment.")
     infra_only_scope = args.scope == "infrastructure"
     da_local_scope = args.scope == "local"
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
-    native_no_dataverse = _is_native_no_dataverse(config, env_url)
+    native_no_dataverse = explicit_connection_target or _is_native_no_dataverse(config, env_url)
     native_remote_scope = (
         native_no_dataverse
         and args.scope in NATIVE_NO_DATAVERSE_SCOPE_MAP
+    )
+    checks = (
+        NATIVE_NO_DATAVERSE_SCOPE_MAP[args.scope]
+        if native_remote_scope
+        else SCOPE_MAP.get(args.scope, FULL_SCOPE)
+    )
+    # Hybrid agents still need native evidence even when Dataverse is configured.
+    hybrid_native_scope = (
+        bool(env_url)
+        and bool(config.get("powerPlatformApiEndpoint"))
+        and any(fn in {
+            run_environment_checks, run_solution_checks,
+            run_workday_checks, run_publishing_checks,
+        } for _, fn in checks)
     )
     resolved_ring = None
     power_platform_admin_origin = None
@@ -2905,6 +3403,8 @@ def main():
     connectivity = None
     powerplatform = None
     azure_arm = None
+    connection_account = None
+    connection_validation_error = None
     if da_local_scope:
         tenant_id = None
         dv_token = None
@@ -2995,11 +3495,20 @@ def main():
                 print(f"ERROR: Invalid native Power Platform endpoint: {exc}")
                 sys.exit(1)
             print("Authenticating for native AgentBuilder FlightCheck...")
-            token, tenant_id = authenticate_flightcheck(
+            connection_auth_options = (
+                {"return_account_identity": True, "emit_account_identity": False}
+                if args.scope == "full" else {}
+            )
+            native_auth = authenticate_flightcheck(
                 ring,
                 include_connectivity=True,
                 allow_write=bool(args.alm_import_probe),
+                **connection_auth_options,
             )
+            if args.scope == "full":
+                token, tenant_id, connection_account = native_auth
+            else:
+                token, tenant_id = native_auth
             api_version = config.get(
                 "agentBuilderApiVersion",
                 DEFAULT_API_VERSION,
@@ -3050,10 +3559,15 @@ def main():
         from auth import authenticate, discover_tenant
 
         print("Authenticating to Dataverse...")
-        dv_token = authenticate(
-            env_url,
-            preferred_username=getattr(args, "preferred_username", None),
-        )
+        dv_auth_kwargs = {
+            "preferred_username": getattr(args, "preferred_username", None),
+        }
+        if hybrid_native_scope:
+            dv_token, dv_username = authenticate(
+                env_url, **dv_auth_kwargs, return_account_identity=True,
+            )
+        else:
+            dv_token = authenticate(env_url, **dv_auth_kwargs)
 
         tenant_id = discover_tenant(env_url)
         print(f"Tenant: {tenant_id}")
@@ -3098,11 +3612,27 @@ def main():
         # (Workday SOAP runtime), and CONFIG-* (local agent / topic /
         # knowledge source). Erroring out here would block those.
         print("Deriving Power Platform environment ID...")
+        # An override or WhoAmI fallback cannot authorize combined native/DV evidence.
+        verified_env_id = None
+        if hybrid_native_scope and pp_admin is not None:
+            try:
+                verified_env_id = derive_environment_id(
+                    env_url, dv_token, pp_admin=pp_admin,
+                )
+            except (RequestException, ValueError, RuntimeError) as exc:
+                print(
+                    "  Dataverse/environment mapping: WARNING - "
+                    f"{_safe_client_error_reason(exc)}"
+                )
         if args.environment_id:
             env_id = args.environment_id
             print(f"Environment ID: {env_id} (provided via --environment-id)")
         else:
-            env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+            env_id = (
+                verified_env_id
+                if hybrid_native_scope and pp_admin is not None
+                else derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+            )
             if env_id and pp_admin is not None:
                 print(f"Environment ID: {env_id}")
             elif env_id:
@@ -3137,6 +3667,38 @@ def main():
                     "license, auth, Workday env-var, Workday SOAP, and local-file "
                     "checks will still run."
                 )
+
+    if hybrid_native_scope and not verified_env_id:
+        connection_validation_error = (
+            "Could not independently verify the Dataverse environment through "
+            "Power Platform Admin. Native dependency reads remain unavailable; "
+            "--environment-id and Dataverse OrganizationId are not mapping evidence."
+        )
+        print(
+            "  Native AgentBuilder APIs: WARNING - Could not independently verify "
+            "the Dataverse environment through Power Platform Admin. "
+            "Native clients remain unavailable; --environment-id and Dataverse "
+            "OrganizationId are not mapping evidence."
+        )
+        print("  (Native-dependent checks cannot verify readiness)")
+    elif hybrid_native_scope:
+        print("Authenticating to native AgentBuilder APIs...")
+        try:
+            agentbuilder, alm_import_target, connectivity = _create_hybrid_scope_clients(
+                args, config, verified_env_id, tenant_id, dv_username,
+            )
+            connection_account = dv_username
+            print("  Native AgentBuilder APIs: OK")
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
+        except Exception as exc:
+            connection_validation_error = _safe_client_error_reason(exc)
+            print(
+                "  Native AgentBuilder APIs: WARNING - "
+                f"{_safe_client_error_reason(exc)}"
+            )
+            print("  (Native-dependent checks cannot verify readiness)")
 
     # Gate PVA (Copilot Studio Island Gateway) auth on scope.
     # Only CONFIG-013 needs PVA today, and it lives in run_local_file_checks.
@@ -3223,6 +3785,25 @@ def main():
     runner.alm_import_target = alm_import_target
     runner.connectivity = connectivity
     runner.alm_import_probe = bool(getattr(args, "alm_import_probe", False))
+    runner.tenant_id = tenant_id
+    if connection_validation_error:
+        runner.connection_validation_error = connection_validation_error
+    elif (
+        env_url and args.scope in {"full", "environment"}
+        and runner.agentbuilder is None and agent_bot_ids(config)
+    ):
+        runner.connection_validation_error = (
+            "Native connection validation requires a configured, independently "
+            "verified native target before combining it with Dataverse evidence. "
+            "Run /setup to capture the native Power Platform API endpoint."
+        )
+        print(f"  ENV-004 dependency access: WARNING - {runner.connection_validation_error}")
+    elif args.scope in {"full", "environment"}:
+        try:
+            _configure_connection_validation(runner, args, account=connection_account)
+        except (ValueError, RuntimeError) as exc:
+            print(f"  ENV-004 dependency access: WARNING - {type(exc).__name__}: {exc}")
+            runner.connection_validation_error = str(exc)
     runner.native_connector_filter = NATIVE_CONNECTOR_FILTERS.get(
         args.scope
     )
@@ -3235,14 +3816,6 @@ def main():
     # setup gates deterministic.
     if not native_remote_scope:
         _resolve_target_selection(args, runner)
-
-    # Register checks based on scope
-    if native_remote_scope:
-        checks = NATIVE_NO_DATAVERSE_SCOPE_MAP[args.scope]
-    elif args.scope == "full":
-        checks = FULL_SCOPE
-    else:
-        checks = SCOPE_MAP.get(args.scope, FULL_SCOPE)
 
     # Resolve consent for the mutating runtime-reachability probe (INFRA-003)
     # before any check runs. This is the only FlightCheck path that writes to
@@ -3382,7 +3955,8 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
     order: am I OK? what must I fix? what must I verify? — without
     having to read every passing row.
     """
-    buckets = bucket_results(result.results)
+    assessment = getattr(result, "da_assessment", None)
+    buckets = bucket_results(result.results, deferred_as_manual=bool(assessment))
     action = buckets[BUCKET_ACTION]
     manual = buckets[BUCKET_MANUAL]
     completed = buckets[BUCKET_PASSED]
@@ -3395,7 +3969,19 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
     print("=" * 64)
 
     # Verdict line — single most important signal in the terminal.
-    if result.overall == "READY":
+    if assessment:
+        counts = assessment["counts"]
+        print(f"  Deployment readiness [{assessment['target']['realm']}]: "
+              f"{assessment['deploymentReadiness']}")
+        print(f"  Diagnostics: {result.overall} (not deployment approval)")
+        print(f"  Required definitions: {counts['requiredDefinitions']} | "
+              f"Satisfied: {counts['satisfied']} | Defects: {counts['defects']} | "
+              f"Incomplete: {counts['incomplete']}")
+        print("  Scope is this exact target/realm; skipped checks are not verified prerequisites.")
+    elif result.diagnostic_only:
+        print(f"  Local diagnostics: {result.overall}")
+        print("  Local files only; deployment readiness not assessed.")
+    elif result.overall == "READY":
         print("  [READY] Ready for deployment")
         if manual:
             print(f"          ({len(manual)} item(s) need manual "

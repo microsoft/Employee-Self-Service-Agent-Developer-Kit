@@ -19,11 +19,26 @@ Continue with this skill for the contract's **Standalone FlightCheck** and
 **Canonical setup ready** states. The contract owns the maker interaction and
 next route for its other states.
 
-Treat a config with `releaseLine: "da"` and no `dataverseEndpoint` as a native
-no-Dataverse agent. Its supported scopes are `full`, `environment`,
-`servicenow`, `workday`, `local`, and `infrastructure`. If
-`dataverseEndpoint` is present, use the existing hybrid/legacy path even when
-the release line is `da`.
+Resolve the selected canonical agent using `activeAgent` (or an explicit agent
+selection). DA release-line metadata, not the presence of `dataverseEndpoint`,
+determines DA full routing. A DA with Dataverse-backed Workday dependencies
+still uses the same selected-agent DA contract, never legacy full.
+
+**DA maker boundary:** when `flightCheckOnly` is not true, `/flightcheck`
+supports `local` only. Set `{SCOPE}` to `local`, leave `{TARGET_FLAGS}` empty,
+and skip Steps 1, 1.5 and 2's probe consent. Do not offer remote scopes or
+invoke standalone full on the maker's behalf. Local validation does not
+establish deployment readiness.
+
+**Standalone DA:** when `flightCheckOnly` is true, offer only Full check and
+Local files only here. Full uses the selected-agent, read-only DA assessment.
+No Graph authentication, administrator-role question, import/egress probe,
+topic activation or employee transaction is part of it. Administrator-owned
+verification remains Skipped with explicit evidence requirements. Workday
+Connect profiles remain separate; do not substitute a broad legacy Workday
+scope for DA full. For an explicit URL target without saved setup, use the
+standalone CLI onboarding documented in `setup/README.md`, with the expected
+schema and deployment realm, not Dataverse-only discovery.
 
 ---
 
@@ -57,10 +72,11 @@ Map the selection to a scope flag:
 - "Environment only" → `environment`
 - "Prerequisites only" → `prerequisites`
 
-For a native no-Dataverse agent, omit "Prerequisites only". Its full scope
-runs exact-agent access, authored-content, native connection readiness,
-environment capacity, and applicable local-file checks; it does not run
-Dataverse, Graph, Power Platform Admin, or legacy flow checks.
+For standalone DA, Full check means exact selected-agent setup/integration
+diagnostics, coverage accounting and a separate deployment decision, with
+administrator/employee evidence left explicit. Use only the two DA options
+described above; the other menu options and legacy descriptions apply to
+custom-engine agents.
 
 ---
 
@@ -73,8 +89,8 @@ of them together and a healthy prod app could be masked by an unrelated
 sandbox app. This step lets the user pin the one they are verifying.
 
 **Only run this step for scopes that touch those integrations:**
-- native no-Dataverse agent → **skip this step entirely**; connection checks
-  use the exact active agent and never guess among physical candidates
+- DA full or DA local → **skip this step entirely**, including hybrid DAs;
+  full uses the exact selected dependencies and never guesses among candidates
 - scope is `full` or `workday` → discover Workday SSO apps
 - scope is `full` or `servicenow` → discover ServiceNow connections
 - any other scope (`local`, `prerequisites`, …) → **skip this step entirely.**
@@ -147,13 +163,14 @@ and never writes to the tenant. If no fresh run exists it returns a guided
 NOT_CONFIGURED — see the **WD-RUN-001 user-assisted run** loop in Step 3. So this
 gate is about INFRA-003 only.
 
-**This gate applies only when INFRA-003 runs its mutating probe: scope `full`.**
+**This gate applies only to legacy/custom-engine full with INFRA-003.**
 For `workday`, `workdayextension`, ServiceNow-only, Local-files-only, or
 Prerequisites-only scopes, skip this gate and go straight to Step 2b.
 
-For a native no-Dataverse agent, skip this gate for every supported scope.
-Its AgentBuilder, connection-inventory, capacity, and local checks are
-read-only and never create a transient flow.
+For DA full or DA local, skip this gate. DA full rejects
+`--runtime-reachability` and `--alm-import-probe`, even with consent. Keep
+manual managed-egress requirements explicit instead of turning a diagnostic
+run into a mutating probe.
 
 Ask using this exact wording, swapping `<SYSTEM>` for the system being checked
 (Workday / ServiceNow / SAP SuccessFactors / custom HTTP — use the connected
@@ -261,7 +278,47 @@ Always show this first:
 *Completed in {duration_secs}s — [View full report](workspace/flightcheck/report.html)*
 ```
 
-Where VERDICT_EMOJI and VERDICT_TEXT are:
+**DA full override:** when JSON contains `da_assessment`, use its
+`deploymentReadiness`, not root `overall`, for the readiness headline:
+
+- READY: "Required evidence accepted for this assessed target and realm"
+- NOT_READY: "Confirmed required defects - not ready"
+- INCOMPLETE: "Deployment readiness incomplete - required coverage or evidence outstanding"
+
+Show `da_assessment.target`'s agent, deployment realm and service ring, its
+required/satisfied/defect/incomplete counts, and root `overall` separately as
+**Diagnostics**. Link the full HTML coverage matrix. Do not equate catalog
+definitions with executed checks or use a diagnostic READY as deployment
+approval. Accepted external evidence is reviewer-declared attestation, not
+automatic administrator/employee verification. It never changes Manual/Skipped
+statuses. A Dev assessment does not approve Test/Prod or organizational release.
+
+Standalone DA full's feature-list review uses `DA-INTEGRATIONS-001` and the
+existing `--da-evidence` envelope with `evidenceKind: feature_applicability`.
+Use the report's unreviewed form: true means used, false means confirmed unused,
+and null/omitted means unknown. Do not fill choices or approve reviews for the
+customer. Feature choices do not satisfy enabled features' health checks, cannot
+contradict observed dependencies, and expire with their target/version-bound
+review. Administrator checks remain Skipped/manual; do not request maker Graph
+authentication or run a promotion/import.
+
+Package export and movement between environments are deferred for DA full.
+`PUB-001` and `PUB-002` are outside this review, not unfinished checks. Do not
+ask for an exportable package, ALM enrollment/publication, promotion evidence or
+an `alm_promotion` feature choice. Installation uses exact native ESS identity
+and content, not mandatory ALM provenance. An explicit release revision pin
+still requires its separate verification.
+
+For DA full, self-contained SAP-only conversations can be outside scope based
+on their resolved calls, never their names or presumed activation. Mixed,
+unreadable or unsupported conversation actions remain incomplete; do not
+manually suppress those findings to obtain readiness.
+
+**Local-only override:** use "Local validation completed - deployment readiness
+not assessed", retaining the actual diagnostic status. Do not call local READY
+deployment approval.
+
+For legacy remote scopes, VERDICT_EMOJI and VERDICT_TEXT are:
 - READY → ✅ and "Your agent is ready for deployment"
 - READY_WITH_WARNINGS → ⚠️ and "Ready with warnings"
 - NOT_READY → ❌ and "Issues found — not ready for deployment"
@@ -288,6 +345,15 @@ Status emoji mapping:
 - Error → 💥
 
 ### 3c — Offer to fix
+
+For DA, do not enter the legacy automatic-repair or WD-RUN-001 loops below.
+Present the reported owning roles and unresolved requirements. An explicit
+request to repair configuration must return to foundation setup or the DA
+Workday Connect workflow, with its own authorization and completion rules.
+Never enable flows, publish, run employee transactions or assume administrator
+privileges from a FlightCheck result. Refer reviewed evidence submission to
+standalone DA full's `--da-evidence` contract; do not invent or self-approve
+records. Stop after presenting the DA findings.
 
 After the table, analyze the failed and warning results and build a list
 of things you CAN fix automatically vs. things that need manual action.

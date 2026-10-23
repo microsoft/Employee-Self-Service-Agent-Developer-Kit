@@ -11,6 +11,34 @@ in `tests/AGENTS.md`. They complement each other; you need both.
 
 ## Architecture overview
 
+Client-provisioning regressions must exercise CLI scope dispatch, not only
+checks with pre-injected clients. Cover native-only, hybrid (native plus
+Dataverse), and legacy configurations. Match native environment, tenant,
+and account to the selected Dataverse target; keep import probes opt-in.
+Independently map the Dataverse URL even when an environment ID is supplied.
+A missing admin mapping disables native clients, not independent checks;
+an override or Dataverse OrganizationId is never proof of that mapping.
+Keep `agentBuilderApiVersion` consistent across all provisioning paths.
+
+Environment-wide checks must resolve overrides for each inspected botId,
+never from the active agent for its siblings. Keep global defaults explicit,
+select configured values by presence (`is not None`), and report missing
+subject identities instead of borrowing another bot. Test different sibling
+pins/realms, unconfigured siblings, missing identities, and falsy overrides.
+Canonicalize revision-pin subjects before reads: agents[] precedes the legacy
+agent copy, an already represented slug is not another subject, and bot IDs
+are deduplicated case-insensitively. Keep each canonical record's own settings.
+
+Scope connection verdicts to the references actually evaluated. Topic-reference
+evidence cannot establish flow-scoped sharing or end-to-end authentication.
+Coexisting package references are not proof of obsolete resources; require
+consumer and owner verification before recommending replacement or retirement.
+Pin evidence boundaries and non-destructive guidance in report-text tests.
+Within one connection audit, read each environment-local invoked flow once,
+including failed reads, but preserve dependency and warning evidence for every
+agent that invokes it. Native and connectivity clients must use the same
+configured AgentBuilder API version.
+
 FlightCheck validates customer deployments by querying multiple APIs.
 Each API requires its own authentication and has different data
 available:
@@ -326,7 +354,9 @@ and do the per-tier verification.
      external screen to open and which value to compare against. MANUAL is
      the canonical pattern for Workday / ServiceNow / SAP tenant-config
      validation that has no programmatic admin surface (see issue #84 for
-     the original SAML-NameID example). MANUAL does NOT fail readiness.
+     the original SAML-NameID example). MANUAL does not fail the diagnostic
+     verdict. DA full's separate deployment decision remains INCOMPLETE
+     until required manual evidence is accepted.
    - `ERROR` — the check itself crashed (the runner catches exceptions and
      sets this automatically)
 
@@ -504,14 +534,16 @@ and do the per-tier verification.
     ISU checks applicable to a selected DA. Keep employee permission
     validation manual and retain connection, flow and runtime checks.
     Never infer the selected agent's type from Dataverse presence or a
-    sibling agent. A profile's compatibility-resolved validation context
-    can contain the first agent on file; that inferred slug is not an
-    explicit selection. Preserve CLI/configured selection when populating
-    the runner. Release-line `None` permits fallback; non-None values
+    sibling agent. Profile execution must reject an unselected agents list
+    before authentication or agent reads. Resolve CLI, activeAgent, or the
+    compatibility agent's slug and use that same identity for the validation
+    context and runner. Release-line `None` permits fallback; non-None values
     such as `""`, `False`, or `0` do not.
     An explicit Workday DA profile remains eligible when an agents list
     has no selected slug. Leave the selected record empty and retain
     workspace release-line validation; do not borrow a sibling's marker.
+    This applicability predicate is not permission to execute an unselected
+    agent profile.
 
     The Workday Runtime reference and the domain package's OAuthUser
     reference can coexist. Exactly one of each, with no legacy ISU or
@@ -522,6 +554,23 @@ and do the per-tier verification.
     addressed to that checkpoint so filtering preserves applicability
     evidence. Keep the CLI's fail-closed unresolved contract unchanged;
     a skipped ISU probe is not evidence of a successful employee call.
+
+    **Documentation routing:** use `documentation.DOC_BASE` for ESS Learn
+    links. `CheckResult` repairs obsolete paths, and the runner resolves
+    DA articles and verified section anchors before console/JSON/HTML
+    output, including URLs embedded in remediation. Keep mappings in
+    `documentation.py`, not separate report templates. Configurations
+    without DA metadata retain custom-engine article selection; do not
+    infer DA from the current branch or an environment's package mix.
+    Existing DA setup records the metadata. Do not fabricate DA guidance
+    when no corresponding published article has been verified.
+    Producers that inspect multiple agents must attach the exact inspected
+    slug as `evidence["agentSlug"]` to each agent-owned result. The runner
+    resolves documentation for that subject, not its display label or the
+    active agent. Only rows owned by the selected agent may use eligible
+    workspace/profile fallback. Unknown, ambiguous, and explicitly non-DA
+    siblings retain compatibility links; never borrow another agent's type.
+    Rows without subject evidence retain the existing run-context policy.
 
 ---
 

@@ -10,7 +10,7 @@ Solution-scoped: uses agent name to filter relevant flows.
 
 from ..runner import CheckResult, Priority, Role, Status
 
-DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+from ..documentation import DOC_BASE
 
 # Flow name patterns per integration
 WORKDAY_PATTERNS = ("Workday",)

@@ -8,9 +8,8 @@ Intended consumers (this reader ships ahead of them; the wiring lands in the
 stacked DA re-point PRs, so nothing in this branch imports it yet):
   * ``DV-CONN-001`` (checks/workday_extension.py) -> the single active agent's
     Workday SOAP reference, via ``read_active_agent_connection_references``.
-  * ``ENV-004`` (checks/environment.py) -> every configured agent's references,
-    environment-wide and de-duped by logical name, via
-    ``read_all_agents_connection_references``.
+  * ``ENV-004`` now uses ``_connection_dependencies.py`` instead: active
+    target-scoped native and flow references, with agent-local identity.
   * The Workday shared-parameter checks (checks/workday.py) -> per-agent Workday
     ``sharedConnectionParameters`` via ``workday_shared_connection_parameters``.
 
@@ -35,31 +34,20 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..agent_scope import active_agent_bot_id
+from ..agent_scope import active_agent_bot_id, configured_agents
 
 
 WORKDAY_SOAP_CONNECTOR_SUFFIX = "/apis/shared_workdaysoap"
 
 
 def agent_bot_ids(config: dict[str, Any]) -> list[str]:
-    """Return configured bot IDs from multi-agent and single-agent config."""
+    """Return canonical bot IDs without stale compatibility subjects."""
     bot_ids: list[str] = []
-    for agent in config.get("agents", []) or []:
-        bid = (agent or {}).get("botId")
+    for agent in configured_agents(config):
+        bid = agent.get("botId")
         if isinstance(bid, str) and bid.strip():
             bot_ids.append(bid.strip())
-    single = (config.get("agent") or {}).get("botId")
-    if isinstance(single, str) and single.strip():
-        bot_ids.append(single.strip())
-
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for bot_id in bot_ids:
-        folded = bot_id.casefold()
-        if folded not in seen:
-            seen.add(folded)
-            ordered.append(bot_id)
-    return ordered
+    return bot_ids
 
 
 def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:

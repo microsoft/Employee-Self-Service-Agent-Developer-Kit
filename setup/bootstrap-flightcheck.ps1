@@ -20,9 +20,23 @@
 .PARAMETER Branch
     Forwarded to Install-EssAdk.ps1. Defaults to "main".
 
+.PARAMETER FlightCheckScope
+    Required validation scope. Prompts with no default when interactive.
+    Also accepts FLIGHTCHECK_SCOPE. Explicit argument takes precedence.
+
 .PARAMETER SourceBaseUrl
     Where to fetch the installer files from. Defaults to the raw GitHub URL of
     the setup folder. Override for testing.
+
+.PARAMETER DaTargetUrl
+    Explicit Copilot Studio DA URL. Requires FlightCheckScope full,
+    AgentSchemaName and ValidationRealm; bypasses Dataverse discovery.
+
+.PARAMETER AgentSchemaName
+    Expected schema name for the explicit DA target.
+
+.PARAMETER ValidationRealm
+    Deployment realm (dev/test/prod), independent of the service Ring.
 #>
 
 [CmdletBinding()]
@@ -31,8 +45,70 @@ param(
     [string] $Branch = 'main',
     [ValidateSet('prod', 'preprod', 'test')]
     [string] $Ring = 'prod',
+    [string] $FlightCheckScope = $env:FLIGHTCHECK_SCOPE,
+    [string] $DaTargetUrl,
+    [string] $AgentSchemaName,
+    [ValidateSet('dev', 'test', 'prod')]
+    [string] $ValidationRealm,
     [string] $SourceBaseUrl
 )
+
+function Resolve-FlightCheckScope {
+    param(
+        [string] $Scope,
+        [bool] $Interactive = (
+            [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and
+            -not ([Environment]::GetCommandLineArgs() -match '^-NonI(nteractive)?$')
+        )
+    )
+    # Keep this preflight self-contained: bootstrap runs it before downloading.
+    # Scope names mirror cli.py, not its separate litmus profiles.
+    $scopes = [ordered]@{
+        full = 'All applicable validation categories'
+        prerequisites = 'Prerequisite access and setup'
+        infrastructure = 'Infrastructure and connectivity'
+        environment = 'Power Platform environment'
+        solution = 'Installed solution configuration'
+        authentication = 'Authentication configuration'
+        entraapp = 'Microsoft Entra application'
+        workdaytenant = 'Workday tenant configuration'
+        external = 'External system configuration'
+        workday = 'External system and Workday checks'
+        workdayextension = 'Workday checks and extension'
+        workdayda = 'Workday declarative-agent package'
+        topics = 'Workday topics'
+        graphconnector = 'External system and Graph connector knowledge'
+        handoff = 'Agent handoff topics'
+        servicenow = 'External system and ServiceNow checks'
+        local = 'Local agent files'
+        publishing = 'Agent publishing'
+        licensing = 'Licensing'
+        cloudpolicy = 'Cloud policies'
+    }
+    $instructions = 'Specify -FlightCheckScope <scope> or set FLIGHTCHECK_SCOPE. Full requires explicit selection.'
+    if ([string]::IsNullOrWhiteSpace($Scope)) {
+        if (-not $Interactive -or $env:CI -or $env:TF_BUILD -or $env:GITHUB_ACTIONS) {
+            throw "FlightCheck scope is required for unattended installation. $instructions Allowed: $($scopes.Keys -join ', ')."
+        }
+        Write-Host 'Choose a FlightCheck scope (no default):'
+        foreach ($name in $scopes.Keys) { Write-Host "  $name - $($scopes[$name])" }
+        try { $Scope = Read-Host 'Enter a scope name' } catch {
+            throw "FlightCheck scope input is unavailable. $instructions"
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($Scope) -or -not $scopes.Contains($Scope.Trim().ToLowerInvariant())) {
+        throw "A valid FlightCheck scope is required; empty input does not select Full. $instructions Allowed: $($scopes.Keys -join ', ')."
+    }
+    return $Scope.Trim().ToLowerInvariant()
+}
+
+$FlightCheckScope = Resolve-FlightCheckScope -Scope $FlightCheckScope
+if ($DaTargetUrl -or $AgentSchemaName -or $ValidationRealm) {
+    if ($FlightCheckScope -ne 'full' -or -not $DaTargetUrl -or
+        -not $AgentSchemaName.Trim() -or -not $ValidationRealm) {
+        throw 'DA onboarding requires -FlightCheckScope full -DaTargetUrl <url> -AgentSchemaName <schema> -ValidationRealm <dev|test|prod>.'
+    }
+}
 
 # Derive SourceBaseUrl from $Branch so that passing -Branch also fetches the
 # installer files from that branch. If we hardcoded the default to `main` the
@@ -88,7 +164,13 @@ $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
 $scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding]::UTF8)
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
-$installerArgs = @{ Branch = $Branch; FlightCheckOnly = $true; Ring = $Ring }
+$installerArgs = @{ Branch = $Branch; FlightCheckOnly = $true; FlightCheckScope = $FlightCheckScope }
+if ($DaTargetUrl) {
+    $installerArgs.DaTargetUrl = $DaTargetUrl
+    $installerArgs.AgentSchemaName = $AgentSchemaName
+    $installerArgs.ValidationRealm = $ValidationRealm.ToLowerInvariant()
+}
+if ($PSBoundParameters.ContainsKey('Ring')) { $installerArgs.Ring = $Ring }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 
 & $scriptBlock @installerArgs

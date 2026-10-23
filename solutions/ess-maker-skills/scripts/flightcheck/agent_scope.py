@@ -12,6 +12,36 @@ from typing import Any
 _AGENT_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
+def configured_agents(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """List canonical subjects, excluding stale compatibility copies."""
+    candidates = [
+        agent for agent in config.get("agents", []) or []
+        if isinstance(agent, dict)
+    ]
+    single = config.get("agent")
+    if isinstance(single, dict):
+        candidates.append(single)
+    agents: list[dict[str, Any]] = []
+    known_slugs: set[str] = set()
+    known_ids: set[str] = set()
+    for agent in candidates:
+        raw_slug = agent.get("slug")
+        slug = raw_slug.strip() if isinstance(raw_slug, str) else ""
+        raw_id = agent.get("botId")
+        bot_id = raw_id.strip().casefold() if isinstance(raw_id, str) else ""
+        if (slug and slug in known_slugs) or (bot_id and bot_id in known_ids):
+            # A canonical bot-ID alias still reserves its represented slug.
+            if slug:
+                known_slugs.add(slug)
+            continue
+        agents.append(agent)
+        if slug:
+            known_slugs.add(slug)
+        if bot_id:
+            known_ids.add(bot_id)
+    return agents
+
+
 def active_agent(
     config: dict[str, Any] | None,
     selected_slug: str | None = None,
@@ -76,13 +106,18 @@ def active_agent_bot_id(
     )
 
 
-def is_declarative_agent(runner: Any) -> bool:
+def is_declarative_agent(runner: Any, *, subject_slug: str | None = None) -> bool:
     """Use explicit workspace/selected-agent metadata, never package presence.
 
     A missing or ambiguous selected agent must not inherit a sibling's type.
     Agent metadata takes precedence over the workspace's compatibility marker.
     An explicitly requested Workday DA profile is also a DA context, unless the
     selected record declares a different release line.
+
+    With ``subject_slug``, resolve that exact result owner. Workspace/profile
+    fallback applies only when it is also the run's selected agent; siblings
+    require their own release-line metadata. Missing/ambiguous owners return
+    False, retaining compatibility documentation without changing check status.
     """
     config = getattr(runner, "config", None)
     if not isinstance(config, dict):
@@ -96,6 +131,12 @@ def is_declarative_agent(runner: Any) -> bool:
         selected_slug = configured_slug
     if selected_slug == "":
         selected_slug = None
+
+    use_run_context = subject_slug is None or subject_slug == selected_slug
+    if subject_slug is not None:
+        if subject_slug == "":
+            return False
+        selected_slug = subject_slug
 
     selected = {}
     if selected_slug is not None:
@@ -113,12 +154,16 @@ def is_declarative_agent(runner: Any) -> bool:
             selected = single
 
     release_line = selected.get("releaseLine")
-    if release_line is None and configured_slug in (None, "", selected_slug):
+    if (
+        release_line is None
+        and use_run_context
+        and configured_slug in (None, "", selected_slug)
+    ):
         # A command-line override must not inherit another active agent's marker.
         release_line = config.get("releaseLine")
     if release_line is not None:
         return isinstance(release_line, str) and release_line.strip().casefold() == "da"
-    return getattr(runner, "workday_da_profile", False) is True
+    return use_run_context and getattr(runner, "workday_da_profile", False) is True
 
 
 def _clean_bot_id(value: Any) -> str:

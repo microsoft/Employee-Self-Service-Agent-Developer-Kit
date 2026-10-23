@@ -4,15 +4,10 @@
 """
 ESS FlightCheck — ESS Solution Installation Validation (ESS-SOLN-xxx)
 
-Verifies that the base ESS declarative agent package is present in the target
-Power Platform environment (skill-2 ``install-ess``). The check reads the
-Copilot Studio minimalBots ALM configure surface so it works after the
-Declarative Agent re-point away from Dataverse solution-table state. Package
-presence is proven by ``grsRepositoryId`` + ``commitSha``; package *identity*
-(that the committed package is ESS, not some other product) is proven by the
-configure ``schemaName`` carrying the ESS token ``copilotforemployeeselfservice``
--- the DA analogue of the CA solution-uniquename prefix
-``msdyn_copilotforemployeeselfservice``.
+DA full reuses the verified native snapshot to check exact ESS identity and
+authored content. It does not require or establish ALM package provenance.
+Legacy scopes retain the minimalBots ALM configure check for repository,
+commit and ESS schema identity.
 """
 
 from __future__ import annotations
@@ -32,7 +27,7 @@ from .. import agent_scope
 
 _ESS_SOLN_DOC_LINK = (
     "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
-    "employee-self-service/install"
+    "employee-self-service/maker-journey-declarative-agent#install-an-employee-self-service-agent-template"
 )
 _ESS_SOLN_DESCRIPTION = "ESS base agent package present in the environment"
 # The CA check proved ESS identity by the Dataverse solution uniquename prefix
@@ -60,7 +55,56 @@ def run_solution_checks(runner) -> list[CheckResult]:
     additional ESS-SOLN-* rows can be added without changing the registry /
     cli wiring.
     """
+    if getattr(runner, "da_full_assessment", False) is True:
+        return [_check_native_ess_identity(runner)]
     return _check_ess_solution_installed(runner)
+
+
+def _check_native_ess_identity(runner) -> CheckResult:
+    snapshot = getattr(runner, "_da_native_snapshot", None)
+    selected = agent_scope.active_agent(
+        getattr(runner, "config", None), getattr(runner, "agent_slug", None),
+    )
+    expected_id = selected.get("botId")
+    expected_schema = selected.get("schemaName")
+    changeset = snapshot.get("changeset") if isinstance(snapshot, dict) else None
+    bot = changeset.get("bot") if isinstance(changeset, dict) else None
+    components = changeset.get("botComponentChanges") if isinstance(changeset, dict) else None
+    pairs = (
+        (snapshot.get("agentId") if isinstance(snapshot, dict) else None, expected_id),
+        (snapshot.get("environmentId") if isinstance(snapshot, dict) else None, getattr(runner, "env_id", None)),
+        (bot.get("cdsBotId") if isinstance(bot, dict) else None, expected_id),
+        (bot.get("schemaName") if isinstance(bot, dict) else None, expected_schema),
+    )
+    if (
+        any(not isinstance(actual, str) or not actual.strip()
+            or not isinstance(expected, str) or not expected.strip()
+            or actual.casefold() != expected.casefold() for actual, expected in pairs)
+        or not isinstance(components, list) or not components
+    ):
+        return _result(
+            Status.BLOCKED.value,
+            "Exact native ESS identity and content could not be confirmed for the selected agent.",
+            "Resolve the native agent access/content findings and refresh this exact target. "
+            "ALM enrollment or publication is not required for this installation check.",
+        )
+    if _ESS_SCHEMA_IDENTITY_TOKEN not in expected_schema.casefold():
+        return _result(
+            Status.FAILED.value,
+            f"The selected native agent schema '{expected_schema}' is not an ESS schema.",
+            "Select the intended Employee Self-Service agent and rerun the full check.",
+        )
+    row = _result(
+        Status.PASSED.value,
+        f"Confirmed native ESS schema {expected_schema} and authored content for the exact selected agent.",
+    )
+    row.description = "Selected native Employee Self-Service identity and content"
+    row.evidence = {
+        "agentId": expected_id, "environmentId": runner.env_id,
+        "agentSchemaName": expected_schema, "componentCount": len(components),
+        "evidenceBoundary": "native_identity_and_content_not_package_origin_revision_or_employee_execution",
+    }
+    return row
 
 
 def _check_ess_solution_installed(runner) -> list[CheckResult]:
@@ -172,8 +216,7 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
                     ),
                 )
             ]
-        return [
-            _result(
+        result = _result(
                 Status.PASSED.value,
                 (
                     "Agent runs the ESS base package "
@@ -182,7 +225,7 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
                     "package revision match pending US 7792604."
                 ),
             )
-        ]
+        return [result]
 
     return [
         _result(
@@ -247,6 +290,9 @@ def _first_present(*values: Any) -> Any:
 
 
 def _alm_realm(runner) -> int | None:
+    if getattr(runner, "da_full_assessment", False) is True:
+        realm = (getattr(runner, "validation_context", None) or {}).get("realm")
+        return _ALM_REALMS.get(realm) if isinstance(realm, str) else None
     config = getattr(runner, "config", None) or {}
     single = config.get("agent") or {}
     raw = _first_present(
@@ -260,6 +306,22 @@ def _alm_realm(runner) -> int | None:
     )
     if raw is None:
         raw = _DEFAULT_ALM_REALM
+    return _parse_alm_realm(raw)
+
+
+def _alm_identity_matches(config: Any, bot_id: str, realm: int, expected_schema: str) -> bool:
+    return (
+        isinstance(config, dict)
+        and isinstance(config.get("cdsBotId"), str)
+        and config["cdsBotId"].casefold() == bot_id.casefold()
+        and _parse_alm_realm(config.get("realm")) == realm
+        and isinstance(expected_schema, str) and bool(expected_schema.strip())
+        and isinstance(config.get("schemaName"), str)
+        and config["schemaName"].strip().casefold() == expected_schema.strip().casefold()
+    )
+
+
+def _parse_alm_realm(raw: Any) -> int | None:
     if type(raw) is int and raw in REALM_NAMES:
         return raw
     if isinstance(raw, str):
