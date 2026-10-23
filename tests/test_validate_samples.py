@@ -28,6 +28,7 @@ from tools.validate_samples.checks import (  # noqa: E402
 from tools.validate_samples.cli import (  # noqa: E402
     _git_changed,
     _preserved_workday_migration,
+    _retired_workday_areas,
 )
 
 VALID_TOPIC_YAML = textwrap.dedent(
@@ -201,7 +202,7 @@ def test_internal_url_detected(tmp_path: Path) -> None:
 
 
 def test_workday_subgroup_topic_folder_resolves(tmp_path: Path) -> None:
-    rel = "samples/WorkdayCustomEngineAgent/Employee/EmployeeGetX/topic.yaml"
+    rel = "samples/Workday/Employee/EmployeeGetX/topic.yaml"
     _write(tmp_path, rel, VALID_TOPIC_YAML)
     results = run_all_checks(tmp_path, [ChangedFile(rel, "M")], whitelist={})
     assert _by_name(results)["Diff scope (samples/ only)"].status is Status.PASS
@@ -210,8 +211,8 @@ def test_workday_subgroup_topic_folder_resolves(tmp_path: Path) -> None:
 def test_workday_subgroup_readme_not_treated_as_topic(tmp_path: Path) -> None:
     # A subgroup-level README plus a real topic edit must not be flagged as
     # touching multiple topic folders.
-    sub_readme = "samples/WorkdayDeclarativeAgent/Employee/README.md"
-    topic_yaml = "samples/WorkdayDeclarativeAgent/Employee/EmployeeGetX/topic.yaml"
+    sub_readme = "samples/Workday/Employee/README.md"
+    topic_yaml = "samples/Workday/Employee/EmployeeGetX/topic.yaml"
     _write(tmp_path, sub_readme, VALID_README)
     _write(tmp_path, topic_yaml, VALID_TOPIC_YAML)
     changed = [
@@ -249,7 +250,7 @@ def test_whitelisted_filename_inconsistency_not_flagged(tmp_path: Path) -> None:
 
 
 def test_whitelisted_folder_inconsistency_not_flagged(tmp_path: Path) -> None:
-    topic = "samples/WorkdayDeclarativeAgent/Employee/WorkdayEmployeesviewtheirjobtaxonomy"
+    topic = "samples/Facilities/legacy-topic"
     _write(tmp_path, f"{topic}/topic.yaml", VALID_TOPIC_YAML)
     _write(tmp_path, f"{topic}/msdyn_X.xml", VALID_XML)
     _write(tmp_path, f"{topic}/README.md", VALID_README)
@@ -334,7 +335,7 @@ def test_new_json_connector_bad_filename_fails(tmp_path: Path) -> None:
     assert _by_name(results)["Filename convention (new)"].status is Status.FAIL
 
 
-GA_ROOT = "samples/WorkdayDeclarativeAgentGA"
+GA_ROOT = "samples/Workday"
 PREVIEW_ROOT = "samples/WorkdayDeclarativeAgentPreview"
 SHARED_CONFIG = f"{GA_ROOT}/WorkdayOSSTemplateConfigurationSetup.yaml"
 VALID_SHARED_CONFIG = "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnRedirect\n  actions: []\n"
@@ -352,7 +353,7 @@ def _new_ga_topic(repo: Path, name: str = "EmployeeGetThing") -> list[ChangedFil
     ]
 
 
-@pytest.mark.parametrize("area", ["WorkdayDeclarativeAgentGA", "WorkdayDeclarativeAgentPreview"])
+@pytest.mark.parametrize("area", ["Workday", "WorkdayDeclarativeAgentPreview"])
 def test_new_workday_areas_resolve_real_topic_not_subgroup(tmp_path: Path, area: str) -> None:
     subgroup = f"samples/{area}/Employee/README.md"
     topic = f"samples/{area}/Employee/EmployeeGetThing/topic.yaml"
@@ -517,3 +518,85 @@ def test_workflow_runs_validation_for_sample_and_validator_edits() -> None:
     ).read_text(encoding="utf-8")
     assert "self_edit" not in workflow
     assert '--diff-base "$BASE_SHA"' in workflow
+
+
+def _retirement_repo(repo: Path, area: str) -> tuple[str, list[ChangedFile]]:
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+    original = []
+    for name in ("First", "Second"):
+        original.extend(_new_topic(repo, f"{area}/Employee/{name}"))
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run([
+        "git", "-C", str(repo), "-c", "user.name=Validator Test",
+        "-c", "user.email=validator@example.invalid", "-c", "commit.gpgsign=false",
+        "commit", "--quiet", "-m", "Old samples",
+    ], check=True)
+    base = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True,
+    ).strip()
+    subprocess.run(["git", "-C", str(repo), "rm", "-r", "--quiet", "--", area], check=True)
+    return base, [ChangedFile(file.path, "D") for file in original]
+
+
+@pytest.mark.parametrize("area", [
+    "samples/WorkdayCustomEngineAgent", PREVIEW_ROOT,
+    "samples/WorkdayDeclarativeAgent", "samples/WorkdayDeclarativeAgentGA",
+])
+def test_complete_workday_retirement_allows_only_deleted_old_paths(tmp_path: Path, area: str) -> None:
+    base, changed = _retirement_repo(tmp_path, area)
+    retired = _retired_workday_areas(tmp_path, base)
+    assert retired == frozenset({area})
+    results = run_all_checks(tmp_path, changed, retired_workday_areas=retired)
+    assert all(result.status is not Status.FAIL for result in results)
+
+
+def test_retirement_requires_entire_area_removed(tmp_path: Path) -> None:
+    base, _ = _retirement_repo(tmp_path, PREVIEW_ROOT)
+    _write(tmp_path, f"{PREVIEW_ROOT}/remaining.txt", "remaining")
+    assert not _retired_workday_areas(tmp_path, base)
+
+
+def test_ga_rollout_can_accompany_verified_retirement(tmp_path: Path) -> None:
+    base, changed = _retirement_repo(tmp_path, "samples/WorkdayDeclarativeAgent")
+    changed.extend(_new_ga_topic(tmp_path))
+    changed.extend(_new_ga_topic(tmp_path, "EmployeeGetOther"))
+    retired = _retired_workday_areas(tmp_path, base)
+    results = run_all_checks(tmp_path, changed, retired_workday_areas=retired)
+    assert all(result.status is not Status.FAIL for result in results)
+    assert not _preserved_workday_migration(tmp_path, base)
+
+
+def test_retirement_does_not_allow_multiple_existing_ga_topic_edits(tmp_path: Path) -> None:
+    base, changed = _retirement_repo(tmp_path, PREVIEW_ROOT)
+    for name in ("EmployeeGetThing", "EmployeeGetOther"):
+        topic = f"{GA_ROOT}/Employee/{name}/topic.yaml"
+        _write(tmp_path, topic, VALID_TOPIC_YAML)
+        changed.append(ChangedFile(topic, "M"))
+    results = run_all_checks(
+        tmp_path, changed, retired_workday_areas=_retired_workday_areas(tmp_path, base),
+    )
+    assert _by_name(results)["Diff scope (samples/ only)"].status is Status.FAIL
+
+
+def test_retirement_does_not_allow_unrelated_topics_or_outside_paths(tmp_path: Path) -> None:
+    base, changed = _retirement_repo(tmp_path, PREVIEW_ROOT)
+    changed.extend(_new_ga_topic(tmp_path))
+    changed.extend(_new_topic(tmp_path, "samples/Facilities/EmployeeGetOther"))
+    changed.append(ChangedFile("solutions/unrelated.py", "M"))
+    results = run_all_checks(
+        tmp_path, changed, retired_workday_areas=_retired_workday_areas(tmp_path, base),
+    )
+    scope = _by_name(results)["Diff scope (samples/ only)"]
+    assert scope.status is Status.FAIL
+    assert any("multiple topic" in detail for detail in scope.details)
+    assert any("outside samples" in detail for detail in scope.details)
+
+
+def test_sample_authoring_guidance_paths_are_in_scope(tmp_path: Path) -> None:
+    changed = _new_ga_topic(tmp_path)
+    changed.extend([
+        ChangedFile(".github/ISSUE_TEMPLATE/sample-topic-request.yml", "M"),
+        ChangedFile(".github/agents/skills/prepare-sample-pr/SKILL.md", "M"),
+    ])
+    results = run_all_checks(tmp_path, changed)
+    assert _by_name(results)["Diff scope (samples/ only)"].status is Status.PASS

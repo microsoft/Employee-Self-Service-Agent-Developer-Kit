@@ -19,6 +19,7 @@ from pathlib import Path
 import yaml
 
 from .checks import (
+    RETIRED_WORKDAY_AREAS,
     WORKDAY_LEGACY,
     WORKDAY_PREVIEW,
     ChangedFile,
@@ -114,6 +115,24 @@ def _preserved_workday_migration(repo_root: Path, base: str) -> frozenset[str]:
     return frozenset(expected)
 
 
+def _retired_workday_areas(repo_root: Path, base: str) -> frozenset[str]:
+    """Recognize complete removals of known obsolete sample areas, not edits."""
+    merge_base = subprocess.check_output(
+        ["git", "-C", str(repo_root), "merge-base", base, "HEAD"], text=True,
+    ).strip()
+    retired = set()
+    for area in RETIRED_WORKDAY_AREAS:
+        original = subprocess.check_output(
+            ["git", "-C", str(repo_root), "ls-tree", "-r", "--name-only",
+             merge_base, "--", area],
+            text=True,
+        ).splitlines()
+        root = repo_root / area
+        if original and not any(path.is_file() for path in root.rglob("*")):
+            retired.add(area)
+    return frozenset(retired)
+
+
 def render_summary(results: list[Result]) -> str:
     lines = ["Validation"]
     label_map = {
@@ -155,13 +174,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.diff_base:
         changed = _git_changed(repo_root, args.diff_base)
         preserved_workday_paths = _preserved_workday_migration(repo_root, args.diff_base)
+        retired_workday_areas = _retired_workday_areas(repo_root, args.diff_base)
     else:
         changed = _parse_paths_file(Path(args.paths_file))
         preserved_workday_paths = frozenset()
+        retired_workday_areas = frozenset()
 
     results = run_all_checks(
         repo_root, changed, whitelist,
         preserved_workday_paths=preserved_workday_paths,
+        retired_workday_areas=retired_workday_areas,
     )
 
     if args.json:

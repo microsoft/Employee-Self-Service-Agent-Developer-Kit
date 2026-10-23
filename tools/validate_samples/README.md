@@ -26,31 +26,36 @@ python -m tools.validate_samples --diff-base origin/main --json
 
 Exit code is non-zero if any check reports FAIL.
 
-## Workday GA and Preview layouts
+## Workday GA layout
 
-Both Workday areas use `Employee/<Scenario>/` and `Manager/<Scenario>/`.
-Subgroup READMEs and GA area screenshots are not topic folders.
+`samples/Workday/` uses `Employee/<Scenario>/` and `Manager/<Scenario>/`.
+Subgroup READMEs and area screenshots are not topic folders.
 
 New GA scenarios require `topic.yaml` and `README.md`, plus the area-level
 `WorkdayOSSTemplateConfigurationSetup.yaml` instead of a per-scenario XML/JSON
 file. The shared configuration must be an `AdaptiveDialog` with an `OnRedirect`
-trigger. New Preview scenarios retain the local connector-config requirement.
-Historical folder-name exceptions exempt spelling only, not required files.
+trigger. Historical folder-name exceptions exempt spelling only, not required
+files.
 
-The normal single-topic scope rule remains. For the initial Workday split,
-`--diff-base` permits the legacy/GA/Preview batch only when **every** original
-legacy file has moved to Preview with identical Git-normalized contents, no
-Preview file is missing or added, and the old tree has no remaining files.
-This preserves inherited Preview conventions without exempting future additions.
-An altered/incomplete copy does not qualify; unrelated sample topics remain
-out of scope. `--paths-file` cannot establish that migration evidence and does
-not grant the exception.
+The normal single-topic scope rule remains. `--diff-base` recognizes the complete
+retirement of obsolete Workday sample areas only when Git history contains the
+old files and none remain on disk. Only deleted paths in those areas are exempt
+from the topic-count restriction; unrelated samples or outside-scope edits are
+not. Initial GA topic additions may accompany that verified retirement, but
+ordinary multi-topic GA modifications do not gain an exception.
+
+Historical preserved-move validation remains available for older migrations;
+it is not a requirement to retain retired sample folders on the current branch.
+`--paths-file` cannot establish Git-backed migration or retirement evidence and
+does not grant either exception.
 
 Validator maintenance can include `tools/validate_samples/`,
 `tests/test_validate_samples.py` and `.github/workflows/validate-samples.yml`
-alongside samples. Those specific paths are allowed by the scope check, not a
-skip switch. CI still runs all sample checks and updates its validation comment
-when the validator itself changes; unrelated paths remain rejected.
+alongside samples. The sample request form and prepare-sample-PR skill are also
+permitted for related authoring-guidance updates. Those specific paths are
+allowed by the scope check, not a skip switch. CI still runs all sample checks
+and updates its validation comment when the validator itself changes; unrelated
+paths remain rejected.
 
 ## Whitelist
 

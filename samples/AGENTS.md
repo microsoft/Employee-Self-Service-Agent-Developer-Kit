@@ -13,22 +13,18 @@ Top-level areas under `samples/` today:
 | Area | Sub-grouping | Notes |
 |---|---|---|
 | `Facilities/` | flat (`<TopicFolder>/` directly) | Office/dining/guest/vehicle topics. |
-| `WorkdayCustomEngineAgent/` | `Employee/`, `Manager/`, `Extended/` | Workday Custom Engine Agent (CEA) topics. |
-| `WorkdayDeclarativeAgentGA/` | `Employee/`, `Manager/` | Workday DA GA topics, plus `WorkdayOSSTemplateConfigurationSetup.yaml` at the area root. |
-| `WorkdayDeclarativeAgentPreview/` | `Employee/`, `Manager/` | Original DA Preview topics and per-scenario XML template configurations. Preserve this legacy content when updating GA. |
+| `Workday/` | `Employee/`, `Manager/` | Workday DA GA topics, plus `WorkdayOSSTemplateConfigurationSetup.yaml` at the area root. |
 | `ServiceNow/` | empty placeholder | Currently empty. Only add a ServiceNow topic when an issue explicitly requests one and provides enough details. |
 
 Topic path patterns:
 
 - `samples/Facilities/<TopicFolder>/`
-- `samples/WorkdayCustomEngineAgent/{Employee|Manager|Extended}/<TopicFolder>/`
-- `samples/WorkdayDeclarativeAgentGA/{Employee|Manager}/<TopicFolder>/`
-- `samples/WorkdayDeclarativeAgentPreview/{Employee|Manager}/<TopicFolder>/`
+- `samples/Workday/{Employee|Manager}/<TopicFolder>/`
 
 ## A topic folder typically contains
 
 - `topic.yaml` — Copilot Studio AdaptiveDialog (`kind: AdaptiveDialog`). Defines `inputs`, `modelDescription`, `beginDialog`, etc.
-- For legacy sample areas, one or more `*.xml` files — ESS Template Configuration. Filenames start with `msdyn_` by convention.
+- For areas with per-topic configuration, one or more `*.xml` or `*.json` files — ESS Template Configuration. Filenames start with `msdyn_` by convention.
 - Workday DA GA scenarios have no per-topic XML or partial file. Their templates are minified Power Fx strings in the area-level `WorkdayOSSTemplateConfigurationSetup.yaml`. Keep one setter and one lookup mapping per source template. Run this shared setup after OOB Workday configuration initialization; OSS mappings replace matching keys and preserve unrelated OOB entries.
 - `README.md` — *expected for new topics; preserved as-is for existing topics that already have one or don't.* See **README expectations** below.
 - Optional assets (screenshots, diagrams, sample payloads) referenced by the README. Use lowercase, hyphenated filenames (e.g., `get-vacation-balance.png`).
@@ -65,7 +61,7 @@ For **existing topics** without a README, do not retrofit one as part of an unre
 - Folders: PascalCase, action-oriented (`EmployeeGetVacationBalance`, `EmployeeInviteGuest`).
 - XML: `msdyn_<Area><Action>.xml`.
 - **Documented inconsistencies — do NOT "fix" these:**
-  - Some employee folders in `WorkdayDeclarativeAgentGA` and `WorkdayDeclarativeAgentPreview` use lowercase / run-together names (e.g., `WorkdayEmployeesviewtheirjobtaxonomy`).
+  - Some employee folders in `Workday` use lowercase / run-together names (e.g., `WorkdayEmployeesviewtheirjobtaxonomy`).
   - The existing manager folders `WorkdayManagersdirect-CompanyCode`, `WorkdayManagersdirect-CostCenter`, and `WorkdayManagersdirect-Jobtaxanomy` retain hyphens and their original spelling. GA name exemptions do not waive README/topic/shared-configuration requirements.
   - One Facilities file has a trailing dot (`msdyn_DiningGetMenusQuery..xml`).
   - Some XML files use lowercase prefixes (`msdyn_copilotforemployeeselfservice...`).
@@ -75,7 +71,7 @@ For **new** files, follow the PascalCase + `msdyn_<Area><Action>.xml` convention
 ## Before you create or change anything
 
 1. **Read a sibling topic first.** Pick the nearest topic in the same area and sub-grouping. Mirror its top-level YAML keys, its XML root element, and its file layout.
-2. Confirm the target area, sub-grouping (Employee/Manager/Extended), and topic folder from the issue. If any of these is ambiguous, **stop and ask**.
+2. Confirm the target area, sub-grouping (Employee/Manager), and topic folder from the issue. If any of these is ambiguous, **stop and ask**.
 3. Run issue triage before editing files. Do not create or modify topic files until the issue is classified as actionable.
 4. Keep ALL changes inside `samples/`. Do not edit `solutions/`, repo-root files, `.github/`, or any other path outside `samples/` — even for "supporting" or "mirroring" purposes. Note any desired out-of-scope changes in the PR description as follow-up items.
 
@@ -120,12 +116,12 @@ Full procedure: [`.github/agents/skills/validate-sample-topic/SKILL.md`](../.git
 - Diff scope limited to a single `samples/<Area>/.../<TopicFolder>/` (area-level docs allowed).
 - No secrets or internal URLs anywhere in touched files (the check scans full file contents, not just the diff).
 
-The validator understands the GA/Preview subgroup layout and the GA shared
-configuration topic. Its single-topic rule has a narrow exception for the
-initial Workday split: `--diff-base` must verify that every legacy file is
-preserved unchanged in Preview and that the old tree has been removed. Missing,
-modified or extra Preview files do not qualify. Do not use unrelated validator
-changes as a bypass; its checks still run on maintainer edits. See
+The validator understands the GA subgroup layout and shared template-config
+setup topic. A complete retirement of obsolete Workday sample areas is checked
+against Git history: partially removed trees do not qualify, and ordinary
+multi-topic edits remain restricted. Initial GA topic additions may accompany
+the verified retirement. Do not use unrelated validator changes as a bypass;
+its checks still run on maintainer edits. See
 [`tools/validate_samples/README.md`](../tools/validate_samples/README.md).
 
 Neighbor-key parity against the sibling reference is your responsibility in step 1 of [`create-or-update-sample-topic`](../.github/agents/skills/create-or-update-sample-topic/SKILL.md) — record the neighbor path in the PR body.

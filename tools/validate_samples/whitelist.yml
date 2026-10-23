@@ -19,12 +19,11 @@ filename_exemption_substrings:
   - msdyn_copilotforemployeeselfservice
 
 # Exact relative folder paths exempt from PascalCase folder convention.
-folder_exemptions:
-  - samples/WorkdayDeclarativeAgent/Employee/WorkdayEmployeesviewtheirjobtaxonomy
+folder_exemptions: []
 
 # Preserved scenario names documented in samples/AGENTS.md. Only spelling is
 # exempt; README.md, topic.yaml and the shared GA configuration remain required.
 folder_name_exemptions:
-  - samples/WorkdayDeclarativeAgentGA/Manager/WorkdayManagersdirect-CompanyCode
-  - samples/WorkdayDeclarativeAgentGA/Manager/WorkdayManagersdirect-CostCenter
-  - samples/WorkdayDeclarativeAgentGA/Manager/WorkdayManagersdirect-Jobtaxanomy
+  - samples/Workday/Manager/WorkdayManagersdirect-CompanyCode
+  - samples/Workday/Manager/WorkdayManagersdirect-CostCenter
+  - samples/Workday/Manager/WorkdayManagersdirect-Jobtaxanomy

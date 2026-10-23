@@ -19,9 +19,13 @@ from defusedxml.ElementTree import ParseError as _XMLParseError
 from defusedxml.ElementTree import fromstring as _xml_fromstring
 
 SAMPLES_ROOT = "samples"
-WORKDAY_GA = "samples/WorkdayDeclarativeAgentGA"
+WORKDAY_GA = "samples/Workday"
 WORKDAY_PREVIEW = "samples/WorkdayDeclarativeAgentPreview"
 WORKDAY_LEGACY = "samples/WorkdayDeclarativeAgent"
+RETIRED_WORKDAY_AREAS = frozenset({
+    WORKDAY_LEGACY, WORKDAY_PREVIEW, "samples/WorkdayCustomEngineAgent",
+    "samples/WorkdayDeclarativeAgentGA",
+})
 SHARED_SETUP = f"{WORKDAY_GA}/WorkdayOSSTemplateConfigurationSetup.yaml"
 
 
@@ -94,9 +98,9 @@ def _topic_folder_for(path: str) -> str | None:
     # samples/<Area>/<Sub>/<Topic>/...  (Workday*, ServiceNow)
     if parts[1] in {
         "WorkdayCustomEngineAgent", "WorkdayDeclarativeAgent", "ServiceNow",
-        "WorkdayDeclarativeAgentGA", "WorkdayDeclarativeAgentPreview",
+        "Workday", "WorkdayDeclarativeAgentGA", "WorkdayDeclarativeAgentPreview",
     }:
-        if parts[1] in {"WorkdayDeclarativeAgentGA", "WorkdayDeclarativeAgentPreview"}:
+        if parts[1] in {"Workday", "WorkdayDeclarativeAgentGA", "WorkdayDeclarativeAgentPreview"}:
             if parts[2] not in {"Employee", "Manager"}:
                 return None
         # Require a file *inside* the topic folder, i.e. at least
@@ -281,6 +285,7 @@ _DOC_BASENAMES = {"README.md", "AGENTS.md", ".gitkeep"}
 def check_diff_scope(
     repo_root: Path, changed: list[ChangedFile],
     *, preserved_workday_paths: frozenset[str] = frozenset(),
+    retired_workday_areas: frozenset[str] = frozenset(),
 ) -> Result:
     """Every changed path must be under samples/, and the diff must touch at
     most one topic folder. Area- and root-level README/AGENTS docs are allowed
@@ -297,10 +302,17 @@ def check_diff_scope(
                 or c.path in {
                     "tests/test_validate_samples.py",
                     ".github/workflows/validate-samples.yml",
+                    ".github/ISSUE_TEMPLATE/sample-topic-request.yml",
+                    ".github/agents/skills/prepare-sample-pr/SKILL.md",
                 }
             ):
                 continue
             res.add(f"{c.path}: outside samples/")
+            continue
+        if c.is_deleted and any(
+            c.path.startswith(area + "/")
+            for area in retired_workday_areas & RETIRED_WORKDAY_AREAS
+        ):
             continue
         tf = _topic_folder_for(c.path)
         if tf is None:
@@ -311,7 +323,7 @@ def check_diff_scope(
             parts = PurePosixPath(c.path).parts
             if (
                 len(parts) == 4
-                and parts[:3] == ("samples", "WorkdayDeclarativeAgentGA", "assets")
+                and parts[:3] == ("samples", "Workday", "assets")
                 and PurePosixPath(c.path).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
             ):
                 continue
@@ -322,7 +334,16 @@ def check_diff_scope(
         tf.startswith((WORKDAY_GA + "/", WORKDAY_PREVIEW + "/", WORKDAY_LEGACY + "/"))
         for tf in topic_folders
     )
-    if len(topic_folders) > 1 and not preserved_split:
+    ga_rollout_with_retirement = (
+        bool(retired_workday_areas & RETIRED_WORKDAY_AREAS)
+        and all(tf.startswith(WORKDAY_GA + "/") for tf in topic_folders)
+        and all(
+            c.is_new or c.is_deleted
+            for c in changed
+            if _topic_folder_for(c.path) in topic_folders
+        )
+    )
+    if len(topic_folders) > 1 and not (preserved_split or ga_rollout_with_retirement):
         res.add(f"diff touches multiple topic folders: {sorted(topic_folders)}")
     return res
 
@@ -373,6 +394,7 @@ CHECK_ORDER = [
 def run_all_checks(
     repo_root: Path, changed: Iterable[ChangedFile], whitelist: dict | None = None,
     *, preserved_workday_paths: frozenset[str] = frozenset(),
+    retired_workday_areas: frozenset[str] = frozenset(),
 ) -> list[Result]:
     whitelist = whitelist or {}
     changed_list = list(changed)
@@ -387,6 +409,7 @@ def run_all_checks(
         ),
         check_diff_scope(
             repo_root, changed_list, preserved_workday_paths=preserved_workday_paths,
+            retired_workday_areas=retired_workday_areas,
         ),
         check_secrets(repo_root, changed_list),
     ]
