@@ -62,6 +62,20 @@ Column casing differs by table family:
 
 Time column on every table: `EventInfo_Time` (UTC).
 
+## Internal test-tenant attribution
+
+FlightCheck and ADK platform events share the explicit tenant-ID allow-list in
+`flightcheck/telemetry.py` for their `tenantClass` / `tenant_class` dimensions.
+Known partner, self-service, and Contoso test tenancies are classified as
+`internal` even when `tenantName` / `tenant_name` is blank. Classification never
+uses display-name patterns; an unrelated customer with a similar name is not
+reclassified. `ESS_ADK_INTERNAL_TENANTS` can extend the allow-list locally.
+
+Classification happens when an updated clone emits an event. It does not
+rewrite historical events or change older clones. External dashboard charts
+therefore also need tenant-ID exclusions for previously misclassified test
+activity; keep those exclusions when adding tenants to the emitter allow-list.
+
 ## What each identifier means
 
 | Field | Meaning |

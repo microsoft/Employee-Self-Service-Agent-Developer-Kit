@@ -149,6 +149,14 @@ _HARDCODED_INTERNAL_TENANT_IDS: frozenset[str] = frozenset(
         CONTOSO_INTERNAL_TENANT_ID,
         CRONTOSO_INTERNAL_TENANT_ID,
         COCREATE_TEST_TENANT_ID,
+        # Partner/self-service test tenants verified during external DA usage
+        # investigation; match IDs, never display-name prefixes.
+        "142b48c2-943c-4d07-ad6b-b0eb5cd0e5f2",  # TEST_TEST CoPilot partner
+        "440d6412-bc8e-49a0-9913-9f8be786b89e",  # TEST_TEST M365E5 partner
+        "4636dd08-fdd9-4610-a443-762fb320fb4e",  # TEST_TEST Office365E5 self-service
+        "6936469c-696e-4fe2-a0c8-dd16f54b1b45",  # TEST_TEST CONTOSOTPM
+        "4345eb96-df8a-464a-9eb8-72253571a621",  # Contoso demo
+        "2d5577b0-a83c-436c-9582-1c3bcd2ab0d3",  # Contoso demo
     }
 )
 

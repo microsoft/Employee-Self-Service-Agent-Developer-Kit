@@ -379,6 +379,28 @@ def test_classify_tenant_hardcoded_internal_dogfood_tenants(monkeypatch):
     assert _fc.classify_tenant(f"  {_fc.CONTOSO_INTERNAL_TENANT_ID.upper()} ") == "internal"
 
 
+@pytest.mark.parametrize(
+    "tenant_id",
+    [
+        "142b48c2-943c-4d07-ad6b-b0eb5cd0e5f2",
+        "440d6412-bc8e-49a0-9913-9f8be786b89e",
+        "4636dd08-fdd9-4610-a443-762fb320fb4e",
+        "6936469c-696e-4fe2-a0c8-dd16f54b1b45",
+        "4345eb96-df8a-464a-9eb8-72253571a621",
+        "2d5577b0-a83c-436c-9582-1c3bcd2ab0d3",
+    ],
+)
+def test_external_usage_test_tenants_are_internal_in_both_emitters(
+    monkeypatch, tenant_id,
+):
+    monkeypatch.delenv("ESS_ADK_INTERNAL_TENANTS", raising=False)
+    assert _fc.classify_tenant(tenant_id) == _fc.TENANT_CLASS_INTERNAL
+    assert _fc.classify_tenant(f" {tenant_id.upper()} ") == _fc.TENANT_CLASS_INTERNAL
+    dimensions = adk.common_dimensions(adk.SURFACE_CLI, tenant_id=tenant_id)
+    assert dimensions["tenant_class"] == _fc.TENANT_CLASS_INTERNAL
+    assert dimensions["tenant_id"] == tenant_id
+
+
 def test_classify_tenant_non_guid_maps_to_unknown():
     # Defense-in-depth: a non-empty tenant_id that isn't a canonical Entra
     # tenant GUID must NEVER classify as "customer" — otherwise the External
