@@ -91,12 +91,13 @@ def _error_result(response, error: str) -> dict:
 class PowerPlatformClient:
     """Power Platform API client for billing-policy / PayG queries."""
 
-    def __init__(self, tenant_id: str, *, ring: str = "prod"):
+    def __init__(self, tenant_id: str, *, ring: str = "prod", strict_reads: bool = False):
         normalized_ring = str(ring).strip().casefold()
         config = RING_CONFIG.get(normalized_ring)
         if config is None:
             raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
         self.tenant_id = tenant_id
+        self.strict_reads = strict_reads
         self.ring = normalized_ring
         self.base_url = str(config["audience"]).rstrip("/")
         self.scope = f"{self.base_url}/.default"
@@ -201,7 +202,12 @@ class PowerPlatformClient:
         """
         items: list = []
         url = f"{self.base_url}{path}"
+        seen_urls: set[str] = set()
         while url:
+            if self.strict_reads:
+                if url in seen_urls:
+                    raise ValueError("Power Platform returned a repeated collection continuation.")
+                seen_urls.add(url)
             resp = _SESSION.get(url, headers=self.headers, params=params, timeout=60)
             if resp.status_code in (401, 403):
                 return _error_result(resp, "insufficient_permissions")
@@ -209,12 +215,32 @@ class PowerPlatformClient:
                 return items
             resp.raise_for_status()
             data = resp.json()
+            if self.strict_reads and (
+                not isinstance(data, dict) or not isinstance(data.get("value"), list)
+                or any(not isinstance(row, dict) for row in data["value"])
+            ):
+                raise ValueError("Power Platform returned an invalid resource collection.")
             items.extend(data.get("value", []))
-            url = (
-                data.get("@odata.nextLink")
-                or data.get("@odata.nextlink")
-                or data.get("nextLink")
-            )
+            continuations = [
+                data[key] for key in ("@odata.nextLink", "@odata.nextlink", "nextLink")
+                if data.get(key) is not None
+            ]
+            if self.strict_reads and (
+                any(not isinstance(link, str) or not link for link in continuations)
+                or len(set(continuations)) > 1
+            ):
+                raise ValueError("Power Platform returned invalid or conflicting collection continuations.")
+            url = next((link for link in continuations if link), None)
+            if self.strict_reads and url is not None:
+                from urllib.parse import urlsplit
+
+                expected, actual = urlsplit(f"{self.base_url}{path}"), urlsplit(str(url))
+                if (
+                    not isinstance(url, str) or not url
+                    or actual.scheme != expected.scheme or actual.netloc != expected.netloc
+                    or actual.path != expected.path or actual.fragment
+                ):
+                    raise ValueError("Power Platform returned an invalid collection continuation.")
             params = None
         return items
 

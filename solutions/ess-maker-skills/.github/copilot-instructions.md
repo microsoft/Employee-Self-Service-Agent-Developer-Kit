@@ -80,13 +80,22 @@ values with resolved evidence and render only the block contents.
 2. **Canonical setup ready:** canonical state has `schema_version: 4`, the
    matching agent exists, and its `connect_ready` is `true`. Proceed with
    `src/skills/flightcheck/SKILL.md`.
-3. **Setup readiness outstanding:** canonical state has `schema_version: 4`,
+3. **Selected DA diagnostics:** local config identifies one selected
+   Declarative Agent (`releaseLine: "da"`) and its target environment.
+   Proceed with `src/skills/flightcheck/SKILL.md` even when canonical setup
+   readiness is outstanding or canonical setup state is absent. Read-only
+   diagnostics must not require `connect_ready: true` or a
+   `flightCheckOnly: true` installation. Use the same selected target, scope
+   and CLI as standalone execution; do not force the scope to local files.
+   The CLI verifies target identity and access and reports unavailable
+   evidence. Never borrow another agent's identity or change setup state.
+4. **Setup readiness outstanding:** canonical state has `schema_version: 4`,
    the matching agent has `workspace.folder`, `workspace.agent_path`, and
    `steps.SETUP-07.state: "done"`, and canonical readiness is outstanding
    (`connect_ready` is false or absent). Build `{READINESS_ISSUES}` from
    canonical setup evidence and use the readiness-outstanding Message block
    below.
-4. **Workspace preparation required:** use the workspace-preparation Message
+5. **Workspace preparation required:** use the workspace-preparation Message
    block below for every remaining state.
 
 Build `{READINESS_ISSUES}` as follows:
@@ -217,7 +226,9 @@ After canonical DA setup is complete:
   boundary;
 - `/backup-template-configs` and `/restore-template-configs` are no longer
   supported because they belonged to the retired Dataverse-based agent model;
-- `/flightcheck` may run only its local-files scope.
+- `/flightcheck` and standalone FlightCheck use the same selected-agent
+  read-only DA diagnostics. Offer full checks and explicit local-only checks;
+  do not require all connection/setup checks to pass before diagnosing them.
 
 Do not infer availability from a missing Dataverse endpoint and do not add
 capability fields to setup state.
@@ -488,8 +499,11 @@ agent icon, or asks what any landing-page setting controls for employees. Do
 not call an AgentConfiguration MCP tool from a generic flow.
 
 **FlightCheck results rendering:** When presenting `/flightcheck` results (Step 3
-of `src/skills/flightcheck/SKILL.md`), read `workspace/flightcheck/results.json`
-with your file-reading tool and format the summary banner and tables **yourself,
+of `src/skills/flightcheck/SKILL.md`), read `results.json` from the executed run's
+output directory (`--output`, or the CLI default when omitted), and link
+`report.html` from that same directory. For the focused Workday litmus run,
+use `workspace/flightcheck/workday-litmus`, not the previous full-suite folder.
+Use your file-reading tool and format the summary banner and tables **yourself,
 directly in the chat reply**. Do NOT write or execute any script (`.py`, `.js`,
 `.ps1`, shell one-liner, etc.) to parse the JSON, build the tables, or print the
 summary. Generating a helper script here is a bug — it leaks raw terminal output
@@ -657,5 +671,6 @@ only on `.local/setup/config.json`.
 The `agent` field is a backward-compatible copy of whichever agent is active
 (pointed to by `activeAgent` slug). All discovered agents are in the `agents`
 array. When setup runs for a new agent, it's added to `agents` and set as
-active. Skills read `agent.*` for the current agent; FlightCheck scans all
-agents under `workspace/agents/` regardless of which is active.
+active. Skills read `agent.*` for the current agent. DA FlightCheck inspects
+only the selected agent; legacy full scopes retain their existing multi-agent
+scan.

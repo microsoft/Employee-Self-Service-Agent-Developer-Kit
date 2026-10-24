@@ -11,6 +11,7 @@ from typing import Any
 
 import responses
 import requests
+import pytest
 
 from flightcheck.checks import workday_da
 from minimalbot_evaluation import reviewed_workday_topic_schemas
@@ -303,6 +304,79 @@ def test_reviewed_topics_pass_complete_active_inventory() -> None:
     )
     assert runner.agentbuilder.requested_bot_id == BOT_ID
     assert row.remediation == ""
+
+
+@pytest.mark.parametrize("suffix", [
+    "WorkdaySystemSetRuntimeTemplateConfigurations",
+    "WorkdaySystemGetUserContextV2",
+    "WorkdaySystemAccessCheck",
+    "WorkdaySystemGetCommonExecution",
+    "WorkdaySystemGetRESTExecution",
+    "WorkdayManagerCheck",
+    "WorkdayOnError",
+])
+@pytest.mark.parametrize("state", ["missing", "Inactive", "unknown", "duplicate"])
+def test_maker_requires_each_workday_system_topic(suffix, state):
+    schema = f"{SCHEMA}.topic.{suffix}"
+    payload = _component_payload(
+        missing=schema if state == "missing" else "",
+        inactive=schema if state == "Inactive" else "",
+    )
+    changes = payload["botComponentChanges"]
+    if state == "missing":
+        changes[:] = [
+            change for change in changes if change["component"]["schemaName"] != schema
+        ]
+    if state in {"unknown", "duplicate"}:
+        target = next(change for change in changes if change["component"]["schemaName"] == schema)
+        if state == "unknown":
+            target["component"].pop("status")
+        else:
+            changes.append(deepcopy(target))
+    row = workday_da._check_reviewed_workday_topics(_runner(
+        maker_diagnostics=True, agentbuilder=_AgentBuilder(payload),
+    ))[0]
+    assert row.status == ("Blocked" if state == "unknown" else "Failed")
+    assert schema in row.result
+    assert {
+        "missing": "missing required system topics",
+        "Inactive": "inactive required system topics",
+        "unknown": "unknown activation",
+        "duplicate": "duplicate schemas",
+    }[state] in row.result
+    assert "Copilot Studio" in row.remediation
+    assert "Do not edit or disable system topics" in row.remediation
+    assert "rerun" in row.remediation
+
+
+def test_maker_required_systems_work_without_optional_scenarios():
+    payload = _component_payload()
+    payload["botComponentChanges"] = [
+        change for change in payload["botComponentChanges"]
+        if change["component"]["schemaName"].rsplit(".", 1)[-1]
+        in workday_da._REQUIRED_SYSTEM_TOPIC_SUFFIXES
+    ]
+    row = workday_da._check_reviewed_workday_topics(_runner(
+        maker_diagnostics=True, agentbuilder=_AgentBuilder(payload),
+    ))[0]
+    assert row.status == "Passed"
+    assert "7 of 7 required system topics present" in row.result
+    assert "Unused optional conversations are not required" in row.result
+    assert row.evidence["unselectedCatalogEntries"] == 16
+    assert row.remediation == ""
+
+
+def test_maker_confirmed_system_defect_is_not_hidden_by_unknown_activation():
+    required = f"{SCHEMA}.topic.WorkdayManagerCheck"
+    payload = _component_payload(missing=required)
+    payload["botComponentChanges"][0]["component"]["status"] = "unknown"
+    row = workday_da._check_reviewed_workday_topics(_runner(
+        maker_diagnostics=True, agentbuilder=_AgentBuilder(payload),
+    ))[0]
+    assert row.status == "Failed"
+    assert required in row.result
+    assert row.evidence["unknownActivation"]
+    assert "restore missing Microsoft-provided system topics" in row.remediation
 
 
 def test_reviewed_topics_fail_missing_and_inactive_components() -> None:

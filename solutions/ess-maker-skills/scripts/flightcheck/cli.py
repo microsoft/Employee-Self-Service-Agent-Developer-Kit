@@ -57,8 +57,9 @@ from flightcheck.runner import (
     BLOCK_REASON_ADMIN_API_UNAVAILABLE,
     BLOCK_REASON_CHECKPOINT_CONTRACT,
     BLOCK_REASON_PROFILE_CARDINALITY,
+    maker_diagnostic_outcome,
 )
-from flightcheck.agent_scope import active_agent, validate_agent_slug
+from flightcheck.agent_scope import active_agent, configured_agents, is_declarative_agent, validate_agent_slug
 from flightcheck.graph_client import GraphClient
 from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
 from flightcheck.pva_client import PVAClient
@@ -93,7 +94,7 @@ from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
 from flightcheck.checks.servicenow import run_servicenow_checks
-from flightcheck.checks.local_files import run_local_file_checks
+from flightcheck.checks.local_files import run_da_local_file_checks, run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.licensing import run_licensing_checks
 from flightcheck.checks.cloud_policy import run_cloud_policy_checks
@@ -1029,7 +1030,48 @@ def _run_exit_code(result) -> int:
     blocked essential capability can never exit 0 and read as success to a
     CI/Connect caller keying on the exit code.
     """
+    if getattr(result, "diagnostic_only", False) and not result.profile:
+        return 1 if result.overall in {"ISSUES_FOUND", "SOME_CHECKS_UNVERIFIED"} else 0
     return 1 if result.failed > 0 or result.blocked > 0 or result.errors > 0 else 0
+
+
+def _run_da_selection_if_applicable(args, config):
+    from types import SimpleNamespace
+
+    selected = _active_agent_config(config, args.agent_slug)
+    slug = args.agent_slug or config.get("activeAgent") or selected.get("slug")
+    if not is_declarative_agent(SimpleNamespace(config=config, agent_slug=slug)):
+        return
+    if not selected.get("botId"):
+        # Pre-agent foundation/setup consumers retain their environment-only
+        # contract; there is no native agent subject for selected-DA execution.
+        return
+    if args.profile and args.profile.startswith("workday-legacy:"):
+        return
+    if args.profile:
+        try:
+            _validation_context_from_args(
+                args, config, args.environment_url or config.get("dataverseEndpoint", ""),
+                args.environment_id or config.get("environmentId"),
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
+    if args.runtime_reachability or args.alm_import_probe:
+        print("ERROR: DA diagnostics are read-only; runtime and import probes are not allowed.")
+        sys.exit(2)
+    from flightcheck.maker_diagnostics import run_maker_diagnostics
+
+    try:
+        result = run_maker_diagnostics(args, config)
+    except ValueError as exc:
+        print(f"ERROR: Unable to plan the selected DA checks: {exc}")
+        sys.exit(2)
+    _print_prioritized_summary(result)
+    save_results(result, args.output)
+    if not getattr(args, "no_open", False):
+        open_report_in_browser(args.output)
+    sys.exit(_run_exit_code(result))
 
 
 def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
@@ -1194,6 +1236,7 @@ def _run_single_checkpoint(args):
         print(f"ERROR: Unable to resolve the profile target: {e}")
         sys.exit(1)
 
+    _run_da_selection_if_applicable(args, config)
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
     if plan.requires_dataverse_endpoint and not env_url:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
@@ -2042,6 +2085,7 @@ def _run_profile(args):
         print(f"ERROR: Unable to resolve the profile target: {e}")
         sys.exit(1)
 
+    _run_da_selection_if_applicable(args, config)
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
     if plan.requires_dataverse_endpoint and not env_url:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
@@ -2589,8 +2633,8 @@ def main():
         help="Validation scope (default: full). Mutually exclusive with --checkpoint/--profile.",
     )
     parser.add_argument(
-        "--output", default="workspace/flightcheck",
-        help="Output directory (default: workspace/flightcheck)",
+        "--output", default=None,
+        help="Output directory (default: workspace/flightcheck; WD-RUN-001 uses its workday-litmus subdirectory)",
     )
     parser.add_argument(
         "--environment-url",
@@ -2762,6 +2806,11 @@ def main():
              "JSON, then exit without running any checks.",
     )
     args = parser.parse_args()
+    if args.output is None:
+        args.output = (
+            os.path.join("workspace", "flightcheck", "workday-litmus")
+            if args.checkpoint == "WD-RUN-001" else "workspace/flightcheck"
+        )
     if args.alm_import_probe and not args.alm_import_target_environment_id:
         parser.error(
             "--alm-import-target-environment-id is required with "
@@ -2824,6 +2873,40 @@ def main():
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"ERROR: Unable to load --connect-config: {e}")
         sys.exit(1)
+
+    from types import SimpleNamespace
+
+    selected = _active_agent_config(config, args.agent_slug)
+    if args.agent_slug and not selected:
+        print("ERROR: --agent-slug does not identify exactly one configured agent.")
+        sys.exit(1)
+    selected_slug = args.agent_slug or config.get("activeAgent") or (config.get("agent") or {}).get("slug")
+    da_context = str(config.get("releaseLine") or "").strip().casefold() == "da" or any(
+        str(agent.get("releaseLine") or "").strip().casefold() == "da"
+        for agent in configured_agents(config)
+    )
+    da_diagnostic_scopes = {"full", "local", "workday", "servicenow"}
+    if da_context and args.scope in da_diagnostic_scopes and (
+        ((config.get("agents") or config.get("agent")) and not selected)
+        or (not selected_slug and len(config.get("agents") or []) > 1)
+    ):
+        print("ERROR: Select exactly one configured agent with --agent-slug before running these checks.")
+        sys.exit(1)
+    da_selected = is_declarative_agent(SimpleNamespace(
+        config=config, agent_slug=selected_slug or selected.get("slug"),
+    ))
+    if args.scope in da_diagnostic_scopes and da_selected:
+        if args.runtime_reachability or args.alm_import_probe:
+            print("ERROR: DA maker diagnostics are read-only; runtime and import probes are not allowed.")
+            sys.exit(2)
+        from flightcheck.maker_diagnostics import run_maker_diagnostics
+
+        result = run_maker_diagnostics(args, config)
+        _print_prioritized_summary(result)
+        save_results(result, args.output)
+        if not args.no_open:
+            open_report_in_browser(args.output)
+        sys.exit(_run_exit_code(result))
 
     infra_only_scope = args.scope == "infrastructure"
     da_local_scope = args.scope == "local"
@@ -3209,7 +3292,7 @@ def main():
         getattr(args, "agent_slug", None)
         or config.get("activeAgent")
         or (config.get("agent") or {}).get("slug")
-        or ""
+        or (selected.get("slug", "") if da_selected else "")
     )
     runner.env_url = env_url
     runner.dv_token = dv_token
@@ -3239,6 +3322,9 @@ def main():
     # Register checks based on scope
     if native_remote_scope:
         checks = NATIVE_NO_DATAVERSE_SCOPE_MAP[args.scope]
+    elif da_selected and args.scope == "local":
+        runner.maker_diagnostics = True
+        checks = [("Local Files", run_da_local_file_checks)]
     elif args.scope == "full":
         checks = FULL_SCOPE
     else:
@@ -3255,6 +3341,10 @@ def main():
     # --- Execute ---
     print("\nRunning checks...\n")
     result = runner.run()
+    if da_selected and args.scope == "local":
+        result.diagnostic_only = True
+        result.overall = maker_diagnostic_outcome(result)
+        result.validation_context = {"agentSlug": runner.agent_slug}
 
     # --- Print summary ---
     _print_prioritized_summary(result)
@@ -3263,7 +3353,7 @@ def main():
     save_results(result, args.output)
 
     # Emit anonymous outcome telemetry (best-effort; never affects exit code).
-    if not args.no_telemetry:
+    if not args.no_telemetry and not getattr(result, "diagnostic_only", False):
         # Telemetry status is internal detail makers shouldn't normally see;
         # only surface it when explicitly debugging telemetry.
         _tele_debug = os.environ.get(
@@ -3367,21 +3457,20 @@ def main():
 
 
 def _print_prioritized_summary(result, *, verbose_manual=False):
-    """Print a triage-first summary that mirrors the HTML layout.
-
-    Three sections, biggest signal first:
-      1. Verdict banner (one line).
-      2. Counts strip.
-      3. ACTION REQUIRED — full per-row detail (Failed / Error).
-      4. NEEDS MANUAL VERIFICATION — one line per row (Warning /
-         Manual / NotConfigured).
-      5. SKIPPED — count only, when present.
-      6. PASSED — count only; point to report.html for the list.
-
-    The goal is for an operator scanning the terminal to see, in
-    order: am I OK? what must I fix? what must I verify? — without
-    having to read every passing row.
-    """
+    """Print the appropriate maker diagnostic or legacy triage summary."""
+    if getattr(result, "diagnostic_only", False):
+        print(f"\nMAKER SETUP DIAGNOSTIC: {result.overall.replace('_', ' ').title()}")
+        print(
+            f"{result.total} results; {result.passed} passed; {result.failed} confirmed issues; "
+            f"{result.manual} need manual verification."
+        )
+        print("Configuration inspection only; not release approval or proof of employee execution.")
+        for row in result.results:
+            if row.status != Status.PASSED.value:
+                print(f"\n  {row.checkpoint_id}: {row.description} [{row.status}]\n  {row.result}")
+                if row.remediation:
+                    print(f"  Next step: {row.remediation}")
+        return
     buckets = bucket_results(result.results)
     action = buckets[BUCKET_ACTION]
     manual = buckets[BUCKET_MANUAL]

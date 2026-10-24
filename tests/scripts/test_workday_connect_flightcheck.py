@@ -101,6 +101,84 @@ def _contract(*, status: str = "Passed", profile: str = PROFILE):
     }
 
 
+def _record_rest_target(state, rest):
+    state["scope"]["workdayTenant"] = "example_impl"
+    state["endpoints"]["restBaseUrl"] = rest
+    phase = state["phases"]["connections"]
+    phase["completedActions"].append("physical-connections-verified")
+    phase["evidence"].append({
+        "action": "physical-connections-verified", "outcome": "verified",
+        "source": "live-power-platform-discovery",
+        "makerUsername": state["operators"]["powerPlatformMaker"]["username"],
+        "connectionIds": {"workday": "workday-connection"},
+        "workdayTargetOutcome": "maker-confirmed-against-workday-packet",
+        "workdayTarget": {
+            "environmentId": state["scope"]["environmentId"],
+            "workdayTenant": state["scope"]["workdayTenant"],
+            "restBaseUrl": rest, "connectionId": "workday-connection",
+        },
+    })
+
+
+@pytest.mark.parametrize("profile", ["workday-da:post-connection", "workday-da:final"])
+@pytest.mark.parametrize("defect", [
+    None, "url", "environment", "connection", "administrator", "unconfirmed",
+    "old_evidence", "maker", "tenant", "malformed_target", "malformed_connections", "malformed_observation",
+])
+def test_rest_manual_requires_matching_verified_connection_target(profile, defect):
+    from flightcheck.checks.da_validation import run_registered_da_check
+    from flightcheck.registry import REGISTRY
+    from types import SimpleNamespace
+    from workday_connect_flightcheck import evaluate_contract, WorkdayConnectFlightCheckError
+
+    rest = "https://example.test/ccx/api"
+    state = _state()
+    _record_rest_target(state, rest)
+    phase = state["phases"]["workday-admin"]
+    phase["completedActions"].append("administrator-response-validated")
+    phase["evidence"].append({"action": "administrator-response-validated"})
+    record = state["phases"]["connections"]["evidence"][0]
+    if defect == "url":
+        record["workdayTarget"]["restBaseUrl"] += "/different"
+    elif defect == "environment":
+        record["workdayTarget"]["environmentId"] = "other-environment"
+    elif defect == "connection":
+        record["workdayTarget"]["connectionId"] = "other-connection"
+    elif defect == "administrator":
+        phase["completedActions"].clear()
+    elif defect == "unconfirmed":
+        record.pop("workdayTargetOutcome")
+    elif defect == "old_evidence":
+        record.pop("workdayTarget")
+    elif defect == "maker":
+        record["makerUsername"] = "other@example.com"
+    elif defect == "tenant":
+        record["workdayTarget"]["workdayTenant"] = "another-tenant"
+    elif defect == "malformed_target":
+        record["workdayTarget"] = ["not", "a", "mapping"]
+    elif defect == "malformed_connections":
+        record["connectionIds"] = ["not", "a", "mapping"]
+    runner = SimpleNamespace(
+        agent_slug="ess-hr", env_id="environment-id", config={"restBaseUrl": rest},
+        da_current_spec=REGISTRY["WD-REST-001"],
+    )
+    observation = run_registered_da_check(runner)[0]
+    assert observation.status == "Manual"
+    if defect == "malformed_observation":
+        observation.evidence = ["not", "a", "mapping"]
+    contract = _contract(profile=profile)
+    contract["overall"] = "READY_WITH_WARNINGS"
+    for row in contract["results"]:
+        if row["checkpointId"] == observation.checkpoint_id:
+            row.update(status=observation.status, evidence=observation.evidence)
+    if defect:
+        with pytest.raises(WorkdayConnectFlightCheckError, match="WD-REST-001=Manual"):
+            evaluate_contract(contract, state, profile)
+    else:
+        result = evaluate_contract(contract, state, profile)
+        assert {"checkpointId": "WD-REST-001", "reason": "validated-controller-evidence"} in result["acceptedSuppressions"]
+
+
 def test_evaluate_contract_accepts_complete_automated_profile():
     from workday_connect_flightcheck import evaluate_contract
 

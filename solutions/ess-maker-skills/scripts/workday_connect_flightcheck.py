@@ -470,11 +470,43 @@ def _has_action(
 def _manual_accepted(
     state: Mapping[str, Any],
     checkpoint_id: str,
+    row: Mapping[str, Any],
 ) -> bool:
     requirements = manual_evidence_for(checkpoint_id)
-    return bool(requirements) and all(
+    accepted = bool(requirements) and all(
         _has_action(state, phase_id, action)
         for phase_id, action in requirements
+    )
+    if not accepted or checkpoint_id != "WD-REST-001":
+        return accepted
+    scope = state.get("scope") or {}
+    endpoints = state.get("endpoints") or {}
+    maker = ((state.get("operators") or {}).get("powerPlatformMaker") or {}).get("username")
+    records = ((state.get("phases") or {}).get("connections") or {}).get("evidence") or []
+    record = next(
+        (item for item in records if isinstance(item, Mapping) and item.get("action") == "physical-connections-verified"),
+        {},
+    )
+    target = record.get("workdayTarget") or {}
+    observed = row.get("evidence") or {}
+    connection_ids = record.get("connectionIds") or {}
+    rest = endpoints.get("restBaseUrl")
+    return (
+        record.get("outcome") == "verified"
+        and record.get("source") == "live-power-platform-discovery"
+        and record.get("workdayTargetOutcome") == "maker-confirmed-against-workday-packet"
+        and bool(maker) and _normalized(record.get("makerUsername")) == _normalized(maker)
+        and isinstance(target, Mapping)
+        and bool(scope.get("environmentId"))
+        and _normalized(target.get("environmentId")) == _normalized(scope.get("environmentId"))
+        and bool(scope.get("workdayTenant"))
+        and _normalized(target.get("workdayTenant")) == _normalized(scope.get("workdayTenant"))
+        and bool(rest) and _normalized(target.get("restBaseUrl")) == _normalized(rest)
+        and isinstance(observed, Mapping)
+        and _normalized(observed.get("configuredRestBaseUrl")) == _normalized(rest)
+        and isinstance(connection_ids, Mapping)
+        and bool(target.get("connectionId"))
+        and target.get("connectionId") == connection_ids.get("workday")
     )
 
 
@@ -569,7 +601,7 @@ def _validate_results(
         remediation_id = _text(row.get("remediationId"))
         if status == "Passed":
             continue
-        if status == "Manual" and _manual_accepted(state, checkpoint_id):
+        if status == "Manual" and _manual_accepted(state, checkpoint_id, row):
             suppressions.append(
                 {
                     "checkpointId": checkpoint_id,

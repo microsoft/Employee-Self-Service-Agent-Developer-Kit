@@ -194,6 +194,13 @@ The command discovers connected physical connections in the selected
 environment and records the result only after both required connections are
 live.
 
+The confirmation records the current environment, Workday tenant, REST URL and
+selected live Workday connection alongside the maker account. Connect uses this
+scoped evidence plus the validated Workday-admin response to reconcile
+`WD-REST-001`'s Manual result; a saved REST URL alone is not deployed-target
+proof. If an older connection record lacks this target snapshot, repeat this
+same comparison and confirmation rather than bypassing the finding.
+
 - If exactly one connection exists for each connector, discovery is
   deterministic.
 - If more than one exists, show safe display names and ask which connection to
