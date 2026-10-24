@@ -2,6 +2,12 @@
 
 # Phase 3 - Workday administrator
 
+Before this phase's first question or handoff, apply the **Development progress
+rule** in `SKILL.md`: show the current six-phase table for unfinished
+Development, unless the orchestrator already showed it for this phase entry.
+Do not repeat it for workbook corrections or insert a Development table into
+a Test or Production plan.
+
 This phase never modifies Workday. The skill generates one handoff, validates
 the administrator's non-secret response, derives deterministic endpoints, and
 records evidence. All Workday tenant changes are performed by the Workday

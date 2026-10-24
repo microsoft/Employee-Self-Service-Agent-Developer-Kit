@@ -303,8 +303,9 @@ cannot be verified. Show the actual target blocker and supported recovery.
   completed, in-progress, or blocked phase makes this a resume. Do not repeat
   the briefing within the same conversation even if all phases remain pending.
 - **Development resume:** On resume, show the current phase and only its
-  remaining participants; do not repeat the full role table, full progress
-  table, or completed administrator handoffs.
+  remaining participants, with the current six-phase progress table as
+  described below; do not repeat the full role table or completed
+  administrator handoffs.
 - **Verified Test or Production:** Show a concise **Workday connection plan -
   Test** or **Workday connection plan - Production** only after that realm
   has been resolved by the controller. Build a short list from that active
@@ -358,10 +359,17 @@ ask the customer to run a second validation workflow.
 
 For a resolved, non-ready lifecycle, after the applicable presentation:
 
-1. Only on the first Development start, render the returned `progressText`
-   as Markdown. It is the visible six-row roadmap and must not be collapsed
-   into a one-line phase list. Omit it on every resume, ready lifecycle,
-   and Test or Production plan.
+1. **Development progress rule:** For a verified, non-ready
+   `activeTargetRealm: dev`, render the returned `progressText` as Markdown
+   on entry or resume and whenever `nextPhaseId` changes, before the current
+   phase explanation or participant questions. This includes transitions to
+   `entra` and `workday-admin`, not only Preflight. After completing a phase,
+   run `status` again before presenting the next phase; do not reuse the
+   previous phase's progress snapshot. It is the visible six-row roadmap and
+   must not be collapsed into a one-line phase list. Do not repeat it for
+   every question, file-path request, or workbook correction within an
+   unchanged phase unless the maker asks for progress. Omit it for a ready
+   lifecycle and Test or Production plans.
 2. Render the returned `nextPhaseSummary` in this form:
 
    ```markdown

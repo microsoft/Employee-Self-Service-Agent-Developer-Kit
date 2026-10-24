@@ -2,6 +2,12 @@
 
 # Phase 2 - Microsoft Entra
 
+Before this phase's first question or handoff, apply the **Development progress
+rule** in `SKILL.md`: show the current six-phase table for unfinished
+Development, unless the orchestrator already showed it for this phase entry.
+Do not repeat it for workbook corrections or insert a Development table into
+a Test or Production plan.
+
 This phase guides an administrator through the required Entra changes and
 records the administrator's non-secret response.
 It requires one Microsoft Entra app administrator with either the
