@@ -232,6 +232,30 @@ def _begin_dialog_targets(
     return targets
 
 
+def verify_local_runtime_workspace(
+    workspace_root: Path,
+    state: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate local runtime topic mappings without authenticating or writing."""
+    context = _agent_verification_context(workspace_root, state)
+    schema = context["agentSchema"]
+    topics = [
+        ("Conversation Start", f"{schema}.topic.ConversationStart"),
+        (
+            "Workday [System] - 1: Set Runtime Template Configurations",
+            f"{schema}.topic.WorkdaySystemSetRuntimeTemplateConfigurations",
+        ),
+        (
+            "Workday [System] - 1: Set User Context V2",
+            f"{schema}.topic.WorkdaySystemGetUserContextV2",
+        ),
+    ]
+    for name, topic_schema in topics:
+        topic = _mapped_dialog(Path(context["agentFolder"]), name, topic_schema)
+        _topic_document(topic)
+    return {"verifiedTopics": len(topics)}
+
+
 def verify_runtime_template_wiring(
     workspace_root: Path,
     state: Mapping[str, Any],

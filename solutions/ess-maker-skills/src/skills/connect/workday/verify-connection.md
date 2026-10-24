@@ -95,45 +95,68 @@ The controller marks the guided lifecycle complete immediately. Do not wait
 for Power Automate run-history evidence, run a separate runtime-correlation
 step, or ask the maker or employee to repeat a successful scenario.
 
-## Finish with post-skill next steps
+## Finish the current Workday connection
 
-After the controller returns `lifecycleComplete: true`, name the completed
-realm from `activeTargetRealm` and render only the returned
-`postSkillNextSteps`. Do not add Production employee-adoption steps to a
-Development or Test completion.
+After the controller returns `lifecycleComplete: true`, render its
+`completionMessage` first. It confirms that all six steps and the maker Test
+pane validation are complete in `activeTargetRealm`, with no further Workday
+Connect action required in that realm. Use the same finish behavior when
+`status` reports an already-ready lifecycle; do not repeat the smoke test.
 
-For Development, tell the maker:
+End this Connect execution after its completion message and optional later
+guidance. Setup is an entry prerequisite, not a phase or completion action:
+do not invoke `src/skills/foundation-setup/SKILL.md` here, recheck overall setup
+readiness to decide whether Connect can finish, or return to Setup. Keep
+completed Workday phases and administrator evidence unchanged. Do not set
+`connect_ready` or mark unrelated setup steps done based on Workday success.
 
-> Workday setup is complete in Development, and the maker Test pane scenario
-> passed.
+## Optional later work
+
+Under **Optional later - not part of this completed connection**, render the returned
+`postSkillNextSteps` for the completed realm. Do not ask for a next realm,
+start promoted-target discovery, or keep this execution open waiting for
+promotion. Returning to Connect is necessary only after the maker actually
+promotes the agent and explicitly asks to configure that new realm.
+
+Do not add Production employee-adoption steps to a Development or Test completion.
+
+For Development, the optional later guidance is:
+
+> **Optional later - not part of this completed connection**
 >
-> **Next steps:**
->
-> 1. Promote the agent from Development to Test when ready.
-> 2. Return to Connect Workday and say that the agent was promoted to Test.
+> 1. Promote the agent from Development to Test when ready. Open the source
+>    agent in Copilot Studio and use your organization's approved promotion
+>    process. Ask the maker responsible for agent deployment if you need
+>    access or instructions. Connect Workday does not perform promotion.
+> 2. Only after promotion is complete, return to Connect Workday and say that
+>    the agent was promoted to Test.
 
-For Test, tell the maker:
+For Test, the optional later guidance is:
 
-> Workday setup is complete in Test, and the maker Test pane scenario passed.
+> **Optional later - not part of this completed connection**
 >
-> **Next steps:**
->
-> 1. Promote the agent from Test to Production when ready.
-> 2. Return to Connect Workday and say that the agent was promoted to
->    Production.
+> 1. Promote the agent from Test to Production when ready. Open the source
+>    agent in Copilot Studio and use your organization's approved promotion
+>    process. Ask the maker responsible for agent deployment if you need
+>    access or instructions. Connect Workday does not perform promotion.
+> 2. Only after promotion is complete, return to Connect Workday and say that
+>    the agent was promoted to Production.
 
-Only for Production, tell the maker:
+Only for Production, the optional later guidance is:
 
-> Workday setup is complete in Production, and the maker Test pane scenario
-> passed.
->
-> **Next steps:**
+> **Optional later - not part of this completed connection**
 >
 > 1. Publish and deploy the Production agent when ready.
-> 2. Have each non-maker employee establish their own Workday connections in
->    Microsoft 365 Chat.
-> 3. Validate an enabled Workday scenario with the published Production agent.
+> 2. After deployment, have each non-maker employee establish their own Workday connections
+>    in Microsoft 365 Chat.
+> 3. After deployment, validate an enabled Workday scenario with the published
+>    Production agent.
 
 Do not wait for those results, record them as lifecycle evidence, or keep the
 Workday skill open. They are deployment and adoption validation outside this
 guided setup lifecycle.
+
+Render the manual promotion destination as the known source-agent Copilot
+Studio link, not an unlinked portal name. If the maker asks to promote, follow
+the promotion decision in `SKILL.md`; do not assume it has already happened or
+claim Connect performed the promotion.

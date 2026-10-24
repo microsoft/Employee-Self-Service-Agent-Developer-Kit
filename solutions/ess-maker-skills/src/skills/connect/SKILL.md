@@ -1,71 +1,32 @@
-# Connect Script
+# Connect integrations
+
+This is a provider-neutral router, not an integration setup procedure.
+Provider names, availability, aliases, entry points, state rules, prerequisites,
+and lifecycle instructions belong in each provider's own directory.
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
-Do not rephrase, add commentary, or tell the user what tools you are calling
-or what files you are reading.
-
----
-
-## Availability
-
-For ServiceNow guided setup or repair (including SNOW and follow-ups), show the Message and
-STOP before provider state, credentials, telemetry, MCP, or retained steps.
-This includes preselection and saved-state resume.
-
-**Message:**
-
-Guided ServiceNow setup is not yet available in ADK. You can configure the ServiceNow connection manually in Copilot Studio or contact admin.
-
-**End message.**
-
----
+Do not narrate tools, files, or internal routing.
 
 ## Start
 
-If the user specified an integration as an argument (e.g., "workday"),
-pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
-"which system" question and go directly to routing for that integration.
+If the user or calling prompt already selected an integration, pass that
+selection to `step1.md` as `PRE_SELECTED_INTEGRATION`. An unambiguous selection
+from the current conversation also counts; do not ask the same question again.
+Preserve the original request and target intent through routing and any
+required foundation setup. Provider-specific follow-ups belong to that
+provider's entry point.
 
-Treat an explicit promotion statement such as **I promoted the agent to
-Test**, **the Workday agent moved to Production**, or **configure the promoted
-Workday realm** as Workday already selected. Preserve the stated target realm
-when routing to the native DA Workday lifecycle. Do not ask which integration
-the user means, and do not invent a realm-specific slash command.
+Read `src/skills/connect/step1.md` and follow it.
 
-Read `src/skills/connect/step1.md` and follow it. That file records anonymous
-usage telemetry after routing knows which integration was chosen, so the
-Connect capability event carries the correct `connector` attribution
-(workday vs servicenow) rather than being a generic "connect" wedge.
+## Boundaries
 
-(Step 1 asks which integration, detects existing state, and dispatches —
-Workday first by agent architecture, then
-DA to its package/Entra/tenant checklist or CEA to either the lightweight
-already-installed lifecycle or the existing unsupported-install boundary.)
-
----
-
-## Routing
-
-Workday routes by architecture before package detection:
-
-- **Workday**:
-  - **CEA simplified extension already installed** — use
-    `src/skills/connect/workday/SKILL.md`, driven by the generic
-    `src/skills/connect/shared/lifecycle-runner.md` and
-    `src/skills/connect/workday/contract.json`.
-  - **CEA full/legacy package or no package** — stop at the current unsupported
-    installation boundary without changing state.
-  - **Native DA HR agent** — use `src/skills/setup/workday-da/SKILL.md` for the
-    resumable six-phase controller lifecycle.
-  - **Classic DA HR, DA IT, or another DA agent** — unsupported for this
-    Workday lifecycle; stop before creating state.
-
-  CEA per-agent lifecycle state is stored at
-  `.local/connect/workday/agents/{agent-slug}/lifecycle.json`. DA Workday state
-  is stored only in `.local/connect/workday-da/config.json`.
-
-Each integration retains only the state artifacts listed above. ServiceNow
-uses its `steps.md` and `config.json`; CEA Workday uses per-agent
-`lifecycle.json`; native DA Workday uses only its `config.json`. Running
-`/connect` again lets the user add a different integration without losing
-existing ones.
+- Discover providers from their `integration.json` registrations, not from a
+  hard-coded provider list or the existence of retained step files.
+- Apply the selected provider's availability before provider state,
+  credentials, telemetry, MCP, or lifecycle actions. This applies equally to
+  preselection, repair requests, follow-ups, and saved-state resume.
+- Do not inspect, reset, copy, or migrate provider state here. Let the selected
+  provider own readiness and resume decisions.
+- There is no shared connection checklist or generic Fresh Start operation.
+- New integrations belong in their own child directories with their own
+  registrations and entry points.

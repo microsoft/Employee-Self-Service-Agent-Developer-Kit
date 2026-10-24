@@ -7,13 +7,23 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 from typing import Any, Callable, Mapping
 
+import requests
+
+from agentbuilder import (
+    AgentBuilderError,
+    ConnectivityClient,
+    authenticate as authenticate_connections,
+    connectivity_read_scopes,
+)
 from auth import authenticate, query_all, update_record
 from install_workday_da_extension import (
+    PacCliError,
     ensure_pac_auth,
     resolve_pac_executable,
 )
@@ -161,8 +171,26 @@ def _list_connections(
             "PAC did not finish listing environment connections within 2 minutes."
         ) from exc
     if result.returncode != 0:
+        output = f"{result.stdout or ''}\n{result.stderr or ''}"
+        if any(
+            marker in output.casefold()
+            for marker in (
+                "not a valid command",
+                "unknown command",
+                "unrecognized command",
+                "unknown argument",
+                "unrecognized argument",
+                "unneeded argument",
+                "not recognized as",
+            )
+        ):
+            raise WorkdayConnectRuntimeError(
+                _pac_upgrade_guidance(pac_executable, output)
+            )
         raise WorkdayConnectRuntimeError(
-            "PAC could not list the target environment's connections."
+            "PAC could not list the target environment's connections. "
+            "Check the selected maker's access and PAC sign-in, then retry "
+            "/connect workday."
         )
     try:
         payload = json.loads(result.stdout or "")
@@ -170,12 +198,80 @@ def _list_connections(
         raise WorkdayConnectRuntimeError(
             "PAC returned invalid connection inventory JSON."
         ) from exc
-    values = payload.get("value")
-    if not isinstance(values, list):
+    values = payload.get("value") if isinstance(payload, dict) else None
+    if not isinstance(values, list) or not all(
+        isinstance(value, dict) for value in values
+    ):
         raise WorkdayConnectRuntimeError(
-            "PAC connection inventory did not contain a value array."
+            "PAC connection inventory did not contain a valid value array."
         )
-    return [value for value in values if isinstance(value, dict)]
+    return values
+
+
+def _pac_upgrade_guidance(
+    pac_executable: Path,
+    output: str,
+    *,
+    command: str = "connectivity list-connections",
+    options: str = "--json",
+) -> str:
+    version = re.search(r"Version:\s*([\w.+-]+)", output, re.IGNORECASE)
+    version_label = f" (version {version.group(1)})" if version else ""
+    executable = _powershell_literal(pac_executable)
+    location = str(pac_executable).replace("\\", "/").casefold()
+    if "/.dotnet/tools/" in location:
+        upgrade = (
+            "Run 'dotnet tool update --global Microsoft.PowerApps.CLI.Tool', "
+            "then reopen the terminal."
+        )
+    elif "/.vscode/extensions/" in location:
+        upgrade = (
+            "Update the Microsoft Power Platform Tools extension in VS Code, "
+            "then restart VS Code."
+        )
+    else:
+        upgrade = (
+            "Update this exact PAC installation using its original installer "
+            "or provisioning tool. For a Windows MSI installation, run "
+            "'pac install latest' in its terminal; for a managed/custom copy, "
+            f"update the PAC files in {_powershell_literal(pac_executable.parent)} "
+            "using that copy's provisioning tool. Installation instructions: "
+            "https://learn.microsoft.com/power-platform/developer/cli/introduction."
+        )
+    return (
+        f"PAC at {executable}{version_label} does not support "
+        f"'{command} {options}'. "
+        f"{upgrade} The kit prefers the managed "
+        "'%LOCALAPPDATA%\\InternalTools\\pac\\pac.exe' when present; "
+        "updating a different PAC on PATH will not update that copy. "
+        f"Verify support with: & {executable} {command} help. "
+        "Then rerun /connect workday."
+        + (
+            " Do not use 'pac connection list' as a substitute: it does not "
+            "provide the required maker-connection inventory."
+            if command == "connectivity list-connections"
+            else ""
+        )
+    )
+
+
+def _api_connections(context: Mapping[str, Any]) -> list[dict[str, Any]]:
+    environment_id = _required_text(context, "environmentId", "Environment ID")
+    tenant_id = _required_text(context, "tenantId", "Microsoft Entra tenant ID")
+    ring = str(context["ring"])
+    token = authenticate_connections(
+        tenant_id,
+        ring,
+        account_hint=context["maker"],
+        scopes=connectivity_read_scopes(ring),
+    )
+    identity = require_identity(token, preferred_username=context["maker"])
+    if identity["tenantId"].casefold() != tenant_id.casefold():
+        raise WorkdayConnectIdentityError(
+            "Power Platform connection discovery authenticated to a different "
+            "Microsoft Entra tenant from the selected Workday target."
+        )
+    return ConnectivityClient(token, ring=ring).list_connections(environment_id)
 
 
 def _single_rows(
@@ -400,6 +496,10 @@ def _runtime_discovery_context(
             "no reviewed flow catalog is available."
         )
     ring = str(scope.get("ring") or "prod").casefold()
+    if ring not in {"prod", "preprod", "test"}:
+        raise WorkdayConnectRuntimeError(
+            f"Unsupported Power Platform ring: {ring!r}."
+        )
     return {
         "realm": realm,
         "realmDisplayName": REALM_DISPLAY_NAMES[realm],
@@ -420,6 +520,7 @@ def _runtime_discovery_context(
             "username",
             "Power Platform maker account",
         ),
+        "ring": ring,
         "pacRing": "preprod" if ring in {"test", "preprod"} else "prod",
         "package": package,
         "flowNames": [str(name) for name in flow_names],
@@ -651,19 +752,55 @@ def _discover_physical_connections(
     pac_auth: Callable[..., Any],
     runner: Callable[..., subprocess.CompletedProcess],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    pac = pac_resolver()
-    pac_auth(
-        pac,
-        ring=context["pacRing"],
-        environment_url=context["environmentUrl"],
-        preferred_username=context["maker"],
-        runner=runner,
-    )
-    connections = _list_connections(
-        pac,
-        context["environmentUrl"],
-        runner=runner,
-    )
+    try:
+        connections = _api_connections(context)
+    except WorkdayConnectIdentityError as exc:
+        raise WorkdayConnectRuntimeError(str(exc)) from exc
+    except (
+        AgentBuilderError,
+        requests.RequestException,
+        OSError,
+        ValueError,
+        WorkdayConnectRuntimeError,
+    ) as exc:
+        api_error = str(exc)
+        print(
+            f"[WARNING] Power Platform connection API discovery failed: "
+            f"{api_error} Falling back to PAC for the same environment "
+            "and maker account.",
+            file=sys.stderr,
+        )
+        try:
+            pac = pac_resolver()
+            pac_auth(
+                pac,
+                ring=context["pacRing"],
+                environment_url=context["environmentUrl"],
+                preferred_username=context["maker"],
+                runner=runner,
+            )
+            connections = _list_connections(
+                pac,
+                context["environmentUrl"],
+                runner=runner,
+            )
+        except (
+            PacCliError,
+            WorkdayConnectRuntimeError,
+            OSError,
+            subprocess.TimeoutExpired,
+        ) as pac_exc:
+            pac_error = (
+                "PAC authentication timed out. Complete sign-in with the "
+                "selected maker account, then retry /connect workday."
+                if isinstance(pac_exc, subprocess.TimeoutExpired)
+                else str(pac_exc)
+            )
+            raise WorkdayConnectRuntimeError(
+                f"Power Platform connection API discovery failed: {api_error} "
+                f"PAC fallback failed: {pac_error}",
+                details={"apiDiscoveryError": api_error},
+            ) from pac_exc
     references_catalog = context["referencesCatalog"]
     dataverse = _select_connection(
         connections,

@@ -26,14 +26,16 @@ WORKSHEET_HEADERS = (
     "Your tenant values",
 )
 WORKSHEET_SHEET_NAME = "Worksheet"
+DETAILED_WORKSHEET_SHEET_NAME = "Worksheet - Detailed"
 STEPS_SHEET_NAME = "Steps"
+_ANSWERS_SHEET_NAME = "Answers"
 _SOLUTION_ROOT = Path(__file__).resolve().parents[1]
 WORKBOOK_ASSET_DIRECTORY = (
     _SOLUTION_ROOT
     / "src"
     / "skills"
-    / "setup"
-    / "workday-da"
+    / "connect"
+    / "workday"
     / "assets"
 )
 ENTRA_ADMIN_WORKBOOK_PATH = (
@@ -55,6 +57,13 @@ _MAX_EXPANDED_BYTES = 25 * 1024 * 1024
 _MAX_ZIP_ENTRIES = 100
 _MAX_WORKSHEET_ROWS = 200
 _CELL_REF_RE = re.compile(r"^([A-Z]+)([1-9][0-9]*)$")
+_OLE_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_ENCRYPTED_WORKBOOK_MESSAGE = (
+    "Administrator workbook is encrypted or protected and cannot be read. "
+    "Ask the administrator for an organization-approved readable .xlsx copy, "
+    "or ask the information protection administrator for an approved handoff "
+    "method. Do not share a password or bypass required protections."
+)
 
 
 class WorkdayConnectWorkbookError(RuntimeError):
@@ -93,6 +102,7 @@ def _sheet_xml(
     *,
     column_widths: Sequence[float],
     freeze_header: bool,
+    answer_validations: Sequence[tuple[int, str]] = (),
 ) -> str:
     columns = "".join(
         (
@@ -127,6 +137,25 @@ def _sheet_xml(
         if freeze_header and rows
         else ""
     )
+    validations = "".join(
+        (
+            '<dataValidation type="list" allowBlank="1" '
+            'showInputMessage="1" showErrorMessage="1" errorStyle="stop" '
+            'errorTitle="Choose a listed answer" '
+            'error="Select only after verifying the setting. Leave blank '
+            'if the administrator task is incomplete." '
+            'promptTitle="Administrator confirmation" '
+            'prompt="Choose a listed answer only after verifying the setting. '
+            'No answer is selected for you." '
+            f'sqref="E{row}"><formula1>{name}</formula1></dataValidation>'
+        )
+        for row, name in answer_validations
+    )
+    if validations:
+        validations = (
+            f'<dataValidations count="{len(answer_validations)}">'
+            f"{validations}</dataValidations>"
+        )
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<worksheet xmlns="{_MAIN_NS}">'
@@ -136,6 +165,7 @@ def _sheet_xml(
         f"<cols>{columns}</cols>"
         f"<sheetData>{''.join(row_documents)}</sheetData>"
         f"{auto_filter}"
+        f"{validations}"
         '<pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" '
         'header="0.2" footer="0.2"/>'
         "</worksheet>"
@@ -159,7 +189,7 @@ def write_administrator_workbook(
     capture_instructions: Iterable[Mapping[str, Any]],
     answers: Mapping[str, str] | None = None,
 ) -> Path:
-    """Write a deterministic two-sheet administrator workbook."""
+    """Write a deterministic workbook with blank answers and optional dropdowns."""
     normalized_answers = {
         str(label): str(value)
         for label, value in (answers or {}).items()
@@ -170,6 +200,9 @@ def write_administrator_workbook(
             "Administrator workbook actions must be non-empty."
         )
     normalized_instructions = []
+    answer_rows = [("Accepted answers - select only after verifying the setting",)]
+    answer_validations: list[tuple[int, str]] = []
+    defined_names = []
     for instruction in capture_instructions:
         if not isinstance(instruction, Mapping):
             raise WorkdayConnectWorkbookError(
@@ -191,6 +224,26 @@ def write_administrator_workbook(
         normalized_instructions.append(
             (*row, normalized_answers.pop(row[0], ""))
         )
+        choices = instruction.get("successfulAnswers")
+        if choices is not None:
+            if (
+                not isinstance(choices, list)
+                or not choices
+                or any(not isinstance(choice, str) or not choice.strip() for choice in choices)
+                or len(set(choices)) != len(choices)
+            ):
+                raise WorkdayConnectWorkbookError(
+                    "Administrator workbook choices must be distinct non-empty strings."
+                )
+            name = f"WorkdayAnswer{len(answer_validations) + 1}"
+            start = len(answer_rows) + 1
+            answer_rows.extend((choice,) for choice in choices)
+            defined_names.append(
+                f'<definedName name="{name}">'
+                f"'{_ANSWERS_SHEET_NAME}'!$A${start}:$A${len(answer_rows)}"
+                "</definedName>"
+            )
+            answer_validations.append((len(normalized_instructions) + 1, name))
     if not normalized_instructions:
         raise WorkdayConnectWorkbookError(
             "Administrator workbook requires capture instructions."
@@ -207,7 +260,9 @@ def write_administrator_workbook(
             (
                 f"{title}. This workbook is for the {administrator_role}. "
                 "Complete the applicable actions, fill every row on the "
-                "Worksheet sheet, and return this same .xlsx file to the maker."
+                "Worksheet sheet, and return this same .xlsx file to the maker. "
+                "Use the answer dropdowns where available; select only after "
+                "verifying the setting. Leave incomplete confirmations blank."
             ),
         ),
         (
@@ -218,6 +273,16 @@ def write_administrator_workbook(
                 "membership lists."
             ),
         ),
+        (
+            "Readable file",
+            (
+                "Return an organization-approved readable .xlsx copy. "
+                "Password encryption or sensitivity-policy protection may "
+                "prevent validation. If protection is required, ask your "
+                "information protection administrator for an approved handoff "
+                "method. Do not share passwords or bypass required protections."
+            ),
+        ),
         *[
             (str(index), action)
             for index, action in enumerate(normalized_actions, start=1)
@@ -225,13 +290,25 @@ def write_administrator_workbook(
     ]
     worksheet_rows = [WORKSHEET_HEADERS, *normalized_instructions]
 
+    answers_sheet = (
+        f'<sheet name="{_ANSWERS_SHEET_NAME}" sheetId="3" r:id="rId4" state="hidden"/>'
+        if answer_validations
+        else ""
+    )
+    names_xml = (
+        f"<definedNames>{''.join(defined_names)}</definedNames>"
+        if defined_names
+        else ""
+    )
     workbook_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<workbook xmlns="{_MAIN_NS}" xmlns:r="{_DOC_REL_NS}">'
         "<sheets>"
         f'<sheet name="{STEPS_SHEET_NAME}" sheetId="1" r:id="rId1"/>'
         f'<sheet name="{WORKSHEET_SHEET_NAME}" sheetId="2" r:id="rId2"/>'
+        f"{answers_sheet}"
         "</sheets>"
+        f"{names_xml}"
         '<calcPr calcId="0" fullCalcOnLoad="1"/>'
         "</workbook>"
     )
@@ -267,6 +344,12 @@ def write_administrator_workbook(
         'builtinId="0"/></cellStyles>'
         "</styleSheet>"
     )
+    answers_content_type = (
+        '<Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/'
+        'vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        if answer_validations
+        else ""
+    )
     content_types = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/'
@@ -281,6 +364,7 @@ def write_administrator_workbook(
         'vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
         '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/'
         'vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        f"{answers_content_type}"
         "</Types>"
     )
     root_relationships = (
@@ -289,6 +373,13 @@ def write_administrator_workbook(
         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
         'officeDocument/2006/relationships/officeDocument" '
         'Target="xl/workbook.xml"/></Relationships>'
+    )
+    answers_relationship = (
+        '<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/'
+        'officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet3.xml"/>'
+        if answer_validations
+        else ""
     )
     workbook_relationships = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -301,6 +392,7 @@ def write_administrator_workbook(
         'Target="worksheets/sheet2.xml"/>'
         '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/'
         'officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        f"{answers_relationship}"
         "</Relationships>"
     )
 
@@ -341,8 +433,19 @@ def write_administrator_workbook(
                     worksheet_rows,
                     column_widths=(32, 52, 65, 42, 52),
                     freeze_header=True,
+                    answer_validations=answer_validations,
                 ),
             )
+            if answer_validations:
+                _zip_write(
+                    archive,
+                    "xl/worksheets/sheet3.xml",
+                    _sheet_xml(
+                        answer_rows,
+                        column_widths=(110,),
+                        freeze_header=False,
+                    ),
+                )
         os.replace(temporary_path, path)
     except OSError as exc:
         raise WorkdayConnectWorkbookError(
@@ -375,6 +478,20 @@ def _validated_archive(path: Path) -> ZipFile:
             "Administrator workbook exceeds the 10 MB size limit."
         )
     try:
+        with path.open("rb") as stream:
+            signature = stream.read(len(_OLE_SIGNATURE))
+            if signature == _OLE_SIGNATURE:
+                content = stream.read(_MAX_FILE_BYTES)
+                if any(
+                    name.encode("utf-16le") in content
+                    for name in ("EncryptedPackage", "EncryptionInfo")
+                ):
+                    raise WorkdayConnectWorkbookError(_ENCRYPTED_WORKBOOK_MESSAGE)
+                raise WorkdayConnectWorkbookError(
+                    "Administrator workbook uses the legacy Excel format, not "
+                    ".xlsx. Ask the administrator to save an organization-approved "
+                    ".xlsx copy and upload it again."
+                )
         archive = ZipFile(path, mode="r")
     except (OSError, BadZipFile) as exc:
         raise WorkdayConnectWorkbookError(
@@ -389,6 +506,9 @@ def _validated_archive(path: Path) -> ZipFile:
     expanded_size = 0
     member_names: set[str] = set()
     for entry in entries:
+        if entry.flag_bits & 1:
+            archive.close()
+            raise WorkdayConnectWorkbookError(_ENCRYPTED_WORKBOOK_MESSAGE)
         member = PurePosixPath(entry.filename)
         if member.is_absolute() or ".." in member.parts:
             archive.close()
@@ -448,11 +568,21 @@ def _worksheet_member(archive: ZipFile, sheet_name: str) -> str:
             f"{{{_PACKAGE_REL_NS}}}Relationship"
         )
     }
-    for sheet in workbook.findall(
-        f".//{{{_MAIN_NS}}}sheet"
-    ):
-        if sheet.get("name") != sheet_name:
-            continue
+    accepted_names = {sheet_name}
+    if sheet_name == WORKSHEET_SHEET_NAME:
+        accepted_names.add(DETAILED_WORKSHEET_SHEET_NAME)
+    matches = [
+        sheet
+        for sheet in workbook.findall(f".//{{{_MAIN_NS}}}sheet")
+        if sheet.get("name") in accepted_names
+    ]
+    if len(matches) > 1:
+        raise WorkdayConnectWorkbookError(
+            "Administrator workbook contains multiple answer sheets. "
+            "Return one completed Worksheet or Worksheet - Detailed sheet, "
+            "not both."
+        )
+    for sheet in matches:
         relationship_id = sheet.get(f"{{{_DOC_REL_NS}}}id")
         target = relationship_targets.get(relationship_id)
         if not target:
@@ -506,7 +636,7 @@ def _column_index(reference: str) -> int:
 
 
 def read_administrator_workbook(path: Path) -> str:
-    """Return the completed Worksheet sheet as labeled worksheet text."""
+    """Read a detailed or previously issued Worksheet as labeled evidence."""
     if path.suffix.casefold() != ".xlsx":
         raise WorkdayConnectWorkbookError(
             "Administrator workbook must use the .xlsx file extension."

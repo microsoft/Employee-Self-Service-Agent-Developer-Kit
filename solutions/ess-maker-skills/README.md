@@ -234,18 +234,32 @@ This toolkit does NOT:
 - Provide hosted runtime, SLAs, or ongoing operations for the agents you build
 - Manage cross-tenant or cross-environment promotion (no built-in CI/CD for Copilot Studio)
 - Ship a production-ready packaged agent — you are authoring components in your own tenant
-- Deploy local DA-GA changes, install product extensions, or configure their connectors
+- Provision arbitrary product extensions or create connector credentials on the maker's behalf
 - Provide official Microsoft support beyond what is described in [SUPPORT.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SUPPORT.md)
 
 ---
 
 ## Integrations
 
-> **DA-GA boundary:** ServiceNow, Workday, and other integrations are delivered
-> through separate product extensions. The current release does not install
-> those extensions, configure their connections, or enter the retired CEA or
-> DA-Preview setup flows. The detailed material below is reference-only until
-> DA-GA product-extension guidance is available.
+The top-level `connect/SKILL.md` and `connect/step1.md` are provider-neutral
+selection and dispatch guidance. Each provider owns its `integration.json`
+registration, availability, entry point, state rules, and lifecycle documents.
+Only available integrations appear in the menu; provider preselection skips
+the menu without bypassing availability or agent validation.
+
+> **DA Workday Connect:** `/connect-workday` guides the selected native ESS HR
+> agent through preflight, administrator handoffs, connections, runtime
+> configuration, and maker validation. Supported package and runtime changes
+> require explicit approval; administrators and makers complete the indicated
+> portal and authentication steps. Guidance, guarded actions, and the detailed
+> administrator workbooks live under
+> [`src/skills/connect/workday/`](src/skills/connect/workday/SKILL.md).
+> Foundation agent installation remains separate. This branch is DA-only;
+> CEA Workday Connect is maintained on `main-ca`.
+>
+> The detailed integration material below is historical reference, not the
+> active DA installation or connection procedure. Guided ServiceNow setup
+> remains unavailable.
 
 The reference sections below describe how these integrations were configured in
 earlier Dataverse-based releases. They are not executable setup paths in the
@@ -280,6 +294,16 @@ Connect your agent to Workday for employee data, compensation, time off, and org
 
 For Declarative Agents, this release supports the **ESS HR Agent**. Workday
 integration with the ESS IT Agent is not supported in this release.
+
+**Automatic prerequisite handoff:** You can ask to connect Workday directly.
+If the required agent workspace preparation is missing, the kit starts Setup
+and continues the original Workday request once that preparation is verified,
+without asking you to type `/setup` or repeat Connect. An already-prepared
+workspace skips this handoff; overall runtime readiness is not required first,
+because Workday connections may be needed to resolve it. Setup is invoked only
+at entry, not between Workday phases or after completion. After all six phases
+and the maker Test pane validation pass, Connect finishes for that realm;
+promotion and deployment guidance is optional work for later.
 
 **Two supported install paths** — the kit detects which one applies and routes automatically:
 
@@ -319,11 +343,17 @@ end-to-end Workday scenario. Settings without a reliable DA-scoped API require
 explicit maker or administrator confirmation rather than being reported as
 automatically verified.
 
-At the beginning of the experience, the skill presents the complete setup plan
+On the first Development run, the skill presents the complete setup plan
 and identifies when an Entra administrator, Workday administrator, Power
 Platform/Dataverse administrator, InfoSec administrator, or Workday test user
 is required. This lets the maker arrange the required participants before the
 setup reaches a permission-dependent step.
+
+Later invocations resolve the realm and saved progress before showing a plan.
+An already-complete connection is acknowledged without replaying the opening
+tables. A verified Test or Production target gets a concise plan containing
+only that realm's unfinished work; healthy reused tenant configuration does
+not require another administrator handoff or the full Development roadmap.
 
 **What you can build after connecting:**
 - Look up employee information, compensation, service anniversary, cost center

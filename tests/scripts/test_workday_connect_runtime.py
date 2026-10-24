@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import base64
 import json
 import sys
 
 import pytest
+import requests
+import responses
 
 
 SCRIPTS = (
@@ -15,11 +18,17 @@ sys.path.insert(0, str(SCRIPTS))
 
 import workday_connect_runtime as runtime  # noqa: E402
 from workday_connect_model import default_state  # noqa: E402
+from tests.conftest import require_validated_mock  # noqa: E402
+from tests.mocks import agentbuilder_connectivity as native  # noqa: E402
+
+
+require_validated_mock(native)
 
 
 BOT_ID = "11111111-1111-1111-1111-111111111111"
 WORKDAY_CONNECTION = "22222222-2222-2222-2222-222222222222"
 DATAVERSE_CONNECTION = "33333333-3333-3333-3333-333333333333"
+TENANT_ID = "00000000-0000-0000-0000-000000004444"
 
 
 def _state():
@@ -61,6 +70,276 @@ def _connections():
             },
         ]
     }
+
+
+def _api_state(ring="test"):
+    state = _state()
+    state["scope"].update(
+        {
+            "environmentId": native.MOCK_ENV_ID,
+            "entraTenantId": TENANT_ID,
+            "ring": ring,
+        }
+    )
+    return state
+
+
+def _api_token(username="maker@contoso.com", tenant_id=TENANT_ID):
+    claims = {"preferred_username": username, "tid": tenant_id}
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode()
+    return f"header.{payload.rstrip('=')}.signature"
+
+
+def _no_pac():
+    pytest.fail("PAC must not be used after a successful API response or identity mismatch")
+
+
+@pytest.mark.parametrize(
+    ("ring", "host"),
+    [
+        ("prod", "https://api.powerplatform.com"),
+        ("preprod", "https://api.preprod.powerplatform.com"),
+        ("test", "https://api.test.powerplatform.com"),
+    ],
+)
+@responses.activate
+def test_connection_api_is_primary_and_uses_selected_ring_tenant_and_maker(
+    monkeypatch, ring, host,
+):
+    calls = []
+
+    def authenticate(tenant_id, service_ring, **kwargs):
+        calls.append((tenant_id, service_ring, kwargs))
+        return _api_token()
+
+    monkeypatch.setattr(runtime, "authenticate_connections", authenticate)
+    response = native.list_connections(items=_connections()["value"])
+    response["url"] = response["url"].replace(native.MOCK_CONNECTIVITY_BASE, host)
+    responses.add(**response)
+
+    evidence = runtime.verify_physical_connections(
+        _api_state(ring), pac_resolver=_no_pac,
+    )
+
+    assert evidence["connectionIds"] == {
+        "workday": WORKDAY_CONNECTION,
+        "dataverse": DATAVERSE_CONNECTION,
+    }
+    assert calls == [
+        (
+            TENANT_ID,
+            ring,
+            {
+                "account_hint": "maker@contoso.com",
+                "scopes": (f"{host}/Connectivity.Connections.Read",),
+            },
+        )
+    ]
+    assert all(call.request.method == "GET" for call in responses.calls)
+
+
+@pytest.mark.parametrize("failure", ["denied", "service", "malformed", "timeout", "auth"])
+@responses.activate
+def test_connection_api_failure_falls_back_to_pac_for_same_target(
+    monkeypatch, capsys, failure,
+):
+    def authenticate(*_args, **_kwargs):
+        if failure == "auth":
+            raise runtime.AgentBuilderError("Consent is required.")
+        return _api_token()
+
+    monkeypatch.setattr(runtime, "authenticate_connections", authenticate)
+    response = native.list_connections()
+    if failure == "timeout":
+        response.pop("json")
+        response["body"] = requests.Timeout("Connection inventory timed out.")
+    elif failure == "malformed":
+        response["json"] = {"unexpected": []}
+    elif failure != "auth":
+        response["status"] = 403 if failure == "denied" else 500
+    responses.add(**response)
+    auth_calls = []
+    commands = []
+
+    def runner(command, **kwargs):
+        commands.append(command)
+        return _pac_runner(command, **kwargs)
+
+    evidence = runtime.verify_physical_connections(
+        _api_state(),
+        pac_resolver=lambda: Path("pac.exe"),
+        pac_auth=lambda pac, **kwargs: auth_calls.append((pac, kwargs)),
+        runner=runner,
+    )
+
+    assert evidence["connectionIds"]["workday"] == WORKDAY_CONNECTION
+    assert auth_calls == [
+        (
+            Path("pac.exe"),
+            {
+                "ring": "preprod",
+                "environment_url": "https://org.crm.dynamics.com",
+                "preferred_username": "maker@contoso.com",
+                "runner": runner,
+            },
+        )
+    ]
+    assert commands == [
+        [
+            "pac.exe", "connectivity", "list-connections", "--environment",
+            "https://org.crm.dynamics.com", "--json",
+        ]
+    ]
+    warning = capsys.readouterr().err
+    assert "[WARNING] Power Platform connection API discovery failed:" in warning
+    assert "Falling back to PAC for the same environment and maker account." in warning
+
+
+@pytest.mark.parametrize(
+    ("token", "message"),
+    [
+        (_api_token(username="other@contoso.com"), "different account"),
+        (
+            _api_token(tenant_id="00000000-0000-0000-0000-000000005555"),
+            "different Microsoft Entra tenant",
+        ),
+        ("unreadable-token", "readable identity claims"),
+    ],
+)
+def test_connection_api_identity_failure_does_not_fall_back(
+    monkeypatch, token, message,
+):
+    monkeypatch.setattr(
+        runtime, "authenticate_connections", lambda *_args, **_kwargs: token,
+    )
+    with pytest.raises(runtime.WorkdayConnectRuntimeError, match=message):
+        runtime.verify_physical_connections(_api_state(), pac_resolver=_no_pac)
+
+
+@pytest.mark.parametrize("inventory", ["empty", "disconnected", "ambiguous"])
+@responses.activate
+def test_valid_api_inventory_with_unresolved_connections_does_not_use_pac(
+    monkeypatch, inventory,
+):
+    monkeypatch.setattr(
+        runtime, "authenticate_connections", lambda *_args, **_kwargs: _api_token(),
+    )
+    connections = _connections()["value"]
+    if inventory == "empty":
+        connections = []
+    elif inventory == "disconnected":
+        connections[1]["properties"]["statuses"] = [{"status": "Error"}]
+    else:
+        duplicate = native.connection(
+            connection_id="alternate-dataverse",
+            connector="shared_commondataserviceforapps",
+        )
+        connections.append(duplicate)
+    responses.add(**native.list_connections(items=connections))
+
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime.verify_physical_connections(_api_state(), pac_resolver=_no_pac)
+
+    assert raised.value.details["connector"] == "shared_commondataserviceforapps"
+
+
+@responses.activate
+def test_api_inventory_reuses_recorded_connection_ids(monkeypatch):
+    monkeypatch.setattr(
+        runtime, "authenticate_connections", lambda *_args, **_kwargs: _api_token(),
+    )
+    state = _api_state()
+    state["phases"]["connections"]["evidence"] = [
+        {
+            "action": "physical-connections-verified",
+            "outcome": "verified",
+            "connectionIds": {
+                "workday": WORKDAY_CONNECTION,
+                "dataverse": DATAVERSE_CONNECTION,
+            },
+        }
+    ]
+    connections = _connections()["value"]
+    connections.append(
+        native.connection(connection_id="other-workday", connector="shared_workdaysoap")
+    )
+    responses.add(**native.list_connections(items=connections))
+
+    evidence = runtime.verify_physical_connections(state, pac_resolver=_no_pac)
+
+    assert evidence["connectionIds"]["workday"] == WORKDAY_CONNECTION
+
+
+@pytest.mark.parametrize(
+    ("path", "guidance"),
+    [
+        (
+            r"C:\Users\maker\.dotnet\tools\pac.exe",
+            "dotnet tool update --global Microsoft.PowerApps.CLI.Tool",
+        ),
+        (
+            r"C:\Users\maker\.vscode\extensions\microsoft.powerplatform\pac.exe",
+            "Update the Microsoft Power Platform Tools extension",
+        ),
+        (
+            r"C:\Users\maker\AppData\Local\InternalTools\pac\pac.exe",
+            "Update this exact PAC installation",
+        ),
+    ],
+)
+def test_unsupported_pac_fallback_reports_exact_installation_and_upgrade(
+    monkeypatch, path, guidance,
+):
+    def failed_api(*_args, **_kwargs):
+        raise runtime.AgentBuilderError("Connection listing failed with HTTP 403")
+
+    monkeypatch.setattr(runtime, "authenticate_connections", failed_api)
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime.verify_physical_connections(
+            _api_state(),
+            pac_resolver=lambda: Path(path),
+            pac_auth=lambda *_args, **_kwargs: None,
+            runner=lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=1,
+                stdout="Microsoft PowerPlatform CLI\nVersion: 1.44.0\n",
+                stderr="Error: Not a valid command. Try running 'pac [command] help'.",
+            ),
+        )
+
+    message = str(raised.value)
+    assert "HTTP 403" in message
+    assert "PAC fallback failed:" in message
+    assert path in message
+    assert "version 1.44.0" in message
+    assert guidance in message
+    assert "connectivity list-connections help" in message
+    assert "updating a different PAC on PATH will not update that copy" in message
+    assert "Do not use 'pac connection list' as a substitute" in message
+
+
+def test_pac_permission_error_is_not_reported_as_version_problem():
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime._list_connections(
+            Path("pac.exe"),
+            "https://org.crm.dynamics.com",
+            runner=lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=1, stdout="", stderr="Access denied.",
+            ),
+        )
+    assert "Check the selected maker's access and PAC sign-in" in str(raised.value)
+    assert "Update" not in str(raised.value)
+
+
+@pytest.mark.parametrize("payload", [[], {"value": [None]}, {"value": {}}])
+def test_pac_rejects_malformed_inventory_instead_of_dropping_rows(payload):
+    with pytest.raises(runtime.WorkdayConnectRuntimeError, match="valid value array"):
+        runtime._list_connections(
+            Path("pac.exe"),
+            "https://org.crm.dynamics.com",
+            runner=lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=0, stdout=json.dumps(payload), stderr="",
+            ),
+        )
 
 
 def _pac_runner(command, **_kwargs):
@@ -203,20 +482,26 @@ def _authorization_preview_runner(command, **_kwargs):
     return SimpleNamespace(returncode=0, stdout="\n".join(output), stderr="")
 
 
+@responses.activate
 def test_runtime_plan_uses_one_dataverse_token_and_exact_targets(monkeypatch):
     records = _records()
     token_calls = []
     monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh")
+    monkeypatch.setattr(
+        runtime, "authenticate_connections", lambda *_args, **_kwargs: _api_token(),
+    )
+    responses.add(**native.list_connections(items=_connections()["value"]))
 
     result = runtime.run_runtime_operation(
-        _state(),
+        _api_state(),
         apply=False,
         token_provider=lambda url, preferred_username: (
             token_calls.append((url, preferred_username)) or "token"
         ),
         identity_provider=_identity,
         authorization_runner=_authorization_preview_runner,
-        **_discovery_dependencies(records),
+        query=_query_for(records),
+        pac_resolver=_no_pac,
     )
 
     assert token_calls == [("https://org.crm.dynamics.com", "maker@contoso.com")]

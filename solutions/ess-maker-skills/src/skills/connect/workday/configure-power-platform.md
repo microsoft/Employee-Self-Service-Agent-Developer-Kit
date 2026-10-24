@@ -87,6 +87,21 @@ Platform connections, then discover them:
 python scripts/workday_connect.py record-connections
 ```
 
+Discovery first uses the read-only Power Platform connection API for the
+selected environment, service ring, tenant, and maker account. If that API is
+unavailable, the controller reports the reason and tries PAC with the same
+environment and maker account. Account or tenant mismatches remain blocking;
+do not bypass them with another identity.
+
+If the PAC fallback reports an unsupported command, show its exact executable
+path and the returned upgrade guidance. Update that installation, not merely
+another PAC copy on PATH: the kit prefers
+`%LOCALAPPDATA%\InternalTools\pac\pac.exe` when it exists. After upgrading,
+verify `connectivity list-connections help` using the exact executable shown,
+then rerun `record-connections`. Do not substitute `pac connection list`,
+invent manual connection evidence, or tell the maker to recreate healthy
+connections because a discovery command is unavailable.
+
 When both required connections resolve exactly, this read-only pass returns
 `requiresConfirmation: true` with safe connection display names and the saved
 non-secret Workday target values. It does not mark the phase complete.
@@ -343,8 +358,9 @@ For each **Workday** entry:
 
 1. Select **Connect**.
 2. Select the already-created Workday connection and confirm the selection.
-3. Select **Manage**.
-4. Enable **Allow permission to share parameters**.
+3. Select **See details**.
+4. Open **Connection parameters**.
+5. Enable **Allow permission to share parameters**.
 
 This prevents each employee from receiving an unexpected first-use connection
 prompt.
@@ -368,7 +384,7 @@ Show the exact agent name and refer only to the two entries displayed as
 [
   {
     "header": "Confirm Workday connection",
-    "question": "In this exact agent, are both entries displayed as Workday connected to the reviewed Workday connection, with Allow permission to share parameters enabled under Manage for both?",
+    "question": "In this exact agent, are both entries displayed as Workday connected to the reviewed Workday connection, with Allow permission to share parameters enabled under See details > Connection parameters for both?",
     "options": [
       { "label": "Yes, confirmed" },
       { "label": "No, review the Workday connection settings" }
@@ -439,6 +455,10 @@ cannot silently reuse another cached account. This scoped push changes only
 the setup redirect and preserves the already verified Workday topic activation
 state. Do not run a separate readiness checkpoint here; the controller
 evaluates the required live coverage after attachment and topic activation.
+
+Continue only when the redirect action returns `ACTION_RESULT = "applied"`.
+On cancellation or failure, stop before recording agent binding and keep the
+Runtime phase incomplete.
 
 Then run:
 

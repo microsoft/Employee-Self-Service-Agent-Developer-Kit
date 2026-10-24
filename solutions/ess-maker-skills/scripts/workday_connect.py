@@ -60,6 +60,7 @@ from workday_connect_realms import (
     revalidate_active_realm_target,
 )
 from workday_connect_runtime import (
+    REALM_DISPLAY_NAMES,
     WorkdayConnectRuntimeError,
     run_runtime_operation,
     verify_physical_connections,
@@ -316,7 +317,10 @@ def _status(
     _args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    return store.status()
+    result = store.status()
+    if result["status"] == "ready":
+        result.update(_completion_handoff(result["activeTargetRealm"]))
+    return result
 
 
 def _discover_realm_target(
@@ -498,32 +502,61 @@ def _action_evidence(
     return None
 
 
+def _completion_handoff(realm: str) -> dict[str, Any]:
+    next_steps = _post_skill_next_steps(realm)
+    return {
+        "lifecycleComplete": True,
+        "completionMessage": (
+            f"Workday Connect is complete in {REALM_DISPLAY_NAMES[realm]}: "
+            "all six steps are finished and the maker Test pane validation "
+            "passed. No further Workday Connect action is required in this realm."
+        ),
+        "postSkillNextSteps": next_steps,
+    }
+
+
 def _post_skill_next_steps(realm: str) -> list[str]:
     if realm == "dev":
         return [
-            "Promote the agent from Development to Test when ready.",
             (
-                "Return to Connect Workday and say that the agent was "
+                "Optional later: Promote the agent from Development to Test "
+                "when ready. "
+                "Open the source agent in Copilot Studio and use your "
+                "organization's approved promotion process. Ask the maker "
+                "responsible for agent deployment if you need access or "
+                "instructions. Connect Workday does not perform promotion."
+            ),
+            (
+                "Only after promotion is complete, return to Connect Workday "
+                "and say that the agent was "
                 "promoted to Test."
             ),
         ]
     if realm == "test":
         return [
-            "Promote the agent from Test to Production when ready.",
             (
-                "Return to Connect Workday and say that the agent was "
+                "Optional later: Promote the agent from Test to Production "
+                "when ready. "
+                "Open the source agent in Copilot Studio and use your "
+                "organization's approved promotion process. Ask the maker "
+                "responsible for agent deployment if you need access or "
+                "instructions. Connect Workday does not perform promotion."
+            ),
+            (
+                "Only after promotion is complete, return to Connect Workday "
+                "and say that the agent was "
                 "promoted to Production."
             ),
         ]
     if realm == "prod":
         return [
-            "Publish and deploy the Production agent when ready.",
+            "Optional later: Publish and deploy the Production agent when ready.",
             (
-                "Have each non-maker employee establish their own Workday "
+                "After deployment, have each non-maker employee establish their own Workday "
                 "connections in Microsoft 365 Chat."
             ),
             (
-                "Validate an enabled Workday scenario with the published "
+                "After deployment, validate an enabled Workday scenario with the published "
                 "Production agent."
             ),
         ]
@@ -1198,22 +1231,15 @@ def _record_validation(
         final_state = store.finalize_maker_validation_success()
         active_realm = final_state["activeTargetRealm"]
         status = store.status()
-        if replayed:
-            return {
-                "verified": True,
-                "replayed": True,
-                "lifecycleComplete": True,
-                "activeTargetRealm": active_realm,
-                "postSkillNextSteps": _post_skill_next_steps(active_realm),
-                "status": status,
-            }
-        return {
+        result = {
             "verified": True,
-            "lifecycleComplete": True,
+            **_completion_handoff(active_realm),
             "activeTargetRealm": active_realm,
-            "postSkillNextSteps": _post_skill_next_steps(active_realm),
             "status": status,
         }
+        if replayed:
+            result["replayed"] = True
+        return result
 
 
 def _record_validation_failure(

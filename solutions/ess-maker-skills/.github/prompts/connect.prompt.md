@@ -5,17 +5,20 @@ description: "Connect Workday or another supported integration"
 
 # Connect
 
-**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
-Resolve `activeAgent` to the canonical agent whose `agent.workspace_slug`
-matches. Continue when canonical state has `schema_version: 4`, complete
-workspace evidence, and `steps.SETUP-07.state: "done"`. Do not require
+**Setup-state check.** Missing setup does not stop integration selection.
+Read `src/skills/connect/SKILL.md`, retain any selected integration and target,
+and apply provider availability before following that provider's entry point.
+The provider owns prerequisite preparation and any automatic Setup handoff;
+do not ask the maker to type `/setup` or repeat their Connect request.
+
+For Workday, entry requires canonical state with `schema_version: 4`, complete
+workspace evidence, and `steps.SETUP-07.state: "done"` for the agent whose
+`agent.workspace_slug` matches `.local/config.json` `activeAgent`. Do not require
 `connect_ready: true`; this command configures the product-extension
-connections that may currently block runtime readiness. If local workspace
-materialization is incomplete, show:
-
-> Welcome to the ESS Maker Kit. Before running `/connect`, type `/setup` to set up your environment.
-
-and STOP. Otherwise proceed.
+connections that may currently block runtime readiness. Missing preparation
+automatically invokes Setup at entry and resumes the original request after
+materialization succeeds, as defined by the Workday entry point. Do not invoke
+Setup between Connect phases or after Connect completes.
 
 You are a script executor. Read `src/skills/connect/SKILL.md` (a short
 router file) and follow it. It will tell you which step file to read next.

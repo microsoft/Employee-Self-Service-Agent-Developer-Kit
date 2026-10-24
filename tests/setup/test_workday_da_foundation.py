@@ -13,8 +13,8 @@ _WORKDAY_DA = (
     / "ess-maker-skills"
     / "src"
     / "skills"
-    / "setup"
-    / "workday-da"
+    / "connect"
+    / "workday"
 )
 
 
@@ -88,7 +88,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     assert "Enter the Workday tenant name, or paste a Workday" in entra
     assert "controller safely extracts the tenant name" in entra
     assert "Do not ask the maker to paste the full signed-in URL" not in entra
-    assert "legacy `src/skills/setup/workday/` procedure" in entra
+    assert "retired Dataverse-based installation procedures" in entra
     assert 'broad "everything is done" confirmation' in entra
     assert (
         '"all good", "continue", or "proceed"' in " ".join(entra.split())
@@ -97,7 +97,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     assert "python scripts/workday_connect.py entra-handoff" in entra
     assert "Your tenant values" in entra
     normalized_entra = " ".join(entra.split())
-    assert "assets/entra-admin-handoff.xlsx" in entra
+    assert "](assets/entra-admin-handoff.xlsx)" in entra
     assert "workbook is the single capture worksheet" in normalized_entra
     assert "Upload the completed Microsoft Entra administrator workbook" in entra
     assert "Do not ask the maker to paste the\nworksheet" in entra
@@ -138,7 +138,7 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
 
     assert "one administrator handoff" in tenant
     assert "Workday administrator details" not in tenant
-    assert "assets/workday-admin-handoff.xlsx" in tenant
+    assert "](assets/workday-admin-handoff.xlsx)" in tenant
     assert "workbook is the single capture worksheet" in normalized
     assert "share these steps and the workbook" in tenant
     assert "Your tenant values" in normalized

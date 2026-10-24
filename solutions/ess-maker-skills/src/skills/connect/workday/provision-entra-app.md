@@ -64,7 +64,7 @@ python scripts/workday_connect.py entra-handoff --discovery-file ".local\connect
 -->
 
 Use this current phase guide and the controller contract only. Do not inspect
-or reuse the legacy `src/skills/setup/workday/` procedure to fill gaps.
+or reuse retired Dataverse-based installation procedures to fill gaps.
 
 Do not render the handoff until the maker confirms that the administrator is
 engaged. Do not add a separate apply approval: the controller does not perform
@@ -148,6 +148,18 @@ maker to send a copy to the administrator and not to edit the repository
 template itself. Do not render `packet.captureInstructions` as a chat table;
 the workbook is the single capture worksheet. Keep the numbered tasks focused
 on actions.
+
+Include this file guidance in the shareable handoff before the numbered tasks:
+
+> Use the single `Worksheet - Detailed` sheet. Follow the detailed instructions
+> beside each row and fill **Your tenant values**. For confirmations, use the
+> exact successful answer shown in **Example value** or the listed choices
+> in **What to record**, only after verifying the setting. Leave incomplete
+> confirmations blank.
+> Return an organization-approved readable `.xlsx` copy. Password encryption
+> or sensitivity-policy protection may prevent validation. If protection is
+> required, ask your information protection administrator for an approved
+> handoff method. Do not share passwords or bypass required protections.
 
 After rendering the complete handoff, persist the presentation and waiting
 boundaries:
@@ -279,6 +291,15 @@ returned `invalidFields` and `outstandingFields`, repeat their applicable
 those cells in the same workbook. Ask the maker to upload the corrected
 `.xlsx` file. Do not replay the full worksheet or revert to one-by-one chat
 questions.
+
+When the controller returns `details.fieldErrors`, show every returned label
+and its correction in one response, including the accepted answers for a
+choice cell. Do not stop after the first invalid field. If the workbook is
+encrypted or protected, explain that specific limitation and show the
+approved-readable-copy guidance above; do not call it a corrupt workbook,
+request a password, or retry parsing it with ad hoc tools. Preserve completed
+phases and resume the same upload boundary. A chat reply such as **Yes** does
+not correct a rejected workbook cell or establish its attestation.
 
 Do not perform a maker-authenticated Graph reread after the maker uploads the
 completed workbook. Role-aware execution will perform those real API checks

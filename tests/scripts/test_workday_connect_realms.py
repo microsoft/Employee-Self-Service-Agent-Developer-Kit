@@ -343,9 +343,16 @@ def test_environment_url_rejects_non_root_paths() -> None:
         _normalize_environment_url(f"{TEST_URL}/api/data")
 
 
+@pytest.mark.parametrize(
+    "environment_id",
+    [TEST_ENVIRONMENT_ID, DEV_ENVIRONMENT_ID],
+)
+@pytest.mark.parametrize("explicit_selection", [False, True])
 def test_records_and_activates_promoted_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    environment_id: str,
+    explicit_selection: bool,
 ) -> None:
     import workday_connect_realms as realms
     from workday_connect_store import WorkdayConnectStore
@@ -379,12 +386,16 @@ def test_records_and_activates_promoted_target(
         tmp_path,
         store,
         realm="test",
-        environment_id=TEST_ENVIRONMENT_ID,
-        environment_url=TEST_URL,
+        environment_id=environment_id if explicit_selection else None,
+        environment_url=TEST_URL if explicit_selection else None,
         authenticator=lambda *_args, **_kwargs: ("token", TENANT_ID),
         environment_loader=lambda *_args, **_kwargs: [
             {
-                "id": TEST_ENVIRONMENT_ID,
+                "id": "non-guid-inventory-identifier",
+                "instanceUrl": "https://unrelated.crm.dynamics.com",
+            },
+            {
+                "id": environment_id,
                 "properties": {
                     "linkedEnvironmentMetadata": {
                         "instanceApiUrl": f"{TEST_URL}/",
@@ -399,7 +410,7 @@ def test_records_and_activates_promoted_target(
     assert result["realm"] == "test"
     assert result["targetStatus"] == "detected"
     assert state["activeTargetRealm"] == "test"
-    assert state["scope"]["environmentId"] == TEST_ENVIRONMENT_ID
+    assert state["scope"]["environmentId"] == environment_id
     assert state["scope"]["agent"]["botId"] == TEST_AGENT_ID
     assert state["targets"]["test"]["provenance"] == (
         "agentbuilder-realm-discovery"
@@ -456,6 +467,10 @@ def test_automatically_discovers_promoted_target_environment(
         authenticator=lambda *_args, **_kwargs: ("token", TENANT_ID),
         environment_loader=lambda *_args, **_kwargs: [
             {
+                "id": "non-guid-inventory-identifier",
+                "instanceUrl": "https://unrelated.crm.dynamics.com",
+            },
+            {
                 "id": wrong_environment_id,
                 "displayName": "Other environment",
                 "instanceUrl": wrong_url,
@@ -472,6 +487,116 @@ def test_automatically_discovers_promoted_target_environment(
     assert result["realm"] == "test"
     assert result["foundationReused"] is False
     assert store.load()["scope"]["environmentId"] == TEST_ENVIRONMENT_ID
+
+
+def test_same_environment_discovery_still_rejects_unrelated_alm_family(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import workday_connect_realms as realms
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    _record_dev(store)
+    (tmp_path / ".local" / "config.json").write_text(
+        json.dumps({"ring": "test", "environmentId": DEV_ENVIRONMENT_ID}),
+        encoding="utf-8",
+    )
+    before = store.load()
+    target = FakeClient()
+    target._configuration["grsRepositoryId"] = OTHER_FAMILY_ID
+    clients = iter((FakeClient(), target))
+    monkeypatch.setattr(
+        realms,
+        "derive_environment_host",
+        lambda *_args: "https://target.environment.api.test.powerplatform.com",
+    )
+
+    with pytest.raises(realms.WorkdayConnectRealmError, match="different ALM family"):
+        realms.discover_and_record_realm_target(
+            tmp_path,
+            store,
+            realm="test",
+            environment_id=DEV_ENVIRONMENT_ID,
+            environment_url=TEST_URL,
+            authenticator=lambda *_args, **_kwargs: ("token", TENANT_ID),
+            environment_loader=lambda *_args, **_kwargs: [
+                {"id": DEV_ENVIRONMENT_ID, "instanceUrl": TEST_URL},
+            ],
+            client_factory=lambda *_args, **_kwargs: next(clients),
+        )
+
+    assert store.load() == before
+
+
+@pytest.mark.parametrize("explicit_selection", [False, True])
+def test_environment_inventory_duplicates_are_not_hidden(explicit_selection: bool) -> None:
+    from workday_connect_realms import (
+        WorkdayConnectRealmError,
+        _environment_candidates,
+    )
+
+    with pytest.raises(WorkdayConnectRealmError, match="duplicate records"):
+        _environment_candidates(
+            [
+                {"id": TEST_ENVIRONMENT_ID, "instanceUrl": TEST_URL},
+                {"id": TEST_ENVIRONMENT_ID, "instanceUrl": TEST_URL},
+            ],
+            environment_id=TEST_ENVIRONMENT_ID if explicit_selection else None,
+            environment_url=TEST_URL,
+            environment_selector=None,
+        )
+
+
+@pytest.mark.parametrize("select_by_name", [False, True])
+def test_friendly_selection_ignores_duplicates_for_unrelated_environments(
+    select_by_name: bool,
+) -> None:
+    from workday_connect_realms import _environment_candidates
+
+    unrelated = {
+        "id": DEV_ENVIRONMENT_ID,
+        "displayName": "Other environment",
+        "instanceUrl": "https://contoso-other.crm.dynamics.com",
+    }
+    candidates = _environment_candidates(
+        [
+            unrelated,
+            dict(unrelated),
+            {
+                "id": TEST_ENVIRONMENT_ID,
+                "displayName": "ESS Test",
+                "instanceUrl": TEST_URL,
+            },
+        ],
+        environment_id=None,
+        environment_url=None if select_by_name else TEST_URL,
+        environment_selector="ESS Test" if select_by_name else None,
+    )
+
+    assert candidates == [(TEST_ENVIRONMENT_ID, TEST_URL, "ESS Test")]
+
+
+def test_url_selection_rejects_conflicting_duplicate_target_records() -> None:
+    from workday_connect_realms import (
+        WorkdayConnectRealmError,
+        _environment_candidates,
+    )
+
+    with pytest.raises(WorkdayConnectRealmError, match="duplicate records"):
+        _environment_candidates(
+            [
+                {"id": TEST_ENVIRONMENT_ID, "instanceUrl": TEST_URL},
+                {
+                    "id": TEST_ENVIRONMENT_ID,
+                    "instanceUrl": "https://contoso-other.crm.dynamics.com",
+                },
+            ],
+            environment_id=None,
+            environment_url=TEST_URL,
+            environment_selector=None,
+        )
 
 
 def test_target_switching_preserves_realm_specific_progress(

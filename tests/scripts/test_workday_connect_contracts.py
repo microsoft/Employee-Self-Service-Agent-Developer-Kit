@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+import shutil
 import sys
+from xml.etree import ElementTree as ET
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
@@ -27,7 +29,6 @@ from workday_connect_contracts import (  # noqa: E402
     validate_workday_admin_response,
 )
 import workday_connect_contracts as contracts  # noqa: E402
-from generate_workday_admin_workbooks import generate_workbooks  # noqa: E402
 from workday_connect_entra_contracts import (  # noqa: E402
     ENTRA_ADMIN_COMPLETION_QUESTION,
     ENTRA_ADMIN_CONSENT_NOTE,
@@ -40,10 +41,10 @@ from workday_connect_model import (  # noqa: E402
 )
 from workday_connect_workbook import (  # noqa: E402
     ENTRA_ADMIN_WORKBOOK_PATH,
-    STEPS_SHEET_NAME,
+    DETAILED_WORKSHEET_SHEET_NAME,
+    WORKBOOK_ASSET_DIRECTORY,
     WORKDAY_ADMIN_WORKBOOK_PATH,
     WORKSHEET_HEADERS,
-    WORKSHEET_SHEET_NAME,
     WorkdayConnectWorkbookError,
     read_administrator_workbook,
     write_administrator_workbook,
@@ -349,30 +350,58 @@ def test_checked_in_administrator_workbooks_match_current_contracts() -> None:
         assert all(not line.partition(":")[2].strip() for line in lines)
         with ZipFile(path) as archive:
             assert "xl/worksheets/sheet1.xml" in archive.namelist()
-            assert "xl/worksheets/sheet2.xml" in archive.namelist()
-            workbook_xml = archive.read("xl/workbook.xml").decode("utf-8")
-            all_xml = "\n".join(
-                archive.read(name).decode("utf-8")
-                for name in archive.namelist()
-                if name.endswith(".xml")
-            )
-        assert f'name="{STEPS_SHEET_NAME}"' in workbook_xml
-        assert f'name="{WORKSHEET_SHEET_NAME}"' in workbook_xml
-        if path == ENTRA_ADMIN_WORKBOOK_PATH:
-            assert "XXXX" in all_xml
-        assert "11111111-1111-1111-1111-111111111111" not in all_xml
+            workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+            worksheet_xml = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+            strings = [
+                "".join(node.itertext())
+                for node in ET.fromstring(
+                    archive.read("xl/sharedStrings.xml")
+                ).findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}si")
+            ] if "xl/sharedStrings.xml" in archive.namelist() else []
+        namespace = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        sheets = workbook.findall("s:sheets/s:sheet", namespace)
+        assert len(sheets) == 1
+        assert sheets[0].get("name") == DETAILED_WORKSHEET_SHEET_NAME
+        worksheet = ET.fromstring(worksheet_xml)
+        rows = worksheet.findall("s:sheetData/s:row", namespace)[1:]
+        assert len(rows) == len(packet["captureInstructions"])
+        locations = [
+            row.find(f"s:c[@r='B{index}']", namespace)
+            for index, row in enumerate(rows, start=2)
+        ]
+        instructions = [
+            strings[int(cell.find("s:v", namespace).text)]
+            if cell.get("t") == "s"
+            else "".join(cell.itertext())
+            for cell in locations
+        ]
+        assert all(text.startswith("1.") and "\n2." in text for text in instructions)
+        assert path.parent == WORKBOOK_ASSET_DIRECTORY
+        assert WORKBOOK_ASSET_DIRECTORY.parts[-4:] == (
+            "skills", "connect", "workday", "assets"
+        )
 
 
-def test_checked_in_administrator_workbooks_are_reproducible(
-    tmp_path: Path,
-) -> None:
-    generated_entra, generated_workday = generate_workbooks(tmp_path)
+def _fill_detailed_workbook(path: Path, answers: dict[str, str]) -> None:
+    namespace = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    main_ns = namespace["s"]
 
-    assert generated_entra.read_bytes() == ENTRA_ADMIN_WORKBOOK_PATH.read_bytes()
-    assert (
-        generated_workday.read_bytes()
-        == WORKDAY_ADMIN_WORKBOOK_PATH.read_bytes()
-    )
+    def fill(content: bytes) -> bytes:
+        worksheet = ET.fromstring(content)
+        for index, answer in enumerate(answers.values(), start=2):
+            row = worksheet.find(f"s:sheetData/s:row[@r='{index}']", namespace)
+            reference = f"E{index}"
+            cell = row.find(f"s:c[@r='{reference}']", namespace)
+            if cell is None:
+                cell = ET.SubElement(row, f"{{{main_ns}}}c", {"r": reference})
+            for node in list(cell):
+                cell.remove(node)
+            cell.set("t", "inlineStr")
+            inline = ET.SubElement(cell, f"{{{main_ns}}}is")
+            ET.SubElement(inline, f"{{{main_ns}}}t").text = answer
+        return ET.tostring(worksheet, encoding="utf-8", xml_declaration=True)
+
+    _rewrite_workbook_member(path, "xl/worksheets/sheet1.xml", fill)
 
 
 @pytest.mark.parametrize(
@@ -396,6 +425,7 @@ def test_checked_in_administrator_workbooks_are_reproducible(
         ),
     ],
 )
+@pytest.mark.parametrize("detailed_template", [False, True])
 def test_completed_administrator_workbook_round_trips_through_contract(
     tmp_path: Path,
     filename: str,
@@ -404,20 +434,142 @@ def test_completed_administrator_workbook_round_trips_through_contract(
     worksheet: str,
     parser,
     validator,
+    detailed_template: bool,
 ) -> None:
-    path = write_administrator_workbook(
-        tmp_path / filename,
-        title="Administrator handoff",
-        administrator_role=packet["administratorRole"],
-        actions=packet["actions"],
-        capture_instructions=packet["captureInstructions"],
-        answers=_worksheet_answers(worksheet),
-    )
+    path = tmp_path / filename
+    if detailed_template:
+        source = (
+            ENTRA_ADMIN_WORKBOOK_PATH if filename == "entra.xlsx"
+            else WORKDAY_ADMIN_WORKBOOK_PATH
+        )
+        shutil.copyfile(source, path)
+        _fill_detailed_workbook(path, _worksheet_answers(worksheet))
+    else:
+        write_administrator_workbook(
+            path,
+            title="Administrator handoff",
+            administrator_role=packet["administratorRole"],
+            actions=packet["actions"],
+            capture_instructions=packet["captureInstructions"],
+            answers=_worksheet_answers(worksheet),
+        )
 
     parsed = parser(state, read_administrator_workbook(path))
     result = validator(state, parsed)
 
     assert result["identifiers"]
+
+
+def test_workbook_rejects_ambiguous_answer_sheets(
+    tmp_path: Path,
+) -> None:
+    packet = build_entra_handoff(_state())
+    path = write_administrator_workbook(
+        tmp_path / "ambiguous.xlsx",
+        title="Administrator handoff",
+        administrator_role=packet["administratorRole"],
+        actions=packet["actions"],
+        capture_instructions=packet["captureInstructions"],
+    )
+    _rewrite_workbook_member(
+        path,
+        "xl/workbook.xml",
+        lambda content: content.replace(
+            b'name="Steps"', b'name="Worksheet - Detailed"', 1,
+        ),
+    )
+
+    with pytest.raises(WorkdayConnectWorkbookError, match="multiple answer sheets"):
+        read_administrator_workbook(path)
+
+
+@pytest.mark.parametrize("encrypted", [True, False])
+def test_workbook_recognizes_protected_and_legacy_excel_files(
+    tmp_path: Path,
+    encrypted: bool,
+) -> None:
+    path = tmp_path / "administrator.xlsx"
+    stream_name = "EncryptedPackage" if encrypted else "Workbook"
+    path.write_bytes(
+        b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + stream_name.encode("utf-16le")
+    )
+
+    with pytest.raises(WorkdayConnectWorkbookError) as caught:
+        read_administrator_workbook(path)
+
+    message = str(caught.value)
+    assert "organization-approved" in message
+    if encrypted:
+        assert "encrypted or protected" in message
+        assert "information protection administrator" in message
+        assert "Do not share a password or bypass required protections" in message
+    else:
+        assert "legacy Excel format" in message
+
+
+def test_entra_workbook_returns_all_independent_corrections() -> None:
+    from workday_connect_contract_common import WorkdayConnectWorksheetError
+
+    worksheet = (
+        _entra_worksheet()
+        .replace("Yes, permissions and consent are confirmed", "Not done")
+        .replace("Yes, access is confirmed or assignment is not required", "Not sure")
+        .replace("2027-01-01", "invalid-date")
+    )
+    with pytest.raises(WorkdayConnectWorksheetError) as caught:
+        parse_entra_return_worksheet(_state(), worksheet)
+
+    errors = caught.value.details["fieldErrors"]
+    assert {error["label"] for error in errors} == {
+        "Permissions and consent",
+        "Employee assignment",
+        "Certificate expiration date (active certificate row)",
+    }
+    assert "Yes, permissions and consent are confirmed" in str(caught.value)
+    assert "Yes, access is confirmed or assignment is not required" in str(caught.value)
+    assert "Not done" not in str(caught.value)
+    assert "correct the listed cells in the same workbook" in str(caught.value)
+
+
+def test_workday_workbook_returns_choice_and_endpoint_corrections_together() -> None:
+    from workday_connect_contract_common import WorkdayConnectWorksheetError
+
+    worksheet = (
+        _workday_worksheet()
+        .replace("Yes, all four values match exactly", "No")
+        .replace("/ccx/api\n", "/ccx/api/contoso_impl\n")
+        .replace("/ccx/service\n", "/ccx/service/contoso_impl\n")
+    )
+    with pytest.raises(WorkdayConnectWorksheetError) as caught:
+        parse_workday_admin_return_worksheet(_workday_state(), worksheet)
+
+    assert {error["label"] for error in caught.value.details["fieldErrors"]} == {
+        "SAML row settings",
+        "REST base URL",
+        "SOAP base URL",
+    }
+    assert "must end exactly at /ccx/api" in str(caught.value)
+    assert "must end exactly at /ccx/service" in str(caught.value)
+
+
+def test_worksheet_choice_accepts_whitespace_without_weakening_attestation() -> None:
+    parsed = parse_entra_return_worksheet(
+        _state(),
+        _entra_worksheet().replace(
+            "Yes, permissions and consent are confirmed",
+            "Yes,  permissions   and consent are confirmed",
+        ),
+    )
+    assert parsed["checks"]["adminConsent"]["provenance"] == (
+        "administrator-attestation"
+    )
+    with pytest.raises(WorkdayConnectContractError, match="Permissions and consent"):
+        parse_entra_return_worksheet(
+            _state(),
+            _entra_worksheet().replace(
+                "Yes, permissions and consent are confirmed", "Yes"
+            ),
+        )
 
 
 def test_administrator_workbook_rejects_changed_headers(
@@ -503,21 +655,18 @@ def test_workday_workbook_explains_alternative_successful_answers(
     field: str,
     outcome: str,
 ) -> None:
-    _, path = generate_workbooks(tmp_path)
-    with ZipFile(path) as archive:
-        worksheet_xml = archive.read("xl/worksheets/sheet2.xml").decode("utf-8")
-    assert answer in worksheet_xml
-    packet = build_workday_admin_packet(_workday_state())
+    path = tmp_path / "workday.xlsx"
+    with ZipFile(WORKDAY_ADMIN_WORKBOOK_PATH) as archive:
+        workbook_text = "\n".join(
+            archive.read(name).decode("utf-8")
+            for name in archive.namelist()
+            if name.endswith(".xml")
+        )
+    assert answer in workbook_text
     answers = _worksheet_answers(_workday_worksheet())
     answers[label] = answer
-    write_administrator_workbook(
-        path,
-        title="Administrator handoff",
-        administrator_role=packet["administratorRole"],
-        actions=packet["actions"],
-        capture_instructions=packet["captureInstructions"],
-        answers=answers,
-    )
+    shutil.copyfile(WORKDAY_ADMIN_WORKBOOK_PATH, path)
+    _fill_detailed_workbook(path, answers)
     response = parse_workday_admin_return_worksheet(
         _workday_state(), read_administrator_workbook(path),
     )

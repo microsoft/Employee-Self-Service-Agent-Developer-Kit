@@ -105,6 +105,12 @@ python scripts/setup_existing_da.py attach \
   --setup-source alm-import
 ```
 
+For an integration's entry-only preparation request, apply **Prepare the
+workspace for an integration** in the parent skill after successful attachment.
+Return to the retained caller once canonical workspace materialization is
+verified, before the ordinary readiness-check message and completion handoff
+below. Do not claim overall setup readiness.
+
 Parse `DA_EXISTING_DEV_SETUP_JSON:`. Treat import `kind: success` only as
 permission to begin attachment. When attachment reports `connectionStatus` as
 `workspace-ready`, show:
