@@ -134,7 +134,7 @@ def test_promoted_realm_plan_contains_only_verified_unfinished_work() -> None:
     assert "Do not claim reuse or promise the three-phase promoted plan until the controller confirms it" in presentation
 
 
-def test_full_briefing_and_progress_are_limited_to_first_dev_start() -> None:
+def test_dev_resume_keeps_progress_without_repeating_the_opening_briefing() -> None:
     skill = " ".join((_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8").split())
     presentation = skill.split("### Choose the presentation", 1)[1]
     continuation = skill.split("### Continue the current unfinished phase", 1)[1]
@@ -142,10 +142,33 @@ def test_full_briefing_and_progress_are_limited_to_first_dev_start() -> None:
     assert "This table is an internal reference, not an opening customer plan" in skill
     assert "Only when `activeTargetRealm` is `dev`, the lifecycle is not ready, all phases are still pending" in presentation
     assert "no administrator evidence has been captured" in presentation
-    assert "do not repeat the full role table, full progress table" in presentation
-    assert "Only on the first Development start, render the returned `progressText`" in continuation
-    assert "Omit it on every resume, ready lifecycle, and Test or Production plan" in continuation
+    assert "do not repeat the full role table or completed administrator handoffs" in presentation
+    assert "Development progress rule" in continuation
+    assert "For a verified, non-ready `activeTargetRealm: dev`" in continuation
+    assert "on entry or resume and whenever `nextPhaseId` changes" in continuation
+    assert "before the current phase explanation or participant questions" in continuation
+    assert "transitions to `entra` and `workday-admin`, not only Preflight" in continuation
+    assert "run `status` again before presenting the next phase" in continuation
+    assert "do not reuse the previous phase's progress snapshot" in continuation
+    assert "Do not repeat it for every question, file-path request, or workbook correction" in continuation
+    assert "Omit it for a ready lifecycle and Test or Production plans" in continuation
+    assert "Only on the first Development start, render" not in continuation
+    assert "Omit it on every resume" not in continuation
     assert "not a recap of every completed phase" in continuation
+
+
+@pytest.mark.parametrize("guide", ["provision-entra-app.md", "configure-tenant.md"])
+def test_administrator_phase_entry_keeps_development_progress(guide: str) -> None:
+    text = (_WORKDAY_DA / guide).read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "Before this phase's first question or handoff" in normalized
+    assert "**Development progress rule** in `SKILL.md`" in normalized
+    assert "show the current six-phase table for unfinished Development" in normalized
+    assert "unless the orchestrator already showed it for this phase entry" in normalized
+    assert "Do not repeat it for workbook corrections" in normalized
+    assert "insert a Development table into a Test or Production plan" in normalized
+    assert text.index("Development progress") < text.index("workday_connect.py")
 
 
 def test_administrator_handoffs_explain_readable_files_and_all_corrections() -> None:
