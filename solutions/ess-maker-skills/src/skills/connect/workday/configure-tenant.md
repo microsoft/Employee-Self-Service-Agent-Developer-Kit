@@ -91,25 +91,26 @@ question or failed workbook cell; show only the relevant help when needed.
 
 Share `workbookFile` from the command result as the downloadable administrator
 workbook. It must resolve to the checked-in
-`[Workday administrator workbook](assets/workday-admin-handoff.xlsx)`. Tell
-the maker to send a copy to the administrator and not to edit the repository
-template itself. Do not render `packet.captureInstructions` as a chat table;
+`[Workday administrator workbook](assets/workday-admin-workbook.xlsx)`.
+Do not render `packet.captureInstructions` as a chat table;
 the workbook is the single capture worksheet. Never render internal `fields`
 names.
 
-Include this file guidance in the concise handoff:
+Render the following five bullets once in the concise handoff, without
+restating them in surrounding prose:
 
-> Use the single `Worksheet - Detailed` sheet. Follow the detailed instructions
-> beside each row and fill every cell in the **Your tenant values** column,
-> then return the completed workbook. Include only non-secret values, never
-> credentials or private keys. For confirmations, use the
-> exact successful answer shown in **Example value** or the listed choices
-> in **What to record**, only after verifying the setting. Leave incomplete
-> confirmations blank.
-> Return an organization-approved readable `.xlsx` copy. Password encryption
-> or sensitivity-policy protection may prevent validation. If protection is
-> required, ask your information protection administrator for an approved
-> handoff method. Do not share passwords or bypass required protections.
+> - **Share:** Send a copy to the Workday administrator; do not edit the original
+>   template itself.
+> - **Complete:** Use **Worksheet - Detailed**, follow each row's instructions,
+>   and fill every cell in the **Your tenant values** column.
+> - **Confirm:** Use the exact successful answer in **Example value** or the
+>   listed choices in **What to record**, only after verifying the setting.
+>   Leave incomplete confirmations blank.
+> - **Return:** Send the completed, organization-approved readable `.xlsx` to
+>   the maker. If encryption or sensitivity protection prevents validation,
+>   ask your information protection administrator for an approved handoff.
+> - **Protect:** Never include credentials, tokens, private keys, or certificate
+>   contents in chat or the workbook, and do not bypass required protections.
 
 When validation returns `details.fieldErrors`, show all returned labels and
 corrections together, including the accepted answers for choice cells and the
@@ -135,9 +136,9 @@ The guided external-prerequisites and final readiness profiles do not include
 the standalone `WD-NET-001` firewall attestation. A completed Workday workbook
 does not prove network reachability or satisfy that independent manual check.
 
-Remind the administrator to use the certificate already transferred through the
-approved channel during the Entra phase. Do not repeat that phase or request
-certificate contents in chat or the workbook.
+Add one certificate bullet: use the certificate already transferred through
+the approved channel during the Entra phase. Do not repeat that phase or
+request another certificate transfer.
 
 After sharing the concise handoff and workbook, record that it was presented
 and is waiting for the administrator:

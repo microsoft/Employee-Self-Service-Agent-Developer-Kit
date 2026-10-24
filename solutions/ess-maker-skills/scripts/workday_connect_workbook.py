@@ -39,10 +39,10 @@ WORKBOOK_ASSET_DIRECTORY = (
     / "assets"
 )
 ENTRA_ADMIN_WORKBOOK_PATH = (
-    WORKBOOK_ASSET_DIRECTORY / "entra-admin-handoff.xlsx"
+    WORKBOOK_ASSET_DIRECTORY / "workday-entra-admin-workbook.xlsx"
 )
 WORKDAY_ADMIN_WORKBOOK_PATH = (
-    WORKBOOK_ASSET_DIRECTORY / "workday-admin-handoff.xlsx"
+    WORKBOOK_ASSET_DIRECTORY / "workday-admin-workbook.xlsx"
 )
 
 _MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
