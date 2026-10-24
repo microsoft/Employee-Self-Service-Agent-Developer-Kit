@@ -2,6 +2,16 @@
 
 # Phases 4 and 5 - Connections and runtime
 
+## Maker guidance before questions
+
+Render the applicable numbered walkthrough as a visible chat message before
+showing its confirmation or **Check again** question, even though these
+walkthroughs are not Message blocks. Include the resolved environment-scoped
+link and required values. Do not substitute an empty question detail or a
+"once connected, check again" reminder for the walkthrough. If the maker asks
+how to perform the step, show the relevant instructions again before asking
+another question. Continue only from verified controller evidence.
+
 ## Connections
 
 Begin by preparing the selected Power Platform environment. Do not ask the
@@ -87,6 +97,21 @@ Platform connections, then discover them:
 python scripts/workday_connect.py record-connections
 ```
 
+Discovery first uses the read-only Power Platform connection API for the
+selected environment, service ring, tenant, and maker account. If that API is
+unavailable, the controller reports the reason and tries PAC with the same
+environment and maker account. Account or tenant mismatches remain blocking;
+do not bypass them with another identity.
+
+If the PAC fallback reports an unsupported command, show its exact executable
+path and the returned upgrade guidance. Update that installation, not merely
+another PAC copy on PATH: the kit prefers
+`%LOCALAPPDATA%\InternalTools\pac\pac.exe` when it exists. After upgrading,
+verify `connectivity list-connections help` using the exact executable shown,
+then rerun `record-connections`. Do not substitute `pac connection list`,
+invent manual connection evidence, or tell the maker to recreate healthy
+connections because a discovery command is unavailable.
+
 When both required connections resolve exactly, this read-only pass returns
 `requiresConfirmation: true` with safe connection display names and the saved
 non-secret Workday target values. It does not mark the phase complete.
@@ -103,6 +128,8 @@ same response. After the maker returns, rerun `record-connections`; continue
 to Workday only when Microsoft Dataverse resolves exactly.
 
 If the Microsoft Dataverse connection is missing or disconnected:
+
+Show these instructions before offering **Check again**:
 
 1. Show a **Create Microsoft Dataverse connection** link using the
    environment-scoped Microsoft Dataverse URL above.
@@ -291,11 +318,30 @@ sibling, ALM family, deployment commit, tenant, environment, and BotId. It then
 rediscovers the Dataverse runtime target, rejects stale approval, reuses one
 Dataverse token for Python mutations, and invokes
 `alm/Enable-CosmosDAFlowAuthorization.ps1` exactly once with every reviewed
-workflow ID and the realm-specific team name:
+workflow ID and the reviewed agent-specific team name:
 
-- Development: `ESS DA HR Workday - Development`
-- Test: `ESS DA HR Workday - Test`
-- Production: `ESS DA HR Workday - Production`
+- Development: `ESS DA HR Workday - Development - {full canonical BotId}`
+- Test: `ESS DA HR Workday - Test - {full canonical BotId}`
+- Production: `ESS DA HR Workday - Production - {full canonical BotId}`
+
+These are internal Dataverse access teams, not collaboration teams the maker
+must create. A valid team already linked to this exact agent is reused without
+renaming it, including legacy names. Planning and apply check authorization
+ownership and proposed-name availability in the exact business unit before
+the first runtime write. An unrelated old agent's records are never adopted,
+deleted, renamed, or relinked.
+
+If authorization fails, show the controller's safe cause and supported next
+action. For a name conflict, refresh the runtime plan; if the conflict
+remains, ask the Dataverse administrator to inspect ownership. Preserve
+completed stages and administrator evidence. Do not reset healthy connections
+or require the maker to repeat Workday administrator setup. Resume Runtime
+after correction. Authorization preflight failures also retain their safe cause
+and next action for later status and resume. Records created for the approved
+agent and team during a partial attempt do not themselves require reapproval;
+the controller checks their ownership again and preserves verified stages.
+Use a freshly reviewed plan if any other approved scope changed, including
+replacement or removal of previously approved authorization or team IDs.
 
 The script verifies the delegated authorization, one linked access team, and
 WriteAccess sharing for every reviewed flow before the stage is recorded.
@@ -341,10 +387,13 @@ maker the internal flow or component names.
 
 For each **Workday** entry:
 
+Show this complete click path before asking whether sharing is enabled:
+
 1. Select **Connect**.
 2. Select the already-created Workday connection and confirm the selection.
-3. Select **Manage**.
-4. Enable **Allow permission to share parameters**.
+3. Select **See details**.
+4. Open **Connection parameters**.
+5. Enable **Allow permission to share parameters**.
 
 This prevents each employee from receiving an unexpected first-use connection
 prompt.
@@ -368,7 +417,7 @@ Show the exact agent name and refer only to the two entries displayed as
 [
   {
     "header": "Confirm Workday connection",
-    "question": "In this exact agent, are both entries displayed as Workday connected to the reviewed Workday connection, with Allow permission to share parameters enabled under Manage for both?",
+    "question": "In this exact agent, are both entries displayed as Workday connected to the reviewed Workday connection, with Allow permission to share parameters enabled under See details > Connection parameters for both?",
     "options": [
       { "label": "Yes, confirmed" },
       { "label": "No, review the Workday connection settings" }
@@ -439,6 +488,10 @@ cannot silently reuse another cached account. This scoped push changes only
 the setup redirect and preserves the already verified Workday topic activation
 state. Do not run a separate readiness checkpoint here; the controller
 evaluates the required live coverage after attachment and topic activation.
+
+Continue only when the redirect action returns `ACTION_RESULT = "applied"`.
+On cancellation or failure, stop before recording agent binding and keep the
+Runtime phase incomplete.
 
 Then run:
 

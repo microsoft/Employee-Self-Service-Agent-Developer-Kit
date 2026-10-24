@@ -642,6 +642,7 @@ def authenticate(
     cache_path: Path = DEFAULT_TOKEN_CACHE,
     force_account_selection: bool = False,
     account_hint: str | None = None,
+    scopes: tuple[str, ...] | None = None,
 ) -> str:
     """Acquire an ESS ADK delegated token without contacting Dataverse."""
     try:
@@ -655,6 +656,7 @@ def authenticate(
         cache_path=cache_path,
         force_account_selection=force_account_selection,
         account_hint=account_hint,
+        scopes=scopes,
     )
 
 

@@ -64,7 +64,12 @@ or create a Markdown state mirror.
   Discovery first searches the maker's visible environments automatically. If
   it cannot prove exactly one target, the maker selects a friendly environment
   name or URL; the maker is never asked for BotIds, flow IDs, team names, or
-  copied internal identifiers.
+  copied internal identifiers. Dev and its promoted sibling may share a
+  Power Platform environment; realm and ALM-family verification, not a
+  different environment ID, distinguish them. Explicit environment selection
+  is applied before unrelated inventory identifiers are validated. Automatic
+  discovery logs and skips non-GUID inventory entries, but rejects duplicate
+  candidate IDs rather than selecting an arbitrary record.
 - `identifiers` contains non-secret Entra and Workday identifiers.
 - `endpoints` contains validated non-secret Workday endpoints.
 - `operators` contains safe account and tenant provenance.
@@ -105,6 +110,33 @@ fields may enter
 `partialEvidence`. Invalid fields are removed from partial evidence and
 reopened without discarding valid sibling values.
 
+## Workbook corrections and completion handoff
+
+The authoritative administrator workbooks live under
+`src/skills/connect/workday/assets/` as `entra-admin-workbook.xlsx` and
+`workday-admin-workbook.xlsx`. Each has one `Worksheet - Detailed` sheet with
+row-by-row instructions and blank **Your tenant values** cells. Edit these
+authored assets directly; do not regenerate them from the shorter controller
+handoff packet. Confirmations must use the successful answers shown beside
+the cells and accepted by the parsers. They remain administrator attestation,
+not independent service verification. Previously issued workbooks with a
+`Worksheet` sheet remain accepted; a workbook containing both answer-sheet
+formats is rejected as ambiguous.
+
+After structural and secret-material validation, worksheet parsing collects
+independent answer and endpoint errors into the controller error payload's
+`details.fieldErrors` list. Each entry contains a canonical worksheet `label`
+and a safe correction `message`; `details.nextAction` requests correction of
+those cells in the same workbook. No rejected answers are returned as
+validated evidence. Encrypted or protected workbooks are rejected with
+approved-readable-copy guidance, never a request for a password.
+
+When status is `ready`, the status response and maker-validation completion
+both include realm-specific `postSkillNextSteps`. These steps are a manual
+promotion or deployment handoff, not authorization for Connect to promote
+or publish the agent. Returning to configure a promoted realm still requires
+fresh controller-owned sibling and deployment verification.
+
 ## Identifier invariant
 
 These values are independent and must never be aliases:
@@ -122,7 +154,17 @@ These values are independent and must never be aliases:
 - Controller-owned runtime mutations must carry an exact plan hash.
 - Runtime plans include the active realm, environment, tenant, agent, ALM
   family, deployed commit, reviewed flows, physical connections, and
-  realm-specific authorization team. Any drift changes the plan hash.
+  agent-specific authorization team, exact existing authorization/team IDs,
+  and business unit. Newly assigned IDs for authorization records absent at
+  approval are accepted only after live ownership checks prove the same agent,
+  team name, business unit, and otherwise unchanged plan. This expected creation
+  progress does not require reapproval or discard verified Runtime stages.
+  Explicit approval of that refreshed plan also preserves those stages.
+  Removal or replacement of an existing approved ID, or any other plan drift,
+  still requires a new approval. A valid exact-agent
+  legacy team is reused without renaming. New names include the realm and full
+  canonical BotId. Foreign or ambiguous records block before runtime writes;
+  they are never adopted, deleted, renamed, or relinked.
 - Runtime planning invokes the authorization script once with `-WhatIf` and
   every reviewed workflow. Runtime apply rereads the promoted AgentBuilder
   identity, invokes the script once for the realm, and accepts completion only

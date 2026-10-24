@@ -1876,9 +1876,11 @@ def test_selected_tenant_authentication_prompts_for_multiple_cached_accounts(
     assert observed["interactive"]["prompt"] == "select_account"
 
 
+@pytest.mark.parametrize("read_connectivity", [False, True])
 def test_account_hint_selects_matching_cached_test_tenant_user(
     tmp_path,
     monkeypatch,
+    read_connectivity,
 ) -> None:
     selected = {
         "username": "test.user@example.test",
@@ -1914,10 +1916,22 @@ def test_account_hint_selects_matching_cached_test_tenant_user(
         "prod",
         cache_path=tmp_path / "token-cache.bin",
         account_hint="test.user@example.test",
+        scopes=(
+            agentbuilder.connectivity_read_scopes("prod")
+            if read_connectivity
+            else None
+        ),
     )
 
     assert result == "test-token"
     assert observed["account"] is selected
+    assert observed["scopes"] == [
+        (
+            "https://api.powerplatform.com/Connectivity.Connections.Read"
+            if read_connectivity
+            else "https://api.powerplatform.com/CopilotStudio.MinimalBot.ReadWrite"
+        )
+    ]
 
 
 def test_account_hint_prepopulates_interactive_selection(

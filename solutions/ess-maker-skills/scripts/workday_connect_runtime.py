@@ -7,13 +7,24 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 from typing import Any, Callable, Mapping
+from uuid import UUID
 
+import requests
+
+from agentbuilder import (
+    AgentBuilderError,
+    ConnectivityClient,
+    authenticate as authenticate_connections,
+    connectivity_read_scopes,
+)
 from auth import authenticate, query_all, update_record
 from install_workday_da_extension import (
+    PacCliError,
     ensure_pac_auth,
     resolve_pac_executable,
 )
@@ -33,10 +44,6 @@ REALM_DISPLAY_NAMES = {
     "test": "Test",
     "prod": "Production",
 }
-REALM_TEAM_NAMES = {
-    realm: f"ESS DA HR Workday - {display_name}"
-    for realm, display_name in REALM_DISPLAY_NAMES.items()
-}
 
 
 class WorkdayConnectRuntimeError(RuntimeError):
@@ -50,6 +57,7 @@ class WorkdayConnectRuntimeError(RuntimeError):
     ) -> None:
         super().__init__(message)
         self.details = dict(details or {})
+        self.customer_remediation = message if self.details.get("nextAction") else ""
 
 
 def _required_text(
@@ -161,8 +169,26 @@ def _list_connections(
             "PAC did not finish listing environment connections within 2 minutes."
         ) from exc
     if result.returncode != 0:
+        output = f"{result.stdout or ''}\n{result.stderr or ''}"
+        if any(
+            marker in output.casefold()
+            for marker in (
+                "not a valid command",
+                "unknown command",
+                "unrecognized command",
+                "unknown argument",
+                "unrecognized argument",
+                "unneeded argument",
+                "not recognized as",
+            )
+        ):
+            raise WorkdayConnectRuntimeError(
+                _pac_upgrade_guidance(pac_executable, output)
+            )
         raise WorkdayConnectRuntimeError(
-            "PAC could not list the target environment's connections."
+            "PAC could not list the target environment's connections. "
+            "Check the selected maker's access and PAC sign-in, then retry "
+            "/connect workday."
         )
     try:
         payload = json.loads(result.stdout or "")
@@ -170,12 +196,80 @@ def _list_connections(
         raise WorkdayConnectRuntimeError(
             "PAC returned invalid connection inventory JSON."
         ) from exc
-    values = payload.get("value")
-    if not isinstance(values, list):
+    values = payload.get("value") if isinstance(payload, dict) else None
+    if not isinstance(values, list) or not all(
+        isinstance(value, dict) for value in values
+    ):
         raise WorkdayConnectRuntimeError(
-            "PAC connection inventory did not contain a value array."
+            "PAC connection inventory did not contain a valid value array."
         )
-    return [value for value in values if isinstance(value, dict)]
+    return values
+
+
+def _pac_upgrade_guidance(
+    pac_executable: Path,
+    output: str,
+    *,
+    command: str = "connectivity list-connections",
+    options: str = "--json",
+) -> str:
+    version = re.search(r"Version:\s*([\w.+-]+)", output, re.IGNORECASE)
+    version_label = f" (version {version.group(1)})" if version else ""
+    executable = _powershell_literal(pac_executable)
+    location = str(pac_executable).replace("\\", "/").casefold()
+    if "/.dotnet/tools/" in location:
+        upgrade = (
+            "Run 'dotnet tool update --global Microsoft.PowerApps.CLI.Tool', "
+            "then reopen the terminal."
+        )
+    elif "/.vscode/extensions/" in location:
+        upgrade = (
+            "Update the Microsoft Power Platform Tools extension in VS Code, "
+            "then restart VS Code."
+        )
+    else:
+        upgrade = (
+            "Update this exact PAC installation using its original installer "
+            "or provisioning tool. For a Windows MSI installation, run "
+            "'pac install latest' in its terminal; for a managed/custom copy, "
+            f"update the PAC files in {_powershell_literal(pac_executable.parent)} "
+            "using that copy's provisioning tool. Installation instructions: "
+            "https://learn.microsoft.com/power-platform/developer/cli/introduction."
+        )
+    return (
+        f"PAC at {executable}{version_label} does not support "
+        f"'{command} {options}'. "
+        f"{upgrade} The kit prefers the managed "
+        "'%LOCALAPPDATA%\\InternalTools\\pac\\pac.exe' when present; "
+        "updating a different PAC on PATH will not update that copy. "
+        f"Verify support with: & {executable} {command} help. "
+        "Then rerun /connect workday."
+        + (
+            " Do not use 'pac connection list' as a substitute: it does not "
+            "provide the required maker-connection inventory."
+            if command == "connectivity list-connections"
+            else ""
+        )
+    )
+
+
+def _api_connections(context: Mapping[str, Any]) -> list[dict[str, Any]]:
+    environment_id = _required_text(context, "environmentId", "Environment ID")
+    tenant_id = _required_text(context, "tenantId", "Microsoft Entra tenant ID")
+    ring = str(context["ring"])
+    token = authenticate_connections(
+        tenant_id,
+        ring,
+        account_hint=context["maker"],
+        scopes=connectivity_read_scopes(ring),
+    )
+    identity = require_identity(token, preferred_username=context["maker"])
+    if identity["tenantId"].casefold() != tenant_id.casefold():
+        raise WorkdayConnectIdentityError(
+            "Power Platform connection discovery authenticated to a different "
+            "Microsoft Entra tenant from the selected Workday target."
+        )
+    return ConnectivityClient(token, ring=ring).list_connections(environment_id)
 
 
 def _single_rows(
@@ -400,6 +494,10 @@ def _runtime_discovery_context(
             "no reviewed flow catalog is available."
         )
     ring = str(scope.get("ring") or "prod").casefold()
+    if ring not in {"prod", "preprod", "test"}:
+        raise WorkdayConnectRuntimeError(
+            f"Unsupported Power Platform ring: {ring!r}."
+        )
     return {
         "realm": realm,
         "realmDisplayName": REALM_DISPLAY_NAMES[realm],
@@ -420,6 +518,7 @@ def _runtime_discovery_context(
             "username",
             "Power Platform maker account",
         ),
+        "ring": ring,
         "pacRing": "preprod" if ring in {"test", "preprod"} else "prod",
         "package": package,
         "flowNames": [str(name) for name in flow_names],
@@ -465,6 +564,158 @@ def _effective_connection_id(
     return requested_value or recorded_value or None
 
 
+def _authorization_preflight_failure(
+    evidence: str,
+    next_action: str,
+    *,
+    cause: str = "invalid-records",
+) -> WorkdayConnectRuntimeError:
+    return WorkdayConnectRuntimeError(
+        f"{evidence} No runtime changes were made. {next_action}",
+        details={
+            "stage": "authorization-preflight",
+            "cause": cause,
+            "nextAction": next_action,
+        },
+    )
+
+
+def _authorization_target(
+    environment_url: str,
+    token: str,
+    realm: str,
+    bot_id: str,
+    *,
+    query: Callable[..., list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Resolve exact-agent ownership before any runtime writes."""
+    try:
+        canonical_bot_id = str(UUID(bot_id))
+    except ValueError as exc:
+        raise _authorization_preflight_failure(
+            "The selected agent needs a valid BotId before runtime authorization.",
+            "Verify the selected agent and environment through supported target "
+            "recovery, then check Runtime again. Do not substitute another agent.",
+        ) from exc
+
+    def record_id(row: Mapping[str, Any], key: str, label: str) -> str:
+        try:
+            return str(UUID(str(row.get(key) or "")))
+        except ValueError as exc:
+            raise _authorization_preflight_failure(
+                f"Authorization preflight could not validate the {label}.",
+                "Ask the Dataverse administrator to inspect the selected "
+                "agent's records before retrying."
+            ) from exc
+
+    def read(entity_set: str, select: str, filter_expr: str) -> list[dict[str, Any]]:
+        try:
+            rows = query(
+                environment_url, token, entity_set, select,
+                filter_expr=filter_expr,
+            )
+        except requests.RequestException as exc:
+            raise _authorization_preflight_failure(
+                "Authorization preflight could not read the selected agent's "
+                "Dataverse records.",
+                "Ask the Dataverse administrator to verify read access, "
+                "then check again.",
+                cause="read-failed",
+            ) from exc
+        if not isinstance(rows, list) or any(
+            not isinstance(row, dict) for row in rows
+        ):
+            raise _authorization_preflight_failure(
+                "Authorization preflight received unreadable Dataverse records.",
+                "Ask the Dataverse administrator to investigate, then check again."
+            )
+        return rows
+
+    authorizations = read(
+        "delegatedauthorizations",
+        "delegatedauthorizationid,botid,providertype",
+        f"botid eq '{canonical_bot_id}'",
+    )
+    teams = read(
+        "teams",
+        "teamid,name,teamtype,_delegatedauthorizationid_value,_businessunitid_value",
+        f"delegatedauthorizationid/botid eq '{canonical_bot_id}'",
+    )
+    if len(authorizations) > 1 or len(teams) > 1:
+        raise _authorization_preflight_failure(
+            "Multiple authorization records or linked teams exist for the selected agent.",
+            "Ask the Dataverse administrator to resolve these duplicates, "
+            "then check again. Do not delete another agent's records."
+        )
+    authorization = authorizations[0] if authorizations else None
+    if authorization is not None and (
+        str(authorization.get("botid") or "").casefold() != canonical_bot_id
+        or authorization.get("providertype") != 3
+    ):
+        raise _authorization_preflight_failure(
+            "The selected agent's authorization has an unexpected owner or provider "
+            "type.",
+            "Ask the Dataverse administrator to inspect it before retrying.",
+        )
+    authorization_id = (
+        record_id(authorization, "delegatedauthorizationid", "authorization ID")
+        if authorization is not None else None
+    )
+    if teams:
+        team = teams[0]
+        if (
+            not authorization_id
+            or team.get("teamtype") != 1
+            or str(team.get("_delegatedauthorizationid_value") or "").casefold()
+            != authorization_id.casefold()
+        ):
+            raise _authorization_preflight_failure(
+                "The linked team does not prove access-team ownership by the "
+                "selected agent.",
+                "Ask the Dataverse administrator to inspect the "
+                "relationship before retrying. Do not adopt or relink another team."
+            )
+        team_name = str(team.get("name") or "").strip()
+        if not team_name:
+            raise _authorization_preflight_failure(
+                "The selected agent's access team has no readable name.",
+                "Ask the Dataverse administrator to inspect the linked access team, "
+                "then check again.",
+            )
+        return {
+            "authorizationId": authorization_id,
+            "teamId": record_id(team, "teamid", "access team ID"),
+            "teamName": team_name,
+            "businessUnitId": record_id(
+                team, "_businessunitid_value", "access team business unit"
+            ),
+        }
+    units = read(
+        "businessunits", "businessunitid",
+        "parentbusinessunitid eq null",
+    )
+    if len(units) != 1:
+        raise _authorization_preflight_failure(
+            "Authorization preflight could not resolve exactly one root business "
+            "unit.",
+            "Ask the Dataverse administrator to inspect it, then check again.",
+        )
+    unit_id = record_id(units[0], "businessunitid", "root business unit")
+    team_name = f"ESS DA HR Workday - {REALM_DISPLAY_NAMES[realm]} - {canonical_bot_id}"
+    conflicts = read(
+        "teams", "teamid",
+        f"_businessunitid_value eq {unit_id} and name eq '{_odata_literal(team_name)}'",
+    )
+    if conflicts:
+        raise _authorization_failure("ndx_TeamName_BusinessUnitId", preflight=True)
+    return {
+        "authorizationId": authorization_id,
+        "teamId": None,
+        "teamName": team_name,
+        "businessUnitId": unit_id,
+    }
+
+
 def _build_runtime_discovery(
     context: Mapping[str, Any],
     *,
@@ -472,6 +723,7 @@ def _build_runtime_discovery(
     dataverse: Mapping[str, Any],
     references: Mapping[str, Mapping[str, Any]],
     flows: Mapping[str, Mapping[str, Any]],
+    authorization_target: Mapping[str, Any],
 ) -> dict[str, Any]:
     references_catalog = context["referencesCatalog"]
     logical_names = [
@@ -524,7 +776,7 @@ def _build_runtime_discovery(
             "botId": context["botId"],
             "workflowIds": [target["workflowId"] for target in flow_targets],
             "script": AUTHORIZATION_SCRIPT,
-            "teamName": REALM_TEAM_NAMES[context["realm"]],
+            **authorization_target,
         },
         "actions": [
             "Bind the reviewed Workday and Dataverse connection references",
@@ -562,7 +814,11 @@ def _build_runtime_discovery(
                 value["displayName"] for value in target_connections.values()
             ],
             "flows": [target["name"] for target in flow_targets],
-            "authorizationTeamName": REALM_TEAM_NAMES[context["realm"]],
+            "authorizationTeam": (
+                "Reuse the existing internal Dataverse access team linked to this agent."
+                if authorization_target["teamId"]
+                else "Create a new internal Dataverse access team for this agent."
+            ),
         },
         "observed": observed,
     }
@@ -639,6 +895,10 @@ def discover_runtime_plan(
         dataverse=dataverse,
         references=references,
         flows=flows,
+        authorization_target=_authorization_target(
+            context["environmentUrl"], active_token,
+            context["realm"], context["botId"], query=query,
+        ),
     )
 
 
@@ -651,19 +911,55 @@ def _discover_physical_connections(
     pac_auth: Callable[..., Any],
     runner: Callable[..., subprocess.CompletedProcess],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    pac = pac_resolver()
-    pac_auth(
-        pac,
-        ring=context["pacRing"],
-        environment_url=context["environmentUrl"],
-        preferred_username=context["maker"],
-        runner=runner,
-    )
-    connections = _list_connections(
-        pac,
-        context["environmentUrl"],
-        runner=runner,
-    )
+    try:
+        connections = _api_connections(context)
+    except WorkdayConnectIdentityError as exc:
+        raise WorkdayConnectRuntimeError(str(exc)) from exc
+    except (
+        AgentBuilderError,
+        requests.RequestException,
+        OSError,
+        ValueError,
+        WorkdayConnectRuntimeError,
+    ) as exc:
+        api_error = str(exc)
+        print(
+            f"[WARNING] Power Platform connection API discovery failed: "
+            f"{api_error} Falling back to PAC for the same environment "
+            "and maker account.",
+            file=sys.stderr,
+        )
+        try:
+            pac = pac_resolver()
+            pac_auth(
+                pac,
+                ring=context["pacRing"],
+                environment_url=context["environmentUrl"],
+                preferred_username=context["maker"],
+                runner=runner,
+            )
+            connections = _list_connections(
+                pac,
+                context["environmentUrl"],
+                runner=runner,
+            )
+        except (
+            PacCliError,
+            WorkdayConnectRuntimeError,
+            OSError,
+            subprocess.TimeoutExpired,
+        ) as pac_exc:
+            pac_error = (
+                "PAC authentication timed out. Complete sign-in with the "
+                "selected maker account, then retry /connect workday."
+                if isinstance(pac_exc, subprocess.TimeoutExpired)
+                else str(pac_exc)
+            )
+            raise WorkdayConnectRuntimeError(
+                f"Power Platform connection API discovery failed: {api_error} "
+                f"PAC fallback failed: {pac_error}",
+                details={"apiDiscoveryError": api_error},
+            ) from pac_exc
     references_catalog = context["referencesCatalog"]
     dataverse = _select_connection(
         connections,
@@ -844,6 +1140,78 @@ def run_runtime_operation(
     }
 
 
+def _authorization_diagnostics(output: str) -> str:
+    return "\n".join(
+        line for line in output.casefold().splitlines()
+        if not re.match(r"^\s*\[(?:reuse|create|ok)\]", line)
+    )
+
+
+def _authorization_forbidden(output: str) -> bool:
+    return bool(re.search(
+        r"(?<![\w-])403(?![\w-])|\bforbidden\b",
+        _authorization_diagnostics(output),
+    ))
+
+
+def _authorization_failure(
+    output: str,
+    *,
+    preflight: bool = False,
+) -> WorkdayConnectRuntimeError:
+    normalized = _authorization_diagnostics(output)
+    if (
+        "ndx_teamname_businessunitid" in normalized
+        or "wd-auth-team-name-conflict" in normalized
+    ):
+        cause = "team-name-conflict"
+        evidence = "The authorization access-team name is already in use."
+        next_action = (
+            "Refresh the runtime plan. If the conflict remains, ask the Dataverse "
+            "administrator to inspect ownership; do not delete, rename, or adopt "
+            "another agent's records."
+        )
+    elif _authorization_forbidden(output):
+        cause = "forbidden"
+        evidence = "Dataverse explicitly denied authorization access."
+        next_action = (
+            "Ask the Dataverse administrator to verify the selected maker's "
+            "authorization and flow-sharing privileges, then check again."
+        )
+    elif "multiple" in normalized or "wd-auth-invalid-records" in normalized:
+        cause = "invalid-records"
+        evidence = "Existing authorization records are ambiguous or incorrectly linked."
+        next_action = (
+            "Ask the Dataverse administrator to inspect the selected agent's "
+            "authorization and linked access team, then check again."
+        )
+    else:
+        cause = "script-failed"
+        evidence = (
+            "The authorization script emitted an explicit [FAIL] result."
+            if "[fail]" in normalized
+            else "The authorization script did not complete verification."
+        )
+        next_action = (
+            "Ask the Dataverse administrator to investigate authorization for the "
+            "selected agent, then retry Runtime. Do not reset healthy connections "
+            "or repeat Workday administrator setup."
+        )
+    progress = (
+        "No runtime changes were made."
+        if preflight
+        else "Earlier verified runtime stages remain saved; Runtime is not complete."
+    )
+    return WorkdayConnectRuntimeError(
+        f"Delegated flow authorization failed. {evidence} {progress} {next_action}",
+        details={
+            "stage": "authorization-preflight" if preflight else "delegated-authorization",
+            "cause": cause,
+            "nextAction": next_action,
+        },
+    )
+
+
 def _run_authorization(
     plan: Mapping[str, Any],
     *,
@@ -903,6 +1271,16 @@ def _run_authorization(
             _powershell_literal(authorization["teamName"]),
         ]
     )
+    if authorization.get("businessUnitId"):
+        invocation += " -BusinessUnitId " + _powershell_literal(
+            authorization["businessUnitId"]
+        )
+    for key, parameter in (
+        ("authorizationId", "-ExpectedAuthorizationId"),
+        ("teamId", "-ExpectedTeamId"),
+    ):
+        if authorization.get(key):
+            invocation += f" {parameter} " + _powershell_literal(authorization[key])
     if preview:
         invocation += " -WhatIf"
     command = [shell, "-NoProfile", "-Command", invocation]
@@ -926,43 +1304,49 @@ def _run_authorization(
             "Delegated flow authorization did not finish within 10 minutes."
         ) from exc
     output = (result.stdout or "") + "\n" + (result.stderr or "")
-    if preview:
-        return _classify_authorization_preview(
-            plan,
-            result.returncode,
-            output,
-            flow_names,
-        )
-    if (
+    failed = (
         result.returncode != 0
         or "[FAIL]" in output
         or "Dataverse authorization is in place." not in output
+    )
+    if failed and (
+        _authorization_forbidden(output)
+        or any(marker in _authorization_diagnostics(output) for marker in (
+            "ndx_teamname_businessunitid", "wd-auth-team-name-conflict",
+            "wd-auth-invalid-records",
+        ))
     ):
-        normalized = output.casefold()
-        if "403" in normalized or "forbidden" in normalized:
-            evidence = (
-                "The authorization script received an explicit forbidden "
-                "response from Dataverse."
+        failure = _authorization_failure(output, preflight=preview)
+        print(f"[ERROR] {script} failed in {realm}: {failure}", file=sys.stderr)
+        raise failure
+    if preview:
+        try:
+            return _classify_authorization_preview(
+                plan,
+                result.returncode,
+                output,
+                flow_names,
             )
-        elif "multiple" in normalized:
-            evidence = (
-                "The authorization script found ambiguous existing "
-                "authorization records."
+        except WorkdayConnectRuntimeError as exc:
+            next_action = (
+                "Ask the Dataverse administrator to investigate the selected "
+                "agent's authorization, then check Runtime again."
             )
-        elif "[fail]" in normalized:
-            evidence = "The authorization script emitted an explicit [FAIL] result."
-        else:
-            evidence = (
-                f"The authorization script exited with code "
-                f"{result.returncode} without its success marker."
-            )
+            raise WorkdayConnectRuntimeError(
+                f"{exc} No runtime changes were made. {next_action}",
+                details={
+                    "stage": "authorization-preflight",
+                    "cause": "preview-unverified",
+                    "nextAction": next_action,
+                },
+            ) from exc
+    if failed:
+        failure = _authorization_failure(output)
         print(
-            f"[ERROR] {script} failed in {realm}: {evidence}",
+            f"[ERROR] {script} failed in {realm}: {failure}",
             file=sys.stderr,
         )
-        raise WorkdayConnectRuntimeError(
-            f"Delegated flow authorization failed in {realm}. {evidence}"
-        )
+        raise failure
     print(
         f"[INFO] {script} completed in {realm}; Dataverse authorization "
         "was verified.",
@@ -1047,14 +1431,12 @@ def _classify_authorization_preview(
             continue
         unexpected_failures.append(line.strip())
     unsafe_markers = (
-        "403",
-        "forbidden",
         "unauthorized",
         "access denied",
         "permission denied",
     )
-    if unexpected_failures or any(
-        marker in normalized for marker in unsafe_markers
+    if unexpected_failures or _authorization_forbidden(output) or any(
+        marker in _authorization_diagnostics(output) for marker in unsafe_markers
     ):
         raise WorkdayConnectRuntimeError(
             "Delegated authorization preview reported an unsafe or "
@@ -1247,6 +1629,23 @@ def apply_runtime_plan(
     stage_recorder: Callable[[str, Mapping[str, Any]], Any] | None = None,
 ) -> dict[str, Any]:
     """Apply and verify ordered idempotent stages with one Dataverse token."""
+    authorization = plan["delegatedAuthorization"]
+    current = _authorization_target(
+        plan["scope"]["dataverseUrl"], token,
+        plan["scope"]["realm"], authorization["botId"], query=query,
+    )
+    if any(
+        current[key] != authorization[key]
+        for key in ("teamName", "businessUnitId")
+    ) or any(
+        authorization[key] is not None and current[key] != authorization[key]
+        for key in ("authorizationId", "teamId")
+    ):
+        raise _authorization_preflight_failure(
+            "Authorization ownership changed after approval.",
+            "Refresh the runtime plan and approve the verified target before "
+            "applying any changes.",
+        )
     verified_stages: list[str] = []
     connection_bindings = _apply_connection_binding_stage(
         plan,

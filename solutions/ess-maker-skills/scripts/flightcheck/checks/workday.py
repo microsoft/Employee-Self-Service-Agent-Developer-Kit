@@ -163,13 +163,12 @@ _REF_SUFFIX_ROLES = {
 #     }
 #
 #   The ``ff0df`` connection is configured with Power Platform's
-#   "Microsoft Entra ID Integrated" authentication type (per skill-5,
-#   src/skills/setup/workday/install-workday-extension-pack.md S5.3), not
-#   Basic auth. That auth type authenticates the signed-in employee
+#   "Microsoft Entra ID Integrated" authentication type, not Basic auth.
+#   This CEA runtime reference is not a DA installation procedure.
+#   That auth type authenticates the signed-in employee
 #   against a federated Workday enterprise app in Entra (Application ID
 #   URI ``http://www.workday.com/{WD_TENANT}``), which is the same
-#   enterprise app the setup flow provisions in skill-3,
-#   src/skills/setup/workday/provision-workday-entra-app.md. The X.509
+#   enterprise app configured for Workday federation. The X.509
 #   signing certificate WD-CONN-102 inspects lives
 #   on that enterprise app as a keyCredential. It is the most visible
 #   expiry-driven health signal on the federation app that the
