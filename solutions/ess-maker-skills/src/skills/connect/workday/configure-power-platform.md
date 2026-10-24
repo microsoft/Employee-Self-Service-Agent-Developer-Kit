@@ -2,6 +2,16 @@
 
 # Phases 4 and 5 - Connections and runtime
 
+## Maker guidance before questions
+
+Render the applicable numbered walkthrough as a visible chat message before
+showing its confirmation or **Check again** question, even though these
+walkthroughs are not Message blocks. Include the resolved environment-scoped
+link and required values. Do not substitute an empty question detail or a
+"once connected, check again" reminder for the walkthrough. If the maker asks
+how to perform the step, show the relevant instructions again before asking
+another question. Continue only from verified controller evidence.
+
 ## Connections
 
 Begin by preparing the selected Power Platform environment. Do not ask the
@@ -118,6 +128,8 @@ same response. After the maker returns, rerun `record-connections`; continue
 to Workday only when Microsoft Dataverse resolves exactly.
 
 If the Microsoft Dataverse connection is missing or disconnected:
+
+Show these instructions before offering **Check again**:
 
 1. Show a **Create Microsoft Dataverse connection** link using the
    environment-scoped Microsoft Dataverse URL above.
@@ -306,11 +318,25 @@ sibling, ALM family, deployment commit, tenant, environment, and BotId. It then
 rediscovers the Dataverse runtime target, rejects stale approval, reuses one
 Dataverse token for Python mutations, and invokes
 `alm/Enable-CosmosDAFlowAuthorization.ps1` exactly once with every reviewed
-workflow ID and the realm-specific team name:
+workflow ID and the reviewed agent-specific team name:
 
-- Development: `ESS DA HR Workday - Development`
-- Test: `ESS DA HR Workday - Test`
-- Production: `ESS DA HR Workday - Production`
+- Development: `ESS DA HR Workday - Development - {full canonical BotId}`
+- Test: `ESS DA HR Workday - Test - {full canonical BotId}`
+- Production: `ESS DA HR Workday - Production - {full canonical BotId}`
+
+These are internal Dataverse access teams, not collaboration teams the maker
+must create. A valid team already linked to this exact agent is reused without
+renaming it, including legacy names. Planning and apply check authorization
+ownership and proposed-name availability in the exact business unit before
+the first runtime write. An unrelated old agent's records are never adopted,
+deleted, renamed, or relinked.
+
+If authorization fails, show the controller's safe cause and supported next
+action. For a name conflict, refresh the runtime plan; if the conflict
+remains, ask the Dataverse administrator to inspect ownership. Preserve
+completed stages and administrator evidence. Do not reset healthy connections
+or require the maker to repeat Workday administrator setup. Resume Runtime
+after correction with a freshly reviewed plan when its approved scope changed.
 
 The script verifies the delegated authorization, one linked access team, and
 WriteAccess sharing for every reviewed flow before the stage is recorded.
@@ -355,6 +381,8 @@ Connect both maker-visible entries displayed as **Workday**. Do not show the
 maker the internal flow or component names.
 
 For each **Workday** entry:
+
+Show this complete click path before asking whether sharing is enabled:
 
 1. Select **Connect**.
 2. Select the already-created Workday connection and confirm the selection.

@@ -16,5 +16,7 @@ match must not make an agent appear connected. Do not read
 If the agent or Workday state has not been configured, or no matching ready
 snapshot exists, return `CONNECTED = false`. If required
 state is malformed or unreadable, report that status could not be determined;
-do not overwrite or reset it. The selected Workday lifecycle re-verifies live
-evidence on entry even when this menu lookup reports a saved ready snapshot.
+do not overwrite or reset it. A saved ready snapshot is not a fresh live
+validation. The selected lifecycle decides whether to acknowledge saved
+completion or perform target-specific verification; this menu lookup cannot
+replace those decisions.

@@ -1569,6 +1569,57 @@ def test_controller_emits_structured_runtime_error_details(
     assert payload["details"] == details
 
 
+def test_authorization_recovery_survives_controller_error_and_later_status(
+    tmp_path, monkeypatch, capsys,
+):
+    import workday_connect
+    import workday_connect_model as model
+    import workday_connect_runtime as runtime
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(phase_id, action, evidence={"outcome": "verified"})
+        store.set_phase_status(phase_id, "complete")
+
+    def fail_authorization(_args, active_store):
+        for action in ("connection-references-bound", "runtime-flows-active"):
+            active_store.complete_action("runtime", action, evidence={"outcome": "verified"})
+        raise runtime._authorization_failure("ndx_TeamName_BusinessUnitId")
+
+    monkeypatch.setitem(
+        workday_connect._COMMAND_HANDLERS, "runtime-apply", fail_authorization,
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "workday_connect.py", "--root", str(tmp_path),
+        "runtime-apply", "--plan-hash", "approved",
+    ])
+
+    with pytest.raises(SystemExit) as error:
+        workday_connect.main()
+
+    assert error.value.code == 1
+    payload = json.loads(
+        capsys.readouterr().err.split(workday_connect.ERROR_MARKER, maxsplit=1)[1]
+    )
+    assert payload["details"]["cause"] == "team-name-conflict"
+    resumed = WorkdayConnectStore(tmp_path).status()
+    assert resumed["nextPhaseId"] == "runtime"
+    guidance = resumed["blocker"]["nextAction"]
+    assert "access-team name is already in use" in guidance
+    assert "Refresh the runtime plan" in guidance
+    assert "do not delete, rename, or adopt another agent's records" in guidance
+    assert "Earlier verified runtime stages remain saved" in guidance
+    assert resumed["status"] != "ready"
+    saved = WorkdayConnectStore(tmp_path).load()
+    assert saved["phases"]["runtime"]["status"] == "blocked"
+    assert {
+        item["action"] for item in saved["phases"]["runtime"]["evidence"]
+    } == {"connection-references-bound", "runtime-flows-active"}
+
+
 def test_record_connections_uses_live_verification(
     tmp_path: Path,
     monkeypatch,

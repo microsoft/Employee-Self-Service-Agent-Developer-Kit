@@ -23,6 +23,42 @@ _WORKDAY_DA = (
 )
 
 
+def test_connect_prompt_allows_phase_walkthroughs_and_requires_them_before_questions():
+    prompt = (
+        _REPO_ROOT / "solutions" / "ess-maker-skills" / ".github" / "prompts"
+        / "connect.prompt.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(prompt.split())
+    assert "a Message block is not required" in normalized
+    assert "walkthrough in full before its confirmation" in normalized
+    assert "before showing another question" in normalized
+    assert "repair guidance before **Check again**" in normalized
+    assert "controller success and error JSON directly" in normalized
+    assert "The ONLY text the user sees is Message blocks" not in normalized
+    assert "If there is no Message block for a situation, stay silent" not in normalized
+
+
+def test_portal_and_test_pane_walkthroughs_cannot_be_replaced_with_questions():
+    connections = (_WORKDAY_DA / "configure-power-platform.md").read_text(encoding="utf-8")
+    validation = (_WORKDAY_DA / "verify-connection.md").read_text(encoding="utf-8")
+    assert connections.index("Show these instructions before offering **Check again**") < (
+        connections.index("Show a **Create Microsoft Dataverse connection**")
+    )
+    assert connections.index("Show this complete click path before asking") < (
+        connections.index("3. Select **See details**.")
+    )
+    assert "before showing its confirmation or **Check again** question" in (
+        " ".join(connections.split())
+    )
+    assert validation.index("Render the following numbered walkthrough") < (
+        validation.index("open a new Test pane conversation")
+    ) < validation.index('"header": "Maker smoke test"')
+    assert "Do not ask whether the scenario passed before explaining how to run it." in (
+        " ".join(validation.split())
+    )
+    assert "this walkthrough again before the question" in " ".join(validation.split())
+
+
 def test_orchestrator_resumes_from_controller_status() -> None:
     text = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
     normalized = " ".join(text.split())

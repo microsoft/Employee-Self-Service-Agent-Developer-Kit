@@ -18,6 +18,7 @@ def test_cea_state_cannot_mark_a_da_agent_connected() -> None:
     assert "agent slug" in connected and "BotId exactly match" in connected
     assert "Saved CEA lifecycle state" in connected
     assert "must not make an agent appear connected" in " ".join(connected.split())
+    assert "not a fresh live validation" in " ".join(connected.split())
 
 
 def test_workday_wiring_uses_installed_identity_and_explicit_result() -> None:

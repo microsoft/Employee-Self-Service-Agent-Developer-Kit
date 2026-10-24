@@ -29,6 +29,10 @@ BOT_ID = "11111111-1111-1111-1111-111111111111"
 WORKDAY_CONNECTION = "22222222-2222-2222-2222-222222222222"
 DATAVERSE_CONNECTION = "33333333-3333-3333-3333-333333333333"
 TENANT_ID = "00000000-0000-0000-0000-000000004444"
+BUSINESS_UNIT_ID = "44444444-4444-4444-4444-444444444444"
+AUTHORIZATION_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+TEAM_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+TEAM_NAME = f"ESS DA HR Workday - Development - {BOT_ID}"
 
 
 def _state():
@@ -446,6 +450,16 @@ def _query_for(records):
             ]
         if entity_set == "workflows":
             return list(records["flows"].values())
+        if entity_set == "delegatedauthorizations":
+            return records.get("authorizations", [])
+        if entity_set == "businessunits":
+            return records.get("businessunits", [{"businessunitid": BUSINESS_UNIT_ID}])
+        if entity_set == "teams":
+            return records.get(
+                "teams" if filter_expr.startswith("delegatedauthorizationid/")
+                else "nameConflicts",
+                [],
+            )
         raise AssertionError(entity_set)
 
     return query
@@ -464,6 +478,241 @@ def _identity(_token, *, preferred_username):
         "username": preferred_username,
         "tenantId": "tenant-id",
     }
+
+
+def _authorization_records(*, team_name=TEAM_NAME):
+    records = _records()
+    records["authorizations"] = [{
+        "delegatedauthorizationid": AUTHORIZATION_ID,
+        "botid": BOT_ID,
+        "providertype": 3,
+    }]
+    records["teams"] = [{
+        "teamid": TEAM_ID,
+        "name": team_name,
+        "teamtype": 1,
+        "_delegatedauthorizationid_value": AUTHORIZATION_ID,
+        "_businessunitid_value": BUSINESS_UNIT_ID,
+    }]
+    return records
+
+
+def _authorization_target(records, *, bot_id=BOT_ID, realm="dev"):
+    return runtime._authorization_target(
+        "https://org.crm.dynamics.com", "token", realm, bot_id,
+        query=_query_for(records),
+    )
+
+
+def test_new_team_names_separate_agents_in_the_same_reused_environment():
+    records = _records()
+    first = _authorization_target(records)
+    second = _authorization_target(
+        records, bot_id="CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC",
+    )
+    assert first["teamName"] == TEAM_NAME
+    assert second["teamName"] == (
+        "ESS DA HR Workday - Development - cccccccc-cccc-cccc-cccc-cccccccccccc"
+    )
+    assert first["teamName"] != second["teamName"]
+    assert first["businessUnitId"] == second["businessUnitId"] == BUSINESS_UNIT_ID
+    assert _authorization_target(records, realm="test")["teamName"] == (
+        f"ESS DA HR Workday - Test - {BOT_ID}"
+    )
+
+
+def test_existing_exact_agent_legacy_team_is_reused_without_a_name_lookup():
+    legacy_name = "ESS DA HR Workday - Development"
+    records = _authorization_records(team_name=legacy_name)
+    records["nameConflicts"] = [{"teamid": "unrelated-team"}]
+
+    target = _authorization_target(records)
+
+    assert target == {
+        "authorizationId": AUTHORIZATION_ID,
+        "teamId": TEAM_ID,
+        "teamName": legacy_name,
+        "businessUnitId": BUSINESS_UNIT_ID,
+    }
+
+
+def test_authorization_created_before_a_failure_can_resume_without_a_team():
+    records = _authorization_records()
+    records["teams"] = []
+
+    target = _authorization_target(records)
+
+    assert target["authorizationId"] == AUTHORIZATION_ID
+    assert target["teamId"] is None
+    assert target["teamName"] == TEAM_NAME
+
+
+@pytest.mark.parametrize("fault", [
+    "duplicate-authorization", "duplicate-team", "wrong-provider", "foreign-bot",
+    "wrong-team-type", "foreign-authorization", "orphan-team", "unreadable",
+    "unreadable-row",
+    "missing-business-unit", "ambiguous-business-unit", "foreign-name",
+])
+def test_authorization_conflicts_fail_before_any_runtime_mutation(fault):
+    records = _authorization_records()
+    if fault == "duplicate-authorization":
+        records["authorizations"] *= 2
+    elif fault == "duplicate-team":
+        records["teams"] *= 2
+    elif fault == "wrong-provider":
+        records["authorizations"][0]["providertype"] = 2
+    elif fault == "foreign-bot":
+        records["authorizations"][0]["botid"] = TEAM_ID
+    elif fault == "wrong-team-type":
+        records["teams"][0]["teamtype"] = 0
+    elif fault == "foreign-authorization":
+        records["teams"][0]["_delegatedauthorizationid_value"] = TEAM_ID
+    elif fault == "orphan-team":
+        records["authorizations"] = []
+    elif fault == "unreadable":
+        records["authorizations"] = None
+    elif fault == "unreadable-row":
+        records["authorizations"] = [{}]
+        records["teams"] = []
+    else:
+        records["teams"] = []
+        if fault == "missing-business-unit":
+            records["businessunits"] = []
+        elif fault == "ambiguous-business-unit":
+            records["businessunits"] = [{"businessunitid": BUSINESS_UNIT_ID}] * 2
+        else:
+            records["nameConflicts"] = [{"teamid": "foreign-team"}]
+    writes = []
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as error:
+        runtime.apply_runtime_plan(
+            {
+                "scope": {"dataverseUrl": "https://org.crm.dynamics.com", "realm": "dev"},
+                "delegatedAuthorization": {"botId": BOT_ID},
+            },
+            token="token", query=_query_for(records),
+            updater=lambda *args: writes.append(args),
+        )
+    assert writes == []
+    assert "administrator" in str(error.value)
+    if fault == "foreign-name":
+        assert error.value.details["cause"] == "team-name-conflict"
+        assert error.value.details["stage"] == "authorization-preflight"
+        assert "No runtime changes were made" in str(error.value)
+
+
+def test_unreadable_authorization_ownership_is_not_treated_as_absent():
+    def denied(*_args, **_kwargs):
+        raise requests.HTTPError("403 raw confidential response")
+
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as error:
+        runtime._authorization_target(
+            "https://org.crm.dynamics.com", "token", "dev", BOT_ID, query=denied,
+        )
+
+    assert error.value.details["cause"] == "read-failed"
+    assert "verify read access" in str(error.value)
+    assert "confidential" not in str(error.value)
+
+
+def test_apply_rechecks_reviewed_authorization_identity_before_runtime_writes():
+    records = _authorization_records()
+    approved = _authorization_target(records)
+    records["teams"][0]["teamid"] = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    writes = []
+
+    with pytest.raises(runtime.WorkdayConnectRuntimeError, match="changed after approval"):
+        runtime.apply_runtime_plan(
+            {
+                "scope": {"dataverseUrl": "https://org.crm.dynamics.com", "realm": "dev"},
+                "delegatedAuthorization": {"botId": BOT_ID, **approved},
+            },
+            token="token", query=_query_for(records),
+            updater=lambda *args: writes.append(args),
+        )
+    assert writes == []
+
+
+@pytest.mark.parametrize(("output", "cause"), [
+    ("Dataverse POST failed: ndx_TeamName_BusinessUnitId", "team-name-conflict"),
+    ("[WD-AUTH-TEAM-NAME-CONFLICT]", "team-name-conflict"),
+    ("403 Forbidden", "forbidden"),
+    ("[WD-AUTH-INVALID-RECORDS]", "invalid-records"),
+    ("unexpected subprocess failure", "script-failed"),
+])
+@pytest.mark.parametrize("preview", [False, True])
+def test_authorization_errors_are_actionable_without_echoing_raw_output(
+    monkeypatch, output, cause, preview,
+):
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh")
+    plan = {
+        "scope": {
+            "dataverseUrl": "https://org.crm.dynamics.com",
+            "makerUsername": "maker@contoso.com",
+            "realm": "dev",
+        },
+        "flows": [{"name": "Read Workday"}],
+        "delegatedAuthorization": {
+            "botId": BOT_ID, "teamName": TEAM_NAME, "script": runtime.AUTHORIZATION_SCRIPT,
+            "workflowIds": [WORKDAY_CONNECTION],
+        },
+    }
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as error:
+        runtime._run_authorization(
+            plan, preview=preview,
+            runner=lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=1, stdout=output, stderr="Bearer private-token password=private",
+            ),
+        )
+    message = str(error.value)
+    assert "private" not in message
+    if cause == "script-failed" and preview:
+        assert "preview" in message
+    else:
+        assert error.value.details["cause"] == cause
+        assert error.value.details["nextAction"]
+        assert "administrator" in message
+        assert "not complete" in message or "No runtime changes" in message
+
+
+@pytest.mark.parametrize("preview", [False, True])
+def test_successful_authorization_does_not_treat_record_names_or_guids_as_errors(
+    monkeypatch, preview,
+):
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh")
+    plan = {
+        "scope": {
+            "dataverseUrl": "https://org.crm.dynamics.com",
+            "makerUsername": "maker@contoso.com",
+            "realm": "dev",
+        },
+        "flows": [{"name": "Read Workday"}],
+        "delegatedAuthorization": {
+            "botId": BOT_ID, "teamName": "Forbidden Legacy Team",
+            "script": runtime.AUTHORIZATION_SCRIPT,
+            "workflowIds": [WORKDAY_CONNECTION],
+            "authorizationId": AUTHORIZATION_ID,
+            "teamId": TEAM_ID,
+            "businessUnitId": BUSINESS_UNIT_ID,
+        },
+    }
+
+    def runner(command, **_kwargs):
+        assert f"-ExpectedAuthorizationId '{AUTHORIZATION_ID}'" in command[-1]
+        assert f"-ExpectedTeamId '{TEAM_ID}'" in command[-1]
+        assert f"-BusinessUnitId '{BUSINESS_UNIT_ID}'" in command[-1]
+        return SimpleNamespace(
+            returncode=0, stderr="",
+            stdout="\n".join([
+                "[reuse] delegatedauthorization 40311111-1111-1111-1111-111111111111",
+                "[reuse] team team-id 'Forbidden Legacy Team' (teamtype 1)",
+                "[reuse] 'Read Workday' already shared with the team",
+                "Dataverse authorization is in place.",
+            ]),
+        )
+
+    result = runtime._run_authorization(plan, preview=preview, runner=runner)
+
+    assert result["outcome"] == ("already-configured" if preview else "verified")
 
 
 def _authorization_preview_runner(command, **_kwargs):
@@ -515,9 +764,10 @@ def test_runtime_plan_uses_one_dataverse_token_and_exact_targets(monkeypatch):
         "Dataverse",
     ]
     assert result["approvalSummary"]["targetRealm"] == "Development"
-    assert result["approvalSummary"]["authorizationTeamName"] == (
-        "ESS DA HR Workday - Development"
+    assert result["approvalSummary"]["authorizationTeam"] == (
+        "Create a new internal Dataverse access team for this agent."
     )
+    assert result["plan"]["delegatedAuthorization"]["teamName"] == TEAM_NAME
     assert result["authorizationPreview"]["outcome"] == "already-configured"
     serialized_summary = __import__("json").dumps(
         result["approvalSummary"],
@@ -525,6 +775,7 @@ def test_runtime_plan_uses_one_dataverse_token_and_exact_targets(monkeypatch):
     )
     assert WORKDAY_CONNECTION not in serialized_summary
     assert DATAVERSE_CONNECTION not in serialized_summary
+    assert BOT_ID not in serialized_summary
     assert len(result["plan"]["flows"]) == 3
     assert "userContext" not in result["plan"]
     assert "token" not in json.dumps(result).casefold()
@@ -793,7 +1044,7 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch, capsys):
         for value in records["flows"].values():
             assert value["workflowid"] in invocation
         assert (
-            "-TeamName 'ESS DA HR Workday - Development'" in invocation
+            f"-TeamName '{TEAM_NAME}'" in invocation
         )
         assert "-WhatIf" not in invocation
         return SimpleNamespace(
@@ -848,7 +1099,7 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch, capsys):
     assert result["applied"]["delegatedAuthorization"] == {
         "outcome": "verified",
         "realm": "dev",
-        "teamName": "ESS DA HR Workday - Development",
+        "teamName": TEAM_NAME,
         "workflowCount": 3,
     }
     assert len(result["applied"]["flows"]) == 3

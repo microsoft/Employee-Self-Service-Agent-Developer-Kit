@@ -1431,6 +1431,9 @@ def main() -> None:
                     "errorType": type(exc).__name__,
                     "message": str(exc),
                 }
+                remediation = str(getattr(exc, "customer_remediation", "") or "").strip()
+                if remediation:
+                    blocker["remediation"] = remediation
                 if phase_id == "maker-validation":
                     existing_phase = (
                         store.load().get("phases", {}).get(phase_id, {})

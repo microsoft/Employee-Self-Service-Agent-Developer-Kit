@@ -12,6 +12,12 @@ skill cannot publish or deploy the agent; those are post-skill next steps.
 
 ## Run the maker smoke test
 
+Render the following numbered walkthrough as a visible chat message before
+the **Maker smoke test** question, even though it is not a Message block.
+Do not ask whether the scenario passed before explaining how to run it.
+For a failed-test retry, show the relevant remediation and this walkthrough
+again before the question. Preserve the same named scenario when required.
+
 Ask the maker to:
 
 1. open **Employee Self-Service (HR)** in Classic Copilot Studio;
