@@ -23,9 +23,8 @@ python scripts/workday_connect.py workday-admin-packet
 
 After the maker confirms the Workday administrator is engaged, tell the maker:
 
-> I am preparing the Workday configuration steps and workbook. Ask the Workday
-> administrator to follow the applicable steps, fill the workbook in parallel,
-> and return the completed workbook to you.
+> Share this detailed workbook with the Workday administrator. It contains
+> the configuration instructions and fields to complete and return.
 
 After `record-entra` succeeds, always require fresh Workday administrator
 confirmation and a completed Workday administrator workbook, even when the
@@ -48,22 +47,26 @@ leave the selection unset.
 This question selects a safe handoff branch. It is not evidence that the
 administrator finished configuration.
 
-- For **Microsoft Entra ID**, render **Workday Administrator Steps - Existing
-  Microsoft Entra federation** and the applicable numbered handoff below.
+- For **Microsoft Entra ID**, label the workbook handoff **Existing
+  Microsoft Entra federation** and note that the existing Entra row must match.
   Do not infer a match from the
   provider choice alone; the administrator must confirm the displayed
   Issuer exactly matches the verified Entra issuer.
-- For **No enabled SAML row**, render **Workday Administrator Steps - New
-  Microsoft Entra federation** and the greenfield handoff below.
+- For **No enabled SAML row**, label the workbook handoff **New
+  Microsoft Entra federation**; the worksheet explains how to add the Entra row.
 - For **Okta**, **Ping Identity**, or **Another sign-in provider**, render
-  **Workday Administrator Steps - Existing non-Entra federation** and the
-  coexistence or controlled-transition handoff below. Preserve the existing
+  the workbook handoff with the short safety note **Existing non-Entra
+  federation: preserve the current provider. Use a separate Entra row for the
+  approved target environment or a customer-approved transition of only that
+  environment; preserve out-of-scope routing and the rollback assignment.**
+  Keep this branch context because the workbook refers to the handoff for the
+  coexistence or controlled-transition decision. Preserve the existing
   provider and guide the Workday administrator to either add a separate
   Microsoft Entra row for the approved target environment or perform a
   customer-approved transition of only that target environment. Do not return
   to Entra or re-engage the Entra app administrator. If the routing decision still
-  needs customer governance approval, show the exact approval and inventory
-  steps, preserve this phase, and resume the same handoff after approval
+  needs customer governance approval, show only the relevant approval and inventory
+  guidance, preserve this phase, and resume the same handoff after approval
   instead of terminating the workflow.
 - For **I'm not sure**, explain that Microsoft Entra issuers commonly contain
   `login.microsoftonline.com` or `sts.windows.net`, Okta issuers commonly
@@ -76,25 +79,30 @@ If the administrator becomes unavailable after a handoff is shown, pause
 before the completion question and preserve the current phase.
 
 Render the selected branch as one standalone section titled **Workday
-administrator handoff - share these steps and the workbook**. It must contain
-the administrator role, exact Workday tenant and environment, packet reference
-values, and every applicable numbered task. The maker must be able to forward
-that section without copying values from earlier chat messages.
+administrator handoff - share the workbook and target values**. It must contain
+the administrator role, exact Workday tenant, known target environment, packet
+reference values, workbook link, and the short selected-branch safety note.
+The maker must be able to forward that section without copying values from
+earlier chat messages.
+The detailed workbook is the administrator's task guide. Do not render the
+numbered administrator guides below, `packet.actions`, or an **Administrator
+tasks** section in chat. Keep those guides as internal reference for a specific
+question or failed workbook cell; show only the relevant help when needed.
 
 Share `workbookFile` from the command result as the downloadable administrator
 workbook. It must resolve to the checked-in
 `[Workday administrator workbook](assets/workday-admin-handoff.xlsx)`. Tell
 the maker to send a copy to the administrator and not to edit the repository
-template itself. Tell the administrator to fill every cell in the **Your tenant
-values** column while performing the applicable steps and return the same
-`.xlsx` file to the maker. Do not render `packet.captureInstructions` as a chat
-table; the workbook is the single capture worksheet. Keep the numbered tasks
-focused on actions and never render internal `fields` names.
+template itself. Do not render `packet.captureInstructions` as a chat table;
+the workbook is the single capture worksheet. Never render internal `fields`
+names.
 
-Include this file guidance in the shareable handoff before the numbered tasks:
+Include this file guidance in the concise handoff:
 
 > Use the single `Worksheet - Detailed` sheet. Follow the detailed instructions
-> beside each row and fill **Your tenant values**. For confirmations, use the
+> beside each row and fill every cell in the **Your tenant values** column,
+> then return the completed workbook. Include only non-secret values, never
+> credentials or private keys. For confirmations, use the
 > exact successful answer shown in **Example value** or the listed choices
 > in **What to record**, only after verifying the setting. Leave incomplete
 > confirmations blank.
@@ -127,8 +135,12 @@ The guided external-prerequisites and final readiness profiles do not include
 the standalone `WD-NET-001` firewall attestation. A completed Workday workbook
 does not prove network reachability or satisfy that independent manual check.
 
-After rendering the complete handoff, record that it was presented and is
-waiting for the administrator:
+Remind the administrator to use the certificate already transferred through the
+approved channel during the Entra phase. Do not repeat that phase or request
+certificate contents in chat or the workbook.
+
+After sharing the concise handoff and workbook, record that it was presented
+and is waiting for the administrator:
 
 ```powershell
 python scripts/workday_connect.py administrator-stage --phase workday-admin --substage handoff-presented
@@ -136,6 +148,10 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
 ```
 
 ### Existing Microsoft Entra federation handoff
+
+Internal reference only: do not render these task lists with the detailed
+workbook. Use only the affected step for an explicit help request or correction.
+This applies to all three federation guides below.
 
 1. **Protect the existing federation.** In Workday, run **Edit Tenant Setup -
    Security**, open **SAML Setup**, and locate the enabled **SAML Identity
@@ -326,12 +342,12 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
     identity-provider SSO service URL, and sign-on redirect URL match the
     expected values.
 
-End the shareable handoff after the applicable numbered tasks. The workbook
+Do not append these tasks to the shareable workbook handoff. The workbook
 already tells the administrator what to return and where to find it, so do not
 repeat an **Information to return to the maker** checklist or a separate return
 worksheet.
 
-After an applicable handoff is shown, ask exactly:
+After the concise handoff and workbook are shared, ask exactly:
 
 **Has the Workday administrator completed their task?**
 
@@ -378,9 +394,10 @@ not exist yet. A maker-observed `Task not authorized` result is handled only
 during Phase 6 after the same named scenario can be retested.
 
 The worksheet definition below is an internal mapping reference for the exact
-successful values accepted by the controller. Do not render it after the
-handoff table. Substitute the packet's expected issuer, Service Provider ID,
-and verified certificate expiration date when building the table:
+successful values accepted by the controller. Do not render it as a chat table
+or a sequence of forms. The concise handoff supplies the packet's expected
+issuer, Service Provider ID, and verified certificate expiration date as
+comparison references for the workbook:
 
 ```json
 [

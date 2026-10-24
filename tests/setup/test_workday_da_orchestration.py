@@ -34,6 +34,8 @@ def test_connect_prompt_allows_phase_walkthroughs_and_requires_them_before_quest
     assert "before showing another question" in normalized
     assert "repair guidance before **Check again**" in normalized
     assert "controller success and error JSON directly" in normalized
+    assert "For administrator workbook handoffs, the concise handoff and downloadable detailed workbook satisfy this rule" in normalized
+    assert "Connection, sharing, and Test pane walkthroughs still render in full" in normalized
     assert "The ONLY text the user sees is Message blocks" not in normalized
     assert "If there is no Message block for a situation, stay silent" not in normalized
 
@@ -301,7 +303,7 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
     )
     assert "tenantFoundationReused: true" not in tenant
     assert "When `nextPhaseId` is `entra`, dispatch" in skill
-    assert "presents the guided handoff" in skill
+    assert "presents a concise handoff and checked-in detailed workbook" in skill
     assert "stop before dispatching the next phase" in normalized_skill
     assert (
         "no phase progress or target configuration was changed"
@@ -747,7 +749,7 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     )
     assert "resume the same handoff after approval" in normalized
     assert "Only after **Yes**\nmay the skill collect evidence" in text
-    assert "share these steps and the workbook" in text
+    assert "share the workbook and target values" in text
     assert "workbook is the single capture worksheet" in normalized
     assert "fill every cell in the **Your tenant values** column" in normalized
     assert "Upload the completed Workday administrator workbook" in text
@@ -767,6 +769,32 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     assert "ending at /ccx/service, without the tenant name" in text
     assert "using steps 2 through 7" not in text
     assert '"header": "Identity provider"' not in text
+
+
+@pytest.mark.parametrize("guide", ["provision-entra-app.md", "configure-tenant.md"])
+def test_administrator_handoffs_use_detailed_workbooks_without_repeated_tasks(guide):
+    text = (_WORKDAY_DA / guide).read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "share the workbook and target values" in normalized
+    assert "The detailed workbook is the administrator's task guide" in normalized
+    assert "`packet.actions`, or an **Administrator tasks** section in chat" in normalized
+    assert "Internal reference only: do not render" in normalized
+    assert "show only the relevant help when needed" in normalized
+    assert "After the concise handoff and workbook are shared, ask exactly" in normalized
+    assert "Worksheet - Detailed" in text
+    assert "--substage handoff-presented" in text
+    assert "--substage completion-confirmed" in text
+    assert "Do not append these tasks to the shareable workbook handoff" in normalized
+    assert "and every applicable numbered task" not in normalized
+    assert "and the numbered tasks below" not in normalized
+    if guide == "provision-entra-app.md":
+        assert "certificate-handoff note" in normalized
+        assert "Render `packet.consentNote` exactly here" in normalized
+    else:
+        assert "preserve the current provider" in normalized
+        assert "customer-approved transition of only that environment" in normalized
+        assert "certificate already transferred" in normalized
 
 
 def test_workday_topic_activation_uses_complete_mapped_scope() -> None:

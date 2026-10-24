@@ -140,7 +140,7 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "Workday administrator details" not in tenant
     assert "](assets/workday-admin-handoff.xlsx)" in tenant
     assert "workbook is the single capture worksheet" in normalized
-    assert "share these steps and the workbook" in tenant
+    assert "share the workbook and target values" in tenant
     assert "Your tenant values" in normalized
     assert (
         "do not repeat an **Information to return to the maker**"
