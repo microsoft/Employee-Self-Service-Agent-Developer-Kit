@@ -137,7 +137,7 @@ Include **Required role: {packet.administratorRole}** in the summary.
 
 Share `workbookFile` from the command result as the downloadable administrator
 workbook. It must resolve to the checked-in
-`[Entra administrator workbook](assets/workday-entra-admin-workbook.xlsx)`.
+`[Entra administrator workbook](assets/entra-admin-workbook.xlsx)`.
 Do not render `packet.captureInstructions` as a chat table;
 the workbook is the single capture worksheet.
 

@@ -113,7 +113,7 @@ reopened without discarding valid sibling values.
 ## Workbook corrections and completion handoff
 
 The authoritative administrator workbooks live under
-`src/skills/connect/workday/assets/` as `workday-entra-admin-workbook.xlsx` and
+`src/skills/connect/workday/assets/` as `entra-admin-workbook.xlsx` and
 `workday-admin-workbook.xlsx`. Each has one `Worksheet - Detailed` sheet with
 row-by-row instructions and blank **Your tenant values** cells. Edit these
 authored assets directly; do not regenerate them from the shorter controller

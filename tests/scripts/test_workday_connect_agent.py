@@ -1062,7 +1062,7 @@ def test_entra_handoff_rediscovery_and_replay_return_actionable_packet(
     )
     assert guided["packet"]["target"]["mode"] == "administrator-selection"
     assert guided["rediscoveryRequired"] is False
-    assert Path(guided["workbookFile"]).name == "workday-entra-admin-workbook.xlsx"
+    assert Path(guided["workbookFile"]).name == "entra-admin-workbook.xlsx"
     assert Path(guided["workbookFile"]).is_file()
 
     creation = workday_connect._entra_handoff(

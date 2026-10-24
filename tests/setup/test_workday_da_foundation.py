@@ -97,7 +97,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     assert "python scripts/workday_connect.py entra-handoff" in entra
     assert "Your tenant values" in entra
     normalized_entra = " ".join(entra.split())
-    assert "](assets/workday-entra-admin-workbook.xlsx)" in entra
+    assert "](assets/entra-admin-workbook.xlsx)" in entra
     assert "workbook is the single capture worksheet" in normalized_entra
     assert "Upload the completed Microsoft Entra administrator workbook" in entra
     assert "Do not ask the maker to paste the\nworksheet" in entra

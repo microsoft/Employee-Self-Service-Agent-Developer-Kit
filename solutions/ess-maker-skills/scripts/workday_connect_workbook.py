@@ -39,7 +39,7 @@ WORKBOOK_ASSET_DIRECTORY = (
     / "assets"
 )
 ENTRA_ADMIN_WORKBOOK_PATH = (
-    WORKBOOK_ASSET_DIRECTORY / "workday-entra-admin-workbook.xlsx"
+    WORKBOOK_ASSET_DIRECTORY / "entra-admin-workbook.xlsx"
 )
 WORKDAY_ADMIN_WORKBOOK_PATH = (
     WORKBOOK_ASSET_DIRECTORY / "workday-admin-workbook.xlsx"
