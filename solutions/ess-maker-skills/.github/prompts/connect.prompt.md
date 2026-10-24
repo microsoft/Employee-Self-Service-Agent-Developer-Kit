@@ -38,7 +38,12 @@ Rules:
    completion, or **Check again** question. Include the target-specific link,
    required click path, and supplied non-secret values. A question is not a
    substitute for instructions. Do not stay silent because a guide has no
-   Message block.
+   Message block. For administrator workbook handoffs, the concise handoff and
+   downloadable detailed workbook satisfy this rule. Do not repeat the
+   workbook's administrator tasks in chat or render `packet.actions` or
+   `packet.captureInstructions` as another task list or table. Show only the
+   relevant help if requested or needed to correct rejected workbook cells.
+   Connection, sharing, and Test pane walkthroughs still render in full.
 4. If the maker asks how to do a step, answer with that step's walkthrough
    before showing another question. On a retry, show the relevant repair
    guidance before **Check again**, not only a completion reminder. Keep

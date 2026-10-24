@@ -123,9 +123,11 @@ work. Publishing and non-maker validation happen after this guided lifecycle.
   Healthy settings may be confirmed without repeating configuration changes.
 - Never reuse foundation evidence across a different Entra tenant, Workday
   tenant, SAML Service Provider ID, Entra application, or signing certificate.
-- Preserve the full administrator guide even on the reuse path, but show only
-  the affected remediation step instead of making the user repeat healthy
-  configuration.
+- Keep the detailed administrator instructions in the workbook and internal
+  guide. In chat, show only the concise handoff, target values, workbook link,
+  and essential handoff notes. Do not repeat administrator task lists. On a
+  question or validation failure, show only the affected help or correction
+  instead of making the user repeat healthy configuration.
 
 ## One-way administrator handoff
 
@@ -396,7 +398,7 @@ from `nextPhaseId`:
 
 When `nextPhaseId` is `entra`, dispatch to `provision-entra-app.md` without the
 form below. That phase asks whether the maker has engaged the administrator,
-presents the guided handoff steps and checked-in workbook, asks whether the
+presents a concise handoff and checked-in detailed workbook, asks whether the
 administrator completed the task, and validates the uploaded workbook. It
 must not authenticate the maker to Graph or perform live Entra API checks.
 
@@ -475,9 +477,10 @@ the required role. The phase-specific live checks or structured administrator
 evidence remain authoritative.
 
 After the maker confirms the Workday administrator is engaged, the Workday
-phase presents the applicable steps in chat and shares the checked-in
-workbook. It tells the maker to have the administrator fill the workbook in
-parallel, asks whether the task is complete, then requests the completed
+phase shares the checked-in detailed workbook with concise target values and
+the applicable federation safety note, not another administrator task list.
+It tells the maker to have the administrator follow and complete the workbook,
+asks whether the task is complete, then requests the completed
 `.xlsx` upload. It must not ask the maker to paste the worksheet table or
 retype the administrator values.
 Do not include people from completed phases or remediation-only roles that are
