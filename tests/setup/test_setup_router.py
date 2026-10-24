@@ -103,6 +103,52 @@ def test_integration_preparation_returns_at_verified_workspace_boundary() -> Non
         assert "return to the retained caller" in text.casefold(), guide
 
 
+def test_connect_route_precedes_setup_probe_and_terminal_welcome() -> None:
+    instructions = (_SOLUTION / ".github" / "copilot-instructions.md").read_text(
+        encoding="utf-8"
+    )
+    routes, gate = instructions.split("### Setup gate for all other requests", 1)
+    normalized_routes = " ".join(routes.split())
+    normalized_gate = " ".join(gate.split())
+
+    assert "Route Before Checking Setup" in routes
+    assert "Use both the user's message and the invoked command prompt" in normalized_routes
+    assert "do not first probe setup metadata" in normalized_routes
+    assert "proceed with `src/skills/connect/SKILL.md` even when setup is missing" in normalized_routes
+    assert "For `/connect workday`, retain `workday` as the selected integration" in normalized_routes
+    assert "**STOP.**" not in routes
+    assert "Hey! Welcome to the ESS Maker Kit." not in routes
+    assert "Only when no setup-independent route above matches" in normalized_gate
+    assert "try to read `.local/setup/config.json`" in normalized_gate
+    assert "**STOP.**" in gate
+    assert "Hey! Welcome to the ESS Maker Kit." in gate
+    assert "YOUR VERY FIRST ACTION on every new conversation" not in instructions
+
+
+def test_clean_workspace_handoff_handles_missing_metadata_at_each_entry() -> None:
+    prompt = " ".join(
+        (_SOLUTION / ".github" / "prompts" / "connect.prompt.md").read_text(encoding="utf-8").split()
+    )
+    alias = " ".join(
+        (_SOLUTION / ".github" / "prompts" / "connect-workday.prompt.md").read_text(encoding="utf-8").split()
+    )
+    entry = " ".join((_WORKDAY_PROVIDER_DIR / "entry.md").read_text(encoding="utf-8").split())
+    foundation = " ".join(
+        (_SOLUTION / "src" / "skills" / "foundation-setup" / "SKILL.md").read_text(encoding="utf-8").split()
+    ).split("## Prepare the workspace for an integration", 1)[1].split("## Start", 1)[0]
+
+    assert "Read that router before probing `.local` metadata" in prompt
+    assert "Route before probing `.local` metadata" in alias
+    assert "check whether canonical `.local/setup/config.json` exists before reading it" in entry
+    assert "`Path does not exist` read result is expected unprepared state" in entry
+    assert "Do not treat access-denied or malformed-file errors as absence" in entry
+    assert "already-known unsupported-product boundary" in entry
+    assert "If `.local` or either file is absent" in foundation
+    assert "continue normal Setup target resolution in this invocation" in foundation
+    assert "recreate deleted metadata by guessing old state" in foundation
+    assert "Unreadable or malformed files still require supported state recovery" in foundation
+
+
 def test_guided_servicenow_requests_stop_before_provider_actions() -> None:
     registration = json.loads(
         (_CONNECT / "servicenow" / "integration.json").read_text(encoding="utf-8")

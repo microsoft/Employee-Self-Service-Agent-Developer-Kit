@@ -585,8 +585,14 @@ a return from the middle or completion of an integration lifecycle. Retain
 the caller's selected integration, original request, supplied target and
 realm intent, and any verified maker in this invocation.
 
-Read `.local/config.json` and canonical `.local/setup/config.json`. Resolve a
-known workspace target by `activeAgent`, schema version `4`, and canonical
+Check for `.local/config.json` and canonical `.local/setup/config.json` before
+reading them. If `.local` or either file is absent, or a read reports
+`Path does not exist`, treat it as missing preparation and continue normal
+Setup target resolution in this invocation. Do not show the global
+setup-required welcome message, ask the maker to type `/setup`, retry a
+missing-file read, or recreate deleted metadata by guessing old state.
+Unreadable or malformed files still require supported state recovery.
+Resolve a known workspace target by `activeAgent`, schema version `4`, and canonical
 `agent.workspace_slug`. Preserve the recorded workspace Dev identity; do not
 replace it with a promoted Test or Production integration target.
 
