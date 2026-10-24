@@ -23,9 +23,20 @@ integration again.
 
 ## Verify the active agent
 
-Read `.local/config.json`, resolve `activeAgent` against `agents`, and fall back
-to the legacy `agent` object only when needed. For a DA agent, also read
-canonical `.local/setup/config.json`. Require top-level `schema_version: 4`
+Check whether `.local/config.json` exists before reading it. If it exists,
+resolve `activeAgent` against `agents`, and fall back to the legacy `agent`
+object only when needed. For a DA agent, also check whether canonical
+`.local/setup/config.json` exists before reading it. A missing `.local`
+directory, missing configuration file, or `Path does not exist` read result
+is expected unprepared state. Do not retry the missing read, reconstruct
+deleted metadata, or show the global setup-required welcome message.
+Follow **Prepare missing prerequisites at entry** below, after applying any
+already-known unsupported-product boundary. Unknown targets use Setup's normal
+selection and authorization controls; remaining workspace files do not prove
+setup completion. Do not treat access-denied or malformed-file errors as absence;
+preserve their diagnostic and use supported state recovery.
+
+For readable configuration, require top-level `schema_version: 4`
 and its `agents` record keyed by the active `botId`, checking that
 `agent.workspace_slug` matches `activeAgent`. Require canonical workspace evidence and
 `steps.SETUP-07.state: "done"`; do not require `connect_ready: true`, because

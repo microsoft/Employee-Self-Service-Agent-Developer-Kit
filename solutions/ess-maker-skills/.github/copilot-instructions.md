@@ -1,37 +1,37 @@
 # ESS Maker Kit — Copilot Instructions
 
-## MANDATORY FIRST ACTION — Do This Before Anything Else
+## MANDATORY FIRST ACTION — Route Before Checking Setup
 
-**YOUR VERY FIRST ACTION on every new conversation must be: use your file
-reading tool to try to read `.local/setup/config.json`.**
-Do NOT skip this step. Do NOT respond to the user's message first. Do NOT greet
-the user first. Do NOT list capabilities. Read this file FIRST, then decide what
-to do based on the result.
+**Classify the current request before reading setup metadata or applying a
+setup-required stop.** Use both the user's message and the invoked command
+prompt: `/connect workday` remains a Connect request when `workday` is supplied
+as the command argument.
 
-### If setup is missing or not ready
+### Setup-independent routes
 
-DA setup is ready only when `.local/setup/config.json` has `schema_version`
-equal to `4` and its `agents` entry matching `.local/config.json`'s
-`activeAgent` workspace slug has `connect_ready` equal to `true`. Setup writes
-that per-agent marker only after all eight foundation steps for that agent have
-reached `done`.
+Apply these routes before the ordinary setup gate below. For a matching request,
+immediately follow its entry point; do not first probe setup metadata, show the
+setup-required Message block, or finish the request because metadata is absent.
+The selected entry point owns any metadata checks and missing-state handling.
 
-**STOP.** Do not read any skill files. Do not load templates. Do not search for
-files. Do not attempt any customization work. Do not answer questions about ESS.
-Do not list your capabilities. Do not greet the user with a menu of options.
-Do not say "hello" or introduce yourself.
-
-Use this setup-required Message block and finish the request:
-
-**Message:**
-
-Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up your
-environment. Type `/setup` to get started — it only takes a couple minutes.
-
-**End message.**
-
-**Exceptions:**
-
+- If the user typed `/connect` or `/connect-workday`, or explicitly asked to
+  **connect Workday**, proceed with `src/skills/connect/SKILL.md` even when
+  setup is missing. For `/connect workday`, retain `workday` as the selected
+  integration. Preserve the selected integration and requested target.
+  Apply provider availability and supported-product boundaries before any
+  setup handoff. The selected provider's entry point owns its prerequisites.
+  Workday requires **local workspace materialization**: `schema_version: 4`,
+  resolve `.local/config.json` `activeAgent` to the canonical agent whose
+  `agent.workspace_slug` matches, and require canonical workspace evidence
+  plus `steps.SETUP-07.state: "done"`. If that preparation is incomplete,
+  automatically invoke `src/skills/foundation-setup/SKILL.md` through the
+  Workday entry point and return to the original Connect request after
+  preparation succeeds. Do not show the setup-required Message block or ask
+  the maker to type `/setup` or repeat Connect. This handoff is entry-only,
+  never between Connect phases or after completion. Do not require
+  `connect_ready: true`; Workday connections may be the remaining runtime
+  readiness blocker. A missing `.local` directory or a `Path does not exist`
+  result is expected unprepared state, not a terminal Connect failure.
 - If the user typed `/setup` or explicitly asked to run setup, proceed with
   setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
 - If the user typed `/planner` or asked to **plan a rollout / plan an ESS
@@ -52,28 +52,33 @@ environment. Type `/setup` to get started — it only takes a couple minutes.
   configuration is available. Deleting deployed sets still requires setup.
 - If the user typed `/flightcheck` or explicitly asked to validate setup or
   environment readiness, follow the **FlightCheck entry contract** below.
-- If the user typed `/connect` or `/connect-workday`, or explicitly asked to
-  **connect Workday**, proceed with `src/skills/connect/SKILL.md` even when
-  setup is missing. Preserve the selected integration and requested target.
-  Apply provider availability and supported-product boundaries before any
-  setup handoff. The selected provider's entry point owns its prerequisites.
-  Workday requires **local workspace materialization**: `schema_version: 4`,
-  resolve `.local/config.json` `activeAgent` to the canonical agent whose
-  `agent.workspace_slug` matches, and require canonical workspace evidence
-  plus `steps.SETUP-07.state: "done"`. If that preparation is incomplete,
-  automatically invoke `src/skills/foundation-setup/SKILL.md` through the
-  Workday entry point and return to the original Connect request after
-  preparation succeeds. Do not show the setup-required Message block or ask
-  the maker to type `/setup` or repeat Connect. This handoff is entry-only,
-  never between Connect phases or after completion. Do not require
-  `connect_ready: true`; Workday connections may be the remaining runtime
-  readiness blocker.
 
-**Except for the cases above, this gate applies to ALL user messages** —
+### Setup gate for all other requests
+
+Only when no setup-independent route above matches, use your file-reading tool
+to try to read `.local/setup/config.json` and resolve `.local/config.json`.
+Absent files mean setup is missing; they do not change the request's intent.
+
+DA setup is ready only when `.local/setup/config.json` has `schema_version`
+equal to `4` and its `agents` entry matching `.local/config.json`'s
+`activeAgent` workspace slug has `connect_ready` equal to `true`. Setup writes
+that per-agent marker only after all eight foundation steps for that agent have
+reached `done`.
+
+**For unmatched requests only, this gate applies to ALL user messages** —
 including "hello", "hi", "help",
 "what can you do", "I need a topic", "create a workflow", or any other request.
-If foundation setup isn't ready and no exception above applies,
-use the setup-required Message block above and finish the request.
+If foundation setup isn't ready and no route above applies, **STOP.** Do not
+read skill files, load templates, search files, attempt customization work,
+answer questions about ESS, list capabilities, or greet the user with a menu.
+Use this setup-required Message block and finish the request:
+
+**Message:**
+
+Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up your
+environment. Type `/setup` to get started — it only takes a couple minutes.
+
+**End message.**
 
 #### FlightCheck entry contract
 

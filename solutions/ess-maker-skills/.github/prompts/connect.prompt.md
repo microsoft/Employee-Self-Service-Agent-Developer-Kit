@@ -5,11 +5,14 @@ description: "Connect Workday or another supported integration"
 
 # Connect
 
-**Setup-state check.** Missing setup does not stop integration selection.
+**Entry routing comes first.** Missing setup does not stop integration selection.
 Read `src/skills/connect/SKILL.md`, retain any selected integration and target,
 and apply provider availability before following that provider's entry point.
 The provider owns prerequisite preparation and any automatic Setup handoff;
 do not ask the maker to type `/setup` or repeat their Connect request.
+Read that router before probing `.local` metadata. The ordinary global setup
+gate does not apply to this command. A missing file or `Path does not exist`
+result must not trigger the setup-required welcome message or end Connect.
 
 For Workday, entry requires canonical state with `schema_version: 4`, complete
 workspace evidence, and `steps.SETUP-07.state: "done"` for the agent whose
