@@ -21,6 +21,8 @@ import re
 import sys
 from urllib.parse import urlparse
 
+from requests import RequestException
+
 # Add scripts/ to path so we can import shared modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -135,12 +137,27 @@ def list_environments():
     return parse_raw_environments(raw_envs)
 
 
-def get_dataverse_environments():
+def get_dataverse_environments(ring="prod"):
     """List environments and filter to only Dataverse-linked ones.
 
     Returns (dv_environments, excluded_count) tuple.
     """
-    environments = list_environments()
+    if ring not in {"prod", "preprod", "test"}:
+        raise ValueError("Power Platform ring must be prod, preprod, or test.")
+    if ring == "prod":
+        environments = list_environments()
+    else:
+        client = PowerPlatformClient("organizations", ring=ring)
+        try:
+            client.authenticate()
+            raw_environments = client.list_environments_for_user()
+        except (OSError, RuntimeError, ValueError, RequestException) as exc:
+            print(f"ERROR: Environment listing in ring '{ring}' failed - {exc}")
+            sys.exit(1)
+        if not isinstance(raw_environments, list):
+            print(f"ERROR: Could not list environments in ring '{ring}'.")
+            sys.exit(1)
+        environments = parse_user_environments(raw_environments)
     dv_environments = [e for e in environments if e["instanceUrl"]]
     excluded = len(environments) - len(dv_environments)
     return dv_environments, excluded
@@ -186,11 +203,16 @@ def resolve_environment_for_user(
         )
         sys.exit(1)
 
+    return find_environment_by_url(parse_user_environments(raw_environments), env_url)
+
+
+def parse_user_environments(raw_environments):
+    """Normalize the user-scoped inventory without inventing a Dataverse host."""
     environments = []
     for environment in raw_environments:
-        url = environment.get("url", "")
-        domain_name = environment.get("domainName", "")
-        if not url and domain_name:
+        url = environment.get("url") or ""
+        domain_name = environment.get("domainName") or ""
+        if not url and "." in domain_name:
             url = f"https://{domain_name}"
         environments.append({
             "id": environment.get("id", ""),
@@ -205,7 +227,7 @@ def resolve_environment_for_user(
             ),
         })
 
-    return find_environment_by_url(environments, env_url)
+    return environments
 
 
 def print_environment_table(environments):
