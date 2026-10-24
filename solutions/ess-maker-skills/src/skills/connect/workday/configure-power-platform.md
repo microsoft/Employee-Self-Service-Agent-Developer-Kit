@@ -343,7 +343,12 @@ action. For a name conflict, refresh the runtime plan; if the conflict
 remains, ask the Dataverse administrator to inspect ownership. Preserve
 completed stages and administrator evidence. Do not reset healthy connections
 or require the maker to repeat Workday administrator setup. Resume Runtime
-after correction with a freshly reviewed plan when its approved scope changed.
+after correction. Authorization preflight failures also retain their safe cause
+and next action for later status and resume. Records created for the approved
+agent and team during a partial attempt do not themselves require reapproval;
+the controller checks their ownership again and preserves verified stages.
+Use a freshly reviewed plan if any other approved scope changed, including
+replacement or removal of previously approved authorization or team IDs.
 
 The script verifies the delegated authorization, one linked access team, and
 WriteAccess sharing for every reviewed flow before the stage is recorded.

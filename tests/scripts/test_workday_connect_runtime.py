@@ -550,7 +550,7 @@ def test_authorization_created_before_a_failure_can_resume_without_a_team():
 @pytest.mark.parametrize("fault", [
     "duplicate-authorization", "duplicate-team", "wrong-provider", "foreign-bot",
     "wrong-team-type", "foreign-authorization", "orphan-team", "unreadable",
-    "unreadable-row",
+    "unreadable-row", "invalid-authorization-id", "invalid-team-id", "missing-team-name",
     "missing-business-unit", "ambiguous-business-unit", "foreign-name",
 ])
 def test_authorization_conflicts_fail_before_any_runtime_mutation(fault):
@@ -574,6 +574,12 @@ def test_authorization_conflicts_fail_before_any_runtime_mutation(fault):
     elif fault == "unreadable-row":
         records["authorizations"] = [{}]
         records["teams"] = []
+    elif fault == "invalid-authorization-id":
+        records["authorizations"][0]["delegatedauthorizationid"] = "not-a-guid"
+    elif fault == "invalid-team-id":
+        records["teams"][0]["teamid"] = "not-a-guid"
+    elif fault == "missing-team-name":
+        records["teams"][0]["name"] = ""
     else:
         records["teams"] = []
         if fault == "missing-business-unit":
@@ -594,6 +600,9 @@ def test_authorization_conflicts_fail_before_any_runtime_mutation(fault):
         )
     assert writes == []
     assert "administrator" in str(error.value)
+    assert error.value.details["stage"] == "authorization-preflight"
+    assert error.value.details["nextAction"] in error.value.customer_remediation
+    assert "No runtime changes were made" in error.value.customer_remediation
     if fault == "foreign-name":
         assert error.value.details["cause"] == "team-name-conflict"
         assert error.value.details["stage"] == "authorization-preflight"
@@ -611,7 +620,10 @@ def test_unreadable_authorization_ownership_is_not_treated_as_absent():
 
     assert error.value.details["cause"] == "read-failed"
     assert "verify read access" in str(error.value)
+    assert "verify read access" in error.value.details["nextAction"]
+    assert error.value.customer_remediation == str(error.value)
     assert "confidential" not in str(error.value)
+    assert "confidential" not in json.dumps(error.value.details)
 
 
 def test_apply_rechecks_reviewed_authorization_identity_before_runtime_writes():
@@ -1015,6 +1027,125 @@ def test_runtime_plan_rejects_connection_id_drift_after_verification():
             identity_provider=_identity,
             **_discovery_dependencies(_records()),
         )
+
+
+@pytest.mark.parametrize("authorization_exists", [False, True])
+@pytest.mark.parametrize("scenario", ["partial-failure", "concurrent-create"])
+def test_runtime_retry_uses_real_approval_and_preserves_verified_progress(
+    tmp_path, monkeypatch, authorization_exists, scenario,
+):
+    from workday_connect_model import PHASE_REQUIRED_ACTIONS
+    from workday_connect_store import WorkdayConnectStore
+
+    records = _authorization_records() if authorization_exists else _records()
+    records.pop("teams", None)
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    state = _api_state()
+    store.merge_section("scope", state["scope"])
+    store.merge_section("operators", state["operators"])
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        for action in PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(phase_id, action, evidence={"outcome": "verified"})
+        store.set_phase_status(phase_id, "complete")
+    administrator_phases = store.load()["phases"]
+    monkeypatch.setattr(runtime, "_api_connections", lambda _context: _connections()["value"])
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh.exe")
+    dependencies = {
+        "token_provider": lambda *_args, **_kwargs: "token",
+        "identity_provider": _identity,
+        "query": _query_for(records),
+    }
+
+    def preview_authorization(command, **_kwargs):
+        assert command[-1].endswith("-WhatIf")
+        output = [
+            (
+                f"[reuse] delegatedauthorization {AUTHORIZATION_ID} (providertype 3)"
+                if authorization_exists
+                else "[create] would create delegatedauthorization (providertype 3)"
+            ),
+            "[create] would create access team (teamtype 1)",
+            *[
+                f"[create] would share '{name}' with the team"
+                for name in records["flows"]
+            ],
+            "[FAIL] GetTeamsForBotId returned 0 teams",
+            *[
+                f"[FAIL] {flow['workflowid']} is NOT shared with the team with WriteAccess"
+                for flow in records["flows"].values()
+            ],
+            "Verification FAILED - see [FAIL] lines above.",
+        ]
+        return SimpleNamespace(returncode=1, stdout="\n".join(output), stderr="")
+
+    preview = runtime.run_runtime_operation(
+        store.load(), apply=False,
+        authorization_runner=preview_authorization, **dependencies,
+    )
+    assert preview["authorizationPreview"]["outcome"] == "changes-required"
+    _, approved_hash = store.approve_plan("runtime", preview["plan"])
+
+    def updater(_url, _token, entity_set, record_id, data):
+        collection, key = {
+            "connectionreferences": ("references", "connectionreferenceid"),
+            "workflows": ("flows", "workflowid"),
+        }[entity_set]
+        for row in records[collection].values():
+            if row.get(key) == record_id:
+                row.update(data)
+                return True
+        raise AssertionError((entity_set, record_id))
+
+    def create_authorization():
+        created = _authorization_records()
+        records["authorizations"] = created["authorizations"]
+        records["teams"] = created["teams"]
+
+    def incomplete_authorization(command, **_kwargs):
+        create_authorization()
+        return SimpleNamespace(
+            returncode=1, stdout="[FAIL] Final flow-share verification failed.", stderr="",
+        )
+
+    def apply(runner):
+        return runtime.run_runtime_operation(
+            store.load(), apply=True, approved_hash=approved_hash,
+            verifier=lambda plan, digest: store.verify_plan("runtime", plan, digest),
+            updater=updater, authorization_runner=runner,
+            stage_recorder=lambda action, evidence: store.complete_action(
+                "runtime", action, evidence=evidence,
+            ),
+            **dependencies,
+        )
+
+    if scenario == "partial-failure":
+        with pytest.raises(runtime.WorkdayConnectRuntimeError, match="authorization failed"):
+            apply(incomplete_authorization)
+        assert set(store.load()["phases"]["runtime"]["completedActions"]) == {
+            "connection-references-bound", "runtime-flows-active",
+        }
+    else:
+        create_authorization()
+
+    def verified_authorization(command, **_kwargs):
+        assert f"-ExpectedAuthorizationId '{AUTHORIZATION_ID}'" in command[-1]
+        assert f"-ExpectedTeamId '{TEAM_ID}'" in command[-1]
+        return SimpleNamespace(
+            returncode=0, stdout="Dataverse authorization is in place.", stderr="",
+        )
+
+    result = apply(verified_authorization)
+
+    assert result["applied"]["verified"] is True
+    saved = store.load()
+    assert saved["phases"]["runtime"]["approvedPlanHash"] == approved_hash
+    assert {
+        "connection-references-bound", "runtime-flows-active",
+        "delegated-authorization-configured",
+    } <= set(saved["phases"]["runtime"]["completedActions"])
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        assert saved["phases"][phase_id] == administrator_phases[phase_id]
 
 
 def test_runtime_apply_verifies_all_mutations(monkeypatch, capsys):

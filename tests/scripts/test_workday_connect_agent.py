@@ -1620,6 +1620,69 @@ def test_authorization_recovery_survives_controller_error_and_later_status(
     } == {"connection-references-bound", "runtime-flows-active"}
 
 
+@pytest.mark.parametrize("failure", ["read-failed", "duplicate-authorization"])
+def test_authorization_preflight_recovery_survives_controller_and_status(
+    tmp_path, monkeypatch, capsys, failure,
+):
+    import requests
+    import workday_connect
+    import workday_connect_model as model
+    import workday_connect_runtime as runtime
+    from workday_connect_store import WorkdayConnectStore
+    from tests.scripts import test_workday_connect_runtime as fixtures
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(phase_id, action, evidence={"outcome": "verified"})
+        store.set_phase_status(phase_id, "complete")
+    before = store.load()
+
+    def fail_preflight(_args, _store):
+        records = fixtures._authorization_records()
+        records["authorizations"] *= 2
+
+        def denied(*_args, **_kwargs):
+            raise requests.HTTPError("403 confidential response body")
+
+        return runtime._authorization_target(
+            "https://org.crm.dynamics.com", "token", "dev", fixtures.BOT_ID,
+            query=denied if failure == "read-failed" else fixtures._query_for(records),
+        )
+
+    monkeypatch.setitem(
+        workday_connect._COMMAND_HANDLERS, "runtime-plan", fail_preflight,
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "workday_connect.py", "--root", str(tmp_path), "runtime-plan",
+    ])
+    with pytest.raises(SystemExit) as error:
+        workday_connect.main()
+
+    assert error.value.code == 1
+    payload = json.loads(
+        capsys.readouterr().err.split(workday_connect.ERROR_MARKER, maxsplit=1)[1]
+    )
+    assert payload["details"]["nextAction"]
+    assert "confidential" not in json.dumps(payload)
+    resumed_store = WorkdayConnectStore(tmp_path)
+    status = resumed_store.status()
+    guidance = status["blocker"]["nextAction"]
+    assert payload["details"]["nextAction"] in guidance
+    assert "No runtime changes were made" in guidance
+    if failure == "read-failed":
+        assert "verify read access" in guidance
+    else:
+        assert "resolve these duplicates" in guidance
+        assert "Do not delete another agent's records" in guidance
+    saved = resumed_store.load()
+    assert status["nextPhaseId"] == "runtime"
+    assert saved["phases"]["runtime"]["status"] == "blocked"
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        assert saved["phases"][phase_id] == before["phases"][phase_id]
+
+
 def test_record_connections_uses_live_verification(
     tmp_path: Path,
     monkeypatch,

@@ -35,6 +35,7 @@ from workday_connect_model import (
     TARGET_REALMS,
     PhaseStatus,
     WorkdayConnectModelError,
+    canonical_plan,
     default_administrator_state,
     default_state,
     next_phase_summary,
@@ -117,6 +118,47 @@ class WorkdayConnectStoreError(RuntimeError):
 
 class WorkdayConnectPlanChangedError(WorkdayConnectStoreError):
     """Raised when an approved plan no longer matches the current plan."""
+
+
+def _is_runtime_creation_progress(
+    plan: Mapping[str, Any],
+    approved_plan: Mapping[str, Any] | None,
+    approved_hash: str | None,
+) -> bool:
+    """Allow newly assigned IDs only within an unchanged approved runtime scope."""
+    if not isinstance(approved_plan, Mapping):
+        return False
+    if plan_hash(approved_plan) != approved_hash:
+        return False
+    current = canonical_plan(plan)
+    approved = canonical_plan(approved_plan)
+    if current["phase"] != "runtime" or approved["phase"] != "runtime":
+        return False
+    current_authorization = current.get("delegatedAuthorization")
+    approved_authorization = approved.get("delegatedAuthorization")
+    if not isinstance(current_authorization, Mapping) or not isinstance(
+        approved_authorization, Mapping
+    ):
+        return False
+    if current_authorization.get("teamId") is not None and not current_authorization.get(
+        "authorizationId"
+    ):
+        return False
+    authorization = dict(current_authorization)
+    changed = False
+    for key in ("authorizationId", "teamId"):
+        value = authorization.get(key)
+        if approved_authorization.get(key) is None and value is not None:
+            if not isinstance(value, str):
+                return False
+            try:
+                uuid.UUID(value)
+            except ValueError:
+                return False
+            authorization[key] = None
+            changed = True
+    current["delegatedAuthorization"] = authorization
+    return changed and plan_hash(current) == approved_hash
 
 
 def _remediation_id(blocker: Mapping[str, Any] | None) -> str:
@@ -1979,12 +2021,19 @@ class WorkdayConnectStore:
             phase = state["phases"][phase_id]
             previous_status = phase["status"]
             plan_changed = phase.get("approvedPlanHash") != approved_hash
+            creation_progress = (
+                phase_id == "runtime"
+                and plan_changed
+                and _is_runtime_creation_progress(
+                    plan, phase.get("approvedPlan"), phase.get("approvedPlanHash")
+                )
+            )
             if (
                 phase["status"] == PhaseStatus.COMPLETE.value
-                or plan_changed
+                or (plan_changed and not creation_progress)
             ):
                 _invalidate_after_phase(state, phase_id)
-            if plan_changed:
+            if plan_changed and not creation_progress:
                 _reset_phase(phase)
             phase["approvedPlan"] = dict(plan)
             phase["approvedPlanHash"] = approved_hash
@@ -2020,12 +2069,20 @@ class WorkdayConnectStore:
             raise WorkdayConnectStoreError(f"Unknown Workday phase: {phase_id}.")
         current_hash = plan_hash(current_plan)
         stored_hash = phase.get("approvedPlanHash")
-        if current_hash != approved_hash or stored_hash != approved_hash:
+        if stored_hash != approved_hash or (
+            current_hash != approved_hash
+            and not (
+                phase_id == "runtime"
+                and _is_runtime_creation_progress(
+                    current_plan, phase.get("approvedPlan"), stored_hash
+                )
+            )
+        ):
             raise WorkdayConnectPlanChangedError(
                 "The Workday change plan or target changed after approval. "
                 "Review and approve the current plan before applying it."
             )
-        return current_hash
+        return approved_hash
 
     def status(self) -> dict[str, Any]:
         from workday_connect_flightcheck import (

@@ -155,7 +155,13 @@ These values are independent and must never be aliases:
 - Runtime plans include the active realm, environment, tenant, agent, ALM
   family, deployed commit, reviewed flows, physical connections, and
   agent-specific authorization team, exact existing authorization/team IDs,
-  and business unit. Any drift changes the plan hash. A valid exact-agent
+  and business unit. Newly assigned IDs for authorization records absent at
+  approval are accepted only after live ownership checks prove the same agent,
+  team name, business unit, and otherwise unchanged plan. This expected creation
+  progress does not require reapproval or discard verified Runtime stages.
+  Explicit approval of that refreshed plan also preserves those stages.
+  Removal or replacement of an existing approved ID, or any other plan drift,
+  still requires a new approval. A valid exact-agent
   legacy team is reused without renaming. New names include the realm and full
   canonical BotId. Foreign or ambiguous records block before runtime writes;
   they are never adopted, deleted, renamed, or relinked.
