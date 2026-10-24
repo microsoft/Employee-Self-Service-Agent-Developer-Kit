@@ -1579,6 +1579,56 @@ class WorkdayConnectStore:
         state = self._mutate(mutation)
         return state, reused
 
+    def record_preflight_checks(
+        self,
+        checks: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Persist local compatibility results without discarding target work."""
+        def mutation(state: dict[str, Any]) -> None:
+            state["phases"]["preflight"]["prerequisiteChecks"] = copy.deepcopy(checks)
+            blocked = [check for check in checks if check["status"] == "blocked"]
+            phase_id = next(
+                (
+                    definition.identifier.value
+                    for definition in PHASE_DEFINITIONS
+                    if state["phases"][definition.identifier.value]["status"]
+                    != PhaseStatus.COMPLETE.value
+                ),
+                PHASE_DEFINITIONS[-1].identifier.value,
+            )
+            phase = state["phases"][phase_id]
+            previous = phase.get("blocker") or {}
+            is_prerequisite_blocker = (
+                previous.get("errorType") == "WorkdayConnectPrerequisiteError"
+            )
+            if blocked:
+                _transition_phase_state(
+                    state, phase_id, PhaseStatus.BLOCKED.value,
+                    blocker={
+                        "operation": "preflight",
+                        "errorType": "WorkdayConnectPrerequisiteError",
+                        "message": "; ".join(check["name"] for check in blocked),
+                        "details": {"verificationChecks": copy.deepcopy(checks)},
+                        "resumeStatus": (
+                            previous["resumeStatus"] if is_prerequisite_blocker
+                            else phase["status"]
+                        ),
+                        "previousBlocker": copy.deepcopy(
+                            previous.get("previousBlocker") if is_prerequisite_blocker
+                            else phase.get("blocker")
+                        ),
+                    },
+                    invalidate_downstream=False,
+                )
+            elif is_prerequisite_blocker:
+                _transition_phase_state(
+                    state, phase_id, previous["resumeStatus"],
+                    blocker=previous.get("previousBlocker"),
+                    invalidate_downstream=False,
+                )
+
+        return self._mutate(mutation)
+
     def set_phase_status(
         self,
         phase_id: str,

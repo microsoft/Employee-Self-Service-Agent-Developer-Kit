@@ -91,6 +91,27 @@ values** column while performing the applicable steps and return the same
 table; the workbook is the single capture worksheet. Keep the numbered tasks
 focused on actions and never render internal `fields` names.
 
+Include this file guidance in the shareable handoff before the numbered tasks:
+
+> Use the single `Worksheet - Detailed` sheet. Follow the detailed instructions
+> beside each row and fill **Your tenant values**. For confirmations, use the
+> exact successful answer shown in **Example value** or the listed choices
+> in **What to record**, only after verifying the setting. Leave incomplete
+> confirmations blank.
+> Return an organization-approved readable `.xlsx` copy. Password encryption
+> or sensitivity-policy protection may prevent validation. If protection is
+> required, ask your information protection administrator for an approved
+> handoff method. Do not share passwords or bypass required protections.
+
+When validation returns `details.fieldErrors`, show all returned labels and
+corrections together, including the accepted answers for choice cells and the
+required endpoint endings. Ask the administrator to correct those cells in
+the same workbook and upload it again. Do not return to Entra or repeat
+healthy handoff tasks. An encrypted or protected workbook requires an approved
+readable copy or an information-protection handoff decision, not a password
+in chat or an ad hoc decryption attempt. A chat reply such as **Yes** does not
+correct the rejected workbook.
+
 Network connectivity is a conditional infrastructure prerequisite, not a
 required worksheet attestation. Do not add a **Network readiness** row or ask
 for a generic readiness confirmation. Both Workday REST and SOAP endpoints

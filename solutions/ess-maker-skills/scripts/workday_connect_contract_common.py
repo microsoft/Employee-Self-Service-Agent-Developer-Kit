@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 import ipaddress
 import re
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
 from workday_connect_evidence_contracts import (
@@ -263,15 +263,62 @@ def _worksheet_choice(
     choices: Mapping[str, str],
 ) -> str:
     supplied = str(values.get(label) or "").strip()
-    normalized = supplied.casefold()
+    normalized = " ".join(supplied.split()).casefold()
     normalized_choices = {
-        option.casefold(): mapped for option, mapped in choices.items()
+        " ".join(option.split()).casefold(): mapped
+        for option, mapped in choices.items()
     }
     if normalized not in normalized_choices:
         raise WorkdayConnectContractError(
-            f"{label} must use one of the worksheet's listed successful answers."
+            f"{label} must use one of the worksheet's listed successful answers. "
+            "Accepted answers: " + "; ".join(choices) + ". "
+            "Select an answer only after verifying the setting; otherwise "
+            "leave the cell blank and complete the administrator task."
         )
     return normalized_choices[normalized]
+
+
+class WorkdayConnectWorksheetError(WorkdayConnectContractError):
+    """Report all independently invalid worksheet answers without recording them."""
+
+    def __init__(self, errors: list[dict[str, str]]) -> None:
+        next_action = (
+            "Ask the administrator to correct the listed cells in the same "
+            "workbook and upload it again. Earlier completed phases are preserved."
+        )
+        super().__init__(
+            "Administrator workbook needs corrections:\n"
+            + "\n".join(f"- {error['message']}" for error in errors)
+            + "\n"
+            + next_action
+        )
+        self.details = {"fieldErrors": errors, "nextAction": next_action}
+
+
+def _validated_worksheet_values(
+    values: Mapping[str, str],
+    *,
+    choices: Mapping[str, Mapping[str, str]],
+    validators: Mapping[str, Callable[[str], Any]],
+    optional_labels: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    errors: list[dict[str, str]] = []
+    for label, value in values.items():
+        if label in optional_labels and not value.strip():
+            continue
+        try:
+            if label in choices:
+                result[label] = _worksheet_choice(values, label, choices[label])
+            elif label in validators:
+                result[label] = validators[label](value)
+            else:
+                result[label] = _safe_nonsecret_text(value, label)
+        except WorkdayConnectContractError as exc:
+            errors.append({"label": label, "message": str(exc)})
+    if errors:
+        raise WorkdayConnectWorksheetError(errors)
+    return result
 
 
 def _administrator_attestation(

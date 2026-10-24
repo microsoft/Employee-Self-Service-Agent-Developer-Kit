@@ -32,6 +32,27 @@ def _state():
     return state
 
 
+@pytest.mark.parametrize("broken", [False, True])
+def test_local_prerequisite_workspace_validates_required_runtime_mappings(
+    tmp_path, broken,
+):
+    import workday_connect_agent as agent
+
+    _write_workspace(tmp_path)
+    _write_runtime_wiring(tmp_path)
+    if broken:
+        (
+            tmp_path / "workspace" / "agents" / "ess-hr"
+            / "topics" / "runtime-template.mcs.yml"
+        ).unlink()
+        with pytest.raises(agent.WorkdayConnectAgentError, match="Mapped topic file is missing"):
+            agent.verify_local_runtime_workspace(tmp_path, _state())
+    else:
+        assert agent.verify_local_runtime_workspace(tmp_path, _state()) == {
+            "verifiedTopics": 3,
+        }
+
+
 def _complete_preflight(store) -> None:
     store.complete_action(
         "preflight",
@@ -826,6 +847,53 @@ def test_controller_reads_completed_xlsx_worksheet(
             "Application ID: 44444444-4444-4444-4444-444444444444\n"
         )
     }
+
+
+def test_controller_returns_workbook_corrections_without_reopening_entra(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    import workday_connect
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+    from workday_connect_workbook import WORKDAY_ADMIN_WORKBOOK_PATH
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section("scope", {"workdayTenant": "contoso"})
+    for phase_id in ("preflight", "entra"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id, action, evidence={"outcome": "verified"}
+            )
+        store.set_phase_status(phase_id, "complete")
+    _advance_administrator_to_completion(store, "workday-admin")
+    before = store.load()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "workday_connect.py", "--root", str(tmp_path),
+            "record-workday-admin",
+            "--response-worksheet-file", str(WORKDAY_ADMIN_WORKBOOK_PATH),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as caught:
+        workday_connect.main()
+
+    assert caught.value.code == 1
+    payload = json.loads(
+        capsys.readouterr().err.split(workday_connect.ERROR_MARKER, maxsplit=1)[1]
+    )
+    labels = {error["label"] for error in payload["details"]["fieldErrors"]}
+    assert {"SAML row settings", "REST base URL", "SOAP base URL"} <= labels
+    after = store.load()
+    assert after["phases"]["entra"] == before["phases"]["entra"]
+    assert after["phases"]["preflight"] == before["phases"]["preflight"]
+    assert after["phases"]["workday-admin"]["status"] == "blocked"
+    assert after["phases"]["connections"]["status"] == "pending"
 
 
 def test_controller_parser_accepts_guided_entra_handoff() -> None:
@@ -2404,17 +2472,31 @@ def test_maker_success_completes_without_run_history_correlation(
     assert result["verified"] is True
     assert result["lifecycleComplete"] is True
     assert result["activeTargetRealm"] == "dev"
+    assert result["completionMessage"] == (
+        "Workday Connect is complete in Development: all six steps are finished "
+        "and the maker Test pane validation passed. "
+        "No further Workday Connect action is required in this realm."
+    )
     assert result["postSkillNextSteps"] == [
-        "Promote the agent from Development to Test when ready.",
         (
-            "Return to Connect Workday and say that the agent was promoted "
-            "to Test."
+            "Optional later: Promote the agent from Development to Test when ready. "
+            "Open the source agent in Copilot Studio and use your "
+            "organization's approved promotion process. Ask the maker "
+            "responsible for agent deployment if you need access or "
+            "instructions. Connect Workday does not perform promotion."
+        ),
+        (
+            "Only after promotion is complete, return to Connect Workday and "
+            "say that the agent was promoted to Test."
         ),
     ]
     assert "non-maker employee" not in " ".join(
         result["postSkillNextSteps"]
     )
     assert state["status"] == "ready"
+    ready_status = workday_connect._status(SimpleNamespace(), store)
+    for field in ("lifecycleComplete", "completionMessage", "postSkillNextSteps"):
+        assert ready_status[field] == result[field]
     assert "employeeTestAttempt" not in state["phases"]["maker-validation"]
     assert set(
         state["phases"]["maker-validation"]["validationProfiles"]
@@ -2437,6 +2519,54 @@ def test_maker_success_completes_without_run_history_correlation(
     assert evidence["testUserCategory"] == "maker"
     assert evidence["timestamp"] == "2026-10-06T01:00:00Z"
 
+    replay = workday_connect._record_validation(
+        SimpleNamespace(evidence_file=evidence_file),
+        store,
+    )
+    assert replay["replayed"] is True
+    for field in ("lifecycleComplete", "completionMessage", "postSkillNextSteps"):
+        assert replay[field] == result[field]
+    assert store.load()["phases"]["maker-validation"]["evidence"] == (
+        state["phases"]["maker-validation"]["evidence"]
+    )
+
+
+@pytest.mark.parametrize(
+    "realm,display_name",
+    [("dev", "Development"), ("test", "Test"), ("prod", "Production")],
+)
+def test_ready_status_confirms_current_realm_completion(realm, display_name) -> None:
+    import workday_connect
+
+    store = SimpleNamespace(
+        status=lambda: {"status": "ready", "activeTargetRealm": realm},
+    )
+    result = workday_connect._status(SimpleNamespace(), store)
+
+    assert result["lifecycleComplete"] is True
+    assert f"Workday Connect is complete in {display_name}:" in result["completionMessage"]
+    assert "all six steps are finished" in result["completionMessage"]
+    assert "maker Test pane validation passed" in result["completionMessage"]
+    assert "No further Workday Connect action is required" in result["completionMessage"]
+    assert result["postSkillNextSteps"][0].startswith("Optional later:")
+    if realm != "prod":
+        assert result["postSkillNextSteps"][1].startswith(
+            "Only after promotion is complete,"
+        )
+
+
+def test_unfinished_status_does_not_claim_completion() -> None:
+    import workday_connect
+
+    store = SimpleNamespace(
+        status=lambda: {"status": "blocked", "activeTargetRealm": "dev"},
+    )
+    result = workday_connect._status(SimpleNamespace(), store)
+
+    assert "lifecycleComplete" not in result
+    assert "completionMessage" not in result
+    assert "postSkillNextSteps" not in result
+
 
 def test_post_skill_next_steps_are_realm_specific() -> None:
     import workday_connect
@@ -2450,13 +2580,13 @@ def test_post_skill_next_steps_are_realm_specific() -> None:
     assert "non-maker employee" not in " ".join(dev_steps)
     assert "non-maker employee" not in " ".join(test_steps)
     assert prod_steps == [
-        "Publish and deploy the Production agent when ready.",
+        "Optional later: Publish and deploy the Production agent when ready.",
         (
-            "Have each non-maker employee establish their own Workday "
+            "After deployment, have each non-maker employee establish their own Workday "
             "connections in Microsoft 365 Chat."
         ),
         (
-            "Validate an enabled Workday scenario with the published "
+            "After deployment, validate an enabled Workday scenario with the published "
             "Production agent."
         ),
     ]

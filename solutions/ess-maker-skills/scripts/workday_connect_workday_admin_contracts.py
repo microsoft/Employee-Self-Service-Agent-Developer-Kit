@@ -20,7 +20,7 @@ from workday_connect_contract_common import (
     _require_endpoint_path,
     _safe_nonsecret_text,
     _safe_string_list,
-    _worksheet_choice,
+    _validated_worksheet_values,
     required_text as _required_text,
 )
 from workday_connect_model import workday_saml_entity_id
@@ -112,10 +112,49 @@ WORKDAY_ADMIN_WORKSHEET_LABEL_ALIASES = {
     "Additional domains": "Additional scenario domains",
     "Domain mappings": "Additional scenario domains",
 }
+WORKDAY_ADMIN_WORKSHEET_CHOICES = {
+    "SAML row settings": {"Yes, all four values match exactly": "verified"},
+    "Certificate": {
+        "The certificate transferred from the completed Entra handoff": "verified",
+        "The new certificate created from the Entra Base64 file": "verified",
+    },
+    "Certificate expiration": {"Yes, the expiration date matches exactly": "verified"},
+    "API client access": {
+        (
+            "Yes, SAML Bearer, Workday Owned Scope, and all four "
+            "required functional areas are configured"
+        ): "verified",
+    },
+    "Required employee access": {
+        (
+            "Yes, Get permission is verified for Public Worker Reports "
+            "and Integration Permissions"
+        ): "get-permission-verified",
+    },
+    "Authentication policy": {
+        **_AUTHENTICATION_POLICY_CHOICES,
+        "An existing active policy allows SAML": "existing-active-policy",
+        "A reviewed policy was activated": "reviewed-policy-activated",
+    },
+    "Rollout": _ROLLOUT_CHOICES,
+    "API client": {
+        "An existing approved client was verified": "existing-client-verified",
+        "A new client was registered": "new-client-registered",
+    },
+    "Network readiness": {
+        "Both Workday hosts are allowed": "confirmed-hosts-allowed",
+        "No customer-managed firewall change is required": (
+            "no-customer-firewall-change-required"
+        ),
+    },
+}
 
 
 def _optional_domain_mappings(value: str) -> list[dict[str, str]]:
-    if not value.strip():
+    if (
+        not value.strip()
+        or value.strip().casefold() == "no additional scenario domains are required"
+    ):
         return []
     result = []
     for line in value.splitlines():
@@ -146,45 +185,23 @@ def parse_workday_admin_return_worksheet(
         ),
         label_aliases=WORKDAY_ADMIN_WORKSHEET_LABEL_ALIASES,
     )
-    _worksheet_choice(
+    tenant = _required_text(state.get("scope") or {}, "workdayTenant", "Workday tenant")
+    validated = _validated_worksheet_values(
         values,
-        "SAML row settings",
-        {"Yes, all four values match exactly": "verified"},
-    )
-    _worksheet_choice(
-        values,
-        "Certificate",
-        {
-            (
-                "The certificate transferred from the completed Entra handoff"
-            ): "verified",
-            "The new certificate created from the Entra Base64 file": "verified",
+        choices=WORKDAY_ADMIN_WORKSHEET_CHOICES,
+        validators={
+            "OAuth token URL": lambda value: _validated_workday_endpoint(
+                value, f"/ccx/oauth2/{tenant}/token", "Workday OAuth token URL"
+            ),
+            "REST base URL": lambda value: _validated_workday_endpoint(
+                value, "/ccx/api", "Workday REST base URL"
+            ),
+            "SOAP base URL": lambda value: _validated_workday_endpoint(
+                value, "/ccx/service", "Workday SOAP base URL"
+            ),
+            "Additional scenario domains": _optional_domain_mappings,
         },
-    )
-    _worksheet_choice(
-        values,
-        "Certificate expiration",
-        {"Yes, the expiration date matches exactly": "verified"},
-    )
-    _worksheet_choice(
-        values,
-        "API client access",
-        {
-            (
-                "Yes, SAML Bearer, Workday Owned Scope, and all four "
-                "required functional areas are configured"
-            ): "verified",
-        },
-    )
-    _worksheet_choice(
-        values,
-        "Required employee access",
-        {
-            (
-                "Yes, Get permission is verified for Public Worker Reports "
-                "and Integration Permissions"
-            ): "verified",
-        },
+        optional_labels=frozenset(_WORKDAY_ADMIN_LEGACY_OPTIONAL_WORKSHEET_LABELS),
     )
     identifiers = state.get("identifiers") or {}
     response: dict[str, Any] = {
@@ -196,24 +213,13 @@ def parse_workday_admin_return_worksheet(
         ),
         "certificateSelectionOutcome": ("entra-signing-certificate-selected"),
         "certificateValidityOutcome": ("matches-verified-entra-certificate"),
-        "oauthClientId": _safe_nonsecret_text(
-            values["OAuth client ID"],
-            "OAuth client ID",
-        ),
+        "oauthClientId": validated["OAuth client ID"],
         "clientGrantType": "saml-bearer",
         "includeWorkdayOwnedScope": "yes",
-        "oauthTokenUrl": values["OAuth token URL"],
-        "restBaseUrl": values["REST base URL"],
-        "soapBaseUrl": values["SOAP base URL"],
-        "authenticationPolicyOutcome": _worksheet_choice(
-            values,
-            "Authentication policy",
-            {
-                **_AUTHENTICATION_POLICY_CHOICES,
-                "An existing active policy allows SAML": "existing-active-policy",
-                "A reviewed policy was activated": "reviewed-policy-activated",
-            },
-        ),
+        "oauthTokenUrl": validated["OAuth token URL"],
+        "restBaseUrl": validated["REST base URL"],
+        "soapBaseUrl": validated["SOAP base URL"],
+        "authenticationPolicyOutcome": validated["Authentication policy"],
         "identityProviderSsoServiceUrl": _required_text(
             identifiers,
             "entraLoginUrl",
@@ -224,68 +230,18 @@ def parse_workday_admin_return_worksheet(
             "replyUrl",
             "Verified Microsoft Entra Reply URL",
         ),
-        "rolloutType": _worksheet_choice(
-            values,
-            "Rollout",
-            _ROLLOUT_CHOICES,
-        ),
-        "publicWorkerReportsOutcome": _worksheet_choice(
-            values,
-            "Required employee access",
-            {
-                (
-                    "Yes, Get permission is verified for Public Worker "
-                    "Reports and Integration Permissions"
-                ): "get-permission-verified",
-            },
-        ),
-        "integrationPermissionsGetOutcome": _worksheet_choice(
-            values,
-            "Required employee access",
-            {
-                (
-                    "Yes, Get permission is verified for Public Worker "
-                    "Reports and Integration Permissions"
-                ): "get-permission-verified",
-            },
-        ),
+        "rolloutType": validated["Rollout"],
+        "publicWorkerReportsOutcome": validated["Required employee access"],
+        "integrationPermissionsGetOutcome": validated["Required employee access"],
         "functionalAreaScopes": list(WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES),
     }
-    api_client_value = values.get("API client", "").strip()
-    if api_client_value:
-        response["apiClientOutcome"] = _worksheet_choice(
-            values,
-            "API client",
-            {
-                "An existing approved client was verified": (
-                    "existing-client-verified"
-                ),
-                "A new client was registered": "new-client-registered",
-            },
-        )
-    network_value = values.get("Network readiness", "").strip()
-    if network_value:
-        response["networkReadinessOutcome"] = _worksheet_choice(
-            values,
-            "Network readiness",
-            {
-                "Both Workday hosts are allowed": "confirmed-hosts-allowed",
-                "No customer-managed firewall change is required": (
-                    "no-customer-firewall-change-required"
-                ),
-            },
-        )
-    additional_domains = values.get(
-        "Additional scenario domains",
-        "",
-    ).strip()
-    if additional_domains:
-        response["optionalDomains"] = (
-            []
-            if additional_domains.casefold()
-            == "no additional scenario domains are required"
-            else _optional_domain_mappings(additional_domains)
-        )
+    for label, key in (
+        ("API client", "apiClientOutcome"),
+        ("Network readiness", "networkReadinessOutcome"),
+        ("Additional scenario domains", "optionalDomains"),
+    ):
+        if label in validated:
+            response[key] = validated[label]
     return response
 
 
@@ -661,27 +617,27 @@ def build_workday_admin_packet(
     }
     if certificate_valid_from:
         packet["referenceValues"]["certificateValidFrom"] = certificate_valid_from
+    for instruction in packet["captureInstructions"]:
+        label = instruction["information"]
+        if label in WORKDAY_ADMIN_WORKSHEET_CHOICES:
+            choices = WORKDAY_ADMIN_WORKSHEET_CHOICES[label]
+            if label == "Authentication policy":
+                choices = _AUTHENTICATION_POLICY_CHOICES
+            instruction["successfulAnswers"] = list(choices)
     return packet
+
+
+def _validated_workday_endpoint(value: Any, path: str, label: str) -> str:
+    endpoint = _https_url(value, label)
+    _require_endpoint_path(endpoint, path, label)
+    return endpoint
 
 
 def _validated_workday_endpoints(
     response: Mapping[str, Any],
     tenant: str,
 ) -> dict[str, str]:
-    endpoints = {
-        "oauthTokenUrl": _https_url(
-            response.get("oauthTokenUrl"),
-            "Workday OAuth token URL",
-        ),
-        "restBaseUrl": _https_url(
-            response.get("restBaseUrl"),
-            "Workday REST base URL",
-        ),
-        "soapBaseUrl": _https_url(
-            response.get("soapBaseUrl"),
-            "Workday SOAP base URL",
-        ),
-    }
+    endpoints = {}
     for key, path_prefix, label in (
         (
             "oauthTokenUrl",
@@ -691,7 +647,9 @@ def _validated_workday_endpoints(
         ("restBaseUrl", "/ccx/api", "Workday REST base URL"),
         ("soapBaseUrl", "/ccx/service", "Workday SOAP base URL"),
     ):
-        _require_endpoint_path(endpoints[key], path_prefix, label)
+        endpoints[key] = _validated_workday_endpoint(
+            response.get(key), path_prefix, label
+        )
     endpoint_hosts = {
         str(urlparse(value).hostname or "").casefold() for value in endpoints.values()
     }

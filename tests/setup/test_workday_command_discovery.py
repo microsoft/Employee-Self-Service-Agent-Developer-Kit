@@ -63,15 +63,15 @@ def test_connect_workday_bypasses_runtime_readiness_gate() -> None:
     normalized = _normalize(instructions)
 
     assert "typed `/connect` or `/connect-workday`" in normalized
-    assert "even when runtime `connect_ready` is false" in normalized
+    assert "Do not require `connect_ready: true`" in normalized
 
 
 def test_connect_workday_routes_to_architecture_aware_connect() -> None:
     instructions = (
         _SOLUTION / ".github" / "copilot-instructions.md"
     ).read_text(encoding="utf-8")
-    hybrid_boundary = (
-        _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
+    workday = (
+        _SOLUTION / "src" / "skills" / "connect" / "workday" / "SKILL.md"
     ).read_text(encoding="utf-8")
     normalized = _normalize(instructions)
 
@@ -83,4 +83,5 @@ def test_connect_workday_routes_to_architecture_aware_connect() -> None:
         "Provision/connect the Workday setup environment (`/connect workday`) "
         "| `src/skills/setup/SKILL.md`"
     ) not in normalized
-    assert "immediately read\n`src/skills/connect/SKILL.md`" in hybrid_boundary
+    assert "scripts/workday_connect.py" in workday
+    assert "This branch is DA-only" in workday

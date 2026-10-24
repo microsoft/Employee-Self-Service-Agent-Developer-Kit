@@ -52,15 +52,22 @@ environment. Type `/setup` to get started — it only takes a couple minutes.
   configuration is available. Deleting deployed sets still requires setup.
 - If the user typed `/flightcheck` or explicitly asked to validate setup or
   environment readiness, follow the **FlightCheck entry contract** below.
-- If the user typed `/connect` or `/connect-workday`, allow the command after
-  **local workspace materialization**, even when runtime `connect_ready` is
-  false. Require
-  `schema_version: 4`, resolve `.local/config.json` `activeAgent` to the
-  canonical agent whose `agent.workspace_slug` matches, and require canonical
-  workspace evidence plus `steps.SETUP-07.state: "done"`. Connector readiness
-  is intentionally not a prerequisite because `/connect` is the workflow that
-  resolves product-extension connection gaps. If materialization is incomplete,
-  use the setup-required Message block above and finish the request.
+- If the user typed `/connect` or `/connect-workday`, or explicitly asked to
+  **connect Workday**, proceed with `src/skills/connect/SKILL.md` even when
+  setup is missing. Preserve the selected integration and requested target.
+  Apply provider availability and supported-product boundaries before any
+  setup handoff. The selected provider's entry point owns its prerequisites.
+  Workday requires **local workspace materialization**: `schema_version: 4`,
+  resolve `.local/config.json` `activeAgent` to the canonical agent whose
+  `agent.workspace_slug` matches, and require canonical workspace evidence
+  plus `steps.SETUP-07.state: "done"`. If that preparation is incomplete,
+  automatically invoke `src/skills/foundation-setup/SKILL.md` through the
+  Workday entry point and return to the original Connect request after
+  preparation succeeds. Do not show the setup-required Message block or ask
+  the maker to type `/setup` or repeat Connect. This handoff is entry-only,
+  never between Connect phases or after completion. Do not require
+  `connect_ready: true`; Workday connections may be the remaining runtime
+  readiness blocker.
 
 **Except for the cases above, this gate applies to ALL user messages** —
 including "hello", "hi", "help",

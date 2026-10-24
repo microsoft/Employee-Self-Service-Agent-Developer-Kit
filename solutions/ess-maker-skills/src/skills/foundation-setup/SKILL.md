@@ -577,6 +577,52 @@ its first agent-setup decision surface with the recorded environment
 and ring. Every other selected follow-up begins at that follow-up's first
 decision surface rather than rendering the durable completion snapshot.
 
+## Prepare the workspace for an integration
+
+An explicit integration request may invoke Setup automatically when its entry
+prerequisites are missing. This is an entry-only prerequisite handoff, not
+a return from the middle or completion of an integration lifecycle. Retain
+the caller's selected integration, original request, supplied target and
+realm intent, and any verified maker in this invocation.
+
+Read `.local/config.json` and canonical `.local/setup/config.json`. Resolve a
+known workspace target by `activeAgent`, schema version `4`, and canonical
+`agent.workspace_slug`. Preserve the recorded workspace Dev identity; do not
+replace it with a promoted Test or Production integration target.
+
+If canonical workspace evidence is complete and `steps.SETUP-07.state: "done"`,
+return immediately to the caller without rerunning setup or showing the Start
+menu, even when `connect_ready` is false. Otherwise perform Setup's normal
+target resolution, access verification, and workspace materialization. For a
+known incomplete target, treat the request as **Resume setup for this agent**
+without asking the maker to select that option. Reuse a retained verified
+maker rather than repeating account selection. If no target or verified
+sign-in is known, use the normal setup questions and authorization controls.
+An integration request does not authorize silently creating or selecting an
+agent, resetting a workspace, installing software, or changing tenants.
+
+Preserve existing setup progress and local edits. Follow normal approval,
+conflicting-workspace, supported-product, and state-recovery rules. A changed,
+expired, or mismatched sign-in still follows Microsoft authorization recovery
+in `permission-guidance.md`; never silently switch account or tenant.
+
+After successful workspace materialization, verify `schema_version: 4`,
+canonical workspace evidence, and `steps.SETUP-07.state: "done"` for the
+resolved workspace agent. Return to the caller's entry point in this same
+invocation, carrying the verified target and maker, without asking the maker
+to repeat Connect or choose it from the post-setup menu. This preparation
+return takes precedence over the usual post-attachment readiness-check and
+terminal-choice handoff. Do not wait for `connect_ready: true`, because
+integration connections may be needed to resolve runtime readiness. Do not
+claim that overall setup readiness passed or mark unfinished records done.
+Carry any unresolved local-cleanup warning into the return.
+
+If preparation is blocked, cancelled, or exited, retain that evidence and the
+caller's request but do not start the integration. Do not return success,
+repeat the automatic handoff, or bypass a missing prerequisite. Ordinary
+standalone `/setup` still runs its full readiness and completion behavior;
+Setup does not proactively launch an integration without a retained caller.
+
 ## Start
 
 Use context supplied with the current setup request and canonical setup state read in this invocation. Do not infer a route or mismatch from conversation history.

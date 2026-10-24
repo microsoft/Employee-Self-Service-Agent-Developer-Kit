@@ -614,28 +614,26 @@ Behavior:
   existing `--scope` behavior changes).
 
 The set of selectable checkpoint IDs is defined by the FlightCheck registry
-(`scripts/flightcheck/registry.py`). Integration-specific IDs (the Workday
-families above, and the IDs minted by the per-skill setup plans and the
-master checklist) are added there as each skill begins emitting them.
+(`scripts/flightcheck/registry.py`). That registry, rather than an installation
+checklist, is the source of truth for runnable IDs.
 
 ---
 
-## Workday Simplified Setup Checkpoints (skills 1–6)
+## Historical CEA Workday checkpoint catalog (reference only)
 
-The Workday simplified-setup flow is decomposed into six atomic skills, each
-verified by one or more checkpoints. This catalog is the **single declaration**
-of those checkpoint IDs, owned by the master setup checklist
-(`src/skills/setup/workday/tasks.md`) — the `Step` column below is its row ID.
+This catalog records checkpoint provenance from the retired CEA setup flow.
+The `Skill` and `Step(s)` columns are historical labels, not runnable skill
+paths or current installation instructions. The old playbooks and master
+checklist are not shipped on this DA-only branch. Current DA Workday guidance
+is in `src/skills/connect/workday/SKILL.md`; CEA Connect belongs on `main-ca`.
 
-> **Status of this section.** Each ID's actual `CheckResult` emitter and its
-> `registry.py` entry land **with the owning skill** (skills 1–6), not here.
-> Until a skill ships, its **minted** IDs are declared (and their prefixes are in
-> the registry's `OWNED_PREFIXES` drift allow-list) but not yet runnable via
-> `--checkpoint`. **Reuse** IDs already exist and are runnable today.
+> Consult `scripts/flightcheck/registry.py` for each ID's current implementation
+> and availability. Inclusion in this historical table does not prove an ID is
+> runnable or applicable to DA.
 
 `Origin`: **reuse** = the checkpoint predates this flow and is simplified-aware;
-**mint** = new, owned by the named skill. `Gate`: see
-[`role-gating.md`](../setup/role-gating.md).
+**mint** = introduced by the named historical skill. `Gate` records the old
+check category; it is not an active DA permission gate.
 
 | Checkpoint             | Origin | Skill            | Step(s)    | Gate                     | What it verifies                                                                                                    |
 | ---------------------- | ------ | ---------------- | ---------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------- |

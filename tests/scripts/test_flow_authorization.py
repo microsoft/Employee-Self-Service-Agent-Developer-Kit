@@ -5,7 +5,11 @@
 
 import importlib.util
 from pathlib import Path
+import shutil
+import subprocess
 import sys
+
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ALM_DIR = (
@@ -103,6 +107,49 @@ def test_token_helper_rejects_mismatched_identity_without_emitting_token(
     assert "different account" in captured.err
     assert "secret-token" not in captured.out
     assert "secret-token" not in captured.err
+
+
+def test_authorization_uses_first_python_when_multiple_applications_are_found(tmp_path):
+    shell = shutil.which("pwsh") or shutil.which("powershell")
+    if not shell:
+        pytest.skip("PowerShell is not installed.")
+    helper = tmp_path / "fake-python.ps1"
+    helper.write_text(
+        "param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)\n"
+        "$global:LASTEXITCODE=0\n'ESS_DATAVERSE_TOKEN=fixture-token'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "get_dataverse_token.py").write_text("", encoding="utf-8")
+    script_path = str(_SCRIPT).replace("'", "''")
+    helper_path = str(helper).replace("'", "''")
+    probe = tmp_path / "probe.ps1"
+    probe.write_text(
+        "$ErrorActionPreference='Stop'\n"
+        "$tokens=$null; $errors=$null\n"
+        f"$ast=[System.Management.Automation.Language.Parser]::ParseFile('{script_path}',"
+        "[ref]$tokens,[ref]$errors)\n"
+        "$definition=$ast.Find({param($node) "
+        "$node -is [System.Management.Automation.Language.FunctionDefinitionAst] "
+        "-and $node.Name -eq 'Get-DataverseToken'},$true)\n"
+        "$functionFile=Join-Path $PSScriptRoot 'token-function.ps1'\n"
+        "Set-Content -Path $functionFile -Value $definition.Extent.Text -Encoding UTF8\n"
+        ". $functionFile\n"
+        "function Test-DataverseToken { param($Resource,$Token) return $true }\n"
+        "function Get-Command { param($Name,$CommandType,$ErrorAction)\n"
+        f"@([pscustomobject]@{{Source='{helper_path}'}},"
+        "[pscustomobject]@{Source='nonexistent-python.exe'}) }\n"
+        "$token=Get-DataverseToken -Resource 'https://example.invalid' "
+        "-PreferredUsername 'maker@example.com'\n"
+        "if ($token -ne 'fixture-token') { throw 'Unexpected helper result.' }\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [shell, "-NoProfile", "-NonInteractive", "-File", str(probe)],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_candidate_tokens_are_attached_to_dataverse_requests() -> None:

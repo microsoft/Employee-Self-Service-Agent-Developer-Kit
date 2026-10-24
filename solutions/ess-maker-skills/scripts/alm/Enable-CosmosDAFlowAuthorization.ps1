@@ -51,8 +51,9 @@
         -WorkflowId 3164dae9-3a2b-5843-98dd-e62bb5123324
 
 .NOTES
-    Requires Azure CLI, signed in to an account with Dataverse system-administrator rights on
-    the target org. Run Steps in the ESS runbook order: this script covers steps 2-4.
+    Uses the kit's Python authentication for the selected maker account. Azure CLI is only
+    an optional token source when PreferredUsername is omitted. The account must have the
+    Dataverse privileges required for the authorization records and flow sharing.
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true)]
@@ -126,7 +127,8 @@ function Get-DataverseToken {
         Write-Host "  Azure CLI token was unavailable or rejected; using the kit's Dataverse sign-in." -ForegroundColor Yellow
     }
     $helper = Join-Path $PSScriptRoot 'get_dataverse_token.py'
-    $python = Get-Command python -ErrorAction SilentlyContinue
+    $python = Get-Command python -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
     if (-not $python -or -not (Test-Path $helper)) {
         throw "Could not acquire a valid Dataverse token. Install Python, then run the kit setup or sign in with an account that can access $Resource."
     }

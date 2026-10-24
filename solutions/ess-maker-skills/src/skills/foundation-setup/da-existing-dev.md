@@ -152,6 +152,12 @@ When one endpoint reports an error and the other succeeds with no identities, do
 
 ## Maintain native FlightCheck evidence
 
+For an integration's entry-only preparation request, first apply **Prepare
+the workspace for an integration** in the parent skill. Once canonical
+workspace materialization is verified, return to the retained caller before
+this readiness sequence or any setup terminal choices. Do not claim overall
+setup readiness. For ordinary standalone setup, continue below.
+
 After every successful `attach` or unchanged existing-workspace resume, run the three setup-readiness FlightChecks and the broad connection diagnostic for the exact agent. Attempt every check whose prerequisites remain available and present all four together.
 
 Before running `ENV-CAPACITY-001` for the first time in the invocation, render
