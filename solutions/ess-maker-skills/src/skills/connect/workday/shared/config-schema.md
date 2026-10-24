@@ -154,7 +154,11 @@ These values are independent and must never be aliases:
 - Controller-owned runtime mutations must carry an exact plan hash.
 - Runtime plans include the active realm, environment, tenant, agent, ALM
   family, deployed commit, reviewed flows, physical connections, and
-  realm-specific authorization team. Any drift changes the plan hash.
+  agent-specific authorization team, exact existing authorization/team IDs,
+  and business unit. Any drift changes the plan hash. A valid exact-agent
+  legacy team is reused without renaming. New names include the realm and full
+  canonical BotId. Foreign or ambiguous records block before runtime writes;
+  they are never adopted, deleted, renamed, or relinked.
 - Runtime planning invokes the authorization script once with `-WhatIf` and
   every reviewed workflow. Runtime apply rereads the promoted AgentBuilder
   identity, invokes the script once for the realm, and accepts completion only
