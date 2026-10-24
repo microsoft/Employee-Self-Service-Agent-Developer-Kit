@@ -137,31 +137,32 @@ Include **Required role: {packet.administratorRole}** in the summary.
 
 Share `workbookFile` from the command result as the downloadable administrator
 workbook. It must resolve to the checked-in
-`[Entra administrator workbook](assets/entra-admin-handoff.xlsx)`. Tell the
-maker to send a copy to the administrator and not to edit the repository
-template itself. Do not render `packet.captureInstructions` as a chat table;
+`[Entra administrator workbook](assets/workday-entra-admin-workbook.xlsx)`.
+Do not render `packet.captureInstructions` as a chat table;
 the workbook is the single capture worksheet.
 
-Include this file guidance in the concise handoff:
+Render the following five bullets once in the concise handoff, without
+restating them in surrounding prose:
 
-> Use the single `Worksheet - Detailed` sheet. Follow the detailed instructions
-> beside each row and fill **Your tenant values**, then return the completed
-> workbook. Include only non-secret values, never credentials or private keys.
-> For confirmations, use the
-> exact successful answer shown in **Example value** or the listed choices
-> in **What to record**, only after verifying the setting. Leave incomplete
-> confirmations blank.
-> Return an organization-approved readable `.xlsx` copy. Password encryption
-> or sensitivity-policy protection may prevent validation. If protection is
-> required, ask your information protection administrator for an approved
-> handoff method. Do not share passwords or bypass required protections.
+> - **Share:** Send a copy to the Entra administrator; do not edit the original
+>   template itself.
+> - **Complete:** Use **Worksheet - Detailed**, follow each row's instructions,
+>   and fill every cell in the **Your tenant values** column.
+> - **Confirm:** Use the exact successful answer in **Example value** or the
+>   listed choices in **What to record**, only after verifying the setting.
+>   Leave incomplete confirmations blank.
+> - **Return:** Send the completed, organization-approved readable `.xlsx` to
+>   the maker. If encryption or sensitivity protection prevents validation,
+>   ask your information protection administrator for an approved handoff.
+> - **Protect:** Never include credentials, tokens, private keys, or certificate
+>   contents in chat or the workbook, and do not bypass required protections.
 
 Include one essential certificate-handoff note: the Entra administrator must
 transfer the active Base64 certificate through the approved customer channel
-to the Workday administrator before signing off. Never put certificate contents
-in chat or the workbook.
-Render `packet.consentNote` exactly here so a separate consent-capable
-administrator is involved only if tenant policy requires one.
+to the Workday administrator before signing off. Render this as an additional
+bullet, not another safety warning.
+Render `packet.consentNote` exactly here as a separate bullet so a separate
+consent-capable administrator is involved only if tenant policy requires one.
 
 After sharing the concise handoff and workbook, persist the presentation and
 waiting boundaries:

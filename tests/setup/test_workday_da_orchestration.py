@@ -154,7 +154,8 @@ def test_administrator_handoffs_explain_readable_files_and_all_corrections() -> 
         assert "Worksheet - Detailed" in text
         assert "exact successful answer" in text
         assert "information protection administrator" in text
-        assert "Do not share passwords or bypass required protections" in text
+        assert "Never include credentials, tokens, private keys, or certificate" in text
+        assert "do not bypass required protections" in text
         assert "details.fieldErrors" in text
         assert "same workbook" in text
 
@@ -772,7 +773,9 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
 
 
 @pytest.mark.parametrize("guide", ["provision-entra-app.md", "configure-tenant.md"])
-def test_administrator_handoffs_use_detailed_workbooks_without_repeated_tasks(guide):
+def test_administrator_handoffs_use_detailed_workbooks_without_repeated_tasks(
+    guide: str,
+) -> None:
     text = (_WORKDAY_DA / guide).read_text(encoding="utf-8")
     normalized = " ".join(text.split())
 
@@ -788,6 +791,18 @@ def test_administrator_handoffs_use_detailed_workbooks_without_repeated_tasks(gu
     assert "Do not append these tasks to the shareable workbook handoff" in normalized
     assert "and every applicable numbered task" not in normalized
     assert "and the numbered tasks below" not in normalized
+    instructions = text.split("Render the following five bullets once", 1)[1]
+    bullets = [
+        line for line in instructions.splitlines()
+        if line.startswith("> - ")
+    ]
+    assert [line.split("**")[1] for line in bullets] == [
+        "Share:", "Complete:", "Confirm:", "Return:", "Protect:",
+    ]
+    assert "restating them in surrounding prose" in instructions
+    assert instructions.count("> - **Protect:**") == 1
+    assert "Do not share passwords or bypass required protections" not in instructions
+    assert "Return only non-secret values" not in instructions
     if guide == "provision-entra-app.md":
         assert "certificate-handoff note" in normalized
         assert "Render `packet.consentNote` exactly here" in normalized

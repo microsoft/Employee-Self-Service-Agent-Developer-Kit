@@ -97,7 +97,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     assert "python scripts/workday_connect.py entra-handoff" in entra
     assert "Your tenant values" in entra
     normalized_entra = " ".join(entra.split())
-    assert "](assets/entra-admin-handoff.xlsx)" in entra
+    assert "](assets/workday-entra-admin-workbook.xlsx)" in entra
     assert "workbook is the single capture worksheet" in normalized_entra
     assert "Upload the completed Microsoft Entra administrator workbook" in entra
     assert "Do not ask the maker to paste the\nworksheet" in entra
@@ -115,7 +115,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
         "Scope ID",
     ):
         assert f'"header": "{removed_header}"' not in entra
-    assert "not to edit the repository\ntemplate itself" in entra
+    assert "do not edit the original" in entra
 
 
 def test_preflight_explains_silent_auth_and_current_phase() -> None:
@@ -138,7 +138,7 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
 
     assert "one administrator handoff" in tenant
     assert "Workday administrator details" not in tenant
-    assert "](assets/workday-admin-handoff.xlsx)" in tenant
+    assert "](assets/workday-admin-workbook.xlsx)" in tenant
     assert "workbook is the single capture worksheet" in normalized
     assert "share the workbook and target values" in tenant
     assert "Your tenant values" in normalized
