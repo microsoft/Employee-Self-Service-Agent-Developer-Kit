@@ -284,7 +284,8 @@ class WorkdayConnectWorksheetError(WorkdayConnectContractError):
     def __init__(self, errors: list[dict[str, str]]) -> None:
         next_action = (
             "Ask the administrator to correct the listed cells in the same "
-            "workbook and upload it again. Earlier completed phases are preserved."
+            "workbook, save it, and provide its full local path again. "
+            "Earlier completed phases are preserved."
         )
         super().__init__(
             "Administrator workbook needs corrections:\n"

@@ -753,7 +753,7 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     assert "share the workbook and target values" in text
     assert "workbook is the single capture worksheet" in normalized
     assert "fill every cell in the **Your tenant values** column" in normalized
-    assert "Upload the completed Workday administrator workbook" in text
+    assert "Save the completed Workday administrator workbook" in text
     assert (
         "do not repeat an **Information to return to the maker**"
         in normalized
@@ -792,8 +792,9 @@ def test_administrator_handoffs_use_detailed_workbooks_without_repeated_tasks(
     assert "and every applicable numbered task" not in normalized
     assert "and the numbered tasks below" not in normalized
     instructions = text.split("Render the following five bullets once", 1)[1]
+    file_guidance = instructions.split("\n\n", 2)[1]
     bullets = [
-        line for line in instructions.splitlines()
+        line for line in file_guidance.splitlines()
         if line.startswith("> - ")
     ]
     assert [line.split("**")[1] for line in bullets] == [
@@ -803,6 +804,14 @@ def test_administrator_handoffs_use_detailed_workbooks_without_repeated_tasks(
     assert instructions.count("> - **Protect:**") == 1
     assert "Do not share passwords or bypass required protections" not in instructions
     assert "Return only non-secret values" not in instructions
+    assert "**Copy as path**" in instructions
+    assert "Paste the full path here, including the filename and `.xlsx` extension" in normalized
+    assert "Do not require an upload or a file picker" in instructions
+    assert "remove that outer pair" in instructions
+    assert "single literal argument" in instructions
+    assert "show the actual controller error" in instructions
+    assert "provide its full path again" in normalized
+    assert "Upload the completed" not in text
     if guide == "provision-entra-app.md":
         assert "certificate-handoff note" in normalized
         assert "Render `packet.consentNote` exactly here" in normalized

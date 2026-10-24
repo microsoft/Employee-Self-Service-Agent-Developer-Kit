@@ -892,7 +892,7 @@ def test_entra_handoff_can_request_explicit_creation():
         "five-column-markdown-table",
         "labeled-worksheet",
     ]
-    assert "Upload the completed administrator workbook" in (
+    assert "full local path to the completed administrator workbook" in (
         handoff["responseForm"]["note"]
     )
     assert "Basic SAML Configuration" in capture_by_field[

@@ -805,14 +805,24 @@ def test_controller_parser_accepts_labeled_worksheet_files() -> None:
     assert workday.response_worksheet_file == Path("workday.txt")
 
 
+@pytest.mark.parametrize(
+    ("command", "option", "input_name"),
+    [
+        ("record-entra", "--verification-worksheet-file", "verification"),
+        ("record-workday-admin", "--response-worksheet-file", "response"),
+    ],
+)
 def test_controller_reads_completed_xlsx_worksheet(
     tmp_path: Path,
+    command: str,
+    option: str,
+    input_name: str,
 ) -> None:
     import workday_connect
     from workday_connect_workbook import write_administrator_workbook
 
     path = write_administrator_workbook(
-        tmp_path / "entra.xlsx",
+        tmp_path / "completed administrator workbook.xlsx",
         title="Microsoft Entra administrator handoff",
         administrator_role="Microsoft Entra administrator",
         actions=["Complete the required configuration."],
@@ -826,15 +836,11 @@ def test_controller_reads_completed_xlsx_worksheet(
         ],
         answers={"Application ID": "44444444-4444-4444-4444-444444444444"},
     )
-    args = SimpleNamespace(
-        verification_file=None,
-        verification_json=None,
-        verification_worksheet_file=path,
-    )
+    args = workday_connect.build_parser().parse_args([command, option, str(path)])
 
     result = workday_connect._json_input(
         args,
-        "verification",
+        input_name,
         "Entra verification",
         worksheet_parser=lambda _state, worksheet: {
             "worksheet": worksheet,

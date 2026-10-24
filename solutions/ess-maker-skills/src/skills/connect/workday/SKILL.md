@@ -36,10 +36,10 @@ it is not a customer-executed phase and must not be shown as an extra step.
 - Use structured `vscode_askQuestions` forms for choices and short customer
   evidence. The Entra and Workday administrator handoffs are the only
   exception: share the checked-in workbook, collect the administrator's
-  completed `.xlsx` file in one upload, and pass that file to the controller's
-  worksheet parser. Accept only the resulting validated structured payload.
+  full local path to the completed `.xlsx` file, and pass that file to the
+  controller's worksheet parser. Accept only the resulting validated structured payload.
   Reject missing, duplicate, or unknown labels, formulas, and unsafe workbook
-  content; never infer an answer or treat an upload as evidence before
+  content; never infer an answer or treat a supplied path as evidence before
   validation.
 - Leave every option initially unset. Do not add `recommended`, `default`,
   “recommended” label text, or any equivalent preselection to approvals,
@@ -399,8 +399,8 @@ from `nextPhaseId`:
 When `nextPhaseId` is `entra`, dispatch to `provision-entra-app.md` without the
 form below. That phase asks whether the maker has engaged the administrator,
 presents a concise handoff and checked-in detailed workbook, asks whether the
-administrator completed the task, and validates the uploaded workbook. It
-must not authenticate the maker to Graph or perform live Entra API checks.
+administrator completed the task, and validates the workbook at the supplied
+path. It must not authenticate the maker to Graph or perform live Entra API checks.
 
 When `nextPhaseId` is `workday-admin`, show only its row and use this exact
 `vscode_askQuestions` form before dispatching that phase:
@@ -480,9 +480,9 @@ After the maker confirms the Workday administrator is engaged, the Workday
 phase shares the checked-in detailed workbook with concise target values and
 the applicable federation safety note, not another administrator task list.
 It tells the maker to have the administrator follow and complete the workbook,
-asks whether the task is complete, then requests the completed
-`.xlsx` upload. It must not ask the maker to paste the worksheet table or
-retype the administrator values.
+asks whether the task is complete, then requests the full local path to the
+completed `.xlsx` file. It must not require an upload or ask the maker to paste
+the worksheet table or retype the administrator values.
 Do not include people from completed phases or remediation-only roles that are
 not currently required. In particular, require the Workday Administrator only
 when `nextPhaseId` is `workday-admin`; a healthy reused tenant foundation
