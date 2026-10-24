@@ -490,7 +490,7 @@ def _validated_archive(path: Path) -> ZipFile:
                 raise WorkdayConnectWorkbookError(
                     "Administrator workbook uses the legacy Excel format, not "
                     ".xlsx. Ask the administrator to save an organization-approved "
-                    ".xlsx copy and upload it again."
+                    ".xlsx copy and provide its full local path."
                 )
         archive = ZipFile(path, mode="r")
     except (OSError, BadZipFile) as exc:
@@ -657,7 +657,7 @@ def read_administrator_workbook(path: Path) -> str:
     except (BadZipFile, zlib.error) as exc:
         raise WorkdayConnectWorkbookError(
             "Administrator workbook contains corrupt ZIP content. "
-            "Upload an intact completed .xlsx workbook."
+            "Provide the full local path to an intact completed .xlsx workbook."
         ) from exc
     finally:
         archive.close()

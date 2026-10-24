@@ -602,7 +602,9 @@ def build_entra_handoff(
                 "validator": "parse_entra_return_worksheet",
             },
             "note": (
-                "Upload the completed administrator workbook. Do not accept "
+                "Ask for the full local path to the completed administrator "
+                "workbook, including its .xlsx filename. Do not require an "
+                "upload or file picker. Do not accept "
                 "blank required values or ask for passwords, client secrets, "
                 "tokens, cookies, certificate contents, or private keys. "
                 "After validation, identify only cells that are missing, "

@@ -607,7 +607,9 @@ def build_workday_admin_packet(
                 "validator": "parse_workday_admin_return_worksheet",
             },
             "note": (
-                "Upload the completed administrator workbook. Do not include "
+                "Ask for the full local path to the completed administrator "
+                "workbook, including its .xlsx filename. Do not require an "
+                "upload or file picker. Do not include "
                 "passwords, client secrets, tokens, cookies, certificate "
                 "contents, or private keys. For missing or invalid values, "
                 "identify only those cells and ask the administrator to "

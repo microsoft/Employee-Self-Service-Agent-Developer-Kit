@@ -99,11 +99,11 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     normalized_entra = " ".join(entra.split())
     assert "](assets/entra-admin-workbook.xlsx)" in entra
     assert "workbook is the single capture worksheet" in normalized_entra
-    assert "Upload the completed Microsoft Entra administrator workbook" in entra
-    assert "Do not ask the maker to paste the\nworksheet" in entra
+    assert "Save the completed Microsoft Entra administrator workbook" in entra
+    assert "Do not ask the maker to paste the worksheet" in normalized_entra
     assert "Do not replay the full worksheet" in entra
     assert "Certificate valid from" not in entra
-    assert "upload the corrected\n`.xlsx` file" in entra
+    assert "provide its full path again" in entra
     for removed_header in (
         "Directory tenant ID",
         "Enterprise app Object ID",
@@ -172,7 +172,7 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "No certificate is selected" in tenant
     assert "Never suggest, prefill, or ask the administrator to confirm" in tenant
     assert '"header": "Certificate name"' not in tenant
-    assert "Upload the completed Workday administrator workbook" in tenant
+    assert "Save the completed Workday administrator workbook" in tenant
     assert '"header": "Identity provider"' not in tenant
     assert '"header": "Authentication policy"' in tenant
     assert '"header": "Network readiness"' not in tenant
@@ -225,8 +225,8 @@ def test_administrator_worksheets_use_controller_parsing_contract() -> None:
 
     assert "only exception" in normalized_skill
     assert "controller's worksheet parser" in normalized_skill
-    assert "completed `.xlsx` file in one upload" in normalized_skill
-    assert "Upload the completed Microsoft Entra administrator workbook" in entra
+    assert "full local path to the completed `.xlsx` file" in normalized_skill
+    assert "Save the completed Microsoft Entra administrator workbook" in entra
     assert "including the header and every row" not in entra
     assert "--verification-worksheet-file" in entra
     assert "entra-verification.json" not in entra

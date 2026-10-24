@@ -274,11 +274,18 @@ python scripts/workday_connect.py administrator-stage --phase entra --substage c
 
 Then tell the maker:
 
-> Upload the completed Microsoft Entra administrator workbook file in this
-> chat.
+> - Save the completed Microsoft Entra administrator workbook on this computer.
+> - In File Explorer, right-click the file and select **Copy as path**.
+> - Paste the full path here, including the filename and `.xlsx` extension,
+>   for example: `"C:\Users\YourName\Downloads\entra-admin-workbook.xlsx"`.
 
-Use the uploaded `.xlsx` file directly. Do not ask the maker to paste the
-worksheet, retype the values, or hand-author JSON. Object IDs, the scope GUID,
+Do not require an upload or a file picker. Accept the surrounding quotes from
+**Copy as path** and remove that outer pair before passing the path as a
+single literal argument to the controller. Use the supplied local `.xlsx`
+file directly. If it cannot be read, show the actual controller error and ask
+for an accessible local path; do not guess another file or bypass permissions.
+Do not ask the maker to paste the worksheet, retype the values, or hand-author
+JSON. Object IDs, the scope GUID,
 derived tenant URLs, and complete URI lists are not required. A reply such as
 "done", "all good", "continue", or "proceed" is not evidence and must not be
 converted into administrator attestation.
@@ -294,9 +301,9 @@ After submission, validate the complete workbook once. If fields are missing,
 invalid, or internally inconsistent, retain every safe valid answer, name the
 returned `invalidFields` and `outstandingFields`, repeat their applicable
 `captureInstructions` portal locations, and ask the administrator to correct
-those cells in the same workbook. Ask the maker to upload the corrected
-`.xlsx` file. Do not replay the full worksheet or revert to one-by-one chat
-questions.
+those cells in the same workbook. Ask the maker to save the corrected
+`.xlsx` file and provide its full path again. Do not replay the full worksheet
+or revert to one-by-one chat questions.
 
 When the controller returns `details.fieldErrors`, show every returned label
 and its correction in one response, including the accepted answers for a
@@ -304,12 +311,12 @@ choice cell. Do not stop after the first invalid field. If the workbook is
 encrypted or protected, explain that specific limitation and show the
 approved-readable-copy guidance above; do not call it a corrupt workbook,
 request a password, or retry parsing it with ad hoc tools. Preserve completed
-phases and resume the same upload boundary. A chat reply such as **Yes** does
-not correct a rejected workbook cell or establish its attestation.
+phases and resume the same file-path collection boundary. A chat reply such as
+**Yes** does not correct a rejected workbook cell or establish its attestation.
 
-Do not perform a maker-authenticated Graph reread after the maker uploads the
-completed workbook. Role-aware execution will perform those real API checks
-later.
+Do not perform a maker-authenticated Graph reread after the maker provides the
+completed workbook path. Role-aware execution will perform those real API
+checks later.
 
 Persist the Application ID, derived `entraAppIdUri`, derived
 `workdaySamlEntityId`, derived `microsoftEntraIdentifier`, derived
@@ -333,10 +340,11 @@ On resume, use the Entra app administrator entry returned by `status`. Do not
 redisplay a completed handoff; collect only its `invalidFields` and
 `outstandingFields`.
 
-Pass the uploaded workbook path directly:
+Pass the supplied workbook path as a single literal argument; never execute
+path text as shell code:
 
 ```powershell
-python scripts/workday_connect.py record-entra --verification-worksheet-file "<uploaded-entra-workbook-path>"
+python scripts/workday_connect.py record-entra --verification-worksheet-file "<completed-entra-workbook-full-path>"
 ```
 
 Successful Entra validation completes only the Entra administrator phase.

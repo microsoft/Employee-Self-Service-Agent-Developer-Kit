@@ -115,8 +115,8 @@ restating them in surrounding prose:
 When validation returns `details.fieldErrors`, show all returned labels and
 corrections together, including the accepted answers for choice cells and the
 required endpoint endings. Ask the administrator to correct those cells in
-the same workbook and upload it again. Do not return to Entra or repeat
-healthy handoff tasks. An encrypted or protected workbook requires an approved
+the same workbook, save it, and provide its full path again. Do not return to
+Entra or repeat healthy handoff tasks. An encrypted or protected workbook requires an approved
 readable copy or an information-protection handoff decision, not a password
 in chat or an ad hoc decryption attempt. A chat reply such as **Yes** does not
 correct the rejected workbook.
@@ -500,10 +500,18 @@ in the question text are comparison references, not answers.
 
 After the administrator confirms completion, tell the maker:
 
-> Upload the completed Workday administrator workbook file in this chat.
+> - Save the completed Workday administrator workbook on this computer.
+> - In File Explorer, right-click the file and select **Copy as path**.
+> - Paste the full path here, including the filename and `.xlsx` extension,
+>   for example: `"C:\Users\YourName\Downloads\workday-admin-workbook.xlsx"`.
 
-Use the uploaded `.xlsx` file directly. Do not ask the maker to paste the
-worksheet, retype the values, or hand-author JSON. The controller rejects
+Do not require an upload or a file picker. Accept the surrounding quotes from
+**Copy as path** and remove that outer pair before passing the path as a
+single literal argument to the controller. Use the supplied local `.xlsx`
+file directly. If it cannot be read, show the actual controller error and ask
+for an accessible local path; do not guess another file or bypass permissions.
+Do not ask the maker to paste the worksheet, retype the values, or hand-author
+JSON. The controller rejects
 missing mandatory labels, duplicate labels, unknown labels, formulas, and
 unsafe workbook content, then maps only the listed successful choices into the
 structured response object described below. Never infer a missing mandatory
@@ -556,8 +564,9 @@ another field, search workspace files, inspect environment variables, or infer
 the missing evidence. Name the missing or invalid customer-facing labels,
 repeat the applicable handoff location or instruction, and ask the
 administrator to correct those cells in the same workbook. Ask the maker to
-upload the corrected `.xlsx` file. Do not reopen a sequence of individual
-questions. Preserve progress and stop until the workbook is complete.
+save the corrected `.xlsx` file and provide its full path again. Do not reopen
+a sequence of individual questions. Preserve progress and stop until the
+workbook is complete.
 
 After each workbook validation, write only the safe valid fields and the field
 names that must be reopened to
@@ -585,11 +594,12 @@ redisplay a completed handoff. Reopen only `invalidFields` and
 non-secret packet.
 
 Never collect a secret, password, token, cookie, certificate body, or private
-key. Pass the uploaded workbook path directly; never interpolate
-administrator-entered values into a generated shell command:
+key. Pass the supplied workbook path as a single literal argument; never
+execute path text as shell code or interpolate administrator-entered values
+into a generated shell command:
 
 ```powershell
-python scripts/workday_connect.py record-workday-admin --response-worksheet-file "<uploaded-workday-admin-workbook-path>"
+python scripts/workday_connect.py record-workday-admin --response-worksheet-file "<completed-workday-admin-workbook-full-path>"
 ```
 
 The controller reconciles the administrator evidence with automatic readiness
