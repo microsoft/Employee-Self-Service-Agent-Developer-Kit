@@ -564,6 +564,22 @@ def _effective_connection_id(
     return requested_value or recorded_value or None
 
 
+def _authorization_preflight_failure(
+    evidence: str,
+    next_action: str,
+    *,
+    cause: str = "invalid-records",
+) -> WorkdayConnectRuntimeError:
+    return WorkdayConnectRuntimeError(
+        f"{evidence} No runtime changes were made. {next_action}",
+        details={
+            "stage": "authorization-preflight",
+            "cause": cause,
+            "nextAction": next_action,
+        },
+    )
+
+
 def _authorization_target(
     environment_url: str,
     token: str,
@@ -576,16 +592,18 @@ def _authorization_target(
     try:
         canonical_bot_id = str(UUID(bot_id))
     except ValueError as exc:
-        raise WorkdayConnectRuntimeError(
-            "The selected agent needs a valid BotId before runtime authorization."
+        raise _authorization_preflight_failure(
+            "The selected agent needs a valid BotId before runtime authorization.",
+            "Verify the selected agent and environment through supported target "
+            "recovery, then check Runtime again. Do not substitute another agent.",
         ) from exc
 
     def record_id(row: Mapping[str, Any], key: str, label: str) -> str:
         try:
             return str(UUID(str(row.get(key) or "")))
         except ValueError as exc:
-            raise WorkdayConnectRuntimeError(
-                f"Authorization preflight could not validate the {label}. "
+            raise _authorization_preflight_failure(
+                f"Authorization preflight could not validate the {label}.",
                 "Ask the Dataverse administrator to inspect the selected "
                 "agent's records before retrying."
             ) from exc
@@ -597,17 +615,18 @@ def _authorization_target(
                 filter_expr=filter_expr,
             )
         except requests.RequestException as exc:
-            raise WorkdayConnectRuntimeError(
+            raise _authorization_preflight_failure(
                 "Authorization preflight could not read the selected agent's "
-                "Dataverse records. Ask the Dataverse administrator to verify "
-                "read access, then check again. No runtime changes were made.",
-                details={"stage": "authorization-preflight", "cause": "read-failed"},
+                "Dataverse records.",
+                "Ask the Dataverse administrator to verify read access, "
+                "then check again.",
+                cause="read-failed",
             ) from exc
         if not isinstance(rows, list) or any(
             not isinstance(row, dict) for row in rows
         ):
-            raise WorkdayConnectRuntimeError(
-                "Authorization preflight received unreadable Dataverse records. "
+            raise _authorization_preflight_failure(
+                "Authorization preflight received unreadable Dataverse records.",
                 "Ask the Dataverse administrator to investigate, then check again."
             )
         return rows
@@ -623,9 +642,9 @@ def _authorization_target(
         f"delegatedauthorizationid/botid eq '{canonical_bot_id}'",
     )
     if len(authorizations) > 1 or len(teams) > 1:
-        raise WorkdayConnectRuntimeError(
-            "Multiple authorization records or linked teams exist for the selected "
-            "agent. Ask the Dataverse administrator to resolve these duplicates, "
+        raise _authorization_preflight_failure(
+            "Multiple authorization records or linked teams exist for the selected agent.",
+            "Ask the Dataverse administrator to resolve these duplicates, "
             "then check again. Do not delete another agent's records."
         )
     authorization = authorizations[0] if authorizations else None
@@ -633,9 +652,10 @@ def _authorization_target(
         str(authorization.get("botid") or "").casefold() != canonical_bot_id
         or authorization.get("providertype") != 3
     ):
-        raise WorkdayConnectRuntimeError(
+        raise _authorization_preflight_failure(
             "The selected agent's authorization has an unexpected owner or provider "
-            "type. Ask the Dataverse administrator to inspect it before retrying."
+            "type.",
+            "Ask the Dataverse administrator to inspect it before retrying.",
         )
     authorization_id = (
         record_id(authorization, "delegatedauthorizationid", "authorization ID")
@@ -649,15 +669,23 @@ def _authorization_target(
             or str(team.get("_delegatedauthorizationid_value") or "").casefold()
             != authorization_id.casefold()
         ):
-            raise WorkdayConnectRuntimeError(
+            raise _authorization_preflight_failure(
                 "The linked team does not prove access-team ownership by the "
-                "selected agent. Ask the Dataverse administrator to inspect the "
+                "selected agent.",
+                "Ask the Dataverse administrator to inspect the "
                 "relationship before retrying. Do not adopt or relink another team."
+            )
+        team_name = str(team.get("name") or "").strip()
+        if not team_name:
+            raise _authorization_preflight_failure(
+                "The selected agent's access team has no readable name.",
+                "Ask the Dataverse administrator to inspect the linked access team, "
+                "then check again.",
             )
         return {
             "authorizationId": authorization_id,
             "teamId": record_id(team, "teamid", "access team ID"),
-            "teamName": _required_text(team, "name", "Access team name"),
+            "teamName": team_name,
             "businessUnitId": record_id(
                 team, "_businessunitid_value", "access team business unit"
             ),
@@ -667,9 +695,10 @@ def _authorization_target(
         "parentbusinessunitid eq null",
     )
     if len(units) != 1:
-        raise WorkdayConnectRuntimeError(
+        raise _authorization_preflight_failure(
             "Authorization preflight could not resolve exactly one root business "
-            "unit. Ask the Dataverse administrator to inspect it, then check again."
+            "unit.",
+            "Ask the Dataverse administrator to inspect it, then check again.",
         )
     unit_id = record_id(units[0], "businessunitid", "root business unit")
     team_name = f"ESS DA HR Workday - {REALM_DISPLAY_NAMES[realm]} - {canonical_bot_id}"
@@ -1612,9 +1641,10 @@ def apply_runtime_plan(
         authorization[key] is not None and current[key] != authorization[key]
         for key in ("authorizationId", "teamId")
     ):
-        raise WorkdayConnectRuntimeError(
-            "Authorization ownership changed after approval. Refresh the runtime "
-            "plan and approve the verified target before applying any changes."
+        raise _authorization_preflight_failure(
+            "Authorization ownership changed after approval.",
+            "Refresh the runtime plan and approve the verified target before "
+            "applying any changes.",
         )
     verified_stages: list[str] = []
     connection_bindings = _apply_connection_binding_stage(
