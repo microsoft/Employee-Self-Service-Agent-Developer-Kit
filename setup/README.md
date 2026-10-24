@@ -107,13 +107,64 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck-mac.sh)"
 ```
 
-That's it. The script handles everything automatically:
+The script asks for a scope before installing anything. There is no default:
+Enter without a scope, end-of-input, and invalid names stop the installer.
 
-1. Installs Python and Git (if not already present)
-2. Opens a browser window for you to sign in with your Microsoft work account
-3. Shows your available environments — pick one by number
-4. Shows the agents in that environment — pick one (or skip)
-5. Runs the full FlightCheck validation and displays results
+1. Choose a validation scope by name from the descriptions shown.
+2. Installs Python and Git (if not already present).
+3. Opens a browser window for Microsoft work-account sign-in.
+4. Shows your available environments and agents for selection.
+5. Runs the selected FlightCheck scope and displays results.
+
+### Selecting a scope explicitly
+
+Both bootstraps and direct installers accept an explicit scope.
+Windows uses `-FlightCheckScope`; macOS uses `--scope`.
+Alternatively, set `FLIGHTCHECK_SCOPE` on either platform.
+An explicit argument overrides the environment variable.
+Names are case-insensitive and surrounding whitespace is ignored.
+Unattended runs (redirected input or CI) must provide a scope, otherwise they fail before downloading the installer or installing tools.
+Providing a scope does not automate the later Microsoft sign-in or target selection.
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1))) -FlightCheckScope workday
+# Direct installer, or set $env:FLIGHTCHECK_SCOPE = 'workday':
+.\setup\Install-EssAdk.ps1 -FlightCheckOnly -FlightCheckScope workday
+```
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck-mac.sh)" _ --scope workday
+# Direct installer, or export FLIGHTCHECK_SCOPE=workday:
+FLIGHTCHECK_ONLY=true /bin/bash setup/install-ess-adk.sh --scope workday
+```
+
+Available scopes match the existing command-line interface (CLI):
+
+| Scope | Validation area |
+|---|---|
+| `full` | All applicable validation categories, only when explicitly selected |
+| `prerequisites` | Prerequisite access and setup |
+| `infrastructure` | Infrastructure and connectivity |
+| `environment` | Power Platform environment |
+| `solution` | Installed solution configuration |
+| `authentication` | Authentication configuration |
+| `entraapp` | Microsoft Entra application |
+| `workdaytenant` | Workday tenant configuration |
+| `external` | External system configuration |
+| `workday` | External system and Workday checks |
+| `workdayextension` | Workday checks and extension |
+| `workdayda` | Workday declarative-agent package |
+| `topics` | Workday topics |
+| `graphconnector` | External system and Graph connector knowledge |
+| `handoff` | Agent handoff topics |
+| `servicenow` | External system and ServiceNow checks |
+| `local` | Local agent files |
+| `publishing` | Agent publishing |
+| `licensing` | Licensing |
+| `cloudpolicy` | Cloud policies |
+
+Scopes are not litmus profiles: `--scope workday` is not `--profile workday-da`.
+This installer selection requirement does not change the CLI defaults or the full Maker/Developer installation modes.
 
 Installer discovery currently lists Dataverse-linked environments and their
 Dataverse-backed agents. It does not discover native Declarative Agents.
