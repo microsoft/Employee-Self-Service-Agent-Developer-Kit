@@ -166,7 +166,7 @@ def test_setup_seeds_shared_cache_once_and_reuses_flightcheck_account() -> None:
         in account_section
     )
     assert "once after the first authenticated account is established" in normalized
-    assert "before the next setup operation" in normalized
+    assert "before any temporary administrator switch" in normalized
     assert "stop before the next setup operation" in normalized
     assert "explain the reported problem, including any partial-completion note" in normalized
     assert "`already-exists`" in account_section
@@ -183,6 +183,146 @@ def test_setup_seeds_shared_cache_once_and_reuses_flightcheck_account() -> None:
     assert len(commands) == 4
     assert all('--preferred-username "{SETUP_ACCOUNT}"' in line for line in commands)
     assert "including retries and rechecks" in readiness
+
+
+def test_administrator_handoffs_are_forwardable_and_evidence_gated() -> None:
+    permission = _PERMISSION_GUIDANCE.read_text(encoding="utf-8")
+    normalized_permission = " ".join(permission.split())
+    environment = _DA_ENVIRONMENT_TARGET.read_text(encoding="utf-8")
+    normalized_environment = " ".join(environment.split())
+
+    assert "## Forwardable administrator request" in permission
+    for field in (
+        "**Requested action:** {EXACT_ADMINISTRATOR_ACTION}",
+        "**Environment:** {ENVIRONMENT_NAME}",
+        "**Environment URL:** {ENVIRONMENT_URL}",
+        "**Agent:** {AGENT_NAME}",
+        "**User:** {SETUP_ACCOUNT}",
+        "**Why this is needed:** {EVIDENCE_SUPPORTED_REASON}",
+        "**When complete:** {RETURN_CONDITION}",
+    ):
+        assert field in permission
+    assert "Omit a field when it does not apply" in normalized_permission
+    assert "unsupported billing guidance" in permission
+    assert "speculative role claims" in permission
+    assert "rerun only the operation or Flight Check" in normalized_permission
+    assert (
+        "When evidence explicitly identifies missing first-party application approval"
+        in permission
+    )
+    assert "https://entra.microsoft.com/" in permission
+    assert (
+        "Only when the service evidence explicitly identifies missing creation access"
+        in permission
+    )
+    assert "**Grant agent-creation access**" in permission
+    assert (
+        "Assign the Environment Maker security role to {SETUP_ACCOUNT} in "
+        "{ENVIRONMENT_NAME}."
+    ) in normalized_permission
+
+    assert "**Environment-creation setup**" in environment
+    assert "**Create a Power Platform environment**" in environment
+    assert "setup_power_platform_environment.py list-locations" in environment
+    assert "setup_power_platform_environment.py create" in environment
+    assert "setup_power_platform_environment.py forget-account" in environment
+    assert "the retained ring-specific origin" in normalized_environment
+    assert (
+        "Switch back to {RETURN_SETUP_ACCOUNT} and forget "
+        "{ENVIRONMENT_ADMIN_ACCOUNT}" in normalized_environment
+    )
+    assert "**Continue with {ENVIRONMENT_ADMIN_ACCOUNT}**" in environment
+    assert "**Use another account**" not in normalized_environment.split(
+        "Present only:", 1
+    )[1].split("Do not preselect", 1)[0]
+    assert "### Environment-creation setup" in permission
+    assert "**Yes, but we need to switch accounts**" in permission
+    assert "**A Power Platform administrator is now available**" in permission
+
+
+def test_administrator_cleanup_requires_both_toolkit_caches() -> None:
+    environment = " ".join(_DA_ENVIRONMENT_TARGET.read_text(encoding="utf-8").split())
+    assert "both the AgentBuilder and shared toolkit caches" in environment
+    assert "both `caches` entries" in environment
+    assert "explain any reported per-cache partial completion" in environment
+    assert "It does not sign out browser or PAC sessions" in environment
+
+
+def test_creation_baseline_belongs_to_the_exact_creating_identity() -> None:
+    text = _DA_ENVIRONMENT_TARGET.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+    baseline = text.split("Only after **Create environment**", 1)[1].split(
+        "Then generate a new client request UUID", 1,
+    )[0]
+    assert "capture a fresh pre-create environment list" in " ".join(baseline.split())
+    assert '--account "{ENVIRONMENT_CREATION_ACCOUNT}"' in baseline
+    assert '--tenant-id "{ENVIRONMENT_CREATION_TENANT_ID}"' in baseline
+    assert '--ring "{RING}"' in baseline
+    assert "Require `DA_AGENTBUILDER_AUTH_JSON:`" in baseline
+    assert "A successful empty list is a valid baseline" in normalized
+    assert "Do not submit creation until this baseline is established" in normalized
+    assert "Never reuse the original setup user's picker results" in normalized
+    assert "Do not replace it with a post-create list" in normalized
+    assert "otherwise leave the target unresolved rather than selecting by name" in normalized
+
+
+def test_optional_maker_grant_is_confirmed_and_read_back_before_cleanup() -> None:
+    text = _DA_ENVIRONMENT_TARGET.read_text(encoding="utf-8")
+    access = " ".join(text.split("## Optional setup-user access", 1)[1].split())
+    assert "Before switching, inspect that user's authenticated identity" in " ".join(text.split())
+    for operation in ("inspect-account", "list-roles", "grant-maker"):
+        assert f"setup_power_platform_environment.py {operation}" in access
+    assert "**Grant Environment Maker** and **Skip for now**" in access
+    assert "with no preselected choice" in access
+    assert "If the assignment already exists, do not submit a grant" in access
+    assert "another write requires fresh confirmation" in access
+    assert "An unreadable role response is not an empty role list" in access
+    assert "Confirm Environment Maker access only after readback" in access
+    assert "Complete or explicitly skip that interaction while the administrator's cached authorization" in " ".join(text.split())
+    foundation = " ".join(_FOUNDATION.read_text(encoding="utf-8").split())
+    assert "Do not append a second `--account` argument" in foundation
+
+
+def test_optional_maker_grant_question_is_standalone() -> None:
+    text = _DA_ENVIRONMENT_TARGET.read_text(encoding="utf-8")
+    access = text.split("## Optional setup-user access", 1)[1]
+    question = access.split("Only after **Grant Environment Maker**", 1)[0]
+    assert "standalone chat message" in " ".join(question.split())
+    assert "**Message:**" in question
+    message, control = question.split("**End message.**", 1)
+    assert " ".join(message.split("**Message:**", 1)[1].split()) == (
+        "Grant **Environment Maker** to `{RETURN_SETUP_ACCOUNT}` in "
+        "`{ENVIRONMENT_DISPLAY_NAME}` so that user can create the agent?"
+    )
+    assert "Finish that message before opening" in " ".join(control.split())
+    assert "**Grant Environment Maker** and **Skip for now**" in control
+    assert "Do not repeat the grant question" in " ".join(control.split())
+
+
+def test_optional_maker_grant_success_is_immediate_after_verified_readback() -> None:
+    text = _DA_ENVIRONMENT_TARGET.read_text(encoding="utf-8")
+    access = " ".join(text.split("## Optional setup-user access", 1)[1].split())
+    verified = access.split(
+        "Confirm Environment Maker access only after readback contains the "
+        "qualifying assignment.", 1,
+    )[1]
+    assert "**Message:**" in verified
+    boundary, result = verified.split("**Message:**", 1)
+    assert (
+        "Immediately show the verified access result before asking which account "
+        "to continue with, forgetting the administrator, or performing another "
+        "operation"
+    ) in " ".join(boundary.split())
+    message, continuation = result.split("**End message.**", 1)
+    assert " ".join(message.split()) == (
+        "**Environment Maker** access is confirmed for `{RETURN_SETUP_ACCOUNT}` "
+        "in `{ENVIRONMENT_DISPLAY_NAME}`. Setup is not complete yet."
+    )
+    assert "Do not show this confirmation for skipped access" in (
+        " ".join(continuation.split())
+    )
+    assert "Carry that verified fact" in continuation
+    assert "same verified-access confirmation below" in access
 
 
 def test_alm_enrollment_confirmation_follows_verified_enrollment() -> None:
@@ -231,54 +371,6 @@ def test_skipped_alm_enrollment_is_announced_before_local_continuation() -> None
     assert "return to the caller's exact attachment command" in continuation
     assert "setup_existing_da.py attach" in continuation
     assert "setup_existing_da.py ensure-alm" not in skipped
-
-
-def test_administrator_handoffs_are_forwardable_and_evidence_gated() -> None:
-    permission = _PERMISSION_GUIDANCE.read_text(encoding="utf-8")
-    normalized_permission = " ".join(permission.split())
-    environment = _DA_ENVIRONMENT_TARGET.read_text(encoding="utf-8")
-    normalized_environment = " ".join(environment.split())
-
-    assert "## Forwardable administrator request" in permission
-    for field in (
-        "**Requested action:** {EXACT_ADMINISTRATOR_ACTION}",
-        "**Environment:** {ENVIRONMENT_NAME}",
-        "**Environment URL:** {ENVIRONMENT_URL}",
-        "**Agent:** {AGENT_NAME}",
-        "**User:** {SETUP_ACCOUNT}",
-        "**Why this is needed:** {EVIDENCE_SUPPORTED_REASON}",
-        "**When complete:** {RETURN_CONDITION}",
-    ):
-        assert field in permission
-    assert "Omit a field when it does not apply" in normalized_permission
-    assert "unsupported billing guidance" in permission
-    assert "speculative role claims" in permission
-    assert "rerun only the operation or Flight Check" in normalized_permission
-    assert (
-        "When evidence explicitly identifies missing first-party application approval"
-        in permission
-    )
-    assert "https://entra.microsoft.com/" in permission
-    assert (
-        "Only when the service evidence explicitly identifies missing creation access"
-        in permission
-    )
-    assert "**Grant agent-creation access**" in permission
-    assert (
-        "Assign the Environment Maker security role to {SETUP_ACCOUNT} in "
-        "{ENVIRONMENT_NAME}."
-    ) in normalized_permission
-
-    assert "Retain the answer as `{REQUESTED_ENVIRONMENT_NAME}`" in (
-        normalized_environment
-    )
-    assert "shared **Forwardable administrator request**" in environment
-    assert "**Create a Power Platform environment**" in environment
-    assert "This setup does not require a Dataverse database." in environment
-    assert "the retained `{POWER_PLATFORM_ADMIN_ORIGIN}/`" in environment
-    assert (
-        "Send the requester the new environment URL" in normalized_environment
-    )
 
 
 def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
@@ -1175,9 +1267,14 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         "Go back",
     ):
         assert f"**{empty_environment_choice}**" in environment_target
-    assert "does not require a Dataverse database" in environment_target
-    assert "Do not route into a Dataverse provisioning skill" in (
-        normalized_environment_target
+    assert "setup_power_platform_environment.py list-locations" in (
+        environment_target
+    )
+    assert "DA_ENVIRONMENT_LOCATIONS_JSON:" in environment_target
+    assert "setup_power_platform_environment.py create" in environment_target
+    assert "DA_ENVIRONMENT_CREATE_JSON:" in environment_target
+    assert "setup_power_platform_environment.py forget-account" in (
+        environment_target
     )
     assert "authorizationFailure" in environment_target
     assert "DA_ENVIRONMENT_LIST_ERROR_JSON:" in environment_target

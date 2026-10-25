@@ -2151,9 +2151,7 @@ def test_list_environments_emits_visible_non_dataverse_targets(
             "DA_ENVIRONMENT_LIST_JSON:"
         )
     )
-    evidence_path = (
-        tmp_path / ".local" / "setup" / "environment-list-test.json"
-    )
+    evidence_path = Path(result["evidencePath"])
     assert result == {
         "tenantId": TENANT_ID,
         "ring": "test",
@@ -2183,6 +2181,61 @@ def test_list_environments_emits_visible_non_dataverse_targets(
             }
         ],
     }
+
+
+def test_list_environment_rechecks_preserve_baseline_and_latest_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    existing = {"id": ENVIRONMENT_ID, "displayName": "ESS Development"}
+    created = {"id": AGENT_ID, "displayName": "ESS Development"}
+    observations = iter([[existing], [existing, created]])
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: ("token", TENANT_ID),
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        lambda token, ring, *, api_version: next(observations),
+    )
+    command = [
+        "list-environments",
+        "--ring",
+        "test",
+        "--tenant-id",
+        TENANT_ID,
+        "--account",
+        "admin@example.test",
+        "--kit-root",
+        str(tmp_path),
+    ]
+
+    assert setup_existing_da.main(command) == 0
+    baseline = json.loads(
+        capsys.readouterr().out.removeprefix("DA_ENVIRONMENT_LIST_JSON:")
+    )
+    baseline_path = Path(baseline["evidencePath"])
+    baseline_bytes = baseline_path.read_bytes()
+
+    assert setup_existing_da.main(command) == 0
+    recheck = json.loads(
+        capsys.readouterr().out.removeprefix("DA_ENVIRONMENT_LIST_JSON:")
+    )
+    recheck_path = Path(recheck["evidencePath"])
+
+    assert recheck_path != baseline_path
+    assert baseline_path.read_bytes() == baseline_bytes
+    assert json.loads(baseline_bytes)["environments"] == [existing]
+    assert json.loads(
+        recheck_path.read_text(encoding="utf-8")
+    )["environments"] == [existing, created]
+    latest_path = (
+        tmp_path / ".local" / "setup" / "environment-list-test.json"
+    )
+    assert latest_path.read_bytes() == recheck_path.read_bytes()
 
 
 def test_list_environments_preserves_empty_result(

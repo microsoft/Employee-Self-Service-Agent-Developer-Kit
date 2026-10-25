@@ -193,13 +193,30 @@ Parse `DA_AGENTBUILDER_ACCOUNTS_JSON:`. This is a local read and does not authen
 
 For **Help me decide** on the multiple-account surface, follow the shared contract above. Establish whether the maker is accessing an existing agent, creating a fresh agent, or only discovering environments. Explain that an existing-agent path needs the login that created the exact agent, a fresh-agent path needs a login whose environment permissions allow agent creation, and environment discovery needs a login that can access the target environment. Recommend only an account the maker identifies as satisfying the applicable reason; otherwise recommend the Microsoft account picker.
 
-Retain a confirmed cached sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, `setup_alm_import.py`, and `reconcile_setup_agent.py` command in this invocation. Never infer a corp account.
+Retain a confirmed cached sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_power_platform_environment.py`, `setup_alm_export.py`, `setup_alm_import.py`, and `reconcile_setup_agent.py` command in this invocation when that command accepts an account. Never infer a corp account.
+
+An explicit account in an owning route's command takes precedence over this
+default. During temporary-administrator environment creation, retain the
+original setup user separately and use the route's explicit creation,
+administrator, or returning-user account. Do not append a second `--account`
+argument that overrides it.
 
 Pass `--preferred-username "{SETUP_ACCOUNT}"` to every setup-owned `flightcheck/cli.py` command, including retries and rechecks. Use the current `{SETUP_ACCOUNT}` after any account change.
 
 When no cached account exists, or the maker selects **Use a different user** or **Use the Microsoft account picker**, omit `--account` and append `--select-account` only to the first read-only command that can authenticate. Parse `DA_AGENTBUILDER_AUTH_JSON:` from that command's output, retain its non-empty `account` as `{SETUP_ACCOUNT}`, and use `--account "{SETUP_ACCOUNT}"` for every later command in this invocation. The picker establishes the identity once; later commands reuse its cached token and sign-in name.
 
-`reconcile_setup_agent.py` does not accept `--select-account`, and a command that may mutate remote state must not establish the selected identity. When reconciliation or a mutating operation would otherwise be the first authenticated command, first run `setup_existing_da.py list-environments --ring "{RING}" --select-account` only to establish `{SETUP_ACCOUNT}`. Do not use its environment rows to replace an already selected target. Parse `DA_AGENTBUILDER_AUTH_JSON:`, retain the selected account, and pass it to reconciliation or mutation with `--account "{SETUP_ACCOUNT}"`. Do not pass `--select-account` to `reconcile_setup_agent.py` or a mutating command.
+`reconcile_setup_agent.py` does not accept `--select-account`. Mutating
+commands also do not accept `--select-account`. A command that may mutate
+remote state must not establish the selected identity. When reconciliation or a mutating operation would
+otherwise be the first authenticated command, first run the owning route's
+read-only account-selection operation. Environment creation uses
+`setup_power_platform_environment.py list-locations`; other routes use
+`setup_existing_da.py list-environments --ring "{RING}" --select-account`.
+Do not use environment rows from an account-establishment command to replace an
+already selected target. Parse `DA_AGENTBUILDER_AUTH_JSON:`, retain the selected
+account, and pass it to reconciliation or mutation with
+`--account "{SETUP_ACCOUNT}"`. Do not pass `--select-account` to
+`reconcile_setup_agent.py` or a mutating command.
 
 When the read-only account-establishment operation does not return an
 authenticated account, or when a returned account differs from an account the
@@ -209,7 +226,7 @@ using the read-only operation result.
 
 If the first authenticated command succeeds but does not return an account identity, run `setup_existing_da.py cached-accounts` again. Retain its sole account when exactly one is present. When no single identity can be established, state that setup could not retain the selected sign-in and rerun the Microsoft account picker before continuing.
 
-Run this local operation once after the first authenticated account is established as `{SETUP_ACCOUNT}`, before the next setup operation:
+Run this local operation once after the first authenticated account is established as `{SETUP_ACCOUNT}`, before any temporary administrator switch:
 
 ```text
 python scripts/setup_existing_da.py seed-shared-cache --account "{SETUP_ACCOUNT}"
@@ -225,10 +242,11 @@ Present account confirmation once per setup invocation. Do not repeat it before 
 
 ## Confirm people and role availability for the selected path
 
-After the setup path, target environment, and Microsoft login are known,
-but before the first agent inventory, exact-agent inspection, or
-agent-template listing, render the matching **Setup-path people and role
-walkthrough** from `permission-guidance.md`.
+After the setup path and Microsoft login are known, render the matching
+**Setup-path people and role walkthrough** from `permission-guidance.md` before
+the first protected operation. Existing-agent and fresh-agent walkthroughs
+also require the target environment to be known. Environment creation runs its
+walkthrough before that target exists.
 
 This is an upfront planning checkpoint. It identifies the maker access required
 now and the administrator personas that may be needed later without claiming
