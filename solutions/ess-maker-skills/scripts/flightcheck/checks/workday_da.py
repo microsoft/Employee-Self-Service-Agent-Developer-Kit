@@ -51,9 +51,21 @@ _SOLN_SELECT = "solutionid,uniquename,friendlyname,ismanaged,version"
 
 _DOC_LINK = (
     "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
-    "employee-self-service/install"
+    "employee-self-service/declarative-agent-workday"
 )
 _DESCRIPTION = "Workday extension package installed for the DA ESS HR agent"
+
+# Portal display names differ from these existing reviewed schema suffixes.
+# https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service/declarative-agent-workday-reference#system-topics
+_REQUIRED_SYSTEM_TOPIC_SUFFIXES = frozenset({
+    "WorkdaySystemSetRuntimeTemplateConfigurations",
+    "WorkdaySystemGetUserContextV2",
+    "WorkdaySystemAccessCheck",
+    "WorkdaySystemGetCommonExecution",
+    "WorkdaySystemGetRESTExecution",
+    "WorkdayManagerCheck",
+    "WorkdayOnError",
+})
 
 
 def _safe_error_summary(exc: Exception) -> str:
@@ -71,7 +83,7 @@ def _safe_error_summary(exc: Exception) -> str:
     return f"{type(exc).__name__}{status_hint}"
 
 
-def run_workday_da_checks(runner) -> list[CheckResult]:
+def run_workday_da_checks(runner, *, include_manual: bool = True) -> list[CheckResult]:
     """Emit every independent DA-specific Workday validation row."""
     checks = (
         ("WD-DA-PKG-001", _check_workday_da_package_installed),
@@ -84,6 +96,8 @@ def run_workday_da_checks(runner) -> list[CheckResult]:
     results: list[CheckResult] = []
     should_execute = getattr(runner, "should_execute", lambda _id: True)
     for checkpoint_id, check in checks:
+        if not include_manual and checkpoint_id == "WD-DA-ATTACH-001":
+            continue
         if should_execute(checkpoint_id):
             results.extend(check(runner))
     return results
@@ -760,7 +774,16 @@ def _fetch_selected_components(
         runner._workday_da_component_cache = cache
     components = cache.get(bot_id)
     if components is None:
-        payload = client.fetch_components(bot_id)
+        snapshot = getattr(runner, "_da_native_snapshot", None)
+        if (
+            getattr(runner, "maker_diagnostics", False) is True
+            and isinstance(snapshot, dict)
+            and snapshot.get("agentId") == bot_id
+            and snapshot.get("environmentId") == getattr(runner, "env_id", None)
+        ):
+            payload = snapshot["changeset"]
+        else:
+            payload = client.fetch_components(bot_id)
         components = _dialog_components(payload)
         cache[bot_id] = components
     return slug, schema, bot_id, components
@@ -806,6 +829,63 @@ def _check_reviewed_workday_topics(runner) -> list[CheckResult]:
     duplicates: list[str] = []
     inactive: list[str] = []
     diagnostics: list[str] = []
+    if getattr(runner, "maker_diagnostics", False) is True:
+        present = {
+            name: components[name.casefold()]
+            for name in expected if components.get(name.casefold())
+        }
+        required = {f"{schema}.topic.{suffix}" for suffix in _REQUIRED_SYSTEM_TOPIC_SUFFIXES}
+        missing = sorted(required - present.keys())
+        inactive = sorted(
+            name for name in required & present.keys()
+            if any(item.get("status") == "Inactive" for item in present[name])
+        )
+        duplicates = sorted(name for name, matches in present.items() if len(matches) != 1)
+        unknown = sorted(
+            name for name, matches in present.items()
+            if any(item.get("status") not in {"Active", "Inactive"} for item in matches)
+        )
+        active = sum(item.get("status") == "Active" for matches in present.values() for item in matches)
+        inactive_count = sum(item.get("status") == "Inactive" for matches in present.values() for item in matches)
+        if missing or inactive or duplicates:
+            status = Status.FAILED.value
+        elif unknown:
+            status = Status.BLOCKED.value
+        else:
+            status = Status.PASSED.value
+        findings = [
+            f"{label}: {', '.join(values)}"
+            for label, values in (
+                ("missing required system topics", missing),
+                ("inactive required system topics", inactive),
+                ("duplicate schemas", duplicates),
+                ("unknown activation", unknown),
+            )
+            if values
+        ]
+        return [_da_result(
+            checkpoint_id, status, "Required Workday system topics and optional conversation inventory",
+            f"Inspected {len(present)} present reviewed conversation(s): {active} active, "
+            f"{inactive_count} inactive, {len(unknown)} with unknown activation. "
+            f"Verified {len(required) - len(missing)} of {len(required)} required system topics present. "
+            + ("; ".join(findings) + ". " if findings else "")
+            + "Unused optional conversations are not required; required system topics must remain active.",
+            remediation=(
+                "In Copilot Studio > the selected HR agent > Topics > All or System, "
+                "restore missing Microsoft-provided system topics through /connect workday, "
+                "turn on required system topics, resolve duplicate schemas and verify unknown activation. "
+                "Do not edit or disable system topics; enable only the intended optional scenarios. "
+                "Refresh the snapshot and rerun."
+                if status != Status.PASSED.value else ""
+            ),
+            evidence={
+                "present": len(present), "active": active, "inactive": inactive_count,
+                "requiredSystemTopics": sorted(required),
+                "missingSystemTopics": missing, "inactiveSystemTopics": inactive,
+                "duplicates": duplicates, "unknownActivation": unknown,
+                "unselectedCatalogEntries": len(expected) - len(present),
+            },
+        )]
     for expected_schema in sorted(expected):
         matches = components.get(expected_schema.casefold()) or []
         if not matches:
@@ -1045,26 +1125,45 @@ def _check_agent_flow_attachment(runner) -> list[CheckResult]:
         return [_da_result(
             "WD-DA-ATTACH-001",
             Status.ERROR.value,
-            "Reviewed Workday flows exposed to the selected agent",
+            "Workday agent connection references and parameter sharing",
             str(exc),
             remediation="Restore the reviewed Workday runtime catalog.",
         )]
     flow_names = list(runtime["agentConnectionFlowNames"])
+    steps = [
+        "In classic Copilot Studio, open the selected HR agent > Settings > Connection Settings.",
+        "For both connection references, select the intended Workday connection: "
+        + ", ".join(flow_names) + ".",
+        "Open Manage for each reference and confirm 'Allow permission to share parameters' is enabled on both.",
+        "Refresh Copilot Studio and reopen the settings to confirm both bindings and sharing settings were retained.",
+    ]
+    missing_action = (
+        "If a required reference is absent, use /connect workday to install or repair "
+        "the required Workday components. If a reference is Not connected, select the intended "
+        "Workday connection in these settings. If the sharing "
+        "setting is off, enable it. If you cannot see or change these settings, ask the "
+        "Environment Maker user or environment administrator to inspect them. "
+        "Do not remove unrelated flows or connections."
+    )
     return [_da_result(
         "WD-DA-ATTACH-001",
         Status.MANUAL.value,
-        "Reviewed Workday flows exposed to the selected agent",
-        "The reviewed agent-facing flow contract contains exactly: "
+        "Workday agent connection references and parameter sharing",
+        "The required agent connection references are: "
         + ", ".join(flow_names)
         + ". FlightCheck has no validated read-only API that proves the "
-        "maker UI attachment and parameter-sharing toggle.",
+        "selected connection and parameter-sharing toggle for both references. "
+        "A person must inspect them; this is not a confirmed configuration defect. "
+        "Flow authorization is verified separately.",
         remediation=(
-            "In Copilot Studio, open the selected ESS HR agent's Workday "
-            "connection settings. Confirm exactly the listed flows are "
-            "attached and 'Allow permission to share parameters' is enabled "
-            "for every exposed connection."
+            "\n".join(f"{index}. {step}" for index, step in enumerate(steps, 1))
+            + "\nIf missing or incorrect: " + missing_action
         ),
         priority=Priority.HIGH.value,
         automation_type="manual",
-        evidence={"expectedFlowNames": flow_names},
+        evidence={
+            "expectedFlowNames": flow_names, "expectedConnectionReferences": flow_names,
+            "manualVerificationSteps": steps, "ifMissingOrIncorrect": missing_action,
+            "verificationBoundary": "portal_settings_not_automatically_verified",
+        },
     )]

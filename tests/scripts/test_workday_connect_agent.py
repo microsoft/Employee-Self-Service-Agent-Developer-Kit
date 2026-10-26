@@ -1511,6 +1511,8 @@ def test_record_connections_uses_live_verification(
 
     store = WorkdayConnectStore(tmp_path)
     store.initialize()
+    store.merge_section("scope", {"environmentId": "environment-id", "workdayTenant": "contoso"})
+    store.merge_section("endpoints", {"restBaseUrl": "https://example.workday.com/ccx/api"})
     for phase_id in ("preflight", "entra", "workday-admin"):
         for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
             store.complete_action(
@@ -1566,6 +1568,12 @@ def test_record_connections_uses_live_verification(
     assert connections["evidence"][1]["connectionIds"] == {
         "workday": "workday-id",
         "dataverse": "dataverse-id",
+    }
+    assert connections["evidence"][1]["workdayTarget"] == {
+        "environmentId": "environment-id",
+        "workdayTenant": "contoso",
+        "restBaseUrl": "https://example.workday.com/ccx/api",
+        "connectionId": "workday-id",
     }
 
 

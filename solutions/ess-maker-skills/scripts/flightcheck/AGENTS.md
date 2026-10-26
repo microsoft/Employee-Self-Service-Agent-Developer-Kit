@@ -11,6 +11,102 @@ in `tests/AGENTS.md`. They complement each other; you need both.
 
 ## Architecture overview
 
+DA maker `full`/`local`/`workday`/`servicenow` diagnostics use diagnostic-only outcomes, not release
+approval. The maker skill and standalone command use the same CLI execution
+path for the same scope; invocation source must not change coverage or findings.
+Local-only is explicit, not a restriction on makers. Read-only selected-DA
+diagnostics do not depend on completed connection readiness.
+Keep exact subject/account/tenant binding, verified read contracts
+and explicit incomplete-discovery errors. Do not add review/evidence forms,
+mandatory administrator approvals or employee transactions to this route.
+Native-selected DA checkpoints and profiles reuse these same producers.
+Profiles preserve the existing Connect aggregate/result contract; pre-agent
+setup without a native bot ID and explicit legacy routes remain compatible.
+Local evidence never
+proves deployed freshness; portal suggestions never become Passed checks.
+Customer reports consolidate internal module labels (for example, all Workday
+checks use one Workday group). Label selected-agent local content as
+part of the Agent report category, alongside cloud checks; name its local
+source scope in each finding and preserve raw recorded categories.
+Applicable portal-only checks belong in the single Manual verification section
+with their ID, purpose, owner, detailed
+steps and missing-setting guidance; they do not require an approval form.
+Use always-visible single-column test cases with inline purpose/result/owner/
+next-step labels. Keep the colored status totals without a duplicate totals
+table. Finding headers have two columns: ID above title on the left, status
+above purple-bordered custom tags on the right. Keep the detailed finding body
+single-column. Put technical observations in a bottom appendix with independent
+FlightCheck-ID search and bidirectional finding links. Do not repeat visible
+Manual instructions or common scope metadata there; keep the full original JSON
+unchanged and retain distinct observations, read limitations and errors.
+Passed findings show purpose and result without repair ownership or next steps;
+put the general rerun-after-configuration-changes reminder once in the reading
+guide. Preserve actionable guidance for incomplete or non-passing findings.
+
+Define optional discovery labels through `CheckpointSpec.custom_tags` (a tuple
+of strings) for shared DA checks, or `CheckResult.custom_tags` (a list of strings)
+in a producer. Shared execution merges both without duplicates, including on
+fallback results. The report renders these as neutral, searchable custom tags;
+never add per-ID tag mappings to the UI or use tags as readiness/status signals.
+
+Single-checkpoint DA reports show only the requested canonical finding(s),
+using coverage selection/replacement metadata, not per-ID UI rules. Execute
+prerequisites and retain their blockers, technical results and full JSON
+accounting. Header totals describe all executed validations; distinguish them
+from requested finding counts and include the exact targeted rerun command.
+WD-RUN-001 defaults to a separate workday-litmus output folder. Its no-fresh-run
+guidance starts with the selected agent's read-only Test-pane scenario, while
+running, failed and inaccessible history receive different next steps.
+Keep litmus instructions code-defined in the producer's
+`manualVerificationSteps` and `ifMissingOrIncorrect` evidence. Interpolate
+verified target labels, not AI-generated prose. Keep the rerun instruction
+entrypoint-neutral; the focused report header retains the exact terminal command.
+The report renders these fields and the skill repeats them without paraphrasing;
+keep the agent Test-pane question separate from the VS Code rerun command.
+
+`da_inventory.csv` attaches typed `DAValidation` metadata to the existing
+`REGISTRY`. It records executable definitions and explicit replaced, legacy,
+excluded, detail, guard and deferred dispositions, preserving historical purpose/source
+and current assertion scope. `da_execution.py` derives full selection,
+checkpoint/profile prerequisite closure, permission-aware fallback and
+planned/emitted coverage from this same registry. An eligible registration
+must run in full without another per-check orchestration edit. Skills reference
+stable IDs/profiles; never copy producers or result interpretation into prose.
+Include the owner, ordered manual steps and missing-setting action with every
+admitted definition. Use the API tier mandated by the cassette index.
+Denied reads and unsupported observations become scoped Manual findings;
+malformed responses, auth/service/program errors and missing/duplicate output
+remain explicit Errors. A failed identity/content guard prevents dependent
+reads. Optional disabled/absent integrations are not defects, and unknown
+applicability is not absence. Returned tenant inventory or historical flow
+samples never prove effective employee entitlement or current employee success.
+
+Legacy classifies a specific old implementation/assertion, not a protocol or
+product capability. Current DA Workday uses both REST and SOAP as the signed-in
+employee, without an ISU. `excluded` means no verified assertion is admitted to
+this implementation; do not present it as a product limitation. Keep Learn
+provenance in the optional `documentation` field, separate from historical
+producer paths/revisions; shared results expose it through `doc_link`.
+Required Workday system topics differ from intentionally unused optional
+employee scenarios. Connection bindings, flow authorization, parameter sharing
+and employee success are separate assertions. No employee write probe or new
+Workday administrator credential is required.
+
+Native ServiceNow actions and Knowledge ingestion have different authentication
+and applicability contracts. Do not gate Knowledge checks on an enabled action
+connector or require old Dataverse templates/flows for direct HRSD/ITSM actions.
+SharePoint filtering and Hub setup are optional; unsupported applicability is
+unknown, not absent or a mandatory feature. Keep conditional portal inspection
+Manual and distinguish test-case quality, completed evaluations, maker tests
+and published non-maker validation.
+
+Use the existing Graph client for Graph authentication, with its own delegated
+read scopes/public application. Verify its actual account and token tenant
+against native authentication before admitting any Graph read. Do not request
+Graph `/.default` with the AgentBuilder application or retry the same failed
+sign-in for every dependent check. Tenant SKU/role inventory is not a universal
+DA licensing or administrator-role requirement.
+
 FlightCheck validates customer deployments by querying multiple APIs.
 Each API requires its own authentication and has different data
 available:
@@ -287,8 +383,9 @@ and do the per-tier verification.
 
 ### 5. Wire and run
 
-1. Wire the new check into `_check_single_agent()` (for per-agent
-   checks) or the appropriate scope runner.
+1. For the shared DA route, register the producer and complete DA metadata;
+   reference its ID from any skill profile. Full discovery is registry-derived.
+   Only older non-DA/narrow scopes require their existing scope-runner wiring.
 2. Run from the **repository root** (not from `scripts/flightcheck/`):
    ```bash
    python scripts/flightcheck/cli.py --scope <scope>

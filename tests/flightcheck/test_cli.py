@@ -421,28 +421,7 @@ class TestAgentBuilderNativeScopes:
             "expected_filter",
         ),
         [
-            (
-                "full",
-                ["Native Agent", "Environment", "Local Files", "Publishing"],
-                True,
-                True,
-                None,
-            ),
             ("environment", ["Environment"], False, True, None),
-            (
-                "servicenow",
-                ["Native Agent"],
-                True,
-                False,
-                ("shared_service-now",),
-            ),
-            (
-                "workday",
-                ["Native Agent"],
-                True,
-                False,
-                ("shared_workdaysoap",),
-            ),
             ("publishing", ["Publishing"], True, False, None),
         ],
     )

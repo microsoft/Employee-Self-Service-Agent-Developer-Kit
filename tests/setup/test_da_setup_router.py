@@ -750,6 +750,7 @@ def test_global_gate_routes_flightcheck_through_setup_evidence() -> None:
     assert "Apply the first matching state" in normalized
     assert "**Standalone FlightCheck:**" in instructions
     assert "**Canonical setup ready:**" in instructions
+    assert "**Selected DA diagnostics:**" in instructions
     assert "**Setup readiness outstanding:**" in instructions
     assert "**Workspace preparation required:**" in instructions
     assert "exact maker-facing copy" in normalized
@@ -791,6 +792,27 @@ def test_global_gate_routes_flightcheck_through_setup_evidence() -> None:
     assert entry_contract.count("**Message:**") == 2
     assert entry_contract.count("**End message.**") == 2
     assert entry_contract.count("```json") == 2
+
+
+def test_da_flightcheck_entry_does_not_require_completed_connections() -> None:
+    instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
+    entry = instructions.split("#### FlightCheck entry contract", 1)[1]
+    entry = entry.split("### If canonical setup is ready", 1)[0]
+    da_entry = entry.split("**Selected DA diagnostics:**", 1)[1]
+    da_entry = " ".join(da_entry.split("**Setup readiness outstanding:**", 1)[0].split())
+    assert 'one selected Declarative Agent (`releaseLine: "da"`)' in da_entry
+    assert "canonical setup state is absent" in da_entry
+    assert "must not require `connect_ready: true`" in da_entry
+    assert "same selected target, scope and CLI as standalone execution" in da_entry
+    assert "Never borrow another agent's identity or change setup state" in da_entry
+    assert "`/flightcheck` may run only its local-files scope" not in instructions
+
+    prompt = (_PROMPTS / "flightcheck.prompt.md").read_text(encoding="utf-8")
+    skill = (_SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Selected DA diagnostics" in prompt
+    assert "Do not substitute local-only checks for a requested full run" in prompt
+    assert "do not send it to setup merely because `connect_ready` is false" in skill
+    assert "never substitute for a requested full run" in skill
 
 
 def test_maker_profile_requires_only_canonical_completion() -> None:
@@ -2649,3 +2671,20 @@ def test_flightcheck_preserves_standalone_and_configured_scope_modes() -> None:
     assert "scope selection supported by the active configuration" in normalized
     assert "supported scopes are `full`, `environment`" in skill
     assert "scope fixed to `local`" not in normalized
+
+
+def test_flightcheck_renders_the_executed_output_and_allows_interpreted_findings() -> None:
+    instructions = " ".join(_INSTRUCTIONS.read_text(encoding="utf-8").split())
+    prompt = " ".join((_PROMPTS / "flightcheck.prompt.md").read_text(encoding="utf-8").split())
+    skill = (_SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md").read_text(encoding="utf-8")
+    rendering = skill.split("## Step 3: Read results and present findings", 1)[1]
+
+    for text in (instructions, " ".join(rendering.split())):
+        assert "executed run's output directory" in text
+        assert "workspace/flightcheck/workday-litmus" in text
+        assert "report.html" in text
+    assert "Read `workspace/flightcheck/results.json`" not in rendering
+    assert "[View full report]({OUTPUT_DIRECTORY}/report.html)" in rendering
+    assert "interpreted DA diagnostic summary and findings table" in prompt
+    assert "Do not add process narration" in prompt
+    assert "pre-deployment readiness" not in prompt

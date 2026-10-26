@@ -992,6 +992,12 @@ def _record_connections(
             "connections": evidence["connections"],
             "connectionIds": evidence["connectionIds"],
             "workdayTargetOutcome": "maker-confirmed-against-workday-packet",
+            "workdayTarget": {
+                "environmentId": state["scope"]["environmentId"],
+                "workdayTenant": state["scope"]["workdayTenant"],
+                "restBaseUrl": state["endpoints"]["restBaseUrl"],
+                "connectionId": evidence["connectionIds"]["workday"],
+            },
         },
     )
     store.set_phase_status("connections", "complete")

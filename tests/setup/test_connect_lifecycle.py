@@ -59,7 +59,10 @@ def test_cea_workday_routing_is_package_gated() -> None:
     assert "Never start a lifecycle from an\n  inconclusive package check" in route
     assert "connect/workday/SKILL.md" in route
     assert ".local/connect/workday-da/config.json" in route
-    assert "`scope.agent.slug` and `scope.agent.botId` exactly" in route
+    assert (
+        "identity whose agent slug and BotId exactly match the active native agent."
+        in " ".join(route.split())
+    )
 
 
 def test_workday_wiring_uses_installed_identity_and_explicit_result() -> None:

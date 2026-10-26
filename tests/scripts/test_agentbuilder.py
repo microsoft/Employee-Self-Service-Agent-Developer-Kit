@@ -1425,6 +1425,54 @@ def test_agentbuilder_rejects_unreadable_token_tenant() -> None:
         agentbuilder.tenant_id_from_access_token("opaque-token")
 
 
+@pytest.mark.parametrize("account,other_tenant", [
+    ("maker@example.com", False),
+    ("other@example.com", False),
+    (None, False),
+    ("maker@example.com", True),
+])
+def test_dependency_auth_is_pinned_to_selected_account_and_tenant(
+    monkeypatch, tmp_path, account, other_tenant,
+):
+    from unittest.mock import Mock
+
+    tenant = "00000000-0000-0000-0000-000000001111"
+    token_tenant = ENVIRONMENT_ID if other_tenant else tenant
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": token_tenant}).encode()
+    ).decode().rstrip("=")
+    token = f"header.{payload}.signature"
+    acquire = Mock(return_value=(token, account))
+    monkeypatch.setattr(agentbuilder, "_acquire_token", acquire)
+    kwargs = {
+        "tenant_id": tenant, "ring": "prod", "account_hint": "maker@example.com",
+        "cache_path": tmp_path / "original-cache.bin",
+    }
+
+    if account != "maker@example.com" or other_tenant:
+        with pytest.raises(agentbuilder.AgentBuilderError, match="different"):
+            agentbuilder.authenticate_flightcheck_dependency("read-scope", **kwargs)
+    else:
+        assert agentbuilder.authenticate_flightcheck_dependency("read-scope", **kwargs) == token
+    assert acquire.call_args.kwargs["authority"].endswith(tenant)
+    assert acquire.call_args.kwargs["cache_path"] == kwargs["cache_path"]
+    assert acquire.call_args.kwargs["scopes"] == ("read-scope",)
+
+
+def test_dependency_auth_requires_known_account_before_login(monkeypatch):
+    from unittest.mock import Mock
+
+    acquire = Mock()
+    monkeypatch.setattr(agentbuilder, "_acquire_token", acquire)
+
+    with pytest.raises(ValueError, match="verified account"):
+        agentbuilder.authenticate_flightcheck_dependency(
+            "read-scope", tenant_id=ENVIRONMENT_ID, ring="prod", account_hint="",
+        )
+
+    acquire.assert_not_called()
+
+
 def test_first_run_authentication_returns_selected_token_tenant(
     tmp_path,
     monkeypatch,

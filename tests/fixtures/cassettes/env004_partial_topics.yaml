@@ -1,0 +1,128 @@
+interactions:
+- request:
+    body: null
+    headers: {}
+    method: GET
+    uri: https://mockenv.00.environment.api.powerplatform.com/copilotstudio/minimalBots/api/00000000-0000-0000-0000-000000000007?api-version=2024-10-01
+  response:
+    body:
+      string: '{"botId":"00000000-0000-0000-0000-000000000007","realm":"dev"}'
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{}'
+    headers: {}
+    method: POST
+    uri: https://mockenv.00.environment.api.powerplatform.com/copilotstudio/minimalBots/api/00000000-0000-0000-0000-000000000007/components?api-version=2022-03-01-preview
+  response:
+    body:
+      string: '{"botComponentChanges":[{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Inactive"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"}],"$kind":"OnRecognizedIntent"},"$kind":"AdaptiveDialog"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeFlowAction","flowId":"00000000-0000-0000-0000-000000000023"}],"$kind":"OnRedirect"},"$kind":"AdaptiveDialog"},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeFlowAction","flowId":"00000000-0000-0000-0000-000000000005"}],"$kind":"OnRedirect"},"$kind":"AdaptiveDialog"},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.00000000-0000-0000-0000-000000000018.shared_service-now"}],"$kind":"OnRedirect"},"$kind":"AdaptiveDialog"},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"}],"$kind":"OnRecognizedIntent"},"$kind":"AdaptiveDialog"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"conditions":[{"actions":[{"$kind":"InvokeFlowAction","flowId":"00000000-0000-0000-0000-000000000021"}],"$kind":"ConditionItem"}],"elseActions":[{"$kind":"InvokeFlowAction","flowId":"00000000-0000-0000-0000-000000000005"}],"$kind":"ConditionGroup"}],"$kind":"OnRedirect"},"$kind":"AdaptiveDialog"},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeFlowAction","flowId":"00000000-0000-0000-0000-000000000005"}],"$kind":"OnRecognizedIntent"},"$kind":"AdaptiveDialog"},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"},{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"}],"$kind":"OnRecognizedIntent"},"$kind":"AdaptiveDialog"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Inactive"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"}],"$kind":"OnRecognizedIntent"},"$kind":"AdaptiveDialog"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"},{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"}],"$kind":"OnRecognizedIntent"},"$kind":"AdaptiveDialog"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"conditions":[{"actions":[{"conditions":[{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.00000000-0000-0000-0000-000000000018.shared_service-now"}],"$kind":"ConditionItem"},{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.00000000-0000-0000-0000-000000000018.shared_service-now"}],"$kind":"ConditionItem"},{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.00000000-0000-0000-0000-000000000018.shared_service-now"}],"$kind":"ConditionItem"}],"$kind":"ConditionGroup"}],"$kind":"ConditionItem"}],"$kind":"ConditionGroup"}],"$kind":"OnRedirect"},"$kind":"AdaptiveDialog"},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.00000000-0000-0000-0000-000000000018.shared_service-now"}],"$kind":"OnRedirect"},"$kind":"AdaptiveDialog"},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"}],"$kind":"OnRecognizedIntent"},"$kind":"AdaptiveDialog"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"}],"$kind":"OnRecognizedIntent"},"$kind":"AdaptiveDialog"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"}],"$kind":"OnRecognizedIntent"},"$kind":"AdaptiveDialog"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"}],"$kind":"OnRecognizedIntent"},"$kind":"AdaptiveDialog"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"},{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"},{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"}],"$kind":"OnRecognizedIntent"},"$kind":"AdaptiveDialog"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"}],"$kind":"OnRecognizedIntent"},"$kind":"AdaptiveDialog"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{"beginDialog":{"actions":[{"$kind":"InvokeConnectorAction","connectionReference":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"}],"$kind":"OnRecognizedIntent"},"$kind":"AdaptiveDialog"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","dialog":{},"status":"Active"}}],"connectionReferenceChanges":[{"$kind":"ConnectionReferenceInsert","connectionReference":{"$kind":"ConnectionReference","id":"00000000-0000-0000-0000-000000000012","connectionId":"00000000000000000000000000000002","connectorId":"/providers/Microsoft.PowerApps/apis/shared_service-now","connectionReferenceLogicalName":"gptagent_copilotforemployeeselfservicehr.00000000-0000-0000-0000-000000000018.shared_service-now"}},{"$kind":"ConnectionReferenceInsert","connectionReference":{"$kind":"ConnectionReference","id":"00000000-0000-0000-0000-000000000019","connectionId":"00000000000000000000000000000020","connectorId":"/providers/Microsoft.PowerApps/apis/shared_sapodata","connectionReferenceLogicalName":"gptagent_copilotforemployeeselfservicehr.shared_sapodata.00000000000000000000000000000020"}}]}'
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers: {}
+    method: GET
+    uri: https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/00000000-0000-0000-0000-000000000011/flows/00000000-0000-0000-0000-000000000005?api-version=2016-11-01
+  response:
+    body:
+      string: '{"properties":{"connectionReferences":{"shared_commondataserviceforapps":{"connectionReferenceLogicalName":"msdyn_sharedcommondataserviceforapps_workdayruntime","connectionName":"00000000000000000000000000000014","source":"Embedded","apiDefinition":{"id":"/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"}},"shared_workdaysoap":{"connectionReferenceLogicalName":"msdyn_sharedworkdaysoap_workdayruntime","connectionName":"00000000000000000000000000000010","source":"Invoker","apiDefinition":{"id":"/providers/Microsoft.PowerApps/apis/shared_workdaysoap"}}}}}'
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers: {}
+    method: GET
+    uri: https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/00000000-0000-0000-0000-000000000011/flows/00000000-0000-0000-0000-000000000021?api-version=2016-11-01
+  response:
+    body:
+      string: '{"properties":{"connectionReferences":{}}}'
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers: {}
+    method: GET
+    uri: https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/00000000-0000-0000-0000-000000000011/flows/00000000-0000-0000-0000-000000000023?api-version=2016-11-01
+  response:
+    body:
+      string: '{"properties":{"connectionReferences":{"shared_workdaysoap":{"connectionReferenceLogicalName":"msdyn_sharedworkdaysoap_workdayruntime","connectionName":"00000000000000000000000000000010","source":"Invoker","apiDefinition":{"id":"/providers/Microsoft.PowerApps/apis/shared_workdaysoap"}}}}}'
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers: {}
+    method: GET
+    uri: https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/00000000-0000-0000-0000-000000000011?api-version=2021-04-01
+  response:
+    body:
+      string: '{"name":"00000000-0000-0000-0000-000000000011","properties":{"linkedEnvironmentMetadata":{"instanceUrl":"https://orgmocktenant.crm.dynamics.com/"}}}'
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers: {}
+    method: GET
+    uri: https://orgmocktenant.crm.dynamics.com/api/data/v9.2/connectionreferences?%24select=connectionreferencelogicalname%2Cconnectorid%2Cconnectionid
+  response:
+    body:
+      string: '{"value":[{"connectionreferencelogicalname":"msdyn_Dataverse","connectorid":"/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps","connectionid":null},{"connectionreferencelogicalname":"msdyn_copilotforemployeeselfserviceit.shared_alchemy.shared-alchemy-00000000-0000-0000-0000-000000000016","connectorid":"/providers/Microsoft.PowerApps/apis/shared_alchemy","connectionid":"shared-alchemy-00000000-0000-0000-0000-000000000017"},{"connectionreferencelogicalname":"msdyn_sharedcommondataserviceforapps_workdayruntime","connectorid":"/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps","connectionid":"00000000000000000000000000000014"},{"connectionreferencelogicalname":"msdyn_sharedworkdaysoap_workdayruntime","connectorid":"/providers/Microsoft.PowerApps/apis/shared_workdaysoap","connectionid":"00000000000000000000000000000010"},{"connectionreferencelogicalname":"msdyn_copilotforemployeeselfserviceit.00000000-0000-0000-0000-000000000006.shared_sapodata","connectorid":"/providers/Microsoft.PowerApps/apis/shared_sapodata","connectionid":"00000000000000000000000000000020"},{"connectionreferencelogicalname":"msdyn_copilotforemployeeselfserviceit.00000000-0000-0000-0000-000000000009.shared_sapodata","connectorid":"/providers/Microsoft.PowerApps/apis/shared_sapodata","connectionid":"00000000000000000000000000000020"},{"connectionreferencelogicalname":"gptagent_copilotforemployeeselfservicehr.00000000-0000-0000-0000-000000000023.shared_workdaysoap","connectorid":"/providers/Microsoft.PowerApps/apis/shared_workdaysoap","connectionid":"00000000000000000000000000000010"},{"connectionreferencelogicalname":"gptagent_copilotforemployeeselfservicehr.00000000-0000-0000-0000-000000000005.shared_workdaysoap","connectorid":"/providers/Microsoft.PowerApps/apis/shared_workdaysoap","connectionid":"00000000000000000000000000000010"},{"connectionreferencelogicalname":"msdyn_sharedcommondataserviceforapps_241f6","connectorid":"/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps","connectionid":"00000000000000000000000000000014"},{"connectionreferencelogicalname":"msdyn_ContentConversion","connectorid":"/providers/Microsoft.PowerApps/apis/shared_conversionservice","connectionid":null},{"connectionreferencelogicalname":"new_sharedsapodata_b7454","connectorid":"/providers/Microsoft.PowerApps/apis/shared_sapodata","connectionid":"00000000000000000000000000000020"}]}'
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers: {}
+    method: GET
+    uri: https://api.powerplatform.com/connectivity/environments/00000000-0000-0000-0000-000000000011/connections?api-version=2024-10-01
+  response:
+    body:
+      string: '{"value":[{"id":"/providers/Microsoft.PowerApps/apis/shared_alchemy/connections/shared-alchemy-00000000-0000-0000-0000-000000000017","name":"shared-alchemy-00000000-0000-0000-0000-000000000017","properties":{"apiId":"/providers/Microsoft.PowerApps/apis/shared_alchemy","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps/connections/00000000000000000000000000000014","name":"00000000000000000000000000000014","properties":{"apiId":"/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/apis/shared_workdaysoap/connections/00000000000000000000000000000010","name":"00000000000000000000000000000010","properties":{"apiId":"/providers/Microsoft.PowerApps/apis/shared_workdaysoap","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/apis/shared_sapodata/connections/00000000000000000000000000000020","name":"00000000000000000000000000000020","properties":{"apiId":"/providers/Microsoft.PowerApps/apis/shared_sapodata","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/apis/shared_service-now/connections/00000000000000000000000000000002","name":"00000000000000000000000000000002","properties":{"apiId":"/providers/Microsoft.PowerApps/apis/shared_service-now","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/apis/shared_logicflows/connections/00000000000000000000000000000001-0000000000000015","name":"00000000000000000000000000000001-0000000000000015","properties":{"apiId":"/providers/Microsoft.PowerApps/apis/shared_logicflows","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/apis/shared_logicflows/connections/00000000000000000000000000000022-0000000000000015","name":"00000000000000000000000000000022-0000000000000015","properties":{"apiId":"/providers/Microsoft.PowerApps/apis/shared_logicflows","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/apis/shared_logicflows/connections/00000000000000000000000000000003-0000000000000015","name":"00000000000000000000000000000003-0000000000000015","properties":{"apiId":"/providers/Microsoft.PowerApps/apis/shared_logicflows","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/apis/shared_logicflows/connections/00000000000000000000000000000004-0000000000000015","name":"00000000000000000000000000000004-0000000000000015","properties":{"apiId":"/providers/Microsoft.PowerApps/apis/shared_logicflows","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/apis/shared_logicflows/connections/00000000000000000000000000000013-0000000000000015","name":"00000000000000000000000000000013-0000000000000015","properties":{"apiId":"/providers/Microsoft.PowerApps/apis/shared_logicflows","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/apis/shared_logicflows/connections/00000000000000000000000000000008-0000000000000015","name":"00000000000000000000000000000008-0000000000000015","properties":{"apiId":"/providers/Microsoft.PowerApps/apis/shared_logicflows","statuses":[{"status":"Connected"}]}}]}'
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers: {}
+    method: GET
+    uri: https://api.powerapps.com/providers/Microsoft.PowerApps/scopes/admin/environments/00000000-0000-0000-0000-000000000011/connections?api-version=2016-11-01
+  response:
+    body:
+      string: '{"value":[{"id":"/providers/Microsoft.PowerApps/scopes/admin/environments/00000000-0000-0000-0000-000000000011/apis/shared_alchemy/connections/shared-alchemy-00000000-0000-0000-0000-000000000017","name":"shared-alchemy-00000000-0000-0000-0000-000000000017","properties":{"apiId":"/providers/Microsoft.PowerApps/scopes/admin/environments/00000000-0000-0000-0000-000000000011/apis/shared_alchemy","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/scopes/admin/environments/00000000-0000-0000-0000-000000000011/apis/shared_commondataserviceforapps/connections/00000000000000000000000000000014","name":"00000000000000000000000000000014","properties":{"apiId":"/providers/Microsoft.PowerApps/scopes/admin/environments/00000000-0000-0000-0000-000000000011/apis/shared_commondataserviceforapps","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/scopes/admin/environments/00000000-0000-0000-0000-000000000011/apis/shared_workdaysoap/connections/00000000000000000000000000000010","name":"00000000000000000000000000000010","properties":{"apiId":"/providers/Microsoft.PowerApps/scopes/admin/environments/00000000-0000-0000-0000-000000000011/apis/shared_workdaysoap","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/scopes/admin/environments/00000000-0000-0000-0000-000000000011/apis/shared_sapodata/connections/00000000000000000000000000000020","name":"00000000000000000000000000000020","properties":{"apiId":"/providers/Microsoft.PowerApps/scopes/admin/environments/00000000-0000-0000-0000-000000000011/apis/shared_sapodata","statuses":[{"status":"Connected"}]}},{"id":"/providers/Microsoft.PowerApps/scopes/admin/environments/00000000-0000-0000-0000-000000000011/apis/shared_service-now/connections/00000000000000000000000000000002","name":"00000000000000000000000000000002","properties":{"apiId":"/providers/Microsoft.PowerApps/scopes/admin/environments/00000000-0000-0000-0000-000000000011/apis/shared_service-now","statuses":[{"status":"Connected"}]}}]}'
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1
