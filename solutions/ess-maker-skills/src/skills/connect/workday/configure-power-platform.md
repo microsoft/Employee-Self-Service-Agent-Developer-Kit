@@ -67,14 +67,14 @@ previously approved plans. Show its recovery guidance; do not reinstall the
 package or overwrite the shared references to bypass the block. Different
 bindings require a separate environment.
 
-Agent **Connection Settings** is a later Runtime step. While either physical
-connection is missing, disconnected, ambiguous, or awaiting confirmation, tell
-the maker:
+Keep the maker focused on the current connection walkthrough while either
+physical connection is missing, disconnected, ambiguous, or awaiting
+confirmation. Do not introduce later Copilot Studio pages or warn the maker
+not to open them.
 
-> Do not open Copilot Studio Connection Settings yet. That page is configured
-> only after both Power Platform connections are verified and the Workday
-> Runtime changes have been applied.
-
+Keep this sequencing internal: agent **Connection Settings** belongs to Runtime,
+after both Power Platform connections are verified and the Runtime changes
+have been applied.
 Do not provide the agent Connection Settings link during the Connections phase.
 Do not diagnose the flow authorization script as failed when Runtime apply has
 not run.

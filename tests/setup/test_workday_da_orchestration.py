@@ -730,7 +730,10 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "Do not ask the maker or administrator to provide them again" in normalized
     assert "Do not request or collect a Workday password" in text
     assert "Reuse a healthy existing connection" in text
-    assert "Do not open Copilot Studio Connection Settings yet" in text
+    assert "Do not open Copilot Studio Connection Settings yet" not in text
+    assert "Keep the maker focused on the current connection walkthrough" in normalized
+    assert "Do not introduce later Copilot Studio pages" in normalized
+    assert "Keep this sequencing internal" in normalized
     assert "Do not provide the agent Connection Settings link" in text
     assert "Do not diagnose the flow authorization script as failed" in text
     assert "keep the customer in the Power Apps **Connections** page" in text
