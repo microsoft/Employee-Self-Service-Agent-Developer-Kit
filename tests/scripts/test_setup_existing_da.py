@@ -2080,6 +2080,7 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
         "list-environments",
         "list-agents",
         "maintain-flightcheck",
+        "seed-shared-cache",
         "select-agent",
         "validate-agent",
     }
@@ -2216,6 +2217,57 @@ def test_list_environments_preserves_empty_result(
     )
     assert result["environments"] == []
     assert result["ring"] == "prod"
+
+
+def test_list_environments_preserves_multiple_guid_service_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    service_id = "00000000-0000-4000-8000-000000004444"
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: ("token", TENANT_ID),
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        lambda token, ring, *, api_version: [
+            {
+                "id": ENVIRONMENT_ID,
+                "displayName": "Standard Environment",
+                "type": "Sandbox",
+                "state": "Ready",
+            },
+            {
+                "id": service_id,
+                "displayName": "Service Environment",
+                "type": "Production",
+                "state": "Ready",
+            },
+        ],
+    )
+
+    assert setup_existing_da.main(
+        [
+            "list-environments",
+            "--ring",
+            "prod",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+    result = json.loads(
+        capsys.readouterr().out.removeprefix(
+            "DA_ENVIRONMENT_LIST_JSON:"
+        )
+    )
+
+    assert [item["id"] for item in result["environments"]] == [
+        service_id,
+        ENVIRONMENT_ID,
+    ]
 
 
 @pytest.mark.parametrize("status_code", [401, 403])
@@ -2403,28 +2455,20 @@ def test_capacity_warning_requires_explicit_administrator_skip(
     assert step["state"] == "blocked"
 
 
-def test_capacity_warning_accepts_administrator_attested_skip(
+@pytest.mark.parametrize("status", ["Warning", "Manual"])
+def test_capacity_first_result_accepts_administrator_attested_skip(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    status: str,
 ) -> None:
     _attach(FakeClient(), tmp_path)
     results_path = _write_flightcheck_results(
         tmp_path,
         "ENV-CAPACITY-001",
-        "Warning",
+        status,
     )
-    blocked = setup_existing_da.maintain_setup_flightcheck(
-        tmp_path,
-        agent_id=AGENT_ID,
-        checkpoint="ENV-CAPACITY-001",
-        results_path=results_path,
-    )
-    assert blocked["state"] == "blocked"
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "ENV-CAPACITY-001",
-        "Warning",
-    )
+    original_evidence = results_path.read_bytes()
+    assert _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]["state"] == "pending"
 
     exit_code = setup_existing_da.main(
         [
@@ -2451,9 +2495,10 @@ def test_capacity_warning_accepts_administrator_attested_skip(
     assert "A Power Platform administrator was present" in step["note"]
     assert "consented to override" in step["note"]
     assert "did not verify" in step["note"]
+    assert results_path.read_bytes() == original_evidence
 
 
-def test_capacity_warning_rejects_administrator_skip_without_recorded_zero(
+def test_capacity_warning_skip_requires_fresh_evidence(
     tmp_path: Path,
 ) -> None:
     _attach(FakeClient(), tmp_path)
@@ -2462,10 +2507,14 @@ def test_capacity_warning_rejects_administrator_skip_without_recorded_zero(
         "ENV-CAPACITY-001",
         "Warning",
     )
+    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
+    stale_time = datetime.fromisoformat(step["updated_at"]).timestamp() - 1
+    os.utime(results_path, (stale_time, stale_time))
+    state_before = (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes()
 
     with pytest.raises(
         setup_existing_da.ExistingDASetupError,
-        match="previously recorded zero allocation",
+        match="predate the current setup maintenance run",
     ):
         setup_existing_da.maintain_setup_flightcheck(
             tmp_path,
@@ -2474,44 +2523,39 @@ def test_capacity_warning_rejects_administrator_skip_without_recorded_zero(
             results_path=results_path,
             administrator_attested_skip=True,
         )
+    assert (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes() == state_before
 
 
-def test_capacity_manual_result_accepts_administrator_attested_skip(
+@pytest.mark.parametrize("status", ["Warning", "Manual"])
+@pytest.mark.parametrize("counter", ["failed", "errors"])
+def test_capacity_skip_rejects_untrustworthy_run_totals(
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
+    status: str,
+    counter: str,
 ) -> None:
     _attach(FakeClient(), tmp_path)
     results_path = _write_flightcheck_results(
         tmp_path,
         "ENV-CAPACITY-001",
-        "Manual",
+        status,
     )
+    evidence = json.loads(results_path.read_text(encoding="utf-8"))
+    evidence[counter] = 1
+    results_path.write_text(json.dumps(evidence), encoding="utf-8")
+    state_before = (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes()
 
-    exit_code = setup_existing_da.main(
-        [
-            "maintain-flightcheck",
-            "--checkpoint",
-            "ENV-CAPACITY-001",
-            "--agent-id",
-            AGENT_ID,
-            "--results",
-            str(results_path),
-            "--administrator-attested-skip",
-            "--kit-root",
-            str(tmp_path),
-        ]
-    )
-
-    assert exit_code == 0
-    output = capsys.readouterr().out
-    assert '"state": "done"' in output
-    assert '"mode": "administrator-attested-skip"' in output
-    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
-    assert step["state"] == "done"
-    assert step["mode"] == "administrator-attested-skip"
-    assert "A Power Platform administrator was present" in step["note"]
-    assert "consented to override" in step["note"]
-    assert "did not verify" in step["note"]
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="requires a current Manual or Warning",
+    ):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            agent_id=AGENT_ID,
+            checkpoint="ENV-CAPACITY-001",
+            results_path=results_path,
+            administrator_attested_skip=True,
+        )
+    assert (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes() == state_before
 
 
 @pytest.mark.parametrize(
@@ -2667,6 +2711,63 @@ def test_cached_accounts_command_reads_workspace_cache(
     assert json.loads(
         output.removeprefix("DA_AGENTBUILDER_ACCOUNTS_JSON:")
     ) == {"accounts": ["test.user@example.test"]}
+
+
+def test_seed_shared_cache_command_reports_bounded_local_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed: dict[str, Any] = {}
+    result = {"outcome": "already-exists", "sharedCache": "existing.bin"}
+
+    def seed(account: str, **kwargs: Any) -> dict[str, Any]:
+        observed.update(account=account, **kwargs)
+        return result
+
+    monkeypatch.setattr(setup_existing_da, "seed_shared_token_cache", seed)
+
+    assert setup_existing_da.main(
+        [
+            "seed-shared-cache",
+            "--account",
+            "maker@example.test",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+    assert observed == {
+        "account": "maker@example.test",
+        "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
+        "shared_cache_path": tmp_path / ".local" / ".token_cache.bin",
+    }
+    assert json.loads(
+        capsys.readouterr().out.removeprefix("DA_AUTH_CACHE_SEED_JSON:")
+    ) == result
+
+
+def test_seed_shared_cache_command_reports_failure_without_success_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def seed(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise PermissionError("cache publication denied")
+
+    monkeypatch.setattr(setup_existing_da, "seed_shared_token_cache", seed)
+
+    assert setup_existing_da.main(
+        [
+            "seed-shared-cache",
+            "--account",
+            "maker@example.test",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 1
+    captured = capsys.readouterr()
+    assert "PermissionError: cache publication denied" in captured.err
+    assert "DA_AUTH_CACHE_SEED_JSON:" not in captured.out
 
 
 def test_unknown_setup_state_uses_format_language(tmp_path: Path) -> None:

@@ -86,8 +86,12 @@ control begins with its own decision prompt, explanation, and choices.
 
 ## Authoring pattern
 
-Compose UI guidance from the runtime context rather than copying a stored
-walkthrough:
+When an owning skill supplies an exact **Message** block or fixed response
+template, render its wording and structure with documented placeholders
+resolved from runtime context.
+
+When the owning skill supplies no fixed copy, compose UI guidance from runtime
+context:
 
 1. Link directly to the closest available destination.
 2. Identify the selected environment, agent, or other scoped object.
@@ -96,10 +100,9 @@ walkthrough:
 5. Describe the required state or action.
 6. End with the save, confirmation, retry, or return action.
 
-The steps above describe structure, not text to display. Each owning skill must
-generate its instructions from the controls and values relevant to that
-workflow. Do not add complete popup messages or workflow walkthroughs to this
-document.
+The steps above describe the structure of composed guidance, not text to
+display. Keep workflow-specific messages and walkthroughs in their owning
+skills.
 
 ## Avoid
 
