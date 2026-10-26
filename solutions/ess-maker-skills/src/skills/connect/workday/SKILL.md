@@ -515,6 +515,13 @@ remains unchanged. After a phase completes and `status` returns a different
 
 Dispatch from `nextPhaseId`:
 
+Preflight dispatch is foundation-only: use the Preflight guide only for Setup's
+initial Development target. For an active Test or Production target, do not
+run `preflight` as a general prerequisite repair or recheck. Preserve its active
+realm, scope, and phase evidence; use promoted-target discovery or the current
+phase's supported recovery. If no target-preserving recovery is available,
+show the exact blocker and stop rather than resetting the target.
+
 - `preflight` -> read `install-extension.md`
 - `entra` -> read `provision-entra-app.md`
 - `workday-admin` -> read `configure-tenant.md`

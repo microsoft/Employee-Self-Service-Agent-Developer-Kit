@@ -2,6 +2,27 @@
 
 # Phase 1 - Preflight
 
+## Foundation-only scope
+
+This guide and its recovery apply only to Setup's initial Development
+foundation, including retries for that same foundation target. Before every
+`preflight` invocation or retry, read controller status. For an existing
+target, require `activeTargetRealm: dev` and the same agent and environment
+recorded by canonical Setup. With no captured Connect target, use Setup's
+verified Development selection.
+
+If the active realm is `test` or `prod`, or the existing target cannot be
+verified as that Development foundation, do not run `preflight`. Preserve the
+active realm, scope, and phase evidence; return to `SKILL.md` for promoted-target
+discovery or the current phase's supported recovery. If no target-preserving
+recovery is available, show the exact blocker and stop. Do not switch or reset
+the active target to enter this guide.
+
+`preflight` resolves the Setup foundation; it is not an active-target-preserving
+recheck across realms. It may invalidate saved progress when the resolved
+foundation target or maker changes. The handoff-preservation guidance below
+applies only while that Development foundation target and maker are unchanged.
+
 Explain only credential stores that may prompt during this phase:
 
 - Dataverse authentication verifies the exact environment and maker account.
@@ -104,7 +125,8 @@ target.
 
 On failure, read `details.verificationChecks` from the structured error or the
 saved current-phase blocker. Results also persist in Preflight's
-`prerequisiteChecks`. A tooling failure blocks the current unfinished phase
+`prerequisiteChecks`. For the unchanged Development foundation target and
+maker, a tooling failure blocks the current unfinished phase
 without reopening completed administrator phases. Show each blocked check's observed `detail`, the
 later operation affected in `impact`, and its specific `remediation.steps`.
 Keep warnings distinct from blockers. Never say only that a prerequisite is
@@ -141,8 +163,10 @@ Use `vscode_askQuestions` with these choices, all initially unset:
   privileges, request passwords, or offer Python/PAC reinstall as a permission
   fix. For `sign-in`, retain the Step 1 maker and tenant and explain the
   observed mismatch before retrying that identity.
-- **Check again:** rerun `preflight` with the same saved target and maker.
-  After an approved repair, do this automatically. Reuse cached sign-ins;
+- **Check again:** recheck the foundation-only boundary before every retry,
+  then rerun `preflight` for the same Development foundation target and maker.
+  After an approved repair, do this automatically only within that boundary.
+  Reuse cached sign-ins;
   do not clear credential caches, restart the lifecycle, or repeat completed
   administrator handoffs. Local prerequisite results are persisted separately
   so repairing tooling does not discard those handoffs.

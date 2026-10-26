@@ -626,6 +626,27 @@ def test_preflight_is_read_only_and_package_install_starts_connections() -> None
     assert "installs through PAC, and rereads Dataverse" in connections
 
 
+def test_preflight_recovery_is_limited_to_the_setup_development_foundation() -> None:
+    text = (_WORKDAY_DA / "install-extension.md").read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+    skill = " ".join((_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8").split())
+    retry = normalized.split("- **Check again:**", 1)[1].split("- **Not now**", 1)[0]
+
+    assert text.index("## Foundation-only scope") < text.index("workday_connect.py preflight")
+    assert "require `activeTargetRealm: dev` and the same agent and environment" in normalized
+    assert "If the active realm is `test` or `prod`" in normalized
+    assert "do not run `preflight`" in normalized
+    assert "it is not an active-target-preserving recheck across realms" in normalized
+    assert "may invalidate saved progress" in normalized
+    assert "recheck the foundation-only boundary before every retry" in retry
+    assert "automatically only within that boundary" in retry
+    assert "Preflight dispatch is foundation-only" in skill
+    assert "do not run `preflight` as a general prerequisite repair or recheck" in skill
+    for guide in (normalized, skill):
+        assert "If no target-preserving recovery is available" in guide
+        assert "show the exact blocker and stop" in guide
+
+
 def test_connections_are_proven_before_runtime_apply() -> None:
     text = (_WORKDAY_DA / "configure-power-platform.md").read_text(encoding="utf-8")
     normalized = " ".join(text.split())
