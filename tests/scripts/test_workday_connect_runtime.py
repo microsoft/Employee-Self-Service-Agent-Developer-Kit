@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from copy import deepcopy
 import base64
 import json
 import sys
@@ -17,7 +18,7 @@ SCRIPTS = (
 sys.path.insert(0, str(SCRIPTS))
 
 import workday_connect_runtime as runtime  # noqa: E402
-from workday_connect_model import default_state  # noqa: E402
+from workday_connect_model import default_state, target_state_from_active  # noqa: E402
 from tests.conftest import require_validated_mock  # noqa: E402
 from tests.mocks import agentbuilder_connectivity as native  # noqa: E402
 
@@ -478,6 +479,174 @@ def _identity(_token, *, preferred_username):
         "username": preferred_username,
         "tenantId": "tenant-id",
     }
+
+
+def _colocated_targets():
+    state = _api_state()
+    records = _records()
+    connections = _connections()["value"]
+    context = runtime._runtime_discovery_context(state, None)
+    for connector, connection in zip(("workday", "dataverse"), connections, strict=True):
+        name = context["referencesCatalog"][connector]["logicalName"]
+        records["references"][name]["connectionid"] = connection["name"]
+    for flow in records["flows"].values():
+        flow.update(statecode=1, statuscode=2)
+    plan = runtime._build_runtime_discovery(
+        context, workday=connections[0], dataverse=connections[1],
+        references=records["references"], flows=records["flows"],
+        authorization_target=runtime._authorization_target(
+            context["environmentUrl"], "token", "dev", BOT_ID, query=_query_for(records),
+        ),
+    )["plan"]
+    state["status"] = "ready"
+    state["phases"]["runtime"].update(
+        status="complete", approvedPlan=plan, approvedPlanHash=plan["planHash"],
+        completedActions=["connection-references-bound", "runtime-flows-active", "delegated-authorization-configured"],
+    )
+    state["targets"]["dev"] = target_state_from_active(state, "dev")
+    state["activeTargetRealm"] = "test"
+    state["status"] = "in-progress"
+    state["scope"]["realm"] = "test"
+    state["scope"]["agent"] = {"botId": "77777777-7777-4777-8777-777777777777"}
+    state["phases"]["runtime"] = deepcopy(default_state()["phases"]["runtime"])
+    state["phases"]["connections"]["evidence"] = [{
+        "action": "physical-connections-verified",
+        "connectionIds": {"workday": WORKDAY_CONNECTION, "dataverse": DATAVERSE_CONNECTION},
+    }]
+    state["targets"]["test"] = target_state_from_active(
+        state, "test", identity={"almFamilyId": BOT_ID, "commitSha": "a" * 40},
+    )
+    return state, records
+
+
+@pytest.mark.parametrize("connector", ["workday", "dataverse"])
+@pytest.mark.parametrize("operation", ["connections", "preview", "apply"])
+@responses.activate
+def test_colocated_target_cannot_change_an_established_shared_binding(monkeypatch, connector, operation):
+    state, records = _colocated_targets()
+    alternate_id = "88888888-8888-4888-8888-888888888888"
+    state["phases"]["connections"]["evidence"][-1]["connectionIds"][connector] = alternate_id
+    original = deepcopy(state)
+    items = _connections()["value"]
+    alternate = deepcopy(items[0 if connector == "workday" else 1])
+    alternate["name"] = alternate_id
+    items.append(alternate)
+    monkeypatch.setattr(runtime, "authenticate_connections", lambda *_a, **_k: _api_token())
+    responses.add(**native.list_connections(items=items))
+    writes = []
+    with pytest.raises(runtime.WorkdayConnectRuntimeError, match="shared runtime bindings") as raised:
+        if operation == "connections":
+            runtime.verify_physical_connections(state, pac_resolver=_no_pac)
+        else:
+            runtime.run_runtime_operation(
+                state, apply=operation == "apply", approved_hash="previously-approved",
+                verifier=lambda *_a: writes.append("approval-verification"),
+                token_provider=lambda *_a, **_k: "token", identity_provider=_identity,
+                query=_query_for(records), pac_resolver=_no_pac,
+                updater=lambda *_a: writes.append("update"),
+                authorization_runner=lambda *_a, **_k: writes.append("authorization"),
+            )
+    assert raised.value.details["cause"] == "shared-runtime-binding-conflict"
+    assert raised.value.details["conflictingConnectors"] == [connector]
+    assert "separate Power Platform environment" in raised.value.customer_remediation
+    assert alternate_id not in str(raised.value)
+    assert not writes
+    assert state == original
+    assert state["targets"]["dev"]["status"] == "ready"
+
+
+@pytest.mark.parametrize("apply", [False, True])
+@responses.activate
+def test_colocated_target_reuses_identical_bindings_without_changing_ready_sibling(monkeypatch, apply):
+    state, records = _colocated_targets()
+    source = deepcopy(state["targets"]["dev"])
+    monkeypatch.setattr(runtime, "authenticate_connections", lambda *_a, **_k: _api_token())
+    monkeypatch.setattr(runtime, "_run_authorization", lambda *_a, **_k: {"outcome": "verified"})
+    responses.add(**native.list_connections(items=_connections()["value"]))
+    writes = []
+    result = runtime.run_runtime_operation(
+        state, apply=apply, approved_hash="approved",
+        verifier=lambda plan, _: plan["planHash"],
+        token_provider=lambda *_a, **_k: "token", identity_provider=_identity,
+        query=_query_for(records), pac_resolver=_no_pac,
+        updater=lambda *_a: writes.append("update"),
+    )
+    assert not writes
+    assert state["targets"]["dev"] == source
+    if apply:
+        assert result["applied"]["verified"] is True
+        assert "connection-references-bound" in result["applied"]["verifiedStages"]
+    else:
+        assert result["observed"]["connectionBindings"]
+        assert all(item["alreadyBoundToSelection"] for item in result["observed"]["connectionBindings"].values())
+
+
+@responses.activate
+def test_runtime_apply_rechecks_sibling_bindings_established_after_preview(monkeypatch):
+    state, records = _colocated_targets()
+    source = state["targets"]["dev"]
+    source["status"] = "in-progress"
+    source["phases"]["runtime"]["status"] = "active"
+    source["phases"]["runtime"]["completedActions"] = []
+    monkeypatch.setattr(runtime, "authenticate_connections", lambda *_a, **_k: _api_token())
+    responses.add(**native.list_connections(items=_connections()["value"]))
+    plan = runtime.discover_runtime_plan(state, token="token", query=_query_for(records), pac_resolver=_no_pac)["plan"]
+    source["phases"]["runtime"]["completedActions"] = ["connection-references-bound"]
+    name = runtime.load_catalog()["connectionReferences"]["dataverse"]["logicalName"]
+    source_plan = source["phases"]["runtime"]["approvedPlan"]
+    source_plan["connectionBindings"][name]["connectionId"] = "88888888-8888-4888-8888-888888888888"
+    source_plan["planHash"] = runtime.plan_hash(source_plan)
+    source["phases"]["runtime"]["approvedPlanHash"] = source_plan["planHash"]
+    records["references"][name]["connectionid"] = source_plan["connectionBindings"][name]["connectionId"]
+    with pytest.raises(runtime.WorkdayConnectRuntimeError, match="shared runtime bindings"):
+        runtime.run_runtime_operation(
+            state, apply=True, approved_hash=plan["planHash"],
+            verifier=lambda *_a: pytest.fail("A stale plan must not reach approval verification"),
+            token_provider=lambda *_a, **_k: "token", identity_provider=_identity,
+            query=_query_for(records), pac_resolver=_no_pac,
+            updater=lambda *_a: pytest.fail("No runtime write is allowed"),
+        )
+
+
+@responses.activate
+def test_separate_environment_can_select_different_connections(monkeypatch):
+    state, _ = _colocated_targets()
+    source = state["targets"]["dev"]
+    source["identity"].update(
+        environmentId="99999999-9999-4999-8999-999999999999",
+        environmentUrl="https://other.crm.dynamics.com",
+    )
+    source["scope"].update(
+        environmentId=source["identity"]["environmentId"],
+        dataverseUrl=source["identity"]["environmentUrl"],
+    )
+    name = runtime.load_catalog()["connectionReferences"]["dataverse"]["logicalName"]
+    source["phases"]["runtime"]["approvedPlan"]["connectionBindings"][name]["connectionId"] = "88888888-8888-4888-8888-888888888888"
+    monkeypatch.setattr(runtime, "authenticate_connections", lambda *_a, **_k: _api_token())
+    responses.add(**native.list_connections(items=_connections()["value"]))
+    evidence = runtime.verify_physical_connections(state, pac_resolver=_no_pac)
+    assert evidence["connectionIds"]["dataverse"] == DATAVERSE_CONNECTION
+    assert source["status"] == "ready"
+
+
+@pytest.mark.parametrize("recorded", [False, True])
+@responses.activate
+def test_legacy_ready_sibling_requires_verified_connection_evidence(monkeypatch, recorded):
+    state, _ = _colocated_targets()
+    source = state["targets"]["dev"]
+    source["phases"]["runtime"].update(approvedPlan=None, approvedPlanHash=None)
+    if recorded:
+        source["phases"]["connections"]["evidence"] = deepcopy(state["phases"]["connections"]["evidence"])
+    monkeypatch.setattr(runtime, "authenticate_connections", lambda *_a, **_k: _api_token())
+    responses.add(**native.list_connections(items=_connections()["value"]))
+    if recorded:
+        result = runtime.verify_physical_connections(state, pac_resolver=_no_pac)
+        assert result["connectionIds"]["dataverse"] == DATAVERSE_CONNECTION
+    else:
+        with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+            runtime.verify_physical_connections(state, pac_resolver=_no_pac)
+        assert raised.value.details["cause"] == "shared-runtime-binding-conflict"
+        assert raised.value.details["requiredConnectionIds"] == {}
 
 
 def _authorization_records(*, team_name=TEAM_NAME):

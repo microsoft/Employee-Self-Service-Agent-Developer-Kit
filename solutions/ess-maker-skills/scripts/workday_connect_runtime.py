@@ -564,6 +564,75 @@ def _effective_connection_id(
     return requested_value or recorded_value or None
 
 
+def _require_shared_connection_selection(
+    state: Mapping[str, Any],
+    context: Mapping[str, Any],
+    workday: Mapping[str, Any],
+    dataverse: Mapping[str, Any],
+) -> None:
+    selected = {"workday": workday, "dataverse": dataverse}
+    for realm, target in (state.get("targets") or {}).items():
+        if realm == context["realm"] or not isinstance(target, Mapping):
+            continue
+        identity = target.get("identity") or {}
+        scope = target.get("scope") or {}
+        environment_id = str(
+            identity.get("environmentId") or scope.get("environmentId") or ""
+        ).strip()
+        environment_url = str(
+            identity.get("environmentUrl") or scope.get("dataverseUrl") or ""
+        ).strip().rstrip("/")
+        same_environment = (
+            environment_id
+            and context["environmentId"]
+            and environment_id.casefold() == context["environmentId"].casefold()
+        ) or environment_url.casefold() == context["environmentUrl"].casefold()
+        if not same_environment:
+            continue
+        phase = (target.get("phases") or {}).get("runtime") or {}
+        if not (
+            target.get("status") == "ready"
+            or phase.get("status") == "complete"
+            or "connection-references-bound" in (phase.get("completedActions") or [])
+        ):
+            continue
+        bindings = (phase.get("approvedPlan") or {}).get("connectionBindings") or {}
+        recorded = _selected_connection_ids(target)
+        conflicts = []
+        required_ids = {}
+        for connector, connection in selected.items():
+            logical_name = context["referencesCatalog"][connector]["logicalName"]
+            binding = bindings.get(logical_name) or {}
+            expected = str(
+                binding.get("connectionId")
+                or (recorded[connector] if not bindings else "")
+            ).strip()
+            if expected:
+                required_ids[connector] = expected
+            if not expected or expected.casefold() != str(connection.get("name") or "").casefold():
+                conflicts.append(connector)
+        if conflicts:
+            target_name = REALM_DISPLAY_NAMES[realm]
+            next_action = (
+                f"Reuse the verified Workday and Microsoft Dataverse connections "
+                f"of the {target_name} target, with the required access, or use "
+                "a separate Power Platform environment for different bindings. "
+                "Do not rebind the shared runtime references independently."
+            )
+            raise WorkdayConnectRuntimeError(
+                f"The selected connections conflict with, or cannot be verified "
+                f"against, the shared runtime bindings already established for "
+                f"{target_name} in this environment. {next_action}",
+                details={
+                    "cause": "shared-runtime-binding-conflict",
+                    "targetRealm": realm,
+                    "conflictingConnectors": conflicts,
+                    "requiredConnectionIds": required_ids,
+                    "nextAction": next_action,
+                },
+            )
+
+
 def _authorization_preflight_failure(
     evidence: str,
     next_action: str,
@@ -856,6 +925,7 @@ def discover_runtime_plan(
         pac_auth=pac_auth,
         runner=runner,
     )
+    _require_shared_connection_selection(state, context, workday, dataverse)
 
     active_token = token or token_provider(
         context["environmentUrl"],
@@ -1004,6 +1074,7 @@ def verify_physical_connections(
             pac_auth=pac_auth,
             runner=runner,
         )
+        _require_shared_connection_selection(state, context, workday, dataverse)
     except WorkdayConnectRuntimeError:
         raise
     except (OSError, RuntimeError, ValueError, SystemExit) as exc:

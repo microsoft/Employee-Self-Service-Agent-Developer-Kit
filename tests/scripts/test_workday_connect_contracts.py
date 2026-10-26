@@ -382,6 +382,20 @@ def test_checked_in_administrator_workbooks_match_current_contracts() -> None:
         )
 
 
+def test_workday_workbook_certificate_recovery_preserves_completed_entra_handoff() -> None:
+    namespace = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with ZipFile(WORKDAY_ADMIN_WORKBOOK_PATH) as archive:
+        worksheet = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+        strings = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+    cell = worksheet.find(".//s:c[@r='C4']", namespace)
+    index = int(cell.find("s:v", namespace).text)
+    instructions = "".join(strings.findall("s:si", namespace)[index].itertext())
+    assert "certificate already transferred during the completed Entra handoff" in instructions
+    assert "correct Workday using" in instructions
+    assert "Re-engage Entra only for independently verified certificate drift" in instructions
+    assert "get the active certificate from the Microsoft Entra admin" not in instructions
+
+
 def _fill_detailed_workbook(path: Path, answers: dict[str, str]) -> None:
     namespace = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
     main_ns = namespace["s"]

@@ -58,6 +58,15 @@ The skill does not create physical connector connections or complete connector
 OAuth. The maker performs those actions; the skill discovers and verifies the
 result.
 
+Dev, Test, or Production targets in the same Power Platform environment share
+the package's Workday and Dataverse runtime connection references. Once another
+tracked target has applied those bindings, reuse its verified physical
+connections with the required access. The controller blocks a conflicting
+selection during Connections and rechecks before Runtime writes, including
+previously approved plans. Show its recovery guidance; do not reinstall the
+package or overwrite the shared references to bypass the block. Different
+bindings require a separate environment.
+
 Agent **Connection Settings** is a later Runtime step. While either physical
 connection is missing, disconnected, ambiguous, or awaiting confirmation, tell
 the maker:
