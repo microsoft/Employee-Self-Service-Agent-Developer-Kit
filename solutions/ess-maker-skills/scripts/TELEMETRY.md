@@ -66,15 +66,28 @@ Time column on every table: `EventInfo_Time` (UTC).
 
 FlightCheck and ADK platform events share the explicit tenant-ID allow-list in
 `flightcheck/telemetry.py` for their `tenantClass` / `tenant_class` dimensions.
-Known partner, self-service, and Contoso test tenancies are classified as
-`internal` even when `tenantName` / `tenant_name` is blank. Classification never
-uses display-name patterns; an unrelated customer with a similar name is not
-reclassified. `ESS_ADK_INTERNAL_TENANTS` can extend the allow-list locally.
+`internal` is the historical reporting bucket for **known non-customer
+traffic**. It includes Microsoft corporate and dogfood tenancy as well as
+explicitly verified partner, self-service, and demo test tenants; the label
+does not assert that every listed tenant is Microsoft-owned. Classification
+never uses display-name patterns, so an unrelated customer with a similar name
+is not reclassified. `ESS_ADK_INTERNAL_TENANTS` can extend the allow-list
+locally.
+
+Hard-coded additions require recorded provenance: confirmation from the tenant
+owner, or a production-usage investigation that resolves the tenant through
+Microsoft Graph followed by an explicit maintainer decision that it is
+non-customer traffic. The six test/demo IDs added in PR #458 followed the latter
+path and were also excluded from every externally scoped Aria chart.
 
 Classification happens when an updated clone emits an event. It does not
 rewrite historical events or change older clones. External dashboard charts
 therefore also need tenant-ID exclusions for previously misclassified test
 activity; keep those exclusions when adding tenants to the emitter allow-list.
+Raw customer-only queries must apply the canonical
+`knownNonCustomerTenantIds` exclusion in
+[`telemetry_queries.kql`](telemetry_queries.kql), because historical rows and
+events from older clones may still say `tenantClass == "customer"`.
 
 ## What each identifier means
 

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import pytest
 
@@ -381,16 +382,9 @@ def test_classify_tenant_hardcoded_internal_dogfood_tenants(monkeypatch):
 
 @pytest.mark.parametrize(
     "tenant_id",
-    [
-        "142b48c2-943c-4d07-ad6b-b0eb5cd0e5f2",
-        "440d6412-bc8e-49a0-9913-9f8be786b89e",
-        "4636dd08-fdd9-4610-a443-762fb320fb4e",
-        "6936469c-696e-4fe2-a0c8-dd16f54b1b45",
-        "4345eb96-df8a-464a-9eb8-72253571a621",
-        "2d5577b0-a83c-436c-9582-1c3bcd2ab0d3",
-    ],
+    _fc.KNOWN_NON_CUSTOMER_TEST_TENANT_IDS,
 )
-def test_external_usage_test_tenants_are_internal_in_both_emitters(
+def test_known_non_customer_tenants_use_shared_classifier_and_adk_dimensions(
     monkeypatch, tenant_id,
 ):
     monkeypatch.delenv("ESS_ADK_INTERNAL_TENANTS", raising=False)
@@ -399,6 +393,19 @@ def test_external_usage_test_tenants_are_internal_in_both_emitters(
     dimensions = adk.common_dimensions(adk.SURFACE_CLI, tenant_id=tenant_id)
     assert dimensions["tenant_class"] == _fc.TENANT_CLASS_INTERNAL
     assert dimensions["tenant_id"] == tenant_id
+
+
+def test_customer_query_exclusions_match_known_non_customer_tenants():
+    query_pack = (
+        Path(__file__).parents[1]
+        / "solutions"
+        / "ess-maker-skills"
+        / "scripts"
+        / "telemetry_queries.kql"
+    ).read_text(encoding="utf-8")
+
+    for tenant_id in _fc.KNOWN_NON_CUSTOMER_TEST_TENANT_IDS:
+        assert query_pack.count(tenant_id) == 1
 
 
 def test_classify_tenant_non_guid_maps_to_unknown():
