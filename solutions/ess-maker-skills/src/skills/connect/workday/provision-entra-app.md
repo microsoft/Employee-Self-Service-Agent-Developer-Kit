@@ -114,11 +114,6 @@ After **Yes**, record the engagement boundary:
 python scripts/workday_connect.py administrator-stage --phase entra --substage administrator-engaged
 ```
 
-Then tell the maker:
-
-> Share this detailed workbook with the Microsoft Entra administrator. It
-> contains the configuration instructions and fields to complete and return.
-
 Then generate the guided handoff packet:
 
 ```powershell
@@ -129,8 +124,8 @@ This command reads only the recorded lifecycle state. It does not authenticate
 to Microsoft Graph, discover applications, or make an Entra change. Use the
 returned `packet` for every packet-driven value below.
 
-Render one standalone section titled **Microsoft Entra app administrator
-handoff - share the workbook and target values**. It must contain the
+Render one standalone section titled **Microsoft Entra administrator
+handoff**. It must contain the
 administrator role, canonical tenant ID, expected Workday Service Provider ID,
 Workday tenant, and downloadable workbook. Keep the handoff concise and
 forwardable without copying values from earlier chat messages.

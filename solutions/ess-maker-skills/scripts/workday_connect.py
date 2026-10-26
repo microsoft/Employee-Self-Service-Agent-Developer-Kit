@@ -519,15 +519,15 @@ def _post_skill_next_steps(realm: str) -> list[str]:
     if realm == "dev":
         return [
             (
-                "Optional later: Promote the agent from Development to Test "
+                "Promote the agent from Development to Test "
                 "when ready. "
                 "Open the source agent in Copilot Studio and use your "
                 "organization's approved promotion process. Ask the maker "
                 "responsible for agent deployment if you need access or "
-                "instructions. Connect Workday does not perform promotion."
+                "instructions."
             ),
             (
-                "Only after promotion is complete, return to Connect Workday "
+                "After promotion is complete, return to Connect Workday "
                 "and say that the agent was "
                 "promoted to Test."
             ),
@@ -535,22 +535,22 @@ def _post_skill_next_steps(realm: str) -> list[str]:
     if realm == "test":
         return [
             (
-                "Optional later: Promote the agent from Test to Production "
+                "Promote the agent from Test to Production "
                 "when ready. "
                 "Open the source agent in Copilot Studio and use your "
                 "organization's approved promotion process. Ask the maker "
                 "responsible for agent deployment if you need access or "
-                "instructions. Connect Workday does not perform promotion."
+                "instructions."
             ),
             (
-                "Only after promotion is complete, return to Connect Workday "
+                "After promotion is complete, return to Connect Workday "
                 "and say that the agent was "
                 "promoted to Production."
             ),
         ]
     if realm == "prod":
         return [
-            "Optional later: Publish and deploy the Production agent when ready.",
+            "Publish and deploy the Production agent when ready.",
             (
                 "After deployment, have each non-maker employee establish their own Workday "
                 "connections in Microsoft 365 Chat."

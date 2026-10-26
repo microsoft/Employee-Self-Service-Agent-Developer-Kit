@@ -2599,14 +2599,14 @@ def test_maker_success_completes_without_run_history_correlation(
     )
     assert result["postSkillNextSteps"] == [
         (
-            "Optional later: Promote the agent from Development to Test when ready. "
+            "Promote the agent from Development to Test when ready. "
             "Open the source agent in Copilot Studio and use your "
             "organization's approved promotion process. Ask the maker "
             "responsible for agent deployment if you need access or "
-            "instructions. Connect Workday does not perform promotion."
+            "instructions."
         ),
         (
-            "Only after promotion is complete, return to Connect Workday and "
+            "After promotion is complete, return to Connect Workday and "
             "say that the agent was promoted to Test."
         ),
     ]
@@ -2668,10 +2668,12 @@ def test_ready_status_confirms_current_realm_completion(realm, display_name) -> 
     assert "all six steps are finished" in result["completionMessage"]
     assert "maker Test pane validation passed" in result["completionMessage"]
     assert "No further Workday Connect action is required" in result["completionMessage"]
-    assert result["postSkillNextSteps"][0].startswith("Optional later:")
+    assert result["postSkillNextSteps"][0].startswith(
+        "Publish and deploy" if realm == "prod" else "Promote the agent"
+    )
     if realm != "prod":
         assert result["postSkillNextSteps"][1].startswith(
-            "Only after promotion is complete,"
+            "After promotion is complete,"
         )
 
 
@@ -2700,7 +2702,7 @@ def test_post_skill_next_steps_are_realm_specific() -> None:
     assert "non-maker employee" not in " ".join(dev_steps)
     assert "non-maker employee" not in " ".join(test_steps)
     assert prod_steps == [
-        "Optional later: Publish and deploy the Production agent when ready.",
+        "Publish and deploy the Production agent when ready.",
         (
             "After deployment, have each non-maker employee establish their own Workday "
             "connections in Microsoft 365 Chat."

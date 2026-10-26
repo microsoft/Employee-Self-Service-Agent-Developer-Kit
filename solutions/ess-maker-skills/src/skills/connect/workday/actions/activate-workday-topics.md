@@ -58,9 +58,9 @@ activation approval never approves topic-content edits.
 
 **Message:**
 
-The Workday connections and shared parameters are ready. I found
-**{WORKDAY_TOPIC_COUNT}** Workday topics included with this agent. I can now
-enable all of them without changing their configured behavior.
+The Workday connections are ready. I can enable the
+**{WORKDAY_TOPIC_COUNT}** Workday topics included with this agent.
+Their existing content will stay unchanged.
 
 **End message.**
 
@@ -106,9 +106,11 @@ do not treat them as an activation failure or proof of a broken package.
 
 **Message:**
 
-I enabled the Workday topics and verified the change. Refresh the Copilot
-Studio page, open **Topics**, and confirm that all
-**{WORKDAY_TOPIC_COUNT}** Workday topics now show as **On**.
+I enabled the Workday topics and verified the change.
+
+1. Refresh the Copilot Studio page.
+2. Open `Topics`.
+3. Check that all **{WORKDAY_TOPIC_COUNT}** Workday topics show as `On`.
 
 **End message.**
 

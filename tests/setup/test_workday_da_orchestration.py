@@ -53,8 +53,11 @@ def test_portal_and_test_pane_walkthroughs_cannot_be_replaced_with_questions():
         " ".join(connections.split())
     )
     assert validation.index("Render the following numbered walkthrough") < (
-        validation.index("open a new Test pane conversation")
-    ) < validation.index('"header": "Maker smoke test"')
+        validation.index("Start a new conversation in the `Test` pane")
+    ) < validation.index('"header": "Test Workday"')
+    assert "Use the controller-verified agent name and known Copilot Studio link" in (
+        " ".join(validation.split())
+    )
     assert "Do not ask whether the scenario passed before explaining how to run it." in (
         " ".join(validation.split())
     )
@@ -214,8 +217,8 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         {
             "header": "Workday administrator",
             "question": (
-                "Have you looped in the Workday administrator to complete "
-                "the next phase?"
+                "Have you arranged for a Workday administrator to complete "
+                "this step?"
             ),
             "options": [
                 {"label": "Yes, the Workday administrator is engaged"},
@@ -230,18 +233,17 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
     ] in forms
     expected_privilege_forms = [
         (
-            "Connection creation privilege",
+            "Connections access",
             (
-                "Do you have the Power Platform Environment Maker privilege "
-                "and package installation access to create the Workday "
-                "connections?"
+                "Do you have Power Platform Environment Maker access and "
+                "permission to install the Workday package in this environment?"
             ),
         ),
         (
-            "Maker validation privilege",
+            "Test access",
             (
-                "Do you have the Environment Maker privilege to perform "
-                "maker validation in the Copilot Studio Test pane?"
+                "Do you have Environment Maker access to test this agent "
+                "in the Copilot Studio Test pane?"
             ),
         ),
     ]
@@ -269,8 +271,7 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         {
             "header": "Required access",
             "question": (
-                "Are the people needed for the next phase available to help "
-                "when that phase begins?"
+                "Are the people listed for this step available to help?"
             ),
             "options": [
                 {"label": "Yes, required people are available"},
@@ -363,7 +364,7 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         "Do not add a second engagement question here"
         in " ".join(tenant.split())
     )
-    assert "Have you looped in the Workday administrator" in tenant
+    assert "Have you arranged for a Workday administrator" in tenant
     assert "## One-way administrator handoff" in skill
     assert "Microsoft Entra sign-off must finish first" in skill
     assert "Only then may the Workday administrator phase begin" in skill
@@ -456,7 +457,8 @@ def test_maker_validation_ends_guided_lifecycle() -> None:
 
     assert "# Phase 6 - Maker validation" in text
     assert "without publishing the agent" in text
-    assert '"header": "Maker smoke test"' in text
+    assert '"header": "Test Workday"' in text
+    assert '"label": "No, the Test pane scenario did not work"' in text
     assert '"testUserCategory": "maker"' in text
     assert '"remediationId": "WD-E2E-006"' in text
     assert "record-validation-failure --evidence-file" in text
@@ -489,7 +491,9 @@ def test_workday_completion_does_not_return_to_setup() -> None:
     assert "do not invoke `src/skills/foundation-setup/SKILL.md` here" in finish
     assert "Do not invoke Setup between phases or at completion" in orchestrator
     assert "Do not ask the maker to run Connect again for this completed realm" in orchestrator
-    assert "Optional later - not part of this completed connection" in orchestrator
+    assert "under **Optional next steps**" in orchestrator
+    assert "Under **Optional next steps**" in finish
+    assert "Optional later - not part of this completed connection" not in orchestrator
     assert "Do not start promotion or another realm without an explicit maker request" in orchestrator
     for text in (finish, orchestrator):
         assert "Resume after an integration completes" not in text
@@ -558,41 +562,21 @@ def test_every_phase_dispatch_target_exists_and_schema_is_reference_only() -> No
 
 def test_customer_messages_exclude_internal_implementation_terms() -> None:
     skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
-    activation = (
-        _REPO_ROOT
-        / "solutions"
-        / "ess-maker-skills"
-        / "src"
-        / "skills"
-        / "connect"
-        / "workday"
-        / "actions"
-        / "activate-workday-topics.md"
-    ).read_text(encoding="utf-8")
-    redirect = (
-        _REPO_ROOT
-        / "solutions"
-        / "ess-maker-skills"
-        / "src"
-        / "skills"
-        / "connect"
-        / "workday"
-        / "actions"
-        / "wire-user-context-redirect.md"
-    ).read_text(encoding="utf-8")
     readiness = skill.split("> Here's who may be needed", 1)[1].split(
         "\n### Continue the current unfinished phase",
         1,
     )[0]
-    activation_message = activation.split("**Message:**", 1)[1].split(
-        "**End message.**",
-        1,
-    )[0]
-    redirect_message = redirect.split("**Message:**", 1)[1].split(
-        "**End message.**",
-        1,
-    )[0]
-    customer_text = readiness + activation_message + redirect_message
+    messages = []
+    for path in sorted((_WORKDAY_DA / "actions").glob("*.md")):
+        messages.extend(
+            re.findall(
+                r"\*\*Message:\*\*(.*?)\*\*End message\.\*\*",
+                path.read_text(encoding="utf-8"),
+                re.DOTALL,
+            )
+        )
+    assert messages
+    customer_text = " ".join((readiness + "\n".join(messages)).split())
 
     for internal_term in (
         "controller",
@@ -603,10 +587,20 @@ def test_customer_messages_exclude_internal_implementation_terms() -> None:
         "checkpoint",
         "CloudFlow",
         "delegatedauthorization",
+        "User Context",
+        "Workday templates",
+        "shared parameters",
+        "OAuthUser",
+        "reliable APIs",
+        "guided lifecycle",
     ):
         assert internal_term.casefold() not in customer_text.casefold()
     assert "Customer-facing language contract" in skill
     assert "Never show or narrate them" in skill
+    normalized = " ".join(skill.split())
+    assert "Keep execution-only notes and action markers" in normalized
+    assert "Do not turn later-phase sequencing rules into warnings about pages" in normalized
+    assert "Show necessary safety guidance at the step where it applies" in normalized
 
 
 def test_preflight_is_read_only_and_package_install_starts_connections() -> None:
@@ -723,9 +717,21 @@ def test_connections_are_proven_before_runtime_apply() -> None:
         )
     )
     assert "Select **Manage**" not in maker_connection_steps
-    assert "enabled under See details > Connection parameters for both?" in text
+    confirmation = next(
+        form[0]
+        for form in (
+            json.loads(block)
+            for block in re.findall(r"```json\s+(.*?)\s+```", text, re.DOTALL)
+        )
+        if isinstance(form, list)
+        and form[0]["question"].startswith("Are both Workday entries")
+    )
+    assert "connected to the connection shown above" in confirmation["question"]
+    assert "Allow permission to share parameters enabled for both?" in confirmation["question"]
+    assert "See details >" not in confirmation["question"]
     assert "enabled under Manage" not in text
-    assert "both entries displayed as Workday" in text
+    assert "Connect both maker-visible entries displayed as **Workday**" in text
+    assert "safe display name of the selected Workday connection from verified Connections evidence immediately before this question" in normalized
     assert "Confirm Workday connection" in text
     assert "Do not ask the maker or administrator to provide them again" in normalized
     assert "Do not request or collect a Workday password" in text
@@ -797,7 +803,7 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     )
     assert "resume the same handoff after approval" in normalized
     assert "Only after **Yes**\nmay the skill collect evidence" in text
-    assert "share the workbook and target values" in text
+    assert "**Workday administrator handoff**" in normalized
     assert "workbook is the single capture worksheet" in normalized
     assert "fill every cell in the **Your tenant values** column" in normalized
     assert "Save the completed Workday administrator workbook" in text
@@ -826,7 +832,9 @@ def test_administrator_handoffs_use_detailed_workbooks_without_repeated_tasks(
     text = (_WORKDAY_DA / guide).read_text(encoding="utf-8")
     normalized = " ".join(text.split())
 
-    assert "share the workbook and target values" in normalized
+    assert "administrator handoff**" in normalized
+    assert "handoff - share the workbook and target values" not in normalized
+    assert "> Share this detailed workbook" not in text
     assert "The detailed workbook is the administrator's task guide" in normalized
     assert "`packet.actions`, or an **Administrator tasks** section in chat" in normalized
     assert "Internal reference only: do not render" in normalized
@@ -899,7 +907,9 @@ def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
     assert "--activate --dry-run" in action
     assert "--activate --yes" in action
     assert "state` and `status` to `Active`" in action
-    assert "Refresh the Copilot\nStudio page" in action
+    assert "1. Refresh the Copilot Studio page." in action
+    assert "2. Open `Topics`." in action
+    assert "Workday topics show as `On`." in action
     assert '"header": "Confirm Workday topics"' in action
     assert "all Workday topics show as On" in action
     assert action.index("Confirm Workday topics") < action.index(
@@ -977,7 +987,7 @@ def test_maker_validation_lists_non_maker_work_as_post_skill_steps() -> None:
     assert "Microsoft 365 Chat" in text
     assert "their own Workday connections" in text
     assert "returns real" in text
-    assert "without an unexpected repeated sign-in" in text
+    assert "without unexpected repeated sign-ins" in text
     assert "Do not wait for those results" in text
     assert "keep the Workday skill open" in normalized
 
@@ -1018,7 +1028,7 @@ def test_capability_claims_match_controller_surface() -> None:
     ):
         assert required_role in skill
     assert (
-        "guided lifecycle completes after the maker's Test pane scenario succeeds"
+        "finishes after your Workday test succeeds in the Copilot Studio Test pane"
         in (normalized["skill"])
     )
     assert "Claim an automated change only after" in normalized["skill"]

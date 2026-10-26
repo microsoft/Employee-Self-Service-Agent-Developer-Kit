@@ -20,8 +20,8 @@ Do not edit Conversation Start unless the Runtime phase already contains
 
 **Message:**
 
-I'll connect your agent's conversation start to the Workday runtime
-configuration so each new conversation receives the current Workday templates.
+I'll configure the agent to load its Workday settings whenever a new
+conversation starts.
 
 **End message.**
 

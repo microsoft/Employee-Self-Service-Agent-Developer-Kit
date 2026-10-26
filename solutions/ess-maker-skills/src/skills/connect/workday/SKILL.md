@@ -64,6 +64,11 @@ Customer-facing messages must describe only:
 - whether a supported change or verification succeeded;
 - the concise remediation needed when it did not.
 
+Keep execution-only notes and action markers such as `A.1` and `B.2` internal.
+Do not turn later-phase sequencing rules into warnings about pages the maker
+has not been asked to use. Show necessary safety guidance at the step where
+it applies, without repeating it in surrounding prose.
+
 Translate internal outcomes into plain language. For example, say **all
 Workday topics are enabled**, not that component `state` and `status` are
 `Active`. Topic metadata diagnostics are support context and must not be
@@ -341,14 +346,13 @@ briefing only after the realm and completion decisions above:
 > | Preflight             | Verify the ESS HR agent, environment, maker account, and supported package choice without changing the environment                                         | Power Platform Environment Maker                                                                                     |
 > | Microsoft Entra       | Configure the Workday enterprise application, SAML, API permission, consent, assignment, and NameID                                                        | One Microsoft Entra app administrator with either the Application Administrator or Cloud Application Administrator role; involve a separate consent-capable administrator only if tenant policy prevents that administrator from granting consent |
 > | Workday administrator | Configure tenant SAML and certificate trust, OAuth and the API client, functional-area access, endpoints, and the employee authentication policy           | Workday Administrator                                                                                                |
-> | Connections           | Install or verify the supported Workday package, then create the Workday OAuthUser and Dataverse connections and complete connector sign-in                | Power Platform Environment Maker with package installation access                                                    |
+> | Connections           | Install or verify the Workday package, then connect Microsoft Dataverse and Workday                                                                         | Power Platform Environment Maker with package installation access                                                    |
 > | Runtime configuration | Connect the installed Workday components, activate the required flows, configure runtime permissions and connection sharing, and enable all Workday topics | Power Platform Environment Maker; Dataverse System Administrator access for runtime authorization                    |
-> | Maker validation      | Smoke-test an enabled Workday scenario in the Copilot Studio Test pane without publishing; publishing and non-maker validation are post-skill next steps | Environment Maker |
+> | Maker validation      | Test a read-only Workday request in the Copilot Studio Test pane                                                                                            | Environment Maker |
 >
-> I'll automate checks and supported changes where reliable APIs are available.
-> For Workday or portal-only settings, I'll provide the responsible
-> administrator with the exact steps and wait for verified evidence. The
-> guided lifecycle completes after the maker's Test pane scenario succeeds.
+> I'll run the available checks and automate supported changes. Each
+> administrator gets a workbook with the required steps. Workday setup
+> finishes after your Workday test succeeds in the Copilot Studio Test pane.
 
 ### Continue the current unfinished phase
 
@@ -417,7 +421,7 @@ When `nextPhaseId` is `workday-admin`, show only its row and use this exact
 [
   {
     "header": "Workday administrator",
-    "question": "Have you looped in the Workday administrator to complete the next phase?",
+    "question": "Have you arranged for a Workday administrator to complete this step?",
     "options": [
       { "label": "Yes, the Workday administrator is engaged" },
       { "label": "No, I still need to engage the Workday administrator" }
@@ -434,7 +438,7 @@ exact `vscode_askQuestions` form before dispatching that phase:
 [
   {
     "header": "Required access",
-    "question": "Are the people needed for the next phase available to help when that phase begins?",
+    "question": "Are the people listed for this step available to help?",
     "options": [
       { "label": "Yes, required people are available" },
       { "label": "No, someone is unavailable" }
@@ -450,8 +454,8 @@ When `nextPhaseId` is `connections`, show only its row and use this exact
 ```json
 [
   {
-    "header": "Connection creation privilege",
-    "question": "Do you have the Power Platform Environment Maker privilege and package installation access to create the Workday connections?",
+    "header": "Connections access",
+    "question": "Do you have Power Platform Environment Maker access and permission to install the Workday package in this environment?",
     "options": [
       { "label": "Yes, I have the required privilege and access" },
       { "label": "No, I do not have the required privilege or access" }
@@ -467,8 +471,8 @@ When `nextPhaseId` is `maker-validation`, show only its row and use this exact
 ```json
 [
   {
-    "header": "Maker validation privilege",
-    "question": "Do you have the Environment Maker privilege to perform maker validation in the Copilot Studio Test pane?",
+    "header": "Test access",
+    "question": "Do you have Environment Maker access to test this agent in the Copilot Studio Test pane?",
     "options": [
       { "label": "Yes, I have the required privilege and access" },
       { "label": "No, I do not have the required privilege or access" }
@@ -546,7 +550,7 @@ its prerequisite handoff belongs only to `entry.md`, before this lifecycle
 starts. Do not ask the maker to run Connect again for this completed realm.
 
 Render `postSkillNextSteps`
-under **Optional later - not part of this completed connection**. These are
+under **Optional next steps**. These are
 future deployment choices, not continued actions or another required phase.
 Link to the known source agent in Copilot Studio for manual promotion, and
 make the deployment-owner responsibility explicit. Do not start promotion or

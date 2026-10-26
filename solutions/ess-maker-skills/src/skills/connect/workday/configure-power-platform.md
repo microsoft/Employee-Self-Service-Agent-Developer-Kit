@@ -181,9 +181,9 @@ Then give the maker this creation process:
 3. Select **Microsoft Entra ID Integrated** authentication.
 4. Enter the displayed values in the matching connection fields, preserving
    their order and keeping the tenant separate from the SOAP base URL.
-5. Select **Create** and complete the Workday sign-in window. This connector
-   uses a separate credential store, so an additional sign-in prompt is
-   expected even when Microsoft or PAC authentication already succeeded.
+5. Select **Create** and complete the Workday sign-in window. A separate
+   Workday sign-in may be required even if you've already signed in to
+   Microsoft.
 6. Return to **Connections** and confirm that the Workday connection shows
    **Connected**.
 
@@ -289,8 +289,8 @@ workflow, or bot identifiers. Then use `vscode_askQuestions`:
 ```json
 [
   {
-    "header": "Apply Workday runtime changes",
-    "question": "Apply these exact Workday runtime changes to the selected environment and agent?",
+    "header": "Apply Workday changes",
+    "question": "Apply the Workday changes shown above to this environment and agent?",
     "options": [{ "label": "Apply changes" }, { "label": "Not now" }],
     "allowFreeformInput": false
   }
@@ -425,15 +425,17 @@ agent-facing connection contract; the latter grants the Cosmos-backed agent
 principal access to the reviewed Dataverse workflows. Do not skip or scope the
 authorization stage solely from `connectionType`.
 
-Show the exact agent name and refer only to the two entries displayed as
-**Workday**. Do not expose their internal flow or component names. Use
+Show the exact agent name and the safe display name of the selected Workday
+connection from verified Connections evidence immediately before this
+question. Refer only to the two entries displayed as **Workday**. Do not
+expose their internal flow or component names. Use
 `vscode_askQuestions`:
 
 ```json
 [
   {
     "header": "Confirm Workday connection",
-    "question": "In this exact agent, are both entries displayed as Workday connected to the reviewed Workday connection, with Allow permission to share parameters enabled under See details > Connection parameters for both?",
+    "question": "Are both Workday entries connected to the connection shown above, with Allow permission to share parameters enabled for both?",
     "options": [
       { "label": "Yes, confirmed" },
       { "label": "No, review the Workday connection settings" }

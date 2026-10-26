@@ -25,8 +25,8 @@ python scripts/checkpoint.py "pre-workday-user-context-redirect"
 
 **Message:**
 
-I'll connect your agent's **User Context** setup to Workday so it can identify
-the signed-in employee when a Workday request begins.
+I'll configure the agent to identify the signed-in employee when a Workday
+request starts.
 
 **End message.**
 

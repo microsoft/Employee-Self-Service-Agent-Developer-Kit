@@ -10,33 +10,37 @@ are next steps outside this skill lifecycle.
 The skill cannot perform the Test pane interaction on the maker's behalf. The
 skill cannot publish or deploy the agent; those are post-skill next steps.
 
-## Run the maker smoke test
+## Test Workday
 
 Render the following numbered walkthrough as a visible chat message before
-the **Maker smoke test** question, even though it is not a Message block.
+the **Test Workday** question, even though it is not a Message block.
 Do not ask whether the scenario passed before explaining how to run it.
 For a failed-test retry, show the relevant remediation and this walkthrough
 again before the question. Preserve the same named scenario when required.
 
+Use the controller-verified agent name and known Copilot Studio link for the
+first step. Render the resolved link, not an unlinked portal name or an
+unresolved placeholder. Run this test without publishing the agent.
+
 Ask the maker to:
 
-1. open **Employee Self-Service (HR)** in Classic Copilot Studio;
-2. open a new Test pane conversation without publishing the agent;
-3. use the maker's configured Workday connection to run one enabled read-only
-   scenario, such as checking a vacation balance; and
-4. confirm that the agent identifies the maker's Workday user and returns real
-   Workday data without an unexpected repeated sign-in.
+1. Open the selected agent in Classic Copilot Studio using its link.
+2. Start a new conversation in the `Test` pane.
+3. Ask a supported, read-only Workday question, such as checking your vacation
+   balance.
+4. Confirm that the response is for your Workday account and returns real
+   data without unexpected repeated sign-ins.
 
 Use `vscode_askQuestions`:
 
 ```json
 [
   {
-    "header": "Maker smoke test",
+    "header": "Test Workday",
     "question": "Did the Workday scenario succeed in the Copilot Studio Test pane?",
     "options": [
       { "label": "Yes, the Test pane scenario passed" },
-      { "label": "No, the Test pane scenario needs remediation" }
+      { "label": "No, the Test pane scenario did not work" }
     ],
     "allowFreeformInput": false
   }
@@ -118,7 +122,7 @@ completed Workday phases and administrator evidence unchanged. Do not set
 
 ## Optional later work
 
-Under **Optional later - not part of this completed connection**, render the returned
+Under **Optional next steps**, render the returned
 `postSkillNextSteps` for the completed realm. Do not ask for a next realm,
 start promoted-target discovery, or keep this execution open waiting for
 promotion. Returning to Connect is necessary only after the maker actually
@@ -128,29 +132,29 @@ Do not add Production employee-adoption steps to a Development or Test completio
 
 For Development, the optional later guidance is:
 
-> **Optional later - not part of this completed connection**
+> **Optional next steps**
 >
 > 1. Promote the agent from Development to Test when ready. Open the source
 >    agent in Copilot Studio and use your organization's approved promotion
 >    process. Ask the maker responsible for agent deployment if you need
->    access or instructions. Connect Workday does not perform promotion.
-> 2. Only after promotion is complete, return to Connect Workday and say that
+>    access or instructions.
+> 2. After promotion is complete, return to Connect Workday and say that
 >    the agent was promoted to Test.
 
 For Test, the optional later guidance is:
 
-> **Optional later - not part of this completed connection**
+> **Optional next steps**
 >
 > 1. Promote the agent from Test to Production when ready. Open the source
 >    agent in Copilot Studio and use your organization's approved promotion
 >    process. Ask the maker responsible for agent deployment if you need
->    access or instructions. Connect Workday does not perform promotion.
-> 2. Only after promotion is complete, return to Connect Workday and say that
+>    access or instructions.
+> 2. After promotion is complete, return to Connect Workday and say that
 >    the agent was promoted to Production.
 
 Only for Production, the optional later guidance is:
 
-> **Optional later - not part of this completed connection**
+> **Optional next steps**
 >
 > 1. Publish and deploy the Production agent when ready.
 > 2. After deployment, have each non-maker employee establish their own Workday connections

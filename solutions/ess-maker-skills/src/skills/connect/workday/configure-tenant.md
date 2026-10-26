@@ -27,11 +27,6 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
 python scripts/workday_connect.py workday-admin-packet
 ```
 
-After the maker confirms the Workday administrator is engaged, tell the maker:
-
-> Share this detailed workbook with the Workday administrator. It contains
-> the configuration instructions and fields to complete and return.
-
 After `record-entra` succeeds, always require fresh Workday administrator
 confirmation and a completed Workday administrator workbook, even when the
 Entra settings match a saved tenant foundation. An Entra workbook does not
@@ -44,7 +39,8 @@ these administrator handoffs using the recorded tenant foundation.
 
 Identify the current federation before rendering a detailed handoff. The
 phase boundary must already have asked
-**Have you looped in the Workday administrator?** and must not dispatch this
+**Have you arranged for a Workday administrator to complete this step?**
+and must not dispatch this
 guide until the maker confirms engagement. Do not add a second
 engagement question here. Use `identityProviderQuestion` from the packet in
 one structured `vscode_askQuestions` call. Present its options unchanged and
@@ -85,7 +81,7 @@ If the administrator becomes unavailable after a handoff is shown, pause
 before the completion question and preserve the current phase.
 
 Render the selected branch as one standalone section titled **Workday
-administrator handoff - share the workbook and target values**. It must contain
+administrator handoff**. It must contain
 the administrator role, exact Workday tenant, known target environment, packet
 reference values, workbook link, and the short selected-branch safety note.
 The maker must be able to forward that section without copying values from
