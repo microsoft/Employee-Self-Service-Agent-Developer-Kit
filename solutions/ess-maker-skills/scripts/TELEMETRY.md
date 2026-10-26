@@ -105,8 +105,12 @@ correct dashboard cohort. A session spanning contexts can therefore have a
 start in each; use distinct `session_id` when combining cohorts.
 
 A start is marked recorded only after delivery or successful local buffering.
-Failed buffered events are retried by the normal transport. File locks coordinate
-overlapping CLI processes; network requests do not hold the session-state lock.
+While another process owns a pending start, later activity is buffered instead
+of being sent ahead of it. Failed buffered events are retried by the normal
+transport. File locks coordinate overlapping CLI processes; network requests
+do not hold the session-state lock or the active retry-buffer lock. A flush
+atomically detaches its snapshot, so concurrent appends remain in the active
+buffer even when the collector is slow.
 This remains best-effort telemetry, not exactly-once delivery: process crashes,
 unwritable state, and bounded-buffer eviction can still cause loss or duplicates.
 

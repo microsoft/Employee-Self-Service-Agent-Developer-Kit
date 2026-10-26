@@ -741,8 +741,10 @@ def test_failed_unbuffered_start_is_retried(captured_post, monkeypatch):
     monkeypatch.setattr(_fc, "_post", lambda *_args: 503)
     with monkeypatch.context() as patch:
         patch.setattr(adk, "_buffer_append", lambda _events: False)
+        patch.setattr(adk, "_buffer_prepend", lambda _events: False)
         result = adk.emit_capability_use("setup", block=True)
     assert result["sent"] is False
+    assert result["reason"] == "session-start-unrecorded"
     assert result["session_start_error"] == "http 503"
     sessions = json.loads(Path(adk.SESSION_PATH).read_text(encoding="utf-8"))
     assert sessions[adk.SURFACE_CLI]["started_contexts"] == []
@@ -874,6 +876,179 @@ assert emit_capability.main(["emit_capability.py", "--worker", "setup"]) == 0
     assert len([e for e in events if e["name"] == adk.EVENT_SESSION_START]) == 1
     assert len([e for e in events if e["name"] == adk.EVENT_CAPABILITY_USE]) == 5
     assert len({e["data"]["session_id"] for e in events}) == 1
+
+
+def test_slow_session_start_buffers_waiter_without_reordering(tmp_path):
+    script = r"""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+import adk_telemetry as adk
+from flightcheck import telemetry as fc
+
+root = Path(sys.argv[2])
+adk.CONFIG_DIR = str(root / ".adk")
+adk.CONFIG_PATH = str(root / ".adk" / "config")
+adk.SESSION_PATH = str(root / ".adk" / "session.json")
+adk.BUFFER_PATH = str(root / ".adk" / "telemetry-buffer.ndjson")
+os.environ["ESS_ADK_TELEMETRY"] = "on"
+fc.get_instance_id = lambda: "00000000-0000-0000-0000-000000002222"
+fc.get_cached_tenant_id = lambda: "00000000-0000-0000-0000-000000001111"
+fc.get_cached_tenant_name = lambda _tid: "Synthetic Organization"
+
+def post(_ikey, envelopes):
+    if any(event["name"] == adk.EVENT_SESSION_START for event in envelopes):
+        (root / "start-posting").touch()
+        time.sleep(6.2)
+    with adk._file_lock(str(root / "posted.lock")):
+        with open(root / "posted.ndjson", "a", encoding="utf-8") as stream:
+            for event in envelopes:
+                stream.write(json.dumps(event) + "\n")
+    return 200
+
+fc._post = post
+deadline = time.monotonic() + 15
+while not (root / "go").exists():
+    if time.monotonic() > deadline:
+        raise TimeoutError("worker barrier")
+    time.sleep(0.01)
+result = adk.emit_capability_use("setup", block=True)
+(root / (sys.argv[3] + ".result.json")).write_text(
+    json.dumps(result), encoding="utf-8"
+)
+"""
+    command = [
+        sys.executable,
+        "-c",
+        script,
+        str(Path(adk.__file__).parent),
+        str(tmp_path),
+    ]
+    workers = [
+        subprocess.Popen(
+            command + [str(index)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for index in range(2)
+    ]
+    try:
+        (tmp_path / "go").touch()
+        for worker in workers:
+            stdout, stderr = worker.communicate(timeout=30)
+            assert worker.returncode == 0, (stdout, stderr)
+    finally:
+        for worker in workers:
+            if worker.poll() is None:
+                worker.kill()
+                worker.communicate()
+
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "posted.ndjson").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert [event["name"] for event in events] == [
+        adk.EVENT_SESSION_START,
+        adk.EVENT_CAPABILITY_USE,
+        adk.EVENT_CAPABILITY_USE,
+    ]
+    results = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in tmp_path.glob("*.result.json")
+    ]
+    assert any(result.get("reason") == "pending-session-start" for result in results)
+
+
+def test_slow_buffer_flush_preserves_concurrent_append(tmp_path):
+    script = r"""
+import json
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+import adk_telemetry as adk
+from flightcheck import telemetry as fc
+
+root = Path(sys.argv[2])
+adk.CONFIG_DIR = str(root / ".adk")
+adk.CONFIG_PATH = str(root / ".adk" / "config")
+adk.SESSION_PATH = str(root / ".adk" / "session.json")
+adk.BUFFER_PATH = str(root / ".adk" / "telemetry-buffer.ndjson")
+mode = sys.argv[3]
+
+if mode == "flush":
+    def post(_ikey, _envelopes):
+        (root / "flush-posting").touch()
+        time.sleep(6.2)
+        return 200
+    fc._post = post
+    adk._buffer_flush("test-key")
+else:
+    deadline = time.monotonic() + 15
+    while not (root / "flush-posting").exists():
+        if time.monotonic() > deadline:
+            raise TimeoutError("flush barrier")
+        time.sleep(0.01)
+    fc._post = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("queued telemetry must not be overtaken by a live post")
+    )
+    result = adk._post_event_sync("new-event", {"sequence": 2})
+    (root / "append-result.json").write_text(
+        json.dumps(result), encoding="utf-8"
+    )
+"""
+    buffer_dir = tmp_path / ".adk"
+    buffer_dir.mkdir()
+    buffer_path = buffer_dir / "telemetry-buffer.ndjson"
+    buffer_path.write_text(
+        json.dumps({"name": "old-event", "data": {"sequence": 1}}) + "\n",
+        encoding="utf-8",
+    )
+    command = [
+        sys.executable,
+        "-c",
+        script,
+        str(Path(adk.__file__).parent),
+        str(tmp_path),
+    ]
+    flusher = subprocess.Popen(
+        command + ["flush"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    appender = subprocess.Popen(
+        command + ["append"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        for worker in (flusher, appender):
+            stdout, stderr = worker.communicate(timeout=30)
+            assert worker.returncode == 0, (stdout, stderr)
+    finally:
+        for worker in (flusher, appender):
+            if worker.poll() is None:
+                worker.kill()
+                worker.communicate()
+
+    result = json.loads(
+        (tmp_path / "append-result.json").read_text(encoding="utf-8")
+    )
+    assert result["reason"] == "buffer-pending"
+    assert result["buffered"] is True
+    buffered = [
+        json.loads(line)
+        for line in buffer_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["name"] for event in buffered] == ["new-event"]
+    assert buffered[0]["data"]["sequence"] == 2
 
 
 # --- ikey resolution ------------------------------------------------------
@@ -1053,6 +1228,29 @@ def test_buffer_oversize_drops_oldest_and_accepts_newest(monkeypatch):
         names = [json.loads(ln)["name"] for ln in f.read().splitlines() if ln.strip()]
     assert "adk.evt.19" in names      # newest kept
     assert "adk.evt.0" not in names   # oldest dropped
+
+
+def test_buffer_prepend_preserves_session_start_under_cap(monkeypatch):
+    monkeypatch.setattr(adk, "BUFFER_MAX_EVENTS", 3)
+    for i in range(3):
+        adk._buffer_append(
+            [adk.build_event(f"adk.activity.{i}", {"n": i}, "o:tok")]
+        )
+
+    start = adk.build_event(adk.EVENT_SESSION_START, {"session_id": "s1"}, "o:tok")
+    assert adk._buffer_prepend([start]) is True
+
+    with open(adk.BUFFER_PATH, "r", encoding="utf-8") as f:
+        names = [
+            json.loads(line)["name"]
+            for line in f.read().splitlines()
+            if line.strip()
+        ]
+    assert names == [
+        adk.EVENT_SESSION_START,
+        "adk.activity.1",
+        "adk.activity.2",
+    ]
 
 
 # --- Vorpal client event bridge --------------------------------------------

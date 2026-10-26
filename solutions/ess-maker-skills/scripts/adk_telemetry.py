@@ -403,8 +403,10 @@ SESSION_PATH = os.path.join(CONFIG_DIR, "session.json")
 BUFFER_PATH = os.path.join(CONFIG_DIR, "telemetry-buffer.ndjson")
 
 SESSION_TIMEOUT_SECS = 30 * 60  # 30 min inactivity => new session (spec).
+SESSION_START_RESERVATION_STALE_SECS = 30
 BUFFER_MAX_EVENTS = 1000
 BUFFER_MAX_BYTES = 5 * 1024 * 1024
+BUFFER_SENDING_STALE_SECS = 30
 RUNS_PATH = os.path.join(CONFIG_DIR, "flightcheck-runs.json")
 
 _SYNC = os.environ.get("ESS_ADK_TELEMETRY_SYNC", "").strip().lower() in (
@@ -679,10 +681,14 @@ def _get_session_locked(surface: str) -> tuple[str, bool]:
         sid = str(uuid.uuid4())
         is_new = True
     started_contexts = entry.get("started_contexts", []) if not is_new else []
+    starting_contexts = entry.get("starting_contexts", []) if not is_new else []
     data[surface] = {
         "id": sid,
         "last": now,
         "started_contexts": started_contexts if isinstance(started_contexts, list) else [],
+        "starting_contexts": (
+            starting_contexts if isinstance(starting_contexts, list) else []
+        ),
     }
     try:
         with open(SESSION_PATH, "w", encoding="utf-8") as f:
@@ -843,63 +849,162 @@ def resolve_ikey() -> tuple[str, str]:
     return (override or _fc.ARIA_IKEYS[env]), env
 
 
+def _read_buffer_lines(path: str) -> list[str]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return [line for line in f.read().splitlines() if line.strip()]
+    except FileNotFoundError:
+        return []
+
+
+def _bounded_buffer_lines(
+    lines: list[str],
+    *,
+    preserve_prefix: int = 0,
+) -> list[str]:
+    prefix = lines[:preserve_prefix]
+    available = max(BUFFER_MAX_EVENTS - len(prefix), 0)
+    bounded = prefix + (lines[preserve_prefix:][-available:] if available else [])
+    while (
+        len(bounded) > max(len(prefix), 1)
+        and len("\n".join(bounded)) + 1 > BUFFER_MAX_BYTES
+    ):
+        bounded.pop(len(prefix))
+    return bounded
+
+
+def _write_buffer_lines(path: str, lines: list[str]) -> None:
+    if not lines:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def _buffer_append(envelopes: list[dict[str, Any]]) -> bool:
+    return _buffer_store(envelopes, prepend=False)
+
+
+def _buffer_prepend(envelopes: list[dict[str, Any]]) -> bool:
+    return _buffer_store(envelopes, prepend=True)
+
+
+def _buffer_store(
+    envelopes: list[dict[str, Any]],
+    *,
+    prepend: bool,
+) -> bool:
     try:
         with _file_lock(BUFFER_PATH + ".lock"):
-            return _buffer_append_locked(envelopes)
+            return _buffer_store_locked(envelopes, prepend=prepend)
     except OSError:
         return False
 
 
-def _buffer_append_locked(envelopes: list[dict[str, Any]]) -> bool:
+def _buffer_store_locked(
+    envelopes: list[dict[str, Any]],
+    *,
+    prepend: bool,
+) -> bool:
     with _BUFFER_LOCK:
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
-            existing: list[str] = []
-            if os.path.exists(BUFFER_PATH):
-                with open(BUFFER_PATH, "r", encoding="utf-8") as f:
-                    existing = [ln for ln in f.read().splitlines() if ln.strip()]
+            existing = _read_buffer_lines(BUFFER_PATH)
             new_lines = [json.dumps(e, separators=(",", ":")) for e in envelopes]
-            combined = (existing + new_lines)[-BUFFER_MAX_EVENTS:]
-            # Byte cap: drop oldest events until under the size limit so a
-            # persistently-failing flush can't grow the file without bound
-            # (always accept the newest events rather than the earlier ones).
-            while len(combined) > 1 and len("\n".join(combined)) + 1 > BUFFER_MAX_BYTES:
-                combined.pop(0)
-            with open(BUFFER_PATH, "w", encoding="utf-8") as f:
-                f.write("\n".join(combined) + "\n")
+            combined = (
+                new_lines + existing if prepend else existing + new_lines
+            )
+            _write_buffer_lines(
+                BUFFER_PATH,
+                _bounded_buffer_lines(
+                    combined,
+                    preserve_prefix=len(new_lines) if prepend else 0,
+                ),
+            )
             return True
         except OSError:
             return False
 
 
-def _buffer_flush(ikey: str) -> None:
+def _buffer_flush(ikey: str) -> bool:
+    """Flush one detached snapshot; return whether no queued work remains."""
+    sending_path = BUFFER_PATH + ".sending"
+    claimed = False
     try:
         with _file_lock(BUFFER_PATH + ".lock"):
-            _buffer_flush_locked(ikey)
+            with _BUFFER_LOCK:
+                if os.path.exists(sending_path):
+                    age = time.time() - os.path.getmtime(sending_path)
+                    if age <= BUFFER_SENDING_STALE_SECS:
+                        return False
+                    stranded = _read_buffer_lines(sending_path)
+                    active = _read_buffer_lines(BUFFER_PATH)
+                    _write_buffer_lines(
+                        BUFFER_PATH,
+                        _bounded_buffer_lines(
+                            stranded + active,
+                            preserve_prefix=len(stranded),
+                        ),
+                    )
+                    os.remove(sending_path)
+                if not os.path.exists(BUFFER_PATH):
+                    return True
+                os.replace(BUFFER_PATH, sending_path)
+                claimed = True
     except OSError:
-        return
+        return False
+    if not claimed:
+        return True
+
+    sent = False
+    try:
+        lines = _read_buffer_lines(sending_path)
+        if not lines:
+            sent = True
+        else:
+            sent = _fc._post(ikey, [json.loads(line) for line in lines]) in (200, 204)
+    except (OSError, ValueError):
+        sent = False
+    except Exception:  # noqa: BLE001 — flush is best-effort, never raises
+        sent = False
+
+    try:
+        with _file_lock(BUFFER_PATH + ".lock"):
+            with _BUFFER_LOCK:
+                if sent:
+                    try:
+                        os.remove(sending_path)
+                    except FileNotFoundError:
+                        pass
+                    return not os.path.exists(BUFFER_PATH)
+                stranded = _read_buffer_lines(sending_path)
+                active = _read_buffer_lines(BUFFER_PATH)
+                _write_buffer_lines(
+                    BUFFER_PATH,
+                    _bounded_buffer_lines(
+                        stranded + active,
+                        preserve_prefix=len(stranded),
+                    ),
+                )
+                try:
+                    os.remove(sending_path)
+                except FileNotFoundError:
+                    pass
+    except OSError:
+        return False
+    return False
 
 
-def _buffer_flush_locked(ikey: str) -> None:
-    with _BUFFER_LOCK:
-        if not os.path.exists(BUFFER_PATH):
-            return
-        try:
-            with open(BUFFER_PATH, "r", encoding="utf-8") as f:
-                lines = [ln for ln in f.read().splitlines() if ln.strip()]
-            if not lines:
-                return
-            envs = [json.loads(ln) for ln in lines]
-            if _fc._post(ikey, envs) in (200, 204):
-                os.remove(BUFFER_PATH)
-        except (OSError, ValueError):
-            pass
-        except Exception:  # noqa: BLE001 — flush is best-effort, never raises
-            pass
-
-
-def _post_event_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
+def _post_event_sync(
+    event_name: str,
+    data: dict[str, Any],
+    *,
+    flush_buffer: bool = True,
+    prepend_on_failure: bool = False,
+) -> dict[str, Any]:
     if not telemetry_enabled():
         return {"sent": False, "events": 0, "status": None, "reason": "disabled"}
     try:
@@ -907,10 +1012,21 @@ def _post_event_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
         data = dict(data)
         data.setdefault("env", env)
         envelope = build_event(event_name, data, _fc.envelope_ikey(ikey))
-        _buffer_flush(ikey)
+        if flush_buffer and not _buffer_flush(ikey):
+            buffered = _buffer_append([envelope])
+            return {
+                "sent": False,
+                "events": 0,
+                "status": None,
+                "env": env,
+                "event": event_name,
+                "buffered": buffered,
+                "reason": "buffer-pending",
+            }
         status = _fc._post(ikey, [envelope])
         ok = status in (200, 204)
-        buffered = not ok and _buffer_append([envelope])
+        store = _buffer_prepend if prepend_on_failure else _buffer_append
+        buffered = not ok and store([envelope])
         return {"sent": ok, "events": 1, "status": status, "env": env,
                 "event": event_name, "buffered": buffered,
                 "reason": "ok" if ok else f"http {status}"}
@@ -920,7 +1036,8 @@ def _post_event_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
             ikey, env = resolve_ikey()
             data = dict(data)
             data.setdefault("env", env)
-            buffered = _buffer_append(
+            store = _buffer_prepend if prepend_on_failure else _buffer_append
+            buffered = store(
                 [build_event(event_name, data, _fc.envelope_ikey(ikey))]
             )
         except Exception:  # noqa: BLE001
@@ -928,6 +1045,72 @@ def _post_event_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
         return {"sent": False, "events": 0, "status": None,
                 "event": event_name, "buffered": buffered,
                 "reason": f"{type(e).__name__}: {e}"}
+
+
+def _write_sessions(sessions: dict[str, Any]) -> None:
+    with open(SESSION_PATH, "w", encoding="utf-8") as f:
+        json.dump(sessions, f)
+
+
+def _reserve_session_start(
+    surface: str,
+    sid: str,
+    context: list[str],
+) -> str:
+    """Return ``started``, ``pending``, or ``owner`` under short state locks."""
+    now = time.time()
+    with _SESSION_START_LOCK, _file_lock(SESSION_PATH + ".start.lock"):
+        with _SESSION_LOCK, _file_lock(SESSION_PATH + ".lock"):
+            sessions = _read_sessions()
+            entry = sessions.get(surface)
+            if not isinstance(entry, dict) or entry.get("id") != sid:
+                return "owner"
+            if context in entry.get("started_contexts", []):
+                return "started"
+            reservations = entry.setdefault("starting_contexts", [])
+            for reservation in reservations:
+                if not isinstance(reservation, dict):
+                    continue
+                if reservation.get("context") != context:
+                    continue
+                reserved_at = float(reservation.get("reserved_at", 0) or 0)
+                if now - reserved_at <= SESSION_START_RESERVATION_STALE_SECS:
+                    return "pending"
+                reservation["reserved_at"] = now
+                _write_sessions(sessions)
+                return "owner"
+            reservations.append({"context": context, "reserved_at": now})
+            _write_sessions(sessions)
+            return "owner"
+
+
+def _finish_session_start(
+    surface: str,
+    sid: str,
+    context: list[str],
+    *,
+    recorded: bool,
+) -> None:
+    with _SESSION_START_LOCK, _file_lock(SESSION_PATH + ".start.lock"):
+        with _SESSION_LOCK, _file_lock(SESSION_PATH + ".lock"):
+            sessions = _read_sessions()
+            entry = sessions.get(surface)
+            if not isinstance(entry, dict) or entry.get("id") != sid:
+                return
+            reservations = entry.get("starting_contexts", [])
+            entry["starting_contexts"] = [
+                reservation
+                for reservation in reservations
+                if not (
+                    isinstance(reservation, dict)
+                    and reservation.get("context") == context
+                )
+            ]
+            if recorded:
+                started = entry.setdefault("started_contexts", [])
+                if context not in started:
+                    started.append(context)
+            _write_sessions(sessions)
 
 
 def _ensure_session_started(data: dict[str, Any]) -> dict[str, Any]:
@@ -940,40 +1123,70 @@ def _ensure_session_started(data: dict[str, Any]) -> dict[str, Any]:
         data["instance_id"], data["tenant_id"], data["agent_type"],
         _fc.envelope_ikey(resolve_ikey()[0]),
     ]
-    # Keep the network outside the session-state lock: allocating an ID on
-    # the foreground CLI thread must not wait for a background HTTP request.
-    with _SESSION_START_LOCK, _file_lock(SESSION_PATH + ".start.lock"):
-        with _SESSION_LOCK, _file_lock(SESSION_PATH + ".lock"):
-            sessions = _read_sessions()
-            entry = sessions.get(surface)
-            if (
-                isinstance(entry, dict)
-                and entry.get("id") == sid
-                and context in entry.get("started_contexts", [])
-            ):
-                return {"sent": False, "reason": "existing-session", "session_id": sid}
+    reservation = _reserve_session_start(surface, sid, context)
+    if reservation == "started":
+        return {"sent": False, "reason": "existing-session", "session_id": sid}
+    if reservation == "pending":
+        return {
+            "sent": False,
+            "buffered": False,
+            "pending": True,
+            "reason": "pending-session-start",
+            "session_id": sid,
+        }
 
-        start_data = common_dimensions(
-            surface,
-            session_id=sid,
-            instance_id=data["instance_id"],
-            tenant_id=data["tenant_id"],
-            tenant_name=data["tenant_name"],
+    start_data = common_dimensions(
+        surface,
+        session_id=sid,
+        instance_id=data["instance_id"],
+        tenant_id=data["tenant_id"],
+        tenant_name=data["tenant_name"],
+    )
+    for field in start_data:
+        if field in data:
+            start_data[field] = data[field]
+    result = _post_event_sync(
+        EVENT_SESSION_START,
+        start_data,
+        flush_buffer=False,
+        prepend_on_failure=True,
+    )
+    recorded = bool(result["sent"] or result.get("buffered"))
+    _finish_session_start(surface, sid, context, recorded=recorded)
+    if result["sent"]:
+        _buffer_flush(resolve_ikey()[0])
+    return result
+
+
+def _buffer_event_sync(
+    event_name: str,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        ikey, env = resolve_ikey()
+        buffered_data = dict(data)
+        buffered_data.setdefault("env", env)
+        buffered = _buffer_append(
+            [build_event(event_name, buffered_data, _fc.envelope_ikey(ikey))]
         )
-        for field in start_data:
-            if field in data:
-                start_data[field] = data[field]
-        result = _post_event_sync(EVENT_SESSION_START, start_data)
-        if result["sent"] or result.get("buffered"):
-            with _SESSION_LOCK, _file_lock(SESSION_PATH + ".lock"):
-                sessions = _read_sessions()
-                entry = sessions.get(surface)
-                if not isinstance(entry, dict) or entry.get("id") != sid:
-                    return result
-                entry.setdefault("started_contexts", []).append(context)
-                with open(SESSION_PATH, "w", encoding="utf-8") as f:
-                    json.dump(sessions, f)
-        return result
+        return {
+            "sent": False,
+            "events": 0,
+            "status": None,
+            "env": env,
+            "event": event_name,
+            "buffered": buffered,
+            "reason": "pending-session-start",
+        }
+    except Exception as e:  # noqa: BLE001 — telemetry must never break a skill
+        return {
+            "sent": False,
+            "events": 0,
+            "status": None,
+            "event": event_name,
+            "buffered": False,
+            "reason": f"{type(e).__name__}: {e}",
+        }
 
 
 def _emit_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -989,10 +1202,23 @@ def _emit_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
             }
         if event_name == EVENT_SESSION_START:
             return start_result
+        if start_result.get("pending"):
+            return _buffer_event_sync(event_name, data)
+        if (
+            not start_result["sent"]
+            and not start_result.get("buffered")
+            and start_result["reason"] != "existing-session"
+        ):
+            return {
+                "sent": False,
+                "events": 0,
+                "status": None,
+                "event": event_name,
+                "buffered": False,
+                "reason": "session-start-unrecorded",
+                "session_start_error": start_result["reason"],
+            }
         result = _post_event_sync(event_name, data)
-        if not start_result["sent"] and not start_result.get("buffered"):
-            if start_result["reason"] != "existing-session":
-                result["session_start_error"] = start_result["reason"]
         return result
     return _post_event_sync(event_name, data)
 
@@ -1018,15 +1244,42 @@ def _emit_many_sync(event_name: str, rows: list[dict[str, Any]]) -> dict[str, An
             "reason": "disabled",
         }
     try:
+        start_result = None
         if rows and rows[0].get("session_id"):
-            _ensure_session_started(rows[0])
+            start_result = _ensure_session_started(rows[0])
+            if start_result.get("pending"):
+                return _buffer_many_sync(event_name, rows)
+            if (
+                not start_result["sent"]
+                and not start_result.get("buffered")
+                and start_result["reason"] != "existing-session"
+            ):
+                return {
+                    "sent": False,
+                    "events": 0,
+                    "status": None,
+                    "event": event_name,
+                    "buffered": False,
+                    "reason": "session-start-unrecorded",
+                    "session_start_error": start_result["reason"],
+                }
         ikey, env = resolve_ikey()
         envelopes = []
         for row in rows:
             data = dict(row)
             data.setdefault("env", env)
             envelopes.append(build_event(event_name, data, _fc.envelope_ikey(ikey)))
-        _buffer_flush(ikey)
+        if not _buffer_flush(ikey):
+            buffered = _buffer_append(envelopes)
+            return {
+                "sent": False,
+                "events": 0,
+                "status": None,
+                "env": env,
+                "event": event_name,
+                "buffered": buffered,
+                "reason": "buffer-pending",
+            }
         status = _fc._post(ikey, envelopes)
         ok = status in (200, 204)
         if not ok:
@@ -1055,6 +1308,38 @@ def _emit_many_sync(event_name: str, rows: list[dict[str, Any]]) -> dict[str, An
             "events": 0,
             "status": None,
             "event": event_name,
+            "reason": f"{type(e).__name__}: {e}",
+        }
+
+
+def _buffer_many_sync(
+    event_name: str,
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    try:
+        ikey, env = resolve_ikey()
+        envelopes = []
+        for row in rows:
+            data = dict(row)
+            data.setdefault("env", env)
+            envelopes.append(build_event(event_name, data, _fc.envelope_ikey(ikey)))
+        buffered = _buffer_append(envelopes)
+        return {
+            "sent": False,
+            "events": 0,
+            "status": None,
+            "env": env,
+            "event": event_name,
+            "buffered": buffered,
+            "reason": "pending-session-start",
+        }
+    except Exception as e:  # noqa: BLE001 — telemetry must never break a caller
+        return {
+            "sent": False,
+            "events": 0,
+            "status": None,
+            "event": event_name,
+            "buffered": False,
             "reason": f"{type(e).__name__}: {e}",
         }
 
