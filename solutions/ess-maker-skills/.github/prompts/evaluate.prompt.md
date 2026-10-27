@@ -33,8 +33,13 @@ feature's only test method; incompatible multi-turn generation is not offered.
    **run**, **view results**, or **delete**?"
 2. Wait for the answer.
 3. Route to the matching skill:
-   - **create** -> read `src/skills/evaluations/dispatcher/SKILL.md` and follow
-     it.
+   - **create** -> offer these creation choices, then read
+     `src/skills/evaluations/dispatcher/SKILL.md` and follow it for either
+     choice:
+     - **Create for a configured or named scenario**.
+     - **Curate from a knowledge source** using local documents or a
+       connected knowledge base (e.g. ServiceNow, SharePoint) plus an
+       agent-instructions file.
    - **update** / **edit** / **add cases** -> read
      `src/skills/evaluations/update/SKILL.md` and follow it with the exact
      selected set context, if any.

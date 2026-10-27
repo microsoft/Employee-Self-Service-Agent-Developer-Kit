@@ -17,6 +17,7 @@ SCRIPTS = (
 sys.path.insert(0, str(SCRIPTS))
 
 import evaluation_csv  # noqa: E402
+import evaluation_method_policy  # noqa: E402
 
 
 def test_passing_score_defaults_for_invalid_threshold():
@@ -106,6 +107,101 @@ def test_regenerate_exports_creates_general_quality_csv(tmp_path):
         ["Prompt", "Expected response", "Test Method Type"],
         ["'=unsafe prompt", "", "GeneralQuality"],
     ]
+
+
+def _write_mixed_set_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+    evaluations = tmp_path / "evaluations"
+    mixed = evaluations / "mixed"
+    following = evaluations / "z-following"
+    exports = evaluations / "exports"
+    mixed.mkdir(parents=True)
+    following.mkdir()
+    exports.mkdir()
+    (mixed / "set.mcs.yml").write_text(
+        "kind: EvaluationSet\n"
+        "displayName: Mixed\n"
+        "graders:\n"
+        "  - kind: CompareMeaningGrader\n"
+        "    threshold: 0.8\n",
+        encoding="utf-8",
+    )
+    (mixed / "single.mcs.yml").write_text(
+        "kind: EvaluationData\n"
+        "rows:\n"
+        "  - input: Single-turn question\n"
+        "    expectedOutput: Single-turn answer\n",
+        encoding="utf-8",
+    )
+    (mixed / "conversation.mcs.yml").write_text(
+        "kind: MultiTurnEvaluationCase\n"
+        "activities:\n"
+        "  - activity:\n"
+        "      value:\n"
+        "        from:\n"
+        "          role: user\n"
+        "    text:\n"
+        "      - Multi-turn question\n",
+        encoding="utf-8",
+    )
+    (following / "set.mcs.yml").write_text(
+        "kind: EvaluationSet\n"
+        "displayName: Following\n",
+        encoding="utf-8",
+    )
+    (following / "case.mcs.yml").write_text(
+        "kind: EvaluationData\n"
+        "rows:\n"
+        "  - input: Following question\n",
+        encoding="utf-8",
+    )
+    existing = exports / "20260927_Mixed.csv"
+    existing.write_text("prior export\n", encoding="utf-8")
+    return mixed, following, existing
+
+
+def test_regenerate_exports_strict_rejects_mixed_set(tmp_path):
+    _write_mixed_set_fixture(tmp_path)
+
+    with pytest.raises(
+        evaluation_method_policy.EvaluationMethodError,
+        match="multi-turn cases cannot use this feature",
+    ):
+        evaluation_csv.regenerate_evaluation_exports(
+            tmp_path,
+            timestamp="20260927",
+        )
+
+
+def test_regenerate_exports_non_strict_keeps_mixed_set_single_turn_behavior(tmp_path):
+    _, _, existing = _write_mixed_set_fixture(tmp_path)
+
+    paths = evaluation_csv.regenerate_evaluation_exports(
+        tmp_path,
+        timestamp="20260927",
+        strict=False,
+    )
+
+    assert [path.name for path in paths] == [
+        "20260927_Mixed.csv",
+        "20260927_Following.csv",
+    ]
+    with existing.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.reader(stream))
+    assert rows == [
+        [
+            "Prompt",
+            "Expected response",
+            "Test Method Type",
+            "Passing Score",
+        ],
+        [
+            "Single-turn question",
+            "Single-turn answer",
+            "CompareMeaning",
+            "80",
+        ],
+    ]
+    assert paths[1].is_file()
 
 
 def test_generate_set_csv_migrates_legacy_export_to_display_name_format(tmp_path):

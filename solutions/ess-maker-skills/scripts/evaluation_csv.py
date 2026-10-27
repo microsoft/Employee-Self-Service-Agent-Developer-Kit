@@ -157,6 +157,71 @@ def _grader(parent: dict[str, Any], rows: list[dict[str, Any]]) -> tuple[
     return "GeneralQuality", None
 
 
+def _row_source_url(document: dict[str, Any]) -> str:
+    extension_data = document.get("extensionData")
+    source_url = extension_data.get("sourceUrl") if isinstance(
+        extension_data, dict
+    ) else None
+    return source_url if isinstance(source_url, str) else ""
+
+
+def _single_turn_csv_table(
+    parent: dict[str, Any],
+    single_turn_docs: list[tuple[dict[str, Any], Path]],
+) -> tuple[list[str], list[dict[str, str]]]:
+    source_rows: list[dict[str, Any]] = []
+    for document, _ in single_turn_docs:
+        document_rows = document.get("rows")
+        source_url = _row_source_url(document)
+        if isinstance(document_rows, list):
+            for row in document_rows:
+                if not isinstance(row, dict):
+                    continue
+                enriched_row = dict(row)
+                enriched_row["_sourceUrl"] = source_url
+                source_rows.append(enriched_row)
+
+    method, passing_score = _grader(parent, source_rows)
+    headers = ["Prompt", "Expected response", "Test Method Type"]
+    if passing_score is not None:
+        headers.append("Passing Score")
+    has_source_url = any(row.get("_sourceUrl") for row in source_rows)
+    if has_source_url:
+        headers.append("Source URL")
+
+    export_rows = []
+    for row in source_rows:
+        export_row = {
+            "Prompt": _formula_safe(row.get("input")),
+            "Expected response": _formula_safe(row.get("expectedOutput")),
+            "Test Method Type": method,
+        }
+        if passing_score is not None:
+            export_row["Passing Score"] = passing_score
+        if has_source_url:
+            export_row["Source URL"] = _formula_safe(row.get("_sourceUrl") or "")
+        export_rows.append(export_row)
+    return headers, export_rows
+
+
+def evaluation_csv_table(
+    set_folder: str | Path,
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Return the exact table for an exclusively single-turn EvaluationSet."""
+    folder = Path(set_folder)
+    parent, case_documents = _set_documents(folder)
+    single_turn_docs = [
+        (document, path)
+        for document, path in case_documents
+        if document_kind(document, context=str(path)) == "EvaluationData"
+    ]
+    if len(single_turn_docs) != len(case_documents):
+        raise EvaluationCSVError(
+            f"Evaluation set is not exclusively single-turn: {folder}"
+        )
+    return _single_turn_csv_table(parent, single_turn_docs)
+
+
 def _activity_role(activity: dict[str, Any]) -> str | None:
     outer = activity.get("activity")
     if not isinstance(outer, dict):
@@ -281,10 +346,6 @@ def generate_set_csv(
         for document, path in case_documents
         if document_kind(document, context=str(path)) == "MultiTurnEvaluationCase"
     ]
-    if multi_turn_docs and single_turn_docs:
-        raise EvaluationCSVError(
-            f"{folder}: mixed single-turn/multi-turn sets cannot be exported without losing cases."
-        )
     content = io.StringIO(newline="")
     writer = csv.writer(content, quoting=csv.QUOTE_MINIMAL)
 
@@ -301,27 +362,10 @@ def generate_set_csv(
         _write_export(output, content.getvalue(), stale)
         return output
 
-    rows: list[dict[str, Any]] = []
-    for document, _ in single_turn_docs:
-        document_rows = document.get("rows")
-        if isinstance(document_rows, list):
-            rows.extend(row for row in document_rows if isinstance(row, dict))
-
-    method, passing_score = _grader(parent, rows)
-    headers = ["Prompt", "Expected response", "Test Method Type"]
-    if passing_score is not None:
-        headers.append("Passing Score")
-
+    headers, export_rows = _single_turn_csv_table(parent, single_turn_docs)
     writer.writerow(headers)
-    for row in rows:
-        values = [
-            _formula_safe(row.get("input")),
-            _formula_safe(row.get("expectedOutput")),
-            method,
-        ]
-        if passing_score is not None:
-            values.append(passing_score)
-        writer.writerow(values)
+    for export_row in export_rows:
+        writer.writerow([export_row.get(header, "") for header in headers])
     output, stale = _resolve_export_path(parent, folder, exports, timestamp)
     _write_export(output, content.getvalue(), stale)
     return output

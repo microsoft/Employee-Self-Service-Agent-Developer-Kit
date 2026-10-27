@@ -17,7 +17,9 @@ remains available. Local editing never automatically deploys.
 
 ## Rules
 
-- Always discover sets from both locations when they are available.
+- For normal update entries, always discover sets from both locations when
+  they are available. Curator-originated preselected-set handoffs are exempt
+  from rediscovery; use only the exact folders supplied by the curator skill.
 - Do not require setup to update a workspace-level set.
 - Require a complete `.local/config.json` only for discovering or pushing
   configured-agent sets.
@@ -78,6 +80,46 @@ Review state and review activity are separate:
 Never route a normal or resumed push into review completion merely because its
 local `review.json` contains `review_requested`.
 
+### Curator-originated preselected-set handoffs
+
+`src/skills/evaluations/curate/SKILL.md` may enter this skill with the exact
+generated workspace set folders already preselected after structural and
+Maker Kit quality validation. Accept each of its three named handoffs without
+rediscovering or reselecting those sets. The curator skill supplies the
+normalized folder and CSV paths returned by `eval_curator_handoff.py`; this
+skill must receive those paths unchanged and must not reconstruct them from set
+names or other handoff fields:
+
+- **Edit the test sets myself** — enter the edit path at Step 2, then complete
+  Steps 2 through 6, including YAML/CSV synchronization and quality validation.
+  The curator gate already selected the edit path: show the current CSV preview
+  and cases, skip Step 2's generic continuation question, and proceed directly
+  to selecting and editing cases. After Step 6 completes, return control to the
+  curator skill's mandatory maker review gate. Do not fall through to Step 6a
+  or Step 7.
+- **Send them to a judge or SME for feedback** — enter Flow R1 with the exact
+  preselected sets as described below. Do not list all sets or ask the maker to
+  select them again.
+- **Keep them unchanged** — enter the **Four maker actions** menu from
+  `src/skills/evaluations/experience-contract.md` with the exact preselected
+  sets. Do not ask an implicit "push it now?" question for this handoff: the
+  deployment-flow rewrite removed the generic push-decision step, and
+  deployment now happens only through an explicitly selected named action.
+  Any deployment for these sets happens only if the maker explicitly chooses
+  **mark this test set ready for review** or **run this test set**, which then
+  follow Flow R1 or `run/SKILL.md` Flow A exactly as for any other set. If the
+  maker chooses neither, each preselected set finishes local-only, exactly
+  like any other set for which no push action was selected.
+
+These curator handoffs waive only the discovery or reselection steps explicitly
+identified above. They do not weaken mutation, synchronization, validation,
+review-state, promotion, dry-run, push, cleanup, or post-push requirements.
+When more than one set is preselected, repeat the applicable handoff
+independently per set: `evaluation_deployment.py` previews and deploys exactly
+one set per invocation, so a judge/SME or push action for multiple preselected
+sets runs its deployment-flow sequence once per set, never a single batched
+command.
+
 ### Review-state reconciliation
 
 Before showing any review-related next action, run
@@ -136,6 +178,13 @@ Before asking the user to tag a set, explain:
    generated set, or the active agent. A set is preselected only when the user
    explicitly names it (for example, "tag Compensation") or answers the
    create flow's scoped question about the generated sets.
+
+When Flow R1 is entered from the curator maker review gate, accept the exact
+generated workspace set folders as already preselected. Do not run
+`evaluation_review.py --list-all`, display unrelated sets, or ask the maker to
+select them again. Continue directly at step 5 for every preselected set,
+repeating steps 5 through 7 once per set.
+
 5. Follow `src/skills/evaluations/deployment-flow.md` before remote mutation.
    Native MinimalBot uses the existing insert API, with new-copy/old-copy
    behavior and its local-only review warning reported after deployment. The

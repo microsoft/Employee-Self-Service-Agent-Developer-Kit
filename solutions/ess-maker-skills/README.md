@@ -101,10 +101,13 @@ Catch and fix compile errors before they reach production. The `/scan` command a
 
 ### 📊 Generate Evaluation Test Sets
 
-Create Copilot Studio-native evaluation sets from configured agent topics, or
-generate catalogue-grounded starter sets for named ESS scenarios before an
-agent is configured. Each set produces synchronized `.mcs.yml` and CSV
-artifacts from the same test cases.
+Create evaluation test sets from three sources:
+
+- **Configured agent topics** — validate behavior already present in the active agent.
+- **Local knowledge source or connected knowledge base + agent instructions** — curate grounded knowledge and instruction-adherence tests through the vendored curator. The knowledge source can be local files/a folder or a connected knowledge base such as ServiceNow or SharePoint. For ServiceNow-backed curation, the kit resolves and searches the active Graph connection for a bounded ranked subset, then fetches selected full articles through ServiceNow MCP before grounding. ServiceNow MCP must already be configured through `/connect ServiceNow`; foundation `/setup` does not configure vendor MCP credentials.
+- **Bundled ESS catalogue** — seed tests for a named ESS scenario without configured topics or documents.
+
+All three sources produce native `.mcs.yml` plus CSV artifacts and use the existing review, push, run, and results lifecycle.
 
 - **Topic Triggering** — Verifies each topic fires on its trigger phrases plus paraphrased variants
 - **Responsible AI** — Standard guardrail tests for harmful, adversarial, and policy-bypass prompts
@@ -114,10 +117,11 @@ artifacts from the same test cases.
 - **Integration Data** — Validates external system data retrieval with placeholder-based expected responses
 - **General Knowledge** — Open-ended quality checks against loaded knowledge sources
 
-Catalogue-grounded sets are staged under `workspace/evaluations/`; configured
-agent sets live under the agent's `evaluations/` folder. New evaluation sets
-use **Compare Meaning** only and require an expected response for every prompt.
-Multi-turn generation is not supported by this single-response feature.
+Catalogue-grounded and knowledge-source-curated sets are staged under
+`workspace/evaluations/`; configured agent sets live under the agent's
+`evaluations/` folder. New evaluation sets use **Compare Meaning** only and
+require an expected response for every prompt. Multi-turn generation is not
+supported by this single-response feature.
 
 Generated previews show full prompts and expected responses, with separate
 in-scope and out-of-scope sections and a downloadable CSV. Returning to an
@@ -418,6 +422,13 @@ The kit also includes a local ServiceNow MCP server (`src/mcp/servicenow/`) for 
 
 Not configured automatically by ADK.
 
+Knowledge-source evaluation curation uses this MCP server only after the kit
+resolves and searches the active Graph connection for the agent's
+ServiceNow-backed knowledge source. Run `/connect ServiceNow` first so the
+ServiceNow MCP server and vendor credentials are already configured.
+Foundation `/setup` connects the Maker Kit workspace to the agent; it does not
+configure vendor MCP credentials.
+
 ---
 
 ## Getting Started
@@ -629,4 +640,4 @@ This project is licensed under the [MIT License](https://github.com/microsoft/Em
 
 ## Trademarks
 
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft trademarks or logos is subject to and must follow [Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general). Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship. Any use of third-party trademarks or logos are subject to those third-party's policies.
+This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft trademarks or logos is subject to and must follow [Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general). Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship. Any use of third-party trademarks or logos are subject to those third-party's policies.

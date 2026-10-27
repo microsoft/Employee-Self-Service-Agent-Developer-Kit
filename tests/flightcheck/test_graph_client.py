@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from flightcheck import graph_client
+from tests.mocks import graph as graph_mocks
 
 
 @pytest.fixture(autouse=True)
@@ -42,8 +43,14 @@ def _fake_app(*, accounts, silent_result):
 def _resp(status_code, payload=None):
     r = MagicMock()
     r.status_code = status_code
-    r.json.return_value = payload or {}
+    r.json.return_value = payload if payload is not None else {}
     return r
+
+
+def _authenticated_client():
+    client = graph_client.GraphClient("tenant-Z")
+    client._token = "tok"
+    return client
 
 
 def test_empty_tenant_id_returns_empty():
@@ -100,6 +107,77 @@ def test_authenticate_uses_preferred_cached_account(monkeypatch):
     assert client_ids == [graph_client.GRAPH_CLIENT_ID]
     assert requested_scopes == [graph_client.GRAPH_SCOPES]
     assert client.signed_in_username == "Maker@Example.com"
+
+
+def test_authenticate_default_scopes_exclude_search_scopes(monkeypatch):
+    """Regression for PR #358: with no ``extra_scopes``, only GRAPH_SCOPES
+    are requested — SEARCH_SCOPES must never be bundled in by default."""
+    requested_scopes = []
+
+    class FakeCache:
+        has_state_changed = False
+
+    class FakeApp:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_accounts(self):
+            return []
+
+        def acquire_token_silent(self, scopes, account):
+            raise AssertionError("no cached account should attempt silent auth")
+
+        def acquire_token_interactive(self, scopes, **kwargs):
+            requested_scopes.append(scopes)
+            return {"access_token": "tok"}
+
+    monkeypatch.setattr(graph_client.msal, "SerializableTokenCache", FakeCache)
+    monkeypatch.setattr(graph_client.msal, "PublicClientApplication", FakeApp)
+
+    client = graph_client.GraphClient("organizations")
+    client.authenticate()
+
+    assert requested_scopes == [graph_client.GRAPH_SCOPES]
+    for scope in graph_client.SEARCH_SCOPES:
+        assert scope not in requested_scopes[0]
+
+
+def test_authenticate_extra_scopes_includes_search_scopes(monkeypatch):
+    """Callers that pass ``extra_scopes=SEARCH_SCOPES`` (e.g. connected-KB
+    search) must get both GRAPH_SCOPES and SEARCH_SCOPES in the requested
+    scope list, whichever MSAL acquisition path (silent or interactive)
+    ends up being used."""
+    requested_scopes = []
+
+    class FakeCache:
+        has_state_changed = False
+
+    class FakeApp:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_accounts(self):
+            return [{"username": "maker@example.com"}]
+
+        def acquire_token_silent(self, scopes, account):
+            requested_scopes.append(scopes)
+            return {"access_token": "silent-token"}
+
+        def acquire_token_interactive(self, scopes, **kwargs):
+            raise AssertionError("silent auth should have succeeded")
+
+    monkeypatch.setattr(graph_client.msal, "SerializableTokenCache", FakeCache)
+    monkeypatch.setattr(graph_client.msal, "PublicClientApplication", FakeApp)
+
+    client = graph_client.GraphClient("organizations")
+    token = client.authenticate(extra_scopes=graph_client.SEARCH_SCOPES)
+
+    assert token == "silent-token"
+    assert len(requested_scopes) == 1
+    for scope in graph_client.GRAPH_SCOPES:
+        assert scope in requested_scopes[0]
+    for scope in graph_client.SEARCH_SCOPES:
+        assert scope in requested_scopes[0]
 
 
 def test_interactive_auth_does_not_reuse_stale_cached_identity(monkeypatch):
@@ -279,3 +357,132 @@ def test_me_fallback_missing_company_name_returns_empty():
     with patch.object(graph_client.msal, "PublicClientApplication", return_value=app), \
          patch.object(graph_client.requests, "get", return_value=_resp(200, {})):
         assert graph_client.resolve_tenant_display_name_silent("tenant-Z") == ""
+
+
+def test_external_item_scope_is_requested():
+    # ExternalItem.Read.All is admin-consent and only needed by the
+    # connected-KB search path, so it lives in SEARCH_SCOPES, not the
+    # default GRAPH_SCOPES every FlightCheck Graph check requests.
+    assert (
+        "https://graph.microsoft.com/ExternalItem.Read.All"
+        in graph_client.SEARCH_SCOPES
+    )
+    assert (
+        "https://graph.microsoft.com/ExternalItem.Read.All"
+        not in graph_client.GRAPH_SCOPES
+    )
+
+
+def test_default_search_hit_uses_external_item_properties():
+    resource = graph_mocks.search_hit()["resource"]
+
+    assert resource == {
+        "@odata.type": "#microsoft.graph.externalConnectors.externalItem",
+        "id": "KB0001001",
+        "properties": {
+            "title": "Parental leave",
+            "url": "https://example.invalid/kb/KB0001001",
+        },
+    }
+
+
+def test_search_external_items_posts_expected_json_without_fields():
+    payload = graph_mocks.external_item_search_response()
+    response = _resp(200, payload)
+    client = _authenticated_client()
+
+    with patch.object(graph_client._SESSION, "post", return_value=response) as post:
+        result = client.search_external_items(
+            "  ServiceNowKB48  ",
+            "  parental leave  ",
+            size=12,
+        )
+
+    assert result == payload
+    post.assert_called_once_with(
+        "https://graph.microsoft.com/v1.0/search/query",
+        headers={**client.headers, "Content-Type": "application/json"},
+        json={
+            "requests": [
+                {
+                    "entityTypes": ["externalItem"],
+                    "contentSources": ["/external/connections/ServiceNowKB48"],
+                    "query": {"queryString": "parental leave"},
+                    "from": 0,
+                    "size": 12,
+                }
+            ]
+        },
+        timeout=30,
+    )
+
+
+def test_search_external_items_posts_fields_when_provided():
+    response = _resp(200, graph_mocks.external_item_search_response())
+
+    with patch.object(graph_client._SESSION, "post", return_value=response) as post:
+        _authenticated_client().search_external_items(
+            "ServiceNowKB48",
+            "benefits",
+            fields=["title", "url"],
+        )
+
+    request = post.call_args.kwargs["json"]["requests"][0]
+    assert request["size"] == 20
+    assert request["fields"] == ["title", "url"]
+
+
+@pytest.mark.parametrize("connection_id", ["", "   ", None])
+def test_search_external_items_rejects_empty_connection_id(connection_id):
+    with pytest.raises(ValueError, match="connection_id"):
+        _authenticated_client().search_external_items(connection_id, "benefits")
+
+
+@pytest.mark.parametrize("query", ["", "   ", None])
+def test_search_external_items_rejects_empty_query(query):
+    with pytest.raises(ValueError, match="query"):
+        _authenticated_client().search_external_items("ServiceNowKB48", query)
+
+
+@pytest.mark.parametrize("size", [0, 101, None, 1.5])
+def test_search_external_items_rejects_invalid_size(size):
+    with pytest.raises(ValueError, match="size"):
+        _authenticated_client().search_external_items(
+            "ServiceNowKB48", "benefits", size=size
+        )
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_search_external_items_returns_permission_sentinel(status):
+    response = _resp(status, {"error": {"code": "Authorization_RequestDenied"}})
+
+    with patch.object(graph_client._SESSION, "post", return_value=response):
+        result = _authenticated_client().search_external_items(
+            "ServiceNowKB48", "benefits"
+        )
+
+    assert result == {"_error": "insufficient_permissions", "_status": status}
+    response.raise_for_status.assert_not_called()
+
+
+def test_search_external_items_rejects_non_dict_json():
+    response = _resp(200, [])
+
+    with patch.object(graph_client._SESSION, "post", return_value=response):
+        with pytest.raises(ValueError, match="JSON object"):
+            _authenticated_client().search_external_items(
+                "ServiceNowKB48", "benefits"
+            )
+
+
+def test_search_external_items_raises_for_other_http_failures():
+    response = _resp(500, {"error": {"code": "InternalServerError"}})
+    response.raise_for_status.side_effect = RuntimeError("HTTP 500")
+
+    with patch.object(graph_client._SESSION, "post", return_value=response):
+        with pytest.raises(RuntimeError, match="HTTP 500"):
+            _authenticated_client().search_external_items(
+                "ServiceNowKB48", "benefits"
+            )
+
+    response.raise_for_status.assert_called_once_with()

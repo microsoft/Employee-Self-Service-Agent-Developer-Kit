@@ -997,6 +997,88 @@ MOCK_EXTERNAL_CONNECTION_NAME = "Mock ServiceNow Knowledge Connector"
 MOCK_GALLERY_CONNECTOR_ID = "serviceNowKnowledge"
 
 
+def search_hit(
+    *,
+    content_source: str = f"/external/connections/{MOCK_EXTERNAL_CONNECTION_ID}",
+    hit_id: str = "KB0001001",
+    rank: int = 1,
+    summary: str = "Parental leave benefits and eligibility.",
+    resource: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a Microsoft Search ``searchHit`` for an external item.
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+      Search API: https://learn.microsoft.com/graph/api/search-query
+      searchHit: https://learn.microsoft.com/graph/api/resources/searchhit
+      searchHitsContainer:
+        https://learn.microsoft.com/graph/api/resources/searchhitscontainer
+
+      Verified response fields:
+        contentSource (Edm.String), hitId (Edm.String), rank (Edm.Int32),
+        summary (Edm.String), resource (microsoft.graph.entity).
+    """
+    return {
+        "contentSource": content_source,
+        "hitId": hit_id,
+        "rank": rank,
+        "summary": summary,
+        "resource": (
+            dict(resource)
+            if resource is not None
+            else {
+                "@odata.type": "#microsoft.graph.externalConnectors.externalItem",
+                "id": hit_id,
+                "properties": {
+                    "title": "Parental leave",
+                    "url": f"https://example.invalid/kb/{hit_id}",
+                },
+            }
+        ),
+    }
+
+
+def external_item_search_response(
+    *,
+    hits: Iterable[Mapping[str, Any]] | None = None,
+    search_terms: Iterable[str] | None = None,
+    total: int | None = None,
+    more_results_available: bool = False,
+) -> dict[str, Any]:
+    """Build the response body for POST /v1.0/search/query.
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+      Search API: https://learn.microsoft.com/graph/api/search-query
+      searchHit: https://learn.microsoft.com/graph/api/resources/searchhit
+      searchHitsContainer:
+        https://learn.microsoft.com/graph/api/resources/searchhitscontainer
+
+      Verified shape:
+        value[] -> searchTerms, hitsContainers[] -> hits[], total,
+        moreResultsAvailable.
+    """
+    hit_list = [
+        dict(hit) for hit in (hits if hits is not None else [search_hit()])
+    ]
+    return {
+        "value": [
+            {
+                "searchTerms": list(
+                    search_terms if search_terms is not None else ["parental", "leave"]
+                ),
+                "hitsContainers": [
+                    {
+                        "hits": hit_list,
+                        "total": len(hit_list) if total is None else total,
+                        "moreResultsAvailable": more_results_available,
+                    }
+                ],
+            }
+        ]
+    }
+
+
 def external_connection(
     *,
     connection_id: str = MOCK_EXTERNAL_CONNECTION_ID,

@@ -70,6 +70,10 @@ verified against the public CSDL at
 
 from __future__ import annotations
 
+from ..graph_connection_resolver import (
+    GraphConnectionResolutionError,
+    resolve_graph_connection,
+)
 from ..runner import CheckResult, Priority, Role, Status
 
 DOC_BASE = "https://learn.microsoft.com/graph/api"
@@ -92,6 +96,20 @@ ESS_KNOWN_ISSUES_DOC = (
 # A connection in any of these states is not actively serving search
 # results — see externalConnectors.connectionState in the Graph CSDL.
 _NON_READY_STATES = {"draft", "obsolete", "limitexceeded"}
+
+
+class _ListedConnectionsGraph:
+    """Reuse the check's tenant-wide list call across source resolutions."""
+
+    def __init__(self, graph, connections: list) -> None:
+        self._graph = graph
+        self._connections = connections
+
+    def get_external_connections(self) -> list:
+        return self._connections
+
+    def get_external_connection(self, reference: str) -> dict:
+        return self._graph.get_external_connection(reference)
 
 
 def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
@@ -180,8 +198,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
     # connector below — the per-source check will surface the right
     # error (insufficient_permissions vs. not_found).
 
-    by_id = {c.get("id"): c for c in connections if isinstance(c, dict) and c.get("id")}
-    by_name = {c.get("name"): c for c in connections if isinstance(c, dict) and c.get("name")}
+    resolution_graph = _ListedConnectionsGraph(graph, connections)
 
     # ---- EXT-002 summary ----
     failed: list[str] = []
@@ -227,28 +244,10 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
             ))
             continue
 
-        # Try the most-likely-to-match strategies in order:
-        #   1. The reference is the connector id (per externalConnection
-        #      schema, id is admin-assigned and unique within tenant).
-        #   2. The reference is the connector display name.
-        #   3. Targeted GET /external/connections/{id} (covers connectors
-        #      not returned by the list-call due to paging).
-        connection = by_id.get(ref) or by_name.get(ref)
-        if not connection:
-            try:
-                fetched = graph.get_external_connection(ref)
-            except Exception as e:
-                failed.append(display)
-                results.append(CheckResult(roles=[Role.M365_ADMIN.value],
-                    checkpoint_id=cid,
-                    category="Graph Connector KB",
-                    priority=Priority.HIGH.value,
-                    status=Status.WARNING.value,
-                    description=f"Graph Connector: {display}",
-                    result=f"Unable to fetch connection '{ref}': {e}",
-                ))
-                continue
-            if isinstance(fetched, dict) and fetched.get("_status") == 404:
+        try:
+            resolved = resolve_graph_connection(resolution_graph, ref)
+        except GraphConnectionResolutionError as e:
+            if e.reason == "not_found":
                 failed.append(display)
                 results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                     checkpoint_id=cid,
@@ -269,7 +268,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
                     doc_link=f"{DOC_BASE}/externalconnectors-externalconnection-get",
                 ))
                 continue
-            if isinstance(fetched, dict) and fetched.get("_status") in (401, 403):
+            if e.reason == "insufficient_permissions":
                 warned.append(display)
                 results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                     checkpoint_id=cid,
@@ -288,11 +287,32 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
                     ),
                 ))
                 continue
-            connection = fetched
+            failed.append(display)
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
+                checkpoint_id=cid,
+                category="Graph Connector KB",
+                priority=Priority.HIGH.value,
+                status=Status.WARNING.value,
+                description=f"Graph Connector: {display}",
+                result=f"Unable to fetch connection '{ref}': {e}",
+            ))
+            continue
+        except Exception as e:
+            failed.append(display)
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
+                checkpoint_id=cid,
+                category="Graph Connector KB",
+                priority=Priority.HIGH.value,
+                status=Status.WARNING.value,
+                description=f"Graph Connector: {display}",
+                result=f"Unable to fetch connection '{ref}': {e}",
+            ))
+            continue
 
         # We have a connection object — validate its state + last op.
+        connection = resolved.connection
         state = (connection.get("state") or "").strip().lower()
-        connection_id = connection.get("id") or ref
+        connection_id = resolved.connection_id
         connection_name = connection.get("name") or display
 
         if state in _NON_READY_STATES:

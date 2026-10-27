@@ -10,6 +10,11 @@ coverage copy, method admission, the complete case preview, and four maker
 actions. Explicit evaluation push remains available through
 `src/skills/evaluations/deployment-flow.md`.
 
+> **Scope boundary:** This skill remains **configured-topic-grounded**. It must not absorb the
+> document-grounding/curator workflow or read user-supplied document folders.
+> Route that request to the dedicated curator path instead; do not duplicate
+> curator rules here.
+
 ## Rules
 
 - ALWAYS read `.local/config.json` to get the agent folder name and slug.

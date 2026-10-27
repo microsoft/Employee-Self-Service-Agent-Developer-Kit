@@ -16,6 +16,10 @@ It produces two artifacts per set from the same cases:
 > they are pushed or deployed is the **host's** concern, not this skill's — this
 > skill never pushes. Run and Request Review delegate to the host's selected-set
 > deployment flow after the user chooses an action.
+>
+> This skill remains **bundled-catalogue-only**. It must not handle user-supplied document folders.
+> Document-grounded generation belongs to the separate curator workflow; do not
+> duplicate that workflow or its rules here.
 
 ## Rules
 

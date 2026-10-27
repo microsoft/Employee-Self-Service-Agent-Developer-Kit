@@ -56,6 +56,22 @@ GRAPH_SCOPES = [
     "https://graph.microsoft.com/ExternalConnection.Read.All",
 ]
 
+# Microsoft Search requires delegated ExternalItem.Read.All when querying
+# externalItem content. See the official Search API permissions table:
+# https://learn.microsoft.com/graph/api/search-query#permissions
+#
+# Kept out of GRAPH_SCOPES: it's an admin-consent scope, and bundling it into
+# the default scope set would make every authenticate() caller request it —
+# including unrelated FlightCheck Graph checks that never call
+# search_external_items(). Tenants that had already consented the existing
+# read-only scopes could then see new consent prompts/failures for a
+# permission their FlightCheck checks don't use. Callers that actually need
+# connected-KB search (e.g. search_connected_kb.py) pass this via
+# ``authenticate(extra_scopes=SEARCH_SCOPES)``.
+SEARCH_SCOPES = [
+    "https://graph.microsoft.com/ExternalItem.Read.All",
+]
+
 # Wall-clock ceiling for the two silent lookups called from the interactive
 # auth hot path (``resolve_tenant_display_name_silent`` → /organization then
 # /me). Kept small — the sign-in critical path must not stall on a
@@ -282,10 +298,36 @@ def _try_me_company_name_lookup(app, account) -> str:
         return ""
 
 
+def _select_cached_account(accounts: list, preferred_username: str | None):
+    """Pick the cached account matching preferred_username, or the only
+    available account when no preference was given. Returns None when a
+    preference was given but doesn't match any cached account — this must
+    fall through to interactive auth rather than silently reusing a
+    different cached identity.
+    """
+    preferred = str(preferred_username or "").casefold()
+    if preferred:
+        return next(
+            (
+                account for account in accounts
+                if str(account.get("username") or "").casefold() == preferred
+            ),
+            None,
+        )
+    return accounts[0] if accounts else None
+
+
 class GraphClient:
     """Lightweight Microsoft Graph client with MSAL interactive auth."""
 
     def __init__(self, tenant_id: str, *, strict_reads: bool = False):
+        """Create a client bound to ``tenant_id``.
+
+        ``strict_reads`` toggles ``get``/``get_all``'s error handling: when
+        False (default) a 401/403 degrades to a sentinel value (``{"_error":
+        ...}`` or partial results); when True the same conditions raise
+        instead, for callers that must not silently treat "denied" as "empty".
+        """
         self.tenant_id = tenant_id
         self.strict_reads = strict_reads
         self._token: str | None = None
@@ -293,9 +335,17 @@ class GraphClient:
 
     def authenticate(
         self,
+        extra_scopes: list[str] | None = None,
         preferred_username: str | None = None,
     ) -> str:
-        """Acquire a Graph access token, reusing the shared MSAL cache."""
+        """Acquire a Graph access token, reusing the shared MSAL cache.
+
+        ``extra_scopes`` lets a specific call site (e.g. connected-KB search)
+        request additional admin-consent scopes beyond the default
+        ``GRAPH_SCOPES``, without bundling them into every FlightCheck Graph
+        check's token request. See ``SEARCH_SCOPES`` for the rationale.
+        """
+        scopes = GRAPH_SCOPES + list(extra_scopes) if extra_scopes else GRAPH_SCOPES
         authority = f"https://login.microsoftonline.com/{self.tenant_id}"
         cache = msal.SerializableTokenCache()
         cache_path = os.path.join(".local", ".token_cache.bin")
@@ -310,19 +360,11 @@ class GraphClient:
 
         # Try silent first
         accounts = app.get_accounts()
-        preferred = str(preferred_username or "").casefold()
-        selected_account = next(
-            (
-                account for account in accounts
-                if str(account.get("username") or "").casefold()
-                == preferred
-            ),
-            accounts[0] if accounts and not preferred else None,
-        )
+        selected_account = _select_cached_account(accounts, preferred_username)
         result = None
         if selected_account is not None:
             result = app.acquire_token_silent(
-                GRAPH_SCOPES,
+                scopes,
                 account=selected_account,
             )
 
@@ -333,7 +375,7 @@ class GraphClient:
             if preferred_username:
                 interactive_options["login_hint"] = preferred_username
             result = app.acquire_token_interactive(
-                GRAPH_SCOPES,
+                scopes,
                 **interactive_options,
             )
 
@@ -691,6 +733,56 @@ class GraphClient:
         operation to detect silent crawl failures.
         """
         return self.get_all(f"/external/connections/{connection_id}/operations")
+
+    def search_external_items(
+        self,
+        connection_id: str,
+        query: str,
+        *,
+        size: int = 20,
+        fields: list[str] | None = None,
+    ) -> dict:
+        """Search external items in one exact Graph external connection.
+
+        POST /v1.0/search/query.
+        See https://learn.microsoft.com/graph/api/search-query.
+        """
+        if not isinstance(connection_id, str) or not connection_id.strip():
+            raise ValueError("connection_id must be a non-empty string")
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query must be a non-empty string")
+        if not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 100:
+            raise ValueError("size must be an integer between 1 and 100")
+
+        search_request: dict = {
+            "entityTypes": ["externalItem"],
+            "contentSources": [
+                f"/external/connections/{connection_id.strip()}"
+            ],
+            "query": {"queryString": query.strip()},
+            "from": 0,
+            "size": size,
+        }
+        if fields is not None:
+            search_request["fields"] = fields
+
+        headers = {**self.headers, "Content-Type": "application/json"}
+        resp = _SESSION.post(
+            f"{GRAPH_BASE}/search/query",
+            headers=headers,
+            json={"requests": [search_request]},
+            timeout=30,
+        )
+        if resp.status_code in (401, 403):
+            return {
+                "_error": "insufficient_permissions",
+                "_status": resp.status_code,
+            }
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, dict):
+            raise ValueError("Microsoft Search response must be a JSON object")
+        return data
 
     def get_claims_mapping_policies(self, service_principal_id: str) -> list:
         """List claimsMappingPolicy objects assigned to a service principal.
