@@ -28,7 +28,7 @@ just the standing portal."
 | 13 | Rule 4 negative — HR-adjacent but in-scope question | "I'm a contractor and need Copilot access approved by my manager" | KB9000015 (Copilot access — contractor), single cluster | Answer directly (sponsor-manager approval required, submit ServiceNow request citing "Copilot - Contractor Provisioning", 3-5 business days) — stays in scope because an IT source is responsive, despite "manager approval" sounding HR-adjacent. |
 | 14 | Rule 1 negative — opening message states subject, single cluster | "I want to open a ticket, I can't get Adobe Creative Cloud approved for my role" | KB9000017, single cluster | Skip the "describe the issue" question (subject stated) and answer directly from KB9000017 (submit ServiceNow software request with manager approval and justification, ~2-3 business days). |
 
-## Cases sourced from real UAT feedback (Gold Prompt validation, tester: Liliana Martinez)
+## Cases sourced from real UAT feedback (Gold Prompt validation, tester: UAT reviewer)
 
 These cases come from an actual UAT test pass — **against the pre-update "Gold Prompt," not this
 repo's revised `dupont-ess-it-agent-prompt.md`** — so they are a real-world failure census, not a
