@@ -29,6 +29,15 @@ beginDialog:
 
   actions:
     - kind: BeginDialog
+      id: GlRaX3
+      displayName: Check user access
+      input:
+        binding:
+          EmployeeName: =Topic.EmployeeName
+
+      dialog: msdyn_copilotforemployeeselfservicehr.topic.WorkdaySystemAccessCheck
+
+    - kind: BeginDialog
       id: 3bFDxH
       displayName: Redirect to Workday System Get Common Execution
       input:
