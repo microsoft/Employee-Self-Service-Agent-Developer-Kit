@@ -892,14 +892,30 @@ def _buffer_prepend(envelopes: list[dict[str, Any]]) -> bool:
     return _buffer_store(envelopes, prepend=True)
 
 
+def _buffer_append_pending(
+    envelopes: list[dict[str, Any]],
+    prerequisite: dict[str, Any],
+) -> bool:
+    return _buffer_store(
+        envelopes,
+        prepend=False,
+        prerequisite=prerequisite,
+    )
+
+
 def _buffer_store(
     envelopes: list[dict[str, Any]],
     *,
     prepend: bool,
+    prerequisite: dict[str, Any] | None = None,
 ) -> bool:
     try:
         with _file_lock(BUFFER_PATH + ".lock"):
-            return _buffer_store_locked(envelopes, prepend=prepend)
+            return _buffer_store_locked(
+                envelopes,
+                prepend=prepend,
+                prerequisite=prerequisite,
+            )
     except OSError:
         return False
 
@@ -908,12 +924,21 @@ def _buffer_store_locked(
     envelopes: list[dict[str, Any]],
     *,
     prepend: bool,
+    prerequisite: dict[str, Any] | None = None,
 ) -> bool:
     with _BUFFER_LOCK:
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
             existing = _read_buffer_lines(BUFFER_PATH)
-            new_lines = [json.dumps(e, separators=(",", ":")) for e in envelopes]
+            new_lines = []
+            for envelope in envelopes:
+                record: dict[str, Any] = envelope
+                if prerequisite is not None:
+                    record = {
+                        "envelope": envelope,
+                        "requiresSessionStart": prerequisite,
+                    }
+                new_lines.append(json.dumps(record, separators=(",", ":")))
             combined = (
                 new_lines + existing if prepend else existing + new_lines
             )
@@ -929,18 +954,53 @@ def _buffer_store_locked(
             return False
 
 
+def _decode_buffer_line(line: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    record = json.loads(line)
+    if (
+        isinstance(record, dict)
+        and isinstance(record.get("envelope"), dict)
+        and isinstance(record.get("requiresSessionStart"), dict)
+    ):
+        return record["envelope"], record["requiresSessionStart"]
+    return record, None
+
+
+def _buffer_prerequisite_satisfied(prerequisite: dict[str, Any] | None) -> bool:
+    if prerequisite is None:
+        return True
+    sessions = _read_sessions()
+    entry = sessions.get(prerequisite.get("surface"))
+    return bool(
+        isinstance(entry, dict)
+        and entry.get("id") == prerequisite.get("session_id")
+        and prerequisite.get("context") in entry.get("started_contexts", [])
+    )
+
+
+def _read_flush_claim(path: str) -> dict[str, Any] | None:
+    try:
+        with open(path, "r", encoding="utf-8") as stream:
+            claim = json.load(stream)
+        return claim if isinstance(claim, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
 def _buffer_flush(ikey: str) -> bool:
     """Flush one detached snapshot; return whether no queued work remains."""
-    sending_path = BUFFER_PATH + ".sending"
-    claimed = False
+    claim_path = BUFFER_PATH + ".sending.claim"
+    token = ""
+    sending_path = ""
     try:
         with _file_lock(BUFFER_PATH + ".lock"):
             with _BUFFER_LOCK:
-                if os.path.exists(sending_path):
-                    age = time.time() - os.path.getmtime(sending_path)
-                    if age <= BUFFER_SENDING_STALE_SECS:
+                claim = _read_flush_claim(claim_path)
+                if claim is not None:
+                    claimed_at = float(claim.get("claimed_at", 0) or 0)
+                    if time.time() - claimed_at <= BUFFER_SENDING_STALE_SECS:
                         return False
-                    stranded = _read_buffer_lines(sending_path)
+                    stale_path = str(claim.get("path", ""))
+                    stranded = _read_buffer_lines(stale_path) if stale_path else []
                     active = _read_buffer_lines(BUFFER_PATH)
                     _write_buffer_lines(
                         BUFFER_PATH,
@@ -949,15 +1009,49 @@ def _buffer_flush(ikey: str) -> bool:
                             preserve_prefix=len(stranded),
                         ),
                     )
-                    os.remove(sending_path)
-                if not os.path.exists(BUFFER_PATH):
+                    if stale_path:
+                        try:
+                            os.remove(stale_path)
+                        except FileNotFoundError:
+                            pass
+                    try:
+                        os.remove(claim_path)
+                    except FileNotFoundError:
+                        pass
+
+                active = _read_buffer_lines(BUFFER_PATH)
+                if not active:
                     return True
-                os.replace(BUFFER_PATH, sending_path)
-                claimed = True
+                eligible = []
+                waiting = []
+                for line in active:
+                    try:
+                        _envelope, prerequisite = _decode_buffer_line(line)
+                    except (TypeError, ValueError):
+                        eligible.append(line)
+                        continue
+                    if _buffer_prerequisite_satisfied(prerequisite):
+                        eligible.append(line)
+                    else:
+                        waiting.append(line)
+                if not eligible:
+                    return False
+
+                token = uuid.uuid4().hex
+                sending_path = f"{BUFFER_PATH}.sending.{token}"
+                _write_buffer_lines(sending_path, eligible)
+                with open(claim_path, "w", encoding="utf-8") as stream:
+                    json.dump(
+                        {
+                            "token": token,
+                            "path": sending_path,
+                            "claimed_at": time.time(),
+                        },
+                        stream,
+                    )
+                _write_buffer_lines(BUFFER_PATH, waiting)
     except OSError:
         return False
-    if not claimed:
-        return True
 
     sent = False
     try:
@@ -965,7 +1059,8 @@ def _buffer_flush(ikey: str) -> bool:
         if not lines:
             sent = True
         else:
-            sent = _fc._post(ikey, [json.loads(line) for line in lines]) in (200, 204)
+            envelopes = [_decode_buffer_line(line)[0] for line in lines]
+            sent = _fc._post(ikey, envelopes) in (200, 204)
     except (OSError, ValueError):
         sent = False
     except Exception:  # noqa: BLE001 — flush is best-effort, never raises
@@ -974,9 +1069,16 @@ def _buffer_flush(ikey: str) -> bool:
     try:
         with _file_lock(BUFFER_PATH + ".lock"):
             with _BUFFER_LOCK:
+                claim = _read_flush_claim(claim_path)
+                if claim is None or claim.get("token") != token:
+                    return False
                 if sent:
                     try:
                         os.remove(sending_path)
+                    except FileNotFoundError:
+                        pass
+                    try:
+                        os.remove(claim_path)
                     except FileNotFoundError:
                         pass
                     return not os.path.exists(BUFFER_PATH)
@@ -991,6 +1093,10 @@ def _buffer_flush(ikey: str) -> bool:
                 )
                 try:
                     os.remove(sending_path)
+                except FileNotFoundError:
+                    pass
+                try:
+                    os.remove(claim_path)
                 except FileNotFoundError:
                     pass
     except OSError:
@@ -1113,8 +1219,8 @@ def _finish_session_start(
             _write_sessions(sessions)
 
 
-def _ensure_session_started(data: dict[str, Any]) -> dict[str, Any]:
-    """Record a start independently of when the session ID was allocated."""
+def _prepare_session_start(data: dict[str, Any]) -> dict[str, Any]:
+    """Reserve or identify the start required by ``data`` without network I/O."""
     surface = data["surface"]
     sid = data["session_id"]
     # The session file is user-global, while dashboards separate installs,
@@ -1123,6 +1229,11 @@ def _ensure_session_started(data: dict[str, Any]) -> dict[str, Any]:
         data["instance_id"], data["tenant_id"], data["agent_type"],
         _fc.envelope_ikey(resolve_ikey()[0]),
     ]
+    prerequisite = {
+        "surface": surface,
+        "session_id": sid,
+        "context": context,
+    }
     reservation = _reserve_session_start(surface, sid, context)
     if reservation == "started":
         return {"sent": False, "reason": "existing-session", "session_id": sid}
@@ -1133,6 +1244,7 @@ def _ensure_session_started(data: dict[str, Any]) -> dict[str, Any]:
             "pending": True,
             "reason": "pending-session-start",
             "session_id": sid,
+            "prerequisite": prerequisite,
         }
 
     start_data = common_dimensions(
@@ -1145,29 +1257,109 @@ def _ensure_session_started(data: dict[str, Any]) -> dict[str, Any]:
     for field in start_data:
         if field in data:
             start_data[field] = data[field]
-    result = _post_event_sync(
-        EVENT_SESSION_START,
-        start_data,
-        flush_buffer=False,
-        prepend_on_failure=True,
-    )
+    return {
+        "sent": False,
+        "owner": True,
+        "reason": "reserved-session-start",
+        "session_id": sid,
+        "surface": surface,
+        "context": context,
+        "prerequisite": prerequisite,
+        "start_data": start_data,
+    }
+
+
+def _complete_session_start(
+    preparation: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
     recorded = bool(result["sent"] or result.get("buffered"))
-    _finish_session_start(surface, sid, context, recorded=recorded)
+    _finish_session_start(
+        preparation["surface"],
+        preparation["session_id"],
+        preparation["context"],
+        recorded=recorded,
+    )
     if result["sent"]:
         _buffer_flush(resolve_ikey()[0])
-    return result
+
+
+def _post_ordered_events_sync(
+    events: list[tuple[str, dict[str, Any]]],
+    *,
+    result_event: str,
+    reported_events: int,
+) -> dict[str, Any]:
+    if not telemetry_enabled():
+        return {"sent": False, "events": 0, "status": None, "reason": "disabled"}
+    try:
+        ikey, env = resolve_ikey()
+        envelopes = []
+        for event_name, event_data in events:
+            data = dict(event_data)
+            data.setdefault("env", env)
+            envelopes.append(
+                build_event(event_name, data, _fc.envelope_ikey(ikey))
+            )
+        if not _buffer_flush(ikey):
+            buffered = _buffer_prepend(envelopes)
+            return {
+                "sent": False,
+                "events": 0,
+                "status": None,
+                "env": env,
+                "event": result_event,
+                "buffered": buffered,
+                "reason": "buffer-pending",
+            }
+        status = _fc._post(ikey, envelopes)
+        ok = status in (200, 204)
+        buffered = not ok and _buffer_prepend(envelopes)
+        return {
+            "sent": ok,
+            "events": reported_events if ok else 0,
+            "status": status,
+            "env": env,
+            "event": result_event,
+            "buffered": buffered,
+            "reason": "ok" if ok else f"http {status}",
+        }
+    except Exception as e:  # noqa: BLE001 — telemetry must never break a skill
+        buffered = False
+        try:
+            ikey, env = resolve_ikey()
+            envelopes = []
+            for event_name, event_data in events:
+                data = dict(event_data)
+                data.setdefault("env", env)
+                envelopes.append(
+                    build_event(event_name, data, _fc.envelope_ikey(ikey))
+                )
+            buffered = _buffer_prepend(envelopes)
+        except Exception:  # noqa: BLE001
+            pass
+        return {
+            "sent": False,
+            "events": 0,
+            "status": None,
+            "event": result_event,
+            "buffered": buffered,
+            "reason": f"{type(e).__name__}: {e}",
+        }
 
 
 def _buffer_event_sync(
     event_name: str,
     data: dict[str, Any],
+    prerequisite: dict[str, Any],
 ) -> dict[str, Any]:
     try:
         ikey, env = resolve_ikey()
         buffered_data = dict(data)
         buffered_data.setdefault("env", env)
-        buffered = _buffer_append(
-            [build_event(event_name, buffered_data, _fc.envelope_ikey(ikey))]
+        buffered = _buffer_append_pending(
+            [build_event(event_name, buffered_data, _fc.envelope_ikey(ikey))],
+            prerequisite,
         )
         return {
             "sent": False,
@@ -1194,16 +1386,39 @@ def _emit_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
         return {"sent": False, "events": 0, "status": None, "reason": "disabled"}
     if data.get("session_id"):
         try:
-            start_result = _ensure_session_started(data)
+            start_result = _prepare_session_start(data)
         except Exception as e:  # noqa: BLE001 — preserve fail-open emission
             start_result = {
                 "sent": False, "events": 0, "status": None,
                 "reason": f"{type(e).__name__}: {e}",
             }
         if event_name == EVENT_SESSION_START:
+            if start_result.get("owner"):
+                result = _post_ordered_events_sync(
+                    [(EVENT_SESSION_START, start_result["start_data"])],
+                    result_event=EVENT_SESSION_START,
+                    reported_events=1,
+                )
+                _complete_session_start(start_result, result)
+                return result
             return start_result
         if start_result.get("pending"):
-            return _buffer_event_sync(event_name, data)
+            return _buffer_event_sync(
+                event_name,
+                data,
+                start_result["prerequisite"],
+            )
+        if start_result.get("owner"):
+            result = _post_ordered_events_sync(
+                [
+                    (EVENT_SESSION_START, start_result["start_data"]),
+                    (event_name, data),
+                ],
+                result_event=event_name,
+                reported_events=1,
+            )
+            _complete_session_start(start_result, result)
+            return result
         if (
             not start_result["sent"]
             and not start_result.get("buffered")
@@ -1246,9 +1461,22 @@ def _emit_many_sync(event_name: str, rows: list[dict[str, Any]]) -> dict[str, An
     try:
         start_result = None
         if rows and rows[0].get("session_id"):
-            start_result = _ensure_session_started(rows[0])
+            start_result = _prepare_session_start(rows[0])
             if start_result.get("pending"):
-                return _buffer_many_sync(event_name, rows)
+                return _buffer_many_sync(
+                    event_name,
+                    rows,
+                    start_result["prerequisite"],
+                )
+            if start_result.get("owner"):
+                result = _post_ordered_events_sync(
+                    [(EVENT_SESSION_START, start_result["start_data"])]
+                    + [(event_name, row) for row in rows],
+                    result_event=event_name,
+                    reported_events=len(rows),
+                )
+                _complete_session_start(start_result, result)
+                return result
             if (
                 not start_result["sent"]
                 and not start_result.get("buffered")
@@ -1315,6 +1543,7 @@ def _emit_many_sync(event_name: str, rows: list[dict[str, Any]]) -> dict[str, An
 def _buffer_many_sync(
     event_name: str,
     rows: list[dict[str, Any]],
+    prerequisite: dict[str, Any],
 ) -> dict[str, Any]:
     try:
         ikey, env = resolve_ikey()
@@ -1323,7 +1552,7 @@ def _buffer_many_sync(
             data = dict(row)
             data.setdefault("env", env)
             envelopes.append(build_event(event_name, data, _fc.envelope_ikey(ikey)))
-        buffered = _buffer_append(envelopes)
+        buffered = _buffer_append_pending(envelopes, prerequisite)
         return {
             "sent": False,
             "events": 0,
