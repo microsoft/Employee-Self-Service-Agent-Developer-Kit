@@ -165,6 +165,18 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
         supported_agents if isinstance(supported_agents, dict) else {}
     )
     agent_contract = supported_agents.get(selected_schema)
+    context = getattr(runner, "validation_context", None)
+    realm = str(
+        (context.get("realm") if isinstance(context, dict) else None)
+        or runner.config.get("realm")
+        or ""
+    ).strip().casefold()
+    if agent_contract is None and realm in {"test", "prod"}:
+        suffix = f"_{realm}"
+        if selected_schema.endswith(suffix):
+            agent_contract = supported_agents.get(
+                selected_schema[:-len(suffix)]
+            )
     if not isinstance(agent_contract, dict):
         return [_result(
             Status.FAILED.value,

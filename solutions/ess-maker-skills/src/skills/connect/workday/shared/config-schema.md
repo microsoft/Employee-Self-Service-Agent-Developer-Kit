@@ -76,6 +76,11 @@ or create a Markdown state mirror.
   is applied before unrelated inventory identifiers are validated. Automatic
   discovery logs and skips non-GUID inventory entries, but rejects duplicate
   candidate IDs rather than selecting an arbitrary record.
+  Readiness uses `activeTargetRealm` and a temporary full target projection
+  passed to FlightCheck with `--profile-config`. It validates the selected
+  realm's actual agent and environment without rewriting the Development
+  workspace in `.local/config.json`. The separate `--connect-config` option
+  remains a provider-only overlay and cannot retarget the configured agent.
 - `identifiers` contains non-secret Entra and Workday identifiers.
 - `endpoints` contains validated non-secret Workday endpoints.
 - `operators` contains safe account and tenant provenance.

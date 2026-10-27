@@ -189,6 +189,47 @@ def test_native_hr_agent_only_requires_child_in_sidecar(
 
 
 @responses.activate
+@pytest.mark.parametrize("realm", ["test", "prod"])
+def test_promoted_hr_schema_uses_exact_realm_package_contract(
+    runner: _MinimalRunner, realm,
+) -> None:
+    _select_native_hr(runner)
+    schema = f"gptagent_copilotforemployeeselfservicehr_{realm}"
+    runner.config["agents"][0]["schemaName"] = schema
+    runner.config["realm"] = realm
+    _register_solutions([_solution_record("msdyn_EssWorkdayRuntime")])
+
+    result = _check_workday_da_package_installed(runner)[0]
+
+    assert result.status == "Passed"
+    assert "msdyn_EssWorkdayRuntime" in result.result
+    assert result.remediation == ""
+    assert runner.config["agents"][0]["schemaName"] == schema
+
+
+@pytest.mark.parametrize(("realm", "schema"), [
+    ("dev", "gptagent_copilotforemployeeselfservicehr_test"),
+    ("test", "gptagent_copilotforemployeeselfservicehr_prod"),
+    ("prod", "gptagent_copilotforemployeeselfservicehr_test"),
+    ("", "gptagent_copilotforemployeeselfservicehr_test"),
+    ("test", "gptagent_copilotforemployeeselfservicehr_custom_test"),
+    ("test", "gptagent_copilotforemployeeselfserviceit_test"),
+])
+def test_promoted_package_rejects_wrong_realm_or_unsupported_schema(
+    runner: _MinimalRunner, realm, schema,
+) -> None:
+    _select_native_hr(runner)
+    runner.config["agents"][0]["schemaName"] = schema
+    runner.config["realm"] = realm
+
+    result = _check_workday_da_package_installed(runner)[0]
+
+    assert result.status == "Failed"
+    assert "not a supported ESS DA HR agent" in result.result
+    assert "Select the installed ESS DA HR agent" in result.remediation
+
+
+@responses.activate
 def test_package_query_uses_catalog_solution_schema(
     runner: _MinimalRunner,
     monkeypatch,
