@@ -202,11 +202,26 @@ def _validate_graph_token(token: str, tenant_id: str, object_id: Optional[str]) 
         ) from error
 
 
+def _log_windows_auth_ui(ui: str = "unknown", **_kwargs: Any) -> None:
+    logger = logging.getLogger("ess-org-announcements.graph")
+    if ui == "broker":
+        logger.info(
+            "Opening Windows broker for Microsoft Graph sign-in (audience discovery)."
+        )
+    elif ui == "browser":
+        logger.warning(
+            "MSAL selected browser sign-in instead of Windows broker for audience discovery."
+        )
+    else:
+        logger.warning("MSAL selected an unknown sign-in UI for audience discovery.")
+
+
 def acquire_graph_token(tenant_id: str, object_id: Optional[str]) -> str:
     """Acquire a delegated Graph token from the shared ADK cache.
 
-    Try silent acquisition for the bound authoring account first, then fall
-    back to MSAL's interactive browser flow when no token is available.
+    Try silent acquisition for the bound authoring account first, then use
+    interactive sign-in when needed. Native Windows opts into WAM; other
+    platforms retain MSAL's browser flow.
 
     Device code is deliberately *not* used. An MCP server speaks JSON-RPC over
     stdio, so printing a device code to stdout corrupts the protocol stream, and
@@ -228,11 +243,26 @@ def acquire_graph_token(tenant_id: str, object_id: Optional[str]) -> str:
     import msal
 
     cache = create_token_cache(GRAPH_TOKEN_CACHE_PATH)
-    app = msal.PublicClientApplication(
-        GRAPH_CLIENT_ID,
-        authority=f"https://login.microsoftonline.com/{tenant_id}",
-        token_cache=cache,
-    )
+    use_windows_broker = sys.platform == "win32"
+    broker_options = {"enable_broker_on_windows": True} if use_windows_broker else {}
+    try:
+        app = msal.PublicClientApplication(
+            GRAPH_CLIENT_ID,
+            authority=f"https://login.microsoftonline.com/{tenant_id}",
+            token_cache=cache,
+            **broker_options,
+        )
+    except ImportError as error:
+        if not use_windows_broker:
+            raise
+        logging.getLogger("ess-org-announcements.graph").warning(
+            "Windows broker dependencies could not be loaded for audience sign-in."
+        )
+        raise GraphAuthenticationError(
+            "Windows broker dependencies could not be loaded. Install the "
+            "Org Announcements MCP requirements using its configured Python "
+            "environment, then restart the MCP provider."
+        ) from error
 
     account = account_for_identity(app, tenant_id, object_id)
     result = (
@@ -241,13 +271,19 @@ def acquire_graph_token(tenant_id: str, object_id: Optional[str]) -> str:
         else None
     )
     if not result or "access_token" not in result:
-        # Logged, never printed: stdout is the MCP transport.
-        logging.getLogger("ess-org-announcements.graph").info(
-            "Opening a browser for Microsoft Graph sign-in (audience discovery)."
-        )
-        result = app.acquire_token_interactive(
-            GRAPH_SCOPES, prompt="select_account"
-        )
+        interactive_options: dict[str, Any] = {"prompt": "select_account"}
+        if use_windows_broker:
+            # The stdio subprocess has no GUI window; MSAL resolves its parent.
+            interactive_options.update(
+                parent_window_handle=msal.PublicClientApplication.CONSOLE_WINDOW_HANDLE,
+                on_before_launching_ui=_log_windows_auth_ui,
+            )
+        else:
+            # Logged, never printed: stdout is the MCP transport.
+            logging.getLogger("ess-org-announcements.graph").info(
+                "Opening a browser for Microsoft Graph sign-in (audience discovery)."
+            )
+        result = app.acquire_token_interactive(GRAPH_SCOPES, **interactive_options)
 
     if not isinstance(result, dict) or "access_token" not in result:
         error_code = result.get("error") if isinstance(result, dict) else None

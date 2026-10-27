@@ -876,6 +876,8 @@ def test_token_acquisition_writes_nothing_to_stdout_or_stderr(
     interactive_calls: list[tuple] = []
 
     class _FakeApp:
+        CONSOLE_WINDOW_HANDLE = object()
+
         def __init__(self, *args, **kwargs) -> None:
             self.token_cache = kwargs["token_cache"]
 
@@ -988,6 +990,8 @@ def test_failed_sign_in_logs_only_allowlisted_msal_codes(
     """Provider diagnostics must not become a channel for private response data."""
 
     class _FakeApp:
+        CONSOLE_WINDOW_HANDLE = object()
+
         def __init__(self, *args, **kwargs) -> None:
             self.token_cache = kwargs["token_cache"]
 
@@ -1508,11 +1512,12 @@ def test_invalidation_closes_the_client_it_drops(monkeypatch) -> None:
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("runtime_platform", ["win32", "darwin"])
 @pytest.mark.parametrize("source", ["environment", "silent", "interactive"])
 @pytest.mark.parametrize("token_tenant", [TENANT_ID, OTHER_TENANT_ID])
 @pytest.mark.parametrize("token_object", [OBJECT_ID, OTHER_OBJECT_ID, None])
 def test_graph_acquisition_is_bound_to_authoring_tenant_and_account(
-    monkeypatch, source, token_tenant, token_object
+    monkeypatch, runtime_platform, source, token_tenant, token_object
 ) -> None:
     import msal
 
@@ -1533,8 +1538,11 @@ def test_graph_acquisition_is_bound_to_authoring_tenant_and_account(
         return cache
 
     class FakeApp:
-        def __init__(self, client_id, *, authority, token_cache):
+        CONSOLE_WINDOW_HANDLE = object()
+
+        def __init__(self, client_id, *, authority, token_cache, **kwargs):
             calls["app"] = (client_id, authority, token_cache)
+            calls["broker_options"] = kwargs
             self.token_cache = token_cache
 
         def get_accounts(self):
@@ -1550,6 +1558,7 @@ def test_graph_acquisition_is_bound_to_authoring_tenant_and_account(
 
     monkeypatch.setattr(graph, "create_token_cache", cache_factory)
     monkeypatch.setattr(msal, "PublicClientApplication", FakeApp)
+    monkeypatch.setattr(graph.sys, "platform", runtime_platform)
     if source == "environment":
         monkeypatch.setenv("GRAPH_ACCESS_TOKEN", token)
 
@@ -1568,13 +1577,103 @@ def test_graph_acquisition_is_bound_to_authoring_tenant_and_account(
             cache,
         )
         assert calls["scopes"] == ["https://graph.microsoft.com/Group.Read.All"]
+        assert calls["broker_options"] == (
+            {"enable_broker_on_windows": True} if runtime_platform == "win32" else {}
+        )
         if source == "interactive":
+            expected_options: dict[str, object] = {"prompt": "select_account"}
+            if runtime_platform == "win32":
+                expected_options.update(
+                    parent_window_handle=FakeApp.CONSOLE_WINDOW_HANDLE,
+                    on_before_launching_ui=graph._log_windows_auth_ui,
+                )
             assert calls["interactive"] == (
                 ["https://graph.microsoft.com/Group.Read.All"],
-                {"prompt": "select_account"},
+                expected_options,
             )
         else:
             assert "interactive" not in calls
+
+
+@pytest.mark.parametrize(
+    ("ui", "level", "message"),
+    [
+        (
+            "broker", "INFO",
+            "Opening Windows broker for Microsoft Graph sign-in (audience discovery).",
+        ),
+        (
+            "browser", "WARNING",
+            "MSAL selected browser sign-in instead of Windows broker for audience discovery.",
+        ),
+        (
+            "PRIVATE_UI_DETAIL", "WARNING",
+            "MSAL selected an unknown sign-in UI for audience discovery.",
+        ),
+    ],
+)
+def test_windows_sign_in_reports_actual_ui_without_private_details(
+    monkeypatch, caplog, capsys, ui, level, message
+) -> None:
+    from types import SimpleNamespace
+    import msal
+
+    cache = SimpleNamespace(search=lambda credential_type: iter([]))
+
+    class App:
+        CONSOLE_WINDOW_HANDLE = object()
+
+        def __init__(self, *args, **kwargs):
+            self.token_cache = kwargs["token_cache"]
+
+        def get_accounts(self):
+            return []
+
+        def acquire_token_interactive(self, scopes, **kwargs):
+            kwargs["on_before_launching_ui"](ui=ui, detail="PRIVATE_EXTRA_DETAIL")
+            return {"access_token": _token()}
+
+    monkeypatch.setattr(graph.sys, "platform", "win32")
+    monkeypatch.setattr(graph, "create_token_cache", lambda path: cache)
+    monkeypatch.setattr(msal, "PublicClientApplication", App)
+    caplog.set_level("INFO", logger="ess-org-announcements.graph")
+
+    assert graph.acquire_graph_token(TENANT_ID, OBJECT_ID) == _token()
+    diagnostics = [
+        (record.levelname, record.getMessage()) for record in caplog.records
+        if record.name == "ess-org-announcements.graph"
+    ]
+    assert diagnostics == [(level, message)]
+    assert "PRIVATE_" not in caplog.text
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("runtime_platform", ["win32", "darwin"])
+def test_missing_windows_broker_dependency_is_an_actionable_auth_error(
+    monkeypatch, caplog, runtime_platform
+) -> None:
+    import msal
+
+    original = ImportError("PRIVATE_BROKER_IMPORT_DETAIL")
+
+    def create_app(*args, **kwargs):
+        raise original
+
+    monkeypatch.setattr(graph.sys, "platform", runtime_platform)
+    monkeypatch.setattr(graph, "create_token_cache", lambda path: object())
+    monkeypatch.setattr(msal, "PublicClientApplication", create_app)
+    if runtime_platform == "win32":
+        with pytest.raises(graph.GraphAuthenticationError, match="requirements") as caught:
+            graph.acquire_graph_token(TENANT_ID, OBJECT_ID)
+        assert caught.value.code == "AuthenticationRequired"
+        assert caught.value.retryable is False
+        assert caught.value.__cause__ is original
+        assert "PRIVATE_" not in str(caught.value)
+    else:
+        with pytest.raises(ImportError) as caught:
+            graph.acquire_graph_token(TENANT_ID, OBJECT_ID)
+        assert caught.value is original
+    assert "PRIVATE_" not in caplog.text
 
 
 def test_a_wrong_tenant_token_cannot_construct_a_directory_client() -> None:

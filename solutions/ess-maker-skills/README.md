@@ -106,12 +106,22 @@ empty discovery.
 
 Announcement authoring requires the Org Announcements feature to be enabled
 for your tenant. Audience search uses delegated `Group.Read.All` through a
-preauthorized first-party client; tenant Conditional Access policies still apply. Graph uses a
-separate resource token for the same authoring tenant and account. The current
-account-context check requires readable `tid` and `oid` claims; opaque tokens
+preauthorized first-party client; tenant Conditional Access policies still apply.
+Graph uses a separate resource token for the same authoring tenant and account.
+The current account-context check requires readable `tid` and `oid` claims; opaque tokens
 or credentials missing those claims return an explicit authentication failure
 rather than using a different account. The API still validates tokens and
 authorizes every request.
+
+On native Windows, audience authentication opts into the Windows Web Account
+Manager (WAM) broker. Existing installations must reinstall
+`scripts/requirements.txt` with the MCP server's Python interpreter and restart
+`ess-org-announcements`; standalone provider installs use
+`src/mcp/agentconfig_org_announcements/requirements.txt`. Both dependency paths
+include the broker extra only on Windows. The sign-in log identifies whether
+MSAL opens the broker or falls back to a browser; browser fallback does not
+bypass tenant token-protection policy. Non-Windows runtimes keep browser
+authentication, including WSL; this does not add macOS broker support.
 
 This development surface requires the matching agent-qualified v1.1 backend
 and scoped widget. The MCP rejects unscoped canonical responses instead of

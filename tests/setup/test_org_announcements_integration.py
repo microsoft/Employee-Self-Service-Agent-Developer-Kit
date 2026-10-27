@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from packaging.requirements import Requirement
 import yaml
 
 
@@ -156,6 +157,18 @@ def test_runtime_dependencies_and_mcp_defaults_cover_announcements() -> None:
         assert requirement in feature
     assert "-r ../src/mcp/agentconfig_core/requirements.txt" in scripts
     assert "-r ../agentconfig_core/requirements.txt" in feature
+    for requirements in (scripts, feature):
+        broker_requirements = [
+            Requirement(line) for line in requirements.splitlines()
+            if line.startswith("msal[broker]")
+        ]
+        assert len(broker_requirements) == 1
+        marker = broker_requirements[0].marker
+        assert marker is not None
+        for runtime_platform in ("win32", "darwin", "linux"):
+            assert marker.evaluate({"sys_platform": runtime_platform}) == (
+                runtime_platform == "win32"
+            )
 
 
 def test_ci_runs_announcements_separately_on_supported_targets() -> None:
