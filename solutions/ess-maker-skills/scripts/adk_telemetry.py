@@ -862,14 +862,30 @@ def _bounded_buffer_lines(
     *,
     preserve_prefix: int = 0,
 ) -> list[str]:
-    prefix = lines[:preserve_prefix]
-    available = max(BUFFER_MAX_EVENTS - len(prefix), 0)
-    bounded = prefix + (lines[preserve_prefix:][-available:] if available else [])
-    while (
-        len(bounded) > max(len(prefix), 1)
-        and len("\n".join(bounded)) + 1 > BUFFER_MAX_BYTES
-    ):
-        bounded.pop(len(prefix))
+    protected = lines[:preserve_prefix]
+    remaining = lines[preserve_prefix:]
+    preserve_first = bool(
+        protected
+        and _buffer_line_event_name(protected[0]) == EVENT_SESSION_START
+    )
+    if preserve_first:
+        available = max(BUFFER_MAX_EVENTS - 1, 0)
+        protected_tail = protected[1:][-available:] if available else []
+        available -= len(protected_tail)
+        bounded = (
+            [protected[0]]
+            + protected_tail
+            + (remaining[-available:] if available else [])
+        )
+    else:
+        bounded = (protected + remaining)[-BUFFER_MAX_EVENTS:]
+    minimum = 1 if preserve_first else 0
+    sizes = [len(line.encode("utf-8")) + 1 for line in bounded]
+    total_bytes = sum(sizes)
+    while len(bounded) > minimum and total_bytes > BUFFER_MAX_BYTES:
+        index = 1 if preserve_first else 0
+        bounded.pop(index)
+        total_bytes -= sizes.pop(index)
     return bounded
 
 
@@ -882,6 +898,18 @@ def _write_buffer_lines(path: str, lines: list[str]) -> None:
         return
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def _pending_buffer_path() -> str:
+    return BUFFER_PATH + ".pending"
+
+
+def _buffer_line_event_name(line: str) -> str:
+    try:
+        envelope, _prerequisite = _decode_buffer_line(line)
+    except (TypeError, ValueError):
+        return ""
+    return str(envelope.get("name", "")) if isinstance(envelope, dict) else ""
 
 
 def _buffer_append(envelopes: list[dict[str, Any]]) -> bool:
@@ -929,7 +957,8 @@ def _buffer_store_locked(
     with _BUFFER_LOCK:
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
-            existing = _read_buffer_lines(BUFFER_PATH)
+            path = _pending_buffer_path() if prerequisite is not None else BUFFER_PATH
+            existing = _read_buffer_lines(path)
             new_lines = []
             for envelope in envelopes:
                 record: dict[str, Any] = envelope
@@ -943,7 +972,7 @@ def _buffer_store_locked(
                 new_lines + existing if prepend else existing + new_lines
             )
             _write_buffer_lines(
-                BUFFER_PATH,
+                path,
                 _bounded_buffer_lines(
                     combined,
                     preserve_prefix=len(new_lines) if prepend else 0,
@@ -968,6 +997,8 @@ def _decode_buffer_line(line: str) -> tuple[dict[str, Any], dict[str, Any] | Non
 def _buffer_prerequisite_satisfied(prerequisite: dict[str, Any] | None) -> bool:
     if prerequisite is None:
         return True
+    if _session_start_evidence_recorded(prerequisite):
+        return True
     sessions = _read_sessions()
     entry = sessions.get(prerequisite.get("surface"))
     return bool(
@@ -975,6 +1006,63 @@ def _buffer_prerequisite_satisfied(prerequisite: dict[str, Any] | None) -> bool:
         and entry.get("id") == prerequisite.get("session_id")
         and prerequisite.get("context") in entry.get("started_contexts", [])
     )
+
+
+def _read_session_start_evidence() -> list[dict[str, Any]]:
+    try:
+        with open(_session_starts_path(), "r", encoding="utf-8") as stream:
+            records = json.load(stream)
+        return records if isinstance(records, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _session_start_evidence_recorded(prerequisite: dict[str, Any]) -> bool:
+    return any(
+        isinstance(record, dict)
+        and record.get("surface") == prerequisite.get("surface")
+        and record.get("session_id") == prerequisite.get("session_id")
+        and record.get("context") == prerequisite.get("context")
+        for record in _read_session_start_evidence()
+    )
+
+
+def _record_session_start_evidence(
+    surface: str,
+    session_id: str,
+    context: list[str],
+) -> None:
+    prerequisite = {
+        "surface": surface,
+        "session_id": session_id,
+        "context": context,
+    }
+    records = _read_session_start_evidence()
+    if any(
+        isinstance(record, dict)
+        and record.get("surface") == surface
+        and record.get("session_id") == session_id
+        and record.get("context") == context
+        for record in records
+    ):
+        return
+    records.append({**prerequisite, "completed_at": time.time()})
+    path = _session_starts_path()
+    temp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(temp_path, "w", encoding="utf-8") as stream:
+            json.dump(records, stream)
+        os.replace(temp_path, path)
+    except OSError:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+
+
+def _session_starts_path() -> str:
+    return os.path.join(os.path.dirname(SESSION_PATH), "session-starts.json")
 
 
 def _read_flush_claim(path: str) -> dict[str, Any] | None:
@@ -989,6 +1077,7 @@ def _read_flush_claim(path: str) -> dict[str, Any] | None:
 def _buffer_flush(ikey: str) -> bool:
     """Flush one detached snapshot; return whether no queued work remains."""
     claim_path = BUFFER_PATH + ".sending.claim"
+    pending_path = _pending_buffer_path()
     token = ""
     sending_path = ""
     try:
@@ -1020,8 +1109,49 @@ def _buffer_flush(ikey: str) -> bool:
                         pass
 
                 active = _read_buffer_lines(BUFFER_PATH)
+                pending = _read_buffer_lines(pending_path)
+                raw_active = []
+                migrated = []
+                for line in active:
+                    try:
+                        _envelope, prerequisite = _decode_buffer_line(line)
+                    except (TypeError, ValueError):
+                        raw_active.append(line)
+                        continue
+                    if prerequisite is None:
+                        raw_active.append(line)
+                    else:
+                        migrated.append(line)
+                if migrated:
+                    pending = _bounded_buffer_lines(pending + migrated)
+                    _write_buffer_lines(pending_path, pending)
+                    active = raw_active
+                    _write_buffer_lines(BUFFER_PATH, active)
+
                 if not active:
-                    return True
+                    eligible = []
+                    waiting = []
+                    for line in pending:
+                        try:
+                            envelope, prerequisite = _decode_buffer_line(line)
+                        except (TypeError, ValueError):
+                            waiting.append(line)
+                            continue
+                        if _buffer_prerequisite_satisfied(prerequisite):
+                            eligible.append(
+                                json.dumps(envelope, separators=(",", ":"))
+                            )
+                        else:
+                            waiting.append(line)
+                    _write_buffer_lines(
+                        pending_path,
+                        _bounded_buffer_lines(waiting),
+                    )
+                    if not eligible:
+                        return not waiting
+                    active = _bounded_buffer_lines(eligible)
+                    _write_buffer_lines(BUFFER_PATH, active)
+
                 eligible = []
                 waiting = []
                 for line in active:
@@ -1081,7 +1211,10 @@ def _buffer_flush(ikey: str) -> bool:
                         os.remove(claim_path)
                     except FileNotFoundError:
                         pass
-                    return not os.path.exists(BUFFER_PATH)
+                    return (
+                        not os.path.exists(BUFFER_PATH)
+                        and not os.path.exists(pending_path)
+                    )
                 stranded = _read_buffer_lines(sending_path)
                 active = _read_buffer_lines(BUFFER_PATH)
                 _write_buffer_lines(
@@ -1166,6 +1299,10 @@ def _reserve_session_start(
     """Return ``started``, ``pending``, or ``owner`` under short state locks."""
     now = time.time()
     with _SESSION_START_LOCK, _file_lock(SESSION_PATH + ".start.lock"):
+        if _session_start_evidence_recorded(
+            {"surface": surface, "session_id": sid, "context": context}
+        ):
+            return "started"
         with _SESSION_LOCK, _file_lock(SESSION_PATH + ".lock"):
             sessions = _read_sessions()
             entry = sessions.get(surface)
@@ -1198,6 +1335,8 @@ def _finish_session_start(
     recorded: bool,
 ) -> None:
     with _SESSION_START_LOCK, _file_lock(SESSION_PATH + ".start.lock"):
+        if recorded:
+            _record_session_start_evidence(surface, sid, context)
         with _SESSION_LOCK, _file_lock(SESSION_PATH + ".lock"):
             sessions = _read_sessions()
             entry = sessions.get(surface)

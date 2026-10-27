@@ -1099,13 +1099,144 @@ def test_pending_context_is_not_replayed_by_other_context(
 
     waiting = [
         json.loads(line)
-        for line in Path(adk.BUFFER_PATH).read_text(encoding="utf-8").splitlines()
+        for line in Path(adk._pending_buffer_path()).read_text(
+            encoding="utf-8"
+        ).splitlines()
     ]
     assert len(waiting) == 1
     assert waiting[0]["envelope"]["data"]["instance_id"] == (
         "00000000-0000-0000-0000-00000000000a"
     )
     assert waiting[0]["requiresSessionStart"] == preparation["prerequisite"]
+
+
+def test_pending_follower_recovers_after_session_rollover(monkeypatch):
+    adk.set_identity(
+        instance_id="00000000-0000-0000-0000-00000000000a",
+        tenant_id="00000000-0000-0000-0000-00000000000b",
+    )
+    session_id, _ = adk.get_session()
+    owner_data = adk.common_dimensions(
+        adk.SURFACE_CLI,
+        session_id=session_id,
+    )
+    owner_data["adk_capability"] = "setup"
+    owner_data["connector"] = ""
+    preparation = adk._prepare_session_start(owner_data)
+
+    monkeypatch.setattr(_fc, "_post", lambda *_args: 503)
+    result = adk._post_ordered_events_sync(
+        [
+            (adk.EVENT_SESSION_START, preparation["start_data"]),
+            (adk.EVENT_CAPABILITY_USE, owner_data),
+        ],
+        result_event=adk.EVENT_CAPABILITY_USE,
+        reported_events=1,
+    )
+    assert result["buffered"] is True
+    adk._complete_session_start(preparation, result)
+
+    sessions = json.loads(Path(adk.SESSION_PATH).read_text(encoding="utf-8"))
+    sessions[adk.SURFACE_CLI]["last"] -= adk.SESSION_TIMEOUT_SECS + 1
+    Path(adk.SESSION_PATH).write_text(json.dumps(sessions), encoding="utf-8")
+    next_session_id, _ = adk.get_session()
+    assert next_session_id != session_id
+
+    follower_data = dict(owner_data)
+    follower_data["adk_capability"] = "connect"
+    assert adk._buffer_event_sync(
+        adk.EVENT_CAPABILITY_USE,
+        follower_data,
+        preparation["prerequisite"],
+    )["buffered"] is True
+
+    posted = []
+
+    def post(_ikey, envelopes):
+        posted.extend(envelopes)
+        return 200
+
+    monkeypatch.setattr(_fc, "_post", post)
+    assert adk._buffer_flush(adk.resolve_ikey()[0]) is False
+    assert adk._buffer_flush(adk.resolve_ikey()[0]) is True
+    assert [event["name"] for event in posted] == [
+        adk.EVENT_SESSION_START,
+        adk.EVENT_CAPABILITY_USE,
+        adk.EVENT_CAPABILITY_USE,
+    ]
+    assert posted[-1]["data"]["adk_capability"] == "connect"
+
+
+def test_pending_sidecar_keeps_legacy_retry_file_raw():
+    start = adk.build_event(adk.EVENT_SESSION_START, {"session_id": "s1"}, "o:test")
+    owner = adk.build_event(adk.EVENT_CAPABILITY_USE, {"owner": True}, "o:test")
+    follower = adk.build_event(
+        adk.EVENT_CAPABILITY_USE,
+        {"owner": False},
+        "o:test",
+    )
+    prerequisite = {
+        "surface": adk.SURFACE_CLI,
+        "session_id": "s1",
+        "context": ["install", "tenant", "unknown", "o:test"],
+    }
+
+    assert adk._buffer_prepend([start, owner]) is True
+    assert adk._buffer_append_pending([follower], prerequisite) is True
+
+    legacy_records = [
+        json.loads(line)
+        for line in Path(adk.BUFFER_PATH).read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["name"] for record in legacy_records] == [
+        adk.EVENT_SESSION_START,
+        adk.EVENT_CAPABILITY_USE,
+    ]
+    pending_records = [
+        json.loads(line)
+        for line in Path(adk._pending_buffer_path()).read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert pending_records == [
+        {
+            "envelope": follower,
+            "requiresSessionStart": prerequisite,
+        }
+    ]
+
+
+def test_prerelease_wrapper_in_legacy_buffer_is_migrated(captured_post):
+    prerequisite = {
+        "surface": adk.SURFACE_CLI,
+        "session_id": "s1",
+        "context": ["install", "tenant", "unknown", "o:test"],
+    }
+    follower = adk.build_event(
+        adk.EVENT_CAPABILITY_USE,
+        {"session_id": "s1"},
+        "o:test",
+    )
+    Path(adk.BUFFER_PATH).parent.mkdir(parents=True)
+    Path(adk.BUFFER_PATH).write_text(
+        json.dumps(
+            {
+                "envelope": follower,
+                "requiresSessionStart": prerequisite,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    adk._record_session_start_evidence(
+        prerequisite["surface"],
+        prerequisite["session_id"],
+        prerequisite["context"],
+    )
+
+    assert adk._buffer_flush("test-key") is True
+    assert _captured_events(captured_post) == [follower]
+    assert not Path(adk._pending_buffer_path()).exists()
 
 
 def test_slow_buffer_flush_preserves_concurrent_append(tmp_path):
@@ -2298,6 +2429,57 @@ def test_report_client_events_fails_open_on_internal_fault(monkeypatch, captured
 def test_batch_cap_is_an_oom_guard_not_a_vorpal_contract():
     """The out-of-memory guard leaves room for independent client batch sizing."""
     assert adk.CLIENT_EVENTS_MAX_BATCH_EVENTS >= 1000
+
+
+def test_failed_maximum_client_batch_preserves_start_within_event_cap(monkeypatch):
+    monkeypatch.setattr(_fc, "_post", lambda *_args: 503)
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {"eventName": f"E{index}", "timeSinceMount": index}
+                for index in range(adk.CLIENT_EVENTS_MAX_BATCH_EVENTS)
+            ]
+        ),
+        block=True,
+    )
+
+    assert result == {
+        "status": "accepted",
+        "acceptedEventCount": adk.CLIENT_EVENTS_MAX_BATCH_EVENTS,
+    }
+    buffered = Path(adk.BUFFER_PATH).read_text(encoding="utf-8").splitlines()
+    assert len(buffered) == adk.BUFFER_MAX_EVENTS
+    records = [json.loads(line) for line in buffered]
+    assert records[0]["name"] == adk.EVENT_SESSION_START
+    assert all("envelope" not in record for record in records)
+
+
+def test_failed_maximum_client_batch_stays_within_byte_cap(monkeypatch):
+    monkeypatch.setattr(_fc, "_post", lambda *_args: 503)
+    properties = {f"k{index}": "x" * 200 for index in range(35)}
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {
+                    "eventName": f"E{index}",
+                    "timeSinceMount": index,
+                    "properties": properties,
+                }
+                for index in range(adk.CLIENT_EVENTS_MAX_BATCH_EVENTS)
+            ]
+        ),
+        block=True,
+    )
+
+    assert result == {
+        "status": "accepted",
+        "acceptedEventCount": adk.CLIENT_EVENTS_MAX_BATCH_EVENTS,
+    }
+    assert Path(adk.BUFFER_PATH).stat().st_size <= adk.BUFFER_MAX_BYTES
+    first = json.loads(
+        Path(adk.BUFFER_PATH).read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert first["name"] == adk.EVENT_SESSION_START
 
 
 def test_fail_open_echoes_the_full_sent_count(monkeypatch, captured_post):

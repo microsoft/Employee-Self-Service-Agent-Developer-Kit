@@ -110,13 +110,26 @@ collector batch, so bounded process-exit flushing cannot persist the start
 while dropping that activity between two network calls. While another process
 owns a pending start, later activity is buffered with that exact
 session/context prerequisite instead of being sent ahead of it; unrelated
-contexts may continue flushing without releasing the waiting activity. Failed
-buffered events are retried by the normal transport. File locks coordinate
-overlapping CLI processes; network requests do not hold the session-state lock
-or the active retry-buffer lock. A flush atomically detaches its snapshot under
-a fresh token and claim timestamp, so concurrent appends remain active, an aged
-queue does not create an immediately stale lease, and an expired owner cannot
-delete or reconcile a successor's snapshot.
+contexts may continue flushing without releasing the waiting activity.
+Completed start evidence is persisted separately from the current 30-minute
+session record, so a queued follower remains eligible after session rollover
+or after an older clone rewrites `session.json`.
+
+The legacy `telemetry-buffer.ndjson` compatibility boundary remains a sequence
+of raw Common Schema envelopes. Prerequisite-bearing followers use a new
+sidecar queue; older clones ignore that sidecar instead of uploading its wrapper
+objects as malformed telemetry, and a current clone promotes eligible nested
+envelopes back into the legacy queue. Current readers also migrate wrapper rows
+written by prerelease revisions of this change. Failed buffered events are
+retried by the normal transport.
+
+File locks coordinate overlapping CLI processes; network requests do not hold
+the session-state lock or the active retry-buffer lock. A flush atomically
+detaches its snapshot under a fresh token and claim timestamp, so concurrent
+appends remain active, an aged queue does not create an immediately stale
+lease, and an expired owner cannot delete or reconcile a successor's snapshot.
+When a start/activity batch exceeds a retry-buffer count or byte budget, the
+start is retained and activities are shed until both limits are met.
 This remains best-effort telemetry, not exactly-once delivery: process crashes,
 unwritable state, and bounded-buffer eviction can still cause loss or duplicates.
 
