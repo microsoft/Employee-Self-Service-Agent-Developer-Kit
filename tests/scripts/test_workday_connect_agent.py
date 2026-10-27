@@ -557,6 +557,125 @@ def test_promoted_verification_rejects_mismatched_or_unready_target(
         assert observed["reads"] == [identity["agentId"]]
 
 
+def test_same_environment_test_completes_native_verification_without_touching_dev(
+    tmp_path, promoted_verification, monkeypatch,
+):
+    """Isolate unrelated profile gates; use real discovery, verifiers and state writes."""
+    import workday_connect as controller
+    import workday_connect_model as model
+    import workday_connect_realms as realms
+    from workday_connect_store import WorkdayConnectStore
+
+    state, _payload, observed, foundation_path = promoted_verification
+    source = state["targets"]["dev"]["identity"]
+    source["sourceAgentId"] = source["agentId"]
+    target = state["targets"]["test"]["identity"]
+    target.update(
+        environmentId=source["environmentId"], environmentUrl=source["environmentUrl"],
+    )
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section("scope", {
+        "environmentId": source["environmentId"], "dataverseUrl": source["environmentUrl"],
+        "entraTenantId": source["tenantId"], "ring": "prod", "packageFlavor": "runtime",
+        "agent": {
+            "slug": source["agentSlug"], "botId": source["agentId"],
+            "schemaName": source["agentSchemaName"],
+        },
+    })
+    store.merge_section("operators", state["operators"])
+    store.record_target_discovery("dev", source, ring="prod")
+    for phase_id, actions in model.PHASE_REQUIRED_ACTIONS.items():
+        for action in actions:
+            store.complete_action(phase_id, action, evidence={"outcome": "verified"})
+        store.set_phase_status(phase_id, "complete")
+    dev_before = store.load()["targets"]["dev"]
+    foundation_before = foundation_path.read_bytes()
+
+    class RealmReadClient:
+        tenant_id = source["tenantId"]
+        api_version = realms.DEFAULT_API_VERSION
+
+        def get_realms(self, agent_id):
+            assert agent_id == source["agentId"]
+            return {"routeRealm": 0, "siblingRealms": [
+                {"realm": 1, "botId": target["agentId"]},
+            ]}
+
+        def get_agent(self, agent_id):
+            identity = source if agent_id == source["agentId"] else target
+            assert agent_id == identity["agentId"]
+            return {"botId": agent_id, "schemaName": identity["agentSchemaName"]}
+
+        def get_realm_configuration(self, agent_id, realm):
+            identity = source if realm == 0 else target
+            assert agent_id == identity["agentId"]
+            return {
+                "realm": realm, "cdsBotId": agent_id,
+                "schemaName": identity["agentSchemaName"],
+                "grsRepositoryId": identity["almFamilyId"],
+                "commitSha": identity["commitSha"],
+            }
+
+    discovery_options = {
+        "authenticator": lambda *_a, **_k: ("token", source["tenantId"]),
+        "client_factory": lambda *_a, **_k: RealmReadClient(),
+        "environment_loader": lambda *_a, **_k: [{
+            "id": source["environmentId"], "instanceUrl": source["environmentUrl"],
+        }],
+    }
+    discovery = realms.discover_and_record_realm_target(
+        tmp_path, store, realm="test",
+        environment_id=source["environmentId"],
+        environment_url=source["environmentUrl"], **discovery_options,
+    )
+    assert discovery["realm"] == "test"
+    assert store.load()["scope"]["agent"]["botId"] == target["agentId"]
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(phase_id, action, evidence={"outcome": "verified"})
+        store.set_phase_status(phase_id, "complete")
+    for action in (
+        "connection-references-bound", "runtime-flows-active",
+        "delegated-authorization-configured",
+    ):
+        store.complete_action("runtime", action, evidence={"outcome": "verified"})
+    monkeypatch.setattr(
+        controller, "revalidate_active_realm_target",
+        lambda root, actual_store: realms.revalidate_active_realm_target(
+            root, actual_store, **discovery_options,
+        ),
+    )
+    monkeypatch.setattr(controller, "_run_profile_gate", lambda *_a: {})
+    monkeypatch.setattr(controller, "_run_final_readiness", lambda *_a: {})
+
+    assert controller._record_topic_activation(SimpleNamespace(), store)["verified"]
+    assert controller._record_runtime_template_wiring(SimpleNamespace(), store)["verified"]
+    flow_names = model.load_catalog()["packages"]["runtime"]["agentConnectionFlowNames"]
+    assert controller._record_agent_binding(SimpleNamespace(
+        attachment_json=json.dumps({
+            "outcome": "maker-confirmed", "botId": target["agentId"],
+            "flowNames": flow_names,
+            "parameterSharingOutcome": "enabled-for-exposed-connections",
+        }),
+    ), store)["verified"]
+    completion = controller._record_validation(SimpleNamespace(
+        evidence_json=json.dumps({
+            "testUserCategory": "maker", "timestamp": "2026-10-26T18:00:00Z",
+            "outcome": "passed",
+        }),
+    ), store)
+
+    final = store.load()
+    assert completion["lifecycleComplete"] is True
+    assert final["status"] == "ready"
+    assert final["targets"]["test"]["deploymentStatus"] == "ready"
+    assert final["targets"]["dev"] == dev_before
+    assert foundation_path.read_bytes() == foundation_before
+    assert observed["reads"] == [target["agentId"]] * 3
+    assert all(kwargs["allow_write"] is False for _ring, kwargs in observed["auth"])
+
+
 def test_promoted_verification_retains_correlated_diagnostics_without_failing_activation(
     tmp_path, promoted_verification,
 ):
