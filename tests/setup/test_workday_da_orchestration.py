@@ -486,7 +486,13 @@ def test_workday_completion_does_not_return_to_setup() -> None:
         (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8").split()
     )
     assert "render its `completionMessage` first" in finish
-    assert "all six steps and the maker Test pane validation are complete" in finish
+    assert "Workday Connect is complete" in finish
+    assert "the maker Test pane validation passed" in finish
+    assert "Do not add a step count" in finish
+    assert "routine recaps of Development readiness, administrator handoffs or preserved sign-offs" in finish
+    assert "Do not append routine recaps" in orchestrator
+    assert "all six steps are finished" not in finish
+    assert "all six steps are finished" not in orchestrator
     assert "End this Connect execution after its completion message" in finish
     assert "do not invoke `src/skills/foundation-setup/SKILL.md` here" in finish
     assert "Do not invoke Setup between phases or at completion" in orchestrator

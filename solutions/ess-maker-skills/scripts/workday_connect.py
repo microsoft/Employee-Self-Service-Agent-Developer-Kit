@@ -507,8 +507,8 @@ def _completion_handoff(realm: str) -> dict[str, Any]:
     return {
         "lifecycleComplete": True,
         "completionMessage": (
-            f"Workday Connect is complete in {REALM_DISPLAY_NAMES[realm]}: "
-            "all six steps are finished and the maker Test pane validation "
+            f"Workday Connect is complete in {REALM_DISPLAY_NAMES[realm]}. "
+            "The maker Test pane validation "
             "passed. No further Workday Connect action is required in this realm."
         ),
         "postSkillNextSteps": next_steps,

@@ -108,9 +108,11 @@ step, or ask the maker or employee to repeat a successful scenario.
 ## Finish the current Workday connection
 
 After the controller returns `lifecycleComplete: true`, render its
-`completionMessage` first. It confirms that all six steps and the maker Test
-pane validation are complete in `activeTargetRealm`, with no further Workday
-Connect action required in that realm. Use the same finish behavior when
+`completionMessage` first. It confirms that Workday Connect is complete and
+the maker Test pane validation passed in `activeTargetRealm`, with no further
+Workday Connect action required in that realm. Do not add a step count or
+routine recaps of Development readiness, administrator handoffs or preserved
+sign-offs. Use the same finish behavior when
 `status` reports an already-ready lifecycle; do not repeat the smoke test.
 
 End this Connect execution after its completion message and optional later

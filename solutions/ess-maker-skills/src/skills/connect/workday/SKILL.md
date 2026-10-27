@@ -545,9 +545,14 @@ question; answer the side question, then resume the same blocker.
 
 Only after controller status is `ready`, render the returned
 `completionMessage`. Status and maker-validation completion return the same
-realm-specific completion: all six steps are finished, the maker Test pane
+realm-specific completion: Workday Connect is complete, the maker Test pane
 validation passed, and no further Workday Connect action is required in that
-realm.
+realm. Do not describe reused administrator prerequisites as steps performed
+again in Test or Production or claim that all six steps were performed there.
+
+Do not append routine recaps of Development readiness, administrator handoffs
+or preserved sign-offs. Preserve that evidence internally; discuss it only
+when the maker asks or an actual blocker requires it.
 
 Finish using **Finish the current Workday connection** in
 `verify-connection.md`. Do not invoke Setup between phases or at completion;

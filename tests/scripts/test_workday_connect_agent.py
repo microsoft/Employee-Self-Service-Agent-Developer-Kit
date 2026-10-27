@@ -2868,8 +2868,8 @@ def test_maker_success_completes_without_run_history_correlation(
     assert result["lifecycleComplete"] is True
     assert result["activeTargetRealm"] == "dev"
     assert result["completionMessage"] == (
-        "Workday Connect is complete in Development: all six steps are finished "
-        "and the maker Test pane validation passed. "
+        "Workday Connect is complete in Development. "
+        "The maker Test pane validation passed. "
         "No further Workday Connect action is required in this realm."
     )
     assert result["postSkillNextSteps"] == [
@@ -2939,10 +2939,11 @@ def test_ready_status_confirms_current_realm_completion(realm, display_name) -> 
     result = workday_connect._status(SimpleNamespace(), store)
 
     assert result["lifecycleComplete"] is True
-    assert f"Workday Connect is complete in {display_name}:" in result["completionMessage"]
-    assert "all six steps are finished" in result["completionMessage"]
-    assert "maker Test pane validation passed" in result["completionMessage"]
-    assert "No further Workday Connect action is required" in result["completionMessage"]
+    assert result["completionMessage"] == (
+        f"Workday Connect is complete in {display_name}. "
+        "The maker Test pane validation passed. "
+        "No further Workday Connect action is required in this realm."
+    )
     assert result["postSkillNextSteps"][0].startswith(
         "Publish and deploy" if realm == "prod" else "Promote the agent"
     )
