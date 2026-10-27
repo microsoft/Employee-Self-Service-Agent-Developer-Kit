@@ -325,8 +325,15 @@ def _check_workday(runner):
             "Ask the environment owner to verify read access to connection references, then rerun.",
             evidence={"httpStatus": code, "readLimitation": type(exc).__name__},
         ))
-    if not runner.should_execute("WD-REST-002"):
-        return rows
+    return rows
+
+
+def _check_workday_redirect(runner):
+    from .checks.workday_da import _validation_realm
+    from .checks.workday_extension import _check_native_user_context_redirect
+
+    if _validation_realm(runner) in {"test", "prod"}:
+        return _check_native_user_context_redirect(runner)
     local = SimpleNamespace(
         config=runner.config, agent_slug=runner.agent_slug, env_id=runner.env_id,
         env_url=None, dv_token=None, pva=None,
@@ -344,8 +351,7 @@ def _check_workday(runner):
         if row.status == "Skipped" and runner.config.get("installPath") == "legacy":
             row.status = "NotConfigured"
             row.evidence["applicability"] = "not_applicable"
-    rows.extend(local_rows)
-    return rows
+    return local_rows
 
 
 def _check_local(runner):

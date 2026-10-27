@@ -7,17 +7,27 @@ from __future__ import annotations
 
 import json
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any, Callable, Mapping
 
 import yaml
 
+from agentbuilder import (
+    AgentBuilderClient,
+    AgentBuilderError,
+    authenticate_flightcheck,
+    derive_environment_host,
+)
 from agentbuilder_object_model import (
     ObjectModelConverterError,
     yaml_to_object_models,
 )
+from flightcheck.runner import CheckResult, Status
 from minimalbot_evaluation import (
     MinimalBotEvaluationClient,
     MinimalBotEvaluationError,
+    blocking_diagnostics,
+    reviewed_workday_topic_schemas,
     resolve_workday_dialogs,
 )
 
@@ -232,6 +242,30 @@ def _begin_dialog_targets(
     return targets
 
 
+def verify_local_runtime_workspace(
+    workspace_root: Path,
+    state: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate local runtime topic mappings without authenticating or writing."""
+    context = _agent_verification_context(workspace_root, state)
+    schema = context["agentSchema"]
+    topics = [
+        ("Conversation Start", f"{schema}.topic.ConversationStart"),
+        (
+            "Workday [System] - 1: Set Runtime Template Configurations",
+            f"{schema}.topic.WorkdaySystemSetRuntimeTemplateConfigurations",
+        ),
+        (
+            "Workday [System] - 1: Set User Context V2",
+            f"{schema}.topic.WorkdaySystemGetUserContextV2",
+        ),
+    ]
+    for name, topic_schema in topics:
+        topic = _mapped_dialog(Path(context["agentFolder"]), name, topic_schema)
+        _topic_document(topic)
+    return {"verifiedTopics": len(topics)}
+
+
 def verify_runtime_template_wiring(
     workspace_root: Path,
     state: Mapping[str, Any],
@@ -244,6 +278,19 @@ def verify_runtime_template_wiring(
     ] = yaml_to_object_models,
 ) -> dict[str, Any]:
     """Verify Conversation Start initializes Workday templates exactly once."""
+    if state.get("activeTargetRealm") in {"test", "prod"}:
+        from flightcheck.checks.workday_da import _check_runtime_template_wiring
+
+        runner = _promoted_verification_runner(workspace_root, state)
+        result = _check_runtime_template_wiring(runner)[0]
+        _require_passed_native_result(result)
+        schema = state["scope"]["agent"]["schemaName"]
+        return {
+            **_promoted_evidence_identity(runner),
+            **result.evidence,
+            "userContextValidate": f"{schema}.topic.System-UserContext-Validate",
+            "verifiedComponents": 3,
+        }
     context = _agent_verification_context(workspace_root, state)
     agent_folder = Path(context["agentFolder"])
     agent_schema = str(context["agentSchema"])
@@ -402,12 +449,178 @@ def verify_agent_binding(
     ] = MinimalBotEvaluationClient.from_config,
 ) -> dict[str, Any]:
     """Verify Workday binding without using topic diagnostics as runtime proof."""
+    if state.get("activeTargetRealm") in {"test", "prod"}:
+        return _verify_promoted_topics(workspace_root, state)
     context = _agent_verification_context(workspace_root, state)
     return _verify_workday_topics(
         context,
         client_factory=client_factory,
         require_clean_diagnostics=False,
     )
+
+
+def _require_passed_native_result(result: CheckResult) -> None:
+    if result.status != Status.PASSED.value:
+        remediation = (
+            "Correct the Development source and promote the corrected content "
+            "before retrying."
+            if result.status == Status.FAILED.value
+            else "Resolve the reported read-only verification failure before retrying."
+        )
+        raise WorkdayConnectAgentError(
+            f"{result.result} {remediation} No topic changes were applied."
+        )
+
+
+def _promoted_evidence_identity(runner) -> dict[str, str]:
+    return {
+        "environmentId": runner.env_id,
+        "botId": runner.config["agent"]["botId"],
+        "makerUsername": runner.authenticated_account,
+    }
+
+
+def _promoted_verification_runner(
+    workspace_root: Path, state: Mapping[str, Any],
+) -> SimpleNamespace:
+    realm = state["activeTargetRealm"]
+    targets = state.get("targets") or {}
+    target = targets.get(realm) or {}
+    identity = target.get("identity") or {}
+    dev_identity = (targets.get("dev") or {}).get("identity") or {}
+    foundation = _read_json(workspace_root / ".local" / "config.json")
+    source = _active_agent(foundation)
+    if foundation.get("tenantId") and str(foundation["tenantId"]).casefold() != str(
+        dev_identity.get("tenantId") or ""
+    ).casefold():
+        raise WorkdayConnectAgentError(
+            "The Development foundation names a different tenant."
+        )
+    for observed, expected in (
+        (foundation.get("environmentId"), dev_identity.get("environmentId")),
+        (source.get("botId"), dev_identity.get("agentId")),
+        (source.get("schemaName"), dev_identity.get("agentSchemaName")),
+        (source.get("slug"), dev_identity.get("agentSlug")),
+        (identity.get("sourceAgentId"), dev_identity.get("agentId")),
+        (identity.get("tenantId"), dev_identity.get("tenantId")),
+    ):
+        if (
+            not observed or not expected
+            or str(observed).casefold() != str(expected).casefold()
+        ):
+            raise WorkdayConnectAgentError(
+                "The promoted target does not match the recorded Development foundation."
+            )
+    scope = state.get("scope") or {}
+    agent = scope.get("agent") or {}
+    if dev_identity.get("almFamilyId") and str(
+        dev_identity["almFamilyId"]
+    ).casefold() != str(identity.get("almFamilyId") or "").casefold():
+        raise WorkdayConnectAgentError(
+            "The promoted target names a different ALM family."
+        )
+    for observed, expected in (
+        (scope.get("environmentId"), identity.get("environmentId")),
+        (
+            str(scope.get("dataverseUrl") or "").rstrip("/"),
+            str(identity.get("environmentUrl") or "").rstrip("/"),
+        ),
+        (scope.get("entraTenantId"), identity.get("tenantId")),
+        (agent.get("botId"), identity.get("agentId")),
+        (agent.get("schemaName"), identity.get("agentSchemaName")),
+        (agent.get("slug"), identity.get("agentSlug")),
+    ):
+        if (
+            not observed or not expected
+            or str(observed).casefold() != str(expected).casefold()
+        ):
+            raise WorkdayConnectAgentError(
+                "The active Workday scope does not match its verified promoted target."
+            )
+    source_schema = str(source["schemaName"])
+    if (
+        not identity.get("almFamilyId")
+        or not identity.get("commitSha")
+        or not reviewed_workday_topic_schemas(source_schema)
+        or str(agent["schemaName"]).casefold() not in {
+            source_schema.casefold(), f"{source_schema}_{realm}".casefold(),
+        }
+    ):
+        raise WorkdayConnectAgentError(
+            "The promoted target has no supported deployed Workday agent identity."
+        )
+    ring = _required_text(scope, "ring", "Promoted environment ring")
+    maker = _required_text(
+        (state.get("operators") or {}).get("powerPlatformMaker") or {},
+        "username", "Power Platform maker account",
+    )
+    try:
+        host = derive_environment_host(identity["environmentId"], ring)
+        token, tenant, account = authenticate_flightcheck(
+            ring,
+            cache_path=workspace_root / ".local" / ".agentbuilder_token_cache.bin",
+            account_hint=maker, include_connectivity=False, allow_write=False,
+            emit_account_identity=False, return_account_identity=True,
+        )
+        if str(tenant).casefold() != str(identity["tenantId"]).casefold():
+            raise WorkdayConnectAgentError(
+                "Promoted verification authenticated a different tenant."
+            )
+        if not account or account.casefold() != maker.casefold():
+            raise WorkdayConnectAgentError(
+                "Promoted verification authenticated a different or unverifiable maker."
+            )
+        client = AgentBuilderClient(host, token, ring=ring, tenant_id=tenant)
+    except (AgentBuilderError, ValueError) as exc:
+        raise WorkdayConnectAgentError(
+            f"Promoted agent read-only authentication failed ({type(exc).__name__})."
+        ) from exc
+    config = {
+        "releaseLine": "da", "realm": realm, "ring": ring,
+        "environmentId": identity["environmentId"], "tenantId": identity["tenantId"],
+        "agent": dict(agent), "agents": [dict(agent)], "activeAgent": agent["slug"],
+    }
+    return SimpleNamespace(
+        config=config, env_id=identity["environmentId"], agent_slug=agent["slug"],
+        agentbuilder=client, validation_context={"realm": realm},
+        authenticated_account=account,
+    )
+
+
+def _verify_promoted_topics(
+    workspace_root: Path, state: Mapping[str, Any],
+) -> dict[str, Any]:
+    from flightcheck.checks.workday_da import _check_reviewed_workday_topics
+
+    runner = _promoted_verification_runner(workspace_root, state)
+    result = _check_reviewed_workday_topics(runner)[0]
+    _require_passed_native_result(result)
+    components = runner._workday_da_component_cache[runner.config["agent"]["botId"]]
+    expected = reviewed_workday_topic_schemas(
+        runner.config["agent"]["schemaName"], realm=state["activeTargetRealm"],
+    )
+    diagnostics = []
+    for schema in expected:
+        component = components[schema.casefold()][0]
+        if component.get("state") != "Active":
+            raise WorkdayConnectAgentError(
+                f"The promoted Workday topic is not active: {schema}."
+            )
+        diagnostics.extend(
+            {
+                **diagnostic,
+                "componentId": str(component.get("id") or ""),
+                "schemaName": schema,
+            }
+            for diagnostic in blocking_diagnostics(component)
+        )
+    return {
+        **_promoted_evidence_identity(runner),
+        "workdayTopics": {
+            "expected": len(expected), "verified": result.evidence["verified"],
+            "active": len(expected), "blockingDiagnostics": diagnostics,
+        },
+    }
 
 
 def _agent_verification_context(
@@ -539,6 +752,8 @@ def verify_topic_activation(
     ] = MinimalBotEvaluationClient.from_config,
 ) -> dict[str, Any]:
     """Verify live topic activation without treating dependency health as state."""
+    if state.get("activeTargetRealm") in {"test", "prod"}:
+        return _verify_promoted_topics(workspace_root, state)
     return _verify_workday_topics(
         _agent_verification_context(workspace_root, state),
         client_factory=client_factory,

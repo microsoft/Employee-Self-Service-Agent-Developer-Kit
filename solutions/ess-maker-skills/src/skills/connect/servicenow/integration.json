@@ -1,0 +1,8 @@
+{
+  "id": "servicenow",
+  "displayName": "ServiceNow",
+  "description": "HR and IT service management",
+  "aliases": ["snow"],
+  "availability": "unavailable",
+  "unavailableMessage": "Guided ServiceNow setup is not yet available in ADK. You can configure the ServiceNow connection manually in Copilot Studio or contact admin."
+}

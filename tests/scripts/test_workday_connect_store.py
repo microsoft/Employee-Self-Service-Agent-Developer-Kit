@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -944,6 +945,123 @@ def test_approved_plan_rejects_changed_target(tmp_path: Path) -> None:
     }
     with pytest.raises(store_module.WorkdayConnectPlanChangedError):
         store.verify_plan("runtime", changed, approved_hash)
+
+
+@pytest.mark.parametrize("existing", ["absent", "authorization-only", "team-missing"])
+def test_runtime_creation_progress_preserves_approval_and_verified_stages(
+    tmp_path, existing,
+):
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        _complete_phase(store, phase_id, set(model.PHASE_REQUIRED_ACTIONS[phase_id]))
+    authorization_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    team_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    plan = {
+        "phase": "runtime",
+        "scope": {"botId": "agent-a"},
+        "actions": ["Apply reviewed runtime bindings"],
+        "delegatedAuthorization": {
+            "authorizationId": None if existing != "team-missing" else authorization_id,
+            "teamId": None,
+            "teamName": "Reviewed access team",
+            "businessUnitId": "reviewed-business-unit",
+        },
+    }
+    _, approved_hash = store.approve_plan("runtime", plan)
+    for action in ("connection-references-bound", "runtime-flows-active"):
+        store.complete_action("runtime", action, evidence={"outcome": "verified"})
+    store.set_phase_status("runtime", "blocked", blocker={
+        "operation": "runtime-apply",
+        "errorType": "WorkdayConnectRuntimeError",
+        "message": "Authorization verification did not finish.",
+    })
+    before = store.load()
+    current = copy.deepcopy(plan)
+    current["delegatedAuthorization"]["authorizationId"] = authorization_id
+    if existing != "authorization-only":
+        current["delegatedAuthorization"]["teamId"] = team_id
+
+    assert store.verify_plan("runtime", current, approved_hash) == approved_hash
+    assert store.load() == before
+    state, refreshed_hash = store.approve_plan("runtime", current)
+    assert refreshed_hash == model.plan_hash(current)
+    assert state["phases"]["runtime"]["status"] == "active"
+    for key in ("completedActions", "evidence"):
+        assert state["phases"]["runtime"][key] == before["phases"]["runtime"][key]
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        assert state["phases"][phase_id] == before["phases"][phase_id]
+
+
+@pytest.mark.parametrize("drift", [
+    "authorization-replaced", "team-replaced", "id-removed", "scope",
+    "team-name", "business-unit", "flow", "invalid-id",
+    "team-without-authorization", "stale-hash", "value-type",
+])
+def test_runtime_creation_progress_does_not_bypass_other_approval_guards(
+    tmp_path, drift,
+):
+    import workday_connect_model as model
+    from workday_connect_store import (
+        WorkdayConnectPlanChangedError,
+        WorkdayConnectStore,
+    )
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        _complete_phase(store, phase_id, set(model.PHASE_REQUIRED_ACTIONS[phase_id]))
+    authorization_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    team_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    plan = {
+        "phase": "runtime",
+        "scope": {"botId": "agent-a", "approvalGeneration": 1},
+        "actions": ["Apply reviewed runtime bindings"],
+        "flows": [{"workflowId": "reviewed-flow"}],
+        "delegatedAuthorization": {
+            "authorizationId": authorization_id if drift in {
+                "authorization-replaced", "team-replaced", "id-removed",
+            } else None,
+            "teamId": team_id if drift == "team-replaced" else None,
+            "teamName": "Reviewed access team",
+            "businessUnitId": "reviewed-business-unit",
+        },
+    }
+    _, approved_hash = store.approve_plan("runtime", plan)
+    before = store.load()
+    current = copy.deepcopy(plan)
+    authorization = current["delegatedAuthorization"]
+    authorization.update(authorizationId=authorization_id, teamId=team_id)
+    if drift == "authorization-replaced":
+        authorization["authorizationId"] = team_id
+    elif drift == "team-replaced":
+        authorization["teamId"] = authorization_id
+    elif drift == "id-removed":
+        authorization["authorizationId"] = None
+        authorization["teamId"] = None
+    elif drift == "scope":
+        current["scope"]["botId"] = "another-agent"
+    elif drift == "team-name":
+        authorization["teamName"] = "Another team"
+    elif drift == "business-unit":
+        authorization["businessUnitId"] = "another-business-unit"
+    elif drift == "flow":
+        current["flows"][0]["workflowId"] = "another-flow"
+    elif drift == "invalid-id":
+        authorization["teamId"] = "not-a-guid"
+    elif drift == "team-without-authorization":
+        authorization["authorizationId"] = None
+    elif drift == "value-type":
+        current["scope"]["approvalGeneration"] = True
+    else:
+        approved_hash = "0" * 64
+
+    with pytest.raises(WorkdayConnectPlanChangedError):
+        store.verify_plan("runtime", current, approved_hash)
+    assert store.load() == before
 
 
 def test_approving_completed_runtime_invalidates_maker_validation(

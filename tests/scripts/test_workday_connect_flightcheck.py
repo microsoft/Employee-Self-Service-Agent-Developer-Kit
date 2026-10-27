@@ -806,6 +806,29 @@ def test_run_profile_reports_timeout(tmp_path, monkeypatch):
     assert raised.value.error_type == "flightcheck-timeout"
 
 
+def test_missing_profile_result_does_not_infer_access_or_service_failure(
+    tmp_path, monkeypatch,
+):
+    from workday_connect_flightcheck import (
+        WorkdayConnectFlightCheckError, run_profile,
+    )
+
+    monkeypatch.setattr(subprocess, "run", lambda command, **_: (
+        subprocess.CompletedProcess(command, 1, "private diagnostic", "")
+    ))
+    with pytest.raises(WorkdayConnectFlightCheckError) as raised:
+        run_profile(tmp_path, _state(), PROFILE)
+    assert "Review the validation error before retrying" in (
+        raised.value.customer_remediation
+    )
+    assert "keep the existing package and completed setup unchanged" in (
+        raised.value.customer_remediation
+    )
+    assert "service health" not in raised.value.customer_remediation
+    assert "account can access" not in raised.value.customer_remediation
+    assert "private diagnostic" not in str(raised.value)
+
+
 def test_ready_v7_migration_preserves_completion_without_runtime_profile(
     tmp_path,
     monkeypatch,

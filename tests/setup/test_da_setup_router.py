@@ -43,8 +43,8 @@ _DA_PRODUCT_REGISTRY = (
 _UI_FORMATTING = _SOLUTION / "src" / "reference" / "ui-formatting-guidelines.md"
 _PREPARE_FRESH_WORKSPACE = _SOLUTION / "scripts" / "prepare_fresh_workspace.py"
 _RESET_LOCAL_WORKSPACE = _SOLUTION / "scripts" / "reset_local_workspace.py"
-_WORKDAY = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
-_CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
+_WORKDAY = _SOLUTION / "src" / "skills" / "connect" / "workday" / "SKILL.md"
+_WORKDAY_ENTRY = _SOLUTION / "src" / "skills" / "connect" / "workday" / "entry.md"
 _INSTRUCTIONS = _SOLUTION / ".github" / "copilot-instructions.md"
 _SETUP_PROMPT = _SOLUTION / ".github" / "prompts" / "setup.prompt.md"
 _PROMPTS = _SOLUTION / ".github" / "prompts"
@@ -830,18 +830,20 @@ def test_maker_profile_requires_only_canonical_completion() -> None:
 
 
 def test_workday_da_setup_routes_only_supported_hr_agents() -> None:
-    step1 = _CONNECT_STEP1.read_text(encoding="utf-8")
+    step1 = _WORKDAY_ENTRY.read_text(encoding="utf-8")
     normalized_step1 = " ".join(step1.split())
     workday = _WORKDAY.read_text(encoding="utf-8")
 
-    assert "src/skills/setup/workday-da/SKILL.md" in step1
+    assert "src/skills/connect/workday/SKILL.md" in step1
     assert "gptagent_copilotforemployeeselfservicehr" in step1
     assert "Workday integration with the ESS IT Agent isn't supported" in step1
     assert "or run `WD-PKG-001`" in normalized_step1
-    assert "src/skills/foundation-setup/SKILL.md" not in step1
+    assert "src/skills/foundation-setup/SKILL.md" in step1
+    assert "product boundaries below before invoking Setup" in normalized_step1
     assert _WORKDAY.is_file()
-    assert "Hybrid Workday extension setup is not available" in workday
-    assert "Do not run the retained Workday setup playbooks" in workday
+    assert "This branch is DA-only" in workday
+    assert "main-ca" in workday
+    assert "scripts/workday_connect.py" in workday
 
 
 def test_foundation_routes_supported_da_setup_paths() -> None:
@@ -915,10 +917,11 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert '--agent-id "{AGENT_ID}"' in text
     assert '--ring "{RING}"' in text
     assert "resolve the service ring" in normalized.casefold()
-    assert text.index("setup_existing_da.py inspect-agent") < text.index(
+    start = text.split("## Start", 1)[1]
+    assert start.index("setup_existing_da.py inspect-agent") < start.index(
         "da-existing-dev.md"
     )
-    assert text.index("setup_existing_da.py inspect-agent") < text.index(
+    assert start.index("setup_existing_da.py inspect-agent") < start.index(
         "da-prod-to-dev.md"
     )
     assert _DA_MOS_STARTER.is_file()

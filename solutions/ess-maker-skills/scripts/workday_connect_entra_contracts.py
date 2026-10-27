@@ -17,7 +17,7 @@ from workday_connect_contract_common import (
     _parse_labeled_worksheet,
     _reject_secret_like_value,
     _safe_nonsecret_text,
-    _worksheet_choice,
+    _validated_worksheet_values,
     required_text as _required_text,
 )
 from workday_connect_model import (
@@ -92,6 +92,24 @@ ENTRA_WORKSHEET_LABEL_ALIASES = {
         "Certificate expiration date (active certificate row)"
     ),
 }
+ENTRA_WORKSHEET_CHOICES = {
+    "SAML signing": {
+        "Sign SAML response and assertion": "Sign SAML response and assertion",
+    },
+    "SAML configuration": {"Yes, confirmed": "confirmed"},
+    "Signing certificate": {"Yes, confirmed": "confirmed"},
+    "Authorized connector": {"Yes, confirmed": "confirmed"},
+    "Permissions and consent": {
+        "Yes, permissions and consent are confirmed": "confirmed",
+    },
+    "Employee assignment": {
+        "Yes, access is confirmed or assignment is not required": "confirmed",
+    },
+    "Existing configuration": {
+        "Preserved without changes": "preserved",
+        "Remediated without replacing unrelated configuration": "remediated",
+    },
+}
 
 
 def parse_entra_return_worksheet(
@@ -108,36 +126,21 @@ def parse_entra_return_worksheet(
         optional_labels=frozenset(_ENTRA_LEGACY_OPTIONAL_WORKSHEET_LABELS),
         label_aliases=ENTRA_WORKSHEET_LABEL_ALIASES,
     )
-    confirmed = {
-        "Yes, confirmed": "confirmed",
-    }
-    permissions = _worksheet_choice(
+    validated = _validated_worksheet_values(
         values,
-        "Permissions and consent",
-        {
-            "Yes, permissions and consent are confirmed": "confirmed",
+        choices=ENTRA_WORKSHEET_CHOICES,
+        validators={
+            "Selected Reply URL": lambda value: _absolute_https_url(
+                value, "Selected Reply URL"
+            ),
+            "Certificate thumbprint (active certificate row)": (
+                lambda value: _certificate_thumbprint(value, "Certificate thumbprint")
+            ),
+            "Certificate expiration date (active certificate row)": (
+                lambda value: _date_only(value, "Certificate expiration date")
+            ),
         },
-    )
-    _worksheet_choice(values, "SAML configuration", confirmed)
-    _worksheet_choice(values, "Signing certificate", confirmed)
-    _worksheet_choice(values, "Authorized connector", confirmed)
-    _worksheet_choice(
-        values,
-        "Employee assignment",
-        {
-            "Yes, access is confirmed or assignment is not required": "confirmed",
-        },
-    )
-    name_id = _safe_nonsecret_text(
-        values["NameID source"],
-        "NameID source",
-    )
-    saml_signing = _worksheet_choice(
-        values,
-        "SAML signing",
-        {
-            "Sign SAML response and assertion": ("Sign SAML response and assertion"),
-        },
+        optional_labels=frozenset(_ENTRA_LEGACY_OPTIONAL_WORKSHEET_LABELS),
     )
     checks = {
         "samlMode": _administrator_attestation(),
@@ -146,23 +149,15 @@ def parse_entra_return_worksheet(
         "graphDelegatedPermissions": _administrator_attestation(),
         "adminConsent": _administrator_attestation(),
         "userAssignment": _administrator_attestation(),
-        "nameId": _administrator_attestation(observed_value=name_id),
+        "nameId": _administrator_attestation(
+            observed_value=validated["NameID source"],
+        ),
         "samlSigningOption": _administrator_attestation(
-            observed_value=saml_signing,
+            observed_value=validated["SAML signing"],
         ),
     }
-    preservation_value = values.get("Existing configuration", "").strip()
-    if preservation_value:
-        preservation = _worksheet_choice(
-            values,
-            "Existing configuration",
-            {
-                "Preserved without changes": "preserved",
-                "Remediated without replacing unrelated configuration": (
-                    "remediated"
-                ),
-            },
-        )
+    preservation = validated.get("Existing configuration")
+    if preservation:
         checks.update(
             {
                 "existingScopesPreserved": _administrator_attestation(
@@ -176,33 +171,14 @@ def parse_entra_return_worksheet(
                 ),
             }
         )
-    if permissions != "confirmed":
-        raise WorkdayConnectContractError("Permissions and consent are incomplete.")
     result = {
         "application": {
-            "appId": _safe_nonsecret_text(
-                values["Application ID"],
-                "Application ID",
-            ),
+            "appId": validated["Application ID"],
         },
-        "replyUrl": _safe_nonsecret_text(
-            values["Selected Reply URL"],
-            "Selected Reply URL",
-        ),
+        "replyUrl": validated["Selected Reply URL"],
         "certificate": {
-            "thumbprint": _safe_nonsecret_text(
-                values["Certificate thumbprint (active certificate row)"],
-                "Certificate thumbprint",
-            ),
-            "validTo": _date_only(
-                _safe_nonsecret_text(
-                    values[
-                        "Certificate expiration date (active certificate row)"
-                    ],
-                    "Certificate expiration date",
-                ),
-                "Certificate expiration date",
-            ),
+            "thumbprint": validated["Certificate thumbprint (active certificate row)"],
+            "validTo": validated["Certificate expiration date (active certificate row)"],
         },
         "checks": checks,
     }
@@ -418,7 +394,7 @@ def build_entra_handoff(
             "Map NameID to the attribute that equals the Workday User Name",
             "Set the SAML signing option to Sign SAML response and assertion",
         ]
-    return {
+    packet = {
         "phase": "entra",
         "scope": {
             "entraTenantId": entra_tenant_id,
@@ -626,7 +602,9 @@ def build_entra_handoff(
                 "validator": "parse_entra_return_worksheet",
             },
             "note": (
-                "Upload the completed administrator workbook. Do not accept "
+                "Ask for the full local path to the completed administrator "
+                "workbook, including its .xlsx filename. Do not require an "
+                "upload or file picker. Do not accept "
                 "blank required values or ask for passwords, client secrets, "
                 "tokens, cookies, certificate contents, or private keys. "
                 "After validation, identify only cells that are missing, "
@@ -635,6 +613,11 @@ def build_entra_handoff(
             ),
         },
     }
+    for instruction in packet["captureInstructions"]:
+        choices = ENTRA_WORKSHEET_CHOICES.get(instruction["information"])
+        if choices:
+            instruction["successfulAnswers"] = list(choices)
+    return packet
 
 
 _ENTRA_CHECKS = {

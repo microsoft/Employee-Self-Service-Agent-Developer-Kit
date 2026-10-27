@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
+import responses
 
 import auth
 from flightcheck import cli, registry
@@ -68,6 +70,247 @@ def _passed() -> CheckResult:
         result="Profile mode remained read-only.",
         roles=[Role.ESS_MAKER.value],
     )
+
+
+@pytest.mark.parametrize("realm", ["test", "prod"])
+@pytest.mark.parametrize("different_environment", [False, True])
+def test_connect_profile_uses_promoted_snapshot_without_retargeting_workspace(
+    tmp_path, monkeypatch, realm, different_environment,
+) -> None:
+    from flightcheck import maker_diagnostics
+    from flightcheck.runner import RunResult
+    from workday_connect_flightcheck import (
+        _command, _config_projection, effective_validation_state,
+    )
+    from workday_connect_model import default_state
+
+    local = tmp_path / ".local"
+    local.mkdir()
+    foundation = local / "config.json"
+    foundation.write_text(json.dumps(_config()), encoding="utf-8")
+    original = foundation.read_bytes()
+    state = default_state()
+    state["activeTargetRealm"] = realm
+    config = _config()
+    target_agent = {
+        **config["agents"][0],
+        "schemaName": f"gptagent_test_{realm}",
+        "botId": "00000000-0000-0000-0000-000000004444",
+    }
+    state["scope"].update({
+        "environmentId": (
+            "00000000-0000-0000-0000-000000005555"
+            if different_environment else config["environmentId"]
+        ),
+        "dataverseUrl": (
+            "https://target.crm.dynamics.com"
+            if different_environment else config["dataverseEndpoint"]
+        ),
+        "entraTenantId": config["tenantId"],
+        "agent": target_agent,
+        "ring": "prod",
+    })
+    state["operators"]["powerPlatformMaker"] = {"username": "maker@example.com"}
+    effective = effective_validation_state(tmp_path, state)
+    snapshot = tmp_path / "target.json"
+    snapshot.write_text(json.dumps(_config_projection(effective)), encoding="utf-8")
+    command = _command(
+        tmp_path, effective, "workday-da:package-ready", tmp_path, snapshot,
+    )
+    assert "--connect-config" not in command
+    args = _args(
+        profile="workday-da:package-ready",
+        profile_config=command[command.index("--profile-config") + 1],
+        validation_realm=command[command.index("--validation-realm") + 1],
+        environment_id=state["scope"]["environmentId"],
+        environment_url=state["scope"]["dataverseUrl"],
+        tenant_id=config["tenantId"],
+        agent_schema_name=target_agent["schemaName"],
+        no_open=True,
+    )
+    captured = {}
+
+    def run_diagnostics(actual_args, actual_config):
+        context = cli._validation_context_from_args(
+            actual_args, actual_config, actual_args.environment_url,
+            actual_args.environment_id,
+        ).to_dict()
+        captured["context"] = context
+        captured["config"] = actual_config
+        return RunResult(
+            scope="profile", started="", profile=actual_args.profile,
+            validation_context=context,
+        )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(maker_diagnostics, "run_maker_diagnostics", run_diagnostics)
+    monkeypatch.setattr(cli, "_print_prioritized_summary", lambda *_a: None)
+    monkeypatch.setattr(cli, "save_results", lambda *_a: None)
+    with pytest.raises(SystemExit) as exc:
+        cli._run_profile(args)
+
+    assert exc.value.code == 0
+    assert captured["context"] == {
+        "realm": realm,
+        "environmentId": state["scope"]["environmentId"],
+        "environmentUrl": state["scope"]["dataverseUrl"],
+        "tenantId": config["tenantId"],
+        "agentSlug": target_agent["slug"],
+        "agentSchemaName": target_agent["schemaName"],
+        "agentId": target_agent["botId"],
+    }
+    assert captured["config"]["releaseLine"] == "da"
+    assert "powerPlatformApiEndpoint" not in captured["config"]
+    assert foundation.read_bytes() == original
+
+
+@pytest.mark.parametrize("realm", ["dev", "test", "prod"])
+@pytest.mark.parametrize("api_version", [None, "2022-03-01-preview"])
+def test_public_connect_profile_preserves_configured_native_api_version(
+    tmp_path, monkeypatch, realm, api_version,
+) -> None:
+    from agentbuilder import DEFAULT_API_VERSION, derive_environment_host
+    from flightcheck import maker_diagnostics
+    from flightcheck.runner import RunResult
+    from tests.conftest import require_validated_mock
+    from tests.mocks import agentbuilder_connectivity as ab
+    from workday_connect_flightcheck import (
+        _command, _config_projection, effective_validation_state,
+    )
+    from workday_connect_model import default_state
+
+    require_validated_mock(ab)
+    config = _config()
+    if api_version is not None:
+        config["agentBuilderApiVersion"] = api_version
+    local = tmp_path / ".local"
+    local.mkdir()
+    foundation = local / "config.json"
+    foundation.write_text(json.dumps(config), encoding="utf-8")
+    original = foundation.read_bytes()
+    state = default_state()
+    state["activeTargetRealm"] = realm
+    state["scope"].update({
+        "environmentId": ab.MOCK_ENV_ID, "entraTenantId": config["tenantId"],
+        "agent": {
+            "slug": "ess-hr", "schemaName": ab.MOCK_SCHEMA_NAME,
+            "botId": ab.MOCK_AGENT_ID,
+        },
+        "ring": "test",
+    })
+    state["operators"]["powerPlatformMaker"] = {"username": "maker@example.com"}
+    state_before = json.dumps(state, sort_keys=True)
+    effective = effective_validation_state(tmp_path, state)
+    snapshot = tmp_path / "target.json"
+    snapshot.write_text(json.dumps(_config_projection(effective)), encoding="utf-8")
+    command = _command(
+        tmp_path, effective, "workday-da:setup-readiness", tmp_path, snapshot,
+    )
+    expected_version = api_version or DEFAULT_API_VERSION
+    host = derive_environment_host(ab.MOCK_ENV_ID, "test")
+    agent_response = ab.get_agent()
+    agent_response["url"] = (
+        f"{host}/copilotstudio/minimalBots/api/{ab.MOCK_AGENT_ID}"
+        f"?api-version={expected_version}"
+    )
+    connection_response = ab.list_connections()
+    connection_response["url"] = connection_response["url"].replace(
+        "2024-10-01", expected_version,
+    )
+    captured = {}
+
+    def run_diagnostics(actual_args, actual_config):
+        runner = SimpleNamespace(
+            config=actual_config, agent_slug=actual_args.agent_slug, env_url="",
+        )
+        maker_diagnostics._configure(runner, actual_args)
+        captured["agent"] = runner.agentbuilder.get_agent(ab.MOCK_AGENT_ID)
+        captured["connections"] = runner.connectivity.list_connections(ab.MOCK_ENV_ID)
+        captured["config"] = actual_config
+        context = cli._validation_context_from_args(
+            actual_args, actual_config, "", ab.MOCK_ENV_ID,
+        ).to_dict()
+        return RunResult(
+            scope="profile", started="", profile=actual_args.profile,
+            validation_context=context,
+        )
+
+    def authenticate(*_args, **kwargs):
+        assert kwargs["allow_write"] is False
+        return "token", config["tenantId"], "maker@example.com"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", [*command[1:], "--no-telemetry"])
+    monkeypatch.setattr(maker_diagnostics, "authenticate_flightcheck", authenticate)
+    monkeypatch.setattr(maker_diagnostics, "run_maker_diagnostics", run_diagnostics)
+    monkeypatch.setattr(cli, "_print_prioritized_summary", lambda *_a: None)
+    monkeypatch.setattr(cli, "save_results", lambda *_a: None)
+    with responses.RequestsMock() as http:
+        http.add(**agent_response)
+        http.add(**connection_response)
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 0
+        assert len(http.calls) == 2
+        assert all(
+            f"api-version={expected_version}" in call.request.url
+            for call in http.calls
+        )
+    assert captured["agent"] == ab.agent()
+    assert captured["connections"] == [ab.connection()]
+    assert captured["config"].get("agentBuilderApiVersion") == api_version
+    assert captured["config"]["agent"]["botId"] == ab.MOCK_AGENT_ID
+    assert foundation.read_bytes() == original
+    assert json.dumps(state, sort_keys=True) == state_before
+
+
+@pytest.mark.parametrize("defect", [
+    "missing", "malformed", "array", "schema", "environment", "tenant", "realm",
+])
+def test_explicit_profile_config_fails_closed(
+    tmp_path, monkeypatch, capsys, defect,
+) -> None:
+    snapshot = tmp_path / "target.json"
+    config = _config()
+    args = _args(profile_config=str(snapshot))
+    if defect == "schema":
+        args.agent_schema_name = "wrong_schema"
+    elif defect == "environment":
+        args.environment_id = "00000000-0000-0000-0000-000000009999"
+    elif defect == "tenant":
+        args.tenant_id = "00000000-0000-0000-0000-000000008888"
+    elif defect == "realm":
+        args.validation_realm = "test"
+    if defect != "missing":
+        snapshot.write_text(
+            "{bad" if defect == "malformed" else json.dumps(
+                [] if defect == "array" else config
+            ),
+            encoding="utf-8",
+        )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(registry, "resolve_profile", lambda _: object())
+    monkeypatch.setattr(registry, "profile_requirements", lambda _: SimpleNamespace(
+        clients=frozenset(), requires_config=False,
+        requires_dataverse_endpoint=False,
+    ))
+    with pytest.raises(SystemExit) as exc:
+        cli._run_profile(args)
+    assert exc.value.code == 1
+    assert "ERROR:" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mode", [[], ["--scope", "local"], ["--checkpoint", "WD-DA-PKG-001"]])
+def test_profile_config_is_not_a_standalone_or_checkpoint_override(
+    monkeypatch, capsys, mode,
+) -> None:
+    monkeypatch.setattr("sys.argv", [
+        "flightcheck", "--profile-config", "target.json", *mode,
+    ])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2
+    assert "--profile-config requires --profile" in capsys.readouterr().err
 
 
 def test_profile_passes_preferred_account_and_forces_read_only(

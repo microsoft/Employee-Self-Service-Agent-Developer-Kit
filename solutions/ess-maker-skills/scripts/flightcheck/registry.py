@@ -302,7 +302,7 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.CRITICAL.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # ---- Workday DA: WD-DA-PKG-001 (setup/workday-da skill, step DA1.1) ----
+    # ---- Workday DA: WD-DA-PKG-001 (connect/workday lifecycle) ----
     # WD-DA-PKG-001: the Workday extension package for the Declarative Agent
     # (DA) flavor of ESS is installed in the target env. Queries the
     # Dataverse `solutions` table for the DA parent (HR/IT) plus its Workday

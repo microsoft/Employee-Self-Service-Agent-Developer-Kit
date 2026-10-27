@@ -2,6 +2,12 @@
 
 # Phase 2 - Microsoft Entra
 
+Before this phase's first question or handoff, apply the **Development progress
+rule** in `SKILL.md`: show the current six-phase table for unfinished
+Development, unless the orchestrator already showed it for this phase entry.
+Do not repeat it for workbook corrections or insert a Development table into
+a Test or Production plan.
+
 This phase guides an administrator through the required Entra changes and
 records the administrator's non-secret response.
 It requires one Microsoft Entra app administrator with either the
@@ -52,7 +58,7 @@ update, grant, enable, or independently verify an Entra setting.
    checks require role-aware Entra app administrator execution.
 3. Give the administrator the canonical tenant ID, Workday tenant, expected
    Service Provider ID `http://www.workday.com/{workdayTenant}`, and the
-   administrator guide below. The administrator must identify the selected
+   detailed administrator workbook. The administrator must identify the selected
    directory and exact enterprise-application/app-registration pairing.
 
 <!--
@@ -64,7 +70,7 @@ python scripts/workday_connect.py entra-handoff --discovery-file ".local\connect
 -->
 
 Use this current phase guide and the controller contract only. Do not inspect
-or reuse the legacy `src/skills/setup/workday/` procedure to fill gaps.
+or reuse retired Dataverse-based installation procedures to fill gaps.
 
 Do not render the handoff until the maker confirms that the administrator is
 engaged. Do not add a separate apply approval: the controller does not perform
@@ -108,12 +114,6 @@ After **Yes**, record the engagement boundary:
 python scripts/workday_connect.py administrator-stage --phase entra --substage administrator-engaged
 ```
 
-Then tell the maker:
-
-> I am preparing the Microsoft Entra configuration steps and workbook. Ask the
-> Entra administrator to follow the steps, fill the workbook in parallel, and
-> return the completed workbook to you.
-
 Then generate the guided handoff packet:
 
 ```powershell
@@ -124,33 +124,49 @@ This command reads only the recorded lifecycle state. It does not authenticate
 to Microsoft Graph, discover applications, or make an Entra change. Use the
 returned `packet` for every packet-driven value below.
 
-Render one standalone section titled **Microsoft Entra app administrator
-handoff - share these steps and the workbook**. It must contain the
+Render one standalone section titled **Microsoft Entra administrator
+handoff**. It must contain the
 administrator role, canonical tenant ID, expected Workday Service Provider ID,
-and the numbered tasks below. The administrator identifies the selected
-directory and exact enterprise application/app-registration identity. The
-maker must be able to forward that section without copying values from earlier
-chat messages.
+Workday tenant, and downloadable workbook. Keep the handoff concise and
+forwardable without copying values from earlier chat messages.
+The detailed workbook is the administrator's task guide. Do not render the
+numbered administrator guide below, `packet.actions`, or an **Administrator
+tasks** section in chat. Keep the guide as internal reference for a specific
+question or failed workbook cell; show only the relevant help when needed.
 
-Before the numbered tasks, tell the administrator:
-
-> Required role: {packet.administratorRole}
->
-> Fill every cell in the **Your tenant values** column of the supplied
-> workbook while performing the tasks, then return the same `.xlsx` file to
-> the maker. Return only non-secret values; never include credentials, tokens,
-> certificate contents, or private keys.
+Include **Required role: {packet.administratorRole}** in the summary.
 
 Share `workbookFile` from the command result as the downloadable administrator
 workbook. It must resolve to the checked-in
-`[Entra administrator workbook](assets/entra-admin-handoff.xlsx)`. Tell the
-maker to send a copy to the administrator and not to edit the repository
-template itself. Do not render `packet.captureInstructions` as a chat table;
-the workbook is the single capture worksheet. Keep the numbered tasks focused
-on actions.
+`[Entra administrator workbook](assets/entra-admin-workbook.xlsx)`.
+Do not render `packet.captureInstructions` as a chat table;
+the workbook is the single capture worksheet.
 
-After rendering the complete handoff, persist the presentation and waiting
-boundaries:
+Render the following five bullets once in the concise handoff, without
+restating them in surrounding prose:
+
+> - **Share:** Send a copy to the Entra administrator; do not edit the original
+>   template itself.
+> - **Complete:** Use **Worksheet - Detailed**, follow each row's instructions,
+>   and fill every cell in the **Your tenant values** column.
+> - **Confirm:** Use the exact successful answer in **Example value** or the
+>   listed choices in **What to record**, only after verifying the setting.
+>   Leave incomplete confirmations blank.
+> - **Return:** Send the completed, organization-approved readable `.xlsx` to
+>   the maker. If encryption or sensitivity protection prevents validation,
+>   ask your information protection administrator for an approved handoff.
+> - **Protect:** Never include credentials, tokens, private keys, or certificate
+>   contents in chat or the workbook, and do not bypass required protections.
+
+Include one essential certificate-handoff note: the Entra administrator must
+transfer the active Base64 certificate through the approved customer channel
+to the Workday administrator before signing off. Render this as an additional
+bullet, not another safety warning.
+Render `packet.consentNote` exactly here as a separate bullet so a separate
+consent-capable administrator is involved only if tenant policy requires one.
+
+After sharing the concise handoff and workbook, persist the presentation and
+waiting boundaries:
 
 ```powershell
 python scripts/workday_connect.py administrator-stage --phase entra --substage handoff-presented
@@ -158,6 +174,9 @@ python scripts/workday_connect.py administrator-stage --phase entra --substage a
 ```
 
 ## Administrator guide for missing or changed settings
+
+Internal reference only: do not render this task list when sharing the detailed
+workbook. Use only the affected step for an explicit help request or correction.
 
 The Entra app administrator must identify the exact application by the expected
 Service Provider ID and matching Application ID. Never select an application
@@ -214,7 +233,7 @@ by display name alone.
    tenant policy; otherwise use the separately arranged consent-capable
    administrator for this step only.
 
-   Render `packet.consentNote` exactly here. Do not ask the maker to arrange a
+   Do not ask the maker to arrange a
    separate consent-capable administrator unless this tenant-policy condition
    occurs.
 8. **Configure assignment.** Open **Enterprise applications -> the exact
@@ -226,7 +245,7 @@ by display name alone.
    Identifier (Name ID)** so the source attribute equals the Workday User Name
    used by the tenant, commonly `user.mail` or `user.userPrincipalName`.
 
-End the shareable handoff after the numbered tasks. Do not repeat an
+Do not append these tasks to the shareable workbook handoff. Do not repeat an
 **Information to return to the maker** checklist: the workbook already
 contains every required value, location, instruction, and allowed example.
 
@@ -235,7 +254,7 @@ The next phase must consume the recorded identifiers and transferred
 certificate without asking the maker to re-engage the Entra app administrator.
 Only an explicit controller-detected Entra target change may reopen this phase.
 
-After the steps and workbook are shared, ask exactly:
+After the concise handoff and workbook are shared, ask exactly:
 
 **Has the Microsoft Entra administrator completed their task?**
 
@@ -256,11 +275,18 @@ python scripts/workday_connect.py administrator-stage --phase entra --substage c
 
 Then tell the maker:
 
-> Upload the completed Microsoft Entra administrator workbook file in this
-> chat.
+> - Save the completed Microsoft Entra administrator workbook on this computer.
+> - In File Explorer, right-click the file and select **Copy as path**.
+> - Paste the full path here, including the filename and `.xlsx` extension,
+>   for example: `"C:\Users\YourName\Downloads\entra-admin-workbook.xlsx"`.
 
-Use the uploaded `.xlsx` file directly. Do not ask the maker to paste the
-worksheet, retype the values, or hand-author JSON. Object IDs, the scope GUID,
+Do not require an upload or a file picker. Accept the surrounding quotes from
+**Copy as path** and remove that outer pair before passing the path as a
+single literal argument to the controller. Use the supplied local `.xlsx`
+file directly. If it cannot be read, show the actual controller error and ask
+for an accessible local path; do not guess another file or bypass permissions.
+Do not ask the maker to paste the worksheet, retype the values, or hand-author
+JSON. Object IDs, the scope GUID,
 derived tenant URLs, and complete URI lists are not required. A reply such as
 "done", "all good", "continue", or "proceed" is not evidence and must not be
 converted into administrator attestation.
@@ -276,13 +302,22 @@ After submission, validate the complete workbook once. If fields are missing,
 invalid, or internally inconsistent, retain every safe valid answer, name the
 returned `invalidFields` and `outstandingFields`, repeat their applicable
 `captureInstructions` portal locations, and ask the administrator to correct
-those cells in the same workbook. Ask the maker to upload the corrected
-`.xlsx` file. Do not replay the full worksheet or revert to one-by-one chat
-questions.
+those cells in the same workbook. Ask the maker to save the corrected
+`.xlsx` file and provide its full path again. Do not replay the full worksheet
+or revert to one-by-one chat questions.
 
-Do not perform a maker-authenticated Graph reread after the maker uploads the
-completed workbook. Role-aware execution will perform those real API checks
-later.
+When the controller returns `details.fieldErrors`, show every returned label
+and its correction in one response, including the accepted answers for a
+choice cell. Do not stop after the first invalid field. If the workbook is
+encrypted or protected, explain that specific limitation and show the
+approved-readable-copy guidance above; do not call it a corrupt workbook,
+request a password, or retry parsing it with ad hoc tools. Preserve completed
+phases and resume the same file-path collection boundary. A chat reply such as
+**Yes** does not correct a rejected workbook cell or establish its attestation.
+
+Do not perform a maker-authenticated Graph reread after the maker provides the
+completed workbook path. Role-aware execution will perform those real API
+checks later.
 
 Persist the Application ID, derived `entraAppIdUri`, derived
 `workdaySamlEntityId`, derived `microsoftEntraIdentifier`, derived
@@ -306,10 +341,11 @@ On resume, use the Entra app administrator entry returned by `status`. Do not
 redisplay a completed handoff; collect only its `invalidFields` and
 `outstandingFields`.
 
-Pass the uploaded workbook path directly:
+Pass the supplied workbook path as a single literal argument; never execute
+path text as shell code:
 
 ```powershell
-python scripts/workday_connect.py record-entra --verification-worksheet-file "<uploaded-entra-workbook-path>"
+python scripts/workday_connect.py record-entra --verification-worksheet-file "<completed-entra-workbook-full-path>"
 ```
 
 Successful Entra validation completes only the Entra administrator phase.

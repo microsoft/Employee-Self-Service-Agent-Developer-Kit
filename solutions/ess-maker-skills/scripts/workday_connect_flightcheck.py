@@ -91,9 +91,14 @@ def _administrator_handoff_phase(
 
 
 def _customer_remediation(phase_id: str, error_type: str) -> str:
+    if error_type == "flightcheck-transport-error":
+        return (
+            "Readiness validation did not finish. Review the validation error "
+            "before retrying; keep the existing package and completed setup "
+            "unchanged."
+        )
     if error_type in {
         "flightcheck-timeout",
-        "flightcheck-transport-error",
         "flightcheck-execution-error",
     }:
         return (
@@ -182,7 +187,7 @@ def effective_validation_state(
     root: Path,
     state: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Add the foundation validation realm without mutating lifecycle state."""
+    """Resolve the active target realm without mutating lifecycle state."""
     effective_state = dict(state)
     effective_scope = dict(state.get("scope") or {})
     foundation_path = root.resolve() / ".local" / "config.json"
@@ -198,13 +203,16 @@ def effective_validation_state(
         except (OSError, json.JSONDecodeError):
             foundation_error = True
     realm = _text(
-        effective_scope.get("validationRealm")
+        ("invalid-foundation-config" if foundation_error else "")
+        or state.get("activeTargetRealm")
+        or effective_scope.get("validationRealm")
         or foundation.get("realm")
-        or ("invalid-foundation-config" if foundation_error else "")
         or "dev"
     ).casefold()
     effective_scope["validationRealm"] = realm
     effective_scope["validationRealmSourceValid"] = not foundation_error
+    if "agentBuilderApiVersion" in foundation:
+        effective_scope["agentBuilderApiVersion"] = foundation["agentBuilderApiVersion"]
     effective_state["scope"] = effective_scope
     return effective_state
 
@@ -236,6 +244,7 @@ def _config_projection(state: Mapping[str, Any]) -> dict[str, Any]:
         **scope,
         **identifiers,
         **endpoints,
+        "releaseLine": "da",
         "realm": scope.get("validationRealm") or "dev",
         "tenantId": scope.get("entraTenantId"),
         "dataverseEndpoint": scope.get("dataverseUrl"),
@@ -269,7 +278,7 @@ def _command(
         str(Path(__file__).with_name("flightcheck") / "cli.py"),
         "--output",
         str(output_dir),
-        "--connect-config",
+        "--profile-config",
         str(config_path),
         "--profile",
         profile_name,
