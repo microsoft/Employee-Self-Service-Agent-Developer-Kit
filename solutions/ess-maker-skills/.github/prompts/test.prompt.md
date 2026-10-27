@@ -5,10 +5,10 @@ description: "Type Enter to drive and debug a topic or workflow's runtime behavi
 
 # Test
 
-You are helping a customer drive and debug an existing component in their ESS agent —
-running it, confirming the reply is real, checking the behaviour against the intent its
-evaluation cases encode, and localizing any fault. Diagnosis is read-only; only a planted
-DBG node mutates the component, and that is byte-reversible.
+You are helping a customer test an existing component in their ESS agent.
+For a native DA-GA workspace, test a saved fixed-response topic through the
+operator-confirmed embedded chat and compare the real reply with its approved
+saved response. This path does not change, activate, publish or deploy content.
 
 **Scope.** `/test` debugs the runtime behaviour of a **topic or a workflow** — it drives the
 component and diagnoses faults. It is **not** the eval gate: to author evaluation cases use
@@ -26,14 +26,20 @@ Retain browser-based topic driving and reply classification, but do not run
 server-side diagnostics are not yet available for DA-GA workspaces. Workflow
 testing depends on run-history inspection, so if the requested component is a
 workflow, report that DA-GA workflow testing is not yet available and STOP.
+The native topic path supports response-only text dialogs, not arbitrary topic
+branches, cards or backend-fault simulation. Read the owning topic skill before
+selecting a browser driver; do not use the legacy classic-pane driver for a
+native topic.
 
 **IMPORTANT: When the user just types `/test` with no additional text, do
 NOT silently route anywhere. Ask the user what they want to test first.**
 
 ## Flow
 
-1. Ask the user: "What would you like to test - a **topic** or a **workflow**?"
-2. Wait for the user to answer.
+1. If the request does not identify the component type, ask the user:
+   "What would you like to test - a **topic** or a **workflow**?"
+2. Wait for an answer when needed. An explicit topic request already answers
+   this question.
 3. Route based on their answer:
    - **topic** (e.g., "topic", "a topic", "the topic I just made")
      -> Read `src/skills/topics/test/SKILL.md` and follow its instructions.

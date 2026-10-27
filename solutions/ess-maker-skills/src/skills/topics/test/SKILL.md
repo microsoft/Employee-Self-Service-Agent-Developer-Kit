@@ -1,5 +1,17 @@
 # Test / Debug Topic Skill
 
+## Native DA-GA workspace
+
+Read `.local/config.json`. When `releaseLine` is `da`, read
+`src/reference/ess-docs/operations/native-topic-testing.md` and follow that
+bounded native-topic procedure instead of the legacy instructions below.
+Resolve the topic from a fresh native read, not an assumed local topic file.
+Do not run `drive_topic.py`, plant debug nodes, inspect classic flow runs,
+change routing, activate, publish, reset, reload or replay a send.
+Finish after the native procedure and its evidence report.
+
+## Legacy topic debugging
+
 Guides a maker through debugging a topic they just created or updated — driving it, confirming the reply is real, checking the fix doesn't break the intent the eval cases encode, and localizing a fault to either the flow it calls or the topic's own internal state.
 
 **Eval cases are the read-only intent guardrail.** A topic's **evaluation cases** (authored upstream via the `evaluations/create` skill, stored as `EvaluationData` under `{agent.folder}/evaluations/`) encode the intended customer-facing behaviour — especially failure handling (backend down, record missing, connection unauthorized). This skill treats them as a **guardrail: a fix must not break the intent they encode.** It reads that intent; it does not grade the topic against the cases and it never edits them. If a topic has no eval cases yet, that is a signal to author them with `evaluations/create` — not work this skill does. Absent evals, drive a representative trigger phrase instead.
