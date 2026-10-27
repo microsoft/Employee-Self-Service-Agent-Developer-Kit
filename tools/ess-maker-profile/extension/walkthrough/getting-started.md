@@ -14,10 +14,15 @@ For example, here are a few prompts to try:
 - **Run a flightcheck** — ask *"Help me run a flightcheck"* to run readiness
   checks before you deploy.
 
-There are many more things you can ask for — creating and updating topics,
+There are many more things you can ask for: creating and updating fixed-answer topics,
 scanning for issues, generating tests, and pushing to Copilot Studio. Describe
 what you want in plain English and Copilot takes it from there.
 
 ## Customizing your agent
 
 Make sure setup is completed before customizing your ESS agent.
+
+For a fixed-answer topic, provide the approved wording and optional support link,
+then review the exact preview before saving. New topics are inactive. Saving does
+not activate or publish a topic, and updates keep the existing topic identity and
+state.

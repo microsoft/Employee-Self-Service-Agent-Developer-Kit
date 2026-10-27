@@ -108,11 +108,11 @@ test('landing-page action sends the slash command', () => {
     assert.deepStrictEqual(landingPage.requires, ['setup']);
 });
 
-test('topic actions send explicit intent through the not-yet-available gates', () => {
+test('topic actions send explicit intent for native fixed-answer authoring', () => {
     const create = ACTIONS.find(a => a.id === 'create');
     const update = ACTIONS.find(a => a.id === 'update');
-    assert.strictEqual(create.label, 'Create a topic (Coming Soon)');
-    assert.strictEqual(update.label, 'Update a topic (Coming Soon)');
+    assert.strictEqual(create.label, 'Create a topic');
+    assert.strictEqual(update.label, 'Update a topic');
     assert.strictEqual(create.query, 'Create a topic');
     assert.strictEqual(update.query, 'Update a topic');
 });
@@ -274,17 +274,17 @@ test('view container is in activitybar (primary sidebar)', () => {
     assert.strictEqual(pkg.contributes.viewsContainers.activitybar[0].id, 'essMakerActions');
 });
 
-test('topic command titles are marked coming soon', () => {
+test('topic command titles expose the supported authoring actions', () => {
     const commands = new Map(pkg.contributes.commands.map(command => [
         command.command, command.title,
     ]));
     assert.strictEqual(
         commands.get('essMaker.runCreate'),
-        'ESS Maker: Create a topic (Coming Soon)',
+        'ESS Maker: Create a topic',
     );
     assert.strictEqual(
         commands.get('essMaker.runUpdate'),
-        'Agent Developer Kit: Modify a topic (Coming Soon)',
+        'Agent Developer Kit: Modify a topic',
     );
 });
 

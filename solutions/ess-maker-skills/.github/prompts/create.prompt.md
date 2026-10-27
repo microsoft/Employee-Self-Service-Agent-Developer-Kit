@@ -1,31 +1,22 @@
 ---
 mode: agent
-description: "Create a workflow or an evaluation test set"
+description: "Create a fixed-response topic, workflow, or evaluation test set"
 ---
 
 # Create
 
-You are helping a customer create a workflow or evaluation test set for their
-ESS agent. Topic creation is not yet available in this release.
+You are helping a customer create a fixed-response topic, workflow, or evaluation
+test set for their ESS agent.
 
-For every explicit or implicit request to create a topic, show this message and
-STOP before reading a topic-authoring skill, drafting an eval contract,
-creating a checkpoint, or writing any file:
+For explicit or implicit topic creation, read
+`src/skills/topics/crafted-response/SKILL.md`. Only a single-intent static answer
+and optional approved support link are supported. That skill owns target
+verification, exact preview, approval, native save, and readback. Do not activate
+or publish the topic or change agent-wide instructions.
 
-> Topic creation is not yet available in this release. No local or remote files have been changed.
-
-Render only that message. Do not offer workflows, evaluation test sets, or
-other alternatives; do not add product-specific capability claims or a
-follow-up question.
-
-The topic-authoring tooling that remains visible in this repository is legacy
-implementation retained for reference and future migration. It has not been
-cleared for use with DA. Its presence does not indicate that topic creation or
-updates are available, and it must not be invoked for direct user requests.
-
-Do not route around this gate through
-`src/skills/topics/create-eval-driven/SKILL.md`,
-`src/skills/topics/create/SKILL.md`, workflow creation, or direct file edits.
+Do not invoke retained `topics/create`, `topics/create-eval-driven`, workflow
+creation, or direct YAML edits to author a topic. Their broader integrations,
+branches, cards, and backend calls are outside this route.
 
 **Setup-state note.** Creating a **workflow** requires completed canonical
 setup. Read `.local/setup/config.json` and `.local/config.json`; if canonical
@@ -52,8 +43,9 @@ When `/create` includes additional text, topic intent, whether explicit or
 implicit, always wins:
 
 1. If the user explicitly or implicitly asks to create any **topic**, including
-   a topic from evals or a scenario file, use the not-yet-available message
-   above and STOP.
+   a topic from evals or a scenario file, read
+   `src/skills/topics/crafted-response/SKILL.md`. Apply its response-only boundary;
+   do not start an eval-driven authoring flow.
 2. If the user explicitly asks to create or generate an **evaluation** or
    **test set**, route to
    `src/skills/evaluations/dispatcher/SKILL.md`. Do this even when the request
@@ -62,15 +54,18 @@ implicit, always wins:
    `src/skills/workflows/create/SKILL.md`.
 4. If the input only points to evaluation YAML files without a requested
    operation, ask whether the user wants to create an **evaluation test set**.
-   State that creating a topic from those evals is not yet available.
+   Do not infer approval to create a topic from the supplied files.
 5. Ask the general component question below only when the remaining text is
    still ambiguous.
 
 ## Flow
 
-1. Ask the user: "What would you like to create - a **workflow** or an **evaluation** test set?"
+1. Ask the user: "What would you like to create - a **topic with a fixed answer**, a **workflow**, or an **evaluation** test set?"
 2. Wait for the user to answer.
 3. Route based on their answer:
+   - **topic**
+     -> Read `src/skills/topics/crafted-response/SKILL.md` and follow its
+     setup check and bounded native creation steps.
    - **workflow** (e.g., "workflow", "a workflow", "new workflow")
      -> If not set up, show the setup message above and STOP. Otherwise read
      `src/skills/workflows/create/SKILL.md` and follow its instructions.

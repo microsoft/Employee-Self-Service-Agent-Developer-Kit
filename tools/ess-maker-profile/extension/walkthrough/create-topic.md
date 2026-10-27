@@ -1,18 +1,18 @@
 # Create a topic
 
-A **topic** is one conversation your agent can handle — for example, "submit a time-off request" or "reset my password".
+A **fixed-answer topic** answers one intent with your approved response and an optional approved support link, then ends.
 
-When you click **Create a topic**, a chat opens where you describe what you want in plain English. The kit will:
+Complete setup, then click **Create a topic**. Copilot will:
 
-- Generate trigger phrases (the things employees might say).
-- Build the conversation flow and adaptive cards.
-- Wire up the integration to ServiceNow, Workday, or your custom system if needed.
-- Save everything to your local working copy.
+- Collect the topic name, intent, trigger phrases, exact answer, and optional link.
+- Show the selected agent and exact proposed content.
+- Ask whether to save, change the details, or cancel.
+- Save one inactive topic to the selected editable Dev agent and verify its saved content.
 
-Nothing is pushed to production yet — that comes later with the Push button.
+Saving does not activate or publish the topic or verify employee chat behavior. Use **Update a topic** to change a supported fixed-answer topic created through this path while keeping the same topic identity and state.
 
-### Examples
+Backend calls, questions, cards, branching, handoffs, and agent-wide instruction changes are not supported. Packaged, system, and integration topics cannot be changed through this path.
 
-> "When someone asks about their PTO balance, look it up in Workday and show how many days they have left this year."
+## Example
 
-> "Let employees submit IT tickets for laptop issues. Ask for the make/model, what's wrong, and urgency, then file the ticket in ServiceNow."
+> "When someone asks where the equipment policy is, show this approved answer and support link."

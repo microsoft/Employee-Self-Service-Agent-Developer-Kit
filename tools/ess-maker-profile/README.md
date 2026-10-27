@@ -16,13 +16,15 @@ In Maker mode, the extension opens the **Agent Developer Kit** rail on the left,
 
 | Customization action | Copilot Chat command |
 |---|---|
-| Create a topic (Coming Soon) | Topic creation availability message |
-| Update a topic (Coming Soon) | Topic update availability message |
+| Create a topic | `Create a topic` |
+| Update a topic | `Update a topic` |
 | Scan for issues | `/scan` |
 | Run a flightcheck | `/flightcheck` |
 | Generate tests | `/evaluate` |
 | Push to Copilot Studio | `/push` |
 | Customize landing page | `/landing-page` |
+
+Topic authoring supports one fixed answer and an optional approved support link. Copilot previews the exact change and asks for approval before saving to the selected editable Dev agent. New topics are inactive; updates keep the existing topic's identity and state. Saving does not activate or publish a topic or verify employee chat behavior. Backend calls, cards, branching, and changes to packaged or system topics are not supported.
 
 The walkthrough has **What ADK does** and **Getting started** steps. Setup is user-driven in both modes: select **Start setup**, type `/setup`, or ask Copilot for setup help.
 

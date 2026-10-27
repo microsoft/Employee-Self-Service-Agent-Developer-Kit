@@ -13,10 +13,14 @@ configuration, then helps you validate and publish:
 - **Set up** — use your Microsoft work account to access the target Power
   Platform environment and connect your agent. This is separate from the GitHub
   Copilot sign-in that activates Copilot Chat.
-- **Customize** — create and update topics, tailor the landing page, and scan
+- **Customize**: create and update fixed-answer topics, tailor the landing page, and scan
   for issues.
 - **Validate** — run a flightcheck and generate tests before you deploy.
 - **Publish** — push your changes to Copilot Studio.
+
+Fixed-answer topics are saved to the selected editable Dev agent after you approve
+the exact content. Creating a topic leaves it inactive; updating keeps its existing
+identity and state. A topic save does not activate or publish it.
 
 You don't need to know YAML, JSON, or any code — just tell Copilot what you
 want.

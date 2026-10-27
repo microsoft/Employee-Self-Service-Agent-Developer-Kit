@@ -208,6 +208,9 @@ before announcing a mismatch, workspace switch, or refresh.
 
 After canonical DA setup is complete:
 
+- one fixed-response topic can be created or updated through
+  `src/skills/topics/crafted-response/SKILL.md`; this saves only the selected
+  native Dev component, without activation or publication;
 - local authoring, review, scan, and browser-based topic driving remain
   available;
 - Dataverse push and server-backed validation are permitted in this
@@ -224,7 +227,7 @@ capability fields to setup state.
 
 ## Persona Boundary
 
-You ARE the kit - not a consultant discussing the kit. Your job is to help users customize their ESS agent through the capabilities available in this release: create workflows and evaluation test sets, scan for errors, set up their environment, and answer questions about ESS capabilities.
+You ARE the kit - not a consultant discussing the kit. Your job is to help users customize their ESS agent through the capabilities available in this release: create or update fixed-response topics, create workflows and evaluation test sets, scan for errors, set up their environment, and answer questions about ESS capabilities.
 
 **Do NOT:**
 
@@ -327,12 +330,16 @@ For full schemas, reference the topic YAML and workflow JSON files in the user's
 ### What customers CAN do (with this kit)
 
 - Create and update supported workflows and evaluation test sets
+- Create and update one maker-owned fixed-response topic in the selected Dev agent
 - Fix compile errors in cloned agents
 - Review and scan supported local agent components
 
-Direct topic creation and updates are not yet available in this release. Stop
-those requests at the capability gate before reading topic-authoring guidance or
-changing files.
+For direct topic creation and updates, read
+`src/skills/topics/crafted-response/SKILL.md`. Only one intent, trigger phrases,
+an exact approved static answer, and an optional approved support link are
+supported. Packaged/system/integration topics, backend calls, branches, and
+handoffs remain unsupported. Do not invoke retained legacy or eval-driven topic
+authoring, edit agent-wide instructions, or route around this boundary.
 
 ### What requires admin/portal access
 
@@ -391,13 +398,13 @@ When helping a customer, match their request to one of these patterns:
 
 | Customer says...                                       | Pattern                    | What to create                                                                                                                                        |
 | ------------------------------------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "I need to look up X from ServiceNow/Workday"          | Product extension required | Route connection/setup requests through `src/skills/connect/SKILL.md`; if topic authoring is requested, stop at the not-yet-available capability gate |
-| "I need to create a ticket/case/request"               | Product extension required | Route connection/setup requests through `src/skills/connect/SKILL.md`; if topic authoring is requested, stop at the not-yet-available capability gate |
-| "I need to show the user their X data"                 | Product extension required | Route connection/setup requests through `src/skills/connect/SKILL.md`; if topic authoring is requested, stop at the not-yet-available capability gate |
-| "I need to call a non-ESS system (Jira, custom API)"   | Topic authoring required   | Stop: topic creation is not yet available                                                                                                             |
-| "I need to add a step to an existing flow"             | Topic update required      | Stop: topic updates are not yet available                                                                                                             |
-| "I need to change how the agent responds to X"         | Topic update required      | Stop: topic updates are not yet available                                                                                                             |
-| "I need to show a dropdown of options from our system" | Topic authoring required   | Stop: topic creation and updates are not yet available                                                                                                |
+| "I need to look up X from ServiceNow/Workday"          | Product extension required | Route connection/setup through `src/skills/connect/SKILL.md`; backend-backed topic authoring is unsupported |
+| "I need to create a ticket/case/request"               | Product extension required | Route connection/setup through `src/skills/connect/SKILL.md`; backend-backed topic authoring is unsupported |
+| "I need to show the user their X data"                 | Product extension required | Route connection/setup through `src/skills/connect/SKILL.md`; backend-backed topic authoring is unsupported |
+| "I need to call a non-ESS system (Jira, custom API)"   | Backend-backed topic       | Stop: only fixed-response topic authoring is supported |
+| "I need to add a step to an existing flow"             | Topic update required      | Stop: adding conversation steps is outside fixed-response topic authoring |
+| "I need to change how the agent responds to X"         | Topic update required      | Read `src/skills/topics/crafted-response/SKILL.md`; update only its supported native topic |
+| "I need to show a dropdown of options from our system" | Backend-backed topic       | Stop: only fixed-response topic authoring is supported |
 
 For detailed patterns, see `src/reference/ess-docs/customization/customize.md`.
 
@@ -424,6 +431,11 @@ For detailed patterns, see `src/reference/ess-docs/customization/customize.md`.
 
 ## Agent Development Lifecycle (CRITICAL)
 
+**Native fixed-response topics are an exception to the local-file pipeline.**
+Follow `src/skills/topics/crafted-response/SKILL.md` for preview, explicit approval,
+native save, and authoritative readback. Do not run checkpoint/push/publish or
+claim that a local YAML edit saved the native topic.
+
 The files in `workspace/agents/{slug}/` are a **local working copy** of the agent
 deployed in Copilot Studio. They are NOT the live agent.
 
@@ -446,9 +458,9 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | Run common ESS foundation setup (`/setup`)                                                              | `src/skills/foundation-setup/SKILL.md`                                                        |
 | Provision/connect Workday for the active ESS HR agent (`/connect workday` or `/connect-workday`)        | `src/skills/connect/SKILL.md`                                                                 |
 | Connect to Workday                                                                                      | `src/skills/connect/SKILL.md`                                                                 |
-| Create a topic                                                                                          | Stop: topic creation is not yet available; do not read a topic-authoring skill or write files |
+| Create a topic                                                                                          | `src/skills/topics/crafted-response/SKILL.md`                                                |
 | Create a workflow                                                                                       | `src/skills/workflows/create/SKILL.md`                                                        |
-| Update/modify a topic                                                                                   | Stop: topic updates are not yet available; do not read a topic-authoring skill or write files |
+| Update/modify a topic                                                                                   | `src/skills/topics/crafted-response/SKILL.md`                                                |
 | Update/modify a workflow                                                                                | `src/skills/workflows/update/SKILL.md`                                                        |
 | Delete/remove a topic                                                                                   | `src/skills/topics/delete/SKILL.md`                                                           |
 | Delete/remove a workflow                                                                                | `src/skills/workflows/delete/SKILL.md`                                                        |
@@ -510,9 +522,9 @@ before continuing. Do NOT complete local authoring until the subagent has
 returned. Do NOT invoke the validate subagent after entire test set delete
 operations or after deleting the last remaining case in a category.
 
-**Topic review invocation:** Direct topic creation and update requests stop at
-the not-yet-available capability gate and must not reach an authoring or review
-skill. When another supported internal flow explicitly delegates topic
+**Topic review invocation:** Direct fixed-response topic requests follow
+`src/skills/topics/crafted-response/SKILL.md`, not the local/eval-driven review
+pipeline. When another supported internal flow explicitly delegates topic
 authoring, at step 6 of the corresponding eval-driven topic flow
 (`src/skills/topics/create-eval-driven/SKILL.md` or
 `src/skills/topics/update-eval-driven/SKILL.md`) — after the scan and before

@@ -877,6 +877,8 @@ class MinimalBotEvaluationClient:
         api_base: str | None = None,
         scope: str | None = None,
         agent_backend: str | None = None,
+        access_token: str | None = None,
+        session: requests.Session | None = None,
     ):
         if not environment_id:
             raise MinimalBotEvaluationError(
@@ -897,7 +899,8 @@ class MinimalBotEvaluationClient:
             agent_backend if agent_backend is not None
             else _agent_backend_for_ring(ring)
         )
-        self._token: str | None = None
+        self._token = access_token
+        self._session = session or _SESSION
         self.signed_in_username: str | None = None
 
     @classmethod
@@ -944,7 +947,7 @@ class MinimalBotEvaluationClient:
     ) -> tuple[requests.Response, Any]:
         auth_value = " ".join(("Bearer", self._require_token()))
         try:
-            response = _SESSION.request(
+            response = self._session.request(
                 method,
                 url,
                 headers={
@@ -981,13 +984,100 @@ class MinimalBotEvaluationClient:
             "POST", self._components_url, body={}, operation="component read")
         if response.status_code != 200:
             raise MinimalBotEvaluationError(
-                f"MinimalBot component read failed (HTTP {response.status_code})."
+                f"MinimalBot component read failed (HTTP {response.status_code}); "
+                f"requestId={response.headers.get('x-ms-request-id')}; "
+                f"response={json.dumps(body, ensure_ascii=False)}"
             )
         if not isinstance(body, dict):
             raise MinimalBotEvaluationError(
                 "MinimalBot component read returned an unexpected payload."
             )
         return body
+
+    def create_dialog_component(
+        self,
+        component: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Insert one inactive dialog and verify its saved identity and content."""
+        if (
+            component.get("$kind") != "DialogComponent"
+            or component.get("parentBotId") != self.bot_id
+            or not component.get("id")
+            or not str(component.get("displayName") or "").strip()
+            or not isinstance(component.get("dialog"), dict)
+            or component.get("state") != "Inactive"
+            or component.get("status") != "Inactive"
+        ):
+            raise MinimalBotEvaluationError(
+                "Creation requires one named inactive dialog for the selected agent."
+            )
+        before = self.read_components()
+        bot = before.get("bot") or {}
+        schema_prefix = str(bot.get("schemaName") or "") + ".topic."
+        if (
+            bot.get("cdsBotId") != self.bot_id
+            or not bot.get("schemaName")
+            or not str(component.get("schemaName") or "").startswith(schema_prefix)
+        ):
+            raise MinimalBotEvaluationError("The dialog does not belong to this agent.")
+        for change in before.get("botComponentChanges") or []:
+            existing = change.get("component") or {}
+            if (
+                existing.get("$kind") == "DialogComponent"
+                and str(existing.get("displayName") or "").strip().casefold()
+                == component["displayName"].strip().casefold()
+            ):
+                raise MinimalBotEvaluationError(
+                    "A topic with this name already exists in the selected agent. "
+                    "No create was sent; select it explicitly for an update."
+                )
+        if not before.get("changeToken"):
+            raise MinimalBotEvaluationError("The native read omitted the changeToken.")
+        payload = {
+            "changeToken": before["changeToken"],
+            "botComponentChanges": [
+                {"$kind": "BotComponentInsert", "component": component}
+            ],
+            "cloudFlowDefinitionChanges": [],
+            "connectionReferenceChanges": [],
+            "connectorDefinitionChanges": [],
+            "environmentVariableChanges": [],
+            "aIPluginOperationChanges": [],
+            "componentCollectionChanges": [],
+            "dataverseTableSearchChanges": [],
+            "connectedAgentDefinitionChanges": [],
+        }
+        response, body = self._request(
+            "PUT", self._components_url, body=payload, operation="dialog create"
+        )
+        if response.status_code != 200:
+            raise MinimalBotEvaluationError(
+                f"MinimalBot dialog create failed (HTTP {response.status_code}); "
+                f"componentId={component['id']}; "
+                f"requestId={response.headers.get('x-ms-request-id')}; "
+                f"response={json.dumps(body, ensure_ascii=False)}. "
+                "Inspect saved state before considering another create."
+            )
+        verified = self.read_components()
+        expectation = {
+            "componentId": component["id"],
+            "schemaName": component["schemaName"],
+            "dialog": component["dialog"],
+            "state": "Inactive",
+            "status": "Inactive",
+            "requireCleanDiagnostics": True,
+        }
+        verification = self._verify_dialog_components_payload([expectation], verified)
+        saved = next(
+            change["component"]
+            for change in verified["botComponentChanges"]
+            if change.get("component", {}).get("id") == component["id"]
+        )
+        if saved.get("displayName") != component["displayName"]:
+            raise MinimalBotEvaluationError(
+                f"Saved topic name did not match; componentId={component['id']}."
+            )
+        return {"createdComponents": 1, "component": saved, **verification}
 
     def update_dialog_components(
         self,
@@ -1137,7 +1227,7 @@ class MinimalBotEvaluationClient:
                 "dataverseTableSearchChanges": [],
                 "connectedAgentDefinitionChanges": [],
             }
-            response, _ = self._request(
+            response, body = self._request(
                 "PUT",
                 self._components_url,
                 body=payload,
@@ -1159,7 +1249,9 @@ class MinimalBotEvaluationClient:
             if response.status_code != 200:
                 raise MinimalBotEvaluationError(
                     "MinimalBot dialog update failed "
-                    f"(HTTP {response.status_code})."
+                    f"(HTTP {response.status_code}); "
+                    f"requestId={response.headers.get('x-ms-request-id')}; "
+                    f"response={json.dumps(body, ensure_ascii=False)}"
                 )
 
         verified = self.read_components()

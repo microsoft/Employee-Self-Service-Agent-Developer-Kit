@@ -20,9 +20,12 @@ root so the kit prompts and instructions are active.
 | `ESS Maker: Restore Developer Layout` | Restore the saved VS Code layout settings. |
 | `ESS Maker: View Tutorial` | Open the native getting-started walkthrough. |
 | `ESS Maker: Connect to environment` | Opens Copilot Chat with `/setup`. |
-| `ESS Maker: Create a topic (Coming Soon)` | Opens Copilot Chat with the current availability message. |
+| `ESS Maker: Create a topic` | Opens Copilot Chat to preview and approve one fixed-answer topic. |
+| `Agent Developer Kit: Modify a topic` | Opens Copilot Chat to update a supported fixed-answer topic. |
 | `ESS Maker: Scan for issues` | Opens Copilot Chat with `/scan`. |
 | `ESS Maker: Validate readiness (FlightCheck)` | Opens Copilot Chat with `/flightcheck`. |
 | `ESS Maker: Push to Copilot Studio` | Opens Copilot Chat with `/push`. |
 
 In the **Customization** tree, **Customize landing page** appears immediately after **Push to Copilot Studio** and opens `/landing-page`. All Customization actions are clickable; complete setup before customizing the agent. Setup is user-driven in both Maker and Developer modes.
+
+Topic saves target the selected editable Dev agent, not local YAML files. Creation saves one inactive topic; updates preserve the existing topic's identity and state. Neither operation activates or publishes. Only one intent, trigger phrases, an approved fixed response, and an optional approved support link are supported. Packaged, system, and integration topics are outside this authoring path.

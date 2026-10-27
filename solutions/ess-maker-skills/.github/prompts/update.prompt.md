@@ -1,31 +1,22 @@
 ---
 mode: agent
-description: "Modify a workflow or evaluation test set"
+description: "Modify a fixed-response topic, workflow, or evaluation test set"
 ---
 
 # Update
 
-You are helping a customer modify a workflow or evaluation test set. Topic
-updates are not yet available in this release.
+You are helping a customer modify a fixed-response topic, workflow, or evaluation
+test set.
 
-For every explicit or implicit request to update, modify, rename, or otherwise
-change a topic, show this message and STOP before reading a topic-authoring
-skill, creating a checkpoint, or writing any file:
+For explicit or implicit changes to a topic itself, read
+`src/skills/topics/crafted-response/SKILL.md`. Update only a supported topic
+created by that native route, keeping its name, native ID, and schema. The skill
+owns fresh readback, before/after preview, approval, and scoped native save.
+Renaming, packaged/system/integration topics, backend calls, extra steps, and
+agent-wide instruction changes remain unsupported. Do not activate or publish.
 
-> Topic updates are not yet available in this release. No local or remote files have been changed.
-
-Render only that message. Do not offer workflow updates, evaluation test sets,
-or other alternatives; do not add product-specific capability claims or a
-follow-up question.
-
-The topic-authoring tooling that remains visible in this repository is legacy
-implementation retained for reference and future migration. It has not been
-cleared for use with DA. Its presence does not indicate that topic creation or
-updates are available, and it must not be invoked for direct user requests.
-
-Do not route around this gate through
-`src/skills/topics/update-eval-driven/SKILL.md`,
-`src/skills/topics/update/SKILL.md`, workflow updates, or direct file edits.
+Do not invoke retained `topics/update`, `topics/update-eval-driven`, workflow
+updates, or direct YAML edits to bypass this boundary.
 
 **Setup-state note.** Workflow updates require a completed setup. Workspace-level
 evaluation updates and review-tag workflows do not. Apply the setup gate only
@@ -60,8 +51,9 @@ NOT silently route anywhere. Ask the user what they want to update first.**
 When `/update` includes additional text, topic intent, whether explicit or
 implicit, always wins:
 
-1. If the user explicitly or implicitly asks to update any **topic**, including
-   its evals, use the not-yet-available message above and STOP.
+1. If the user explicitly or implicitly asks to change a **topic itself**, read
+   `src/skills/topics/crafted-response/SKILL.md`. Changing an evaluation about a
+   topic is an evaluation operation, not permission to edit the topic.
 2. If the user explicitly asks to update an **evaluation**, **test set**, or
    **add test cases**,
    route to `src/skills/evaluations/update/SKILL.md`.
@@ -70,9 +62,12 @@ implicit, always wins:
 
 ## Flow
 
-1. Ask the user: "What would you like to update - a **workflow** or an **evaluation** test set?"
+1. Ask the user: "What would you like to update - a **topic with a fixed answer**, a **workflow**, or an **evaluation** test set?"
 2. Wait for the user to answer.
 3. Route based on their answer:
+   - **topic**
+     -> Read `src/skills/topics/crafted-response/SKILL.md` and follow its
+     setup check, supported-topic selection, and native update steps.
    - **workflow**
      -> Apply the same setup check, then read
      `src/skills/workflows/update/SKILL.md` and follow its instructions.
