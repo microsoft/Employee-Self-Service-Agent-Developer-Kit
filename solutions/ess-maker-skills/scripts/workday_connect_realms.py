@@ -333,6 +333,17 @@ def discover_realm_target(
             "The recorded Dev target belongs to a different ALM family."
         )
 
+    source_schema_name = str(
+        source_configuration.get("schemaName")
+        or direct_source.get("schemaName")
+        or ""
+    ).strip().casefold()
+    supported_agents = (catalog or load_catalog())["supportedAgents"]
+    if source_schema_name not in supported_agents:
+        raise WorkdayConnectRealmError(
+            "The recorded Dev source is not the supported ESS HR agent."
+        )
+
     direct_target = target_client.get_agent(target_agent_id)
     if _agent_id(
         direct_target,
@@ -374,8 +385,10 @@ def discover_realm_target(
         or direct_target.get("schemaName")
         or ""
     ).strip()
-    supported_agents = (catalog or load_catalog())["supportedAgents"]
-    if schema_name.casefold() not in supported_agents:
+    if schema_name.casefold() not in {
+        source_schema_name,
+        f"{source_schema_name}_{normalized_realm}",
+    }:
         raise WorkdayConnectRealmError(
             "The promoted target is not the supported ESS HR agent."
         )

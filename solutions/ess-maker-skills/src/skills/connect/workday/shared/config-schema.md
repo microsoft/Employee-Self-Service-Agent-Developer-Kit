@@ -61,6 +61,12 @@ or create a Markdown state mirror.
   TEST and PROD remain `null` until controller-owned AgentBuilder discovery
   proves the promoted sibling, ALM family, supported schema, deployed commit,
   tenant, and exact environment ID-to-Dataverse URL mapping.
+  Product validation requires a supported Dev source. The promoted schema must
+  be that canonical schema or the same schema with the exact requested `_test`
+  or `_prod` suffix; arbitrary prefix matches and another realm's suffix are
+  rejected. Persist the actual promoted schema in target identity and scope,
+  not the canonical Dev name. Sibling, family, tenant, agent and deployment
+  checks remain mandatory before accepting either form.
   Discovery first searches the maker's visible environments automatically. If
   it cannot prove exactly one target, the maker selects a friendly environment
   name or URL; the maker is never asked for BotIds, flow IDs, team names, or

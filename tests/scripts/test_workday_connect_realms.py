@@ -138,6 +138,101 @@ def test_discovers_exact_promoted_target() -> None:
     )
 
 
+@pytest.mark.parametrize("realm,realm_value", [("test", 1), ("prod", 2)])
+def test_discovers_exact_realm_suffixed_schema(realm: str, realm_value: int) -> None:
+    from workday_connect_realms import discover_realm_target
+
+    source = FakeClient(
+        realms={
+            "routeRealm": 0,
+            "siblingRealms": [{"realm": realm_value, "botId": TEST_AGENT_ID}],
+        },
+    )
+    target = FakeClient()
+    target._agent.pop("schemaName")
+    target._configuration.update(
+        {"realm": realm_value, "schemaName": f"{SCHEMA_NAME}_{realm}"},
+    )
+
+    result = discover_realm_target(
+        source,
+        target,
+        source_agent_id=DEV_AGENT_ID,
+        source_agent_slug="ess-hr",
+        realm=realm,
+        environment_id=TEST_ENVIRONMENT_ID,
+        environment_url=TEST_URL,
+        catalog=_catalog(),
+    )
+
+    assert result["agentSchemaName"] == f"{SCHEMA_NAME}_{realm}"
+    assert result["agentId"] == TEST_AGENT_ID
+    assert result["almFamilyId"] == FAMILY_ID
+
+
+@pytest.mark.parametrize(
+    "schema_name",
+    [f"{SCHEMA_NAME}_prod", f"{SCHEMA_NAME}_test_copy"],
+)
+def test_rejects_wrong_realm_or_prefix_only_schema(schema_name: str) -> None:
+    from workday_connect_realms import (
+        WorkdayConnectRealmError,
+        discover_realm_target,
+    )
+
+    target = FakeClient()
+    target._configuration["schemaName"] = schema_name
+    with pytest.raises(
+        WorkdayConnectRealmError, match="promoted target is not the supported"
+    ):
+        discover_realm_target(
+            FakeClient(),
+            target,
+            source_agent_id=DEV_AGENT_ID,
+            source_agent_slug="ess-hr",
+            realm="test",
+            environment_id=TEST_ENVIRONMENT_ID,
+            environment_url=TEST_URL,
+            catalog=_catalog(),
+        )
+
+
+def test_promoted_schema_cannot_substitute_for_supported_dev_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from workday_connect_realms import (
+        WorkdayConnectRealmError,
+        discover_realm_target,
+    )
+
+    source = FakeClient()
+    monkeypatch.setattr(
+        source,
+        "get_realm_configuration",
+        lambda *_args: {
+            "realm": 0,
+            "cdsBotId": DEV_AGENT_ID,
+            "grsRepositoryId": FAMILY_ID,
+            "schemaName": "unrelated-agent",
+        },
+    )
+    target = FakeClient()
+    target._configuration["schemaName"] = f"{SCHEMA_NAME}_test"
+    with pytest.raises(
+        WorkdayConnectRealmError, match="Dev source is not the supported"
+    ):
+        discover_realm_target(
+            source,
+            target,
+            source_agent_id=DEV_AGENT_ID,
+            source_agent_slug="ess-hr",
+            realm="test",
+            environment_id=TEST_ENVIRONMENT_ID,
+            environment_url=TEST_URL,
+            catalog=_catalog(),
+        )
+
+
 def test_rejects_recorded_dev_family_drift() -> None:
     from workday_connect_realms import (
         WorkdayConnectRealmError,
@@ -348,11 +443,13 @@ def test_environment_url_rejects_non_root_paths() -> None:
     [TEST_ENVIRONMENT_ID, DEV_ENVIRONMENT_ID],
 )
 @pytest.mark.parametrize("explicit_selection", [False, True])
+@pytest.mark.parametrize("schema_name", [SCHEMA_NAME, f"{SCHEMA_NAME}_test"])
 def test_records_and_activates_promoted_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     environment_id: str,
     explicit_selection: bool,
+    schema_name: str,
 ) -> None:
     import workday_connect_realms as realms
     from workday_connect_store import WorkdayConnectStore
@@ -375,7 +472,9 @@ def test_records_and_activates_promoted_target(
         ),
         encoding="utf-8",
     )
-    clients = iter((FakeClient(), FakeClient()))
+    target = FakeClient()
+    target._configuration["schemaName"] = schema_name
+    clients = iter((FakeClient(), target))
     monkeypatch.setattr(
         realms,
         "derive_environment_host",
@@ -412,6 +511,9 @@ def test_records_and_activates_promoted_target(
     assert state["activeTargetRealm"] == "test"
     assert state["scope"]["environmentId"] == environment_id
     assert state["scope"]["agent"]["botId"] == TEST_AGENT_ID
+    assert state["scope"]["agent"]["schemaName"] == schema_name
+    assert state["targets"]["test"]["identity"]["agentSchemaName"] == schema_name
+    assert state["targets"]["dev"]["identity"]["agentSchemaName"] == SCHEMA_NAME
     assert state["targets"]["test"]["provenance"] == (
         "agentbuilder-realm-discovery"
     )
