@@ -215,6 +215,15 @@ These values are independent and must never be aliases:
   and fresh native revalidation still require the exact tenant and family.
   Local topic enabling and wiring pushes remain Development-only. No foundation
   retargeting or copying of Dev topic-readiness evidence is permitted.
+- The required `WD-REST-002` check remains in post-agent-wiring and final
+  readiness. Development checks its selected local component map and YAML.
+  Test and Production read the exact selected native agent's active User Context
+  setup and Workday UserContextV2 topics and require the former's `OnRedirect`
+  to call the latter in that promoted namespace. Development-local edits cannot
+  pass or block this promoted check. Repair a confirmed defect in Development
+  and promote the correction; never push Development-local content into a
+  promoted realm. Native authored-content inspection is not publication or
+  employee runtime proof.
 - A phase is complete only after the target has been reread and matching
   evidence exists for every compact required action.
 - The provider status becomes `ready` only when all six phases are complete.
