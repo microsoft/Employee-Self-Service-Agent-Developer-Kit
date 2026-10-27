@@ -8,7 +8,7 @@ for tenant-local existence and save validity; this client decides which group
 categories the kit is willing to author against, which is deliberately narrower
 than everything the backend might accept.
 
-Authentication is delegated MSAL using the established Graph Command Line Tools
+Authentication is delegated MSAL using the Dynamics 365 Example Client Application
 public client and the ADK ``.local/.token_cache.bin`` cache, anchored to the
 solution root so it is the *same* cache `/setup` populates. It is a separate
 delegated resource from the AgentConfiguration/WeveNova token: no Graph scope is
@@ -46,12 +46,9 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 
-# The established Microsoft Graph Command Line Tools public client, reused so
-# audience discovery needs no new app registration or preauthorization. This is
-# the same first-party client the kit's `/setup` and FlightCheck Graph paths
-# use, which is what makes a silent (prompt-free) acquisition possible here.
-GRAPH_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
-GRAPH_SCOPES = ["https://graph.microsoft.com/Directory.Read.All"]
+# First-party client preauthorized for delegated Group.Read.All audience lookup.
+GRAPH_CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
+GRAPH_SCOPES = ["https://graph.microsoft.com/Group.Read.All"]
 
 # The one delegated Graph/Dataverse cache the whole ADK shares. It is anchored
 # to the *solution root* derived from this module's own location, never to the
@@ -208,10 +205,8 @@ def _validate_graph_token(token: str, tenant_id: str, object_id: Optional[str]) 
 def acquire_graph_token(tenant_id: str, object_id: Optional[str]) -> str:
     """Acquire a delegated Graph token from the shared ADK cache.
 
-    Silent first, so a maker who already signed in for `/setup` is not prompted
-    again; the Graph CLI public client is first-party and FOCI, so a prior
-    Dataverse sign-in usually redeems silently. Only when that fails does this
-    fall back to MSAL's interactive browser flow.
+    Try silent acquisition for the bound authoring account first, then fall
+    back to MSAL's interactive browser flow when no token is available.
 
     Device code is deliberately *not* used. An MCP server speaks JSON-RPC over
     stdio, so printing a device code to stdout corrupts the protocol stream, and
@@ -495,8 +490,7 @@ class GraphDirectoryClient:
             if status == 403:
                 raise GraphDirectoryError(
                     "Microsoft Graph denied the directory request. "
-                    "Directory.Read.All requires tenant consent and may be "
-                    "blocked by Conditional Access.",
+                    "Check Group.Read.All authorization and tenant access policies.",
                     code="AuthorizationDenied",
                     retryable=False,
                     http_status=status,

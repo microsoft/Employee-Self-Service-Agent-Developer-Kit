@@ -105,8 +105,8 @@ error; malformed metadata, sign-in, access, and API failures are not treated as
 empty discovery.
 
 Announcement authoring requires the Org Announcements feature to be enabled
-for your tenant, and audience search requires the `Directory.Read.All`
-Microsoft Graph permission to be consented in your tenant. Graph uses a
+for your tenant. Audience search uses delegated `Group.Read.All` through a
+preauthorized first-party client; tenant Conditional Access policies still apply. Graph uses a
 separate resource token for the same authoring tenant and account. The current
 account-context check requires readable `tid` and `oid` claims; opaque tokens
 or credentials missing those claims return an explicit authentication failure

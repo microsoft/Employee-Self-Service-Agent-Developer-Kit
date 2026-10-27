@@ -1383,6 +1383,10 @@ def test_a_403_does_not_invalidate_the_token(monkeypatch) -> None:
         with pytest.raises(graph.GraphDirectoryError) as caught:
             await client.search_groups("finance")
         assert caught.value.code == "AuthorizationDenied"
+        assert str(caught.value) == (
+            "Microsoft Graph denied the directory request. "
+            "Check Group.Read.All authorization and tenant access policies."
+        )
         assert client._token == _token("token-1")
         assert client._client is not None
         await client.aclose()
@@ -1559,14 +1563,14 @@ def test_graph_acquisition_is_bound_to_authoring_tenant_and_account(
     else:
         assert calls["cache_path"] == graph.GRAPH_TOKEN_CACHE_PATH
         assert calls["app"] == (
-            "14d82eec-204b-4c2f-b7e8-296a70dab67e",
+            "51f81489-12ee-4a9e-aaae-a2591f45987d",
             f"https://login.microsoftonline.com/{TENANT_ID}",
             cache,
         )
-        assert calls["scopes"] == ["https://graph.microsoft.com/Directory.Read.All"]
+        assert calls["scopes"] == ["https://graph.microsoft.com/Group.Read.All"]
         if source == "interactive":
             assert calls["interactive"] == (
-                ["https://graph.microsoft.com/Directory.Read.All"],
+                ["https://graph.microsoft.com/Group.Read.All"],
                 {"prompt": "select_account"},
             )
         else:

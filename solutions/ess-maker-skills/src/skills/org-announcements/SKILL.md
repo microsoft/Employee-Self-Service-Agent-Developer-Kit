@@ -428,7 +428,7 @@ before calling again.
 | `CommittedRefreshFailed` | The write **succeeded**; only the refreshed view failed to load. Tell them the change was saved and to refresh management to see it. Never say it failed, never offer to retry, and never repeat the action — repeating a create makes a second announcement. |
 | `ServiceError` | The service could not complete the request. This is not something the maker typed wrong, so do not ask them to change a field. Offer to try again later. |
 | `SearchUnavailable` | Audience search is temporarily unavailable. Offer to open the editor so they can search there. |
-| `AudienceMetadataUnavailable` | Group names could not be loaded. Note that `Directory.Read.All` needs tenant consent and can be blocked by Conditional Access, then offer to retry. |
+| `AudienceMetadataUnavailable` | Group names could not be loaded. Note that audience lookup uses `Group.Read.All` and can be blocked by tenant access policies, then offer to retry. |
 | `InvalidRequest` | Something in the request did not fit the contract. Explain what to change; do not retry the same call. |
 | `RegistrationRequired` | The selected agent has no Microsoft 365 registration titleId. Have the maker publish/register that agent for Microsoft 365, then retry discovery. Never synthesize an identifier. |
 | Any backend validation code | Show the backend's own message. Codes such as `AudienceRequired`, `AudienceGroupInvalid`, and `BulletinLimitExceeded` are the authoritative explanation. |
