@@ -79,7 +79,10 @@ or create a Markdown state mirror.
   Readiness uses `activeTargetRealm` and a temporary full target projection
   passed to FlightCheck with `--profile-config`. It validates the selected
   realm's actual agent and environment without rewriting the Development
-  workspace in `.local/config.json`. The separate `--connect-config` option
+  workspace in `.local/config.json`. The snapshot preserves the foundation's
+  configured `agentBuilderApiVersion` for native agent and connection
+  diagnostics; an absent override keeps the clients' existing default.
+  The separate `--connect-config` option
   remains a provider-only overlay and cannot retarget the configured agent.
   Runtime apply converts the CLI workspace root to a filesystem path before
   revalidating the exact active promoted target; revalidation still precedes

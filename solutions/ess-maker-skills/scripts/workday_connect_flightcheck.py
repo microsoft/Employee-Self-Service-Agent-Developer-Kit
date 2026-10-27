@@ -211,6 +211,8 @@ def effective_validation_state(
     ).casefold()
     effective_scope["validationRealm"] = realm
     effective_scope["validationRealmSourceValid"] = not foundation_error
+    if "agentBuilderApiVersion" in foundation:
+        effective_scope["agentBuilderApiVersion"] = foundation["agentBuilderApiVersion"]
     effective_state["scope"] = effective_scope
     return effective_state
 

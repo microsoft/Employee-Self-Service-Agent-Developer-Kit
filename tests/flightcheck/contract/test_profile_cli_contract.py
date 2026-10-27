@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
+import responses
 
 import auth
 from flightcheck import cli, registry
@@ -160,6 +162,106 @@ def test_connect_profile_uses_promoted_snapshot_without_retargeting_workspace(
     assert captured["config"]["releaseLine"] == "da"
     assert "powerPlatformApiEndpoint" not in captured["config"]
     assert foundation.read_bytes() == original
+
+
+@pytest.mark.parametrize("realm", ["dev", "test", "prod"])
+@pytest.mark.parametrize("api_version", [None, "2022-03-01-preview"])
+def test_public_connect_profile_preserves_configured_native_api_version(
+    tmp_path, monkeypatch, realm, api_version,
+) -> None:
+    from agentbuilder import DEFAULT_API_VERSION, derive_environment_host
+    from flightcheck import maker_diagnostics
+    from flightcheck.runner import RunResult
+    from tests.conftest import require_validated_mock
+    from tests.mocks import agentbuilder_connectivity as ab
+    from workday_connect_flightcheck import (
+        _command, _config_projection, effective_validation_state,
+    )
+    from workday_connect_model import default_state
+
+    require_validated_mock(ab)
+    config = _config()
+    if api_version is not None:
+        config["agentBuilderApiVersion"] = api_version
+    local = tmp_path / ".local"
+    local.mkdir()
+    foundation = local / "config.json"
+    foundation.write_text(json.dumps(config), encoding="utf-8")
+    original = foundation.read_bytes()
+    state = default_state()
+    state["activeTargetRealm"] = realm
+    state["scope"].update({
+        "environmentId": ab.MOCK_ENV_ID, "entraTenantId": config["tenantId"],
+        "agent": {
+            "slug": "ess-hr", "schemaName": ab.MOCK_SCHEMA_NAME,
+            "botId": ab.MOCK_AGENT_ID,
+        },
+        "ring": "test",
+    })
+    state["operators"]["powerPlatformMaker"] = {"username": "maker@example.com"}
+    state_before = json.dumps(state, sort_keys=True)
+    effective = effective_validation_state(tmp_path, state)
+    snapshot = tmp_path / "target.json"
+    snapshot.write_text(json.dumps(_config_projection(effective)), encoding="utf-8")
+    command = _command(
+        tmp_path, effective, "workday-da:setup-readiness", tmp_path, snapshot,
+    )
+    expected_version = api_version or DEFAULT_API_VERSION
+    host = derive_environment_host(ab.MOCK_ENV_ID, "test")
+    agent_response = ab.get_agent()
+    agent_response["url"] = (
+        f"{host}/copilotstudio/minimalBots/api/{ab.MOCK_AGENT_ID}"
+        f"?api-version={expected_version}"
+    )
+    connection_response = ab.list_connections()
+    connection_response["url"] = connection_response["url"].replace(
+        "2024-10-01", expected_version,
+    )
+    captured = {}
+
+    def run_diagnostics(actual_args, actual_config):
+        runner = SimpleNamespace(
+            config=actual_config, agent_slug=actual_args.agent_slug, env_url="",
+        )
+        maker_diagnostics._configure(runner, actual_args)
+        captured["agent"] = runner.agentbuilder.get_agent(ab.MOCK_AGENT_ID)
+        captured["connections"] = runner.connectivity.list_connections(ab.MOCK_ENV_ID)
+        captured["config"] = actual_config
+        context = cli._validation_context_from_args(
+            actual_args, actual_config, "", ab.MOCK_ENV_ID,
+        ).to_dict()
+        return RunResult(
+            scope="profile", started="", profile=actual_args.profile,
+            validation_context=context,
+        )
+
+    def authenticate(*_args, **kwargs):
+        assert kwargs["allow_write"] is False
+        return "token", config["tenantId"], "maker@example.com"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", [*command[1:], "--no-telemetry"])
+    monkeypatch.setattr(maker_diagnostics, "authenticate_flightcheck", authenticate)
+    monkeypatch.setattr(maker_diagnostics, "run_maker_diagnostics", run_diagnostics)
+    monkeypatch.setattr(cli, "_print_prioritized_summary", lambda *_a: None)
+    monkeypatch.setattr(cli, "save_results", lambda *_a: None)
+    with responses.RequestsMock() as http:
+        http.add(**agent_response)
+        http.add(**connection_response)
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 0
+        assert len(http.calls) == 2
+        assert all(
+            f"api-version={expected_version}" in call.request.url
+            for call in http.calls
+        )
+    assert captured["agent"] == ab.agent()
+    assert captured["connections"] == [ab.connection()]
+    assert captured["config"].get("agentBuilderApiVersion") == api_version
+    assert captured["config"]["agent"]["botId"] == ab.MOCK_AGENT_ID
+    assert foundation.read_bytes() == original
+    assert json.dumps(state, sort_keys=True) == state_before
 
 
 @pytest.mark.parametrize("defect", [
