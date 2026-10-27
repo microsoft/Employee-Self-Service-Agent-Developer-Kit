@@ -8,6 +8,9 @@ User Context redirect. It initializes the Workday runtime template
 configuration on every new conversation, rather than depending on the
 separately cached employee user context.
 
+For Test and Production, the topic-state prerequisite is a read-only
+verification of promoted content, not a new activation or maker confirmation.
+
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 
 ---

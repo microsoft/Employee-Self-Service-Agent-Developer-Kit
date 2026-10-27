@@ -200,7 +200,9 @@ These values are independent and must never be aliases:
 - A verified Test or Production sibling in the same ALM family and Entra
   tenant starts with Preflight, Entra, and Workday administrator phases
   complete from the recorded tenant foundation. Connections, runtime wiring,
-  topics, and Maker Test pane validation remain independent in each realm.
+  topic-state verification, and Maker Test pane validation remain independent
+  in each realm. Topic enabling and its maker confirmations are Development-only;
+  Test and Production preserve promoted topic states and verify them read-only.
 - A phase is complete only after the target has been reread and matching
   evidence exists for every compact required action.
 - The provider status becomes `ready` only when all six phases are complete.

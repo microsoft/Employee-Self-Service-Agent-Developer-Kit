@@ -957,6 +957,28 @@ def test_topic_activation_precedes_runtime_template_and_user_context_wiring() ->
     assert "Do not ask the maker to choose an overwrite strategy" in action
 
 
+def test_topic_enabling_and_refresh_confirmation_are_development_only() -> None:
+    configure = (_WORKDAY_DA / "configure-power-platform.md").read_text(encoding="utf-8")
+    action = (_WORKDAY_DA / "actions" / "activate-workday-topics.md").read_text(encoding="utf-8")
+    skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
+
+    assert action.index("activeTargetRealm: dev") < action.index("--activate --dry-run")
+    assert "Stop if the active realm is unresolved" in action
+    assert "For `activeTargetRealm: dev`, run internally:" in configure
+    promoted = configure.split(
+        "For `activeTargetRealm: test` or `prod`,", 1,
+    )[1].split("Only after topic activation is verified", 1)[0]
+    normalized = " ".join(promoted.split())
+    assert "skip that activation action entirely" in promoted
+    assert "Do not run an activation push" in promoted
+    assert "or ask the maker to refresh Copilot Studio" in normalized
+    assert "read-only verification" in promoted
+    assert "record-topic-activation" in promoted
+    assert "do not replace a failed verification with local activation" in normalized
+    assert "correct topic state in Development" in normalized
+    assert "authorization remain required" in " ".join(skill.split())
+
+
 def test_user_context_redirect_reconciles_without_publish_prompt() -> None:
     action = (
         _REPO_ROOT

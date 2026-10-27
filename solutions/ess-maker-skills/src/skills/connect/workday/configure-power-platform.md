@@ -462,7 +462,7 @@ file-write tool:
 }
 ```
 
-Then run internally:
+For `activeTargetRealm: dev`, run internally:
 `src/skills/connect/workday/actions/activate-workday-topics.md`. That action
 derives the complete Workday dialog list from the selected agent's
 `.component-map.json`, previews the exact scope, and uses the native components
@@ -473,14 +473,23 @@ that every Workday topic visibly shows as **On** before recording activation.
 This refreshed-page confirmation is a UX gate, not a substitute for the
 controller's live reread.
 
-Then run:
+For `activeTargetRealm: test` or `prod`, skip that activation action entirely.
+Promotion carries the topic enabled/disabled states from the source realm.
+Do not run an activation push, ask **Enable Workday topics**, or ask the maker
+to refresh Copilot Studio and confirm that topics show as **On**.
+
+Record the enabled state with the read-only verification below. In Development,
+the activation action already runs it; do not repeat it:
 
 ```powershell
 python scripts/workday_connect.py record-topic-activation
 ```
 
-This command proves that every Workday topic included with the agent is
-enabled. Topic diagnostics are retained as supporting detail but do not change
+This command verifies the existing enabled state; it does not enable topics.
+In Test and Production, do not replace a failed verification with local
+activation. Preserve the target blocker; correct topic state in Development
+and promote the corrected content through the normal ALM process.
+Topic diagnostics are retained as supporting detail but do not change
 the activation result or create a package-repair blocker by themselves.
 
 Only after topic activation is verified, initialize the Workday runtime

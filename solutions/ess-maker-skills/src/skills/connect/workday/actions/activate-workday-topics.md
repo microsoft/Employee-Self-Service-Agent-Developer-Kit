@@ -1,5 +1,12 @@
 # Action: Activate all Workday topics
 
+**Development only.** Require controller status `activeTargetRealm: dev` before
+previewing changes or asking either activation question. For Test or Production,
+do not run this action, change topic enabled/disabled states, or show the
+**Enable Workday topics** or **Confirm Workday topics** questions. Return to
+the Runtime guide's read-only verification of the promoted state instead.
+Stop if the active realm is unresolved; never assume Development.
+
 Run this action only after the reviewed Workday flows are connected to the
 agent and **Allow permission to share parameters** is enabled.
 
