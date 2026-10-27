@@ -11,9 +11,11 @@ test set.
 For explicit or implicit changes to a topic itself, read
 `src/skills/topics/crafted-response/SKILL.md`. Update only a supported topic
 created by that native route, keeping its name, native ID, and schema. The skill
-owns fresh readback, before/after preview, approval, and scoped native save.
-Renaming, packaged/system/integration topics, backend calls, extra steps, and
-agent-wide instruction changes remain unsupported. Do not activate or publish.
+owns fresh readback, current native instruction alignment, separate previews
+and approvals, and scoped native saves. Matching instruction text edits must
+follow that skill's bounded operation. Renaming, packaged/system/integration
+topics, backend calls, extra steps, and unrelated agent-wide instruction
+changes remain unsupported. Do not activate or publish.
 
 Do not invoke retained `topics/update`, `topics/update-eval-driven`, workflow
 updates, or direct YAML edits to bypass this boundary.

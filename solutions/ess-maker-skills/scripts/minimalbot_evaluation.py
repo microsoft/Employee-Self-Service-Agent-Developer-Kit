@@ -56,6 +56,7 @@ except ImportError:  # pragma: no cover - dependency guard mirrors siblings
     )
 
 from agentbuilder import RING_CONFIG, ring_from_environment_host
+from alm_enrollment import _extract_request_id, _redact_evidence
 from evaluation_method_policy import (
     EvaluationMethodError,
     document_kind,
@@ -150,6 +151,82 @@ _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
 
 class MinimalBotEvaluationError(RuntimeError):
     """Raised when a MinimalBot evaluation operation cannot be completed."""
+
+
+class AgentInstructionEditError(MinimalBotEvaluationError):
+    """An attempted instruction write with retained outcome evidence."""
+
+    def __init__(self, message: str, evidence: dict[str, Any]) -> None:
+        self.evidence = _redact_evidence(evidence)
+        super().__init__(
+            f"{message}; evidence={json.dumps(self.evidence, ensure_ascii=False)}"
+        )
+
+
+def _instruction_segments(component: dict[str, Any]) -> list[Any]:
+    metadata = component.get("metadata")
+    instructions = metadata.get("instructions") if isinstance(metadata, dict) else None
+    if (
+        component.get("$kind") != "GptComponent"
+        or not isinstance(instructions, dict)
+        or instructions.get("$kind") != "TemplateLine"
+        or not isinstance(instructions.get("segments"), list)
+    ):
+        raise MinimalBotEvaluationError(
+            "Instruction editing requires native GptComponent TemplateLine instructions."
+        )
+    return instructions["segments"]
+
+
+def build_agent_instruction_update(
+    component: dict[str, Any], edits: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Replace unique literals in text segments without altering other native fields."""
+    segments = _instruction_segments(component)
+    if not isinstance(edits, list) or not edits:
+        raise MinimalBotEvaluationError("Provide at least one explicit instruction text edit.")
+    replacements: dict[int, list[tuple[int, int, str]]] = {}
+    for edit in edits:
+        if not isinstance(edit, dict) or set(edit) != {"segmentIndex", "oldText", "newText"}:
+            raise MinimalBotEvaluationError(
+                "Each instruction edit requires only segmentIndex, oldText, and newText."
+            )
+        index, old, new = edit["segmentIndex"], edit["oldText"], edit["newText"]
+        if (
+            type(index) is not int or not 0 <= index < len(segments)
+            or not isinstance(old, str) or not old or not isinstance(new, str)
+        ):
+            raise MinimalBotEvaluationError(
+                "Instruction edits require a valid segment index, nonempty oldText, "
+                "and string newText."
+            )
+        segment = segments[index]
+        if (
+            not isinstance(segment, dict) or segment.get("$kind") != "TextSegment"
+            or not isinstance(segment.get("value"), str)
+        ):
+            raise MinimalBotEvaluationError(f"Instruction segment {index} is not editable text.")
+        text = segment["value"]
+        start = text.find(old)
+        if start < 0 or text.find(old, start + 1) != -1:
+            raise MinimalBotEvaluationError(
+                f"oldText must occur exactly once in instruction segment {index}."
+            )
+        end = start + len(old)
+        ranges = replacements.setdefault(index, [])
+        if any(start < stop and begin < end for begin, stop, _ in ranges):
+            raise MinimalBotEvaluationError(
+                f"Instruction edits overlap in segment {index}; combine them explicitly."
+            )
+        ranges.append((start, end, new))
+    desired = copy.deepcopy(component)
+    desired_segments = _instruction_segments(desired)
+    for index, ranges in replacements.items():
+        text = segments[index]["value"]
+        for start, end, new in sorted(ranges, reverse=True):
+            text = text[:start] + new + text[end:]
+        desired_segments[index]["value"] = text
+    return desired
 
 
 def is_minimalbot(config: dict[str, Any]) -> bool:
@@ -993,6 +1070,135 @@ class MinimalBotEvaluationClient:
                 "MinimalBot component read returned an unexpected payload."
             )
         return body
+
+    def _instruction_components(
+        self, payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        components = self._remote_components(payload)
+        matches = [c for c in components.values() if c.get("$kind") == "GptComponent"]
+        bot = payload.get("bot")
+        if (
+            not isinstance(bot, dict) or bot.get("cdsBotId") != self.bot_id
+            or len(matches) != 1 or matches[0].get("parentBotId") != self.bot_id
+            or not isinstance(matches[0].get("schemaName"), str)
+            or not matches[0]["schemaName"].strip()
+        ):
+            raise MinimalBotEvaluationError(
+                "Native instruction read requires one identified GPT component "
+                f"belonging to the selected agent; selectedAgentId={self.bot_id}; "
+                f"nativeAgentId={bot.get('cdsBotId') if isinstance(bot, dict) else None}; "
+                "gptCandidates=" + json.dumps([
+                    {key: c.get(key) for key in ("id", "schemaName", "parentBotId")}
+                    for c in matches
+                ])
+            )
+        if not isinstance(payload.get("changeToken"), str) or not payload["changeToken"]:
+            raise MinimalBotEvaluationError("The native instruction read omitted the changeToken.")
+        _instruction_segments(matches[0])
+        return components, matches[0]
+
+    def read_agent_instructions(self) -> dict[str, Any]:
+        """Return the current native GPT component, not the extracted agent file."""
+        payload = self.read_components()
+        components, component = self._instruction_components(payload)
+        return {
+            "component": copy.deepcopy(component),
+            "changeToken": payload["changeToken"],
+            "componentCount": len(components),
+        }
+
+    def update_agent_instructions(
+        self, expected_component: dict[str, Any], edits: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Apply one baseline-bound text edit and verify all native component content.
+
+        Uses the client's existing transport. No conflict reconciliation,
+        activation, rollback, or publication is performed.
+        """
+        before = self.read_components()
+        components, current = self._instruction_components(before)
+        if current != expected_component:
+            raise MinimalBotEvaluationError(
+                "Native instructions changed since the expected snapshot. No write was sent."
+            )
+        desired = build_agent_instruction_update(current, edits)
+        if desired == current:
+            return {
+                "updatedComponents": 0, "verifiedComponents": 1,
+                "component": copy.deepcopy(current),
+                "changeToken": before["changeToken"],
+                "unchangedOtherComponents": len(components) - 1,
+            }
+        payload = {
+            "changeToken": before["changeToken"],
+            "botComponentChanges": [{"$kind": "BotComponentUpdate", "component": desired}],
+            "cloudFlowDefinitionChanges": [],
+            "connectionReferenceChanges": [],
+            "connectorDefinitionChanges": [],
+            "environmentVariableChanges": [],
+            "aIPluginOperationChanges": [],
+            "componentCollectionChanges": [],
+            "dataverseTableSearchChanges": [],
+            "connectedAgentDefinitionChanges": [],
+        }
+        evidence = {
+            "componentId": current["id"], "schemaName": current["schemaName"],
+            "writeAttempted": True, "verified": False,
+        }
+        try:
+            response, body = self._request(
+                "PUT", self._components_url, body=payload, operation="agent instruction update"
+            )
+        except MinimalBotEvaluationError as exc:
+            raise AgentInstructionEditError(
+                "Instruction write outcome is unknown. Read native state before "
+                "deciding what to do next", evidence,
+            ) from exc
+        evidence.update({
+            "httpStatus": response.status_code,
+            "requestId": _extract_request_id(response), "response": body,
+        })
+        if response.status_code != 200:
+            raise AgentInstructionEditError(
+                "Instruction update returned an unsuccessful HTTP response. "
+                "Inspect native state before deciding what to do next", evidence,
+            )
+
+        def content(component: dict[str, Any]) -> dict[str, Any]:
+            return {k: v for k, v in component.items() if k not in {"auditInfo", "version"}}
+
+        try:
+            after = self.read_components()
+            actual, saved = self._instruction_components(after)
+            evidence["readbackComponent"] = saved
+            if content(saved) != content(desired):
+                raise MinimalBotEvaluationError(
+                    "Saved GPT component differs from the requested instruction-only update."
+                )
+            others = {key: content(value) for key, value in components.items()
+                      if key != current["id"]}
+            actual_others = {key: content(value) for key, value in actual.items()
+                             if key != current["id"]}
+            if others != actual_others:
+                evidence["changedOtherComponentIds"] = sorted(
+                    key for key in others.keys() | actual_others.keys()
+                    if others.get(key) != actual_others.get(key)
+                )
+                raise MinimalBotEvaluationError(
+                    "Other native component content changed during the instruction update; "
+                    "the cause is not established."
+                )
+        except MinimalBotEvaluationError as exc:
+            raise AgentInstructionEditError(
+                "Instruction PUT returned HTTP 200, but saved-state verification failed. "
+                "Inspect native state; no rollback was attempted", evidence,
+            ) from exc
+        return {
+            "updatedComponents": 1, "verifiedComponents": 1, "component": saved,
+            "changeToken": after["changeToken"],
+            "unchangedOtherComponents": len(others),
+            "requestId": evidence["requestId"], "response": _redact_evidence(body),
+        }
 
     def create_dialog_component(
         self,

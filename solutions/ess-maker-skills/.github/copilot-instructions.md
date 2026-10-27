@@ -209,8 +209,9 @@ before announcing a mismatch, workspace switch, or refresh.
 After canonical DA setup is complete:
 
 - one fixed-response topic can be created or updated through
-  `src/skills/topics/crafted-response/SKILL.md`; this saves only the selected
-  native Dev component, without activation or publication;
+  `src/skills/topics/crafted-response/SKILL.md`; matching instruction text edits
+  use its separate native read, preview, approval, and save steps, without
+  activation or publication;
 - local authoring, review, scan, and browser-based topic driving remain
   available;
 - Dataverse push and server-backed validation are permitted in this
@@ -338,8 +339,11 @@ For direct topic creation and updates, read
 `src/skills/topics/crafted-response/SKILL.md`. Only one intent, trigger phrases,
 an exact approved static answer, and an optional approved support link are
 supported. Packaged/system/integration topics, backend calls, branches, and
-handoffs remain unsupported. Do not invoke retained legacy or eval-driven topic
-authoring, edit agent-wide instructions, or route around this boundary.
+handoffs remain unsupported. The skill owns current native instruction
+alignment and any separately approved matching text edit. Do not substitute
+the extracted `agent.mcs.yml` as the current instruction baseline, make unrelated
+agent-wide instruction changes, invoke retained legacy or eval-driven topic
+authoring, or route around this boundary.
 
 ### What requires admin/portal access
 
@@ -431,10 +435,12 @@ For detailed patterns, see `src/reference/ess-docs/customization/customize.md`.
 
 ## Agent Development Lifecycle (CRITICAL)
 
-**Native fixed-response topics are an exception to the local-file pipeline.**
-Follow `src/skills/topics/crafted-response/SKILL.md` for preview, explicit approval,
-native save, and authoritative readback. Do not run checkpoint/push/publish or
-claim that a local YAML edit saved the native topic.
+**Native fixed-response topics and their matching instruction text edits are
+exceptions to the local-file pipeline.** Follow
+`src/skills/topics/crafted-response/SKILL.md` for separate previews, explicit
+approvals, native saves, and authoritative readback. Do not run
+checkpoint/push/publish or claim that a local YAML edit saved the native topic
+or instructions.
 
 The files in `workspace/agents/{slug}/` are a **local working copy** of the agent
 deployed in Copilot Studio. They are NOT the live agent.

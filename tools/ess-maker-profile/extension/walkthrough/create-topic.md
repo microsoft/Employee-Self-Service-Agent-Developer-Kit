@@ -11,7 +11,7 @@ Complete setup, then click **Create a topic**. Copilot will:
 
 Saving does not activate or publish the topic or verify employee chat behavior. Use **Update a topic** to change a supported fixed-answer topic created through this path while keeping the same topic identity and state.
 
-Backend calls, questions, cards, branching, handoffs, and agent-wide instruction changes are not supported. Packaged, system, and integration topics cannot be changed through this path.
+Backend calls, questions, cards, branching, handoffs, and unrelated agent-wide instruction changes are not supported. Packaged, system, and integration topics cannot be changed through this path.
 
 ## Example
 

@@ -11,8 +11,10 @@ test set for their ESS agent.
 For explicit or implicit topic creation, read
 `src/skills/topics/crafted-response/SKILL.md`. Only a single-intent static answer
 and optional approved support link are supported. That skill owns target
-verification, exact preview, approval, native save, and readback. Do not activate
-or publish the topic or change agent-wide instructions.
+verification, current native instruction alignment, separate previews and
+approvals, native saves, and readback. Matching instruction text edits must
+follow that skill's bounded operation. Do not activate, publish, or make
+unrelated agent-wide instruction changes.
 
 Do not invoke retained `topics/create`, `topics/create-eval-driven`, workflow
 creation, or direct YAML edits to author a topic. Their broader integrations,

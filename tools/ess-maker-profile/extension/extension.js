@@ -594,7 +594,7 @@ function getTutorialHtml() {
             <li>Save one inactive topic to the selected editable Dev agent.</li>
             <li>Verify the saved topic without activating or publishing it.</li>
         </ul>
-        <p>Backend calls, forms, branching, handoffs, and changes to agent-wide instructions are not supported. Saving is not publication and does not verify employee chat behavior.</p>
+        <p>Backend calls, forms, branching, handoffs, and unrelated changes to agent-wide instructions are not supported. Saving is not publication and does not verify employee chat behavior.</p>
         <h3>Examples</h3>
         <blockquote><p>\u201cWhen someone asks where the equipment policy is, show this approved answer and support link.\u201d</p></blockquote>
     </section>
