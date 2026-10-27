@@ -54,6 +54,18 @@ def test_readme_documents_da_scope_and_target_deployment() -> None:
     assert "ESS IT Agent is not supported" in readme
     assert "scripts/alm/README.md" in readme
     assert "signed-in end-to-end Workday scenario" in normalized
+    workday = _normalize(
+        readme.split("### Workday (HCM / Payroll / Absence)", 1)[1]
+        .split("### ServiceNow", 1)[0]
+    )
+    assert "does not require ISU service accounts" in workday
+    assert "return to `/connect workday` for the promoted target" in workday
+    assert "Topic enabling and content changes happen only in Development" in workday
+    assert "Test and Production verify the promoted content without changing it" in workday
+    assert "Two supported install paths" not in workday
+    assert "automatically creates" not in workday
+    assert "| `/connect` | Choose an available integration |" in readme
+    assert "| `/connect-workday` | Connect the ESS HR agent to Workday |" in readme
 
 
 def test_connect_workday_bypasses_runtime_readiness_gate() -> None:
