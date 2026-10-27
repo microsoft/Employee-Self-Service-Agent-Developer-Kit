@@ -941,7 +941,7 @@ def _runtime_apply(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    revalidate_active_realm_target(args.root, store)
+    revalidate_active_realm_target(Path(args.root), store)
     result = run_runtime_operation(
         store.load(),
         apply=True,

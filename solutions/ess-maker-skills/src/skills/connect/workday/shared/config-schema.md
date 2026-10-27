@@ -81,6 +81,9 @@ or create a Markdown state mirror.
   realm's actual agent and environment without rewriting the Development
   workspace in `.local/config.json`. The separate `--connect-config` option
   remains a provider-only overlay and cannot retarget the configured agent.
+  Runtime apply converts the CLI workspace root to a filesystem path before
+  revalidating the exact active promoted target; revalidation still precedes
+  every Runtime write.
 - `identifiers` contains non-secret Entra and Workday identifiers.
 - `endpoints` contains validated non-secret Workday endpoints.
 - `operators` contains safe account and tenant provenance.

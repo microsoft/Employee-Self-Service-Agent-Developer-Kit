@@ -985,6 +985,61 @@ def test_revalidating_promoted_target_accepts_complete_identity_match(
     assert store.load() == approved_state
 
 
+@pytest.mark.parametrize("realm", ["test", "prod"])
+@pytest.mark.parametrize("explicit_root", [False, True])
+def test_runtime_apply_converts_cli_root_before_promoted_revalidation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, realm: str,
+    explicit_root: bool,
+) -> None:
+    import workday_connect
+    import workday_connect_realms as realms
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    _record_dev(store)
+    identity = _identity(
+        environment_id=TEST_ENVIRONMENT_ID,
+        environment_url=TEST_URL,
+        agent_id=TEST_AGENT_ID,
+        commit_sha="abc123",
+    )
+    store.record_target_discovery(realm, identity, ring="test")
+    store.activate_target(realm)
+    config = tmp_path / ".local" / "config.json"
+    config.write_text(json.dumps({"environmentId": DEV_ENVIRONMENT_ID}), encoding="utf-8")
+    before = store.config_path.read_bytes()
+    order = []
+
+    def rediscover(root, actual_store, **kwargs):
+        assert realms._read_foundation(root)["environmentId"] == DEV_ENVIRONMENT_ID
+        assert actual_store is store
+        assert kwargs["realm"] == realm
+        assert kwargs["environment_id"] == TEST_ENVIRONMENT_ID
+        order.append("revalidated")
+        return dict(identity), "test"
+
+    def apply(state, **kwargs):
+        assert order == ["revalidated"]
+        assert state["activeTargetRealm"] == realm
+        assert kwargs["apply"] is True
+        assert kwargs["approved_hash"] == "approved-hash"
+        order.append("applied")
+        return {"applied": True}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(realms, "_discover_promoted_realm_identity", rediscover)
+    monkeypatch.setattr(workday_connect, "run_runtime_operation", apply)
+    args = workday_connect.build_parser().parse_args([
+        *(["--root", str(tmp_path)] if explicit_root else []),
+        "runtime-apply", "--plan-hash", "approved-hash",
+    ])
+
+    assert workday_connect._runtime_apply(args, store)["applied"] is True
+    assert order == ["revalidated", "applied"]
+    assert store.config_path.read_bytes() == before
+
+
 def test_v10_state_migrates_to_realm_registry(tmp_path: Path) -> None:
     from workday_connect_model import PHASE_REQUIRED_ACTIONS, default_state
     from workday_connect_store import WorkdayConnectStore
