@@ -2,6 +2,11 @@
 
 # Action: Initialize Workday runtime templates at conversation start
 
+**Development only.** Require verified `activeTargetRealm: dev` before
+checkpointing, editing, converting or pushing any local topic. Test and
+Production use `record-runtime-template-wiring` to inspect promoted content
+read-only; do not run this authoring action for those realms.
+
 Run this action only after all reviewed Workday topics are enabled and
 `record-topic-activation` has verified them. Run it before wiring the Admin
 User Context redirect. It initializes the Workday runtime template

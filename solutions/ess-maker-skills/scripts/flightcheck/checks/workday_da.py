@@ -108,6 +108,15 @@ def run_workday_da_package_check(runner) -> list[CheckResult]:
     return _check_workday_da_package_installed(runner)
 
 
+def _validation_realm(runner) -> str:
+    context = getattr(runner, "validation_context", None)
+    return str(
+        (context.get("realm") if isinstance(context, dict) else None)
+        or (getattr(runner, "config", {}) or {}).get("realm")
+        or ""
+    ).strip().casefold()
+
+
 def _check_workday_da_package_installed(runner) -> list[CheckResult]:
     """WD-DA-PKG-001: the DA Workday extension package is installed.
 
@@ -165,12 +174,7 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
         supported_agents if isinstance(supported_agents, dict) else {}
     )
     agent_contract = supported_agents.get(selected_schema)
-    context = getattr(runner, "validation_context", None)
-    realm = str(
-        (context.get("realm") if isinstance(context, dict) else None)
-        or runner.config.get("realm")
-        or ""
-    ).strip().casefold()
+    realm = _validation_realm(runner)
     if agent_contract is None and realm in {"test", "prod"}:
         suffix = f"_{realm}"
         if selected_schema.endswith(suffix):
@@ -815,7 +819,9 @@ def _check_reviewed_workday_topics(runner) -> list[CheckResult]:
         )]
     try:
         slug, schema, _bot_id, components = _fetch_selected_components(runner)
-        expected = reviewed_workday_topic_schemas(schema)
+        expected = reviewed_workday_topic_schemas(
+            schema, realm=_validation_realm(runner),
+        )
         if not expected:
             raise ValueError(
                 f"No reviewed Workday topic inventory exists for {schema!r}."

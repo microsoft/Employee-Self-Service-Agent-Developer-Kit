@@ -203,6 +203,15 @@ These values are independent and must never be aliases:
   topic-state verification, and Maker Test pane validation remain independent
   in each realm. Topic enabling and its maker confirmations are Development-only;
   Test and Production preserve promoted topic states and verify them read-only.
+  Promoted topic and runtime-template verification revalidates the recorded
+  sibling/deployment identity, then reads that exact target through AgentBuilder
+  with verified maker/tenant read-only authentication. It uses the actual target
+  schema and reviewed inventory, never Development's local component IDs or
+  converted local topic bodies. Missing optional foundation `tenantId` or initial
+  Dev ALM-family metadata is not a target mismatch: the recorded promoted identity
+  and fresh native revalidation still require the exact tenant and family.
+  Local topic enabling and wiring pushes remain Development-only. No foundation
+  retargeting or copying of Dev topic-readiness evidence is permitted.
 - A phase is complete only after the target has been reread and matching
   evidence exists for every compact required action.
 - The provider status becomes `ready` only when all six phases are complete.

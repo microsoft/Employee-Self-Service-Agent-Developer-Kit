@@ -113,10 +113,19 @@ _REVIEWED_WORKDAY_TOPIC_SUFFIXES = {
 }
 
 
-def reviewed_workday_topic_schemas(agent_schema: str) -> frozenset[str]:
+def reviewed_workday_topic_schemas(
+    agent_schema: str, *, realm: str = "",
+) -> frozenset[str]:
     """Return the reviewed OOB Workday topic schemas for one agent."""
     schema = str(agent_schema or "").strip()
     suffixes = _REVIEWED_WORKDAY_TOPIC_SUFFIXES.get(schema.casefold())
+    normalized_realm = str(realm).strip().casefold()
+    if suffixes is None and normalized_realm in {"test", "prod"}:
+        suffix = f"_{normalized_realm}"
+        if schema.casefold().endswith(suffix):
+            suffixes = _REVIEWED_WORKDAY_TOPIC_SUFFIXES.get(
+                schema[:-len(suffix)].casefold()
+            )
     if suffixes is None:
         return frozenset()
     return frozenset(

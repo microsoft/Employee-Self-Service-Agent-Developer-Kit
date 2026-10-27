@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -240,6 +241,40 @@ def _runner(**overrides: Any) -> SimpleNamespace:
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+@pytest.mark.parametrize("realm", ["test", "prod"])
+def test_native_promoted_inventory_uses_actual_realm_schema(realm) -> None:
+    schema = f"{SCHEMA}_{realm}"
+    config = _config()
+    config["realm"] = realm
+    config["agents"][0]["schemaName"] = schema
+    payload = json.loads(json.dumps(_component_payload()).replace(SCHEMA, schema))
+    runner = _runner(
+        config=config, maker_diagnostics=True,
+        agentbuilder=_AgentBuilder(payload),
+    )
+
+    row = workday_da._check_reviewed_workday_topics(runner)[0]
+
+    assert row.status == "Passed"
+    assert "required system topics present" in row.result
+    assert all(
+        name.startswith(schema + ".topic.")
+        for name in row.evidence["requiredSystemTopics"]
+    )
+    assert row.remediation == ""
+
+
+@pytest.mark.parametrize(("schema", "realm"), [
+    (f"{SCHEMA}_test", "dev"),
+    (f"{SCHEMA}_test", "prod"),
+    (f"{SCHEMA}_prod", "test"),
+    (f"{SCHEMA}_test", ""),
+    (f"{SCHEMA}_custom_test", "test"),
+])
+def test_reviewed_inventory_rejects_wrong_realm_and_arbitrary_suffix(schema, realm):
+    assert not reviewed_workday_topic_schemas(schema, realm=realm)
 
 
 def test_runtime_flow_catalog_passes_exact_active_inventory(monkeypatch) -> None:

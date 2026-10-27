@@ -1047,6 +1047,7 @@ def _record_agent_binding(
         "Workday flow attachment confirmation",
     )
     state = store.load()
+    revalidate_active_realm_target(store.workspace_root, store)
     live_evidence = verify_agent_binding(store.workspace_root, state)
     live_evidence["flowAttachment"] = flow_attachment
     evidence = validate_agent_binding_evidence(
@@ -1119,6 +1120,7 @@ def _record_topic_activation(
     _args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
+    revalidate_active_realm_target(store.workspace_root, store)
     evidence = verify_topic_activation(
         store.workspace_root,
         store.load(),
@@ -1158,6 +1160,7 @@ def _record_runtime_template_wiring(
             "Enable and verify all Workday topics before wiring the runtime "
             "template into Conversation Start."
         )
+    revalidate_active_realm_target(store.workspace_root, store)
     evidence = verify_runtime_template_wiring(
         store.workspace_root,
         state,

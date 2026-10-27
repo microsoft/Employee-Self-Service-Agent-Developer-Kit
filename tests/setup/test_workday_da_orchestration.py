@@ -979,6 +979,19 @@ def test_topic_enabling_and_refresh_confirmation_are_development_only() -> None:
     assert "authorization remain required" in " ".join(skill.split())
 
 
+def test_promoted_runtime_verifies_content_without_local_authoring() -> None:
+    configure = (_WORKDAY_DA / "configure-power-platform.md").read_text(encoding="utf-8")
+    promoted = configure.split("**Test and Production:**", 1)[1]
+    normalized = " ".join(promoted.split())
+    assert "Do not run either content-editing action" in normalized
+    assert "record-runtime-template-wiring" in promoted
+    assert "reread that target's live components" in normalized
+    assert "never Development's local component IDs" in normalized
+    for action in ("wire-runtime-template-config.md", "wire-user-context-redirect.md"):
+        text = (_WORKDAY_DA / "actions" / action).read_text(encoding="utf-8")
+        assert text.index("activeTargetRealm: dev") < text.index("python scripts/checkpoint.py")
+
+
 def test_user_context_redirect_reconciles_without_publish_prompt() -> None:
     action = (
         _REPO_ROOT

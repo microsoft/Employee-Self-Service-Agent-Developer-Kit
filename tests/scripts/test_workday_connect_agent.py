@@ -348,6 +348,281 @@ class _VerifiedClient:
         }
 
 
+@pytest.fixture
+def promoted_verification(tmp_path, monkeypatch):
+    import workday_connect_agent as agent
+    from minimalbot_evaluation import reviewed_workday_topic_schemas
+    from tests.conftest import require_validated_mock
+    from tests.mocks import agentbuilder_connectivity as ab
+
+    require_validated_mock(ab)
+    _write_workspace(tmp_path)
+    source_schema = "gptagent_copilotforemployeeselfservicehr"
+    source_identity = {
+        "environmentId": "00000000-0000-4000-8000-000000001111",
+        "environmentUrl": "https://source.crm.dynamics.com",
+        "tenantId": "00000000-0000-4000-8000-000000002222",
+        "agentId": "00000000-0000-4000-8000-000000003333",
+        "agentSchemaName": source_schema, "agentSlug": "ess-hr",
+        "almFamilyId": "family-id", "commitSha": "dev123",
+    }
+    foundation_path = tmp_path / ".local" / "config.json"
+    foundation = json.loads(foundation_path.read_text(encoding="utf-8"))
+    foundation["environmentId"] = source_identity["environmentId"]
+    foundation["tenantId"] = source_identity["tenantId"]
+    for selected in (foundation["agent"], *foundation["agents"]):
+        selected.update(botId=source_identity["agentId"], schemaName=source_schema)
+    foundation_path.write_text(json.dumps(foundation), encoding="utf-8")
+    target_identity = {
+        **source_identity,
+        "environmentId": "00000000-0000-4000-8000-000000004444",
+        "environmentUrl": "https://target.crm.dynamics.com",
+        "agentId": "00000000-0000-4000-8000-000000005555",
+        "sourceAgentId": source_identity["agentId"],
+        "agentSchemaName": f"{source_schema}_test", "commitSha": "test123",
+    }
+    state = _state()
+    state["activeTargetRealm"] = "test"
+    state["targets"]["dev"] = {"identity": source_identity}
+    state["targets"]["test"] = {
+        "identity": target_identity, "deploymentStatus": "blocked",
+    }
+    state["scope"].update(
+        environmentId=target_identity["environmentId"],
+        dataverseUrl=target_identity["environmentUrl"],
+        entraTenantId=target_identity["tenantId"], ring="prod",
+        agent={
+            "slug": "ess-hr", "botId": target_identity["agentId"],
+            "schemaName": target_identity["agentSchemaName"],
+        },
+    )
+    payload = ab.dialog_components([
+        ab.dialog_component_change(schema_name=schema)
+        for schema in sorted(reviewed_workday_topic_schemas(
+            target_identity["agentSchemaName"], realm="test",
+        ))
+    ])
+    target_schema = target_identity["agentSchemaName"]
+    runtime = f"{target_schema}.topic.WorkdaySystemSetRuntimeTemplateConfigurations"
+    validation = f"{target_schema}.topic.System-UserContext-Validate"
+    payload["botComponentChanges"].append(ab.dialog_component_change(
+        schema_name=f"{target_schema}.topic.ConversationStart",
+        dialog={
+            "$kind": "AdaptiveDialog",
+            "beginDialog": {"$kind": "OnConversationStart", "actions": [
+                {"$kind": "BeginDialog", "dialog": {"literalValue": runtime}},
+                {"$kind": "BeginDialog", "dialog": {"literalValue": validation}},
+            ]},
+        },
+    ))
+    for change in payload["botComponentChanges"]:
+        change["component"]["state"] = "Active"
+    observed = {"reads": [], "auth": []}
+
+    def authenticate(ring, **kwargs):
+        observed["auth"].append((ring, kwargs))
+        return "token", target_identity["tenantId"], "maker@example.com"
+
+    class ReadOnlyClient:
+        def __init__(self, host, token, **kwargs):
+            observed["host"] = host
+            observed["client"] = kwargs
+
+        def fetch_components(self, bot_id):
+            observed["reads"].append(bot_id)
+            return payload
+
+    monkeypatch.setattr(agent, "authenticate_flightcheck", authenticate)
+    monkeypatch.setattr(agent, "AgentBuilderClient", ReadOnlyClient)
+    return state, payload, observed, foundation_path
+
+
+@pytest.mark.parametrize("realm", ["test", "prod"])
+@pytest.mark.parametrize("same_environment", [False, True])
+@pytest.mark.parametrize("operation", [
+    "verify_topic_activation", "verify_agent_binding", "verify_runtime_template_wiring",
+])
+def test_promoted_verification_reads_actual_target_without_local_topic_ids(
+    tmp_path, promoted_verification, realm, same_environment, operation,
+):
+    import workday_connect_agent as agent
+    from agentbuilder import derive_environment_host
+
+    state, payload, observed, foundation_path = promoted_verification
+    target = state["targets"].pop("test")
+    old_schema = target["identity"]["agentSchemaName"]
+    new_schema = old_schema.removesuffix("_test") + f"_{realm}"
+    target["identity"]["agentSchemaName"] = new_schema
+    state["activeTargetRealm"] = realm
+    state["targets"][realm] = target
+    state["scope"]["agent"]["schemaName"] = new_schema
+    if same_environment:
+        source = state["targets"]["dev"]["identity"]
+        target["identity"].update(
+            environmentId=source["environmentId"], environmentUrl=source["environmentUrl"],
+        )
+        state["scope"].update(
+            environmentId=source["environmentId"], dataverseUrl=source["environmentUrl"],
+        )
+    payload.update(json.loads(json.dumps(payload).replace(old_schema, new_schema)))
+    before = foundation_path.read_bytes()
+    state_before = json.dumps(state, sort_keys=True)
+
+    evidence = getattr(agent, operation)(tmp_path, state)
+
+    assert evidence["botId"] == target["identity"]["agentId"]
+    assert evidence["environmentId"] == target["identity"]["environmentId"]
+    assert observed["reads"] == [target["identity"]["agentId"]]
+    assert observed["host"] == derive_environment_host(
+        target["identity"]["environmentId"], "prod",
+    )
+    assert observed["client"]["tenant_id"] == target["identity"]["tenantId"]
+    auth = observed["auth"][0][1]
+    assert auth["allow_write"] is False
+    assert auth["include_connectivity"] is False
+    assert auth["account_hint"] == "maker@example.com"
+    assert foundation_path.read_bytes() == before
+    assert json.dumps(state, sort_keys=True) == state_before
+    if operation == "verify_runtime_template_wiring":
+        assert evidence["runtimeTemplate"].startswith(new_schema + ".topic.")
+        assert evidence["verifiedComponents"] == 3
+    else:
+        assert evidence["workdayTopics"]["active"] == 23
+
+
+@pytest.mark.parametrize("defect", [
+    "scope-agent", "scope-environment", "scope-tenant", "source-agent",
+    "source-tenant", "family", "commit", "wrong-realm-schema", "account",
+    "authenticated-tenant", "missing-topic", "inactive-topic", "inactive-state",
+    "duplicate-topic", "malformed-payload", "misplaced-wiring",
+])
+def test_promoted_verification_rejects_mismatched_or_unready_target(
+    tmp_path, promoted_verification, monkeypatch, defect,
+):
+    import workday_connect_agent as agent
+
+    state, payload, observed, foundation_path = promoted_verification
+    identity = state["targets"]["test"]["identity"]
+    if defect == "scope-agent":
+        state["scope"]["agent"]["botId"] = "different-agent"
+    elif defect == "scope-environment":
+        state["scope"]["environmentId"] = "different-environment"
+    elif defect == "scope-tenant":
+        state["scope"]["entraTenantId"] = "different-tenant"
+    elif defect == "source-agent":
+        identity["sourceAgentId"] = "different-source"
+    elif defect == "source-tenant":
+        source = json.loads(foundation_path.read_bytes())
+        source["tenantId"] = "different-source-tenant"
+        foundation_path.write_text(json.dumps(source), encoding="utf-8")
+    elif defect == "family":
+        identity["almFamilyId"] = "different-family"
+    elif defect == "commit":
+        identity["commitSha"] = ""
+    elif defect == "wrong-realm-schema":
+        schema = identity["agentSchemaName"].removesuffix("_test") + "_prod"
+        identity["agentSchemaName"] = state["scope"]["agent"]["schemaName"] = schema
+    elif defect in {"account", "authenticated-tenant"}:
+        monkeypatch.setattr(agent, "authenticate_flightcheck", lambda *_a, **_k: (
+            "token",
+            "different-tenant" if defect == "authenticated-tenant" else identity["tenantId"],
+            "different@example.com" if defect == "account" else "maker@example.com",
+        ))
+    elif defect == "missing-topic":
+        payload["botComponentChanges"].pop(0)
+    elif defect == "inactive-topic":
+        payload["botComponentChanges"][0]["component"]["status"] = "Inactive"
+    elif defect == "inactive-state":
+        payload["botComponentChanges"][0]["component"]["state"] = "Inactive"
+    elif defect == "duplicate-topic":
+        payload["botComponentChanges"].append(payload["botComponentChanges"][0])
+    elif defect == "malformed-payload":
+        payload.pop("botComponentChanges")
+    else:
+        actions = payload["botComponentChanges"][-1]["component"]["dialog"]["beginDialog"]["actions"]
+        actions.reverse()
+    before = foundation_path.read_bytes()
+    state_before = json.dumps(state, sort_keys=True)
+
+    operation = (
+        agent.verify_runtime_template_wiring
+        if defect == "misplaced-wiring" else agent.verify_topic_activation
+    )
+    with pytest.raises(agent.WorkdayConnectAgentError):
+        operation(tmp_path, state)
+
+    assert foundation_path.read_bytes() == before
+    assert json.dumps(state, sort_keys=True) == state_before
+    if defect == "inactive-topic":
+        assert observed["reads"] == [identity["agentId"]]
+
+
+def test_promoted_verification_retains_correlated_diagnostics_without_failing_activation(
+    tmp_path, promoted_verification,
+):
+    from workday_connect_agent import verify_topic_activation
+
+    state, payload, _observed, _foundation = promoted_verification
+    component = payload["botComponentChanges"][0]["component"]
+    component["dialog"]["diagnostics"] = [{
+        "errorCode": "NotFound", "errorMessage": "CloudFlow not found",
+        "referenceType": "CloudFlow",
+    }]
+
+    topics = verify_topic_activation(tmp_path, state)["workdayTopics"]
+
+    assert topics["active"] == 23
+    diagnostic, = topics["blockingDiagnostics"]
+    assert diagnostic["componentId"] == component["id"]
+    assert diagnostic["schemaName"] == component["schemaName"]
+    assert diagnostic["errorCode"] == "NotFound"
+    assert diagnostic["referenceType"] == "CloudFlow"
+
+
+def test_promoted_verification_uses_verified_tenant_when_foundation_omits_it(
+    tmp_path, promoted_verification,
+):
+    from workday_connect_agent import verify_topic_activation
+
+    state, _payload, _observed, path = promoted_verification
+    foundation = json.loads(path.read_bytes())
+    foundation.pop("tenantId")
+    state["targets"]["dev"]["identity"].pop("almFamilyId")
+    path.write_text(json.dumps(foundation), encoding="utf-8")
+    before = path.read_bytes()
+
+    assert verify_topic_activation(tmp_path, state)["workdayTopics"]["active"] == 23
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("operation", [
+    "_record_topic_activation", "_record_runtime_template_wiring", "_record_agent_binding",
+])
+def test_promoted_recording_revalidates_identity_before_reads_or_evidence(
+    tmp_path, promoted_verification, monkeypatch, operation,
+):
+    import workday_connect
+    from workday_connect_realms import WorkdayConnectRealmError
+
+    state, _payload, observed, _foundation = promoted_verification
+    state["phases"]["runtime"]["completedActions"] = ["workday-topics-activated"]
+    store = SimpleNamespace(workspace_root=tmp_path, load=lambda: state)
+    args = SimpleNamespace(attachment_json=json.dumps({"outcome": "maker-confirmed"}))
+
+    def reject(root, actual_store):
+        assert root == tmp_path
+        assert actual_store is store
+        raise WorkdayConnectRealmError("The promoted identity changed.")
+
+    monkeypatch.setattr(workday_connect, "revalidate_active_realm_target", reject)
+
+    with pytest.raises(WorkdayConnectRealmError, match="identity changed"):
+        getattr(workday_connect, operation)(args, store)
+
+    assert observed["reads"] == []
+    assert observed["auth"] == []
+
+
 def test_agent_binding_is_built_from_live_checks_and_components(
     tmp_path: Path,
 ) -> None:

@@ -1,5 +1,9 @@
 # Action: Wire the User Context redirect to Workday
 
+**Development only.** Require verified `activeTargetRealm: dev` before
+checkpointing, editing or pushing local topics. Test and Production preserve
+the redirect carried by promotion; do not run this authoring action there.
+
 Called by the native DA Workday Runtime phase in
 `src/skills/connect/workday/configure-power-platform.md` after approved runtime
 configuration, flow attachment, topic activation, and runtime-template wiring.

@@ -492,7 +492,10 @@ and promote the corrected content through the normal ALM process.
 Topic diagnostics are retained as supporting detail but do not change
 the activation result or create a package-repair blocker by themselves.
 
-Only after topic activation is verified, initialize the Workday runtime
+Only after topic activation is verified, continue with the realm-specific
+wiring step below.
+
+**Development only:** Initialize the Workday runtime
 templates from the native agent's Conversation Start by running the guarded
 action in
 `src/skills/connect/workday/actions/wire-runtime-template-config.md`.
@@ -520,16 +523,32 @@ Continue only when the redirect action returns `ACTION_RESULT = "applied"`.
 On cancellation or failure, stop before recording agent binding and keep the
 Runtime phase incomplete.
 
-Then run:
+**Test and Production:** Do not run either content-editing action above,
+push Development's local files into the promoted agent, or change its topic
+activation states. The conversation-start initialization and User Context
+redirect are carried by promotion. Verify the actual promoted runtime-template
+wiring read-only:
+
+```powershell
+python scripts/workday_connect.py record-runtime-template-wiring
+```
+
+If verification fails, preserve the selected target and applied permissions.
+Correct the source content in Development and promote it through the normal
+ALM process; do not repair a promoted agent with a local authoring push.
+
+For every realm, then run:
 
 ```powershell
 python scripts/workday_connect.py record-agent-binding --attachment-file ".local\connect\workday-da\agent-flow-attachment.json"
 ```
 
 This command runs automatic readiness checks against the recorded Workday
-state, signs in to the native components endpoint as the recorded maker, derives the
-complete Workday topic set from `.component-map.json`, and rereads every
-mapped topic. It completes the runtime phase only when the target-bound flow
+state and signs in to the native components endpoint as the recorded maker.
+Development derives its topic set from `.component-map.json`; Test and
+Production use the reviewed inventory with the actual promoted schema and
+reread that target's live components, never Development's local component IDs.
+It completes the runtime phase only when the target-bound flow
 attachment is confirmed, every Workday topic is Active, and the automatic
 configuration checks are accepted. It retains any topic
 diagnostics for support correlation without presenting them as runtime failure
