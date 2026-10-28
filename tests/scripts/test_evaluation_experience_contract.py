@@ -530,8 +530,8 @@ def test_entry_prompts_preserve_explicit_push_without_general_deployment_overrid
     assert "Do NOT add `--yes`" in push.split("## General component push", 1)[1]
     assert "never launch an interactive evaluation push" in _normalized(push).lower()
     update = _normalized(_read(".github/prompts/update.prompt.md"))
-    assert "For **workflow updates only**" in update
-    assert "This restriction does not apply to evaluation operations" in update
+    assert "Workspace-level evaluation updates and review-tag workflows do not require configured-agent setup" in update
+    assert "separate deployment and run approvals" in update
     evaluate = _normalized(_read(".github/prompts/evaluate.prompt.md"))
     assert "**quality review** / **Run another quality review**" in evaluate
     assert "agentStudioUrl" in evaluate

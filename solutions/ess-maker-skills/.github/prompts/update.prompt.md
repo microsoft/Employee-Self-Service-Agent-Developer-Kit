@@ -1,101 +1,30 @@
 ---
 mode: agent
-description: "Modify a fixed-response topic, workflow, or evaluation test set"
+description: "Update a topic, workflow notice, or evaluation test set"
 ---
 
 # Update
 
-You are helping a customer modify a fixed-response topic, workflow, or evaluation
-test set.
+Route updates to the operation's current owner. When the request is ambiguous, ask whether the maker wants to update a **topic**, **workflow**, or **evaluation test set**.
 
-For explicit or implicit changes to a topic itself, read
-`src/skills/topics/crafted-response/SKILL.md`. Update only a supported topic
-created by that native route, keeping its name, native ID, and schema. The skill
-owns fresh readback, current native instruction alignment, separate previews
-and approvals, and scoped native saves. Matching instruction text edits must
-follow that skill's bounded operation. Renaming, packaged/system/integration
-topics, backend calls, extra steps, and unrelated agent-wide instruction
-changes remain unsupported. Do not activate or publish.
+**Setup-state check.** Topic updates require `.local/setup/config.json` with
+`schema_version: 4` and the active workspace's matching `agents` entry with
+`connect_ready: true`, plus `.local/config.json`. Apply this gate only after the
+maker chooses a topic. Workspace evaluation updates and the workflow notice do
+not require setup.
 
-Do not invoke retained `topics/update`, `topics/update-eval-driven`, workflow
-updates, or direct YAML edits to bypass this boundary.
+## Topic
 
-**Setup-state note.** Workflow updates require a completed setup. Workspace-level
-evaluation updates and review-tag workflows do not. Apply the setup gate only
-after the user chooses a workflow, or when an evaluation operation needs a
-configured agent for push. Read `.local/setup/config.json` and
-`.local/config.json`; completed setup requires `schema_version: 4` and an
-`agents` entry matching the active workspace slug with `connect_ready: true`.
+For any explicit or implicit topic change, read `src/skills/topics/update/SKILL.md` and follow it completely. Carry the exact selected topic and any supplied evaluation cases or findings. Do not use a separate eval-driven save/materialization workflow.
 
-For **workflow updates only**, continue with local authoring but skip every
-instruction to push, publish, or
-run server-backed validation. Finish by stating that the local files were
-saved and DA-GA deployment is not yet available in this release. Do not offer
-`/test` as validation of the local change because `/test` can exercise only
-the unchanged deployed version.
+The topic owner handles fresh native readback, mapped identity, ordinary `.mcs.yml` drafting, instruction alignment, separate approvals, scoped native save, optional testing handoff, and end-of-iteration evaluation impact.
 
-This restriction does not apply to evaluation operations. Evaluation edit/add,
-Request Review, Run, reviewer completion, and explicit evaluation push follow
-`src/skills/evaluations/experience-contract.md` and
-`src/skills/evaluations/deployment-flow.md`. Run and Request Review include their
-required scoped deployment without a separate push command. Keep the existing
-APIs: Dataverse push persists review metadata; new/changed native YAML creates a
-new copy while retaining the old remote copy and local review sidecar.
-Unchanged YAML, including review-only changes, uses verified reuse. Show
-that behavior before consent and report the native shared-review limitation,
-not a new API-parity blocker or a false reviewer-availability claim.
+## Evaluation
 
-**IMPORTANT: When the user just types `/update` with no additional text, do
-NOT silently route anywhere. Ask the user what they want to update first.**
+For evaluation edits, additions, review, deployment, or runs, use the applicable evaluation skill. A request to change evaluation cases about a topic is not permission to modify the topic.
 
-## Routing additional text
+Workspace-level evaluation updates and review-tag workflows do not require configured-agent setup. Preserve the exact selected folder/source and the evaluation skill's separate deployment and run approvals.
 
-When `/update` includes additional text, topic intent, whether explicit or
-implicit, always wins:
+## Workflow
 
-1. If the user explicitly or implicitly asks to change a **topic itself**, read
-   `src/skills/topics/crafted-response/SKILL.md`. Changing an evaluation about a
-   topic is an evaluation operation, not permission to edit the topic.
-2. If the user explicitly asks to update an **evaluation**, **test set**, or
-   **add test cases**,
-   route to `src/skills/evaluations/update/SKILL.md`.
-3. If the user explicitly asks to update a **workflow**, route to
-   `src/skills/workflows/update/SKILL.md`.
-
-## Flow
-
-1. Ask the user: "What would you like to update - a **topic with a fixed answer**, a **workflow**, or an **evaluation** test set?"
-2. Wait for the user to answer.
-3. Route based on their answer:
-   - **topic**
-     -> Read `src/skills/topics/crafted-response/SKILL.md` and follow its
-     setup check, supported-topic selection, and native update steps.
-   - **workflow**
-     -> Apply the same setup check, then read
-     `src/skills/workflows/update/SKILL.md` and follow its instructions.
-   - **evaluation**
-     -> Read `src/skills/evaluations/update/SKILL.md` and follow its
-     instructions. Preserve exact selected context and visibly offer edit/add.
-   - **mark/send evaluation sets for review**
-     -> Read `src/skills/evaluations/update/SKILL.md` Flow R1. Do not stop at
-     a local tag or ask for a separate push command.
-   - **review evaluation test sets** / **review testsets**
-     -> Read `src/skills/evaluations/review/SKILL.md` and follow it. Do not
-     invoke quality validation before listing `review_requested` sets and
-     obtaining a selection.
-
-> Welcome to the ESS Maker Kit. Before updating workflows, type `/setup` to set up your environment.
-
-Do NOT proceed without reading the appropriate skill file first.
-
-## Workflow completion gate
-
-This gate does not apply in this DA-only release. State that runtime testing
-is deferred until a supported deployment path can make the local change live.
-
-This gate applies only to workflow updates. Evaluation updates and
-evaluation review workflows follow their evaluation skill's completion steps.
-
-Do not offer `/test` for a locally updated workflow because the unchanged
-deployed agent does not contain that update and DA-GA workflow run-history
-inspection is not yet available.
+For workflow updates, read `src/skills/workflows/update/SKILL.md`. It is notice-only: ADK does not author Power Automate flows through this route. Do not offer calling-topic changes. Do not offer `/test`.
