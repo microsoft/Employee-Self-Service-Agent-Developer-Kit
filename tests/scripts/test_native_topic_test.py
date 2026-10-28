@@ -85,12 +85,12 @@ def test_literal_response_rejects_nonliteral_shapes(component, unsupported):
         None,
         aggregate_turn([Bubble(ANSWER)], timed_out=True),
         aggregate_turn([]),
-        aggregate_turn([Bubble("Connect to continue")]),
         aggregate_turn([Bubble(ANSWER, had_card=True)]),
+        aggregate_turn([Bubble("", had_card=True)]),
     ],
 )
 def test_nonreplies_and_cards_never_pass_exact_response(capture):
-    result = native.assess(capture, ANSWER, {"added": [], "removed": [], "changed": []})
+    result = native.assess(capture, ANSWER, True)
     assert result["checks"]["savedResponse"]["assessed"] is False
     assert result["checks"]["savedResponse"]["met"] is None
     assert result["outcome"] != "passed"
@@ -98,13 +98,27 @@ def test_nonreplies_and_cards_never_pass_exact_response(capture):
 
 def test_exact_response_requires_case_sensitive_match_and_native_integrity():
     capture = aggregate_turn([Bubble(ANSWER)])
-    clean = {"added": [], "removed": [], "changed": []}
-    assert native.assess(capture, ANSWER, clean)["outcome"] == "passed"
-    assert native.assess(capture, ANSWER.lower(), clean)["outcome"] == "failed"
+    assert native.assess(capture, ANSWER, True)["outcome"] == "passed"
+    assert native.assess(capture, ANSWER.lower(), True)["outcome"] == "failed"
     assert native.assess(capture, ANSWER, None)["outcome"] == "incomplete"
-    assert native.assess(capture, ANSWER, {**clean, "changed": [COMPONENT_ID]})[
-        "outcome"
-    ] == "failed"
+    assert native.assess(capture, ANSWER, False)["outcome"] == "failed"
+
+
+def test_exact_complete_noncard_response_can_contain_advisory_consent_text():
+    answer = "Open connection manager to verify your credentials."
+    result = native.assess(aggregate_turn([Bubble(answer)]), answer, True)
+    assert result["signal"] == "consent_gate"
+    assert result["checks"]["savedResponse"]["met"] is True
+    assert result["outcome"] == "passed"
+    assert native.assess(
+        aggregate_turn([Bubble(answer)]), ANSWER, True,
+    )["outcome"] != "passed"
+    assert native.assess(
+        aggregate_turn([Bubble(answer)], timed_out=True), answer, True,
+    )["outcome"] == "timeout"
+    assert native.assess(
+        aggregate_turn([Bubble(answer, had_card=True)]), answer, True,
+    )["outcome"] == "unsupported_reply"
 
 
 @pytest.fixture
@@ -167,7 +181,7 @@ def exercise(tmp_path, component, monkeypatch):
 def test_native_gates_block_before_browser_start(exercise, component, failure, tmp_path):
     args, client, calls = exercise
     if failure == "changed":
-        component["version"] += 1
+        component["dialog"]["beginDialog"]["intent"]["triggerQueries"].append("another phrase")
     elif failure == "inactive":
         component["state"] = "Inactive"
         inspected = native._read(args.inspection)
@@ -235,7 +249,7 @@ def test_cleanup_failure_is_reported_without_losing_native_readback(exercise, tm
     monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "close", failed_close)
     result, code = native._exercise(args, tmp_path, client, TARGET)
     assert code == 2 and result["outcome"] == "incomplete"
-    assert result["checks"]["nativeComponentsUnchanged"]["met"] is True
+    assert result["checks"]["selectedTopicUnchanged"]["met"] is True
     assert result["error"]["cleanupError"]["message"] == "Browser disconnect failed"
     assert calls.count(("send", PROMPT)) == 1
 
@@ -258,3 +272,230 @@ def test_observe_retains_confirmed_response_identity_after_capture_error(
     observed = [call for call in calls if isinstance(call, tuple) and call[0] == "observe"]
     assert observed[0][2]["expectedResponseId"] == "current-response"
     assert calls.count(("send", PROMPT)) == 1
+
+
+@pytest.fixture
+def completed_exercise(exercise, monkeypatch):
+    args, client, calls = exercise
+
+    def completed_send(_self, text, timeout_s):
+        calls.append(("send", text))
+        return [Bubble(ANSWER)], False
+
+    monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "send", completed_send)
+    return args, client, calls
+
+
+def test_inspection_allows_unrelated_selected_component_metadata_changes(
+    completed_exercise, component, tmp_path,
+):
+    args, client, calls = completed_exercise
+    component["version"] += 1
+    component["displayName"] = "Updated label"
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == 0 and result["outcome"] == "passed"
+    assert calls.count(("send", PROMPT)) == 1
+
+
+@pytest.mark.parametrize(
+    "change,unchanged",
+    [("other-added", True), ("other-removed", True), ("other-changed", True),
+     ("metadata", True), ("dialog", False), ("inactive", False),
+     ("identity", False), ("removed", False)],
+)
+def test_integrity_is_scoped_to_selected_topic_with_all_drift_retained(
+    completed_exercise, component, tmp_path, monkeypatch, change, unchanged,
+):
+    args, client, _calls = completed_exercise
+    other_id = "00000000-0000-4000-8000-000000005555"
+    reads = 0
+
+    def fetch(_agent_id):
+        nonlocal reads
+        reads += 1
+        selected = deepcopy(component)
+        other = {"id": other_id, "$kind": "GptComponent", "version": reads}
+        components = [selected]
+        if change != "other-added" or reads > 1:
+            components.append(other)
+        if reads > 1:
+            if change == "other-removed":
+                components.remove(other)
+            elif change == "metadata":
+                selected["version"] += 1
+            elif change == "dialog":
+                selected["dialog"]["modelDescription"] = "Changed routing intent"
+            elif change == "inactive":
+                selected["status"] = "Inactive"
+            elif change == "identity":
+                selected["schemaName"] = "another.topic"
+            elif change == "removed":
+                components.remove(selected)
+        return {"botComponentChanges": [{"component": value} for value in components]}
+
+    monkeypatch.setattr(client, "fetch_components", fetch)
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == (0 if unchanged else 1)
+    assert result["checks"]["selectedTopicUnchanged"]["met"] is unchanged
+    assert result["checks"]["savedResponse"]["met"] is True
+    assert any(result["componentDrift"].values())
+    assert native._read(args.output / "native-after.json") == result["nativeReadback"]
+
+
+def test_screenshot_failure_is_diagnostic_with_its_original_cause(
+    completed_exercise, tmp_path, monkeypatch,
+):
+    args, client, _calls = completed_exercise
+
+    def failed_screenshot(_self, _path):
+        try:
+            raise OSError("Screenshot file is unavailable")
+        except OSError as cause:
+            raise RuntimeError("Current-turn screenshot failed") from cause
+
+    monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "screenshot", failed_screenshot)
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == 0 and result["outcome"] == "passed"
+    assert result["diagnostics"]["screenshotError"]["cause"] == {
+        "type": "OSError", "message": "Screenshot file is unavailable",
+    }
+    assert result["capture"]["replyText"] == ANSWER
+    assert result["checks"]["selectedTopicUnchanged"]["met"] is True
+
+
+@pytest.mark.parametrize("filename", ["capture.json", "native-after.json", "result.json"])
+def test_output_failure_preserves_known_capture_and_readback(
+    completed_exercise, tmp_path, monkeypatch, filename,
+):
+    args, client, calls = completed_exercise
+    write = native._write
+
+    def failed_write(path, value):
+        if path.name == filename:
+            raise OSError(f"Cannot write {filename}")
+        write(path, value)
+
+    monkeypatch.setattr(native, "_write", failed_write)
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == 2 and result["outcome"] == "incomplete"
+    assert result["assessmentOutcome"] == "passed"
+    assert result["capture"]["replyText"] == ANSWER
+    assert result["nativeReadback"]["component"]["id"] == COMPONENT_ID
+    assert result["checks"]["savedResponse"]["met"] is True
+    assert result["checks"]["selectedTopicUnchanged"]["met"] is True
+    assert result["observation"]["responseId"] == "current-response"
+    assert result["submissionMayHaveOccurred"] is True
+    assert result["evidenceWriteErrors"] == [{
+        "file": filename, "error": {"type": "OSError", "message": f"Cannot write {filename}"},
+    }]
+    assert calls.count(("send", PROMPT)) == 1
+
+
+def test_required_execution_recording_failure_blocks_send(
+    completed_exercise, tmp_path, monkeypatch,
+):
+    args, client, calls = completed_exercise
+    write = native._write
+
+    def failed_write(path, value):
+        if path.name == "execution.json":
+            raise OSError("Cannot record the pre-send boundary")
+        write(path, value)
+
+    monkeypatch.setattr(native, "_write", failed_write)
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == 2 and result["outcome"] == "blocked"
+    assert result["submissionMayHaveOccurred"] is False
+    assert result["capture"] is None
+    assert result["error"]["captureError"]["message"] == "Cannot record the pre-send boundary"
+    assert result["checks"]["selectedTopicUnchanged"]["met"] is True
+    assert not any(isinstance(call, tuple) and call[0] == "send" for call in calls)
+
+
+def test_readback_failure_survives_later_result_write_failure(
+    completed_exercise, tmp_path, monkeypatch,
+):
+    args, client, _calls = completed_exercise
+    fetch = client.fetch_components
+    write = native._write
+    reads = 0
+
+    def failed_readback(agent_id):
+        nonlocal reads
+        reads += 1
+        if reads > 1:
+            raise native.requests.ConnectionError("Authoritative readback unavailable")
+        return fetch(agent_id)
+
+    def failed_write(path, value):
+        if path.name == "result.json":
+            raise OSError("Result directory became read-only")
+        write(path, value)
+
+    monkeypatch.setattr(client, "fetch_components", failed_readback)
+    monkeypatch.setattr(native, "_write", failed_write)
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == 2 and result["outcome"] == "incomplete"
+    assert result["capture"]["replyText"] == ANSWER
+    assert result["checks"]["selectedTopicUnchanged"]["assessed"] is False
+    assert result["error"]["nativeReadbackError"]["message"] == "Authoritative readback unavailable"
+    assert result["evidenceWriteErrors"][0]["error"]["message"] == "Result directory became read-only"
+
+
+def test_result_output_failure_returns_known_facts_through_cli(
+    completed_exercise, tmp_path, monkeypatch, capsys,
+):
+    args, client, calls = completed_exercise
+    write = native._write
+
+    def failed_write(path, value):
+        if path.name == "result.json":
+            raise OSError("Result file unavailable")
+        write(path, value)
+
+    monkeypatch.setattr(native, "_write", failed_write)
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    code = native.main([
+        "run", "--kit-root", str(tmp_path), "--inspection", str(args.inspection),
+        "--prompt", PROMPT, "--cdp", args.cdp, "--url", URL, "--output", str(args.output),
+    ])
+    output = capsys.readouterr()
+    result = json.loads(output.out)
+    assert code == 2 and not output.err
+    assert result["outcome"] == "incomplete" and result["assessmentOutcome"] == "passed"
+    assert result["capture"]["replyText"] == ANSWER
+    assert result["nativeReadback"]["component"]["id"] == COMPONENT_ID
+    assert result["evidenceWriteErrors"][0]["error"]["message"] == "Result file unavailable"
+    assert calls.count(("send", PROMPT)) == 1
+
+
+def test_later_observation_keeps_original_snapshot_and_expectation(
+    exercise, tmp_path, monkeypatch,
+):
+    args, client, calls = exercise
+    _result, _code = native._exercise(args, tmp_path, client, TARGET)
+    original_snapshot = native._read(args.output / "native-before.json")
+    other_id = "00000000-0000-4000-8000-000000005555"
+    fetch = client.fetch_components
+
+    def changed_inventory(agent_id):
+        result = fetch(agent_id)
+        result["botComponentChanges"].append({"component": {"id": other_id, "$kind": "GptComponent"}})
+        return result
+
+    monkeypatch.setattr(client, "fetch_components", changed_inventory)
+    args.operation, args.previous, args.output = "observe", args.output, None
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == 0 and result["outcome"] == "passed"
+    assert result["componentDrift"]["added"] == [other_id]
+    assert native._read(args.previous / "native-before.json") == original_snapshot
+    assert calls.count(("send", PROMPT)) == 1
+
+    execution_path = args.previous / "execution.json"
+    execution = native._read(execution_path)
+    execution["expectation"]["text"] = "A replacement expectation"
+    execution_path.write_text(json.dumps(execution), encoding="utf-8")
+    calls.clear()
+    with pytest.raises(ValueError, match="original response"):
+        native._exercise(args, tmp_path, client, TARGET)
+    assert not calls

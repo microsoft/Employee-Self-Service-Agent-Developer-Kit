@@ -199,14 +199,15 @@ class DagaChatDriver:
         if responses.count() > 1:
             raise RuntimeError("The current turn has ambiguous response identities.")
         response_id = responses.first.get_attribute("id") if responses.count() else None
-        bubbles = tuple(
-            Bubble(body, bool(reply.locator(".ac-adaptiveCard").count()))
-            for reply in self._visible(latest.locator(_REPLY))
-            if (body := reply.inner_text().strip())
-        )
+        bubbles = []
+        for reply in self._visible(latest.locator(_REPLY)):
+            body = reply.inner_text().strip()
+            had_card = bool(reply.locator(".ac-adaptiveCard").count())
+            if body or had_card:
+                bubbles.append(Bubble(body, had_card))
         return _Snapshot(
             int(indices[-1]), element_id, count, user.inner_text().strip(),
-            bubbles, generating, response_id,
+            tuple(bubbles), generating, response_id,
         )
 
     def prepare(self) -> dict[str, Any]:
