@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import hashlib
 import json
@@ -27,6 +28,7 @@ from agentbuilder import (
     AgentBuilderClient,
     AgentBuilderError,
     AgentBuilderHTTPError,
+    _acquire_token,
     authenticate_agent_inventory,
     authenticate,
     authenticate_selected_tenant,
@@ -35,6 +37,7 @@ from agentbuilder import (
     derive_environment_host,
     list_environments,
     seed_shared_token_cache,
+    tenant_id_from_access_token,
     validate_environment_host,
 )
 from alm_enrollment import AlmEnrollmentError, ensure_alm
@@ -1549,6 +1552,75 @@ def _validate_setup_target(
             "agent."
         )
     return canonical_state, agent_state
+
+
+def connect_selected_dev_workspace(
+    kit_root: Path,
+    account: str | None = None,
+) -> tuple[AgentBuilderClient, dict[str, Any]]:
+    """Authenticate and validate the canonical, ready workspace's Dev target."""
+    config = _load_json(kit_root / ".local" / "config.json")
+    state = _load_canonical_setup_state(kit_root)
+    selected = [
+        entry for entry in (state or {}).get("agents", {}).values()
+        if entry.get("agent", {}).get("workspace_slug") == config.get("activeAgent")
+    ]
+    agent = config.get("agent", {})
+    if (
+        state is None
+        or config.get("releaseLine") != "da"
+        or len(selected) != 1
+        or selected[0].get("connect_ready") is not True
+        or selected[0]["agent"].get("id") != agent.get("botId")
+        or selected[0]["agent"].get("realm") != "dev"
+    ):
+        raise ExistingDASetupError("Complete /setup for the selected Dev agent first.")
+    tenant = state["environment"]["tenant_id"]
+    environment = {
+        "id": config["environmentId"],
+        "tenantId": tenant,
+        "powerPlatformApiEndpoint": config["powerPlatformApiEndpoint"],
+        "ring": config["ring"],
+        "apiVersion": config["agentBuilderApiVersion"],
+    }
+    if not _canonical_environment_matches_connection(state, {"environment": environment}):
+        raise ExistingDASetupError("Operational and canonical environment identities differ.")
+    cache = kit_root / ".local" / ".agentbuilder_token_cache.bin"
+    accounts = cached_account_names(cache)
+    if account is None and len(accounts) != 1:
+        raise ExistingDASetupError(
+            "Select one Maker account with /setup or --account; "
+            "no account was selected automatically."
+        )
+    selected_account = account or accounts[0]
+    with contextlib.redirect_stdout(sys.stderr):
+        authenticated = _acquire_token(
+            authority=f"https://login.microsoftonline.com/{tenant}",
+            ring=config["ring"],
+            cache_path=cache,
+            force_account_selection=False,
+            account_hint=selected_account,
+            emit_account_identity=False,
+            return_account_identity=True,
+        )
+    if not isinstance(authenticated, tuple):
+        raise ExistingDASetupError("Authentication did not return the selected identity.")
+    token, actual_account = authenticated
+    if str(actual_account or "").casefold() != selected_account.casefold():
+        raise ExistingDASetupError("Authentication used a different Maker account.")
+    if tenant_id_from_access_token(token).casefold() != tenant.casefold():
+        raise ExistingDASetupError("Authentication used a different tenant.")
+    client = AgentBuilderClient(
+        environment["powerPlatformApiEndpoint"], token,
+        ring=environment["ring"], tenant_id=tenant,
+        api_version=environment["apiVersion"],
+    )
+    target = validate_existing_dev_connection(
+        client, environment_id=environment["id"], agent_id=agent["botId"],
+        expected_schema_name=agent["schemaName"],
+    )
+    _validate_setup_target(kit_root, target)
+    return client, target
 
 
 def _changeset_sha256(changeset: dict[str, Any]) -> str:
