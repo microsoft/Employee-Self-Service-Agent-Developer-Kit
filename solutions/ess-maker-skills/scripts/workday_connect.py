@@ -62,6 +62,7 @@ from workday_connect_realms import (
 from workday_connect_runtime import (
     REALM_DISPLAY_NAMES,
     WorkdayConnectRuntimeError,
+    configured_connection_api_version,
     run_runtime_operation,
     verify_physical_connections,
 )
@@ -930,6 +931,7 @@ def _runtime_plan(
     result = run_runtime_operation(
         store.load(),
         apply=False,
+        api_version=configured_connection_api_version(store.workspace_root),
         workday_connection_id=args.workday_connection_id,
         dataverse_connection_id=args.dataverse_connection_id,
     )
@@ -945,6 +947,7 @@ def _runtime_apply(
     result = run_runtime_operation(
         store.load(),
         apply=True,
+        api_version=configured_connection_api_version(store.workspace_root),
         approved_hash=args.plan_hash,
         verifier=lambda plan, approved_hash: store.verify_plan(
             "runtime",
@@ -993,6 +996,7 @@ def _record_connections(
         )
     evidence = verify_physical_connections(
         state,
+        api_version=configured_connection_api_version(store.workspace_root),
         workday_connection_id=args.workday_connection_id,
         dataverse_connection_id=args.dataverse_connection_id,
     )

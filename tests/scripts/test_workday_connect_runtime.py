@@ -143,6 +143,85 @@ def test_connection_api_is_primary_and_uses_selected_ring_tenant_and_maker(
     assert all(call.request.method == "GET" for call in responses.calls)
 
 
+@pytest.mark.parametrize("configured_version", [None, "2022-03-01-preview"])
+@pytest.mark.parametrize("operation", ["connections", "preview", "apply"])
+@responses.activate
+def test_controller_discovery_preserves_foundation_api_version(
+    tmp_path, monkeypatch, configured_version, operation,
+):
+    from urllib.parse import parse_qs, urlsplit
+
+    import workday_connect as controller
+
+    foundation = tmp_path / ".local" / "config.json"
+    foundation.parent.mkdir()
+    foundation.write_text(json.dumps(
+        {} if configured_version is None else {
+            "agentBuilderApiVersion": configured_version,
+        }
+    ), encoding="utf-8")
+    original_config = foundation.read_bytes()
+    state, records = _colocated_targets()
+    state["phases"]["connections"]["completedActions"].append("verify-package")
+    original_state = deepcopy(state)
+    store = SimpleNamespace(
+        workspace_root=tmp_path,
+        load=lambda: state,
+        status=lambda: {},
+        record_lifecycle_event=lambda *_a, **_k: None,
+        verify_plan=lambda _phase, plan, _hash: plan["planHash"],
+        complete_action=lambda *_a, **_k: None,
+    )
+    args = SimpleNamespace(
+        root=str(tmp_path), workday_connection_id=None,
+        dataverse_connection_id=None, plan_hash="approved",
+        confirm_workday_target=False,
+    )
+    monkeypatch.setattr(controller, "revalidate_active_realm_target", lambda *_a: None)
+    monkeypatch.setattr(runtime, "authenticate_connections", lambda *_a, **_k: _api_token())
+    monkeypatch.setattr(runtime, "_run_authorization", lambda *_a, **_k: {"outcome": "verified"})
+
+    def run_operation(current, **kwargs):
+        return runtime.run_runtime_operation(
+            current, **kwargs,
+            token_provider=lambda *_a, **_k: "token", identity_provider=_identity,
+            query=_query_for(records), pac_resolver=_no_pac,
+            updater=lambda *_a: pytest.fail("Existing healthy Runtime bindings must not change"),
+        )
+
+    monkeypatch.setattr(controller, "run_runtime_operation", run_operation)
+    expected_version = configured_version or runtime.DEFAULT_API_VERSION
+    response = native.list_connections(items=_connections()["value"])
+    response["url"] = response["url"].split("?")[0]
+    responses.add(**response)
+
+    handler = {
+        "connections": controller._record_connections,
+        "preview": controller._runtime_plan,
+        "apply": controller._runtime_apply,
+    }[operation]
+    handler(args, store)
+
+    assert len(responses.calls) == 1
+    request = responses.calls[0].request
+    assert request.method == "GET"
+    assert parse_qs(urlsplit(request.url).query)["api-version"] == [expected_version]
+    assert foundation.read_bytes() == original_config
+    assert state == original_state
+
+
+@pytest.mark.parametrize("content", [
+    "{bad", "[]", '{"agentBuilderApiVersion": null}', '{"agentBuilderApiVersion": ""}',
+])
+def test_discovery_rejects_unreadable_or_invalid_foundation_config(tmp_path, content):
+    foundation = tmp_path / ".local" / "config.json"
+    foundation.parent.mkdir()
+    foundation.write_text(content, encoding="utf-8")
+
+    with pytest.raises(runtime.WorkdayConnectRuntimeError):
+        runtime.configured_connection_api_version(tmp_path)
+
+
 @pytest.mark.parametrize("failure", ["denied", "service", "malformed", "timeout", "auth"])
 @responses.activate
 def test_connection_api_failure_falls_back_to_pac_for_same_target(

@@ -19,6 +19,7 @@ import requests
 from agentbuilder import (
     AgentBuilderError,
     ConnectivityClient,
+    DEFAULT_API_VERSION,
     authenticate as authenticate_connections,
     connectivity_read_scopes,
 )
@@ -253,6 +254,28 @@ def _pac_upgrade_guidance(
     )
 
 
+def configured_connection_api_version(root: Path) -> str:
+    config_path = root / ".local" / "config.json"
+    if not config_path.exists():
+        return DEFAULT_API_VERSION
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise WorkdayConnectRuntimeError(
+            "The foundation configuration could not be read for connection discovery."
+        ) from exc
+    if not isinstance(config, Mapping):
+        raise WorkdayConnectRuntimeError(
+            "The foundation configuration must be an object."
+        )
+    version = config.get("agentBuilderApiVersion", DEFAULT_API_VERSION)
+    if not isinstance(version, str) or not version.strip():
+        raise WorkdayConnectRuntimeError(
+            "The configured agentBuilderApiVersion must be a non-empty string."
+        )
+    return version
+
+
 def _api_connections(context: Mapping[str, Any]) -> list[dict[str, Any]]:
     environment_id = _required_text(context, "environmentId", "Environment ID")
     tenant_id = _required_text(context, "tenantId", "Microsoft Entra tenant ID")
@@ -269,7 +292,10 @@ def _api_connections(context: Mapping[str, Any]) -> list[dict[str, Any]]:
             "Power Platform connection discovery authenticated to a different "
             "Microsoft Entra tenant from the selected Workday target."
         )
-    return ConnectivityClient(token, ring=ring).list_connections(environment_id)
+    return ConnectivityClient(
+        token, ring=ring,
+        api_version=context.get("agentBuilderApiVersion", DEFAULT_API_VERSION),
+    ).list_connections(environment_id)
 
 
 def _single_rows(
@@ -416,6 +442,8 @@ def _default_runner(command: list[str], **kwargs) -> subprocess.CompletedProcess
 def _runtime_discovery_context(
     state: Mapping[str, Any],
     catalog: Mapping[str, Any] | None,
+    *,
+    api_version: str = DEFAULT_API_VERSION,
 ) -> dict[str, Any]:
     scope = state.get("scope") or {}
     operators = state.get("operators") or {}
@@ -519,6 +547,7 @@ def _runtime_discovery_context(
             "Power Platform maker account",
         ),
         "ring": ring,
+        "agentBuilderApiVersion": api_version,
         "pacRing": "preprod" if ring in {"test", "preprod"} else "prod",
         "package": package,
         "flowNames": [str(name) for name in flow_names],
@@ -896,6 +925,7 @@ def _build_runtime_discovery(
 def discover_runtime_plan(
     state: Mapping[str, Any],
     *,
+    api_version: str = DEFAULT_API_VERSION,
     workday_connection_id: str | None = None,
     dataverse_connection_id: str | None = None,
     catalog: Mapping[str, Any] | None = None,
@@ -907,7 +937,7 @@ def discover_runtime_plan(
     runner: Callable[..., subprocess.CompletedProcess] = _default_runner,
 ) -> dict[str, Any]:
     """Discover exact runtime targets and return a stable approval plan."""
-    context = _runtime_discovery_context(state, catalog)
+    context = _runtime_discovery_context(state, catalog, api_version=api_version)
     selected_ids = context["selectedConnectionIds"]
     workday, dataverse = _discover_physical_connections(
         context,
@@ -1047,6 +1077,7 @@ def _discover_physical_connections(
 def verify_physical_connections(
     state: Mapping[str, Any],
     *,
+    api_version: str = DEFAULT_API_VERSION,
     workday_connection_id: str | None = None,
     dataverse_connection_id: str | None = None,
     catalog: Mapping[str, Any] | None = None,
@@ -1056,7 +1087,7 @@ def verify_physical_connections(
 ) -> dict[str, Any]:
     """Verify selected Workday and Dataverse connections from live state."""
     try:
-        context = _runtime_discovery_context(state, catalog)
+        context = _runtime_discovery_context(state, catalog, api_version=api_version)
         selected_ids = context["selectedConnectionIds"]
         workday, dataverse = _discover_physical_connections(
             context,

@@ -382,6 +382,41 @@ def test_checked_in_administrator_workbooks_match_current_contracts() -> None:
         )
 
 
+def test_workday_workbook_requires_client_reuse_or_registration_before_capture() -> None:
+    namespace = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with ZipFile(WORKDAY_ADMIN_WORKBOOK_PATH) as archive:
+        worksheet = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+        strings = [
+            "".join(node.itertext())
+            for node in ET.fromstring(archive.read("xl/sharedStrings.xml")).findall("s:si", namespace)
+        ]
+
+    def value(reference):
+        cell = worksheet.find(f".//s:c[@r='{reference}']", namespace)
+        assert cell is not None
+        if cell.get("t") == "s":
+            return strings[int(cell.find("s:v", namespace).text)]
+        return "".join(cell.itertext())
+
+    assert value("A5") == "OAuth client ID"
+    assert value("A11") == "API client access"
+    capture = value("B5")
+    assert capture.index("Complete row 11") < capture.index("Return here")
+    assert "reuse an approved client or register one if none exists" in capture
+    assert "rows 6-8" in capture
+    registration = value("B11")
+    assert "If none exists, go to step 3 and register one" in registration
+    assert "Register API Client" in registration
+    assert value("E5") == value("E11") == ""
+    packet = build_workday_admin_packet(_workday_state())
+    instruction = next(
+        row["instruction"] for row in packet["captureInstructions"]
+        if row["information"] == "OAuth client ID"
+    )
+    assert instruction.index("API client access first") < instruction.index("record")
+    assert "register one if needed" in instruction
+
+
 def test_workday_workbook_certificate_recovery_preserves_completed_entra_handoff() -> None:
     namespace = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
     with ZipFile(WORKDAY_ADMIN_WORKBOOK_PATH) as archive:
