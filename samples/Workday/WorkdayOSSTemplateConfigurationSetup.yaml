@@ -192,12 +192,30 @@ beginDialog:
       displayName: Merge OSS templates with existing Workday configurations
       variable: Global.ESS_WorkdayHCM_Template_Configurations
       value: |-
-        =Table(
-            Filter(
-                Global.ESS_WorkdayHCM_Template_Configurations,
-                Not(Key in ShowColumns(Topic.OSSTemplateConfigurations, Key))
-            ),
-            Topic.OSSTemplateConfigurations
+        =With(
+            {
+                ExistingConfigurations: Filter(
+                    Global.ESS_WorkdayHCM_Template_Configurations As ExistingConfiguration,
+                    CountIf(
+                        Topic.OSSTemplateConfigurations As OSSConfiguration,
+                        OSSConfiguration.Key = ExistingConfiguration.Key
+                    ) = 0
+                )
+            },
+            ForAll(
+                Sequence(
+                    CountRows(ExistingConfigurations) +
+                    CountRows(Topic.OSSTemplateConfigurations)
+                ),
+                If(
+                    Value <= CountRows(ExistingConfigurations),
+                    Index(ExistingConfigurations, Value),
+                    Index(
+                        Topic.OSSTemplateConfigurations,
+                        Value - CountRows(ExistingConfigurations)
+                    )
+                )
+            )
         )
 
     - kind: EndDialog
