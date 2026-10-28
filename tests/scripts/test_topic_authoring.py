@@ -69,10 +69,12 @@ def topic_cli(monkeypatch, tmp_path, fake_config, fake_token, fake_tenant_id):
         for change in updates:
             component = next(c for c in components if c["id"] == change["componentId"])
             component["dialog"] = copy.deepcopy(change["dialog"])
-        return {"verifiedComponents": len(updates)}
+        return {
+            "verifiedComponents": len(updates), "components": copy.deepcopy(components),
+        }
 
     transport.update_dialog_components.side_effect = update
-    monkeypatch.setattr(authoring, "connect", lambda _root, _account: (client, target))
+    monkeypatch.setattr(authoring, "connect_selected_dev_workspace", lambda _root, _account: (client, target))
     monkeypatch.setattr(authoring, "MinimalBotEvaluationClient", Mock(return_value=transport))
     monkeypatch.chdir(tmp_path)
     request = tmp_path / "request.json"
@@ -153,14 +155,22 @@ def test_create_saves_one_marked_inactive_component_after_approval(topic_cli):
     assert result["component"]["id"] == component["id"]
 
 
-def test_create_prevents_same_name_even_for_an_unmarked_topic(topic_cli):
+def test_deliberate_creation_does_not_retarget_an_existing_same_name(topic_cli):
     topic_cli.components.append({
         "$kind": "DialogComponent", "id": "another-topic",
         "displayName": f" {topic_cli.values['name'].upper()} ",
     })
-    with pytest.raises(ValueError, match="name already exists"):
-        authoring.main(["create", "--request", str(topic_cli.request)])
-    topic_cli.transport.create_dialog_component.assert_not_called()
+    preview = topic_cli.root / "preview.json"
+    authoring.main([
+        "create", "--request", str(topic_cli.request), "--output", str(preview),
+    ])
+    authoring.main([
+        "create", "--request", str(topic_cli.request),
+        "--expected", str(preview), "--yes",
+    ])
+    inserted = topic_cli.transport.create_dialog_component.call_args.args[0]
+    assert inserted["id"] != "another-topic"
+    topic_cli.transport.update_dialog_components.assert_not_called()
 
 
 def test_update_keeps_native_identity_and_saved_node_ids(topic_cli):
@@ -192,13 +202,9 @@ def test_update_keeps_native_identity_and_saved_node_ids(topic_cli):
     topic_cli.transport.create_dialog_component.assert_not_called()
 
 
-@pytest.mark.parametrize("boundary", ["unmarked", "managed"])
-def test_update_rechecks_the_current_supported_topic_boundary(topic_cli, boundary):
+def test_update_rechecks_the_current_supported_topic_boundary(topic_cli):
     component = copy.deepcopy(topic_cli.component)
-    if boundary == "unmarked":
-        component["extensionData"].clear()
-    else:
-        component["managedProperties"] = {"isManaged": True}
+    component["extensionData"].clear()
     topic_cli.components.append(component)
     with pytest.raises(ValueError, match="not an editable crafted-response topic"):
         authoring.main([
@@ -208,41 +214,17 @@ def test_update_rechecks_the_current_supported_topic_boundary(topic_cli, boundar
     topic_cli.transport.update_dialog_components.assert_not_called()
 
 
-@pytest.mark.parametrize("mismatch", ["account", "tenant"])
-def test_connect_checks_the_actual_authenticated_identity(
-    monkeypatch, tmp_path, fake_config, fake_tenant_id, fake_token, mismatch,
-):
-    local = tmp_path / ".local"
-    (local / "setup").mkdir(parents=True)
-    fake_config["ring"] = "test"
-    (local / "config.json").write_text(json.dumps(fake_config), encoding="utf-8")
-    (local / "setup" / "config.json").write_text(json.dumps({
-        "schema_version": 4, "environment": {"tenant_id": fake_tenant_id},
-        "agents": {"selected": {
-            "agent": {
-                "workspace_slug": fake_config["activeAgent"],
-                "id": fake_config["agent"]["botId"], "realm": "dev",
-            },
-            "connect_ready": True,
-        }},
-    }), encoding="utf-8")
-    monkeypatch.setattr(authoring, "cached_account_names", lambda _cache: ["maker@contoso.com"])
-    monkeypatch.setattr(
-        authoring, "_acquire_token",
-        lambda **_kwargs: (
-            fake_token, "another@contoso.com" if mismatch == "account" else "maker@contoso.com",
-        ),
-    )
-    monkeypatch.setattr(
-        authoring, "tenant_id_from_access_token",
-        lambda _token: "another-tenant" if mismatch == "tenant" else fake_tenant_id,
-    )
-    client = Mock()
-    monkeypatch.setattr(authoring, "AgentBuilderClient", client)
-    message = "different account" if mismatch == "account" else "tenant does not match"
-    with pytest.raises(ValueError, match=message):
-        authoring.connect(tmp_path, None)
-    client.assert_not_called()
+def test_managed_property_hints_do_not_override_service_permissions(topic_cli):
+    component = copy.deepcopy(topic_cli.component)
+    component["managedProperties"] = {"isManaged": True, "isCustomizable": False}
+    topic_cli.components.append(component)
+    authoring.main([
+        "update", "--request", str(topic_cli.request),
+        "--expected", str(topic_cli.before), "--yes",
+    ])
+    topic_cli.transport.update_dialog_components.assert_called_once()
+
+
 
 
 def test_native_insert_sends_one_inactive_component_and_verifies_readback(topic_cli, monkeypatch):
@@ -252,7 +234,10 @@ def test_native_insert_sends_one_inactive_component_and_verifies_readback(topic_
             "cdsBotId": topic_cli.target["agent"]["id"],
             "schemaName": topic_cli.target["agent"]["schemaName"],
         },
-        "changeToken": "fresh-token", "botComponentChanges": [],
+        "changeToken": "fresh-token", "botComponentChanges": [{"component": {
+            "$kind": "DialogComponent", "id": "same-name",
+            "displayName": component["displayName"].upper(),
+        }}],
     }
     after = {
         **before, "changeToken": "saved-token",
@@ -280,24 +265,118 @@ def test_native_insert_sends_one_inactive_component_and_verifies_readback(topic_
                and key != "botComponentChanges")
 
 
-def test_native_insert_rechecks_same_name_before_sending(topic_cli, monkeypatch):
+@pytest.mark.parametrize("status", [403, 409, 412, 503])
+def test_scoped_update_returns_service_evidence_without_conflict_replay(
+    topic_cli, monkeypatch, status,
+):
+    component = copy.deepcopy(topic_cli.component)
+    component["managedProperties"] = {"isManaged": True, "isCustomizable": False}
     client = native.MinimalBotEvaluationClient(
         topic_cli.target["environment"]["id"], topic_cli.target["agent"]["id"],
         topic_cli.target["environment"]["tenantId"],
     )
-    monkeypatch.setattr(client, "read_components", lambda: {
-        "bot": {
-            "cdsBotId": topic_cli.target["agent"]["id"],
-            "schemaName": topic_cli.target["agent"]["schemaName"],
-        },
-        "changeToken": "fresh-token",
-        "botComponentChanges": [{"component": {
-            "$kind": "DialogComponent", "id": "another-topic",
-            "displayName": topic_cli.component["displayName"].upper(),
-        }}],
+    read = Mock(return_value={
+        "changeToken": "fresh-token", "botComponentChanges": [{"component": component}],
     })
-    request = Mock()
+    body = {
+        "error": {"code": "service-permission-or-conflict", "unfamiliar": {"keep": True}},
+        "access_token": "must-not-emit",
+    }
+    request = Mock(return_value=(
+        SimpleNamespace(status_code=status, headers={"x-ms-request-id": "write-id"}), body,
+    ))
+    monkeypatch.setattr(client, "read_components", read)
     monkeypatch.setattr(client, "_request", request)
-    with pytest.raises(native.MinimalBotEvaluationError, match="name already exists"):
-        client.create_dialog_component(topic_cli.component)
-    request.assert_not_called()
+    desired = {**component["dialog"], "modelDescription": "Explicit approved edit"}
+    with pytest.raises(native.ComponentEditError) as error:
+        client.update_dialog_components([{
+            "componentId": component["id"], "schemaName": component["schemaName"],
+            "expectedDialog": component["dialog"], "dialog": desired,
+        }], _retry_on_conflict=False)
+    assert error.value.evidence["httpStatus"] == status
+    assert error.value.evidence["requestId"] == "write-id"
+    assert error.value.evidence["response"]["error"] == body["error"]
+    assert "must-not-emit" not in json.dumps(error.value.evidence)
+    request.assert_called_once()
+    read.assert_called_once()
+
+
+def test_accepted_create_readback_failure_preserves_cause_and_never_recreates(
+    topic_cli, monkeypatch,
+):
+    component = topic_cli.component
+    client = native.MinimalBotEvaluationClient(
+        topic_cli.target["environment"]["id"], topic_cli.target["agent"]["id"],
+        topic_cli.target["environment"]["tenantId"],
+    )
+    cause = RuntimeError("Unexpected readback failure")
+    client.read_components = Mock(side_effect=[{
+        "bot": {"cdsBotId": client.bot_id,
+                "schemaName": topic_cli.target["agent"]["schemaName"]},
+        "changeToken": "fresh-token", "botComponentChanges": [],
+    }, cause])
+    request = Mock(return_value=(
+        SimpleNamespace(status_code=200), {"unknownCreateEvidence": ["preserved"]},
+    ))
+    monkeypatch.setattr(client, "_request", request)
+    with pytest.raises(native.ComponentEditError) as error:
+        client.create_dialog_component(component)
+    assert error.value.evidence["writeAccepted"] is True
+    assert error.value.evidence["verified"] is False
+    assert error.value.evidence["response"] == {"unknownCreateEvidence": ["preserved"]}
+    assert error.value.__cause__ is cause
+    request.assert_called_once()
+
+
+def test_session_component_writes_reuse_selected_transport_without_status_retry(
+    topic_cli,
+):
+    from agentbuilder import AgentBuilderClient
+    import responses
+
+    builder = AgentBuilderClient(
+        topic_cli.target["environment"]["powerPlatformApiEndpoint"], "offline-token",
+        ring="test", tenant_id=topic_cli.target["environment"]["tenantId"],
+    )
+    client = native.MinimalBotEvaluationClient(
+        topic_cli.target["environment"]["id"], topic_cli.target["agent"]["id"],
+        topic_cli.target["environment"]["tenantId"],
+        host=builder.host, access_token="offline-token", session=builder.session,
+    )
+    assert client._session is builder.session
+    with responses.RequestsMock() as recorded:
+        recorded.post(client._components_url, json={}, status=503)
+        recorded.put(client._components_url, json={"serviceHint": "inspect"}, status=503)
+        response, _ = client._request("POST", client._components_url, body={})
+        assert response.status_code == 503
+        response, body = client._request("PUT", client._components_url, body={})
+        assert response.status_code == 503 and body == {"serviceHint": "inspect"}
+        assert [call.request.method for call in recorded.calls] == ["POST", "PUT"]
+
+
+def test_output_failure_preserves_a_known_topic_save(topic_cli, monkeypatch, capsys):
+    preview = topic_cli.root / "preview.json"
+    authoring.main([
+        "create", "--request", str(topic_cli.request), "--output", str(preview),
+    ])
+    output = topic_cli.root / "saved.json"
+    original_write = authoring.Path.write_text
+    cause = PermissionError("Output directory is unavailable")
+
+    def fail_output(path, *args, **kwargs):
+        if path == output:
+            raise cause
+        return original_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(authoring.Path, "write_text", fail_output)
+    capsys.readouterr()
+    with pytest.raises(native.ComponentEditError) as error:
+        authoring.main([
+            "create", "--request", str(topic_cli.request), "--expected", str(preview),
+            "--yes", "--output", str(output),
+        ])
+    assert error.value.__cause__ is cause
+    assert error.value.evidence["operationResult"]["createdComponents"] == 1
+    observed = json.loads(capsys.readouterr().out)
+    assert observed["saved"] is True and observed["verifiedComponents"] == 1
+    topic_cli.transport.create_dialog_component.assert_called_once()

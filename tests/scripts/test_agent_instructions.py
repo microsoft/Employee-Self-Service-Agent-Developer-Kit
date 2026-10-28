@@ -12,6 +12,7 @@ from unittest.mock import Mock
 
 import pytest
 import requests
+import yaml
 
 import agent_instructions as cli
 import minimalbot_evaluation as native
@@ -197,14 +198,15 @@ def test_native_update_uses_fresh_token_one_gpt_and_authoritative_readback(
     )
     assert result["component"] == after["botComponentChanges"][0]["component"]
     assert result["updatedComponents"] == result["verifiedComponents"] == 1
-    assert result["unchangedOtherComponents"] == 1
+    assert result["verified"] is True
+    assert "unchangedOtherComponents" not in result
     assert result["requestId"] == "correlation-id"
     assert result["response"]["nativeExtension"] == {"preserved": True}
 
 
 def test_stale_native_baseline_is_rejected_before_write(component, monkeypatch):
     stale = copy.deepcopy(component)
-    stale["version"] -= 1
+    stale["metadata"]["instructions"]["segments"][0]["value"] = "Stale instructions"
     client, request = _client(monkeypatch, [_payload(component)])
     with pytest.raises(native.MinimalBotEvaluationError, match="changed since"):
         client.update_agent_instructions(stale, _edits())
@@ -263,7 +265,7 @@ def test_transport_uncertainty_keeps_the_original_cause(component, monkeypatch):
 
 @pytest.mark.parametrize(
     "problem",
-    ["instructions", "metadata", "other-content", "other-deleted", "read-failed"],
+    ["instructions", "read-failed"],
 )
 def test_accepted_write_does_not_claim_success_when_verification_fails(
     component, monkeypatch, problem
@@ -272,14 +274,6 @@ def test_accepted_write_does_not_claim_success_when_verification_fails(
     after = _payload(desired)
     if problem == "instructions":
         after = _payload(component)
-    elif problem == "metadata":
-        after["botComponentChanges"][0]["component"]["metadata"]["unknownSetting"] = {}
-    elif problem == "other-content":
-        after["botComponentChanges"][1]["component"]["dialog"]["unknownField"] = (
-            "changed"
-        )
-    elif problem == "other-deleted":
-        after["botComponentChanges"].pop()
     else:
         after = native.MinimalBotEvaluationError("readback unavailable")
     client, request = _client(monkeypatch, [_payload(component), after])
@@ -293,6 +287,34 @@ def test_accepted_write_does_not_claim_success_when_verification_fails(
     request.assert_called_once()
 
 
+@pytest.mark.parametrize("drift", ["metadata", "other-content", "other-deleted"])
+def test_instruction_object_model_save_ignores_unrelated_drift(
+    component, monkeypatch, drift,
+):
+    desired = copy.deepcopy(component["metadata"]["instructions"])
+    desired["segments"][0]["value"] = "Approved text with the original expression."
+    current = copy.deepcopy(component)
+    current["metadata"]["unknownSetting"] = {"newer": "preserve"}
+    current["version"] += 1
+    after = _payload(current)
+    after["botComponentChanges"][0]["component"]["metadata"]["instructions"] = desired
+    if drift == "metadata":
+        after["botComponentChanges"][0]["component"]["metadata"]["unknownSetting"] = {}
+    elif drift == "other-content":
+        after["botComponentChanges"][1]["component"]["dialog"] = {"newer": True}
+    else:
+        after["botComponentChanges"].pop()
+    client, request = _client(monkeypatch, [_payload(current), after])
+    result = client.update_agent_instructions(component, desired_instructions=desired)
+    submitted = request.call_args.kwargs["body"]["botComponentChanges"][0]["component"]
+    assert submitted["metadata"]["unknownSetting"] == {"newer": "preserve"}
+    assert submitted["metadata"]["instructions"]["segments"][1] == (
+        component["metadata"]["instructions"]["segments"][1]
+    )
+    assert result["component"] == after["botComponentChanges"][0]["component"]
+    assert result["verified"] is True
+
+
 def test_unexpected_failure_is_not_swallowed(component, monkeypatch):
     client, request = _client(monkeypatch, [_payload(component)])
     failure = RuntimeError("unexpected failure")
@@ -300,6 +322,26 @@ def test_unexpected_failure_is_not_swallowed(component, monkeypatch):
     with pytest.raises(RuntimeError) as error:
         client.update_agent_instructions(component, _edits())
     assert error.value is failure
+
+
+def test_instruction_ack_preserves_other_baseline_fields_and_later_edits(tmp_path):
+    baseline = tmp_path / ".baseline" / "agent.mcs.yml"
+    baseline.parent.mkdir()
+    original = {
+        "displayName": "Original name", "unknownMetadata": {"keep": [1, 2]},
+        "instructions": "old",
+    }
+    submitted = {
+        "displayName": "Unsubmitted name",
+        "instructions": ["Approved text", {"kind": "ExpressionSegment", "value": "=System.User"}],
+    }
+    baseline.write_text(yaml.safe_dump(original), encoding="utf-8")
+    working = tmp_path / "agent.mcs.yml"
+    working.write_text("instructions: Later local edit\n", encoding="utf-8")
+    cli.acknowledge_instruction_baseline(tmp_path, yaml.safe_dump(submitted))
+    acknowledged = yaml.safe_load(baseline.read_text(encoding="utf-8"))
+    assert acknowledged == {**original, "instructions": submitted["instructions"]}
+    assert working.read_text(encoding="utf-8") == "instructions: Later local edit\n"
 
 
 @pytest.fixture
@@ -332,7 +374,7 @@ def instruction_cli(component, monkeypatch, tmp_path, fake_token, fake_tenant_id
         "changeToken": "saved-token",
         "unchangedOtherComponents": 1,
     }
-    monkeypatch.setattr(cli, "connect", Mock(return_value=(connection, target)))
+    monkeypatch.setattr(cli, "connect_selected_dev_workspace", Mock(return_value=(connection, target)))
     monkeypatch.setattr(cli, "MinimalBotEvaluationClient", Mock(return_value=transport))
     monkeypatch.chdir(tmp_path)
     baseline = tmp_path / "baseline.json"
@@ -401,6 +443,26 @@ def test_cli_read_and_preview_compose_without_writes_then_explicit_save(
     assert saved["published"] is False and saved["conversationVerified"] is False
 
 
+def test_verified_instruction_noop_is_already_saved(instruction_cli, capsys):
+    fixture = instruction_cli
+    edits = _edits()
+    edits[0]["newText"] = edits[0]["oldText"]
+    fixture.request.write_text(json.dumps({"edits": edits}), encoding="utf-8")
+    _preview(fixture)
+    fixture.transport.update_agent_instructions.side_effect = lambda *args: {
+        "component": fixture.snapshot["component"],
+        "updatedComponents": 0, "verifiedComponents": 1,
+    }
+    capsys.readouterr()
+    cli.main([
+        "update", "--request", str(fixture.request),
+        "--expected", str(fixture.preview), "--yes",
+    ])
+    result = json.loads(capsys.readouterr().out)
+    assert result["saved"] is True and result["changed"] is False
+    assert result["updatedComponents"] == 0
+
+
 @pytest.mark.parametrize("drift", ["request", "target", "native", "read-not-preview"])
 def test_cli_save_requires_the_same_preview_request_target_and_baseline(
     instruction_cli, drift
@@ -415,7 +477,9 @@ def test_cli_save_requires_the_same_preview_request_target_and_baseline(
     elif drift == "target":
         fixture.target["environment"]["ring"] = "prod"
     elif drift == "native":
-        fixture.snapshot["component"]["version"] += 1
+        fixture.snapshot["component"]["metadata"]["instructions"]["segments"][0][
+            "value"
+        ] = "Newer native instructions"
     else:
         expected = fixture.baseline
     with pytest.raises(
@@ -469,7 +533,7 @@ def test_cli_output_failure_does_not_hide_an_observed_native_save(
 
     monkeypatch.setattr(cli.Path, "open", fail_result_open)
     capsys.readouterr()
-    with pytest.raises(PermissionError, match="result output is unavailable"):
+    with pytest.raises(native.ComponentEditError, match="output failed") as error:
         cli.main(
             [
                 "update",
@@ -482,6 +546,9 @@ def test_cli_output_failure_does_not_hide_an_observed_native_save(
                 str(result),
             ]
         )
+    assert isinstance(error.value.__cause__, PermissionError)
+    assert str(error.value.__cause__) == "result output is unavailable"
+    assert error.value.evidence["operationResult"]["verifiedComponents"] == 1
     observed = json.loads(capsys.readouterr().out)
     assert observed["saved"] is True and observed["verifiedComponents"] == 1
     fixture.transport.update_agent_instructions.assert_called_once()

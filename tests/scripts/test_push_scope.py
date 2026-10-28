@@ -1,23 +1,19 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Tests for the --only / --only-from scoping added to scripts/push.py.
-
-Pure-logic, no network. The most important guard here is
-``update_baseline_scoped``: a scoped push must refresh ONLY the pushed files'
-baseline entries. If it refreshed the whole baseline it would silently mark
-unpushed working-tree changes as "pushed", so the next /push would never
-retry them — a correctness bug.
-"""
+"""Read-only pending inspection and captured-content acknowledgement."""
 
 from __future__ import annotations
 
-from pathlib import Path
 import json
+from pathlib import Path
 
 import pytest
 
 import push
+import topic_authoring
+import workspace_state
+from unittest.mock import Mock
 
 
 class TestParseOnlyGlobs:
@@ -67,218 +63,155 @@ class TestParseOnlyGlobs:
 
 class TestMatchesOnly:
     def test_empty_globs_matches_everything(self):
-        assert push.matches_only("anything/at/all.yml", []) is True
+        assert workspace_state.matches_only("anything/at/all.yml", []) is True
 
     def test_exact_path(self):
-        assert push.matches_only("topics/A.mcs.yml", ["topics/A.mcs.yml"])
-        assert not push.matches_only("topics/B.mcs.yml", ["topics/A.mcs.yml"])
+        assert workspace_state.matches_only("topics/A.mcs.yml", ["topics/A.mcs.yml"])
+        assert not workspace_state.matches_only("topics/B.mcs.yml", ["topics/A.mcs.yml"])
 
     def test_wildcard(self):
-        assert push.matches_only("topics/A.mcs.yml", ["topics/*.mcs.yml"])
-        assert not push.matches_only(
+        assert workspace_state.matches_only("topics/A.mcs.yml", ["topics/*.mcs.yml"])
+        assert not workspace_state.matches_only(
             "workflows/f/workflow.json", ["topics/*.mcs.yml"])
 
     def test_backslash_path_normalised(self):
-        assert push.matches_only("topics\\A.mcs.yml", ["topics/A.mcs.yml"])
+        assert workspace_state.matches_only("topics\\A.mcs.yml", ["topics/A.mcs.yml"])
 
 
-class TestEvaluationReviewMetadata:
-    def test_review_json_is_pushable_metadata(self):
-        assert push.classify_path(
-            "evaluations/compensation/review.json"
-        ) == "evaluation-review"
-
-    def test_review_metadata_resolves_existing_parent(self):
-        review_path = "evaluations/compensation/review.json"
-        parent_path = "evaluations/compensation/compensation.mcs.yml"
-        component_map = {
-            parent_path: {
-                "componenttype": 19,
-                "botcomponentid": "parent-id",
-            }
-        }
-        working = {
-            parent_path: "kind: EvaluationSet\n",
-            review_path: "{}",
-        }
-
-        assert push._evaluation_parent_path(
-            review_path, component_map, working
-        ) == parent_path
-
-    def test_new_parent_description_comes_from_review_metadata(self):
-        parent_path = "evaluations/compensation/compensation.mcs.yml"
-        working = {
-            parent_path: "kind: EvaluationSet\n",
-            "evaluations/compensation/review.json": (
-                '{"status":"review_requested",'
-                '"baseDescription":"Human description"}'
-            ),
-        }
-
-        assert push._review_description_for_create(
-            parent_path, working
-        ) == (
-            "Human description\n\n"
-            "[ADK-REVIEW status=review_requested]"
-        )
+def _topic_workspace(root):
+    (root / ".baseline" / "topics").mkdir(parents=True)
+    (root / "topics").mkdir()
+    (root / ".baseline" / "topics" / "A.mcs.yml").write_text("old", encoding="utf-8")
+    (root / "topics" / "A.mcs.yml").write_text("submitted", encoding="utf-8")
+    return root
 
 
-class TestUpdateBaselineScoped:
-    def _agent(self, tmp_path: Path) -> Path:
-        agent = tmp_path / "agent"
-        (agent / "topics").mkdir(parents=True)
-        (agent / ".baseline" / "topics").mkdir(parents=True)
-        return agent
-
-    def test_only_scoped_file_is_refreshed(self, tmp_path: Path):
-        agent = self._agent(tmp_path)
-        # A: changed and IN scope -> baseline should update to new content.
-        (agent / "topics" / "A.mcs.yml").write_text("new-A")
-        (agent / ".baseline" / "topics" / "A.mcs.yml").write_text("old-A")
-        # B: new and OUT of scope -> baseline must NOT gain B.
-        (agent / "topics" / "B.mcs.yml").write_text("new-B")
-
-        push.update_baseline_scoped(str(agent), ["topics/A.mcs.yml"])
-
-        assert (agent / ".baseline" / "topics" / "A.mcs.yml").read_text() == "new-A"
-        assert not (agent / ".baseline" / "topics" / "B.mcs.yml").exists()
-
-    def test_template_config_drags_meta_companion(self, tmp_path: Path):
-        agent = self._agent(tmp_path)
-        (agent / "template-configs").mkdir()
-        (agent / "template-configs" / "X.xml").write_text("<x/>")
-        (agent / "template-configs" / "X.meta.json").write_text("{}")
-
-        push.update_baseline_scoped(str(agent), ["template-configs/X.xml"])
-
-        b = agent / ".baseline" / "template-configs"
-        assert (b / "X.xml").read_text() == "<x/>"
-        assert (b / "X.meta.json").read_text() == "{}"
-
-    def test_scoped_delete_removes_from_baseline(self, tmp_path: Path):
-        agent = self._agent(tmp_path)
-        # C exists only in baseline (deleted from working) and is in scope.
-        (agent / ".baseline" / "topics" / "C.mcs.yml").write_text("old-C")
-        # D exists only in baseline but is OUT of scope -> must remain.
-        (agent / ".baseline" / "topics" / "D.mcs.yml").write_text("old-D")
-
-        push.update_baseline_scoped(str(agent), ["topics/C.mcs.yml"])
-
-        assert not (agent / ".baseline" / "topics" / "C.mcs.yml").exists()
-        assert (agent / ".baseline" / "topics" / "D.mcs.yml").exists()
-
-
-class _FakeResp:
-    def __init__(self, status_code: int):
-        self.status_code = status_code
-
-
-class _FakeHTTPError(Exception):
-    """Mimics requests.HTTPError: carries a .response with a status_code."""
-
-    def __init__(self, status_code: int):
-        super().__init__(f"HTTP {status_code}")
-        self.response = _FakeResp(status_code)
-
-
-class _FakeAuth:
-    def __init__(self):
-        self.token = "tok"
-
-    def refresh(self):
-        self.token = "tok2"
-        return self.token
-
-
-class TestVerifyBotExists:
-    """Pre-flight guard: a stale botId must fail fast with the real cause,
-    not the misleading "solution may not be deployed" 404 the friendly error
-    layer would otherwise emit for every component."""
-
-    def test_missing_bot_exits_with_actionable_message(self, monkeypatch, capsys):
-        def boom(env_url, token, path, params=None):
-            raise _FakeHTTPError(404)
-
-        monkeypatch.setattr(push, "dataverse_get", boom)
-        with pytest.raises(SystemExit) as exc:
-            push._verify_bot_exists(
-                _FakeAuth(), "https://x.crm.dynamics.com", "bad-bot")
-        assert exc.value.code == 2
-        out = capsys.readouterr().out
-        assert "does not exist in this environment" in out
-        assert "/setup" in out
-        assert "bad-bot" in out
-
-    def test_existing_bot_passes_and_targets_right_path(self, monkeypatch):
-        seen = {}
-
-        def ok(env_url, token, path, params=None):
-            seen["path"] = path
-            return {"botid": "good-bot"}
-
-        monkeypatch.setattr(push, "dataverse_get", ok)
-        push._verify_bot_exists(
-            _FakeAuth(), "https://x.crm.dynamics.com", "good-bot")
-        assert seen["path"] == "bots(good-bot)"
-
-    def test_non_404_error_propagates(self, monkeypatch):
-        def boom(env_url, token, path, params=None):
-            raise _FakeHTTPError(500)
-
-        monkeypatch.setattr(push, "dataverse_get", boom)
-        with pytest.raises(_FakeHTTPError):
-            push._verify_bot_exists(
-                _FakeAuth(), "https://x.crm.dynamics.com", "any")
-
-
-def _selected_agent(tmp_path):
-    agent = tmp_path / "agent"
-    folder = agent / "evaluations" / "selected"
-    folder.mkdir(parents=True)
-    (folder / "parent.mcs.yml").write_text(
-        "kind: EvaluationSet\ngraders:\n  - kind: CompareMeaningGrader\n",
-        encoding="utf-8",
+def test_pending_inspection_neither_authenticates_nor_acknowledges(tmp_path, monkeypatch):
+    root = _topic_workspace(tmp_path / "agent")
+    (root / "topics" / "B.mcs.yml").write_text("new", encoding="utf-8")
+    (root / ".component-map.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        push.MinimalBotEvaluationClient, "from_config",
+        lambda config: pytest.fail("Local inspection must not create a remote client."),
     )
-    (folder / "case.mcs.yml").write_text(
-        "kind: EvaluationData\nrows:\n  - input: Question\n    expectedOutput: Answer\n",
-        encoding="utf-8",
-    )
-    (agent / ".baseline").mkdir()
-    (agent / ".component-map.json").write_text(json.dumps({}), encoding="utf-8")
-    config = {
-        "agent": {"folder": str(agent), "botId": "bot", "schemaName": "test"},
-        "dataverseEndpoint": "https://example.crm.dynamics.com",
+    before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    result = push.main(["--dry-run"], config={"agent": {"folder": str(root)}})
+    assert result["changes"] == {
+        "modified": ["topics/A.mcs.yml"], "new": ["topics/B.mcs.yml"], "deleted": [],
     }
-    return agent, folder, config
+    assert result["remoteVerified"] is False
+    assert {path: path.read_bytes() for path in before} == before
 
 
-def test_selected_invalid_method_blocked_before_no_change(tmp_path, monkeypatch):
-    agent, folder, config = _selected_agent(tmp_path)
-    parent = folder / "parent.mcs.yml"
-    parent.write_text(parent.read_text().replace("CompareMeaningGrader", "UnsupportedGrader"))
-    push.update_baseline_scoped(str(agent), ["evaluations/selected/*"])
-    monkeypatch.setattr(push, "authenticate", lambda *a: pytest.fail("Must not authenticate"))
-    result = push.main(["--only", "evaluations/selected/*", "--yes"], config=config)
-    assert result["status"] == "blocked"
-    assert "Compare Meaning only" in result["error"]
+def test_pending_inspection_does_not_hide_unreadable_directories(tmp_path, monkeypatch):
+    root = _topic_workspace(tmp_path / "agent")
+    cause = PermissionError("A workspace directory cannot be read")
+
+    def unreadable(path, *, onerror):
+        onerror(cause)
+        return iter(())
+
+    monkeypatch.setattr(workspace_state.os, "walk", unreadable)
+    with pytest.raises(PermissionError) as error:
+        workspace_state.inspect_pending_changes(root)
+    assert error.value is cause
 
 
-def test_dataverse_cancel_is_not_success(tmp_path, monkeypatch):
-    _, _, config = _selected_agent(tmp_path)
-    monkeypatch.setattr("builtins.input", lambda *a: "no")
-    monkeypatch.setattr(push, "authenticate", lambda *a: pytest.fail("Must not authenticate"))
-    result = push.main(["--only", "evaluations/selected/*"], config=config)
-    assert result["status"] == "cancelled"
+def test_topic_save_acknowledges_captured_content_not_concurrent_disk_edit(tmp_path):
+    root = _topic_workspace(tmp_path / "agent")
+    updates = [{
+        "path": "topics/A.mcs.yml", "submittedYaml": "submitted",
+        "componentId": "topic-a", "schemaName": "agent.topic.A",
+        "expectedDialog": {"old": True}, "dialog": {"submitted": True},
+    }]
+    client = Mock()
 
+    def save(selected, **kwargs):
+        (root / "topics" / "A.mcs.yml").write_text("later edit", encoding="utf-8")
+        return {"verifiedComponents": 1, "components": [{"id": "topic-a"}]}
 
-def test_structured_no_change_requires_verifier(tmp_path):
-    agent, _, config = _selected_agent(tmp_path)
-    push.update_baseline_scoped(str(agent), ["evaluations/selected/*"])
-    seen = []
-    result = push.main(
-        ["--only", "evaluations/selected/*"], config=config,
-        verify=lambda component_map: seen.append(component_map),
+    client.update_dialog_components.side_effect = save
+    result = topic_authoring.save_workspace_topic_updates(
+        client, root, updates, retry_on_conflict=False,
     )
-    assert result["status"] == "up_to_date"
-    assert seen == [{}]
+    client.update_dialog_components.assert_called_once_with(updates, _retry_on_conflict=False)
+    assert result["verifiedComponents"] == 1
+    assert (root / ".baseline" / "topics" / "A.mcs.yml").read_text() == "submitted"
+    assert (root / "topics" / "A.mcs.yml").read_text() == "later edit"
+    assert workspace_state.inspect_pending_changes(root)["modified"] == ["topics/A.mcs.yml"]
+
+
+def test_local_ack_failure_keeps_known_remote_result_and_cause(tmp_path, monkeypatch):
+    root = _topic_workspace(tmp_path / "agent")
+    client = Mock()
+    known = {"verifiedComponents": 1, "components": [{"id": "topic-a"}]}
+    client.update_dialog_components.return_value = known
+    cause = PermissionError("Baseline is locked")
+    monkeypatch.setattr(topic_authoring, "acknowledge_files", Mock(side_effect=cause))
+    with pytest.raises(topic_authoring.ComponentEditError) as error:
+        topic_authoring.save_workspace_topic_updates(client, root, [{
+            "path": "topics/A.mcs.yml", "submittedYaml": "submitted", "dialog": {},
+        }])
+    assert error.value.__cause__ is cause
+    assert error.value.evidence["remoteResult"] == known
+    assert error.value.evidence["acknowledgementComplete"] is False
+    client.update_dialog_components.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["../outside", r"C:\outside", "C:outside", "/outside", "topics/A:stream",
+     "topics/../outside", r"\\host\share\outside"],
+)
+def test_captured_acknowledgement_rejects_escape_before_any_write(tmp_path, relative):
+    root = _topic_workspace(tmp_path / "agent")
+    with pytest.raises(ValueError, match="Invalid acknowledged"):
+        workspace_state.acknowledge_files(root, {
+            "topics/A.mcs.yml": "submitted", relative: "unsafe",
+        })
+    assert (root / ".baseline" / "topics" / "A.mcs.yml").read_text() == "old"
+
+
+@pytest.mark.parametrize("flag", ["--repair", "--force-delete"])
+def test_retired_write_flags_stop_before_configuration_or_auth(monkeypatch, flag):
+    monkeypatch.setattr(push, "load_config", lambda: pytest.fail("No configuration needed"))
+    with pytest.raises(SystemExit) as stopped:
+        push.main([flag, "--yes"])
+    assert stopped.value.code == 2
+
+
+def test_scoped_cli_retains_known_remote_result_when_acknowledgement_fails(
+    tmp_path, monkeypatch, capsys,
+):
+    root = _topic_workspace(tmp_path / "agent")
+    client = Mock()
+    monkeypatch.setattr(push.MinimalBotEvaluationClient, "from_config", lambda config: client)
+    monkeypatch.setattr(push, "_minimalbot_topic_update_plan", lambda *args, **kwargs: [{
+        "displayName": "A", "path": "topics/A.mcs.yml",
+        "dialog": {}, "submittedYaml": "submitted",
+    }])
+    known = {"verifiedComponents": 1, "verified": True, "writeAttempted": True}
+    client.update_dialog_components.return_value = known
+    cause = PermissionError("Baseline is locked")
+    monkeypatch.setattr(topic_authoring, "acknowledge_files", Mock(side_effect=cause))
+    with pytest.raises(SystemExit) as stopped:
+        push._minimalbot_push({"agent": {"folder": str(root)}}, auto_yes=True)
+    observed = json.loads(capsys.readouterr().err)
+    assert observed["evidence"]["remoteResult"] == known
+    assert observed["errors"][-1]["type"] == "PermissionError"
+    assert stopped.value.__cause__.__cause__ is cause
+
+
+@pytest.mark.parametrize("scope", ["topics/A.mcs.yml", "evaluations/set/*", "workflows/*"])
+def test_dataverse_push_has_no_write_fallback(tmp_path, monkeypatch, scope):
+    monkeypatch.setattr(
+        push.MinimalBotEvaluationClient, "from_config",
+        lambda config: pytest.fail("No remote client may be constructed"),
+    )
+    config = {
+        "dataverseEndpoint": "https://example.crm.dynamics.com",
+        "agent": {"folder": str(tmp_path)},
+    }
+    with pytest.raises(SystemExit) as stopped:
+        push.main(["--only", scope, "--yes"], config=config)
+    assert stopped.value.code == 2

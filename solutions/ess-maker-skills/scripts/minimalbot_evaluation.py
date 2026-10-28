@@ -63,6 +63,7 @@ from evaluation_method_policy import (
     validate_evaluation_documents,
     validate_evaluation_folder,
 )
+from workspace_state import _atomic_write_text
 
 
 # Shared public client ID used across the ADK's MSAL flows (matches auth.py).
@@ -153,14 +154,16 @@ class MinimalBotEvaluationError(RuntimeError):
     """Raised when a MinimalBot evaluation operation cannot be completed."""
 
 
-class AgentInstructionEditError(MinimalBotEvaluationError):
-    """An attempted instruction write with retained outcome evidence."""
+class ComponentEditError(MinimalBotEvaluationError):
+    """A component operation with redacted evidence and its original cause."""
 
     def __init__(self, message: str, evidence: dict[str, Any]) -> None:
         self.evidence = _redact_evidence(evidence)
-        super().__init__(
-            f"{message}; evidence={json.dumps(self.evidence, ensure_ascii=False)}"
-        )
+        super().__init__(message)
+
+
+class AgentInstructionEditError(ComponentEditError):
+    """An attempted instruction write with retained outcome evidence."""
 
 
 def _instruction_segments(component: dict[str, Any]) -> list[Any]:
@@ -1107,27 +1110,73 @@ class MinimalBotEvaluationClient:
             "componentCount": len(components),
         }
 
-    def update_agent_instructions(
-        self, expected_component: dict[str, Any], edits: list[dict[str, Any]],
+    def _submit_component_edit(
+        self, payload: dict[str, Any], operation: str,
+        component_ids: list[str],
     ) -> dict[str, Any]:
-        """Apply one baseline-bound text edit and verify all native component content.
+        evidence = {
+            "componentIds": component_ids, "writeAttempted": True, "verified": False,
+        }
+        try:
+            response, body = self._request(
+                "PUT", self._components_url, body=payload, operation=operation,
+            )
+        except MinimalBotEvaluationError as exc:
+            raise ComponentEditError(
+                f"{operation} outcome is unknown. Read saved state before another write.",
+                evidence,
+            ) from exc
+        evidence.update({
+            "httpStatus": response.status_code, "requestId": _extract_request_id(response),
+            "response": body, "writeAccepted": response.status_code == 200,
+        })
+        if response.status_code != 200:
+            raise ComponentEditError(
+                f"{operation} failed (HTTP {response.status_code}). "
+                "Inspect saved state before deciding whether to retry.",
+                evidence,
+            )
+        return evidence
 
-        Uses the client's existing transport. No conflict reconciliation,
-        activation, rollback, or publication is performed.
+    def update_agent_instructions(
+        self, expected_component: dict[str, Any], edits: list[dict[str, Any]] | None = None,
+        *, desired_instructions: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Update only instructions against expected instructions and target identity.
+
+        ``desired_instructions`` is a TemplateLine Object Model, including mixed
+        text/expression segments. The text-edit argument remains compatible with
+        existing programmatic callers. No conflict retry or workspace writes.
         """
+        _instruction_segments(expected_component)
+        if (edits is None) == (desired_instructions is None):
+            raise MinimalBotEvaluationError(
+                "Supply either desired instructions or explicit text edits."
+            )
         before = self.read_components()
         components, current = self._instruction_components(before)
-        if current != expected_component:
+        identity = ("$kind", "id", "schemaName", "parentBotId")
+        if (
+            any(current.get(key) != expected_component.get(key) for key in identity)
+            or current["metadata"]["instructions"]
+            != expected_component["metadata"]["instructions"]
+        ):
             raise MinimalBotEvaluationError(
                 "Native instructions changed since the expected snapshot. No write was sent."
             )
-        desired = build_agent_instruction_update(current, edits)
-        if desired == current:
+        if desired_instructions is None:
+            desired_instructions = build_agent_instruction_update(current, edits)[
+                "metadata"
+            ]["instructions"]
+        desired = copy.deepcopy(current)
+        desired["metadata"]["instructions"] = copy.deepcopy(desired_instructions)
+        _instruction_segments(desired)
+        if desired["metadata"]["instructions"] == current["metadata"]["instructions"]:
             return {
                 "updatedComponents": 0, "verifiedComponents": 1,
                 "component": copy.deepcopy(current),
                 "changeToken": before["changeToken"],
-                "unchangedOtherComponents": len(components) - 1,
+                "writeAttempted": False, "verified": True,
             }
         payload = {
             "changeToken": before["changeToken"],
@@ -1157,6 +1206,7 @@ class MinimalBotEvaluationClient:
         evidence.update({
             "httpStatus": response.status_code,
             "requestId": _extract_request_id(response), "response": body,
+            "writeAccepted": response.status_code == 200,
         })
         if response.status_code != 200:
             raise AgentInstructionEditError(
@@ -1164,31 +1214,18 @@ class MinimalBotEvaluationClient:
                 "Inspect native state before deciding what to do next", evidence,
             )
 
-        def content(component: dict[str, Any]) -> dict[str, Any]:
-            return {k: v for k, v in component.items() if k not in {"auditInfo", "version"}}
-
         try:
             after = self.read_components()
             actual, saved = self._instruction_components(after)
             evidence["readbackComponent"] = saved
-            if content(saved) != content(desired):
+            if (
+                any(saved.get(key) != current.get(key) for key in identity)
+                or saved["metadata"]["instructions"] != desired["metadata"]["instructions"]
+            ):
                 raise MinimalBotEvaluationError(
                     "Saved GPT component differs from the requested instruction-only update."
                 )
-            others = {key: content(value) for key, value in components.items()
-                      if key != current["id"]}
-            actual_others = {key: content(value) for key, value in actual.items()
-                             if key != current["id"]}
-            if others != actual_others:
-                evidence["changedOtherComponentIds"] = sorted(
-                    key for key in others.keys() | actual_others.keys()
-                    if others.get(key) != actual_others.get(key)
-                )
-                raise MinimalBotEvaluationError(
-                    "Other native component content changed during the instruction update; "
-                    "the cause is not established."
-                )
-        except MinimalBotEvaluationError as exc:
+        except Exception as exc:
             raise AgentInstructionEditError(
                 "Instruction PUT returned HTTP 200, but saved-state verification failed. "
                 "Inspect native state; no rollback was attempted", evidence,
@@ -1196,7 +1233,7 @@ class MinimalBotEvaluationClient:
         return {
             "updatedComponents": 1, "verifiedComponents": 1, "component": saved,
             "changeToken": after["changeToken"],
-            "unchangedOtherComponents": len(others),
+            "writeAttempted": True, "verified": True,
             "requestId": evidence["requestId"], "response": _redact_evidence(body),
         }
 
@@ -1205,6 +1242,7 @@ class MinimalBotEvaluationClient:
         component: dict[str, Any],
     ) -> dict[str, Any]:
         """Insert one inactive dialog and verify its saved identity and content."""
+        component = copy.deepcopy(component)
         if (
             component.get("$kind") != "DialogComponent"
             or component.get("parentBotId") != self.bot_id
@@ -1226,17 +1264,6 @@ class MinimalBotEvaluationClient:
             or not str(component.get("schemaName") or "").startswith(schema_prefix)
         ):
             raise MinimalBotEvaluationError("The dialog does not belong to this agent.")
-        for change in before.get("botComponentChanges") or []:
-            existing = change.get("component") or {}
-            if (
-                existing.get("$kind") == "DialogComponent"
-                and str(existing.get("displayName") or "").strip().casefold()
-                == component["displayName"].strip().casefold()
-            ):
-                raise MinimalBotEvaluationError(
-                    "A topic with this name already exists in the selected agent. "
-                    "No create was sent; select it explicitly for an update."
-                )
         if not before.get("changeToken"):
             raise MinimalBotEvaluationError("The native read omitted the changeToken.")
         payload = {
@@ -1253,18 +1280,7 @@ class MinimalBotEvaluationClient:
             "dataverseTableSearchChanges": [],
             "connectedAgentDefinitionChanges": [],
         }
-        response, body = self._request(
-            "PUT", self._components_url, body=payload, operation="dialog create"
-        )
-        if response.status_code != 200:
-            raise MinimalBotEvaluationError(
-                f"MinimalBot dialog create failed (HTTP {response.status_code}); "
-                f"componentId={component['id']}; "
-                f"requestId={response.headers.get('x-ms-request-id')}; "
-                f"response={json.dumps(body, ensure_ascii=False)}. "
-                "Inspect saved state before considering another create."
-            )
-        verified = self.read_components()
+        evidence = self._submit_component_edit(payload, "dialog create", [component["id"]])
         expectation = {
             "componentId": component["id"],
             "schemaName": component["schemaName"],
@@ -1273,17 +1289,31 @@ class MinimalBotEvaluationClient:
             "status": "Inactive",
             "requireCleanDiagnostics": True,
         }
-        verification = self._verify_dialog_components_payload([expectation], verified)
-        saved = next(
-            change["component"]
-            for change in verified["botComponentChanges"]
-            if change.get("component", {}).get("id") == component["id"]
-        )
-        if saved.get("displayName") != component["displayName"]:
-            raise MinimalBotEvaluationError(
-                f"Saved topic name did not match; componentId={component['id']}."
+        try:
+            verified = self.read_components()
+            evidence["readback"] = verified
+            verification = self._verify_dialog_components_payload([expectation], verified)
+            saved = next(
+                change["component"]
+                for change in verified["botComponentChanges"]
+                if str(change.get("component", {}).get("id") or "").casefold()
+                == str(component["id"]).casefold()
             )
-        return {"createdComponents": 1, "component": saved, **verification}
+            if saved.get("displayName") != component["displayName"]:
+                raise MinimalBotEvaluationError(
+                    f"Saved topic name did not match; componentId={component['id']}."
+                )
+        except Exception as exc:
+            raise ComponentEditError(
+                "Dialog create returned HTTP 200, but saved-state verification failed. "
+                "Inspect saved state; do not repeat creation.",
+                {**evidence, **getattr(exc, "evidence", {})},
+            ) from exc
+        return {
+            "createdComponents": 1, "component": saved, **verification,
+            "verified": True, "writeAttempted": True,
+            "requestId": evidence["requestId"], "response": _redact_evidence(evidence["response"]),
+        }
 
     def update_dialog_components(
         self,
@@ -1420,6 +1450,10 @@ class MinimalBotEvaluationClient:
                 }
             )
 
+        evidence = {
+            "componentIds": [str(update["componentId"]) for update in updates],
+            "writeAttempted": bool(changes), "verified": False,
+        }
         if changes:
             payload = {
                 "changeToken": change_token,
@@ -1433,41 +1467,40 @@ class MinimalBotEvaluationClient:
                 "dataverseTableSearchChanges": [],
                 "connectedAgentDefinitionChanges": [],
             }
-            response, body = self._request(
-                "PUT",
-                self._components_url,
-                body=payload,
-                operation="dialog update",
-            )
-            if (
-                response.status_code in {409, 412}
-                and _retry_on_conflict
-            ):
-                # The live change token advanced after the read. Re-read once:
-                # if another attempt already applied this exact mapping the
-                # idempotent reconciliation returns success without another
-                # PUT; otherwise it reapplies the same scoped delta to the
-                # newer live topic.
-                return self.update_dialog_components(
-                    updates,
-                    _retry_on_conflict=False,
+            try:
+                evidence = self._submit_component_edit(
+                    payload, "dialog update", evidence["componentIds"],
                 )
-            if response.status_code != 200:
-                raise MinimalBotEvaluationError(
-                    "MinimalBot dialog update failed "
-                    f"(HTTP {response.status_code}); "
-                    f"requestId={response.headers.get('x-ms-request-id')}; "
-                    f"response={json.dumps(body, ensure_ascii=False)}"
-                )
+            except ComponentEditError as exc:
+                if _retry_on_conflict and exc.evidence.get("httpStatus") in {409, 412}:
+                    return self.update_dialog_components(updates, _retry_on_conflict=False)
+                raise
 
-        verified = self.read_components()
-        verification = self._verify_dialog_components_payload(
-            verification_updates,
-            verified,
-        )
+        try:
+            verified = self.read_components()
+            evidence["readback"] = verified
+            verification = self._verify_dialog_components_payload(
+                verification_updates, verified,
+            )
+        except Exception as exc:
+            raise ComponentEditError(
+                "Dialog update saved-state verification failed. Inspect saved state "
+                "before deciding whether another write is needed.",
+                {**evidence, **getattr(exc, "evidence", {})},
+            ) from exc
         return {
             "updatedComponents": len(changes),
             "reconciledComponents": reconciled_components,
+            "components": [
+                change["component"] for change in verified["botComponentChanges"]
+                if isinstance(change, dict)
+                and isinstance(change.get("component"), dict)
+                and str(change["component"].get("id") or "").casefold()
+                in {str(update["componentId"]).casefold() for update in updates}
+            ],
+            "verified": True, "writeAttempted": bool(changes),
+            **{key: _redact_evidence(evidence[key])
+               for key in ("requestId", "response") if key in evidence},
             **verification,
         }
 
@@ -1546,20 +1579,22 @@ class MinimalBotEvaluationClient:
                         "schemaName": str(update.get("schemaName") or ""),
                     }
                 )
+            if not verified_update:
+                raise MinimalBotEvaluationError(
+                    "MinimalBot dialog verification failed for component "
+                    f"{component_id}."
+                )
             if (
                 diagnostics
                 and update.get("requireCleanDiagnostics") is True
             ):
                 first = diagnostics[0]
                 detail = first["errorCode"] or first["kind"] or "error"
-                raise MinimalBotEvaluationError(
+                raise ComponentEditError(
                     "MinimalBot dialog has blocking diagnostics after "
-                    f"verification ({update.get('schemaName')}): {detail}."
-                )
-            if not verified_update:
-                raise MinimalBotEvaluationError(
-                    "MinimalBot dialog verification failed for component "
-                    f"{component_id}."
+                    f"verification ({update.get('schemaName')}): {detail}.",
+                    {"component": component, "contentVerified": True,
+                     "blockingDiagnostics": all_diagnostics},
                 )
         return {
             "verifiedComponents": len(updates),
@@ -1802,34 +1837,7 @@ class MinimalBotEvaluationClient:
                 )
             actual = self._remote_components(self.read_components())
         self._verify_components(expected, actual, set(expected))
-        current = {}
-        for folder in set_folders:
-            for path in folder.rglob("*.mcs.yml"):
-                if path.parent != folder:
-                    raise MinimalBotEvaluationError(
-                        "Source changed during deployment: nested evaluation document added."
-                    )
-                current[f"evaluations/{folder.name}/{path.name}"] = path.read_text(
-                    encoding="utf-8"
-                )
-            if (folder / "review.json").is_file():
-                current[f"evaluations/{folder.name}/review.json"] = (
-                    (folder / "review.json").read_text(encoding="utf-8")
-                )
-        if current != plan["files"]:
-            raise MinimalBotEvaluationError(
-                "Source changed during native deployment. Remote state may be "
-                "committed; local synchronization was not recorded."
-            )
-        self._commit_tracking(root, plan)
-        if inserted_ids and pending_path.exists():
-            saved_pending = self._read_tracking(pending_path)
-            if saved_pending.get("fingerprint") != fingerprint or saved_pending.get("target") != target:
-                raise MinimalBotEvaluationError(
-                    "Pending deployment ownership changed; refusing to clear another deployment."
-                )
-            pending_path.unlink()
-        return {
+        result = {
             "dryRun": False,
             "status": "pushed" if inserted_ids else "up_to_date",
             "sets": plan["sets"],
@@ -1837,6 +1845,43 @@ class MinimalBotEvaluationClient:
             "verifiedComponents": len(expected),
             **review_outcome,
         }
+        try:
+            current = {}
+            for folder in set_folders:
+                for path in folder.rglob("*.mcs.yml"):
+                    if path.parent != folder:
+                        raise MinimalBotEvaluationError(
+                            "Source changed during deployment: nested evaluation document added."
+                        )
+                    current[f"evaluations/{folder.name}/{path.name}"] = path.read_text(
+                        encoding="utf-8"
+                    )
+                if (folder / "review.json").is_file():
+                    current[f"evaluations/{folder.name}/review.json"] = (
+                        (folder / "review.json").read_text(encoding="utf-8")
+                    )
+            if current != plan["files"]:
+                raise MinimalBotEvaluationError(
+                    "Source changed during native deployment; local synchronization "
+                    "was not recorded."
+                )
+            self._commit_tracking(root, plan)
+            if inserted_ids and pending_path.exists():
+                saved_pending = self._read_tracking(pending_path)
+                if (
+                    saved_pending.get("fingerprint") != fingerprint
+                    or saved_pending.get("target") != target
+                ):
+                    raise MinimalBotEvaluationError(
+                        "Pending deployment ownership changed; refusing to clear another deployment."
+                    )
+                pending_path.unlink()
+        except Exception as exc:
+            raise ComponentEditError(
+                "Native deployment was verified, but local synchronization failed.",
+                {"remoteResult": result, "acknowledgementComplete": False},
+            ) from exc
+        return result
 
     @staticmethod
     def _read_tracking(path: Path) -> dict[str, Any]:
@@ -1854,7 +1899,6 @@ class MinimalBotEvaluationClient:
     def _write_tracking(
         path: Path, value: dict[str, Any], *, exclusive: bool = False,
     ) -> None:
-        from push import _atomic_write_text
         try:
             content = json.dumps(value, indent=2)
             if exclusive:
@@ -1945,7 +1989,6 @@ class MinimalBotEvaluationClient:
                 )
 
     def _commit_tracking(self, root: Path, plan: dict[str, Any]) -> None:
-        from push import _atomic_write_text
         prefixes = tuple(f"evaluations/{item['folder']}/" for item in plan["sets"])
         component_map = {
             path: entry

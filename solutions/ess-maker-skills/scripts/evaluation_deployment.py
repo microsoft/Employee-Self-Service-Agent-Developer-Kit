@@ -18,9 +18,10 @@ from typing import Any
 import requests
 import yaml
 
-import push
+from workspace_state import _atomic_write_text, _ensure_utf8_stdout, compute_diff
 import analytics_pointer
 from auth import load_config
+from alm_enrollment import _exception_chain, _redact_evidence
 from evaluation_method_policy import EvaluationMethodError, validate_evaluation_folder
 from evaluation_promotion import (
     EvaluationPromotionError,
@@ -28,16 +29,15 @@ from evaluation_promotion import (
     promote_workspace_set,
 )
 from evaluation_review import (
-    REVIEW_COMPLETED,
     REVIEW_FILENAME,
     REVIEW_REQUESTED,
     ReviewMetadataError,
-    parse_review_marker,
     parse_review_metadata,
     set_review_metadata,
 )
 from http_errors import APIError
 from minimalbot_evaluation import (
+    ComponentEditError,
     MinimalBotEvaluationClient,
     MinimalBotEvaluationError,
     NATIVE_REVIEW_LOCAL_ONLY_WARNING,
@@ -160,78 +160,6 @@ def _target(config: dict[str, Any], agent: Path) -> dict[str, Any]:
         "powerPlatformApiEndpoint": str(config.get("powerPlatformApiEndpoint") or ""),
     }
 
-
-def _rows(config: dict[str, Any], token: str) -> dict[str, dict[str, Any]]:
-    bot_id = str(config["agent"]["botId"]).replace("'", "''")
-    rows = push.query_all(
-        config["dataverseEndpoint"], token, "botcomponents",
-        "botcomponentid,data,description,schemaname,_parentbotcomponentid_value,statecode",
-        filter_expr=f"_parentbotid_value eq '{bot_id}' and componenttype eq 19",
-    )
-    if not isinstance(rows, list) or any(
-        not isinstance(row, dict) or not row.get("botcomponentid") for row in rows
-    ):
-        raise EvaluationDeploymentError("Malformed Dataverse component response.")
-    by_id = {str(row["botcomponentid"]): row for row in rows}
-    if len(by_id) != len(rows):
-        raise EvaluationDeploymentError("Duplicate Dataverse component identities.")
-    return by_id
-
-
-def _verify_dataverse(
-    context: dict[str, Any], component_map: dict[str, Any], rows: dict[str, Any],
-) -> str:
-    prefix = context["prefix"]
-    source = context["files"]
-    parent_entry = component_map.get(prefix + _parent(source), {})
-    parent_id = str(parent_entry.get("botcomponentid") or "")
-    if not parent_id:
-        raise EvaluationDeploymentError("The deployed parent identity is not known.")
-    expected_children = {
-        str(component_map.get(prefix + name, {}).get("botcomponentid") or "")
-        for name in source if name.endswith(".mcs.yml") and name != _parent(source)
-    }
-    actual_children = {
-        str(row["botcomponentid"]) for row in rows.values()
-        if str(row.get("_parentbotcomponentid_value") or "").casefold()
-        == parent_id.casefold()
-    }
-    if expected_children != actual_children:
-        raise EvaluationDeploymentError(
-            "The deployed case identities do not match the complete selected set."
-        )
-    for name, content in source.items():
-        if not name.endswith(".mcs.yml"):
-            continue
-        relative = prefix + name
-        entry = component_map.get(relative, {})
-        row = rows.get(str(entry.get("botcomponentid") or ""))
-        if not row or yaml.safe_load(row.get("data") or "") != yaml.safe_load(content):
-            raise EvaluationDeploymentError(
-                f"Remote content verification failed for {relative}; no run may start."
-            )
-        if row.get("statecode", 0) != 0:
-            raise EvaluationDeploymentError(f"The deployed component is inactive: {relative}")
-        if name != _parent(source) and str(
-            row.get("_parentbotcomponentid_value") or ""
-        ).casefold() != parent_id.casefold():
-            raise EvaluationDeploymentError(f"Remote parent mismatch for {relative}.")
-    remote_parent = rows[parent_id]
-    if remote_parent.get("_parentbotcomponentid_value"):
-        raise EvaluationDeploymentError("The deployed set identity points to a child component.")
-    remote_status = parse_review_marker(remote_parent.get("description"))
-    if (remote_status or {}).get("status") != _status(source):
-        raise EvaluationDeploymentError("The deployed review marker does not match local intent.")
-    for relative, entry in context["originalMap"].items():
-        if relative.startswith(prefix) and relative not in {
-            prefix + name for name in source if name.endswith(".mcs.yml")
-        } and str(entry.get("botcomponentid")) in rows:
-            raise EvaluationDeploymentError(
-                f"Deleted component remains deployed: {relative}"
-            )
-    return parent_id
-
-
 def _prepare(
     set_folder: str | Path, *, action: str, config: dict[str, Any],
     replace: bool, solution_root: str | Path | None,
@@ -263,13 +191,11 @@ def _prepare(
         )
     target = _target(config, agent)
     config = {**config, "agent": {**active, "folder": str(agent)}}
-    native = is_minimalbot(config)
-    if not native and (
-        not target["dataverseEndpoint"] or not active.get("schemaName")
-        or not (agent / ".baseline").is_dir()
-        or not (agent / ".component-map.json").is_file()
-    ):
-        raise EvaluationDeploymentError("Dataverse setup/baseline is incomplete; run /setup.")
+    if not is_minimalbot(config):
+        raise EvaluationDeploymentError(
+            "Dataverse evaluation deployment is retired. "
+            "Use a supported AgentBuilder evaluation workspace."
+        )
     destination = (agent_evaluations / source.name).resolve()
     if destination.parent != agent_evaluations:
         raise EvaluationDeploymentError("The target set resolves outside the active agent.")
@@ -293,135 +219,50 @@ def _prepare(
         "source": source, "agent": agent, "destination": destination,
         "workspace": workspace, "files": source_files, "baseline": baseline,
         "prefix": prefix, "target": target, "config": config, "action": action,
-        "originalMap": component_map, "backend": "minimalbot" if native else "dataverse",
+        "originalMap": component_map, "backend": "minimalbot",
     }
-    pending_path = agent / ".evaluation-deployment.json"
-    pending = _json_file(pending_path)
     recovery = False
-    if pending and (
-        pending.get("target") != target or pending.get("prefix") != prefix
-        or pending.get("files") != source_files
-    ):
-        raise EvaluationDeploymentError(
-            "A different or changed deployment is unresolved. Reconcile it before continuing."
-        )
-    if native:
-        native_pending = _json_file(agent / ".evaluation-pending.json")
-        client = MinimalBotEvaluationClient.from_config(config)
-        preview_path = agent / ".evaluation-preview.json"
-        prior_preview = _json_file(preview_path)
-        plan = client.push_agent_evaluations(
-            agent, dry_run=True, source_folder=source,
-            plan=prior_preview.get("plan") if prior_preview.get("files") == source_files
-            and prior_preview.get("target") == target
-            and prior_preview.get("prefix") == prefix
-            and prior_preview.get("baseline") == baseline
-            and prior_preview.get("map") == selected_map else None,
-        )
-        client.authenticate()
-        remote = client.read_components()
-        context["nativeClient"] = client
-        context["nativePlan"] = plan
-        context["nativeRemote"] = remote
-        remote_snapshot = remote
-        if selected_map and not native_pending and not plan["changes"]:
-            client.verify_deployed_components({"entries": selected_map}, remote)
-        if native_pending:
-            context["nativePending"] = native_pending
-            client.verify_deployed_components(plan, remote)
-            recovery = True
-    else:
-        auth = push._AuthHolder(config["dataverseEndpoint"])
-        auth.acquire()
-        context["auth"] = auth
-        remote = _rows(config, auth.token)
-        if pending:
-            context["originalMap"] = pending.get("originalMap", component_map)
-            candidate_map = pending.get("candidateMap") or component_map
-            recovered_map = {
-                **{path: entry for path, entry in component_map.items()
-                   if not path.startswith(prefix)},
-                **{path: entry for path, entry in candidate_map.items()
-                   if path.startswith(prefix)},
-            }
-            _verify_dataverse(context, recovered_map, remote)
-            context["recoveredMap"] = recovered_map
-            recovery = True
-        else:
-            for name in baseline:
-                if name.endswith(".mcs.yml") and prefix + name not in selected_map:
-                    raise EvaluationDeploymentError(
-                        "Baseline component identity is missing. Refresh/reconcile before pushing."
-                    )
-            for relative, entry in selected_map.items():
-                name = relative[len(prefix):]
-                row = remote.get(str(entry.get("botcomponentid") or ""))
-                if name in baseline and (
-                    not row or yaml.safe_load(row.get("data") or "")
-                    != yaml.safe_load(baseline[name])
-                ):
-                    raise EvaluationDeploymentError(
-                        "The deployed set changed since the local baseline. "
-                        "Refresh/reconcile before replacing it."
-                    )
-                if name not in baseline:
-                    raise EvaluationDeploymentError(
-                        "Component tracking and baseline disagree. Reconcile before pushing."
-                    )
-                if name == _parent(baseline) and (
-                    (row.get("description") or "") != (entry.get("description") or "")
-                ):
-                    raise EvaluationDeploymentError(
-                        "The remote parent description changed. Refresh/reconcile "
-                        "before replacing review metadata."
-                    )
-            if baseline:
-                _verify_dataverse({**context, "files": baseline}, component_map, remote)
-        ids = {
-            str(entry.get("botcomponentid"))
-            for entry in (
-                context.get("recoveredMap", component_map)[path]
-                for path in context.get("recoveredMap", component_map)
-                if path.startswith(prefix)
-            )
-        }
-        remote_snapshot = {key: remote[key] for key in sorted(ids) if key in remote}
-        parent_id = selected_map.get(prefix + _parent(source_files), {}).get("botcomponentid")
-        remote_marker = parse_review_marker(
-            remote.get(str(parent_id), {}).get("description")
-        )
-        remote_status = (remote_marker or {}).get("status") or _status(baseline)
-        local_status, baseline_status = _status(source_files), _status(baseline)
-        if not pending and parent_id and (remote_marker or {}).get("status") != baseline_status:
-            raise EvaluationDeploymentError(
-                "Remote review state differs from the baseline. Refresh/reconcile "
-                "without implicitly completing or replacing a review."
-            )
-    if native:
-        local_status, baseline_status = _status(source_files), _status(baseline)
-        remote_status = baseline_status
+    native_pending = _json_file(agent / ".evaluation-pending.json")
+    client = MinimalBotEvaluationClient.from_config(config)
+    preview_path = agent / ".evaluation-preview.json"
+    prior_preview = _json_file(preview_path)
+    plan = client.push_agent_evaluations(
+        agent, dry_run=True, source_folder=source,
+        plan=prior_preview.get("plan") if prior_preview.get("files") == source_files
+        and prior_preview.get("target") == target
+        and prior_preview.get("prefix") == prefix
+        and prior_preview.get("baseline") == baseline
+        and prior_preview.get("map") == selected_map else None,
+    )
+    client.authenticate()
+    remote = client.read_components()
+    context["nativeClient"] = client
+    context["nativePlan"] = plan
+    context["nativeRemote"] = remote
+    remote_snapshot = remote
+    if selected_map and not native_pending and not plan["changes"]:
+        client.verify_deployed_components({"entries": selected_map}, remote)
+    if native_pending:
+        context["nativePending"] = native_pending
+        client.verify_deployed_components(plan, remote)
+        recovery = True
+    local_status = _status(source_files)
     if action == "run":
-        pending_change = local_status != baseline_status
-        blocked = local_status == REVIEW_REQUESTED if native else (
-            (
-                pending_change and local_status != REVIEW_COMPLETED
-                and REVIEW_REQUESTED in (local_status, baseline_status)
-            ) or (not pending_change and remote_status == REVIEW_REQUESTED)
-        )
+        blocked = local_status == REVIEW_REQUESTED
         if blocked:
             raise EvaluationDeploymentError(
                 "This test set is tagged for review and cannot run until "
                 "the review is explicitly completed and pushed."
             )
-    changed, new, deleted = push.compute_diff(baseline, source_files)
-    local_changed, local_new, local_deleted = push.compute_diff(
+    changed, new, deleted = compute_diff(baseline, source_files)
+    local_changed, local_new, local_deleted = compute_diff(
         destination_files, source_files,
     )
     token_input = {
         "target": target, "source": str(source), "action": action, "replace": replace,
         "files": source_files, "destination": destination_files, "baseline": baseline,
         "map": selected_map, "remote": remote_snapshot,
-        "pending": pending, "nativePending": context.get("nativePending"),
+        "nativePending": context.get("nativePending"),
         "nativePlan": context.get("nativePlan"),
     }
     token = hashlib.sha256(
@@ -429,9 +270,7 @@ def _prepare(
     ).hexdigest()
     context.update({
         "confirmationToken": token,
-        "requiresPush": (
-            bool(plan["changes"]) if native else bool(changed or new or deleted)
-        ) and not recovery,
+        "requiresPush": bool(plan["changes"]) and not recovery,
         "changes": {"modified": changed, "new": new, "deleted": deleted},
         "recovering": recovery,
         "promotion": {
@@ -443,11 +282,10 @@ def _prepare(
             },
         },
     })
-    if native:
-        push._atomic_write_text(str(preview_path), json.dumps({
-            "target": target, "files": source_files, "plan": plan, "prefix": prefix,
-            "baseline": baseline, "map": selected_map,
-        }, indent=2))
+    _atomic_write_text(str(preview_path), json.dumps({
+        "target": target, "files": source_files, "plan": plan, "prefix": prefix,
+        "baseline": baseline, "map": selected_map,
+    }, indent=2))
     return context
 
 
@@ -469,8 +307,6 @@ def _public(context: dict[str, Any], status: str) -> dict[str, Any]:
         result["reviewMetadataPersisted"] = False
         if REVIEW_FILENAME in context["files"]:
             result["reviewWarning"] = NATIVE_REVIEW_LOCAL_ONLY_WARNING
-    elif status in SUCCESS_STATUSES:
-        result["reviewMetadataPersisted"] = True
     return result
 
 
@@ -510,6 +346,7 @@ def deploy_evaluation_set(
         return {"status": "cancelled", "error": "Deployment was not confirmed."}
     stack = ExitStack()
     stage = "preparation"
+    remote_result = None
     try:
         config = _configuration(config, set_folder, action, solution_root)
         context = _prepare(
@@ -521,17 +358,10 @@ def deploy_evaluation_set(
             raise EvaluationDeploymentError(
                 "The target, source, or deployed state changed after preview. Preview and confirm again."
             )
-        deletions = [
-            path for path in context["changes"]["deleted"] if path != REVIEW_FILENAME
-        ]
-        if context["backend"] == "minimalbot" and force_delete:
+        if force_delete:
             raise EvaluationDeploymentError(
                 "Existing native Push does not support --force-delete. A new "
                 "copy can omit cases, but the old remote copy is retained."
-            )
-        if deletions and context["backend"] != "minimalbot" and not force_delete:
-            raise EvaluationDeploymentError(
-                "Selected case deletions require explicit approval and --force-delete."
             )
         source, destination, agent = (
             context["source"], context["destination"], context["agent"]
@@ -546,65 +376,11 @@ def deploy_evaluation_set(
             raise EvaluationDeploymentError("Selected source changed after confirmation.")
         scope = f"evaluations/{escape_glob(source.name)}/*"
         stage = "deployment"
-        if context["backend"] == "minimalbot":
-            client = context["nativeClient"]
-            plan = context["nativePlan"]
-            outcome = client.push_agent_evaluations(agent, only_globs=[scope], plan=plan)
-            set_id = outcome["sets"][0]["testSetId"]
-        else:
-            pending_path = agent / ".evaluation-deployment.json"
-            pending = {
-                "target": context["target"], "prefix": context["prefix"],
-                "files": context["files"],
-                "originalMap": context["originalMap"],
-            }
-            def verify(candidate_map):
-                pending["candidateMap"] = candidate_map
-                push._atomic_write_text(str(pending_path), json.dumps(pending, indent=2))
-                if _files(destination) != context["files"] or _files(source) != context["files"]:
-                    raise EvaluationDeploymentError(
-                        "Source changed during deployment; local synchronization is incomplete."
-                    )
-                _verify_dataverse(context, candidate_map, _rows(config, context["auth"].token))
-
-            if context["recovering"]:
-                recovered_map = context["recoveredMap"]
-                verify(recovered_map)
-                push.update_baseline_scoped(str(agent), [scope])
-                push.save_component_map(str(agent), recovered_map)
-                outcome = {"status": "pushed"}
-            else:
-                if context["requiresPush"]:
-                    push._atomic_write_text(str(pending_path), json.dumps(pending, indent=2))
-                argv = ["--only", scope, "--yes"]
-                if force_delete:
-                    argv.append("--force-delete")
-                try:
-                    outcome = push.main(argv, config=config, verify=verify)
-                except SystemExit as exc:
-                    return _close_deployment_stack(stack, {
-                        **_public(context, "failed"),
-                        "error": f"Push stopped with exit code {exc.code}; local source retained.",
-                    })
-                if outcome["status"] not in SUCCESS_STATUSES:
-                    if outcome.get("pendingCreates"):
-                        pending["candidateMap"] = {
-                            **context["originalMap"], **outcome["pendingCreates"],
-                        }
-                        push._atomic_write_text(str(pending_path), json.dumps(pending, indent=2))
-                    return _close_deployment_stack(stack, {
-                        **_public(context, outcome["status"]),
-                        **{key: outcome[key] for key in ("error", "remoteCommitted")
-                           if key in outcome},
-                    })
-            component_map = _json_file(agent / ".component-map.json")
-            set_id = _verify_dataverse(
-                context, component_map, _rows(config, context["auth"].token)
-            )
-            if _files(agent / ".baseline" / "evaluations" / source.name) != context["files"]:
-                raise EvaluationDeploymentError("Baseline synchronization is incomplete.")
-            if pending_path.exists():
-                pending_path.unlink()
+        client = context["nativeClient"]
+        plan = context["nativePlan"]
+        outcome = client.push_agent_evaluations(agent, only_globs=[scope], plan=plan)
+        remote_result = outcome
+        set_id = outcome["sets"][0]["testSetId"]
         if _files(destination) != context["files"] or _files(source) != context["files"]:
             raise EvaluationDeploymentError(
                 "Source changed during deployment; local synchronization is incomplete."
@@ -614,18 +390,15 @@ def deploy_evaluation_set(
             "sets": [{
                 "sourceFolder": str(source), "agentSetFolder": str(destination),
                 "testSetId": set_id,
-                "deployedReviewStatus": (
-                    _status(context["files"]) if context["backend"] == "dataverse" else None
-                ),
+                "deployedReviewStatus": None,
             }],
         }
-        if context["backend"] == "minimalbot":
-            try:
-                (agent / ".evaluation-preview.json").unlink(missing_ok=True)
-            except OSError as exc:
-                _append_cleanup_warning(
-                    result, f"Verified deployment; preview record retained: {exc}",
-                )
+        try:
+            (agent / ".evaluation-preview.json").unlink(missing_ok=True)
+        except OSError as exc:
+            _append_cleanup_warning(
+                result, f"Verified deployment; preview record retained: {exc}",
+            )
         if source != destination:
             try:
                 cleanup_workspace_set(context["workspace"], agent, source.name)
@@ -638,6 +411,10 @@ def deploy_evaluation_set(
             "status": "blocked" if stage == "preparation" else "failed",
             "stage": stage, "error": str(exc),
             "deploymentMayHaveCommitted": stage == "deployment",
+            "errors": _exception_chain(exc),
+            **({"remoteResult": _redact_evidence(remote_result)}
+               if remote_result is not None else {}),
+            **({"evidence": exc.evidence} if hasattr(exc, "evidence") else {}),
         })
     except SystemExit as exc:
         return _close_deployment_stack(stack, {
@@ -649,6 +426,11 @@ def deploy_evaluation_set(
             stack.close()
         except OSError as cleanup_exc:
             exc.add_note(f"Deployment lock cleanup also failed: {cleanup_exc}")
+        if remote_result is not None and isinstance(exc, Exception):
+            raise ComponentEditError(
+                "Verified native deployment was followed by an unexpected local failure.",
+                {"remoteResult": remote_result, "localCompletion": False},
+            ) from exc
         raise
 
 
@@ -662,7 +444,7 @@ def main() -> int:
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--force-delete", action="store_true")
     args = parser.parse_args()
-    push._ensure_utf8_stdout(sys.stderr)
+    _ensure_utf8_stdout(sys.stderr)
     with redirect_stdout(sys.stderr):
         if args.command == "preview":
             result = preview_deployment(

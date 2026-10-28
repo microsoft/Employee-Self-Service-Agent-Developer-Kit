@@ -6,9 +6,9 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import copy
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -16,30 +16,25 @@ from urllib.parse import urlparse
 import uuid
 
 from adk_telemetry import emit_capability_use
-from agentbuilder import (
-    AgentBuilderClient,
-    AgentBuilderError,
-    _acquire_token,
-    cached_account_names,
-    tenant_id_from_access_token,
-)
+from agentbuilder import AgentBuilderError
+from alm_enrollment import _exception_chain, _redact_evidence
 from agentbuilder_object_model import object_models_to_yaml, yaml_to_object_models
-from minimalbot_evaluation import MinimalBotEvaluationClient, MinimalBotEvaluationError
+from agentbuilder_object_model import ObjectModelConverterError
+from minimalbot_evaluation import (
+    ComponentEditError, MinimalBotEvaluationClient, MinimalBotEvaluationError,
+    resolve_workday_dialogs,
+)
+from workspace_state import (
+    acknowledge_files, collect_files, compute_diff, load_component_map, matches_only,
+    read_json,
+)
 from setup_existing_da import (
     ExistingDASetupError,
-    _validate_setup_target,
-    validate_existing_dev_connection,
+    connect_selected_dev_workspace,
 )
 
 
 PATTERN_KEY = "EssAdkCraftedResponse"
-
-
-def read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError(f"Expected a JSON object: {path}")
-    return value
 
 
 def request_values(value: dict[str, Any]) -> dict[str, Any]:
@@ -113,8 +108,6 @@ def require_crafted(component: dict[str, Any]) -> None:
     if (
         component.get("$kind") != "DialogComponent"
         or component.get("extensionData", {}).get(PATTERN_KEY) is not True
-        or component.get("managedProperties", {}).get("isManaged") is True
-        or component.get("managedProperties", {}).get("isCustomizable") is False
     ):
         raise ValueError(
             "This is not an editable crafted-response topic created by this "
@@ -143,56 +136,214 @@ def require_crafted(component: dict[str, Any]) -> None:
         raise ValueError("The saved response contains unsupported dynamic content.")
 
 
-def connect(root: Path, account: str | None) -> tuple[AgentBuilderClient, dict[str, Any]]:
-    config = read_json(root / ".local" / "config.json")
-    setup = read_json(root / ".local" / "setup" / "config.json")
-    agent = config["agent"]
-    selected = [
-        entry for entry in setup.get("agents", {}).values()
-        if entry.get("agent", {}).get("workspace_slug") == config.get("activeAgent")
-    ]
-    if (
-        setup.get("schema_version") != 4
-        or len(selected) != 1
-        or selected[0].get("connect_ready") is not True
-        or selected[0]["agent"].get("id") != agent.get("botId")
-        or selected[0]["agent"].get("realm") != "dev"
-    ):
-        raise ValueError("Complete setup for the selected editable Dev agent first.")
-    tenant = setup["environment"]["tenant_id"]
-    cache = root / ".local" / ".agentbuilder_token_cache.bin"
-    accounts = cached_account_names(cache)
-    if account is None and len(accounts) != 1:
-        raise ValueError(
-            "Authentication requires one selected Maker account. Run /setup "
-            "or supply --account; no account was selected automatically."
-        )
-    selected_account = account or accounts[0]
-    with contextlib.redirect_stdout(sys.stderr):
-        authenticated = _acquire_token(
-            authority=f"https://login.microsoftonline.com/{tenant}",
-            ring=config["ring"], cache_path=cache,
-            force_account_selection=False, account_hint=selected_account,
-            return_account_identity=True,
-        )
-    if not isinstance(authenticated, tuple):
-        raise ValueError("Authentication did not return the selected Maker identity.")
-    token, actual_account = authenticated
-    if str(actual_account or "").casefold() != selected_account.casefold():
-        raise ValueError("Authentication used a different account from the selected Maker.")
-    if tenant_id_from_access_token(token).casefold() != tenant.casefold():
-        raise ValueError("The authenticated tenant does not match the selected environment.")
-    client = AgentBuilderClient(
-        config["powerPlatformApiEndpoint"], token,
-        ring=config["ring"], tenant_id=tenant,
-        api_version=config["agentBuilderApiVersion"],
+def plan_workspace_topic_updates(
+    agent_dir,
+    only_globs,
+    *,
+    activate_topics=False,
+    agent_schema=None,
+):
+    """Build guarded updates for scoped, existing MinimalBot topics."""
+    if not only_globs:
+        return []
+    baseline_dir = os.path.join(agent_dir, ".baseline")
+    if not os.path.isdir(baseline_dir):
+        if activate_topics or any(
+            pattern.replace("\\", "/").startswith("topics/") for pattern in only_globs
+        ):
+            raise MinimalBotEvaluationError("The selected topic workspace has no baseline.")
+        return []
+    baseline = collect_files(baseline_dir)
+    working = collect_files(agent_dir)
+    changed, new, deleted = compute_diff(baseline, working)
+    selected_changed = sorted(
+        path
+        for path in changed
+        if matches_only(path, only_globs)
+        and path.replace("\\", "/").startswith("topics/")
+        and path.endswith(".mcs.yml")
     )
-    target = validate_existing_dev_connection(
-        client, environment_id=config["environmentId"], agent_id=agent["botId"],
-        expected_schema_name=agent["schemaName"],
+    selected_new_or_deleted = sorted(
+        path
+        for path in (*new, *deleted)
+        if matches_only(path, only_globs)
+        and path.replace("\\", "/").startswith("topics/")
     )
-    _validate_setup_target(root, target)
-    return client, target
+    if selected_new_or_deleted:
+        raise MinimalBotEvaluationError(
+            "MinimalBot scoped topic push supports updates to existing topics "
+            "only; create/delete is not allowed: "
+            + ", ".join(selected_new_or_deleted)
+        )
+    if not selected_changed and not activate_topics:
+        return []
+    raw_component_map = load_component_map(agent_dir)
+    component_map = {}
+    for raw_path, entry in raw_component_map.items():
+        normalized_path = str(raw_path).replace("\\", "/")
+        if normalized_path in component_map:
+            raise MinimalBotEvaluationError(
+                "The component map contains duplicate normalized paths."
+            )
+        component_map[normalized_path] = entry
+
+    selected_activation = []
+    if activate_topics:
+        workday_entries = resolve_workday_dialogs(
+            agent_dir,
+            agent_schema or "",
+        )
+        workday_by_path = {
+            entry["path"]: entry
+            for entry in workday_entries
+        }
+        selected_activation = sorted(
+            path
+            for path in workday_by_path
+            if matches_only(path, only_globs)
+        )
+        missing = sorted(set(workday_by_path) - set(selected_activation))
+        selected_dialogs = {
+            str(path).replace("\\", "/")
+            for path, entry in component_map.items()
+            if isinstance(path, str)
+            and isinstance(entry, dict)
+            and entry.get("componentKind") == "DialogComponent"
+            and matches_only(path, only_globs)
+        }
+        non_workday = sorted(selected_dialogs - set(workday_by_path))
+        if missing or non_workday:
+            details = []
+            if missing:
+                details.append(
+                    f"{len(missing)} mapped Workday topic(s) were omitted"
+                )
+            if non_workday:
+                details.append(
+                    "the activation scope also matched non-Workday topics: "
+                    + ", ".join(non_workday)
+                )
+            raise MinimalBotEvaluationError(
+                "Workday activation must target exactly the complete mapped "
+                "Workday topic set; "
+                + "; ".join(details)
+                + "."
+            )
+        changed_workday = sorted(
+            path for path in selected_changed if path in workday_by_path
+        )
+        if changed_workday:
+            raise MinimalBotEvaluationError(
+                "Workday activation cannot publish pending topic content "
+                "changes. Push or discard these changes separately before "
+                "activation: "
+                + ", ".join(changed_workday)
+            )
+        selected_changed = []
+    selected_paths = sorted(
+        set(selected_changed) | set(selected_activation)
+    )
+    if not selected_paths:
+        return []
+
+    conversion_items = []
+    for path in selected_changed:
+        conversion_items.extend(
+            (
+                {"key": f"{path}:baseline", "yaml": baseline[path]},
+                {"key": f"{path}:working", "yaml": working[path]},
+            )
+        )
+    try:
+        converted = yaml_to_object_models(conversion_items)
+    except ObjectModelConverterError as exc:
+        raise MinimalBotEvaluationError(
+            f"Could not convert scoped topic YAML: {exc}"
+        ) from exc
+    converted_by_key = {entry["key"]: entry for entry in converted}
+
+    updates = []
+    for path in selected_paths:
+        entry = component_map.get(path)
+        if not isinstance(entry, dict):
+            raise MinimalBotEvaluationError(
+                f"Scoped topic is missing from .component-map.json: {path}"
+            )
+        if entry.get("componentKind") != "DialogComponent":
+            raise MinimalBotEvaluationError(
+                f"Scoped path is not a dialog component: {path}"
+            )
+        component_id = str(entry.get("componentId") or "").strip()
+        schema_name = str(entry.get("schemaName") or "").strip()
+        if not component_id or not schema_name:
+            raise MinimalBotEvaluationError(
+                f"Scoped topic identity is incomplete in the component map: "
+                f"{path}"
+            )
+        update = {
+            "path": path,
+            "componentId": component_id,
+            "schemaName": schema_name,
+            "displayName": str(entry.get("displayName") or path),
+        }
+        if path in selected_changed:
+            baseline_result = converted_by_key[f"{path}:baseline"]
+            working_result = converted_by_key[f"{path}:working"]
+            failed = next(
+                (
+                    result
+                    for result in (baseline_result, working_result)
+                    if result.get("success") is not True
+                ),
+                None,
+            )
+            if failed:
+                error = failed.get("error") or {}
+                raise MinimalBotEvaluationError(
+                    f"Could not convert scoped topic {path}: "
+                    f"{error.get('message') or 'unknown conversion error'}"
+                )
+            if (
+                baseline_result.get("elementType") != "AdaptiveDialog"
+                or working_result.get("elementType") != "AdaptiveDialog"
+            ):
+                raise MinimalBotEvaluationError(
+                    f"Scoped topic is not an AdaptiveDialog: {path}"
+                )
+            update["expectedDialog"] = baseline_result["objectModel"]
+            update["dialog"] = working_result["objectModel"]
+            update["submittedYaml"] = working[path]
+        if path in selected_activation:
+            update["state"] = "Active"
+            update["status"] = "Active"
+        updates.append(update)
+    return updates
+
+
+def save_workspace_topic_updates(
+    client, agent_dir, updates, *, retry_on_conflict=True,
+):
+    """Save mapped Object Model updates and acknowledge their captured YAML."""
+    submitted = {}
+    for update in updates:
+        if "dialog" in update:
+            if not isinstance(update.get("submittedYaml"), str) or not update.get("path"):
+                raise ValueError("Content updates require a path and captured submitted YAML.")
+            submitted[update["path"]] = update["submittedYaml"]
+    result = (
+        client.update_dialog_components(updates)
+        if retry_on_conflict
+        else client.update_dialog_components(updates, _retry_on_conflict=False)
+    )
+    try:
+        acknowledge_files(agent_dir, submitted)
+    except (OSError, ValueError) as exc:
+        raise ComponentEditError(
+            "Topic save was verified remotely, but local acknowledgement failed. "
+            "Do not repeat the remote write to repair local bookkeeping.",
+            {"remoteResult": result, "acknowledgementComplete": False},
+        ) from exc
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -220,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--component-id is required.")
     if args.output and args.output.exists():
         raise FileExistsError(f"Choose a new output path; this file exists: {args.output}")
-    client, target = connect(args.kit_root.resolve(), args.account)
+    client, target = connect_selected_dev_workspace(args.kit_root.resolve(), args.account)
     agent_id = target["agent"]["id"]
     payload = client.fetch_components(agent_id)
     components = [
@@ -273,13 +424,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         result.update({"approvedValues": value, "desiredDialog": desired, "saved": False})
         if args.operation == "create":
-            if any(
-                c.get("$kind") == "DialogComponent"
-                and str(c.get("displayName") or "").strip().casefold()
-                == value["name"].strip().casefold()
-                for c in components
-            ):
-                raise ValueError("A topic with this name already exists. No create was sent.")
             component_id = str(uuid.uuid4())
             component = {
                 "$kind": "DialogComponent", "id": component_id,
@@ -293,14 +437,16 @@ def main(argv: list[str] | None = None) -> int:
             if args.yes:
                 emit_capability_use("topic_create")
                 result.update(native.create_dialog_component(component))
+                result["saved"] = True
                 try:
                     require_crafted(result["component"])
                 except ValueError as exc:
-                    raise ValueError(
+                    raise ComponentEditError(
                         f"Native create returned componentId={component_id}, "
                         f"schemaName={component['schemaName']}, but its supported "
                         f"authoring boundary could not be verified: {exc}. "
-                        "Inspect native saved state; do not repeat creation."
+                        "Inspect native saved state; do not repeat creation.",
+                        {"remoteResult": result},
                     ) from exc
         else:
             assert snapshot is not None
@@ -329,19 +475,25 @@ def main(argv: list[str] | None = None) -> int:
                     "expectedDialog": expected["dialog"], "dialog": desired,
                     "requireCleanDiagnostics": True,
                 }], _retry_on_conflict=False))
-                saved = client.fetch_components(agent_id)
+                result["saved"] = True
                 result["component"] = next(
-                    c["component"] for c in saved["botComponentChanges"]
-                    if c.get("component", {}).get("id") == expected["id"]
+                    c for c in result["components"]
+                    if str(c.get("id") or "").casefold() == str(expected["id"]).casefold()
                 )
         result["saved"] = args.yes
         result["published"] = False
         result["conversationVerified"] = False
-    output = json.dumps(result, indent=2, ensure_ascii=False) + "\n"
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(output, encoding="utf-8")
-    print(output, end="")
+    try:
+        output = json.dumps(_redact_evidence(result), indent=2, ensure_ascii=False) + "\n"
+        print(output, end="")
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(output, encoding="utf-8")
+    except Exception as exc:
+        raise ComponentEditError(
+            "The topic operation result was observed, but writing its output failed.",
+            {"operationResult": result, "outputComplete": False},
+        ) from exc
     return 0
 
 
@@ -352,5 +504,7 @@ if __name__ == "__main__":
         AgentBuilderError, ExistingDASetupError, MinimalBotEvaluationError,
         ValueError, OSError,
     ) as exc:
-        print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(json.dumps({
+            "errors": _exception_chain(exc), "evidence": getattr(exc, "evidence", {}),
+        }), file=sys.stderr)
         raise SystemExit(1) from exc

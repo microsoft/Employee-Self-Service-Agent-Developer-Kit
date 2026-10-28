@@ -27,15 +27,33 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import yaml
+
 from agentbuilder import AgentBuilderError
-from alm_enrollment import _exception_chain
+from alm_enrollment import _exception_chain, _redact_evidence
 from minimalbot_evaluation import (
+    ComponentEditError,
     MinimalBotEvaluationClient,
     MinimalBotEvaluationError,
     build_agent_instruction_update,
 )
-from setup_existing_da import ExistingDASetupError
-from topic_authoring import connect, read_json
+from setup_existing_da import ExistingDASetupError, connect_selected_dev_workspace
+from workspace_state import _atomic_write_text, read_json
+
+
+def acknowledge_instruction_baseline(agent_dir: Path, submitted_yaml: str) -> None:
+    """Acknowledge submitted instructions only; leave later drafts untouched."""
+    path = Path(agent_dir) / ".baseline" / "agent.mcs.yml"
+    baseline = yaml.safe_load(path.read_text(encoding="utf-8"))
+    submitted = yaml.safe_load(submitted_yaml)
+    if not isinstance(baseline, dict) or not isinstance(submitted, dict):
+        raise ValueError("Instruction acknowledgement requires agent YAML mappings.")
+    if "instructions" not in submitted:
+        raise ValueError("Submitted agent YAML has no instructions section.")
+    baseline["instructions"] = submitted["instructions"]
+    _atomic_write_text(
+        path, yaml.safe_dump(baseline, sort_keys=False, allow_unicode=True),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -65,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     if request is not None and set(request) != {"edits"}:
         raise ValueError("An instruction request must contain only edits.")
 
-    client, target = connect(args.kit_root.resolve(), args.account)
+    client, target = connect_selected_dev_workspace(args.kit_root.resolve(), args.account)
     native = MinimalBotEvaluationClient(
         target["environment"]["id"],
         target["agent"]["id"],
@@ -90,7 +108,14 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(
                     "The expected instruction snapshot belongs to a different target."
                 )
-        if current["component"] != expected["component"]:
+        current_component = current["component"]
+        expected_component = expected["component"]
+        if (
+            any(current_component.get(key) != expected_component.get(key)
+                for key in ("$kind", "id", "schemaName", "parentBotId"))
+            or current_component["metadata"]["instructions"]
+            != expected_component["metadata"]["instructions"]
+        ):
             raise ValueError(
                 "Native instructions changed since the expected snapshot; preview again."
             )
@@ -99,7 +124,8 @@ def main(argv: list[str] | None = None) -> int:
             expected.get("operation") != "update"
             or expected.get("saved") is not False
             or expected.get("edits") != request["edits"]
-            or expected.get("desiredComponent") != desired
+            or (expected.get("desiredComponent") or {}).get("metadata", {}).get("instructions")
+            != desired["metadata"]["instructions"]
         ):
             raise ValueError(
                 "The instruction request differs from its approved preview; preview again."
@@ -117,15 +143,21 @@ def main(argv: list[str] | None = None) -> int:
                 current["component"], request["edits"]
             )
             result.update(update)
-            result["saved"] = update["updatedComponents"] != 0
+            result["saved"] = True
     result["published"] = False
     result["conversationVerified"] = False
-    output = json.dumps(result, indent=2, ensure_ascii=False) + "\n"
-    print(output, end="")
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.open("x", encoding="utf-8") as handle:
-            handle.write(output)
+    try:
+        output = json.dumps(_redact_evidence(result), indent=2, ensure_ascii=False) + "\n"
+        print(output, end="")
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            with args.output.open("x", encoding="utf-8") as handle:
+                handle.write(output)
+    except Exception as exc:
+        raise ComponentEditError(
+            "The instruction operation result was observed, but writing its output failed.",
+            {"operationResult": result, "outputComplete": False},
+        ) from exc
     return 0
 
 
