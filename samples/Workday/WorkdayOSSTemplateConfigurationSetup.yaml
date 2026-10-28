@@ -1,4 +1,5 @@
 kind: AdaptiveDialog
+modelDescription: "Workday OSS Template Configuration Setup"
 beginDialog:
   kind: OnRedirect
   id: main
