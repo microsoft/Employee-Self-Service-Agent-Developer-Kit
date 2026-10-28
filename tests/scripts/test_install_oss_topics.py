@@ -252,72 +252,31 @@ def test_readback_verification_ignores_server_structured_record_expression():
     assert verified["id"] == expected["id"]
 
 
-def test_manifest_has_shared_setup_then_documented_employee_manager_order():
+def test_manifest_has_documented_employee_manager_order():
     entries = installer.build_manifest(SAMPLES)
 
-    assert len(entries) == 17
+    assert len(entries) == 16
     assert [entry.name for entry in entries] == [
-        installer.SETUP_NAME,
         *installer.EMPLOYEE_SCENARIOS,
         *installer.MANAGER_SCENARIOS,
     ]
-    assert [entry.order for entry in entries] == list(range(1, 18))
+    assert [entry.order for entry in entries] == list(range(1, 17))
     assert all(len(entry.source_sha256) == 64 for entry in entries)
 
 
-def test_setup_topic_flattens_existing_and_oss_configuration_tables():
-    setup = installer.build_manifest(SAMPLES)[0]
-    document = yaml.safe_load(setup.raw_yaml)
-    merge = next(
-        action
-        for action in document["beginDialog"]["actions"]
-        if action.get("id") == "setVariable_mergeOSSConfigurations"
-    )
-
-    assert merge["value"] == """=With(
-    {
-        ExistingConfigurations: Filter(
-            Global.ESS_WorkdayHCM_Template_Configurations As ExistingConfiguration,
-            CountIf(
-                Topic.OSSTemplateConfigurations As OSSConfiguration,
-                OSSConfiguration.Key = ExistingConfiguration.Key
-            ) = 0
-        )
-    },
-    ForAll(
-        Sequence(
-            CountRows(ExistingConfigurations) +
-            CountRows(Topic.OSSTemplateConfigurations)
-        ),
-        If(
-            Value <= CountRows(ExistingConfigurations),
-            Index(ExistingConfigurations, Value),
-            Index(
-                Topic.OSSTemplateConfigurations,
-                Value - CountRows(ExistingConfigurations)
-            )
-        )
-    )
-)"""
-
-
-def test_subset_always_includes_shared_setup_first():
+def test_subset_contains_only_selected_scenarios():
     entries = installer.build_manifest(
         SAMPLES,
         scenarios=["WorkdayGetEducation"],
     )
 
-    assert [entry.name for entry in entries] == [
-        installer.SETUP_NAME,
-        "WorkdayGetEducation",
-    ]
+    assert [entry.name for entry in entries] == ["WorkdayGetEducation"]
 
 
-def test_scenarios_only_uses_prefix_and_excludes_shared_setup():
+def test_display_prefix_applies_to_all_scenarios():
     entries = installer.build_manifest(
         SAMPLES,
         scenarios=installer.ALL_SCENARIOS,
-        include_setup=False,
         display_prefix="Workday OSS ",
     )
 
@@ -533,9 +492,9 @@ def test_dry_run_is_deterministic_and_never_writes():
 
     assert first == second
     assert first["summary"] == {
-        "selected": 2,
+        "selected": 1,
         "created": 0,
-        "wouldCreate": 2,
+        "wouldCreate": 1,
         "preserved": 0,
     }
     assert first_transport.write_payloads == second_transport.write_payloads == []
@@ -544,7 +503,10 @@ def test_dry_run_is_deterministic_and_never_writes():
 def test_create_uses_sequential_insert_contract_and_verifies_each_readback():
     entries = installer.build_manifest(
         SAMPLES,
-        scenarios=["WorkdayGetEducation"],
+        scenarios=[
+            "EmployeeGetVacationBalance",
+            "WorkdayGetEducation",
+        ],
     )
     transport = FakeTransport(_remote_payload(*_dependencies(entries)))
 
@@ -632,7 +594,10 @@ def test_missing_write_response_identity_fails_without_retry():
 def test_partial_failure_retains_verified_prior_results():
     entries = installer.build_manifest(
         SAMPLES,
-        scenarios=["WorkdayGetEducation"],
+        scenarios=[
+            "EmployeeGetVacationBalance",
+            "WorkdayGetEducation",
+        ],
     )
 
     class SecondResponseMissingIdentity(FakeTransport):
@@ -658,7 +623,7 @@ def test_partial_failure_retains_verified_prior_results():
 
     assert captured.value.failed_entry.name == "WorkdayGetEducation"
     assert [item["name"] for item in captured.value.results] == [
-        installer.SETUP_NAME
+        "EmployeeGetVacationBalance"
     ]
     assert captured.value.results[0]["status"] == "created"
 

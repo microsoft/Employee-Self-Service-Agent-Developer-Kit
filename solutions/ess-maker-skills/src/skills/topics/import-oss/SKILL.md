@@ -1,6 +1,6 @@
 ---
 name: workday-oss-import
-description: Deterministically install the shared Workday OSS configuration topic and selected employee or manager scenario topics into an existing editable DA agent through an authenticated Copilot Studio browser session.
+description: Deterministically install selected Workday OSS employee or manager scenario topics into an existing configured DA agent through an authenticated Copilot Studio browser session.
 ---
 
 # Import Workday OSS topics
@@ -9,7 +9,6 @@ Install the reviewed Workday OSS sample topics into the active editable DA
 agent. This is a bounded native-agent operation:
 
 - source is only `samples/Workday`;
-- the shared `WorkdayOSSTemplateConfigurationSetup` topic is first by default;
 - employee topics follow `samples/Workday/Employee/README.md`;
 - manager topics follow `samples/Workday/Manager/README.md`;
 - existing topics are preserved when either `displayName` or `schemaName`
@@ -18,9 +17,10 @@ agent. This is a bounded native-agent operation:
 - no topic is updated, deleted, published, activated, or runtime-tested;
 - no Computer Use automation is allowed.
 
-Use `--scenarios-only` only when the target already has equivalent shared
-configuration handling. `--display-prefix` can add a reviewed prefix to created
-topic display names without changing schema names.
+The target must already have its Workday template configurations initialized.
+This command installs only the 16 Employee and Manager scenario topics.
+`--display-prefix` can add a reviewed prefix to created topic display names
+without changing schema names.
 
 The installer uses the Microsoft Object Model converter and the live MinimalBot
 components request contract observed from an authenticated Copilot Studio page.
@@ -75,9 +75,9 @@ Read `.local/config.json` and resolve `activeAgent`. Require:
 - the endpoint-encoded environment GUID to match the configured environment.
 
 Ask whether to install all scenarios or an explicit subset. Never infer all
-from "OSS". The shared setup topic is included automatically for either choice.
+from "OSS".
 
-For all 17 resources:
+For all 16 scenarios:
 
 ```powershell
 python scripts/install_oss_topics.py --all --dry-run
@@ -91,10 +91,10 @@ python scripts/install_oss_topics.py `
   --dry-run
 ```
 
-To exclude the shared setup topic and prefix scenario display names:
+To prefix scenario display names:
 
 ```powershell
-python scripts/install_oss_topics.py --all --scenarios-only `
+python scripts/install_oss_topics.py --all `
   --display-prefix "Workday OSS " --dry-run
 ```
 
@@ -171,11 +171,10 @@ Report the JSON status accurately:
 - `offline-plan`: no target assertions were made;
 - `failed`: stop at the reported boundary; do not claim rollback or retry.
 
-List created and preserved topics separately. Remind the maker that the shared
-topic still must be called after the existing OOB Workday configuration
-initializer and before OSS scenarios execute, as documented in
-`samples/Workday/README.md`. Publishing and fresh-conversation runtime testing
-remain separate approved actions.
+List created and preserved topics separately. Remind the maker that Workday
+template configurations must already be initialized before these scenarios
+execute. Publishing and fresh-conversation runtime testing remain separate
+approved actions.
 
 ## Telemetry
 

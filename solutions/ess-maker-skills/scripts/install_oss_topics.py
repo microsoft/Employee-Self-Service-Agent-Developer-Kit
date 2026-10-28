@@ -42,7 +42,6 @@ from agentbuilder_object_model import (
 
 COMPONENTS_PATH = "/copilotstudio/minimalBots/api/{agent_id}/components"
 DEFAULT_CDP_ENDPOINT = "http://localhost:9222"
-SETUP_NAME = "WorkdayOSSTemplateConfigurationSetup"
 SOURCE_SCHEMA = "gptagent_copilotforemployeeselfservicehr"
 EMPTY_CHANGE_COLLECTIONS = {
     "cloudFlowDefinitionChanges": [],
@@ -379,18 +378,8 @@ def _child_dialogs(value: Any) -> tuple[str, ...]:
 def _manifest_source_paths(
     samples_root: Path,
     scenarios: Iterable[str],
-    *,
-    include_setup: bool = True,
 ) -> list[tuple[str, str, Path]]:
     paths = []
-    if include_setup:
-        paths.append(
-            (
-                "shared",
-                SETUP_NAME,
-                samples_root / f"{SETUP_NAME}.yaml",
-            )
-        )
     selected = set(scenarios)
     for name in EMPLOYEE_SCENARIOS:
         if name in selected:
@@ -405,7 +394,6 @@ def build_manifest(
     samples_root: Path,
     *,
     scenarios: Iterable[str] = ALL_SCENARIOS,
-    include_setup: bool = True,
     display_prefix: str = "",
 ) -> list[ManifestEntry]:
     root = samples_root.resolve()
@@ -423,7 +411,7 @@ def build_manifest(
         )
     entries: list[ManifestEntry] = []
     for order, (category, name, path) in enumerate(
-        _manifest_source_paths(root, selected, include_setup=include_setup),
+        _manifest_source_paths(root, selected),
         start=1,
     ):
         try:
@@ -468,11 +456,6 @@ def build_manifest(
         raise InstallerError(
             "invalid-selection",
             "At least one Workday OSS topic must be selected.",
-        )
-    if include_setup and entries[0].name != SETUP_NAME:
-        raise InstallerError(
-            "invalid-source",
-            "The shared Workday OSS setup topic must be first.",
         )
     return entries
 
@@ -1382,19 +1365,13 @@ def main(argv: list[str] | None = None) -> int:
     selection.add_argument(
         "--all",
         action="store_true",
-        help=(
-            "Select all 16 Workday scenarios; the shared setup topic is "
-            "included unless --scenarios-only is passed."
-        ),
+        help="Select all 16 Workday scenarios.",
     )
     selection.add_argument(
         "--topics",
         nargs="+",
         choices=ALL_SCENARIOS,
-        help=(
-            "Select scenario names; the shared setup topic is included first "
-            "unless --scenarios-only is passed."
-        ),
+        help="Select one or more Workday scenario names.",
     )
     operation = parser.add_mutually_exclusive_group(required=True)
     operation.add_argument(
@@ -1425,11 +1402,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cdp", default=DEFAULT_CDP_ENDPOINT)
     parser.add_argument("--page-url-contains")
     parser.add_argument(
-        "--scenarios-only",
-        action="store_true",
-        help="Exclude the shared setup topic and install only selected scenarios.",
-    )
-    parser.add_argument(
         "--display-prefix",
         default="",
         help="Prefix applied to each installed topic display name.",
@@ -1441,7 +1413,6 @@ def main(argv: list[str] | None = None) -> int:
         entries = build_manifest(
             repository_root() / "samples" / "Workday",
             scenarios=_selected_scenarios(args),
-            include_setup=not args.scenarios_only,
             display_prefix=args.display_prefix,
         )
         if args.offline_plan:

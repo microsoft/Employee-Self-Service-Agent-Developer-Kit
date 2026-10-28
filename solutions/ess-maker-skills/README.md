@@ -82,13 +82,13 @@ deployment is not yet available, so the kit leaves the live agent unchanged.
 
 ### 📥 Install Workday OSS Topics
 
-`/import-oss` is a narrow native-agent installer for the shared Workday OSS
-configuration topic plus the 16 employee and manager scenarios under
-`samples/Workday`. It attaches to an already authenticated exact-agent page on
-the production or preview Copilot Studio host over Playwright/CDP, converts
-each YAML source through the Microsoft Object Model, preserves existing
-display/schema matches, and creates only missing topics through the MinimalBot
-components contract.
+`/import-oss` is a narrow native-agent installer for the 16 Workday OSS
+employee and manager scenarios under `samples/Workday`. It requires existing
+Workday template configuration, attaches to an already authenticated
+exact-agent page on the production or preview Copilot Studio host over
+Playwright/CDP, converts each YAML source through the Microsoft Object Model,
+preserves existing display/schema matches, and creates only missing topics
+through the MinimalBot components contract.
 
 The command always performs a target-aware dry-run before asking for approval.
 Writes are sequential and each save must pass response-identity, read-back, and

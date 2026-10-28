@@ -4,12 +4,11 @@
 
 The source manifest is fixed to `samples/Workday`:
 
-1. `WorkdayOSSTemplateConfigurationSetup.yaml`
-2. the 11 folders listed by `samples/Workday/Employee/README.md`
-3. the 5 folders listed by `samples/Workday/Manager/README.md`
+1. the 11 folders listed by `samples/Workday/Employee/README.md`
+2. the 5 folders listed by `samples/Workday/Manager/README.md`
 
 Each result includes the repository-relative source path and SHA-256. A subset
-retains this order and still includes the shared setup topic first.
+retains this order.
 
 ## Authentication boundary
 
