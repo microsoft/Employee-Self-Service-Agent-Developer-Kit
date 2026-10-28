@@ -100,7 +100,6 @@ _REVIEWED_WORKDAY_TOPIC_SUFFIXES = {
             "WorkdayGetVisas",
             "WorkdayManagerCheck",
             "WorkdayOnError",
-            "WorkdaySystemAccessCheck",
             "WorkdaySystemGetCommonExecution",
             "WorkdaySystemGetRESTExecution",
             "WorkdaySystemGetUserContextV2",
@@ -726,7 +725,7 @@ def resolve_workday_dialogs(
                 )
             raise MinimalBotEvaluationError(
                 "The active ESS HR component map does not match the reviewed "
-                "23-topic Workday inventory ("
+                f"{len(reviewed_schemas)}-topic Workday inventory ("
                 + "; ".join(details)
                 + "). Refresh the workspace before activation."
             )

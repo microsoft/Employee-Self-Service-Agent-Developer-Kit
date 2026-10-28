@@ -20,7 +20,7 @@ Read `workspace/agents/{AGENT_SLUG}/.component-map.json`. This map is the
 materialized workspace projection of the source `agent.yml`.
 
 Resolve the repository-reviewed ESS HR Workday inventory. The resolver must
-match all 23 exact schema names in the checked-in contract, including the two
+match all 22 exact schema names in the checked-in contract, including the two
 topics whose schema names do not begin with `Workday`:
 
 - `{AGENT_SCHEMA}.topic.EmployeeUpdatePhoneNumber`
@@ -29,7 +29,7 @@ topics whose schema names do not begin with `Workday`:
 For every reviewed entry:
 
 - `componentKind` must be `DialogComponent`;
-- the exact schema name must be in the reviewed 23-topic HR inventory;
+- the exact schema name must be in the reviewed 22-topic HR inventory;
 - `displayName` must start with `Workday`;
 - the mapped path starts with `topics/` and ends with `.mcs.yml`;
 - the mapped file exists beneath the selected agent directory.
@@ -40,7 +40,7 @@ enforces the same exact mapped set and rejects omitted Workday topics or any
 selected non-Workday dialog; these instructions are not the only safety
 boundary. Do not derive the set from a broad display-name search. The two
 disabled employee/manager handoff topics are not in the reviewed inventory and
-must remain excluded. For the current ESS HR template this resolves all 23
+must remain excluded. For the current ESS HR template this resolves all 22
 active-contract Workday dialog topics, including business and supporting
 system topics.
 
@@ -78,10 +78,7 @@ Use the `vscode_askQuestions` tool:
   {
     "header": "Enable Workday topics",
     "question": "Enable all Workday topics in the active ESS HR agent?",
-    "options": [
-      { "label": "Enable" },
-      { "label": "Not now" }
-    ],
+    "options": [{ "label": "Enable" }, { "label": "Not now" }],
     "allowFreeformInput": false
   }
 ]

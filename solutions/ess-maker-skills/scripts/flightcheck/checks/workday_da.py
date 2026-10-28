@@ -60,7 +60,6 @@ _DESCRIPTION = "Workday extension package installed for the DA ESS HR agent"
 _REQUIRED_SYSTEM_TOPIC_SUFFIXES = frozenset({
     "WorkdaySystemSetRuntimeTemplateConfigurations",
     "WorkdaySystemGetUserContextV2",
-    "WorkdaySystemAccessCheck",
     "WorkdaySystemGetCommonExecution",
     "WorkdaySystemGetRESTExecution",
     "WorkdayManagerCheck",

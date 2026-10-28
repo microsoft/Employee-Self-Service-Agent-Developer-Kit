@@ -341,10 +341,28 @@ def test_reviewed_topics_pass_complete_active_inventory() -> None:
     assert row.remediation == ""
 
 
+@pytest.mark.parametrize("maker_diagnostics", [False, True])
+def test_reviewed_topics_accept_inventory_without_retired_access_check(
+    maker_diagnostics,
+):
+    retired_schema = f"{SCHEMA}.topic.WorkdaySystemAccessCheck"
+    payload = _component_payload(missing=retired_schema)
+    runner = _runner(
+        maker_diagnostics=maker_diagnostics,
+        agentbuilder=_AgentBuilder(payload),
+    )
+
+    row = workday_da._check_reviewed_workday_topics(runner)[0]
+
+    assert row.status == "Passed"
+    assert retired_schema not in reviewed_workday_topic_schemas(SCHEMA)
+    assert "WorkdaySystemAccessCheck" not in workday_da._REQUIRED_SYSTEM_TOPIC_SUFFIXES
+    assert row.remediation == ""
+
+
 @pytest.mark.parametrize("suffix", [
     "WorkdaySystemSetRuntimeTemplateConfigurations",
     "WorkdaySystemGetUserContextV2",
-    "WorkdaySystemAccessCheck",
     "WorkdaySystemGetCommonExecution",
     "WorkdaySystemGetRESTExecution",
     "WorkdayManagerCheck",
@@ -395,7 +413,7 @@ def test_maker_required_systems_work_without_optional_scenarios():
         maker_diagnostics=True, agentbuilder=_AgentBuilder(payload),
     ))[0]
     assert row.status == "Passed"
-    assert "7 of 7 required system topics present" in row.result
+    assert "6 of 6 required system topics present" in row.result
     assert "Unused optional conversations are not required" in row.result
     assert row.evidence["unselectedCatalogEntries"] == 16
     assert row.remediation == ""
