@@ -25,6 +25,18 @@ Run `/setup` and follow the prompts.
 
 > **Accounts used during setup:** Sign in to GitHub Copilot to activate Copilot Chat, where you run `/setup`. When `/setup` connects your agent, use the separate Microsoft work account that can access the target Power Platform environment and agent. GitHub Copilot authentication does not grant Power Platform access. See [Authentication prompts](../../setup/README.md#authentication-prompts) for the full sequence and the standalone FlightCheck exception.
 
+### 🧩 Build Agent Skills
+
+Turn HR and IT scenarios into agent skills that work with your agent's own MCP tools. Put each MCP server's tool list in `workspace/ess-da-ga-skill-builder-capabilities/mcp/<server-name>/tools.json` and your agent's `capabilities` array in `knowledge/knowledge.json` (or point to your agent's app package), then run `/build-skill` or ask `Build a skill for opening HR cases`.
+
+- **Platform-first guidance:** Microsoft 365 Copilot documentation first, then the Agent Skills specification and best practices, followed by applicable Anthropic and OpenAI authoring guidance. [Source precedence](src/skills/ess-da-ga-skill-builder/references/sources.md) keeps documented requirements separate from testing observations.
+- **Grounded in your tools and knowledge:** reads every tool description and knowledge source, and checks, step by step, whether your agent can do each scenario.
+- **Right-sized skills:** recommends thin skills where purpose-built tools do the work, focused skills where general-purpose tools need the skill to carry the steps, and splitting scenarios your tools can only partly support.
+- **Built with you:** asks a few questions at a time about scope, how explicit to be, sources such as existing topics, and confirmation rules, and refines the draft until you're happy.
+- **Ready to upload:** validates each skill against Copilot's limits and packages it as a `.zip` for Copilot Studio or Agent Builder, or a folder for the Microsoft 365 Agents Toolkit.
+
+Everything stays in `workspace/` on your machine; your agent doesn't change until you add the skill.
+
 ### 🎨 Customize the ESS Landing Page
 
 Configure the active agent's tenant landing page directly from chat. Run
@@ -375,6 +387,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 |---------|-------------|
 | `/setup` | Connect this workspace to an existing editable DA Dev agent |
 | `/landing-page` | Configure landing-page branding and content |
+| `/build-skill` | Build agent skills for your declarative agent from its MCP tools, step by step |
 | `/connect` | Choose an available integration |
 | `/connect-workday` | Connect the ESS HR agent to Workday |
 | `/create` | Create a topic, workflow, or evaluation test set locally |

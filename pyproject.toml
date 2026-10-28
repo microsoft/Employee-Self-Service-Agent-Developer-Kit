@@ -62,6 +62,7 @@ testpaths = ["tests"]
 # pythonpath so tests can `from auth import ...` and `from flightcheck import ...`.
 pythonpath = [
     "solutions/ess-maker-skills/scripts",
+    "solutions/ess-maker-skills/scripts/ess-da-ga-skill-builder",
 ]
 addopts = [
     "-ra",
