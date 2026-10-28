@@ -1,23 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Read, preview, and explicitly save native agent-instruction text edits.
-
-Uses the selected canonical Dev agent and workspace-local authentication.
-Read native instructions with `read --output <snapshot.json>`. Supply an update
-request containing only {"edits": [{"segmentIndex": 0, "oldText": "...",
-"newText": "..."}]}. Indices refer to the native instructions.segments array.
-Each oldText must occur exactly once in its TextSegment; edits cannot overlap.
-Expression segments and all other component fields are preserved.
-
-Preview with `update --request <request.json> --expected <snapshot.json>
---output <preview.json>`. After separate approval, save with the same request,
-`--expected <preview.json> --yes --output <result.json>`. A changed request,
-target, or native GPT baseline requires another preview. Output files must be
-new paths. This operation does not edit topics, activate, publish, or verify
-conversational behavior. After an uncertain write, read native state before
-the session decides whether another operation is appropriate.
-"""
+"""Preview and save the instruction section from the selected agent YAML."""
 
 from __future__ import annotations
 
@@ -28,45 +12,52 @@ import sys
 from typing import Any
 
 from agentbuilder import AgentBuilderError
-from alm_enrollment import _exception_chain
-from minimalbot_evaluation import (
-    MinimalBotEvaluationClient,
-    MinimalBotEvaluationError,
-    build_agent_instruction_update,
+from agentbuilder_object_model import (
+    ObjectModelConverterError,
+    object_models_to_yaml,
+    yaml_to_object_models,
 )
-from setup_existing_da import ExistingDASetupError
-from topic_authoring import connect, read_json
+from alm_enrollment import _exception_chain
+from minimalbot_evaluation import MinimalBotEvaluationClient, MinimalBotEvaluationError
+from setup_existing_da import (
+    ExistingDASetupError,
+    connect_selected_dev_workspace,
+)
+from topic_authoring import read_json
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    parser.add_argument("operation", choices=("read", "update"))
-    parser.add_argument("--kit-root", type=Path, default=Path.cwd())
-    parser.add_argument("--account")
-    parser.add_argument("--request", type=Path)
-    parser.add_argument("--expected", type=Path)
-    parser.add_argument("--output", type=Path)
-    parser.add_argument(
-        "--yes", action="store_true", help="Save the separately approved preview."
-    )
-    args = parser.parse_args(argv)
-    if args.operation == "read" and (args.yes or args.request or args.expected):
-        parser.error("read does not accept --yes, --request, or --expected.")
-    if args.operation == "update" and (args.request is None or args.expected is None):
-        parser.error("update requires --request and --expected.")
-    if args.output and args.output.exists():
-        raise FileExistsError(
-            f"Choose a new output path; this file exists: {args.output}"
+class InstructionBookkeepingError(RuntimeError):
+    """A baseline failure after a verified remote instruction result."""
+
+    def __init__(self, message: str, evidence: dict[str, Any]) -> None:
+        self.evidence = evidence
+        super().__init__(message)
+
+
+def _active_agent_folder(root: Path) -> Path:
+    config = read_json(root / ".local" / "config.json")
+    folder = config.get("agent", {}).get("folder")
+    if not isinstance(folder, str) or not folder.strip():
+        raise ValueError("The selected agent folder is missing from .local/config.json.")
+    path = Path(folder)
+    if not path.is_absolute():
+        path = root / path
+    return path.resolve()
+
+
+def _target_matches(expected: dict[str, Any], target: dict[str, Any]) -> bool:
+    return all(
+        expected.get(section, {}).get(field) == target.get(section, {}).get(field)
+        for section, fields in (
+            ("environment", ("id", "tenantId", "ring", "powerPlatformApiEndpoint")),
+            ("agent", ("id", "schemaName", "realm")),
         )
-    request = read_json(args.request) if args.request else None
-    expected = read_json(args.expected) if args.expected else None
-    if request is not None and set(request) != {"edits"}:
-        raise ValueError("An instruction request must contain only edits.")
+        for field in fields
+    )
 
-    client, target = connect(args.kit_root.resolve(), args.account)
-    native = MinimalBotEvaluationClient(
+
+def _native_client(client: Any, target: dict[str, Any]) -> MinimalBotEvaluationClient:
+    return MinimalBotEvaluationClient(
         target["environment"]["id"],
         target["agent"]["id"],
         target["environment"]["tenantId"],
@@ -75,57 +66,181 @@ def main(argv: list[str] | None = None) -> int:
         access_token=client.headers["Authorization"].split(" ", 1)[1],
         session=client.session,
     )
-    current = native.read_agent_instructions()
-    result: dict[str, Any] = {"target": target, "operation": args.operation, **current}
-    if args.operation == "update":
-        assert expected is not None and request is not None
-        for section, fields in (
-            ("environment", ("id", "tenantId", "ring", "powerPlatformApiEndpoint")),
-            ("agent", ("id", "schemaName", "realm")),
-        ):
-            if any(
-                expected["target"][section].get(field) != target[section].get(field)
-                for field in fields
-            ):
-                raise ValueError(
-                    "The expected instruction snapshot belongs to a different target."
-                )
-        if current["component"] != expected["component"]:
-            raise ValueError(
-                "Native instructions changed since the expected snapshot; preview again."
-            )
-        desired = build_agent_instruction_update(current["component"], request["edits"])
-        if args.yes and (
-            expected.get("operation") != "update"
-            or expected.get("saved") is not False
-            or expected.get("edits") != request["edits"]
-            or expected.get("desiredComponent") != desired
-        ):
-            raise ValueError(
-                "The instruction request differs from its approved preview; preview again."
-            )
-        result.update(
-            {
-                "edits": request["edits"],
-                "desiredComponent": desired,
-                "changed": desired != current["component"],
-                "saved": False,
-            }
+
+
+def _metadata_from_yaml(content: str, key: str) -> dict[str, Any]:
+    converted = yaml_to_object_models([{"key": key, "yaml": content}])[0]
+    if converted.get("success") is not True:
+        error = converted.get("error") or {}
+        raise ValueError(
+            "Could not convert agent YAML: "
+            + str(error.get("message") or "unknown conversion error")
         )
-        if args.yes:
-            update = native.update_agent_instructions(
-                current["component"], request["edits"]
+    metadata = converted.get("objectModel")
+    instructions = metadata.get("instructions") if isinstance(metadata, dict) else None
+    if (
+        not isinstance(metadata, dict)
+        or not isinstance(instructions, dict)
+        or instructions.get("$kind") != "TemplateLine"
+        or not isinstance(instructions.get("segments"), list)
+    ):
+        raise ValueError(
+            "agent.mcs.yml must contain TemplateLine instructions with segments."
+        )
+    return metadata
+
+
+def _project_metadata(metadata: dict[str, Any], key: str) -> str:
+    projected = object_models_to_yaml([{"key": key, "objectModel": metadata}])[0]
+    if projected.get("success") is not True:
+        error = projected.get("error") or {}
+        raise ValueError(
+            "Could not project agent YAML: "
+            + str(error.get("message") or "unknown conversion error")
+        )
+    yaml_content = projected.get("yaml")
+    if not isinstance(yaml_content, str) or not yaml_content.strip():
+        raise ValueError("The agent converter returned empty YAML.")
+    return yaml_content
+
+
+def _acknowledge_instructions(
+    agent_folder: Path,
+    desired_instructions: dict[str, Any],
+) -> None:
+    baseline = agent_folder / ".baseline" / "agent.mcs.yml"
+    baseline_metadata = _metadata_from_yaml(
+        baseline.read_text(encoding="utf-8"),
+        "baseline-agent",
+    )
+    baseline_metadata["instructions"] = desired_instructions
+    baseline.write_text(
+        _project_metadata(baseline_metadata, "baseline-agent"),
+        encoding="utf-8",
+        newline="",
+    )
+
+
+def _emit_result(result: dict[str, Any], output: Path | None) -> None:
+    content = json.dumps(result, indent=2, ensure_ascii=False) + "\n"
+    print(content, end="")
+    if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(content, encoding="utf-8")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("operation", choices=("read", "update"))
+    parser.add_argument("--kit-root", type=Path, default=Path.cwd())
+    parser.add_argument("--account")
+    parser.add_argument("--draft", type=Path, help="Desired agent.mcs.yml draft.")
+    parser.add_argument("--expected", type=Path, help="Fresh native read snapshot.")
+    parser.add_argument("--output", type=Path, help="Reusable JSON result path.")
+    parser.add_argument("--yaml-output", type=Path, help="Optional reusable read projection.")
+    parser.add_argument("--yes", action="store_true", help="Apply the separately approved save.")
+    args = parser.parse_args(argv)
+
+    if args.operation == "read" and (args.yes or args.draft or args.expected):
+        parser.error("read does not accept --yes, --draft, or --expected.")
+    if args.operation == "update" and (args.draft is None or args.expected is None):
+        parser.error("update requires --draft and --expected.")
+    if args.yaml_output and args.operation != "read":
+        parser.error("--yaml-output is valid only for read.")
+
+    root = args.kit_root.resolve()
+    client, target = connect_selected_dev_workspace(root, args.account)
+    agent_folder = _active_agent_folder(root)
+    native = _native_client(client, target)
+    current = native.read_agent_instructions()
+    result: dict[str, Any] = {
+        "target": target,
+        "operation": args.operation,
+        **current,
+        "published": False,
+        "conversationVerified": False,
+    }
+
+    if args.operation == "read":
+        _emit_result(result, args.output)
+        if args.yaml_output:
+            metadata = {
+                **current["component"]["metadata"],
+                "displayName": current["component"].get("displayName"),
+            }
+            args.yaml_output.parent.mkdir(parents=True, exist_ok=True)
+            args.yaml_output.write_text(
+                _project_metadata(metadata, "agent"),
+                encoding="utf-8",
+                newline="",
             )
-            result.update(update)
-            result["saved"] = update["updatedComponents"] != 0
-    result["published"] = False
-    result["conversationVerified"] = False
-    output = json.dumps(result, indent=2, ensure_ascii=False) + "\n"
-    print(output, end="")
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.open("x", encoding="utf-8") as handle:
-            handle.write(output)
+        return 0
+
+    assert args.draft is not None and args.expected is not None
+    draft_path = args.draft.resolve()
+    if draft_path != (agent_folder / "agent.mcs.yml").resolve():
+        raise ValueError("Instruction updates use the selected agent's agent.mcs.yml draft.")
+    captured_yaml = draft_path.read_text(encoding="utf-8")
+    desired_metadata = _metadata_from_yaml(captured_yaml, "agent")
+    desired_instructions = desired_metadata["instructions"]
+    expected = read_json(args.expected)
+    if not _target_matches(expected.get("target", {}), target):
+        raise ValueError("The expected instruction snapshot belongs to a different target.")
+    expected_component = expected.get("component")
+    if not isinstance(expected_component, dict):
+        raise ValueError("The expected instruction snapshot contains no GPT component.")
+    expected_instructions = expected_component.get("metadata", {}).get("instructions")
+    if not isinstance(expected_instructions, dict):
+        raise ValueError("The expected instruction snapshot contains no instructions.")
+    current_identity = {
+        key: current["component"].get(key)
+        for key in ("id", "schemaName", "parentBotId")
+    }
+    expected_identity = {
+        key: expected_component.get(key)
+        for key in ("id", "schemaName", "parentBotId")
+    }
+    if current_identity != expected_identity:
+        raise ValueError("The native GPT component identity changed after the read.")
+    if current["component"]["metadata"]["instructions"] != expected_instructions:
+        raise ValueError("Native instructions changed after the expected read.")
+
+    result.update(
+        {
+            "expectedInstructions": expected_instructions,
+            "desiredInstructions": desired_instructions,
+            "changed": desired_instructions != expected_instructions,
+            "saved": False,
+        }
+    )
+    if args.yes:
+        update = native.update_agent_instructions(
+            expected_component,
+            expected_instructions,
+            desired_instructions,
+        )
+        result.update(update)
+        result["saved"] = update["verifiedComponents"] == 1
+        try:
+            _acknowledge_instructions(agent_folder, desired_instructions)
+        except (ObjectModelConverterError, OSError, ValueError) as exc:
+            result["bookkeepingComplete"] = False
+            raise InstructionBookkeepingError(
+                "The instruction result was verified, but baseline acknowledgement failed.",
+                {"remoteResult": result, "localError": _exception_chain(exc)},
+            ) from exc
+        result["bookkeepingComplete"] = True
+
+    try:
+        _emit_result(result, args.output)
+    except OSError as exc:
+        if args.yes and result.get("saved") is True:
+            result["outputComplete"] = False
+            raise InstructionBookkeepingError(
+                "The instruction result was verified, but reusable output writing failed.",
+                {"remoteResult": result, "localError": _exception_chain(exc)},
+            ) from exc
+        raise
     return 0
 
 
@@ -135,7 +250,9 @@ if __name__ == "__main__":
     except (
         AgentBuilderError,
         ExistingDASetupError,
+        InstructionBookkeepingError,
         MinimalBotEvaluationError,
+        ObjectModelConverterError,
         ValueError,
         OSError,
     ) as exc:

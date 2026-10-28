@@ -163,7 +163,7 @@ class AgentInstructionEditError(MinimalBotEvaluationError):
         )
 
 
-def _instruction_segments(component: dict[str, Any]) -> list[Any]:
+def _component_instructions(component: dict[str, Any]) -> dict[str, Any]:
     metadata = component.get("metadata")
     instructions = metadata.get("instructions") if isinstance(metadata, dict) else None
     if (
@@ -173,60 +173,9 @@ def _instruction_segments(component: dict[str, Any]) -> list[Any]:
         or not isinstance(instructions.get("segments"), list)
     ):
         raise MinimalBotEvaluationError(
-            "Instruction editing requires native GptComponent TemplateLine instructions."
+            "Instruction updates require native GptComponent TemplateLine instructions."
         )
-    return instructions["segments"]
-
-
-def build_agent_instruction_update(
-    component: dict[str, Any], edits: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Replace unique literals in text segments without altering other native fields."""
-    segments = _instruction_segments(component)
-    if not isinstance(edits, list) or not edits:
-        raise MinimalBotEvaluationError("Provide at least one explicit instruction text edit.")
-    replacements: dict[int, list[tuple[int, int, str]]] = {}
-    for edit in edits:
-        if not isinstance(edit, dict) or set(edit) != {"segmentIndex", "oldText", "newText"}:
-            raise MinimalBotEvaluationError(
-                "Each instruction edit requires only segmentIndex, oldText, and newText."
-            )
-        index, old, new = edit["segmentIndex"], edit["oldText"], edit["newText"]
-        if (
-            type(index) is not int or not 0 <= index < len(segments)
-            or not isinstance(old, str) or not old or not isinstance(new, str)
-        ):
-            raise MinimalBotEvaluationError(
-                "Instruction edits require a valid segment index, nonempty oldText, "
-                "and string newText."
-            )
-        segment = segments[index]
-        if (
-            not isinstance(segment, dict) or segment.get("$kind") != "TextSegment"
-            or not isinstance(segment.get("value"), str)
-        ):
-            raise MinimalBotEvaluationError(f"Instruction segment {index} is not editable text.")
-        text = segment["value"]
-        start = text.find(old)
-        if start < 0 or text.find(old, start + 1) != -1:
-            raise MinimalBotEvaluationError(
-                f"oldText must occur exactly once in instruction segment {index}."
-            )
-        end = start + len(old)
-        ranges = replacements.setdefault(index, [])
-        if any(start < stop and begin < end for begin, stop, _ in ranges):
-            raise MinimalBotEvaluationError(
-                f"Instruction edits overlap in segment {index}; combine them explicitly."
-            )
-        ranges.append((start, end, new))
-    desired = copy.deepcopy(component)
-    desired_segments = _instruction_segments(desired)
-    for index, ranges in replacements.items():
-        text = segments[index]["value"]
-        for start, end, new in sorted(ranges, reverse=True):
-            text = text[:start] + new + text[end:]
-        desired_segments[index]["value"] = text
-    return desired
+    return instructions
 
 
 def is_minimalbot(config: dict[str, Any]) -> bool:
@@ -1094,7 +1043,7 @@ class MinimalBotEvaluationClient:
             )
         if not isinstance(payload.get("changeToken"), str) or not payload["changeToken"]:
             raise MinimalBotEvaluationError("The native instruction read omitted the changeToken.")
-        _instruction_segments(matches[0])
+        _component_instructions(matches[0])
         return components, matches[0]
 
     def read_agent_instructions(self) -> dict[str, Any]:
@@ -1108,21 +1057,48 @@ class MinimalBotEvaluationClient:
         }
 
     def update_agent_instructions(
-        self, expected_component: dict[str, Any], edits: list[dict[str, Any]],
+        self,
+        expected_component: dict[str, Any],
+        expected_instructions: dict[str, Any],
+        desired_instructions: dict[str, Any],
     ) -> dict[str, Any]:
-        """Apply one baseline-bound text edit and verify all native component content.
+        """Save one baseline-bound instruction value and verify native content.
 
         Uses the client's existing transport. No conflict reconciliation,
         activation, rollback, or publication is performed.
         """
         before = self.read_components()
         components, current = self._instruction_components(before)
-        if current != expected_component:
+        expected_identity = {
+            key: expected_component.get(key)
+            for key in ("id", "schemaName", "parentBotId")
+        }
+        current_identity = {
+            key: current.get(key)
+            for key in ("id", "schemaName", "parentBotId")
+        }
+        if current_identity != expected_identity:
             raise MinimalBotEvaluationError(
-                "Native instructions changed since the expected snapshot. No write was sent."
+                "The native GPT component identity changed since the expected "
+                "snapshot. No write was sent."
             )
-        desired = build_agent_instruction_update(current, edits)
-        if desired == current:
+        current_instructions = _component_instructions(current)
+        if current_instructions != expected_instructions:
+            raise MinimalBotEvaluationError(
+                "Native instructions changed since the expected snapshot. "
+                "No write was sent."
+            )
+        if (
+            not isinstance(desired_instructions, dict)
+            or desired_instructions.get("$kind") != "TemplateLine"
+            or not isinstance(desired_instructions.get("segments"), list)
+        ):
+            raise MinimalBotEvaluationError(
+                "Desired instructions must be a TemplateLine with segments."
+            )
+        desired = copy.deepcopy(current)
+        desired["metadata"]["instructions"] = copy.deepcopy(desired_instructions)
+        if desired_instructions == current_instructions:
             return {
                 "updatedComponents": 0, "verifiedComponents": 1,
                 "component": copy.deepcopy(current),
@@ -1165,15 +1141,30 @@ class MinimalBotEvaluationClient:
             )
 
         def content(component: dict[str, Any]) -> dict[str, Any]:
-            return {k: v for k, v in component.items() if k not in {"auditInfo", "version"}}
+            return copy.deepcopy(
+                {
+                    key: value
+                    for key, value in component.items()
+                    if key not in {"auditInfo", "version"}
+                }
+            )
 
         try:
             after = self.read_components()
             actual, saved = self._instruction_components(after)
             evidence["readbackComponent"] = saved
-            if content(saved) != content(desired):
+            if _component_instructions(saved) != desired_instructions:
                 raise MinimalBotEvaluationError(
-                    "Saved GPT component differs from the requested instruction-only update."
+                    "Saved GPT instructions differ from the requested update."
+                )
+            saved_content = content(saved)
+            desired_content = content(desired)
+            saved_content["metadata"]["instructions"] = expected_instructions
+            desired_content["metadata"]["instructions"] = expected_instructions
+            if saved_content != desired_content:
+                raise MinimalBotEvaluationError(
+                    "Unrelated GPT component content changed during the "
+                    "instruction update."
                 )
             others = {key: content(value) for key, value in components.items()
                       if key != current["id"]}
@@ -1226,17 +1217,6 @@ class MinimalBotEvaluationClient:
             or not str(component.get("schemaName") or "").startswith(schema_prefix)
         ):
             raise MinimalBotEvaluationError("The dialog does not belong to this agent.")
-        for change in before.get("botComponentChanges") or []:
-            existing = change.get("component") or {}
-            if (
-                existing.get("$kind") == "DialogComponent"
-                and str(existing.get("displayName") or "").strip().casefold()
-                == component["displayName"].strip().casefold()
-            ):
-                raise MinimalBotEvaluationError(
-                    "A topic with this name already exists in the selected agent. "
-                    "No create was sent; select it explicitly for an update."
-                )
         if not before.get("changeToken"):
             raise MinimalBotEvaluationError("The native read omitted the changeToken.")
         payload = {
