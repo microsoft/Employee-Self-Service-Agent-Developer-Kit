@@ -1074,14 +1074,27 @@ def _run_da_selection_if_applicable(args, config):
     sys.exit(_run_exit_code(result))
 
 
+def _adk_flightcheck_result(overall: str) -> str:
+    """Map standard and diagnostic FlightCheck outcomes to ADK telemetry."""
+    return {
+        "READY": "pass",
+        "READY_WITH_WARNINGS": "partial",
+        "NOT_READY": "fail",
+        "SETUP_CHECKS_PASSED": "pass",
+        "CHECKED_WITH_NOTES": "partial",
+        "SOME_CHECKS_UNVERIFIED": "partial",
+        "ISSUES_FOUND": "fail",
+    }.get(overall, "fail")
+
+
 def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
     """Emit anonymous outcome telemetry for a completed run (best-effort).
 
-    Shared by the --checkpoint and --profile paths so both single-purpose
-    "connect" runs surface on the Aria dashboards the same way a --scope run
-    does. Never raises: telemetry must not change the run's exit code. The
-    caller passes the run ``scope`` (e.g. ``checkpoint:<id>`` or
-    ``profile:<name>``); everything else is derived from the shared run state.
+    Shared by DA diagnostics, --checkpoint, and --profile paths so runs that
+    return before the normal scope telemetry block still surface on the Aria
+    dashboards. Never raises: telemetry must not change the run's exit code.
+    The caller passes the run ``scope`` (e.g. ``local``, ``checkpoint:<id>``,
+    or ``profile:<name>``); everything else is derived from shared run state.
     """
     if getattr(args, "no_telemetry", False):
         return
@@ -1167,15 +1180,10 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
         _adk.emit_flightcheck_run(
             agent_id=_agent_id, run_index=_ridx, connector=_connector
         )
-        _result_map = {
-            "READY": "pass",
-            "READY_WITH_WARNINGS": "partial",
-            "NOT_READY": "fail",
-        }
         _adk.emit_flightcheck_result(
             agent_id=_agent_id,
             run_index=_ridx,
-            result=_result_map.get(result.overall, "fail"),
+            result=_adk_flightcheck_result(result.overall),
             duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
             connector=_connector,
         )
@@ -2926,6 +2934,19 @@ def main():
         result = run_maker_diagnostics(args, config)
         _print_prioritized_summary(result)
         save_results(result, args.output)
+        diagnostic_tenant_id = str(
+            config.get("tenantId")
+            or selected.get("tenantId")
+            or ""
+        ).strip()
+        _emit_run_telemetry(
+            result,
+            args,
+            config,
+            graph=None,
+            tenant_id=diagnostic_tenant_id,
+            scope=args.scope,
+        )
         if not args.no_open:
             open_report_in_browser(args.output)
         sys.exit(_run_exit_code(result))
@@ -3445,15 +3466,10 @@ def main():
             _adk.emit_flightcheck_run(
                 agent_id=_agent_id, run_index=_ridx, connector=_connector
             )
-            _result_map = {
-                "READY": "pass",
-                "READY_WITH_WARNINGS": "partial",
-                "NOT_READY": "fail",
-            }
             _adk.emit_flightcheck_result(
                 agent_id=_agent_id,
                 run_index=_ridx,
-                result=_result_map.get(result.overall, "fail"),
+                result=_adk_flightcheck_result(result.overall),
                 duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
                 connector=_connector,
             )
@@ -3464,7 +3480,10 @@ def main():
         if os.environ.get(
             "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
         ).strip().lower() in ("1", "on", "true", "yes"):
-            print("[telemetry] disabled via --no-telemetry")
+            if args.no_telemetry:
+                print("[telemetry] suppressed: --no-telemetry")
+            elif getattr(result, "diagnostic_only", False):
+                print("[telemetry] suppressed: diagnostic-only FlightCheck run")
 
     # Open the HTML report only when the run includes a MANUAL check — those
     # need the browser's rich remediation view. Runs with no manual items are

@@ -352,6 +352,106 @@ class TestInfrastructureScopeAuthGating:
 
 
 class TestAgentBuilderLocalScope:
+    @pytest.mark.parametrize(
+        ("overall", "expected"),
+        [
+            ("SETUP_CHECKS_PASSED", "pass"),
+            ("CHECKED_WITH_NOTES", "partial"),
+            ("SOME_CHECKS_UNVERIFIED", "partial"),
+            ("ISSUES_FOUND", "fail"),
+        ],
+    )
+    def test_da_diagnostic_outcome_maps_to_adk_telemetry(
+        self,
+        overall: str,
+        expected: str,
+    ) -> None:
+        assert cli._adk_flightcheck_result(overall) == expected
+
+    def test_da_diagnostic_emits_adk_flightcheck_telemetry(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        tenant_id = "11111111-1111-1111-1111-111111111111"
+        config = {
+            "releaseLine": "da",
+            "tenantId": tenant_id,
+            "activeAgent": "mock-agent",
+            "agents": [
+                {
+                    "slug": "mock-agent",
+                    "botId": "22222222-2222-2222-2222-222222222222",
+                    "releaseLine": "da",
+                }
+            ],
+        }
+        (local_dir / "config.json").write_text(
+            json.dumps(config),
+            encoding="utf-8",
+        )
+        result = _FakeRunner("local").run()
+        result.diagnostic_only = True
+        result.profile = ""
+        result.overall = "SETUP_CHECKS_PASSED"
+        captured = {}
+
+        def capture_telemetry(
+            emitted_result,
+            args,
+            emitted_config,
+            graph,
+            tenant_id,
+            scope,
+        ):
+            captured.update(
+                {
+                    "result": emitted_result,
+                    "invocation_source": args.invocation_source,
+                    "config": emitted_config,
+                    "graph": graph,
+                    "tenant_id": tenant_id,
+                    "scope": scope,
+                }
+            )
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "flightcheck.maker_diagnostics.run_maker_diagnostics",
+            lambda _args, _config: result,
+        )
+        monkeypatch.setattr(cli, "_print_prioritized_summary", lambda _result: None)
+        monkeypatch.setattr(cli, "save_results", lambda _result, _output: None)
+        monkeypatch.setattr(
+            cli,
+            "_emit_run_telemetry",
+            capture_telemetry,
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "cli.py",
+                "--scope",
+                "local",
+                "--invocation-source",
+                "adk",
+                "--no-open",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 0
+        assert captured["result"] is result
+        assert captured["invocation_source"] == "adk"
+        assert captured["config"] == config
+        assert captured["graph"] is None
+        assert captured["tenant_id"] == tenant_id
+        assert captured["scope"] == "local"
+
     def test_runs_without_dataverse_or_remote_authentication(
         self,
         tmp_path: Path,
