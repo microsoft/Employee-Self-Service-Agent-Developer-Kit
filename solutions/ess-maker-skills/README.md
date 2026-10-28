@@ -80,6 +80,22 @@ available in this release.
 The current pipeline is checkpoint → local edit → error scan. Native DA-GA
 deployment is not yet available, so the kit leaves the live agent unchanged.
 
+### 📥 Install Workday OSS Topics
+
+`/import-oss` is a narrow native-agent installer for the shared Workday OSS
+configuration topic plus the 16 employee and manager scenarios under
+`samples/Workday`. It attaches to an already authenticated exact-agent page on
+the production or preview Copilot Studio host over Playwright/CDP, converts
+each YAML source through the Microsoft Object Model, preserves existing
+display/schema matches, and creates only missing topics through the MinimalBot
+components contract.
+
+The command always performs a target-aware dry-run before asking for approval.
+Writes are sequential and each save must pass response-identity, read-back, and
+diagnostic verification. It does not overwrite, delete, publish, or runtime-test
+topics, and it never writes browser tokens, cookies, or authorization headers
+to disk.
+
 ### ⚡ Create, Update & Delete Workflows
 
 Generate Power Automate cloud flows for integrations that don't have an ESS shared orchestrator (custom APIs, Jira, ADP, etc.).
@@ -389,6 +405,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | `/push` | Push explicitly selected evaluation sets where supported; other native DA-GA deployment remains unavailable |
 | `/backup-template-configs` | Capture hybrid Workday reference-data template configs before an extension update |
 | `/restore-template-configs` | Restore hybrid Workday reference-data template configs after an extension update |
+| `/import-oss` | Dry-run and install missing Workday OSS topics through an authenticated Copilot Studio browser session |
 | `/menu` | See all available commands |
 
 You can also describe what you want in plain English — the agent will figure out the right approach.
