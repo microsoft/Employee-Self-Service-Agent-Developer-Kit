@@ -30,7 +30,7 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 def _write(path: Path, value: dict[str, Any]) -> None:
-    with path.open("x", encoding="utf-8", newline="\n") as stream:
+    with path.open("x", encoding="utf-8") as stream:
         stream.write(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
 
 
@@ -146,6 +146,15 @@ def _snapshot(components: dict[str, dict[str, Any]], component_id: str) -> dict[
     }
 
 
+def _topic_state(component: dict[str, Any] | None) -> dict[str, Any] | None:
+    if component is None:
+        return None
+    return {
+        key: component.get(key)
+        for key in ("$kind", "id", "schemaName", "dialog", "state", "status")
+    }
+
+
 def _drift(before: dict[str, str], after: dict[str, str]) -> dict[str, list[str]]:
     return {
         "added": sorted(after.keys() - before.keys()),
@@ -157,33 +166,39 @@ def _drift(before: dict[str, str], after: dict[str, str]) -> dict[str, list[str]
 def assess(
     capture: DriveResult | None,
     expected: str,
-    native_drift: dict[str, list[str]] | None,
+    selected_unchanged: bool | None,
+    native_drift: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     signal = (
         classify_reply_signal(capture.reply_text, timed_out=capture.timed_out)
         if capture is not None else None
     )
-    assessed = capture is not None and signal is ReplySignal.OK and not capture.had_card
+    assessed = (
+        capture is not None and not capture.timed_out
+        and bool(capture.reply_text.strip()) and not capture.had_card
+    )
     exact = capture.reply_text == expected if capture is not None and assessed else None
-    unchanged = not any(native_drift.values()) if native_drift is not None else None
     return {
         "signal": signal.value if signal is not None else None,
         "errorShaped": looks_like_error(capture.reply_text) if capture is not None else None,
+        "componentDrift": native_drift,
         "checks": {
             "savedResponse": {
                 "requirementType": "requiredOutcome", "requirementId": "saved-response",
                 "assessed": assessed, "met": exact, "operator": "exact",
             },
-            "nativeComponentsUnchanged": {
-                "requirementType": "invariant", "requirementId": "native-components-unchanged",
-                "assessed": unchanged is not None, "met": unchanged, "drift": native_drift,
+            "selectedTopicUnchanged": {
+                "requirementType": "invariant", "requirementId": "selected-topic-unchanged",
+                "assessed": selected_unchanged is not None, "met": selected_unchanged,
             },
         },
         "outcome": (
             "blocked" if capture is None
-            else "passed" if exact is True and unchanged is True
-            else "incomplete" if unchanged is None
-            else "unsupported_reply" if capture.had_card and signal is ReplySignal.OK
+            else "passed" if exact is True and selected_unchanged is True
+            else "incomplete" if selected_unchanged is None
+            else "timeout" if capture.timed_out
+            else "unsupported_reply" if capture.had_card
+            else "failed" if assessed
             else signal.value if signal is not None and signal is not ReplySignal.OK
             else "failed"
         ),
@@ -208,6 +223,7 @@ def _exercise(
         expected_component = inspection["component"]
         cdp, url = args.cdp, args.url
         original = None
+        original_baseline = None
     else:
         original = _evidence_path(root, args.previous)
         execution = _read(original / "execution.json")
@@ -219,13 +235,19 @@ def _exercise(
         expected_target = execution["target"]
         expected_component = inspection["component"]
         cdp, url = execution["cdp"], execution["url"]
+        original_baseline = _read(original / "native-before.json")
     if expected_target != _identity(target):
         raise ValueError("The inspection or original run belongs to another native target.")
     before = _components(client, target)
     component = before.get(component_id)
-    if component is None or component != expected_component:
+    if component is None or _topic_state(component) != _topic_state(expected_component):
         raise ValueError("The selected native topic changed. Inspect it and approve its content again.")
     expected, triggers = literal_response(component)
+    if original is not None and (
+        execution["expectation"] != {"operator": "exact", "text": expected}
+        or _topic_state(original_baseline["component"]) != _topic_state(component)
+    ):
+        raise ValueError("The original response or selected-topic boundary no longer matches.")
     if prompt not in triggers:
         raise ValueError("This bounded test accepts only an explicitly saved trigger phrase.")
     if component.get("state") != "Active" or component.get("status") != "Active":
@@ -244,12 +266,23 @@ def _exercise(
             "description": "The approved saved trigger returns the approved saved literal response.",
         }],
         "invariants": [{
-            "id": "native-components-unchanged",
-            "description": "Testing leaves the selected native agent's components unchanged.",
+            "id": "selected-topic-unchanged",
+            "description": "The selected topic's identity, dialog and active state remain unchanged.",
         }],
     })
     capture = None
-    error = None
+    capture_facts = None
+    errors = {}
+    diagnostics = {}
+    evidence_errors = []
+    submission_may_have_occurred = False
+
+    def record(name: str, value: dict[str, Any]) -> None:
+        try:
+            _write(output / name, value)
+        except OSError as exc:
+            evidence_errors.append({"file": name, "error": _error_facts(exc)})
+
     surface = DriveSurface(driver)
     try:
         surface.start()
@@ -263,6 +296,7 @@ def _exercise(
                 "submissionMayHaveOccurred": True,
                 "isolation": "Existing conversation; no reset or reload.",
             })
+            submission_may_have_occurred = True
             capture = surface.drive(prompt, timeout_s=args.timeout)
         else:
             boundary = dict(execution["boundary"])
@@ -281,58 +315,69 @@ def _exercise(
                 "boundary": boundary, "submissionMayHaveOccurred": False,
             })
             capture = driver.observe(prompt, boundary, args.timeout)
-        _write(output / "capture.json", {
+        capture_facts = {
             "replyText": capture.reply_text, "timedOut": capture.timed_out,
+            "hadCard": capture.had_card, "bubbleCount": capture.bubble_count,
             "bubbles": [{"text": bubble.text, "hadCard": bubble.had_card} for bubble in capture.bubbles],
             "observation": driver.observation(),
-        })
+        }
+        record("capture.json", capture_facts)
         if not capture.timed_out:
-            driver.screenshot(output / "current-turn.png")
+            try:
+                driver.screenshot(output / "current-turn.png")
+            except (RuntimeError, PlaywrightError, OSError) as exc:
+                diagnostics["screenshotError"] = _error_facts(exc)
     except (RuntimeError, PlaywrightError, requests.RequestException, OSError) as exc:
-        error = {
+        errors["captureError"] = {
             **_error_facts(exc),
             "observation": driver.observation(),
         }
     finally:
         try:
             surface.close()
-        except (RuntimeError, PlaywrightError) as exc:
-            error = {
-                **({"captureError": error} if error else {}),
-                "cleanupError": _error_facts(exc),
-            }
+        except (RuntimeError, PlaywrightError, OSError) as exc:
+            errors["cleanupError"] = _error_facts(exc)
     drift = None
+    after = None
+    selected_unchanged = None
     try:
         after = _snapshot(_components(client, target), component_id)
-        _write(output / "native-after.json", after)
-        before_hashes = (
-            _read(original / "native-before.json")["componentHashes"]
-            if original is not None else baseline["componentHashes"]
-        )
-        drift = _drift(before_hashes, after["componentHashes"])
+        comparison = original_baseline if original_baseline is not None else baseline
+        drift = _drift(comparison["componentHashes"], after["componentHashes"])
+        selected_unchanged = _topic_state(comparison["component"]) == _topic_state(after["component"])
+        record("native-after.json", after)
     except (AgentBuilderError, requests.RequestException, ValueError) as exc:
-        error = {
-            **({"captureError": error} if error else {}),
-            "nativeReadbackError": _error_facts(exc),
-        }
+        errors["nativeReadbackError"] = _error_facts(exc)
     result = {
         "schemaVersion": 1, "operation": args.operation,
         "target": _identity(target), "componentId": component_id,
         "prompt": prompt, "evidenceDirectory": str(output),
         "observation": driver.observation(),
+        "submissionMayHaveOccurred": submission_may_have_occurred,
+        "capture": capture_facts,
+        "nativeReadback": after,
         **({"originalRun": str(original)} if original is not None else {}),
-        **assess(capture, expected, drift),
+        **assess(capture, expected, selected_unchanged, drift),
         "limitations": [
             "Reply equality is not an exact-topic invocation trace.",
             "The existing conversation was not reset; this is not independent discovery evidence.",
             "Cards, workflow diagnostics, backend faults and automatic publication are unsupported.",
         ],
     }
-    if error is not None:
-        result["error"] = error
+    result["assessmentOutcome"] = result["outcome"]
+    if diagnostics:
+        result["diagnostics"] = diagnostics
+    if errors:
+        result["error"] = errors
         result["outcome"] = "incomplete" if capture is not None else "blocked"
-    _write(output / "result.json", result)
-    return result, 0 if result["outcome"] == "passed" else 2 if error else 1
+    if evidence_errors:
+        result["evidenceWriteErrors"] = evidence_errors
+        result["outcome"] = "incomplete" if capture is not None else "blocked"
+    record("result.json", result)
+    if evidence_errors:
+        result["evidenceWriteErrors"] = evidence_errors
+        result["outcome"] = "incomplete" if capture is not None else "blocked"
+    return result, 0 if result["outcome"] == "passed" else 2 if errors or evidence_errors else 1
 
 
 def main(argv: list[str] | None = None) -> int:

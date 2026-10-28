@@ -2,11 +2,15 @@
 # Licensed under the MIT License.
 
 from dataclasses import replace
+import os
+from pathlib import Path
 
 import pytest
+from playwright.sync_api import sync_playwright
 
 from daga_chat_driver import DagaChatDriver, _Snapshot, validate_cdp_endpoint, validate_studio_url
-from drive_surface import Bubble
+from drive_surface import Bubble, aggregate_turn
+from native_topic_test import assess
 
 TARGET = {
     "environment": {"id": "00000000-0000-4000-8000-000000001111", "ring": "test"},
@@ -95,3 +99,61 @@ def test_mismatching_echo_retains_diagnostic_without_accepting_reply():
     facts = driver.observation()
     assert facts["turnElementId"] is None
     assert facts["lastObservedTurn"]["userText"] == "different prompt"
+
+
+@pytest.fixture
+def isolated_dom_page():
+    with sync_playwright() as playwright:
+        options = {}
+        if not Path(playwright.chromium.executable_path).is_file():
+            edge = (
+                Path(os.environ.get("PROGRAMFILES(X86)", ""))
+                / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+            )
+            if not edge.is_file():
+                pytest.skip("No existing Chromium/Edge binary for the isolated DOM fixture.")
+            options["executable_path"] = str(edge)
+        browser = playwright.chromium.launch(
+            headless=True,
+            args=["--disable-background-networking", "--disable-component-update",
+                  "--disable-sync", "--no-first-run"],
+            **options,
+        )
+        try:
+            context = browser.new_context(service_workers="block")
+            context.route("**/*", lambda route: route.abort())
+            yield context.new_page()
+        finally:
+            browser.close()
+
+
+@pytest.mark.parametrize("with_text", [False, True])
+def test_dom_capture_preserves_text_empty_cards_before_assertions(isolated_dom_page, with_text):
+    answer = "Approved test response."
+    text_bubble = (
+        f'<div class="fai-CopilotMessage__content">{answer}</div>' if with_text else ""
+    )
+    isolated_dom_page.set_content(f"""
+        <div id="m365-chat-editor-target-element" role="textbox"
+             aria-label="Message Copilot" contenteditable="true"></div>
+        <div data-testid="m365-chat-llm-web-ui-chat-message" data-message-index="0" id="turn-0">
+          <div data-testid="chatQuestion"><div data-testid="chatOutput">prompt</div></div>
+          <div id="chatMessageResponse-current" data-testid="copilot-message-reply-div">
+            <div class="fai-CopilotMessage__content"><div class="ac-adaptiveCard">
+              <input aria-label="Card input">
+            </div></div>
+            {text_bubble}
+          </div>
+        </div>
+    """)
+    driver = DagaChatDriver(cdp="http://127.0.0.1:9222", expected_url=isolated_dom_page.url)
+    driver._page = isolated_dom_page
+    snapshot = driver._snapshot()
+    assert snapshot.response_id == "chatMessageResponse-current"
+    assert snapshot.bubbles == (
+        (Bubble("", had_card=True), Bubble(answer)) if with_text
+        else (Bubble("", had_card=True),)
+    )
+    result = assess(aggregate_turn(list(snapshot.bubbles)), answer, True)
+    assert result["outcome"] == "unsupported_reply"
+    assert result["checks"]["savedResponse"]["assessed"] is False
