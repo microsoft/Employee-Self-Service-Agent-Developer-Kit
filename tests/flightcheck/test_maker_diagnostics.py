@@ -581,7 +581,7 @@ def test_maker_workday_inventory_does_not_require_unused_catalog_topics(setup_wo
     row = workday_da._check_reviewed_workday_topics(runner)[0]
     assert row.status == {"Inactive": "Passed", "unknown": "Blocked", "duplicate": "Failed"}[state]
     assert "Unused optional conversations are not required" in row.result
-    assert "7 of 7 required system topics present" in row.result
+    assert "6 of 6 required system topics present" in row.result
     assert "activate each" not in row.remediation
     if state == "duplicate":
         assert "resolve duplicate schemas" in row.remediation

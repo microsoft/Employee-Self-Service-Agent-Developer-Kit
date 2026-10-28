@@ -138,6 +138,101 @@ def test_discovers_exact_promoted_target() -> None:
     )
 
 
+@pytest.mark.parametrize("realm,realm_value", [("test", 1), ("prod", 2)])
+def test_discovers_exact_realm_suffixed_schema(realm: str, realm_value: int) -> None:
+    from workday_connect_realms import discover_realm_target
+
+    source = FakeClient(
+        realms={
+            "routeRealm": 0,
+            "siblingRealms": [{"realm": realm_value, "botId": TEST_AGENT_ID}],
+        },
+    )
+    target = FakeClient()
+    target._agent.pop("schemaName")
+    target._configuration.update(
+        {"realm": realm_value, "schemaName": f"{SCHEMA_NAME}_{realm}"},
+    )
+
+    result = discover_realm_target(
+        source,
+        target,
+        source_agent_id=DEV_AGENT_ID,
+        source_agent_slug="ess-hr",
+        realm=realm,
+        environment_id=TEST_ENVIRONMENT_ID,
+        environment_url=TEST_URL,
+        catalog=_catalog(),
+    )
+
+    assert result["agentSchemaName"] == f"{SCHEMA_NAME}_{realm}"
+    assert result["agentId"] == TEST_AGENT_ID
+    assert result["almFamilyId"] == FAMILY_ID
+
+
+@pytest.mark.parametrize(
+    "schema_name",
+    [f"{SCHEMA_NAME}_prod", f"{SCHEMA_NAME}_test_copy"],
+)
+def test_rejects_wrong_realm_or_prefix_only_schema(schema_name: str) -> None:
+    from workday_connect_realms import (
+        WorkdayConnectRealmError,
+        discover_realm_target,
+    )
+
+    target = FakeClient()
+    target._configuration["schemaName"] = schema_name
+    with pytest.raises(
+        WorkdayConnectRealmError, match="promoted target is not the supported"
+    ):
+        discover_realm_target(
+            FakeClient(),
+            target,
+            source_agent_id=DEV_AGENT_ID,
+            source_agent_slug="ess-hr",
+            realm="test",
+            environment_id=TEST_ENVIRONMENT_ID,
+            environment_url=TEST_URL,
+            catalog=_catalog(),
+        )
+
+
+def test_promoted_schema_cannot_substitute_for_supported_dev_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from workday_connect_realms import (
+        WorkdayConnectRealmError,
+        discover_realm_target,
+    )
+
+    source = FakeClient()
+    monkeypatch.setattr(
+        source,
+        "get_realm_configuration",
+        lambda *_args: {
+            "realm": 0,
+            "cdsBotId": DEV_AGENT_ID,
+            "grsRepositoryId": FAMILY_ID,
+            "schemaName": "unrelated-agent",
+        },
+    )
+    target = FakeClient()
+    target._configuration["schemaName"] = f"{SCHEMA_NAME}_test"
+    with pytest.raises(
+        WorkdayConnectRealmError, match="Dev source is not the supported"
+    ):
+        discover_realm_target(
+            source,
+            target,
+            source_agent_id=DEV_AGENT_ID,
+            source_agent_slug="ess-hr",
+            realm="test",
+            environment_id=TEST_ENVIRONMENT_ID,
+            environment_url=TEST_URL,
+            catalog=_catalog(),
+        )
+
+
 def test_rejects_recorded_dev_family_drift() -> None:
     from workday_connect_realms import (
         WorkdayConnectRealmError,
@@ -343,9 +438,18 @@ def test_environment_url_rejects_non_root_paths() -> None:
         _normalize_environment_url(f"{TEST_URL}/api/data")
 
 
+@pytest.mark.parametrize(
+    "environment_id",
+    [TEST_ENVIRONMENT_ID, DEV_ENVIRONMENT_ID],
+)
+@pytest.mark.parametrize("explicit_selection", [False, True])
+@pytest.mark.parametrize("schema_name", [SCHEMA_NAME, f"{SCHEMA_NAME}_test"])
 def test_records_and_activates_promoted_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    environment_id: str,
+    explicit_selection: bool,
+    schema_name: str,
 ) -> None:
     import workday_connect_realms as realms
     from workday_connect_store import WorkdayConnectStore
@@ -368,7 +472,9 @@ def test_records_and_activates_promoted_target(
         ),
         encoding="utf-8",
     )
-    clients = iter((FakeClient(), FakeClient()))
+    target = FakeClient()
+    target._configuration["schemaName"] = schema_name
+    clients = iter((FakeClient(), target))
     monkeypatch.setattr(
         realms,
         "derive_environment_host",
@@ -379,12 +485,16 @@ def test_records_and_activates_promoted_target(
         tmp_path,
         store,
         realm="test",
-        environment_id=TEST_ENVIRONMENT_ID,
-        environment_url=TEST_URL,
+        environment_id=environment_id if explicit_selection else None,
+        environment_url=TEST_URL if explicit_selection else None,
         authenticator=lambda *_args, **_kwargs: ("token", TENANT_ID),
         environment_loader=lambda *_args, **_kwargs: [
             {
-                "id": TEST_ENVIRONMENT_ID,
+                "id": "non-guid-inventory-identifier",
+                "instanceUrl": "https://unrelated.crm.dynamics.com",
+            },
+            {
+                "id": environment_id,
                 "properties": {
                     "linkedEnvironmentMetadata": {
                         "instanceApiUrl": f"{TEST_URL}/",
@@ -399,8 +509,11 @@ def test_records_and_activates_promoted_target(
     assert result["realm"] == "test"
     assert result["targetStatus"] == "detected"
     assert state["activeTargetRealm"] == "test"
-    assert state["scope"]["environmentId"] == TEST_ENVIRONMENT_ID
+    assert state["scope"]["environmentId"] == environment_id
     assert state["scope"]["agent"]["botId"] == TEST_AGENT_ID
+    assert state["scope"]["agent"]["schemaName"] == schema_name
+    assert state["targets"]["test"]["identity"]["agentSchemaName"] == schema_name
+    assert state["targets"]["dev"]["identity"]["agentSchemaName"] == SCHEMA_NAME
     assert state["targets"]["test"]["provenance"] == (
         "agentbuilder-realm-discovery"
     )
@@ -456,6 +569,10 @@ def test_automatically_discovers_promoted_target_environment(
         authenticator=lambda *_args, **_kwargs: ("token", TENANT_ID),
         environment_loader=lambda *_args, **_kwargs: [
             {
+                "id": "non-guid-inventory-identifier",
+                "instanceUrl": "https://unrelated.crm.dynamics.com",
+            },
+            {
                 "id": wrong_environment_id,
                 "displayName": "Other environment",
                 "instanceUrl": wrong_url,
@@ -472,6 +589,116 @@ def test_automatically_discovers_promoted_target_environment(
     assert result["realm"] == "test"
     assert result["foundationReused"] is False
     assert store.load()["scope"]["environmentId"] == TEST_ENVIRONMENT_ID
+
+
+def test_same_environment_discovery_still_rejects_unrelated_alm_family(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import workday_connect_realms as realms
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    _record_dev(store)
+    (tmp_path / ".local" / "config.json").write_text(
+        json.dumps({"ring": "test", "environmentId": DEV_ENVIRONMENT_ID}),
+        encoding="utf-8",
+    )
+    before = store.load()
+    target = FakeClient()
+    target._configuration["grsRepositoryId"] = OTHER_FAMILY_ID
+    clients = iter((FakeClient(), target))
+    monkeypatch.setattr(
+        realms,
+        "derive_environment_host",
+        lambda *_args: "https://target.environment.api.test.powerplatform.com",
+    )
+
+    with pytest.raises(realms.WorkdayConnectRealmError, match="different ALM family"):
+        realms.discover_and_record_realm_target(
+            tmp_path,
+            store,
+            realm="test",
+            environment_id=DEV_ENVIRONMENT_ID,
+            environment_url=TEST_URL,
+            authenticator=lambda *_args, **_kwargs: ("token", TENANT_ID),
+            environment_loader=lambda *_args, **_kwargs: [
+                {"id": DEV_ENVIRONMENT_ID, "instanceUrl": TEST_URL},
+            ],
+            client_factory=lambda *_args, **_kwargs: next(clients),
+        )
+
+    assert store.load() == before
+
+
+@pytest.mark.parametrize("explicit_selection", [False, True])
+def test_environment_inventory_duplicates_are_not_hidden(explicit_selection: bool) -> None:
+    from workday_connect_realms import (
+        WorkdayConnectRealmError,
+        _environment_candidates,
+    )
+
+    with pytest.raises(WorkdayConnectRealmError, match="duplicate records"):
+        _environment_candidates(
+            [
+                {"id": TEST_ENVIRONMENT_ID, "instanceUrl": TEST_URL},
+                {"id": TEST_ENVIRONMENT_ID, "instanceUrl": TEST_URL},
+            ],
+            environment_id=TEST_ENVIRONMENT_ID if explicit_selection else None,
+            environment_url=TEST_URL,
+            environment_selector=None,
+        )
+
+
+@pytest.mark.parametrize("select_by_name", [False, True])
+def test_friendly_selection_ignores_duplicates_for_unrelated_environments(
+    select_by_name: bool,
+) -> None:
+    from workday_connect_realms import _environment_candidates
+
+    unrelated = {
+        "id": DEV_ENVIRONMENT_ID,
+        "displayName": "Other environment",
+        "instanceUrl": "https://contoso-other.crm.dynamics.com",
+    }
+    candidates = _environment_candidates(
+        [
+            unrelated,
+            dict(unrelated),
+            {
+                "id": TEST_ENVIRONMENT_ID,
+                "displayName": "ESS Test",
+                "instanceUrl": TEST_URL,
+            },
+        ],
+        environment_id=None,
+        environment_url=None if select_by_name else TEST_URL,
+        environment_selector="ESS Test" if select_by_name else None,
+    )
+
+    assert candidates == [(TEST_ENVIRONMENT_ID, TEST_URL, "ESS Test")]
+
+
+def test_url_selection_rejects_conflicting_duplicate_target_records() -> None:
+    from workday_connect_realms import (
+        WorkdayConnectRealmError,
+        _environment_candidates,
+    )
+
+    with pytest.raises(WorkdayConnectRealmError, match="duplicate records"):
+        _environment_candidates(
+            [
+                {"id": TEST_ENVIRONMENT_ID, "instanceUrl": TEST_URL},
+                {
+                    "id": TEST_ENVIRONMENT_ID,
+                    "instanceUrl": "https://contoso-other.crm.dynamics.com",
+                },
+            ],
+            environment_id=None,
+            environment_url=TEST_URL,
+            environment_selector=None,
+        )
 
 
 def test_target_switching_preserves_realm_specific_progress(
@@ -756,6 +983,61 @@ def test_revalidating_promoted_target_accepts_complete_identity_match(
         "revalidated": True,
     }
     assert store.load() == approved_state
+
+
+@pytest.mark.parametrize("realm", ["test", "prod"])
+@pytest.mark.parametrize("explicit_root", [False, True])
+def test_runtime_apply_converts_cli_root_before_promoted_revalidation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, realm: str,
+    explicit_root: bool,
+) -> None:
+    import workday_connect
+    import workday_connect_realms as realms
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    _record_dev(store)
+    identity = _identity(
+        environment_id=TEST_ENVIRONMENT_ID,
+        environment_url=TEST_URL,
+        agent_id=TEST_AGENT_ID,
+        commit_sha="abc123",
+    )
+    store.record_target_discovery(realm, identity, ring="test")
+    store.activate_target(realm)
+    config = tmp_path / ".local" / "config.json"
+    config.write_text(json.dumps({"environmentId": DEV_ENVIRONMENT_ID}), encoding="utf-8")
+    before = store.config_path.read_bytes()
+    order = []
+
+    def rediscover(root, actual_store, **kwargs):
+        assert realms._read_foundation(root)["environmentId"] == DEV_ENVIRONMENT_ID
+        assert actual_store is store
+        assert kwargs["realm"] == realm
+        assert kwargs["environment_id"] == TEST_ENVIRONMENT_ID
+        order.append("revalidated")
+        return dict(identity), "test"
+
+    def apply(state, **kwargs):
+        assert order == ["revalidated"]
+        assert state["activeTargetRealm"] == realm
+        assert kwargs["apply"] is True
+        assert kwargs["approved_hash"] == "approved-hash"
+        order.append("applied")
+        return {"applied": True}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(realms, "_discover_promoted_realm_identity", rediscover)
+    monkeypatch.setattr(workday_connect, "run_runtime_operation", apply)
+    args = workday_connect.build_parser().parse_args([
+        *(["--root", str(tmp_path)] if explicit_root else []),
+        "runtime-apply", "--plan-hash", "approved-hash",
+    ])
+
+    assert workday_connect._runtime_apply(args, store)["applied"] is True
+    assert order == ["revalidated", "applied"]
+    assert store.config_path.read_bytes() == before
 
 
 def test_v10_state_migrates_to_realm_registry(tmp_path: Path) -> None:

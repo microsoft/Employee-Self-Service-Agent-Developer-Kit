@@ -60,7 +60,6 @@ _DESCRIPTION = "Workday extension package installed for the DA ESS HR agent"
 _REQUIRED_SYSTEM_TOPIC_SUFFIXES = frozenset({
     "WorkdaySystemSetRuntimeTemplateConfigurations",
     "WorkdaySystemGetUserContextV2",
-    "WorkdaySystemAccessCheck",
     "WorkdaySystemGetCommonExecution",
     "WorkdaySystemGetRESTExecution",
     "WorkdayManagerCheck",
@@ -106,6 +105,15 @@ def run_workday_da_checks(runner, *, include_manual: bool = True) -> list[CheckR
 def run_workday_da_package_check(runner) -> list[CheckResult]:
     """Preserve the legacy package-only ``workdayda`` scope contract."""
     return _check_workday_da_package_installed(runner)
+
+
+def _validation_realm(runner) -> str:
+    context = getattr(runner, "validation_context", None)
+    return str(
+        (context.get("realm") if isinstance(context, dict) else None)
+        or (getattr(runner, "config", {}) or {}).get("realm")
+        or ""
+    ).strip().casefold()
 
 
 def _check_workday_da_package_installed(runner) -> list[CheckResult]:
@@ -165,6 +173,13 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
         supported_agents if isinstance(supported_agents, dict) else {}
     )
     agent_contract = supported_agents.get(selected_schema)
+    realm = _validation_realm(runner)
+    if agent_contract is None and realm in {"test", "prod"}:
+        suffix = f"_{realm}"
+        if selected_schema.endswith(suffix):
+            agent_contract = supported_agents.get(
+                selected_schema[:-len(suffix)]
+            )
     if not isinstance(agent_contract, dict):
         return [_result(
             Status.FAILED.value,
@@ -803,7 +818,9 @@ def _check_reviewed_workday_topics(runner) -> list[CheckResult]:
         )]
     try:
         slug, schema, _bot_id, components = _fetch_selected_components(runner)
-        expected = reviewed_workday_topic_schemas(schema)
+        expected = reviewed_workday_topic_schemas(
+            schema, realm=_validation_realm(runner),
+        )
         if not expected:
             raise ValueError(
                 f"No reviewed Workday topic inventory exists for {schema!r}."

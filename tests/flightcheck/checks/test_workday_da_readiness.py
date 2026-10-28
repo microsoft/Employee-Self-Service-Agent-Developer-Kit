@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -242,6 +243,40 @@ def _runner(**overrides: Any) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
+@pytest.mark.parametrize("realm", ["test", "prod"])
+def test_native_promoted_inventory_uses_actual_realm_schema(realm) -> None:
+    schema = f"{SCHEMA}_{realm}"
+    config = _config()
+    config["realm"] = realm
+    config["agents"][0]["schemaName"] = schema
+    payload = json.loads(json.dumps(_component_payload()).replace(SCHEMA, schema))
+    runner = _runner(
+        config=config, maker_diagnostics=True,
+        agentbuilder=_AgentBuilder(payload),
+    )
+
+    row = workday_da._check_reviewed_workday_topics(runner)[0]
+
+    assert row.status == "Passed"
+    assert "required system topics present" in row.result
+    assert all(
+        name.startswith(schema + ".topic.")
+        for name in row.evidence["requiredSystemTopics"]
+    )
+    assert row.remediation == ""
+
+
+@pytest.mark.parametrize(("schema", "realm"), [
+    (f"{SCHEMA}_test", "dev"),
+    (f"{SCHEMA}_test", "prod"),
+    (f"{SCHEMA}_prod", "test"),
+    (f"{SCHEMA}_test", ""),
+    (f"{SCHEMA}_custom_test", "test"),
+])
+def test_reviewed_inventory_rejects_wrong_realm_and_arbitrary_suffix(schema, realm):
+    assert not reviewed_workday_topic_schemas(schema, realm=realm)
+
+
 def test_runtime_flow_catalog_passes_exact_active_inventory(monkeypatch) -> None:
     monkeypatch.setattr(workday_da, "query_all", lambda *_a, **_k: _flows())
     row = workday_da._check_runtime_flow_catalog(_runner())[0]
@@ -306,10 +341,28 @@ def test_reviewed_topics_pass_complete_active_inventory() -> None:
     assert row.remediation == ""
 
 
+@pytest.mark.parametrize("maker_diagnostics", [False, True])
+def test_reviewed_topics_accept_inventory_without_retired_access_check(
+    maker_diagnostics,
+):
+    retired_schema = f"{SCHEMA}.topic.WorkdaySystemAccessCheck"
+    payload = _component_payload(missing=retired_schema)
+    runner = _runner(
+        maker_diagnostics=maker_diagnostics,
+        agentbuilder=_AgentBuilder(payload),
+    )
+
+    row = workday_da._check_reviewed_workday_topics(runner)[0]
+
+    assert row.status == "Passed"
+    assert retired_schema not in reviewed_workday_topic_schemas(SCHEMA)
+    assert "WorkdaySystemAccessCheck" not in workday_da._REQUIRED_SYSTEM_TOPIC_SUFFIXES
+    assert row.remediation == ""
+
+
 @pytest.mark.parametrize("suffix", [
     "WorkdaySystemSetRuntimeTemplateConfigurations",
     "WorkdaySystemGetUserContextV2",
-    "WorkdaySystemAccessCheck",
     "WorkdaySystemGetCommonExecution",
     "WorkdaySystemGetRESTExecution",
     "WorkdayManagerCheck",
@@ -360,7 +413,7 @@ def test_maker_required_systems_work_without_optional_scenarios():
         maker_diagnostics=True, agentbuilder=_AgentBuilder(payload),
     ))[0]
     assert row.status == "Passed"
-    assert "7 of 7 required system topics present" in row.result
+    assert "6 of 6 required system topics present" in row.result
     assert "Unused optional conversations are not required" in row.result
     assert row.evidence["unselectedCatalogEntries"] == 16
     assert row.remediation == ""
@@ -473,6 +526,66 @@ def test_runtime_template_wiring_passes_reviewed_chain() -> None:
     assert row.status == "Passed"
     assert "immediately before User Context Validate" in row.result
     assert row.remediation == ""
+
+
+@pytest.mark.parametrize("defect", [
+    "missing_setup", "duplicate_setup", "missing_target", "foreign_setup",
+    "inactive_setup", "wrong_trigger", "malformed_dialog",
+])
+def test_promoted_redirect_reports_missing_ambiguous_or_invalid_native_content(defect):
+    from flightcheck.da_execution import DAExecutor
+    from flightcheck.registry import REGISTRY
+
+    schema = f"{SCHEMA}_test"
+    target_schema = f"{schema}.topic.WorkdaySystemGetUserContextV2"
+    payload = json.loads(json.dumps(_component_payload()).replace(SCHEMA, schema))
+    setup = _component(
+        f"{schema}.topic.Setusercontext",
+        dialog={
+            "$kind": "AdaptiveDialog",
+            "beginDialog": {
+                "$kind": "OnRedirect",
+                "actions": [{
+                    "$kind": "BeginDialog",
+                    "dialog": {"$kind": "DialogExpression", "literalValue": target_schema},
+                }],
+            },
+        },
+    )
+    setup["component"]["displayName"] = "[Admin] - User Context - Setup"
+    if defect == "foreign_setup":
+        setup["component"]["schemaName"] = f"{SCHEMA}.topic.Setusercontext"
+    elif defect == "inactive_setup":
+        setup["component"]["status"] = "Inactive"
+    elif defect == "wrong_trigger":
+        setup["component"]["dialog"]["beginDialog"]["$kind"] = "OnConversationStart"
+    elif defect == "malformed_dialog":
+        setup["component"]["dialog"] = "not-an-object"
+    if defect != "missing_setup":
+        payload["botComponentChanges"].append(setup)
+    if defect == "duplicate_setup":
+        payload["botComponentChanges"].append(deepcopy(setup))
+    elif defect == "missing_target":
+        payload["botComponentChanges"] = [
+            change for change in payload["botComponentChanges"]
+            if change["component"]["schemaName"] != target_schema
+        ]
+    config = _config()
+    config["realm"] = "test"
+    config["agents"][0]["schemaName"] = schema
+    runner = _runner(
+        config=config, da_explicit_selection=True,
+        agentbuilder=_AgentBuilder(payload),
+    )
+    spec = REGISTRY["WD-REST-002"]
+    row = DAExecutor(runner, SimpleNamespace(), (spec.key,), (spec,), {}).run(runner)[0]
+
+    assert row.status == ("Error" if defect == "malformed_dialog" else "Failed")
+    if row.status == "Failed":
+        assert row.evidence["agentId"] == BOT_ID
+        assert row.evidence["targetTopic"] == target_schema
+        assert "promote the corrected agent" in row.remediation
+    assert runner.agentbuilder.requested_bot_id == BOT_ID
 
 
 def test_runtime_template_wiring_fails_wrong_conversation_start_position() -> None:

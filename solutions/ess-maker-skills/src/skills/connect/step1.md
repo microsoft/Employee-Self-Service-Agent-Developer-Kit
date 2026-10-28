@@ -1,326 +1,136 @@
-# Step 1: Choose an Integration
+# Choose an integration
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
-Do not rephrase, add commentary, or tell the user what tools you are calling.
+Do not narrate tools, files, or internal routing.
 
-Apply **Availability** in `src/skills/connect/SKILL.md` before section 1.1,
-including PRE_SELECTED_INTEGRATION. Reapply it to every selection before
-section 1.3.
+## 1.1 - Discover registrations
 
----
+Read `src/skills/connect/*/integration.json` from immediate child directories.
+Each registration supplies:
 
-## 1.1 — Check what's already connected
+- `id`: a unique lowercase identifier containing only letters, digits, and
+  hyphens, starting with a letter, matching its directory name.
+- `displayName`, `description`, and `aliases`: menu text and selection names.
+- `availability`: exactly `available` or `unavailable`.
+- `entryDoc`: required when available, a relative Markdown path within the
+  same provider directory.
+- `statusDoc`: optional when available, a relative Markdown path within the
+  same provider directory for read-only, active-agent connection status.
+- `unavailableMessage`: required when unavailable, the exact message to show.
 
-Build a list of connected integrations (if any):
+Reject malformed registrations, duplicate identifiers or selection names across
+providers, invalid availability, missing required fields, and missing or unsafe
+document paths. Never follow absolute paths or `..` segments, or silently guess
+a default. A directory without a registration is not a guided integration.
 
-- **Workday** — connected if either:
-  - `.local/connect/workday/agents/{active-agent-slug}/lifecycle.json` exists,
-    its `agentSlug` exactly matches the active agent, and every phase is
-    `done`; or
-  - `.local/connect/workday-da/config.json` has `schemaVersion: 12`, and one
-    `targets.dev`, `targets.test`, or `targets.prod` snapshot has
-    `deploymentStatus: "ready"` with an identity whose agent slug and BotId
-    exactly match the active native agent.
-  Shared provider state without an exact active-agent match must not make a
-  sibling or newly selected agent appear connected.
-
----
-
-## 1.2 — Ask which system
-
-**If PRE_SELECTED_INTEGRATION was passed from SKILL.md** (the user already
-specified the supported integration "workday"): skip this question entirely.
-Set the selection to the pre-selected value and go directly to section 1.3.
-
-If there are connected integrations, show them first:
+If registrations cannot be loaded safely:
 
 **Message:**
 
-Currently connected: {list of connected integration names, e.g. "Workday"}
-
-Which system do you want to connect next?
-
-1. **Workday** — Payroll, time off, employee data
+I can't load the integration options because the local integration
+configuration is incomplete or conflicting. No connection changes were made.
+Restore the integration configuration before trying again.
 
 **End message.**
 
-If nothing is connected yet:
+Stop. Do not run provider actions.
+
+## 1.2 - Resolve a selection or show the menu
+
+Use the current explicit request or `PRE_SELECTED_INTEGRATION` before any
+earlier conversation selection. Match the named provider to a registration's
+ID, display name, or aliases, case-insensitively. Use an established conversation
+selection only when the current request does not select a different provider.
+An ambiguous or unknown selection must not select a provider.
+If there is one exact provider match, go directly to 1.3 without asking.
+
+Otherwise, build the menu from `available` registrations only, sorted by
+`displayName`. Number each row as `{number}. **{displayName}** - {description}`.
+Keep this number-to-provider mapping for the user's response.
+
+If none are available:
+
+**Message:**
+
+No guided integrations are available in this installation.
+Please contact your administrator.
+
+**End message.**
+
+Stop without running provider actions.
+
+For available providers that define `statusDoc`, follow only that document's
+local, read-only status instructions. Status lookup must not authenticate,
+contact services, or mutate state. Do not inspect unavailable providers' state.
+Show a connected name only when its status document returns `CONNECTED = true`;
+an unknown or failed status lookup is not a successful connection. If a status
+lookup errors, show:
+
+**Message:**
+
+I couldn't determine the current connection status for {provider display name}.
+No connection state was changed.
+
+**End message.**
+
+Do not claim the provider is disconnected. Continue with integration selection.
+
+If any providers are connected, show:
+
+**Message:**
+
+Currently connected: {connected provider display names}
+
+**End message.**
+
+Then show:
 
 **Message:**
 
 Which system do you want to connect to your agent?
 
-1. **Workday** — Payroll, time off, employee data
+{numbered available-integration menu}
 
 **End message.**
 
-Wait for the user to respond.
-
----
-
-## 1.3 — Route by selection
-
-### If the user requested ServiceNow
-
-Apply **Availability** in `src/skills/connect/SKILL.md` and STOP.
-The legacy steps below are reference-only.
-
-Record anonymous usage telemetry attributed to ServiceNow (best-effort,
-non-blocking — no user-facing message, and it never fails the step):
-`python scripts/emit_capability.py connect --connector servicenow`
-
-Check if `.local/connect/servicenow/steps.md` exists.
-
-**If it exists and all items are checked:**
-
-Read `.local/connect/servicenow/config.json` to get the current `authType`.
-Map it to a display name:
-- `entra` → "Entra ID (interactive sign-in)"
-- `certificate` → "Certificate (service-to-service)"
-- `oauth2` → "OAuth2 (ServiceNow credentials)"
-- `basic` → "Basic auth"
+Wait for the user. Resolve their number against the displayed mapping, or match
+their text against all registrations, including unavailable ones. On an unknown
+or ambiguous response, show:
 
 **Message:**
 
-ServiceNow is already connected using **{display name}**.
-
-1. **Keep current setup** — run `/create` to start building topics
-2. **Change authentication** — switch to a different auth method
-3. **Reconnect from scratch** — reset everything and start over
+I couldn't identify that integration. Choose a number from the list or enter
+the integration's name.
 
 **End message.**
 
-Wait for the user.
+Wait for the user and try again. Never fall back to a provider automatically.
 
-**If the user chose 1 (keep):** Stop here.
+## 1.3 - Apply availability, then dispatch
 
-**If the user chose 2 (change auth):**
+Recheck the selected registration's availability on every selection and resume.
+For `unavailable`, show `unavailableMessage` verbatim and STOP before provider
+state, credentials, telemetry, MCP, or retained steps. Do not load `entryDoc`,
+`statusDoc`, or any old setup procedure for that provider.
 
-Use the `vscode_askQuestions` tool:
+**Message:**
 
-```json
-[
-  {
-    "header": "Authentication",
-    "question": "Which authentication method do you want to switch to?",
-    "options": [
-      { "label": "Microsoft account (Entra ID)", "description": "Employees use their Microsoft work account" },
-      { "label": "Certificate (service-to-service)", "description": "Non-interactive, uses Entra app certificate" },
-      { "label": "ServiceNow username and password", "description": "Separate ServiceNow login" },
-      { "label": "Dev/test instance", "description": "Simplest setup" }
-    ],
-    "allowFreeformInput": false
-  }
-]
+{unavailableMessage}
+
+**End message.**
+
+Stop after that message for an unavailable provider.
+
+For `available`, set `INTEGRATION_ID` to the validated registration ID. Record
+anonymous usage telemetry attributed to that selected provider:
+
+```text
+python scripts/emit_capability.py connect --connector "{INTEGRATION_ID}"
 ```
 
-Map the answer to SNOW_AUTH using the same rules as
-`src/skills/connect/servicenow/step1.md` section 1.1 (the per-product
-step1, NOT this top-level routing file).
+Telemetry is best-effort and non-blocking; do not narrate it or fail the
+connection because of a telemetry error.
 
-Update `.local/connect/servicenow/config.json` — set `authType` to the new
-value. Set `status` to `"in-progress"`. Reset all pack statuses in
-`packs` from `"installed"` to `"pending"`.
-
-Update `.local/connect/servicenow/steps.md` — reset steps 2, 3, and 4 from
-`- [x]` to `- [ ]`.
-
-Update `.local/config.json` — remove the `connections.ServiceNow` entry (it
-will be re-created by step 4 with the new auth type after verification).
-
-**Message:**
-
-| # | Step | Status |
-|---|------|--------|
-| 1 | Instance configured | ✅ |
-| 2 | Connection secured | ⬜ |
-| 3 | Extension installed | ⬜ |
-| 4 | Connection verified | ⬜ |
-
-Switching to **{new auth display name}**. Picking up from step 2.
-
-**End message.**
-
-Read `.local/connect/servicenow/config.json` to restore INSTANCE_NAME and
-other values. Then route by the new SNOW_AUTH:
-
-- If `entra` → read `src/skills/connect/servicenow/step2-entra.md`
-- If `certificate` → read `src/skills/connect/servicenow/step2-certificate.md`
-- If `oauth2` → read `src/skills/connect/servicenow/step2-oauth2.md`
-- If `federated` → read `src/skills/connect/servicenow/step2-graph.md`
-- If `basic` → mark step 2 complete, read `src/skills/connect/servicenow/step3-basic.md`
-
-**If the user chose 3 (reconnect from scratch):**
-
-Reset `.local/connect/servicenow/steps.md` — all steps to `- [ ]`.
-
-Delete `.local/connect/servicenow/config.json`.
-
-Copy `src/skills/connect/servicenow/steps.md` to
-`.local/connect/servicenow/steps.md`.
-
-**Message:**
-
-| # | Step | Status |
-|---|------|--------|
-| 1 | Instance configured | ⬜ |
-| 2 | Connection secured | ⬜ |
-| 3 | Extension installed | ⬜ |
-| 4 | Connection verified | ⬜ |
-
-Starting fresh. Let's reconnect ServiceNow to your agent.
-
-**End message.**
-
-Now read `src/skills/connect/servicenow/step1.md` and follow it.
-
-**If it exists and some items are unchecked:**
-
-Show the checklist from `.local/connect/servicenow/steps.md` (✅ for checked,
-⬜ for unchecked) followed by "Picking up where we left off."
-
-Read `.local/connect/servicenow/config.json` to restore saved values
-(INSTANCE_NAME, SNOW_USAGE, SNOW_AUTH, etc.). Then find the first unchecked
-step and route as follows:
-
-- **Step 1 unchecked** → read `src/skills/connect/servicenow/step1.md`
-- **Step 2 unchecked** → check `authType` in config.json:
-  - If `entra` → read `src/skills/connect/servicenow/step2-entra.md`
-  - If `certificate` → read `src/skills/connect/servicenow/step2-certificate.md`
-  - If `oauth2` → read `src/skills/connect/servicenow/step2-oauth2.md`
-  - If `federated` → read `src/skills/connect/servicenow/step2-graph.md`
-  - If `basic` → mark step 2 complete, then route to step 3
-- **Step 3 unchecked** → check `authType` in config.json:
-  - If `entra` → read `src/skills/connect/servicenow/step3-entra.md`
-  - If `certificate` → read `src/skills/connect/servicenow/step3-certificate.md`
-  - If `oauth2` → read `src/skills/connect/servicenow/step3-oauth2.md`
-  - If `federated` → read `src/skills/connect/servicenow/step3-graph.md`
-  - If `basic` → read `src/skills/connect/servicenow/step3-basic.md`
-- **Step 4 unchecked** → read `src/skills/connect/servicenow/step4.md`
-
-**If it does not exist:**
-
-Copy `src/skills/connect/servicenow/steps.md` to
-`.local/connect/servicenow/steps.md`.
-
-**Message:**
-
-| # | Step | Status |
-|---|------|--------|
-| 1 | Instance configured | ⬜ |
-| 2 | Connection secured | ⬜ |
-| 3 | Extension installed | ⬜ |
-| 4 | Connection verified | ⬜ |
-
-Let's connect ServiceNow to your agent.
-
-**End message.**
-
-Now read `src/skills/connect/servicenow/step1.md` and follow it.
-
-### If the user chose Workday (1 or "workday")
-
-Record anonymous usage telemetry attributed to Workday (best-effort,
-non-blocking — no user-facing message, and it never fails the step):
-`python scripts/emit_capability.py connect --connector workday`
-
-Read `.local/config.json`, resolve `activeAgent` against `agents`, and fall back
-to the legacy `agent` object only when needed. For a DA agent, also read the
-canonical `.local/setup/config.json` `agents` record keyed by the active
-`botId`. Require canonical workspace evidence and
-`steps.SETUP-07.state: "done"`; do not require `connect_ready: true`, because
-Workday connection configuration may be the remaining readiness blocker.
-
-If there is no concrete active agent, its architecture cannot be resolved, or
-the DA workspace is not materialized, show:
-
-**Message:**
-
-I don't see a setup-complete Employee Self-Service agent selected in this
-workspace yet. Run `/setup` or select the intended agent first, then come
-back and run `/connect workday` again.
-
-**End message.**
-
-Stop without creating integration state.
-
-Treat these current MOS schemas and legacy DA aliases as Declarative Agents:
-
-- `gptagent_copilotforemployeeselfservicehr`
-- `gptagent_copilotforemployeeselfserviceit`
-- `msdyn_copilotforemployeeselfservicedahr`
-- `msdyn_copilotforemployeeselfservicedait`
-
-Also treat another active agent with `releaseLine: "da"` as Declarative.
-Never infer architecture from retired product inventory or the first installed
-agent.
-
-For the ESS DA IT Agent, show:
-
-**Message:**
-
-Workday integration with the ESS IT Agent isn't supported in this release.
-Please contact your administrator.
-
-**End message.**
-
-Stop immediately without creating Workday state or running a package check.
-
-For another unsupported DA target, show:
-
-**Message:**
-
-Workday integration is available for the ESS HR Agent in this release.
-Please select the ESS HR Agent or contact your administrator.
-
-**End message.**
-
-Stop immediately without creating Workday state or entering a lifecycle.
-
-For `gptagent_copilotforemployeeselfservicehr`, read
-`src/skills/setup/workday-da/SKILL.md` and follow it. That setup uses
-`WD-DA-PKG-001`. Do not create CEA Workday lifecycle state or run
-`WD-PKG-001`: DA packages share some Workday connection-reference names with
-CEA, so the CEA package fingerprint is not an architecture discriminator.
-If the user arrived with an explicit Test or Production promotion statement,
-preserve that realm intent when entering the Workday DA skill so it can run
-promoted-target discovery instead of restarting DEV.
-
-For the classic DA HR schema `msdyn_copilotforemployeeselfservicedahr`, explain
-that the simplified Workday lifecycle currently supports only the native ESS
-HR agent. Stop without creating or changing Workday state.
-
-For a CEA agent, check the currently installed Workday extension before
-honoring lifecycle state:
-
-```
-python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
-```
-
-Read the `WD-PKG-001` row from `workspace/flightcheck/results.json` and route
-by both its status and detected flavor:
-
-- **`Passed` + simplified-install result** — read
-  `src/skills/connect/workday/SKILL.md` and follow it, whether or not a
-  lifecycle state file already exists.
-- **`Passed` + full / legacy result** — do not run the simplified V2 lifecycle.
-  Explain that this installation requires the legacy CEA setup experience and
-  stop without changing state.
-- **`NotConfigured`** — fresh CEA Workday installation is not available from
-  the current boundary. Explain that this release supports the DA HR Workday
-  path and stop without changing state.
-- **`Failed`** — show the checkpoint remediation and stop; do not treat a
-  partial install as a fresh environment.
-- **`Warning` / `Skipped` / `Error`**, or a `Passed` result whose flavor cannot
-  be determined — show the result and stop. Never start a lifecycle from an
-  inconclusive package check.
-
-### If the user said something else
-
-**Message:**
-
-I didn't catch that. Enter **1** for Workday.
-
-**End message.**
-
-Wait for the user and try again.
+Read the selected provider directory's `entryDoc` and follow it with the
+original request and target intent intact. Only that entry point decides
+supported agents, authentication, readiness, state, and lifecycle progress.

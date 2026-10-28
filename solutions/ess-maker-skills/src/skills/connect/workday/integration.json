@@ -1,0 +1,9 @@
+{
+  "id": "workday",
+  "displayName": "Workday",
+  "description": "Payroll, time off, employee data",
+  "aliases": ["connect-workday"],
+  "availability": "available",
+  "entryDoc": "entry.md",
+  "statusDoc": "status.md"
+}

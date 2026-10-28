@@ -1569,6 +1569,164 @@ def test_real_cli_profile_adapter_output_is_consumed_by_connect(setup_workspace,
     assert evaluate_contract(payload["contract"], state, profile)["accepted"] is True
 
 
+@pytest.mark.parametrize("profile", [
+    "workday-da:post-agent-wiring", "workday-da:final",
+])
+@pytest.mark.parametrize("realm", ["dev", "test", "prod"])
+@pytest.mark.parametrize("native_correct", [True, False])
+def test_connect_profiles_gate_redirect_on_realm_content_not_other_realms(
+    setup_workspace, monkeypatch, profile, realm, native_correct,
+):
+    """Run the real adapter, CLI, native producers and acceptance contract.
+
+    Only unrelated package/administrator observations are fixture inputs.
+    Replace subprocess transport with an in-process CLI, not a profile gate.
+    """
+    import subprocess
+    from dataclasses import replace
+
+    from agentbuilder import derive_environment_host
+    from flightcheck.checks import _connection_dependencies
+    from tests.flightcheck.checks.test_workday_da_readiness import SCHEMA, _component_payload
+    from tests.flightcheck.checks.test_workday_extension import _write_installed_topic, _write_topic
+    from tests.mocks import agentbuilder_connectivity as ab
+    from tests.scripts.test_workday_connect_flightcheck import _state
+    from workday_connect_flightcheck import run_profile, WorkdayConnectFlightCheckError
+    from workday_connect_readiness_policy import PROFILE_POLICIES
+
+    require_validated_mock(ab)
+    ws = setup_workspace
+    ws.config["realm"] = "dev"
+    foundation = ws.root / ".local" / "config.json"
+    foundation.write_text(json.dumps(ws.config), encoding="utf-8")
+    original_foundation = foundation.read_bytes()
+    local_target = f"{SCHEMA}.topic.WorkdaySystemGetUserContextV2"
+    _write_topic(ws.root, "hr", (
+        "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnRedirect\n  actions:\n"
+        f"    - kind: BeginDialog\n      dialog: {local_target if not native_correct else 'wrong-local-target'}\n"
+    ))
+    _write_installed_topic(ws.root, "hr", local_target)
+    agent_dir = ws.root / "workspace" / "agents" / "hr"
+    original_files = {
+        path: path.read_bytes() for path in agent_dir.rglob("*") if path.is_file()
+    }
+
+    target_agent = deepcopy(ws.config["agents"][0])
+    if realm != "dev":
+        target_agent.update({
+            "botId": ab.MOCK_AGENT_ID,
+            "schemaName": f"{SCHEMA}_{realm}",
+        })
+    schema = target_agent["schemaName"]
+    target_dialog = f"{schema}.topic.WorkdaySystemGetUserContextV2"
+    changes = json.loads(json.dumps(_component_payload()).replace(SCHEMA, schema))
+    setup = ab.dialog_component_change(
+        schema_name=f"{schema}.topic.SelectedAdminSetup",
+        dialog={
+            "$kind": "AdaptiveDialog",
+            "beginDialog": {
+                "$kind": "OnRedirect",
+                "actions": [{
+                    "$kind": "BeginDialog",
+                    "dialog": {
+                        "$kind": "DialogExpression",
+                        "literalValue": target_dialog if native_correct else local_target,
+                    },
+                }] if native_correct or realm != "dev" else [],
+            },
+        },
+    )
+    # displayName is captured on DialogComponent in agentbuilder_readiness.yaml.
+    setup["component"]["displayName"] = "[Admin] - User Context - Setup"
+    changes["botComponentChanges"].append(setup)
+    ws.content["botComponentChanges"] = changes["botComponentChanges"]
+    ws.content["bot"].update({
+        "cdsBotId": target_agent["botId"], "schemaName": schema,
+    })
+    environment = _body(next(
+        item for item in _capture("flightcheck_pp_admin.yaml")
+        if "api.bap.microsoft.com" in item["request"]["uri"] and "/environments/" in item["request"]["uri"]
+    ))
+    env_url = environment["properties"]["linkedEnvironmentMetadata"]["instanceUrl"]
+    state = _state()
+    state["activeTargetRealm"] = realm
+    state["scope"].update({
+        "environmentId": ws.config["environmentId"], "dataverseUrl": env_url,
+        "entraTenantId": TENANT_ID, "ring": "prod", "agent": target_agent,
+    })
+    state["operators"]["powerPlatformMaker"]["username"] = "maker@example.test"
+    original_state = deepcopy(state)
+    monkeypatch.setattr(_connection_dependencies, "discover_tenant", lambda _: TENANT_ID)
+    for key in PROFILE_POLICIES[profile].checkpoints:
+        spec = registry.REGISTRY[key]
+        if key == "WD-REST-002" or spec.da.strategy in {
+            "native", "workday_topics", "workday_wiring",
+        }:
+            continue
+
+        def domain_row(_runner, current=spec):
+            return [CheckResult(
+                current.key, current.category_label, current.priority, "Passed",
+                current.da.purpose, "Unrelated domain observation fixture.",
+            )]
+
+        monkeypatch.setitem(registry.REGISTRY, key, replace(
+            spec, category_fn=domain_row, da=replace(spec.da, strategy="custom", feature=""),
+        ))
+    captured = {}
+
+    def invoke_cli(command, **_kwargs):
+        monkeypatch.setattr("sys.argv", [*command[1:], "--no-telemetry"])
+        with pytest.raises(SystemExit) as exit_result:
+            cli.main()
+        output = command[command.index("--output") + 1]
+        captured.update(json.loads((ws.root / output / "results.json").read_text(encoding="utf-8")))
+        return subprocess.CompletedProcess(command, exit_result.value.code, "", "")
+
+    monkeypatch.setattr("workday_connect_flightcheck.subprocess.run", invoke_cli)
+    host = derive_environment_host(ws.config["environmentId"], "prod")
+    agent_response = ab.agent()
+    agent_response.update({"botId": target_agent["botId"], "realm": realm})
+    expected_pass = not native_correct if realm == "dev" else native_correct
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as http:
+        _register_native(http, ws)
+        http.get(
+            f"{host}/copilotstudio/minimalBots/api/{target_agent['botId']}",
+            json=agent_response,
+        )
+        http.post(
+            f"{host}/copilotstudio/minimalBots/api/{target_agent['botId']}/components",
+            json=ws.content,
+        )
+        if expected_pass:
+            summary = run_profile(ws.root, state, profile)
+            assert summary["accepted"] is True
+            assert summary["checkpointStatuses"]["WD-REST-002"] == "Passed"
+            assert summary["target"]["agentId"] == target_agent["botId"]
+            assert summary["target"]["realm"] == realm
+        else:
+            with pytest.raises(WorkdayConnectFlightCheckError, match="WD-REST-002=Failed"):
+                run_profile(ws.root, state, profile)
+        native_calls = [call.request for call in http.calls if "/minimalBots/" in call.request.url]
+        assert len(native_calls) == 2
+        assert all(target_agent["botId"] in call.url for call in native_calls)
+        assert all(
+            call.request.method == "GET" or call.request.url.split("?")[0].endswith("/components")
+            for call in http.calls
+        )
+    row = _row(captured, "WD-REST-002")
+    assert row["status"] == ("Passed" if expected_pass else "Failed")
+    assert row["evidence"]["evidenceBoundary"] == (
+        "local_authored_content" if realm == "dev" else "selected_promoted_native_content"
+    )
+    assert captured["coverage"]["planned"] == captured["coverage"]["emitted"]
+    assert foundation.read_bytes() == original_foundation
+    assert state == original_state
+    assert {
+        path: path.read_bytes() for path in agent_dir.rglob("*") if path.is_file()
+    } == original_files
+
+
 @pytest.mark.parametrize("variant", ["no_endpoint", "configured_endpoint", "wrong_account", "denied_endpoint"])
 def test_real_setup_profile_keeps_optional_endpoint_and_rejects_unverified_target(setup_workspace, monkeypatch, variant):
     from flightcheck.checks import _connection_dependencies
