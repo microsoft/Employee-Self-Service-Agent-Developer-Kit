@@ -6,8 +6,8 @@ botcomponent ``data`` YAML.
 
 Codifies the debug-oracle instrumentation pattern: insert a DBG ``SendActivity``
 node after a named action to project internal topic state into the transcript,
-then strip it so debug noise never ships. Both transforms are pure and
-byte-reversible, so a live orchestration can guarantee an exact revert.
+then strip it locally. Both transforms are pure and byte-reversible; neither
+reads, saves or publishes a deployed topic.
 
 Design choices, each addressing a real fragility of manual debug-node insertion:
 
@@ -24,16 +24,8 @@ Design choices, each addressing a real fragility of manual debug-node insertion:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Protocol
-
-
 class DebugPlantError(ValueError):
     """Base error for debug plant/strip operations."""
-
-
-class NoAnchorError(DebugPlantError):
-    """The anchor action id was not found — nothing was planted."""
 
 
 def _split(data: str) -> tuple[list[str], str]:
@@ -144,80 +136,3 @@ def strip_debug_nodes(
         out.append(line)
         i += 1
     return nl.join(out), removed
-
-
-# --------------------------------------------------------------------------- #
-# Live orchestration — deterministic; plant, PATCH, and (caller-driven) publish.
-# The DataverseClient Protocol is structural, so any object exposing the three
-# methods satisfies it without an import — keeping this core decoupled from the
-# concrete Dataverse access layer.
-# --------------------------------------------------------------------------- #
-
-@dataclass(frozen=True)
-class PlantSpec:
-    """One DBG node to plant: WHERE (after_action_id) + WHAT (node_id, activity).
-    Choosing these values is the judgment/authoring touch; this struct is the
-    deterministic contract that feeds plant_debug_node."""
-    after_action_id: str
-    node_id: str
-    activity: str
-
-
-@dataclass(frozen=True)
-class PlantProvenance:
-    """Everything strip_debug_nodes_live needs for a guaranteed byte-identical
-    revert, plus the verifier specs a caller uses to confirm each plant is live."""
-    topic: str
-    record_id: str
-    planted_node_ids: list[str]
-    specs: list[PlantSpec]
-
-    def verifier_specs(self) -> list[dict]:
-        """The {nodeId, topic, marker} specs a verifier checks to confirm the
-        planted DBG line rendered — so plant -> verify -> run is one loop.
-        marker = the activity text (its DBG prefix is what a caller asserts on)."""
-        return [{"nodeId": s.node_id, "topic": self.topic, "marker": s.activity}
-                for s in self.specs]
-
-
-class DataverseClient(Protocol):
-    def get_topic(self, schemaname: str) -> tuple[str, str]: ...
-    def patch_topic(self, record_id: str, content: str) -> None: ...
-
-
-def plant_debug_nodes_live(
-    client: DataverseClient, topic_schemaname: str, specs: list[PlantSpec]
-) -> PlantProvenance:
-    """Fetch the deployed topic, plant every spec, and PATCH it back in one write.
-    Raises NoAnchorError (WITHOUT patching) if any spec's anchor action id is
-    absent — a mis-targeted plant would otherwise silently instrument the wrong
-    place or partially write. Returns provenance for a guaranteed strip.
-
-    Publish is the caller's responsibility (a topic-layer change is dormant until
-    publish); this leaves publish separate so the caller can batch/throttle it.
-    """
-    record_id, data = client.get_topic(topic_schemaname)
-    new_data = data
-    for spec in specs:
-        new_data, count = plant_debug_node(
-            new_data, after_action_id=spec.after_action_id,
-            node_id=spec.node_id, activity=spec.activity)
-        if count == 0:
-            raise NoAnchorError(
-                f"anchor action id {spec.after_action_id!r} not found in topic "
-                f"{topic_schemaname!r}; refusing to PATCH (mis-targeted plant?)")
-    client.patch_topic(record_id, new_data)
-    return PlantProvenance(
-        topic=topic_schemaname, record_id=record_id,
-        planted_node_ids=[s.node_id for s in specs], specs=list(specs))
-
-
-def strip_debug_nodes_live(client: DataverseClient, provenance: PlantProvenance) -> int:
-    """Remove the planted nodes using captured provenance. Idempotent: if the
-    nodes are already gone (already stripped), it is a no-op returning 0. Returns
-    the number of nodes removed."""
-    record_id, data = client.get_topic(provenance.topic)
-    stripped, removed = strip_debug_nodes(data, node_ids=provenance.planted_node_ids)
-    if removed:
-        client.patch_topic(record_id, stripped)
-    return len(removed)

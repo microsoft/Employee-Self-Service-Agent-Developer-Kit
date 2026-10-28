@@ -1,19 +1,13 @@
 ---
 mode: agent
-description: "Type Enter to drive and debug a topic or workflow's runtime behaviour until it's right"
+description: "Test a saved active text-response topic, or inspect an existing workflow run"
 ---
 
 # Test
 
-You are helping a customer test an existing component in their ESS agent.
-For a native DA-GA workspace, test a saved fixed-response topic through the
-operator-confirmed embedded chat and compare the real reply with its approved
-saved response. This path does not change, activate, publish or deploy content.
+You are helping a customer test an existing component in their ESS agent. For a native DA-GA workspace, test a saved fixed-response topic through the operator-confirmed embedded chat and compare the real reply with its approved saved response. This path does not change, activate, publish or deploy content.
 
-**Scope.** `/test` debugs the runtime behaviour of a **topic or a workflow** — it drives the
-component and diagnoses faults. It is **not** the eval gate: to author evaluation cases use
-`/evaluate`, and running an eval set as a graded pass/fail over the deployed agent is a
-separate runtime-eval runner, not this command.
+**Scope.** `/test` tests one saved, active, compatible trigger/literal-response topic, or routes separately requested read-only workflow-run inspection. It is **not** the eval gate: to author evaluation cases use `/evaluate`, and running an eval set as a graded pass/fail over the deployed agent is a separate runtime-eval runner, not this command.
 
 **Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`. If canonical state does not have `schema_version: 4` and an `agents` entry matching the active workspace slug with `connect_ready: true`, show:
 
@@ -21,31 +15,18 @@ separate runtime-eval runner, not this command.
 
 and STOP. Otherwise proceed.
 
-Retain browser-based topic driving and reply classification, but do not run
-`flow_run_inspect.py`, `plant_debug.py`, or `strip_debug.py`. Report that these
-server-side diagnostics are not yet available for DA-GA workspaces. Workflow
-testing depends on run-history inspection, so if the requested component is a
-workflow, report that DA-GA workflow testing is not yet available and STOP.
-The native topic path supports response-only text dialogs, not arbitrary topic
-branches, cards or backend-fault simulation. Read the owning topic skill before
-selecting a browser driver; do not use the legacy classic-pane driver for a
-native topic.
+The topic path supports response-only text dialogs, not unsaved drafts, arbitrary branches, cards, backend-fault simulation or debug instrumentation. Read its owning skill before selecting a browser operation. Do not activate, publish, reset, reload or replay a send to make testing pass. Exact response equality is not proof of exact-topic invocation.
 
-**IMPORTANT: When the user just types `/test` with no additional text, do
-NOT silently route anywhere. Ask the user what they want to test first.**
+Existing workflow-run inspection remains read-only and requires its own confirmed Flow API target and authentication. Do not infer those prerequisites from native agent setup or start a conversation to produce a run.
+
+Carry forward the selected component from the current conversation. When the user types only `/test` and no component is established, ask what they want to test. Do not repeat a known topic or component-type selection.
 
 ## Flow
 
-1. If the request does not identify the component type, ask the user:
-   "What would you like to test - a **topic** or a **workflow**?"
-2. Wait for an answer when needed. An explicit topic request already answers
-   this question.
+1. If neither the request nor current context identifies the component type, ask the user: "What would you like to test - a **topic** or a **workflow**?"
+2. Wait for an answer when needed. An explicit topic request or an established selected topic already answers this question.
 3. Route based on their answer:
-   - **topic** (e.g., "topic", "a topic", "the topic I just made")
-     -> Read `src/skills/topics/test/SKILL.md` and follow its instructions.
-   - **workflow** (e.g., "workflow", "a workflow", "the flow")
-     -> For an AgentBuilder workspace, report that DA-GA workflow testing is
-        not yet available and STOP. Otherwise, read
-        `src/skills/workflows/test/SKILL.md` and follow its instructions.
+   - **topic** (e.g., "topic", "a topic", "the topic I just made") -> Read `src/skills/topics/test/SKILL.md` and follow its instructions.
+   - **workflow** (e.g., "workflow", "a workflow", "the flow") -> Read `src/skills/workflows/test/SKILL.md` for supported read-only inspection of an existing run. Report unavailable prerequisites explicitly; do not offer automated backend-topic testing.
 
 Do NOT proceed without reading the appropriate skill file first.

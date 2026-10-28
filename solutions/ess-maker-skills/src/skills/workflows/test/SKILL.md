@@ -2,7 +2,9 @@
 
 Guides a maker through debugging a Power Automate cloud flow (workflow) behind their agent — exercising it, reading its per-action run history, localizing a fault to a specific action, and fixing the flow (or the template config it reads).
 
-**You do not drive a flow directly from this skill.** An ESS flow is triggered by Copilot Studio — a topic calls it — so you exercise it one of two ways (below) and then read the decisive surface: the **run history**, action by action. The bot reply tells you what the user saw; the flow source tells you what was authored; only the run-action view tells you what actually happened.
+**You do not drive a flow directly from this skill.** Inspect an existing run when that is the request; do not start a conversation or create a run merely to inspect it. Confirm the Flow API environment, flow and authorized authentication independently of native agent setup. If they are unavailable, report that boundary and pause. Separately approved manual execution is described below. The bot reply tells you what the user saw; the flow source tells you what was authored; only the run-action view tells you what actually happened.
+
+For a read-only request, skip the exercise/fix loop and stop after reporting the existing run evidence. Inspection does not authorize runtime execution, flow authoring or template-config writes.
 
 ## The debug-and-validate loop
 
@@ -26,8 +28,7 @@ Debugging a flow is one loop, repeated until the run is clean:
 
 ## Identify the flow
 
-Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
-message, and it never fails the step): `python scripts/emit_capability.py workflow_test`
+Record anonymous usage telemetry (best-effort, non-blocking — no user-facing message, and it never fails the step): `python scripts/emit_capability.py workflow_test`
 
 Read `.local/config.json` for `agent.folder` and `agent.slug`. List the workflow folders under `{agent.folder}/workflows/` — each holds a `metadata.yml` (with `workflowId`, `name`) and a `workflow.json`. Match the user's request to a folder by name or `metadata.yml` display name; if ambiguous, list them and ask. The **flow GUID** you pass to the inspector is `workflowId` from that `metadata.yml`.
 
@@ -36,7 +37,7 @@ Read `.local/config.json` for `agent.folder` and `agent.slug`. List the workflow
 Pick the mode by the question you're answering:
 
 - **Isolated — is the fault in the flow itself?** Have the maker open the flow in Power Automate (make.powerautomate.com → the agent's environment → Solutions → the solution containing the flow), open it, and click **Test → Manually**, supplying the inputs the flow's trigger expects. This removes the topic from the picture — a failure here is purely the flow (or the backend it calls).
-- **In context — is the fault in how the topic calls it?** Drive the topic that invokes the flow with the `topics/test` skill (`scripts/drive_topic.py`). This exercises the real request the topic builds and passes in. Use this when the flow tests clean in isolation but the topic still misbehaves.
+- **In context:** A maker may exercise the existing calling topic manually in Copilot Studio with separately approved test inputs and resources. The bounded topic-test operation does not automate backend-backed conversations or debug instrumentation. Do not route that conversation through the literal-response topic test.
 
 Either way, the flow produces a run you then inspect.
 
@@ -46,7 +47,7 @@ Either way, the flow produces a run you then inspect.
 
 Dump the latest run's action cascade:
 
-```
+```powershell
 python scripts/flow_run_inspect.py --flow <workflowId>
 ```
 

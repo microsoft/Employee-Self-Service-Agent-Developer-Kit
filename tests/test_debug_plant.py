@@ -13,8 +13,8 @@ Two pure text transforms over a topic's botcomponent ``data`` YAML:
                      all whose activity carries the DBG marker). Byte-reversible
                      against the pre-plant data.
 
-Round-trip invariant: strip(plant(data)) == data (byte-identical) — the
-guaranteed-revert property the live orchestration relies on.
+Round-trip invariant: strip(plant(data)) == data (byte-identical).
+These tests exercise local text only, not a deployed-topic cleanup path.
 """
 from __future__ import annotations
 
@@ -22,13 +22,8 @@ import pytest
 
 from debug_plant import (
     DebugPlantError,
-    NoAnchorError,
-    PlantProvenance,
-    PlantSpec,
     plant_debug_node,
-    plant_debug_nodes_live,
     strip_debug_nodes,
-    strip_debug_nodes_live,
 )
 
 # A minimal topic with two actions at different indents (a SetVariable inside a
@@ -179,99 +174,3 @@ def test_multi_plant_then_marker_strip_round_trips():
     stripped, removed = strip_debug_nodes(data, marker="DBG")
     assert len(removed) == 2
     assert stripped == _TOPIC
-
-
-# --------------------------------------------------------------------------- #
-# Live orchestration — plant_debug_nodes_live / strip_debug_nodes_live
-# (deterministic; fakes the Dataverse via a structural client)
-# --------------------------------------------------------------------------- #
-
-class FakeDataverse:
-    def __init__(self, topics):
-        self._topics = topics            # schemaname -> {"id", "data"}
-        self.patches = []
-        self.published = []
-
-    def get_topic(self, schemaname):
-        t = self._topics[schemaname]
-        return t["id"], t["data"]
-
-    def patch_topic(self, record_id, content):
-        self.patches.append((record_id, content))
-        for t in self._topics.values():
-            if t["id"] == record_id:
-                t["data"] = content
-
-    def publish_bot(self, bot_id):
-        self.published.append(bot_id)
-
-
-def _dv():
-    return FakeDataverse({"snow_sys": {"id": "rec-1", "data": _TOPIC}})
-
-
-def test_plant_live_patches_and_returns_provenance():
-    dv = _dv()
-    specs = [
-        PlantSpec(after_action_id="setVariable_cacheHit",
-                  node_id="sendActivity_DBG_cacheHit", activity="DBG branch=cache-hit"),
-        PlantSpec(after_action_id="beginDialog_fetch",
-                  node_id="sendActivity_DBG_fetch", activity="DBG branch=fetch"),
-    ]
-    prov = plant_debug_nodes_live(dv, "snow_sys", specs)
-    assert isinstance(prov, PlantProvenance)
-    assert prov.topic == "snow_sys"
-    assert prov.record_id == "rec-1"
-    assert prov.planted_node_ids == ["sendActivity_DBG_cacheHit", "sendActivity_DBG_fetch"]
-    # one PATCH carrying both planted nodes
-    assert len(dv.patches) == 1
-    assert "sendActivity_DBG_cacheHit" in dv.patches[0][1]
-    assert "sendActivity_DBG_fetch" in dv.patches[0][1]
-
-
-def test_plant_live_emits_verifier_specs():
-    # the returned provenance carries {nodeId, topic, marker} specs a verifier
-    # consumes, so plant -> verify -> run is one loop.
-    dv = _dv()
-    specs = [PlantSpec(after_action_id="setVariable_cacheHit",
-                       node_id="sendActivity_DBG_cacheHit", activity="DBG branch=cache-hit")]
-    prov = plant_debug_nodes_live(dv, "snow_sys", specs)
-    vs = prov.verifier_specs()
-    assert vs == [{"nodeId": "sendActivity_DBG_cacheHit", "topic": "snow_sys",
-                   "marker": "DBG branch=cache-hit"}]
-
-
-def test_plant_live_raises_when_anchor_missing_and_does_not_patch():
-    dv = _dv()
-    specs = [PlantSpec(after_action_id="setVariable_nonexistent",
-                       node_id="sendActivity_DBG_x", activity="DBG x")]
-    with pytest.raises(NoAnchorError):
-        plant_debug_nodes_live(dv, "snow_sys", specs)
-    assert dv.patches == []            # no partial write on a mis-targeted plant
-    assert dv._topics["snow_sys"]["data"] == _TOPIC
-
-
-def test_strip_live_restores_original_byte_identical():
-    dv = _dv()
-    specs = [
-        PlantSpec(after_action_id="setVariable_cacheHit",
-                  node_id="sendActivity_DBG_cacheHit", activity="DBG branch=cache-hit"),
-        PlantSpec(after_action_id="beginDialog_fetch",
-                  node_id="sendActivity_DBG_fetch", activity="DBG branch=fetch"),
-    ]
-    prov = plant_debug_nodes_live(dv, "snow_sys", specs)
-    assert "sendActivity_DBG_cacheHit" in dv._topics["snow_sys"]["data"]
-    count = strip_debug_nodes_live(dv, prov)
-    assert count == 2
-    assert dv._topics["snow_sys"]["data"] == _TOPIC   # guaranteed byte-identical revert
-
-
-def test_strip_live_is_idempotent():
-    dv = _dv()
-    specs = [PlantSpec(after_action_id="setVariable_cacheHit",
-                       node_id="sendActivity_DBG_cacheHit", activity="DBG branch=cache-hit")]
-    prov = plant_debug_nodes_live(dv, "snow_sys", specs)
-    strip_debug_nodes_live(dv, prov)
-    # second strip: nodes already gone -> no-op, returns 0, does not raise
-    assert strip_debug_nodes_live(dv, prov) == 0
-    assert dv._topics["snow_sys"]["data"] == _TOPIC
