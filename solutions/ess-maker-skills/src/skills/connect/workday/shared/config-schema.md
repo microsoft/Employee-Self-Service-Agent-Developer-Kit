@@ -226,6 +226,11 @@ These values are independent and must never be aliases:
   employee runtime proof.
 - A phase is complete only after the target has been reread and matching
   evidence exists for every compact required action.
+- Connection discovery uses the foundation configuration's optional
+  `agentBuilderApiVersion` for prerequisites, Connections verification, and
+  Runtime preview/apply, as well as readiness profiles. When absent, the native
+  client's default is retained. The transport setting is read without changing
+  foundation identity, saved lifecycle state, or approved Runtime targets.
 - The provider status becomes `ready` only when all six phases are complete.
 
 Schema-v2 through schema-v11, or legacy row-based state, is backed up to

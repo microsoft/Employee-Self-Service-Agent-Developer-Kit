@@ -465,7 +465,11 @@ def build_workday_admin_packet(
                 "information": "OAuth client ID",
                 "fields": ["oauthClientId"],
                 "portalLocation": "View API Client -> Client ID",
-                "instruction": "Record the non-secret OAuth client ID.",
+                "instruction": (
+                    "Complete API client access first: reuse an approved "
+                    "client or register one if needed. Then record the "
+                    "non-secret OAuth client ID and capture its endpoints."
+                ),
                 "exampleValue": "safe-client-id",
             },
             {
