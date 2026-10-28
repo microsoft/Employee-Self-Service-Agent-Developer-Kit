@@ -1069,6 +1069,10 @@ def _run_da_selection_if_applicable(args, config):
         sys.exit(2)
     _print_prioritized_summary(result)
     save_results(result, args.output)
+    _emit_run_telemetry(
+        result, args, config, graph=None, tenant_id="",
+        scope=f"profile:{args.profile}" if args.profile else f"checkpoint:{args.checkpoint}",
+    )
     if not getattr(args, "no_open", False):
         open_report_in_browser(args.output)
     sys.exit(_run_exit_code(result))
@@ -1104,18 +1108,14 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
     _tele_debug = os.environ.get(
         "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
     ).strip().lower() in ("1", "on", "true", "yes")
-    # Resolve the active agent from config (may be empty for Entra-only
-    # checkpoints run before /setup writes a full config).
-    _agents = config.get("agents", [])
-    if not _agents:
-        _agent_entry = config.get("agent", {})
-        if _agent_entry:
-            _agents = [_agent_entry]
-    _active = config.get("activeAgent", config.get("agent", {}).get("slug", ""))
-    _active_agent = next(
-        (a for a in _agents if a.get("slug") == _active),
-        _agents[0] if _agents else {},
-    )
+    _agents = configured_agents(config)
+    _active_agent = _active_agent_config(config, getattr(args, "agent_slug", None))
+    _context = getattr(result, "validation_context", {}) or {}
+    _agent_id = _context.get("agentId") or _active_agent.get("botId", "")
+    tenant_id = str(
+        _context.get("tenantId") or tenant_id
+        or config.get("tenantId") or _active_agent.get("tenantId") or ""
+    ).strip()
     # Best-effort tenant display name (OII; privacy-approved). Reuses the
     # already-authenticated Graph client when one was needed; never re-auths.
     # Falls back to the persisted ``.local/.tenant_name`` cache when the
@@ -1142,7 +1142,7 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
             result,
             tenant_id=tenant_id or "",
             tenant_name=tenant_name,
-            agent_id=_active_agent.get("botId", ""),
+            agent_id=_agent_id,
             scope=scope,
             agent_count=len(_agents),
             invocation_source=_inv_source,
@@ -1161,24 +1161,23 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
     # --scope emit so these runs also count toward the adk.* cubes.
     try:
         import adk_telemetry as _adk
-        from flightcheck.telemetry import derive_connector_from_category
+        from flightcheck.telemetry import (
+            derive_connector_from_category, derive_connector_from_scope,
+        )
 
-        _agent_id = _active_agent.get("botId", "")
         if tenant_id or tenant_name:
             _adk.set_identity(tenant_id=tenant_id or "", tenant_name=tenant_name)
         _ridx = _adk.next_run_index(_agent_id)
-        # The first result row's category is the run's connector (or "" for
-        # cross-cutting checkpoints like Environment / Authentication).
-        # Derived here rather than passed by the caller so the CLI runtime
-        # path matches the same connector attribution as the legacy
-        # ESSMakerKit.FlightCheck.* events (ADO 7943641 review).
-        _connector = ""
-        if result.results:
+        _connector = derive_connector_from_scope(scope)
+        # Preserve category attribution for targeted checks without a
+        # connector-prefixed ID; scope runs must not inherit a prerequisite.
+        if not _connector and scope.startswith(("checkpoint:", "profile:")) and result.results:
             _connector = derive_connector_from_category(
                 getattr(result.results[0], "category", "") or ""
             )
         _adk.emit_flightcheck_run(
-            agent_id=_agent_id, run_index=_ridx, connector=_connector
+            agent_id=_agent_id, run_index=_ridx, connector=_connector,
+            invocation_source=_inv_source,
         )
         _adk.emit_flightcheck_result(
             agent_id=_agent_id,
@@ -1186,6 +1185,7 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
             result=_adk_flightcheck_result(result.overall),
             duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
             connector=_connector,
+            invocation_source=_inv_source,
         )
         _adk.flush(timeout=3)
     except Exception:  # noqa: BLE001 — adk telemetry must never break the run
@@ -2934,17 +2934,12 @@ def main():
         result = run_maker_diagnostics(args, config)
         _print_prioritized_summary(result)
         save_results(result, args.output)
-        diagnostic_tenant_id = str(
-            config.get("tenantId")
-            or selected.get("tenantId")
-            or ""
-        ).strip()
         _emit_run_telemetry(
             result,
             args,
             config,
             graph=None,
-            tenant_id=diagnostic_tenant_id,
+            tenant_id="",
             scope=args.scope,
         )
         if not args.no_open:
@@ -3404,10 +3399,7 @@ def main():
         ).strip().lower() in ("1", "on", "true", "yes")
         # Resolve the active agent once, up front, so both the legacy and the
         # adk.* telemetry blocks can use it even if the first block raises early.
-        active_agent = next(
-            (a for a in agents if a.get("slug") == active),
-            agents[0] if agents else {},
-        )
+        active_agent = _active_agent_config(config, args.agent_slug)
         # Best-effort tenant display name (OII; privacy-approved). Reuses the
         # already-authenticated Graph client's /organization record — no extra
         # auth. Falls back to the persisted ``.local/.tenant_name`` cache when
@@ -3464,7 +3456,8 @@ def main():
             # per-check attribution lives on the check events, not run events.
             _connector = derive_connector_from_scope(args.scope)
             _adk.emit_flightcheck_run(
-                agent_id=_agent_id, run_index=_ridx, connector=_connector
+                agent_id=_agent_id, run_index=_ridx, connector=_connector,
+                invocation_source=args.invocation_source,
             )
             _adk.emit_flightcheck_result(
                 agent_id=_agent_id,
@@ -3472,6 +3465,7 @@ def main():
                 result=_adk_flightcheck_result(result.overall),
                 duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
                 connector=_connector,
+                invocation_source=args.invocation_source,
             )
             _adk.flush(timeout=3)
         except Exception:  # noqa: BLE001 — adk telemetry must never break the run

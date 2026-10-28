@@ -368,22 +368,48 @@ class TestAgentBuilderLocalScope:
     ) -> None:
         assert cli._adk_flightcheck_result(overall) == expected
 
-    def test_da_diagnostic_emits_adk_flightcheck_telemetry(
+    @pytest.mark.parametrize(
+        ("mode", "target", "expected_scope", "connector"),
+        [
+            ("--scope", "local", "local", ""),
+            ("--scope", "full", "full", ""),
+            ("--scope", "workday", "workday", "workday"),
+            ("--scope", "servicenow", "servicenow", "servicenow"),
+            ("--checkpoint", "WD-RUN-001", "checkpoint:WD-RUN-001", "workday"),
+            ("--profile", "workday-da:setup-readiness", "profile:workday-da:setup-readiness", "workday"),
+        ],
+    )
+    @pytest.mark.parametrize("no_telemetry", [False, True])
+    def test_da_diagnostic_emits_both_telemetry_families(
         self,
         tmp_path: Path,
         monkeypatch,
+        mode: str,
+        target: str,
+        expected_scope: str,
+        connector: str,
+        no_telemetry: bool,
     ) -> None:
+        import adk_telemetry as adk
+        from flightcheck import telemetry
+
         local_dir = tmp_path / ".local"
         local_dir.mkdir()
         tenant_id = "11111111-1111-1111-1111-111111111111"
+        agent_id = "22222222-2222-2222-2222-222222222222"
         config = {
             "releaseLine": "da",
-            "tenantId": tenant_id,
-            "activeAgent": "mock-agent",
+            "realm": "dev",
+            "activeAgent": "other-agent",
             "agents": [
                 {
+                    "slug": "other-agent",
+                    "botId": "33333333-3333-3333-3333-333333333333",
+                    "releaseLine": "da",
+                },
+                {
                     "slug": "mock-agent",
-                    "botId": "22222222-2222-2222-2222-222222222222",
+                    "botId": agent_id,
                     "releaseLine": "da",
                 }
             ],
@@ -394,28 +420,24 @@ class TestAgentBuilderLocalScope:
         )
         result = _FakeRunner("local").run()
         result.diagnostic_only = True
-        result.profile = ""
-        result.overall = "SETUP_CHECKS_PASSED"
-        captured = {}
+        result.profile = target if mode == "--profile" else ""
+        result.overall = "READY" if result.profile else "SETUP_CHECKS_PASSED"
+        result.validation_context = {"tenantId": tenant_id}
+        if target != "local":
+            result.validation_context["agentId"] = agent_id
+        result.results = [
+            SimpleNamespace(category="Workday" if target == "full" else "Agent setup"),
+        ]
+        legacy_events = []
+        adk_events = []
 
-        def capture_telemetry(
-            emitted_result,
-            args,
-            emitted_config,
-            graph,
-            tenant_id,
-            scope,
-        ):
-            captured.update(
-                {
-                    "result": emitted_result,
-                    "invocation_source": args.invocation_source,
-                    "config": emitted_config,
-                    "graph": graph,
-                    "tenant_id": tenant_id,
-                    "scope": scope,
-                }
-            )
+        def capture_post(_ikey, events):
+            legacy_events.extend(events)
+            return 204
+
+        def capture_adk(name, data, **_kwargs):
+            adk_events.append({"name": name, "data": data})
+            return {}
 
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(
@@ -424,33 +446,61 @@ class TestAgentBuilderLocalScope:
         )
         monkeypatch.setattr(cli, "_print_prioritized_summary", lambda _result: None)
         monkeypatch.setattr(cli, "save_results", lambda _result, _output: None)
+        monkeypatch.setattr(telemetry, "_post", capture_post)
         monkeypatch.setattr(
-            cli,
-            "_emit_run_telemetry",
-            capture_telemetry,
+            telemetry, "resolve_ikey",
+            lambda: (telemetry.ARIA_IKEYS["dev"], "dev"),
+        )
+        monkeypatch.setattr(telemetry, "get_toolkit_git_branch", lambda: "other")
+        monkeypatch.setattr(adk, "_emit", capture_adk)
+        monkeypatch.setattr(adk, "get_session", lambda _surface: ("test-session", False))
+        monkeypatch.setattr(adk, "next_run_index", lambda _agent_id: 1)
+        monkeypatch.setattr(adk, "flush", lambda **_kwargs: None)
+        monkeypatch.setattr(
+            adk, "_IDENTITY", {"instance_id": "", "tenant_id": "", "tenant_name": ""},
         )
         monkeypatch.setattr(
             "sys.argv",
             [
                 "cli.py",
-                "--scope",
-                "local",
+                mode,
+                target,
+                "--agent-slug",
+                "mock-agent",
                 "--invocation-source",
                 "adk",
                 "--no-open",
-            ],
+            ] + (["--no-telemetry"] if no_telemetry else []),
         )
 
         with pytest.raises(SystemExit) as exc:
             cli.main()
 
         assert exc.value.code == 0
-        assert captured["result"] is result
-        assert captured["invocation_source"] == "adk"
-        assert captured["config"] == config
-        assert captured["graph"] is None
-        assert captured["tenant_id"] == tenant_id
-        assert captured["scope"] == "local"
+        if no_telemetry:
+            assert legacy_events == []
+            assert adk_events == []
+            return
+        assert len(legacy_events) == 2
+        run = legacy_events[0]["data"]
+        assert run["agentId"] == agent_id
+        assert run["tenantId"] == tenant_id
+        assert run["agentType"] == "declarative_agent"
+        assert run["invocationSource"] == "adk"
+        assert run["scope"] == expected_scope
+        assert run["connector"] == connector
+        assert {event["name"] for event in adk_events} == {
+            adk.EVENT_FLIGHTCHECK_RUN, adk.EVENT_FLIGHTCHECK_RESULT,
+        }
+        assert len(adk_events) == 2
+        for event in adk_events:
+            data = event["data"]
+            assert data["agent_id"] == agent_id
+            assert data["tenant_id"] == tenant_id
+            assert data["agent_type"] == "declarative_agent"
+            assert data["connector"] == connector
+            if event["name"] == adk.EVENT_FLIGHTCHECK_RESULT:
+                assert data["result"] == "pass"
 
     def test_runs_without_dataverse_or_remote_authentication(
         self,
