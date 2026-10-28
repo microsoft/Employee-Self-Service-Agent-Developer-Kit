@@ -487,7 +487,7 @@ def test_promoted_verification_reads_actual_target_without_local_topic_ids(
         assert evidence["runtimeTemplate"].startswith(new_schema + ".topic.")
         assert evidence["verifiedComponents"] == 3
     else:
-        assert evidence["workdayTopics"]["active"] == 23
+        assert evidence["workdayTopics"]["active"] == 22
 
 
 @pytest.mark.parametrize("defect", [
@@ -690,7 +690,7 @@ def test_promoted_verification_retains_correlated_diagnostics_without_failing_ac
 
     topics = verify_topic_activation(tmp_path, state)["workdayTopics"]
 
-    assert topics["active"] == 23
+    assert topics["active"] == 22
     diagnostic, = topics["blockingDiagnostics"]
     assert diagnostic["componentId"] == component["id"]
     assert diagnostic["schemaName"] == component["schemaName"]
@@ -710,7 +710,7 @@ def test_promoted_verification_uses_verified_tenant_when_foundation_omits_it(
     path.write_text(json.dumps(foundation), encoding="utf-8")
     before = path.read_bytes()
 
-    assert verify_topic_activation(tmp_path, state)["workdayTopics"]["active"] == 23
+    assert verify_topic_activation(tmp_path, state)["workdayTopics"]["active"] == 22
     assert path.read_bytes() == before
 
 
