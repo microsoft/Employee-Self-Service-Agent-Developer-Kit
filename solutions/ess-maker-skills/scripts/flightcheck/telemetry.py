@@ -796,6 +796,19 @@ def classify_agent_type(git_branch: str) -> str:
     return AGENT_TYPE_UNKNOWN
 
 
+def classify_flightcheck_agent_type(
+    git_branch: str,
+    invocation_source: str,
+) -> str:
+    """Classify ADK-invoked FlightCheck runs as DA unless shipped from CA."""
+    normalized_branch = str(git_branch or "").strip().lower()
+    if normalized_branch == "main-ca":
+        return AGENT_TYPE_CUSTOM
+    if str(invocation_source or "").strip().lower() == "adk":
+        return AGENT_TYPE_DECLARATIVE
+    return classify_agent_type(normalized_branch)
+
+
 def _build_event(name: str, ikey_envelope: str, data: dict[str, Any]) -> dict[str, Any]:
     """Build a minimal Common Schema 4.0 envelope.
 
@@ -1168,7 +1181,10 @@ def build_events(
 ) -> list[dict[str, Any]]:
     """Build the run envelope + one envelope per check (testable, no IO)."""
     run_id = run_id or str(uuid.uuid4())
-    agent_type = classify_agent_type(get_toolkit_git_branch())
+    agent_type = classify_flightcheck_agent_type(
+        get_toolkit_git_branch(),
+        invocation_source,
+    )
     events = [
         _build_event(
             EVENT_RUN,

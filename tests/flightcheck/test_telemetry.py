@@ -438,16 +438,52 @@ def test_classify_agent_type_unknown_branches_bucketed(branch):
     assert telemetry.classify_agent_type(branch) == telemetry.AGENT_TYPE_UNKNOWN
 
 
-def test_build_events_derives_agent_type_once(monkeypatch):
+@pytest.mark.parametrize("branch", [
+    "main",
+    "other",
+    "detached",
+    "unknown",
+    "",
+])
+def test_adk_flightcheck_runs_classify_as_declarative(branch):
+    assert (
+        telemetry.classify_flightcheck_agent_type(branch, "adk")
+        == telemetry.AGENT_TYPE_DECLARATIVE
+    )
+
+
+def test_main_ca_adk_flightcheck_run_remains_custom():
+    assert (
+        telemetry.classify_flightcheck_agent_type("main-ca", "adk")
+        == telemetry.AGENT_TYPE_CUSTOM
+    )
+
+
+def test_non_adk_flightcheck_runs_keep_branch_classification():
+    assert (
+        telemetry.classify_flightcheck_agent_type("main", "cli")
+        == telemetry.AGENT_TYPE_DECLARATIVE
+    )
+    assert (
+        telemetry.classify_flightcheck_agent_type("main-ca", "installer")
+        == telemetry.AGENT_TYPE_CUSTOM
+    )
+    assert (
+        telemetry.classify_flightcheck_agent_type("other", "connect")
+        == telemetry.AGENT_TYPE_UNKNOWN
+    )
+
+
+def test_build_events_derives_flightcheck_agent_type_once(monkeypatch):
     calls = []
 
-    monkeypatch.setattr(telemetry, "get_toolkit_git_branch", lambda: "main")
+    monkeypatch.setattr(telemetry, "get_toolkit_git_branch", lambda: "other")
 
-    def fake_classify(branch):
-        calls.append(branch)
+    def fake_classify(branch, invocation_source):
+        calls.append((branch, invocation_source))
         return telemetry.AGENT_TYPE_DECLARATIVE
 
-    monkeypatch.setattr(telemetry, "classify_agent_type", fake_classify)
+    monkeypatch.setattr(telemetry, "classify_flightcheck_agent_type", fake_classify)
     events = telemetry.build_events(
         FakeRun(),
         env="dev",
@@ -460,7 +496,7 @@ def test_build_events_derives_agent_type_once(monkeypatch):
         ikey_envelope=f"o:{DEV_TOKEN}",
     )
 
-    assert calls == ["main"]
+    assert calls == [("other", "cli")]
     assert all(
         event["data"]["agentType"] == telemetry.AGENT_TYPE_DECLARATIVE
         for event in events
