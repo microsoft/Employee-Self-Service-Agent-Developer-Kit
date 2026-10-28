@@ -1,5 +1,12 @@
 # Action: Activate all Workday topics
 
+**Development only.** Require controller status `activeTargetRealm: dev` before
+previewing changes or asking either activation question. For Test or Production,
+do not run this action, change topic enabled/disabled states, or show the
+**Enable Workday topics** or **Confirm Workday topics** questions. Return to
+the Runtime guide's read-only verification of the promoted state instead.
+Stop if the active realm is unresolved; never assume Development.
+
 Run this action only after the reviewed Workday flows are connected to the
 agent and **Allow permission to share parameters** is enabled.
 
@@ -58,9 +65,9 @@ activation approval never approves topic-content edits.
 
 **Message:**
 
-The Workday connections and shared parameters are ready. I found
-**{WORKDAY_TOPIC_COUNT}** Workday topics included with this agent. I can now
-enable all of them without changing their configured behavior.
+The Workday connections are ready. I can enable the
+**{WORKDAY_TOPIC_COUNT}** Workday topics included with this agent.
+Their existing content will stay unchanged.
 
 **End message.**
 
@@ -103,9 +110,11 @@ do not treat them as an activation failure or proof of a broken package.
 
 **Message:**
 
-I enabled the Workday topics and verified the change. Refresh the Copilot
-Studio page, open **Topics**, and confirm that all
-**{WORKDAY_TOPIC_COUNT}** Workday topics now show as **On**.
+I enabled the Workday topics and verified the change.
+
+1. Refresh the Copilot Studio page.
+2. Open `Topics`.
+3. Check that all **{WORKDAY_TOPIC_COUNT}** Workday topics show as `On`.
 
 **End message.**
 

@@ -2,6 +2,16 @@
 
 # Phases 4 and 5 - Connections and runtime
 
+## Maker guidance before questions
+
+Render the applicable numbered walkthrough as a visible chat message before
+showing its confirmation or **Check again** question, even though these
+walkthroughs are not Message blocks. Include the resolved environment-scoped
+link and required values. Do not substitute an empty question detail or a
+"once connected, check again" reminder for the walkthrough. If the maker asks
+how to perform the step, show the relevant instructions again before asking
+another question. Continue only from verified controller evidence.
+
 ## Connections
 
 Begin by preparing the selected Power Platform environment. Do not ask the
@@ -48,14 +58,23 @@ The skill does not create physical connector connections or complete connector
 OAuth. The maker performs those actions; the skill discovers and verifies the
 result.
 
-Agent **Connection Settings** is a later Runtime step. While either physical
-connection is missing, disconnected, ambiguous, or awaiting confirmation, tell
-the maker:
+Dev, Test, or Production targets in the same Power Platform environment share
+the package's Workday and Dataverse runtime connection references. Once another
+tracked target has applied those bindings, reuse its verified physical
+connections with the required access. The controller blocks a conflicting
+selection during Connections and rechecks before Runtime writes, including
+previously approved plans. Show its recovery guidance; do not reinstall the
+package or overwrite the shared references to bypass the block. Different
+bindings require a separate environment.
 
-> Do not open Copilot Studio Connection Settings yet. That page is configured
-> only after both Power Platform connections are verified and the Workday
-> Runtime changes have been applied.
+Keep the maker focused on the current connection walkthrough while either
+physical connection is missing, disconnected, ambiguous, or awaiting
+confirmation. Do not introduce later Copilot Studio pages or warn the maker
+not to open them.
 
+Keep this sequencing internal: agent **Connection Settings** belongs to Runtime,
+after both Power Platform connections are verified and the Runtime changes
+have been applied.
 Do not provide the agent Connection Settings link during the Connections phase.
 Do not diagnose the flow authorization script as failed when Runtime apply has
 not run.
@@ -87,6 +106,21 @@ Platform connections, then discover them:
 python scripts/workday_connect.py record-connections
 ```
 
+Discovery first uses the read-only Power Platform connection API for the
+selected environment, service ring, tenant, and maker account. If that API is
+unavailable, the controller reports the reason and tries PAC with the same
+environment and maker account. Account or tenant mismatches remain blocking;
+do not bypass them with another identity.
+
+If the PAC fallback reports an unsupported command, show its exact executable
+path and the returned upgrade guidance. Update that installation, not merely
+another PAC copy on PATH: the kit prefers
+`%LOCALAPPDATA%\InternalTools\pac\pac.exe` when it exists. After upgrading,
+verify `connectivity list-connections help` using the exact executable shown,
+then rerun `record-connections`. Do not substitute `pac connection list`,
+invent manual connection evidence, or tell the maker to recreate healthy
+connections because a discovery command is unavailable.
+
 When both required connections resolve exactly, this read-only pass returns
 `requiresConfirmation: true` with safe connection display names and the saved
 non-secret Workday target values. It does not mark the phase complete.
@@ -103,6 +137,8 @@ same response. After the maker returns, rerun `record-connections`; continue
 to Workday only when Microsoft Dataverse resolves exactly.
 
 If the Microsoft Dataverse connection is missing or disconnected:
+
+Show these instructions before offering **Check again**:
 
 1. Show a **Create Microsoft Dataverse connection** link using the
    environment-scoped Microsoft Dataverse URL above.
@@ -145,9 +181,9 @@ Then give the maker this creation process:
 3. Select **Microsoft Entra ID Integrated** authentication.
 4. Enter the displayed values in the matching connection fields, preserving
    their order and keeping the tenant separate from the SOAP base URL.
-5. Select **Create** and complete the Workday sign-in window. This connector
-   uses a separate credential store, so an additional sign-in prompt is
-   expected even when Microsoft or PAC authentication already succeeded.
+5. Select **Create** and complete the Workday sign-in window. A separate
+   Workday sign-in may be required even if you've already signed in to
+   Microsoft.
 6. Return to **Connections** and confirm that the Workday connection shows
    **Connected**.
 
@@ -253,8 +289,8 @@ workflow, or bot identifiers. Then use `vscode_askQuestions`:
 ```json
 [
   {
-    "header": "Apply Workday runtime changes",
-    "question": "Apply these exact Workday runtime changes to the selected environment and agent?",
+    "header": "Apply Workday changes",
+    "question": "Apply the Workday changes shown above to this environment and agent?",
     "options": [{ "label": "Apply changes" }, { "label": "Not now" }],
     "allowFreeformInput": false
   }
@@ -298,11 +334,30 @@ sibling, ALM family, deployment commit, tenant, environment, and BotId. It then
 rediscovers the Dataverse runtime target, rejects stale approval, reuses one
 Dataverse token for Python mutations, and invokes
 `alm/Enable-CosmosDAFlowAuthorization.ps1` exactly once with every reviewed
-workflow ID and the realm-specific team name:
+workflow ID and the reviewed agent-specific team name:
 
-- Development: `ESS DA HR Workday - Development`
-- Test: `ESS DA HR Workday - Test`
-- Production: `ESS DA HR Workday - Production`
+- Development: `ESS DA HR Workday - Development - {full canonical BotId}`
+- Test: `ESS DA HR Workday - Test - {full canonical BotId}`
+- Production: `ESS DA HR Workday - Production - {full canonical BotId}`
+
+These are internal Dataverse access teams, not collaboration teams the maker
+must create. A valid team already linked to this exact agent is reused without
+renaming it, including legacy names. Planning and apply check authorization
+ownership and proposed-name availability in the exact business unit before
+the first runtime write. An unrelated old agent's records are never adopted,
+deleted, renamed, or relinked.
+
+If authorization fails, show the controller's safe cause and supported next
+action. For a name conflict, refresh the runtime plan; if the conflict
+remains, ask the Dataverse administrator to inspect ownership. Preserve
+completed stages and administrator evidence. Do not reset healthy connections
+or require the maker to repeat Workday administrator setup. Resume Runtime
+after correction. Authorization preflight failures also retain their safe cause
+and next action for later status and resume. Records created for the approved
+agent and team during a partial attempt do not themselves require reapproval;
+the controller checks their ownership again and preserves verified stages.
+Use a freshly reviewed plan if any other approved scope changed, including
+replacement or removal of previously approved authorization or team IDs.
 
 The script verifies the delegated authorization, one linked access team, and
 WriteAccess sharing for every reviewed flow before the stage is recorded.
@@ -348,10 +403,13 @@ maker the internal flow or component names.
 
 For each **Workday** entry:
 
+Show this complete click path before asking whether sharing is enabled:
+
 1. Select **Connect**.
 2. Select the already-created Workday connection and confirm the selection.
-3. Select **Manage**.
-4. Enable **Allow permission to share parameters**.
+3. Select **See details**.
+4. Open **Connection parameters**.
+5. Enable **Allow permission to share parameters**.
 
 This prevents each employee from receiving an unexpected first-use connection
 prompt.
@@ -367,15 +425,17 @@ agent-facing connection contract; the latter grants the Cosmos-backed agent
 principal access to the reviewed Dataverse workflows. Do not skip or scope the
 authorization stage solely from `connectionType`.
 
-Show the exact agent name and refer only to the two entries displayed as
-**Workday**. Do not expose their internal flow or component names. Use
+Show the exact agent name and the safe display name of the selected Workday
+connection from verified Connections evidence immediately before this
+question. Refer only to the two entries displayed as **Workday**. Do not
+expose their internal flow or component names. Use
 `vscode_askQuestions`:
 
 ```json
 [
   {
     "header": "Confirm Workday connection",
-    "question": "In this exact agent, are both entries displayed as Workday connected to the reviewed Workday connection, with Allow permission to share parameters enabled under Manage for both?",
+    "question": "Are both Workday entries connected to the connection shown above, with Allow permission to share parameters enabled for both?",
     "options": [
       { "label": "Yes, confirmed" },
       { "label": "No, review the Workday connection settings" }
@@ -402,7 +462,7 @@ file-write tool:
 }
 ```
 
-Then run internally:
+For `activeTargetRealm: dev`, run internally:
 `src/skills/connect/workday/actions/activate-workday-topics.md`. That action
 derives the complete Workday dialog list from the selected agent's
 `.component-map.json`, previews the exact scope, and uses the native components
@@ -413,17 +473,29 @@ that every Workday topic visibly shows as **On** before recording activation.
 This refreshed-page confirmation is a UX gate, not a substitute for the
 controller's live reread.
 
-Then run:
+For `activeTargetRealm: test` or `prod`, skip that activation action entirely.
+Promotion carries the topic enabled/disabled states from the source realm.
+Do not run an activation push, ask **Enable Workday topics**, or ask the maker
+to refresh Copilot Studio and confirm that topics show as **On**.
+
+Record the enabled state with the read-only verification below. In Development,
+the activation action already runs it; do not repeat it:
 
 ```powershell
 python scripts/workday_connect.py record-topic-activation
 ```
 
-This command proves that every Workday topic included with the agent is
-enabled. Topic diagnostics are retained as supporting detail but do not change
+This command verifies the existing enabled state; it does not enable topics.
+In Test and Production, do not replace a failed verification with local
+activation. Preserve the target blocker; correct topic state in Development
+and promote the corrected content through the normal ALM process.
+Topic diagnostics are retained as supporting detail but do not change
 the activation result or create a package-repair blocker by themselves.
 
-Only after topic activation is verified, initialize the Workday runtime
+Only after topic activation is verified, continue with the realm-specific
+wiring step below.
+
+**Development only:** Initialize the Workday runtime
 templates from the native agent's Conversation Start by running the guarded
 action in
 `src/skills/connect/workday/actions/wire-runtime-template-config.md`.
@@ -447,16 +519,36 @@ the setup redirect and preserves the already verified Workday topic activation
 state. Do not run a separate readiness checkpoint here; the controller
 evaluates the required live coverage after attachment and topic activation.
 
-Then run:
+Continue only when the redirect action returns `ACTION_RESULT = "applied"`.
+On cancellation or failure, stop before recording agent binding and keep the
+Runtime phase incomplete.
+
+**Test and Production:** Do not run either content-editing action above,
+push Development's local files into the promoted agent, or change its topic
+activation states. The conversation-start initialization and User Context
+redirect are carried by promotion. Verify the actual promoted runtime-template
+wiring read-only:
+
+```powershell
+python scripts/workday_connect.py record-runtime-template-wiring
+```
+
+If verification fails, preserve the selected target and applied permissions.
+Correct the source content in Development and promote it through the normal
+ALM process; do not repair a promoted agent with a local authoring push.
+
+For every realm, then run:
 
 ```powershell
 python scripts/workday_connect.py record-agent-binding --attachment-file ".local\connect\workday-da\agent-flow-attachment.json"
 ```
 
 This command runs automatic readiness checks against the recorded Workday
-state, signs in to the native components endpoint as the recorded maker, derives the
-complete Workday topic set from `.component-map.json`, and rereads every
-mapped topic. It completes the runtime phase only when the target-bound flow
+state and signs in to the native components endpoint as the recorded maker.
+Development derives its topic set from `.component-map.json`; Test and
+Production use the reviewed inventory with the actual promoted schema and
+reread that target's live components, never Development's local component IDs.
+It completes the runtime phase only when the target-bound flow
 attachment is confirmed, every Workday topic is Active, and the automatic
 configuration checks are accepted. It retains any topic
 diagnostics for support correlation without presenting them as runtime failure

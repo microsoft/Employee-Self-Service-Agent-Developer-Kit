@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from copy import deepcopy
+import base64
 import json
 import sys
 
 import pytest
+import requests
+import responses
 
 
 SCRIPTS = (
@@ -14,12 +18,22 @@ SCRIPTS = (
 sys.path.insert(0, str(SCRIPTS))
 
 import workday_connect_runtime as runtime  # noqa: E402
-from workday_connect_model import default_state  # noqa: E402
+from workday_connect_model import default_state, target_state_from_active  # noqa: E402
+from tests.conftest import require_validated_mock  # noqa: E402
+from tests.mocks import agentbuilder_connectivity as native  # noqa: E402
+
+
+require_validated_mock(native)
 
 
 BOT_ID = "11111111-1111-1111-1111-111111111111"
 WORKDAY_CONNECTION = "22222222-2222-2222-2222-222222222222"
 DATAVERSE_CONNECTION = "33333333-3333-3333-3333-333333333333"
+TENANT_ID = "00000000-0000-0000-0000-000000004444"
+BUSINESS_UNIT_ID = "44444444-4444-4444-4444-444444444444"
+AUTHORIZATION_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+TEAM_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+TEAM_NAME = f"ESS DA HR Workday - Development - {BOT_ID}"
 
 
 def _state():
@@ -61,6 +75,276 @@ def _connections():
             },
         ]
     }
+
+
+def _api_state(ring="test"):
+    state = _state()
+    state["scope"].update(
+        {
+            "environmentId": native.MOCK_ENV_ID,
+            "entraTenantId": TENANT_ID,
+            "ring": ring,
+        }
+    )
+    return state
+
+
+def _api_token(username="maker@contoso.com", tenant_id=TENANT_ID):
+    claims = {"preferred_username": username, "tid": tenant_id}
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode()
+    return f"header.{payload.rstrip('=')}.signature"
+
+
+def _no_pac():
+    pytest.fail("PAC must not be used after a successful API response or identity mismatch")
+
+
+@pytest.mark.parametrize(
+    ("ring", "host"),
+    [
+        ("prod", "https://api.powerplatform.com"),
+        ("preprod", "https://api.preprod.powerplatform.com"),
+        ("test", "https://api.test.powerplatform.com"),
+    ],
+)
+@responses.activate
+def test_connection_api_is_primary_and_uses_selected_ring_tenant_and_maker(
+    monkeypatch, ring, host,
+):
+    calls = []
+
+    def authenticate(tenant_id, service_ring, **kwargs):
+        calls.append((tenant_id, service_ring, kwargs))
+        return _api_token()
+
+    monkeypatch.setattr(runtime, "authenticate_connections", authenticate)
+    response = native.list_connections(items=_connections()["value"])
+    response["url"] = response["url"].replace(native.MOCK_CONNECTIVITY_BASE, host)
+    responses.add(**response)
+
+    evidence = runtime.verify_physical_connections(
+        _api_state(ring), pac_resolver=_no_pac,
+    )
+
+    assert evidence["connectionIds"] == {
+        "workday": WORKDAY_CONNECTION,
+        "dataverse": DATAVERSE_CONNECTION,
+    }
+    assert calls == [
+        (
+            TENANT_ID,
+            ring,
+            {
+                "account_hint": "maker@contoso.com",
+                "scopes": (f"{host}/Connectivity.Connections.Read",),
+            },
+        )
+    ]
+    assert all(call.request.method == "GET" for call in responses.calls)
+
+
+@pytest.mark.parametrize("failure", ["denied", "service", "malformed", "timeout", "auth"])
+@responses.activate
+def test_connection_api_failure_falls_back_to_pac_for_same_target(
+    monkeypatch, capsys, failure,
+):
+    def authenticate(*_args, **_kwargs):
+        if failure == "auth":
+            raise runtime.AgentBuilderError("Consent is required.")
+        return _api_token()
+
+    monkeypatch.setattr(runtime, "authenticate_connections", authenticate)
+    response = native.list_connections()
+    if failure == "timeout":
+        response.pop("json")
+        response["body"] = requests.Timeout("Connection inventory timed out.")
+    elif failure == "malformed":
+        response["json"] = {"unexpected": []}
+    elif failure != "auth":
+        response["status"] = 403 if failure == "denied" else 500
+    responses.add(**response)
+    auth_calls = []
+    commands = []
+
+    def runner(command, **kwargs):
+        commands.append(command)
+        return _pac_runner(command, **kwargs)
+
+    evidence = runtime.verify_physical_connections(
+        _api_state(),
+        pac_resolver=lambda: Path("pac.exe"),
+        pac_auth=lambda pac, **kwargs: auth_calls.append((pac, kwargs)),
+        runner=runner,
+    )
+
+    assert evidence["connectionIds"]["workday"] == WORKDAY_CONNECTION
+    assert auth_calls == [
+        (
+            Path("pac.exe"),
+            {
+                "ring": "preprod",
+                "environment_url": "https://org.crm.dynamics.com",
+                "preferred_username": "maker@contoso.com",
+                "runner": runner,
+            },
+        )
+    ]
+    assert commands == [
+        [
+            "pac.exe", "connectivity", "list-connections", "--environment",
+            "https://org.crm.dynamics.com", "--json",
+        ]
+    ]
+    warning = capsys.readouterr().err
+    assert "[WARNING] Power Platform connection API discovery failed:" in warning
+    assert "Falling back to PAC for the same environment and maker account." in warning
+
+
+@pytest.mark.parametrize(
+    ("token", "message"),
+    [
+        (_api_token(username="other@contoso.com"), "different account"),
+        (
+            _api_token(tenant_id="00000000-0000-0000-0000-000000005555"),
+            "different Microsoft Entra tenant",
+        ),
+        ("unreadable-token", "readable identity claims"),
+    ],
+)
+def test_connection_api_identity_failure_does_not_fall_back(
+    monkeypatch, token, message,
+):
+    monkeypatch.setattr(
+        runtime, "authenticate_connections", lambda *_args, **_kwargs: token,
+    )
+    with pytest.raises(runtime.WorkdayConnectRuntimeError, match=message):
+        runtime.verify_physical_connections(_api_state(), pac_resolver=_no_pac)
+
+
+@pytest.mark.parametrize("inventory", ["empty", "disconnected", "ambiguous"])
+@responses.activate
+def test_valid_api_inventory_with_unresolved_connections_does_not_use_pac(
+    monkeypatch, inventory,
+):
+    monkeypatch.setattr(
+        runtime, "authenticate_connections", lambda *_args, **_kwargs: _api_token(),
+    )
+    connections = _connections()["value"]
+    if inventory == "empty":
+        connections = []
+    elif inventory == "disconnected":
+        connections[1]["properties"]["statuses"] = [{"status": "Error"}]
+    else:
+        duplicate = native.connection(
+            connection_id="alternate-dataverse",
+            connector="shared_commondataserviceforapps",
+        )
+        connections.append(duplicate)
+    responses.add(**native.list_connections(items=connections))
+
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime.verify_physical_connections(_api_state(), pac_resolver=_no_pac)
+
+    assert raised.value.details["connector"] == "shared_commondataserviceforapps"
+
+
+@responses.activate
+def test_api_inventory_reuses_recorded_connection_ids(monkeypatch):
+    monkeypatch.setattr(
+        runtime, "authenticate_connections", lambda *_args, **_kwargs: _api_token(),
+    )
+    state = _api_state()
+    state["phases"]["connections"]["evidence"] = [
+        {
+            "action": "physical-connections-verified",
+            "outcome": "verified",
+            "connectionIds": {
+                "workday": WORKDAY_CONNECTION,
+                "dataverse": DATAVERSE_CONNECTION,
+            },
+        }
+    ]
+    connections = _connections()["value"]
+    connections.append(
+        native.connection(connection_id="other-workday", connector="shared_workdaysoap")
+    )
+    responses.add(**native.list_connections(items=connections))
+
+    evidence = runtime.verify_physical_connections(state, pac_resolver=_no_pac)
+
+    assert evidence["connectionIds"]["workday"] == WORKDAY_CONNECTION
+
+
+@pytest.mark.parametrize(
+    ("path", "guidance"),
+    [
+        (
+            r"C:\Users\maker\.dotnet\tools\pac.exe",
+            "dotnet tool update --global Microsoft.PowerApps.CLI.Tool",
+        ),
+        (
+            r"C:\Users\maker\.vscode\extensions\microsoft.powerplatform\pac.exe",
+            "Update the Microsoft Power Platform Tools extension",
+        ),
+        (
+            r"C:\Users\maker\AppData\Local\InternalTools\pac\pac.exe",
+            "Update this exact PAC installation",
+        ),
+    ],
+)
+def test_unsupported_pac_fallback_reports_exact_installation_and_upgrade(
+    monkeypatch, path, guidance,
+):
+    def failed_api(*_args, **_kwargs):
+        raise runtime.AgentBuilderError("Connection listing failed with HTTP 403")
+
+    monkeypatch.setattr(runtime, "authenticate_connections", failed_api)
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime.verify_physical_connections(
+            _api_state(),
+            pac_resolver=lambda: Path(path),
+            pac_auth=lambda *_args, **_kwargs: None,
+            runner=lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=1,
+                stdout="Microsoft PowerPlatform CLI\nVersion: 1.44.0\n",
+                stderr="Error: Not a valid command. Try running 'pac [command] help'.",
+            ),
+        )
+
+    message = str(raised.value)
+    assert "HTTP 403" in message
+    assert "PAC fallback failed:" in message
+    assert path in message
+    assert "version 1.44.0" in message
+    assert guidance in message
+    assert "connectivity list-connections help" in message
+    assert "updating a different PAC on PATH will not update that copy" in message
+    assert "Do not use 'pac connection list' as a substitute" in message
+
+
+def test_pac_permission_error_is_not_reported_as_version_problem():
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime._list_connections(
+            Path("pac.exe"),
+            "https://org.crm.dynamics.com",
+            runner=lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=1, stdout="", stderr="Access denied.",
+            ),
+        )
+    assert "Check the selected maker's access and PAC sign-in" in str(raised.value)
+    assert "Update" not in str(raised.value)
+
+
+@pytest.mark.parametrize("payload", [[], {"value": [None]}, {"value": {}}])
+def test_pac_rejects_malformed_inventory_instead_of_dropping_rows(payload):
+    with pytest.raises(runtime.WorkdayConnectRuntimeError, match="valid value array"):
+        runtime._list_connections(
+            Path("pac.exe"),
+            "https://org.crm.dynamics.com",
+            runner=lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=0, stdout=json.dumps(payload), stderr="",
+            ),
+        )
 
 
 def _pac_runner(command, **_kwargs):
@@ -167,6 +451,16 @@ def _query_for(records):
             ]
         if entity_set == "workflows":
             return list(records["flows"].values())
+        if entity_set == "delegatedauthorizations":
+            return records.get("authorizations", [])
+        if entity_set == "businessunits":
+            return records.get("businessunits", [{"businessunitid": BUSINESS_UNIT_ID}])
+        if entity_set == "teams":
+            return records.get(
+                "teams" if filter_expr.startswith("delegatedauthorizationid/")
+                else "nameConflicts",
+                [],
+            )
         raise AssertionError(entity_set)
 
     return query
@@ -187,6 +481,421 @@ def _identity(_token, *, preferred_username):
     }
 
 
+def _colocated_targets():
+    state = _api_state()
+    records = _records()
+    connections = _connections()["value"]
+    context = runtime._runtime_discovery_context(state, None)
+    for connector, connection in zip(("workday", "dataverse"), connections, strict=True):
+        name = context["referencesCatalog"][connector]["logicalName"]
+        records["references"][name]["connectionid"] = connection["name"]
+    for flow in records["flows"].values():
+        flow.update(statecode=1, statuscode=2)
+    plan = runtime._build_runtime_discovery(
+        context, workday=connections[0], dataverse=connections[1],
+        references=records["references"], flows=records["flows"],
+        authorization_target=runtime._authorization_target(
+            context["environmentUrl"], "token", "dev", BOT_ID, query=_query_for(records),
+        ),
+    )["plan"]
+    state["status"] = "ready"
+    state["phases"]["runtime"].update(
+        status="complete", approvedPlan=plan, approvedPlanHash=plan["planHash"],
+        completedActions=["connection-references-bound", "runtime-flows-active", "delegated-authorization-configured"],
+    )
+    state["targets"]["dev"] = target_state_from_active(state, "dev")
+    state["activeTargetRealm"] = "test"
+    state["status"] = "in-progress"
+    state["scope"]["realm"] = "test"
+    state["scope"]["agent"] = {"botId": "77777777-7777-4777-8777-777777777777"}
+    state["phases"]["runtime"] = deepcopy(default_state()["phases"]["runtime"])
+    state["phases"]["connections"]["evidence"] = [{
+        "action": "physical-connections-verified",
+        "connectionIds": {"workday": WORKDAY_CONNECTION, "dataverse": DATAVERSE_CONNECTION},
+    }]
+    state["targets"]["test"] = target_state_from_active(
+        state, "test", identity={"almFamilyId": BOT_ID, "commitSha": "a" * 40},
+    )
+    return state, records
+
+
+@pytest.mark.parametrize("connector", ["workday", "dataverse"])
+@pytest.mark.parametrize("operation", ["connections", "preview", "apply"])
+@responses.activate
+def test_colocated_target_cannot_change_an_established_shared_binding(monkeypatch, connector, operation):
+    state, records = _colocated_targets()
+    alternate_id = "88888888-8888-4888-8888-888888888888"
+    state["phases"]["connections"]["evidence"][-1]["connectionIds"][connector] = alternate_id
+    original = deepcopy(state)
+    items = _connections()["value"]
+    alternate = deepcopy(items[0 if connector == "workday" else 1])
+    alternate["name"] = alternate_id
+    items.append(alternate)
+    monkeypatch.setattr(runtime, "authenticate_connections", lambda *_a, **_k: _api_token())
+    responses.add(**native.list_connections(items=items))
+    writes = []
+    with pytest.raises(runtime.WorkdayConnectRuntimeError, match="shared runtime bindings") as raised:
+        if operation == "connections":
+            runtime.verify_physical_connections(state, pac_resolver=_no_pac)
+        else:
+            runtime.run_runtime_operation(
+                state, apply=operation == "apply", approved_hash="previously-approved",
+                verifier=lambda *_a: writes.append("approval-verification"),
+                token_provider=lambda *_a, **_k: "token", identity_provider=_identity,
+                query=_query_for(records), pac_resolver=_no_pac,
+                updater=lambda *_a: writes.append("update"),
+                authorization_runner=lambda *_a, **_k: writes.append("authorization"),
+            )
+    assert raised.value.details["cause"] == "shared-runtime-binding-conflict"
+    assert raised.value.details["conflictingConnectors"] == [connector]
+    assert "separate Power Platform environment" in raised.value.customer_remediation
+    assert alternate_id not in str(raised.value)
+    assert not writes
+    assert state == original
+    assert state["targets"]["dev"]["status"] == "ready"
+
+
+@pytest.mark.parametrize("apply", [False, True])
+@responses.activate
+def test_colocated_target_reuses_identical_bindings_without_changing_ready_sibling(monkeypatch, apply):
+    state, records = _colocated_targets()
+    source = deepcopy(state["targets"]["dev"])
+    monkeypatch.setattr(runtime, "authenticate_connections", lambda *_a, **_k: _api_token())
+    monkeypatch.setattr(runtime, "_run_authorization", lambda *_a, **_k: {"outcome": "verified"})
+    responses.add(**native.list_connections(items=_connections()["value"]))
+    writes = []
+    result = runtime.run_runtime_operation(
+        state, apply=apply, approved_hash="approved",
+        verifier=lambda plan, _: plan["planHash"],
+        token_provider=lambda *_a, **_k: "token", identity_provider=_identity,
+        query=_query_for(records), pac_resolver=_no_pac,
+        updater=lambda *_a: writes.append("update"),
+    )
+    assert not writes
+    assert state["targets"]["dev"] == source
+    if apply:
+        assert result["applied"]["verified"] is True
+        assert "connection-references-bound" in result["applied"]["verifiedStages"]
+    else:
+        assert result["observed"]["connectionBindings"]
+        assert all(item["alreadyBoundToSelection"] for item in result["observed"]["connectionBindings"].values())
+
+
+@responses.activate
+def test_runtime_apply_rechecks_sibling_bindings_established_after_preview(monkeypatch):
+    state, records = _colocated_targets()
+    source = state["targets"]["dev"]
+    source["status"] = "in-progress"
+    source["phases"]["runtime"]["status"] = "active"
+    source["phases"]["runtime"]["completedActions"] = []
+    monkeypatch.setattr(runtime, "authenticate_connections", lambda *_a, **_k: _api_token())
+    responses.add(**native.list_connections(items=_connections()["value"]))
+    plan = runtime.discover_runtime_plan(state, token="token", query=_query_for(records), pac_resolver=_no_pac)["plan"]
+    source["phases"]["runtime"]["completedActions"] = ["connection-references-bound"]
+    name = runtime.load_catalog()["connectionReferences"]["dataverse"]["logicalName"]
+    source_plan = source["phases"]["runtime"]["approvedPlan"]
+    source_plan["connectionBindings"][name]["connectionId"] = "88888888-8888-4888-8888-888888888888"
+    source_plan["planHash"] = runtime.plan_hash(source_plan)
+    source["phases"]["runtime"]["approvedPlanHash"] = source_plan["planHash"]
+    records["references"][name]["connectionid"] = source_plan["connectionBindings"][name]["connectionId"]
+    with pytest.raises(runtime.WorkdayConnectRuntimeError, match="shared runtime bindings"):
+        runtime.run_runtime_operation(
+            state, apply=True, approved_hash=plan["planHash"],
+            verifier=lambda *_a: pytest.fail("A stale plan must not reach approval verification"),
+            token_provider=lambda *_a, **_k: "token", identity_provider=_identity,
+            query=_query_for(records), pac_resolver=_no_pac,
+            updater=lambda *_a: pytest.fail("No runtime write is allowed"),
+        )
+
+
+@responses.activate
+def test_separate_environment_can_select_different_connections(monkeypatch):
+    state, _ = _colocated_targets()
+    source = state["targets"]["dev"]
+    source["identity"].update(
+        environmentId="99999999-9999-4999-8999-999999999999",
+        environmentUrl="https://other.crm.dynamics.com",
+    )
+    source["scope"].update(
+        environmentId=source["identity"]["environmentId"],
+        dataverseUrl=source["identity"]["environmentUrl"],
+    )
+    name = runtime.load_catalog()["connectionReferences"]["dataverse"]["logicalName"]
+    source["phases"]["runtime"]["approvedPlan"]["connectionBindings"][name]["connectionId"] = "88888888-8888-4888-8888-888888888888"
+    monkeypatch.setattr(runtime, "authenticate_connections", lambda *_a, **_k: _api_token())
+    responses.add(**native.list_connections(items=_connections()["value"]))
+    evidence = runtime.verify_physical_connections(state, pac_resolver=_no_pac)
+    assert evidence["connectionIds"]["dataverse"] == DATAVERSE_CONNECTION
+    assert source["status"] == "ready"
+
+
+@pytest.mark.parametrize("recorded", [False, True])
+@responses.activate
+def test_legacy_ready_sibling_requires_verified_connection_evidence(monkeypatch, recorded):
+    state, _ = _colocated_targets()
+    source = state["targets"]["dev"]
+    source["phases"]["runtime"].update(approvedPlan=None, approvedPlanHash=None)
+    if recorded:
+        source["phases"]["connections"]["evidence"] = deepcopy(state["phases"]["connections"]["evidence"])
+    monkeypatch.setattr(runtime, "authenticate_connections", lambda *_a, **_k: _api_token())
+    responses.add(**native.list_connections(items=_connections()["value"]))
+    if recorded:
+        result = runtime.verify_physical_connections(state, pac_resolver=_no_pac)
+        assert result["connectionIds"]["dataverse"] == DATAVERSE_CONNECTION
+    else:
+        with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+            runtime.verify_physical_connections(state, pac_resolver=_no_pac)
+        assert raised.value.details["cause"] == "shared-runtime-binding-conflict"
+        assert raised.value.details["requiredConnectionIds"] == {}
+
+
+def _authorization_records(*, team_name=TEAM_NAME):
+    records = _records()
+    records["authorizations"] = [{
+        "delegatedauthorizationid": AUTHORIZATION_ID,
+        "botid": BOT_ID,
+        "providertype": 3,
+    }]
+    records["teams"] = [{
+        "teamid": TEAM_ID,
+        "name": team_name,
+        "teamtype": 1,
+        "_delegatedauthorizationid_value": AUTHORIZATION_ID,
+        "_businessunitid_value": BUSINESS_UNIT_ID,
+    }]
+    return records
+
+
+def _authorization_target(records, *, bot_id=BOT_ID, realm="dev"):
+    return runtime._authorization_target(
+        "https://org.crm.dynamics.com", "token", realm, bot_id,
+        query=_query_for(records),
+    )
+
+
+def test_new_team_names_separate_agents_in_the_same_reused_environment():
+    records = _records()
+    first = _authorization_target(records)
+    second = _authorization_target(
+        records, bot_id="CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC",
+    )
+    assert first["teamName"] == TEAM_NAME
+    assert second["teamName"] == (
+        "ESS DA HR Workday - Development - cccccccc-cccc-cccc-cccc-cccccccccccc"
+    )
+    assert first["teamName"] != second["teamName"]
+    assert first["businessUnitId"] == second["businessUnitId"] == BUSINESS_UNIT_ID
+    assert _authorization_target(records, realm="test")["teamName"] == (
+        f"ESS DA HR Workday - Test - {BOT_ID}"
+    )
+
+
+def test_existing_exact_agent_legacy_team_is_reused_without_a_name_lookup():
+    legacy_name = "ESS DA HR Workday - Development"
+    records = _authorization_records(team_name=legacy_name)
+    records["nameConflicts"] = [{"teamid": "unrelated-team"}]
+
+    target = _authorization_target(records)
+
+    assert target == {
+        "authorizationId": AUTHORIZATION_ID,
+        "teamId": TEAM_ID,
+        "teamName": legacy_name,
+        "businessUnitId": BUSINESS_UNIT_ID,
+    }
+
+
+def test_authorization_created_before_a_failure_can_resume_without_a_team():
+    records = _authorization_records()
+    records["teams"] = []
+
+    target = _authorization_target(records)
+
+    assert target["authorizationId"] == AUTHORIZATION_ID
+    assert target["teamId"] is None
+    assert target["teamName"] == TEAM_NAME
+
+
+@pytest.mark.parametrize("fault", [
+    "duplicate-authorization", "duplicate-team", "wrong-provider", "foreign-bot",
+    "wrong-team-type", "foreign-authorization", "orphan-team", "unreadable",
+    "unreadable-row", "invalid-authorization-id", "invalid-team-id", "missing-team-name",
+    "missing-business-unit", "ambiguous-business-unit", "foreign-name",
+])
+def test_authorization_conflicts_fail_before_any_runtime_mutation(fault):
+    records = _authorization_records()
+    if fault == "duplicate-authorization":
+        records["authorizations"] *= 2
+    elif fault == "duplicate-team":
+        records["teams"] *= 2
+    elif fault == "wrong-provider":
+        records["authorizations"][0]["providertype"] = 2
+    elif fault == "foreign-bot":
+        records["authorizations"][0]["botid"] = TEAM_ID
+    elif fault == "wrong-team-type":
+        records["teams"][0]["teamtype"] = 0
+    elif fault == "foreign-authorization":
+        records["teams"][0]["_delegatedauthorizationid_value"] = TEAM_ID
+    elif fault == "orphan-team":
+        records["authorizations"] = []
+    elif fault == "unreadable":
+        records["authorizations"] = None
+    elif fault == "unreadable-row":
+        records["authorizations"] = [{}]
+        records["teams"] = []
+    elif fault == "invalid-authorization-id":
+        records["authorizations"][0]["delegatedauthorizationid"] = "not-a-guid"
+    elif fault == "invalid-team-id":
+        records["teams"][0]["teamid"] = "not-a-guid"
+    elif fault == "missing-team-name":
+        records["teams"][0]["name"] = ""
+    else:
+        records["teams"] = []
+        if fault == "missing-business-unit":
+            records["businessunits"] = []
+        elif fault == "ambiguous-business-unit":
+            records["businessunits"] = [{"businessunitid": BUSINESS_UNIT_ID}] * 2
+        else:
+            records["nameConflicts"] = [{"teamid": "foreign-team"}]
+    writes = []
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as error:
+        runtime.apply_runtime_plan(
+            {
+                "scope": {"dataverseUrl": "https://org.crm.dynamics.com", "realm": "dev"},
+                "delegatedAuthorization": {"botId": BOT_ID},
+            },
+            token="token", query=_query_for(records),
+            updater=lambda *args: writes.append(args),
+        )
+    assert writes == []
+    assert "administrator" in str(error.value)
+    assert error.value.details["stage"] == "authorization-preflight"
+    assert error.value.details["nextAction"] in error.value.customer_remediation
+    assert "No runtime changes were made" in error.value.customer_remediation
+    if fault == "foreign-name":
+        assert error.value.details["cause"] == "team-name-conflict"
+        assert error.value.details["stage"] == "authorization-preflight"
+        assert "No runtime changes were made" in str(error.value)
+
+
+def test_unreadable_authorization_ownership_is_not_treated_as_absent():
+    def denied(*_args, **_kwargs):
+        raise requests.HTTPError("403 raw confidential response")
+
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as error:
+        runtime._authorization_target(
+            "https://org.crm.dynamics.com", "token", "dev", BOT_ID, query=denied,
+        )
+
+    assert error.value.details["cause"] == "read-failed"
+    assert "verify read access" in str(error.value)
+    assert "verify read access" in error.value.details["nextAction"]
+    assert error.value.customer_remediation == str(error.value)
+    assert "confidential" not in str(error.value)
+    assert "confidential" not in json.dumps(error.value.details)
+
+
+def test_apply_rechecks_reviewed_authorization_identity_before_runtime_writes():
+    records = _authorization_records()
+    approved = _authorization_target(records)
+    records["teams"][0]["teamid"] = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    writes = []
+
+    with pytest.raises(runtime.WorkdayConnectRuntimeError, match="changed after approval"):
+        runtime.apply_runtime_plan(
+            {
+                "scope": {"dataverseUrl": "https://org.crm.dynamics.com", "realm": "dev"},
+                "delegatedAuthorization": {"botId": BOT_ID, **approved},
+            },
+            token="token", query=_query_for(records),
+            updater=lambda *args: writes.append(args),
+        )
+    assert writes == []
+
+
+@pytest.mark.parametrize(("output", "cause"), [
+    ("Dataverse POST failed: ndx_TeamName_BusinessUnitId", "team-name-conflict"),
+    ("[WD-AUTH-TEAM-NAME-CONFLICT]", "team-name-conflict"),
+    ("403 Forbidden", "forbidden"),
+    ("[WD-AUTH-INVALID-RECORDS]", "invalid-records"),
+    ("unexpected subprocess failure", "script-failed"),
+])
+@pytest.mark.parametrize("preview", [False, True])
+def test_authorization_errors_are_actionable_without_echoing_raw_output(
+    monkeypatch, output, cause, preview,
+):
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh")
+    plan = {
+        "scope": {
+            "dataverseUrl": "https://org.crm.dynamics.com",
+            "makerUsername": "maker@contoso.com",
+            "realm": "dev",
+        },
+        "flows": [{"name": "Read Workday"}],
+        "delegatedAuthorization": {
+            "botId": BOT_ID, "teamName": TEAM_NAME, "script": runtime.AUTHORIZATION_SCRIPT,
+            "workflowIds": [WORKDAY_CONNECTION],
+        },
+    }
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as error:
+        runtime._run_authorization(
+            plan, preview=preview,
+            runner=lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=1, stdout=output, stderr="Bearer private-token password=private",
+            ),
+        )
+    message = str(error.value)
+    assert "private" not in message
+    if cause == "script-failed" and preview:
+        assert "preview" in message
+    else:
+        assert error.value.details["cause"] == cause
+        assert error.value.details["nextAction"]
+        assert "administrator" in message
+        assert "not complete" in message or "No runtime changes" in message
+
+
+@pytest.mark.parametrize("preview", [False, True])
+def test_successful_authorization_does_not_treat_record_names_or_guids_as_errors(
+    monkeypatch, preview,
+):
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh")
+    plan = {
+        "scope": {
+            "dataverseUrl": "https://org.crm.dynamics.com",
+            "makerUsername": "maker@contoso.com",
+            "realm": "dev",
+        },
+        "flows": [{"name": "Read Workday"}],
+        "delegatedAuthorization": {
+            "botId": BOT_ID, "teamName": "Forbidden Legacy Team",
+            "script": runtime.AUTHORIZATION_SCRIPT,
+            "workflowIds": [WORKDAY_CONNECTION],
+            "authorizationId": AUTHORIZATION_ID,
+            "teamId": TEAM_ID,
+            "businessUnitId": BUSINESS_UNIT_ID,
+        },
+    }
+
+    def runner(command, **_kwargs):
+        assert f"-ExpectedAuthorizationId '{AUTHORIZATION_ID}'" in command[-1]
+        assert f"-ExpectedTeamId '{TEAM_ID}'" in command[-1]
+        assert f"-BusinessUnitId '{BUSINESS_UNIT_ID}'" in command[-1]
+        return SimpleNamespace(
+            returncode=0, stderr="",
+            stdout="\n".join([
+                "[reuse] delegatedauthorization 40311111-1111-1111-1111-111111111111",
+                "[reuse] team team-id 'Forbidden Legacy Team' (teamtype 1)",
+                "[reuse] 'Read Workday' already shared with the team",
+                "Dataverse authorization is in place.",
+            ]),
+        )
+
+    result = runtime._run_authorization(plan, preview=preview, runner=runner)
+
+    assert result["outcome"] == ("already-configured" if preview else "verified")
+
+
 def _authorization_preview_runner(command, **_kwargs):
     assert command[-1].endswith("-WhatIf")
     flow_names = runtime.load_catalog()["packages"]["runtime"]["flowNames"]
@@ -203,20 +912,26 @@ def _authorization_preview_runner(command, **_kwargs):
     return SimpleNamespace(returncode=0, stdout="\n".join(output), stderr="")
 
 
+@responses.activate
 def test_runtime_plan_uses_one_dataverse_token_and_exact_targets(monkeypatch):
     records = _records()
     token_calls = []
     monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh")
+    monkeypatch.setattr(
+        runtime, "authenticate_connections", lambda *_args, **_kwargs: _api_token(),
+    )
+    responses.add(**native.list_connections(items=_connections()["value"]))
 
     result = runtime.run_runtime_operation(
-        _state(),
+        _api_state(),
         apply=False,
         token_provider=lambda url, preferred_username: (
             token_calls.append((url, preferred_username)) or "token"
         ),
         identity_provider=_identity,
         authorization_runner=_authorization_preview_runner,
-        **_discovery_dependencies(records),
+        query=_query_for(records),
+        pac_resolver=_no_pac,
     )
 
     assert token_calls == [("https://org.crm.dynamics.com", "maker@contoso.com")]
@@ -230,9 +945,10 @@ def test_runtime_plan_uses_one_dataverse_token_and_exact_targets(monkeypatch):
         "Dataverse",
     ]
     assert result["approvalSummary"]["targetRealm"] == "Development"
-    assert result["approvalSummary"]["authorizationTeamName"] == (
-        "ESS DA HR Workday - Development"
+    assert result["approvalSummary"]["authorizationTeam"] == (
+        "Create a new internal Dataverse access team for this agent."
     )
+    assert result["plan"]["delegatedAuthorization"]["teamName"] == TEAM_NAME
     assert result["authorizationPreview"]["outcome"] == "already-configured"
     serialized_summary = __import__("json").dumps(
         result["approvalSummary"],
@@ -240,6 +956,7 @@ def test_runtime_plan_uses_one_dataverse_token_and_exact_targets(monkeypatch):
     )
     assert WORKDAY_CONNECTION not in serialized_summary
     assert DATAVERSE_CONNECTION not in serialized_summary
+    assert BOT_ID not in serialized_summary
     assert len(result["plan"]["flows"]) == 3
     assert "userContext" not in result["plan"]
     assert "token" not in json.dumps(result).casefold()
@@ -481,6 +1198,125 @@ def test_runtime_plan_rejects_connection_id_drift_after_verification():
         )
 
 
+@pytest.mark.parametrize("authorization_exists", [False, True])
+@pytest.mark.parametrize("scenario", ["partial-failure", "concurrent-create"])
+def test_runtime_retry_uses_real_approval_and_preserves_verified_progress(
+    tmp_path, monkeypatch, authorization_exists, scenario,
+):
+    from workday_connect_model import PHASE_REQUIRED_ACTIONS
+    from workday_connect_store import WorkdayConnectStore
+
+    records = _authorization_records() if authorization_exists else _records()
+    records.pop("teams", None)
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    state = _api_state()
+    store.merge_section("scope", state["scope"])
+    store.merge_section("operators", state["operators"])
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        for action in PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(phase_id, action, evidence={"outcome": "verified"})
+        store.set_phase_status(phase_id, "complete")
+    administrator_phases = store.load()["phases"]
+    monkeypatch.setattr(runtime, "_api_connections", lambda _context: _connections()["value"])
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh.exe")
+    dependencies = {
+        "token_provider": lambda *_args, **_kwargs: "token",
+        "identity_provider": _identity,
+        "query": _query_for(records),
+    }
+
+    def preview_authorization(command, **_kwargs):
+        assert command[-1].endswith("-WhatIf")
+        output = [
+            (
+                f"[reuse] delegatedauthorization {AUTHORIZATION_ID} (providertype 3)"
+                if authorization_exists
+                else "[create] would create delegatedauthorization (providertype 3)"
+            ),
+            "[create] would create access team (teamtype 1)",
+            *[
+                f"[create] would share '{name}' with the team"
+                for name in records["flows"]
+            ],
+            "[FAIL] GetTeamsForBotId returned 0 teams",
+            *[
+                f"[FAIL] {flow['workflowid']} is NOT shared with the team with WriteAccess"
+                for flow in records["flows"].values()
+            ],
+            "Verification FAILED - see [FAIL] lines above.",
+        ]
+        return SimpleNamespace(returncode=1, stdout="\n".join(output), stderr="")
+
+    preview = runtime.run_runtime_operation(
+        store.load(), apply=False,
+        authorization_runner=preview_authorization, **dependencies,
+    )
+    assert preview["authorizationPreview"]["outcome"] == "changes-required"
+    _, approved_hash = store.approve_plan("runtime", preview["plan"])
+
+    def updater(_url, _token, entity_set, record_id, data):
+        collection, key = {
+            "connectionreferences": ("references", "connectionreferenceid"),
+            "workflows": ("flows", "workflowid"),
+        }[entity_set]
+        for row in records[collection].values():
+            if row.get(key) == record_id:
+                row.update(data)
+                return True
+        raise AssertionError((entity_set, record_id))
+
+    def create_authorization():
+        created = _authorization_records()
+        records["authorizations"] = created["authorizations"]
+        records["teams"] = created["teams"]
+
+    def incomplete_authorization(command, **_kwargs):
+        create_authorization()
+        return SimpleNamespace(
+            returncode=1, stdout="[FAIL] Final flow-share verification failed.", stderr="",
+        )
+
+    def apply(runner):
+        return runtime.run_runtime_operation(
+            store.load(), apply=True, approved_hash=approved_hash,
+            verifier=lambda plan, digest: store.verify_plan("runtime", plan, digest),
+            updater=updater, authorization_runner=runner,
+            stage_recorder=lambda action, evidence: store.complete_action(
+                "runtime", action, evidence=evidence,
+            ),
+            **dependencies,
+        )
+
+    if scenario == "partial-failure":
+        with pytest.raises(runtime.WorkdayConnectRuntimeError, match="authorization failed"):
+            apply(incomplete_authorization)
+        assert set(store.load()["phases"]["runtime"]["completedActions"]) == {
+            "connection-references-bound", "runtime-flows-active",
+        }
+    else:
+        create_authorization()
+
+    def verified_authorization(command, **_kwargs):
+        assert f"-ExpectedAuthorizationId '{AUTHORIZATION_ID}'" in command[-1]
+        assert f"-ExpectedTeamId '{TEAM_ID}'" in command[-1]
+        return SimpleNamespace(
+            returncode=0, stdout="Dataverse authorization is in place.", stderr="",
+        )
+
+    result = apply(verified_authorization)
+
+    assert result["applied"]["verified"] is True
+    saved = store.load()
+    assert saved["phases"]["runtime"]["approvedPlanHash"] == approved_hash
+    assert {
+        "connection-references-bound", "runtime-flows-active",
+        "delegated-authorization-configured",
+    } <= set(saved["phases"]["runtime"]["completedActions"])
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        assert saved["phases"][phase_id] == administrator_phases[phase_id]
+
+
 def test_runtime_apply_verifies_all_mutations(monkeypatch, capsys):
     records = _records()
     verified_hashes = []
@@ -508,7 +1344,7 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch, capsys):
         for value in records["flows"].values():
             assert value["workflowid"] in invocation
         assert (
-            "-TeamName 'ESS DA HR Workday - Development'" in invocation
+            f"-TeamName '{TEAM_NAME}'" in invocation
         )
         assert "-WhatIf" not in invocation
         return SimpleNamespace(
@@ -563,7 +1399,7 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch, capsys):
     assert result["applied"]["delegatedAuthorization"] == {
         "outcome": "verified",
         "realm": "dev",
-        "teamName": "ESS DA HR Workday - Development",
+        "teamName": TEAM_NAME,
         "workflowCount": 3,
     }
     assert len(result["applied"]["flows"]) == 3

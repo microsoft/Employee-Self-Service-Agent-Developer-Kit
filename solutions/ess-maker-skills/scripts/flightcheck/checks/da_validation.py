@@ -674,6 +674,7 @@ def run_registered_da_check(runner):
     component_checks = {
         "workday_topics": _check_reviewed_workday_topics,
         "workday_wiring": _check_runtime_template_wiring,
+        "workday_redirect": maker._check_workday_redirect,
     }
     if strategy in component_checks:
         return component_checks[strategy](runner)

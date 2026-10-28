@@ -2065,9 +2065,13 @@ def _run_profile(args):
         )
         sys.exit(2)
 
-    config_path = os.path.join(".local", "config.json")
-    if not os.path.exists(config_path) and plan.requires_config:
-        print("ERROR: .local/config.json not found. Run /setup first.")
+    explicit_config = getattr(args, "profile_config", None)
+    config_path = explicit_config or os.path.join(".local", "config.json")
+    if not os.path.exists(config_path) and (explicit_config or plan.requires_config):
+        if explicit_config:
+            print(f"ERROR: Profile configuration not found: {config_path}.")
+        else:
+            print("ERROR: .local/config.json not found. Run /setup first.")
         sys.exit(1)
 
     try:
@@ -2081,6 +2085,12 @@ def _run_profile(args):
                 )
         config = _merge_connect_config(config, getattr(args, "connect_config", None))
         _profile_target_matches_config(args, config)
+        if explicit_config:
+            requested_realm = getattr(args, "validation_realm", None)
+            if requested_realm and requested_realm != config.get("realm"):
+                raise ValueError(
+                    "--validation-realm does not match --profile-config."
+                )
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"ERROR: Unable to resolve the profile target: {e}")
         sys.exit(1)
@@ -2696,6 +2706,16 @@ def main():
         help="Agent schema name for a --profile validation context.",
     )
     parser.add_argument(
+        "--profile-config",
+        default=None,
+        help=(
+            "Use this complete target configuration JSON instead of "
+            ".local/config.json for a read-only --profile run. Connect uses "
+            "a temporary verified realm snapshot; the workspace is not changed. "
+            "Unlike --connect-config, this explicitly selects the full target."
+        ),
+    )
+    parser.add_argument(
         "--connect-config",
         default=None,
         help=(
@@ -2806,6 +2826,8 @@ def main():
              "JSON, then exit without running any checks.",
     )
     args = parser.parse_args()
+    if args.profile_config and not args.profile:
+        parser.error("--profile-config requires --profile.")
     if args.output is None:
         args.output = (
             os.path.join("workspace", "flightcheck", "workday-litmus")

@@ -63,7 +63,8 @@ The comprehensive selection includes:
 | WD-DA-TOPIC-001 / WD-DA-WIRING-001 | Native component inspection uses the exact selected-agent snapshot independently of Dataverse access; unrelated package/authorization read limits do not hide observed topic defects |
 | WD-ASSIGN-001 / WD-ENTRA-* / WD-CONN-101/102 | Exact configured Workday Entra application, assignments, exposed scope, resource-bound consent and federation/certificate observations. Cross-system agreement and unsupported signing-option reads remain Manual; no tenant-wide first candidate substitutes for an unconfigured application |
 | WD-CONN-012 / WD-REST-001 / WD-RUN-001 / SN-RUN-001 | Runtime-package plus selected-agent reference bindings, saved REST configuration and recent exact invoked-flow history. These do not certify deployed endpoint agreement or current intended-employee execution |
-| DV-CONN-001 / WD-REST-002 | Enabled OOB Workday runtime Dataverse reference and selected local mapped redirect; local evidence does not prove cloud freshness |
+| DV-CONN-001 | Enabled OOB Workday runtime Dataverse reference |
+| WD-REST-002 | Development checks the selected local component-map/YAML redirect. Test and Production inspect the exact selected native agent's active User Context setup and Workday UserContextV2 topics and their OnRedirect target, independently of local Development files and Dataverse package reads. Repair in Development and promote; do not push local files into a promoted realm. Neither assertion proves publication or employee runtime success |
 | WD-DA-ATTACH-001 | Manual inspection of both agent connection references, ESS Workday Runtime and ESS Workday Runtime REST Execution, under Settings > Connection Settings > Manage; select the intended Workday connection and enable Allow permission to share parameters on both. Flow authorization is separate; never an automatic pass |
 | WD-CONN-AUTH-001 / WD-API-CLIENT-001 / WD-TENANT-001 / WD-SEC-003 | Manual employee-auth, cross-system IDs/endpoints, SAML bearer grant, Workday Owned Scope, the four functional areas and intended employee domain permissions. Public Worker Reports requires Get under Integration Permissions; extra scenario domains remain conditional |
 | WD-REST-001 | Strict saved HTTPS `/ccx/api` structure, without embedded credentials/query/fragment or extra resource suffix. Valid saved syntax remains Manual until compared with the actual deployed Workday connection and tenant |
@@ -303,7 +304,7 @@ are **not** minted here. See the setup catalog below for the owning checklist ro
 | WD-CONN-AUTH-001 | Workday connection authentication is **Microsoft Entra ID Integrated**. Reads the cached Workday (`ff0df` or `msdyn_sharedworkdaysoap_workdayruntime`) reference and echoes the observed `connectionParametersSet.name` + owner from the Power Platform admin connection. **Always `MANUAL`** — the admin API exposes no kit-verifiable fingerprint for the "Microsoft Entra ID Integrated" auth type, so this echoes for operator confirmation rather than PASS/FAIL (see reconciliation note below). | High     | Power Platform admin connections (echo only)             | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
 | DV-CONN-001      | ESS Dataverse connection reference (`…_92b66` or `msdyn_sharedcommondataserviceforapps_workdayruntime`, connector `shared_commondataserviceforapps`) bound to an **active** connection; echoes the owner so the operator can confirm it is their own account. Programmatic PASS/FAIL on a documented-tier Dataverse `connectionreferences` read. **Non-`WD` family.**                                                                                                                                  | High     | Dataverse `connectionreferences` (+ PP admin owner echo) | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
 | WD-REST-001      | Captured `restBaseUrl` is present and **trimmed to** `/api`. Pure-config check — no client.                                                                                                                                                                                                                                                                                                                                                                                                            | High     | None (reads captured config)                             | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
-| WD-REST-002      | Agent's `user-context-setup.mcs.yml` topic contains a `BeginDialog` redirect to the Workday user-context system topic (`WorkdaySystemGetUserContextV2` on the simplified pack). Pure local-file check; `SKIPPED` on the legacy install path.                                                                                                                                                                                                                                                           | High     | None (reads local agent YAML)                            | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
+| WD-REST-002 | User Context redirects to Workday UserContextV2. DA Development inspects the selected local map/YAML; Test and Production read that exact promoted agent's active native topics and OnRedirect target. Local files cannot pass or block a promoted redirect check. The legacy producer remains local-only and skips the legacy install path. Neither mode certifies employee runtime success. | High | Local map/YAML or validated AgentBuilder component read | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
 | WD-NET-001       | Workday REST + SOAP endpoints allowlisted at the corporate firewall for the Power Platform managed connectors. **Always `MANUAL`** — the kit has no reliable probe (a local reachability test proves only the dev machine's egress, not the managed-connector outbound path), so it echoes the endpoints InfoSec/IT must allowlist.                                                                                                                                                                    | High     | None (InfoSec/IT attestation; echoes captured hosts)     | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
 
 > **Gate reconciliation (S5.3).** The master checklist historically tagged S5.3 as
@@ -614,28 +615,26 @@ Behavior:
   existing `--scope` behavior changes).
 
 The set of selectable checkpoint IDs is defined by the FlightCheck registry
-(`scripts/flightcheck/registry.py`). Integration-specific IDs (the Workday
-families above, and the IDs minted by the per-skill setup plans and the
-master checklist) are added there as each skill begins emitting them.
+(`scripts/flightcheck/registry.py`). That registry, rather than an installation
+checklist, is the source of truth for runnable IDs.
 
 ---
 
-## Workday Simplified Setup Checkpoints (skills 1–6)
+## Historical CEA Workday checkpoint catalog (reference only)
 
-The Workday simplified-setup flow is decomposed into six atomic skills, each
-verified by one or more checkpoints. This catalog is the **single declaration**
-of those checkpoint IDs, owned by the master setup checklist
-(`src/skills/setup/workday/tasks.md`) — the `Step` column below is its row ID.
+This catalog records checkpoint provenance from the retired CEA setup flow.
+The `Skill` and `Step(s)` columns are historical labels, not runnable skill
+paths or current installation instructions. The old playbooks and master
+checklist are not shipped on this DA-only branch. Current DA Workday guidance
+is in `src/skills/connect/workday/SKILL.md`; CEA Connect belongs on `main-ca`.
 
-> **Status of this section.** Each ID's actual `CheckResult` emitter and its
-> `registry.py` entry land **with the owning skill** (skills 1–6), not here.
-> Until a skill ships, its **minted** IDs are declared (and their prefixes are in
-> the registry's `OWNED_PREFIXES` drift allow-list) but not yet runnable via
-> `--checkpoint`. **Reuse** IDs already exist and are runnable today.
+> Consult `scripts/flightcheck/registry.py` for each ID's current implementation
+> and availability. Inclusion in this historical table does not prove an ID is
+> runnable or applicable to DA.
 
 `Origin`: **reuse** = the checkpoint predates this flow and is simplified-aware;
-**mint** = new, owned by the named skill. `Gate`: see
-[`role-gating.md`](../setup/role-gating.md).
+**mint** = introduced by the named historical skill. `Gate` records the old
+check category; it is not an active DA permission gate.
 
 | Checkpoint             | Origin | Skill            | Step(s)    | Gate                     | What it verifies                                                                                                    |
 | ---------------------- | ------ | ---------------- | ---------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------- |

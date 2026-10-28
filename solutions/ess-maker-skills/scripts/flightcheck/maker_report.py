@@ -50,7 +50,7 @@ _PURPOSES = {
     "WD-DA-TOPIC-001": "Checks that the required Workday system conversations are active and unique; intentionally unused employee scenarios are optional.",
     "WD-DA-WIRING-001": "Checks that conversation startup initializes the Workday configuration before loading user context.",
     "DV-CONN-001": "Checks that Workday's runtime Dataverse connection reference is active and bound.",
-    "WD-REST-002": "Checks that the selected local user-context conversation redirects to its mapped Workday conversation; local files do not prove cloud freshness.",
+    "WD-REST-002": "Checks the User Context redirect in Development's selected local files or Test/Production's selected native agent. This does not prove publication or employee runtime success.",
     "WD-DA-ATTACH-001": "Guides manual inspection of both agent connection references and their parameter-sharing settings; flow authorization is a separate check.",
     "CONFIG-007": "Checks that the selected agent's local instructions are present.",
     "CONFIG-005": "Inspects the starter prompts in the selected agent's local files.",

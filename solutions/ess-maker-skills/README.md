@@ -165,11 +165,17 @@ above. It does not add new native update/delete or review-metadata endpoints.
 
 ### ✈️ FlightCheck — Agent Setup Diagnostics
 
-In a DA-GA workspace, `/flightcheck` and the standalone command use the same selected-agent diagnostics and result contract. Full discovers applicable definitions from the shared registry, including agent/content, identity, tenant-license observations, environment capacity/billing/policy, connections, knowledge, optional integrations and manual QA/publishing guidance. These are scoped observations, not proof of intended-user entitlement or current employee success. Denied reads and unsupported observations receive detailed Manual guidance; unexpected service/response failures remain Errors. Local-only is explicit, not a restriction on makers. A configured DA can run read-only diagnostics before connection readiness is complete; FlightCheck does not change setup state.
+Run `/flightcheck` to inspect the selected agent's setup and find what needs
+attention. Checks cover agent configuration, connections, environment and
+licensing observations, knowledge sources, and applicable integrations.
+Workday and ServiceNow checks depend on what the agent uses; an unused
+integration is not a setup problem. The number of checks varies with the
+agent's configuration.
 
-For a saved native DA, checkpoint and profile selections use the same producers and prerequisite closure as full. A skill references stable check IDs or named profiles; adding an eligible shared definition automatically includes it in full. Structured JSON retains the existing result contract and adds planned/emitted coverage accounting. Connect profiles preserve their existing aggregate contract, and pre-agent/legacy compatibility routes are unchanged. See the [DA coverage inventory and contributor path](src/reference/ess-docs/flightcheck/validation-matrix.md#da-maker-diagnostic-scope).
-
-DA reports distinguish **problems found**, **could not verify**, notes and passed checks. They provide a next step and an appropriate owner, not deployment approval. They do not require review JSON, administrator attestations, licensing/capacity approvals, ALM export/import or employee test evidence. Portal settings and employee scenarios that were not tested remain suggestions, never Passed checks.
+DA diagnostics are read-only: they do not change your agent or environment.
+You can run them before connection setup is complete. Use `local` scope when
+you want to check only the agent files in your ADK workspace, without signing
+in to remote services.
 
 Run `/flightcheck` from Copilot Chat, or run the equivalent full command directly from this solution's directory:
 
@@ -178,10 +184,18 @@ cd solutions/ess-maker-skills
 python scripts/flightcheck/cli.py --scope full
 ```
 
-Use `--scope local` when you explicitly want only the selected agent's extracted
-files checked without remote authentication. Both entrypoints save
-`results.json` and `report.html`. Given the same target, scope, permissions and
-evidence, findings agree; timestamps, duration and changed live data may differ.
+Chat and standalone runs use the same checks for the same selected agent and
+scope. Both save a browser report (`report.html`) and detailed results
+(`results.json`).
+
+| Scope | What it checks |
+|-------|----------------|
+| `full` | The selected agent and its applicable setup checks (default) |
+| `workday` | Applicable Workday setup checks |
+| `servicenow` | Applicable ServiceNow setup checks |
+| `local` | Agent files in the ADK workspace only; no remote API calls |
+
+For example: `python scripts/flightcheck/cli.py --scope local`.
 
 **Standalone install (no VS Code or Copilot required):**
 
@@ -193,19 +207,20 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 Re-run the same command to change your environment or agent. See [`setup/README.md`](../../setup/README.md) for details.
 
-**DA full check:** exact selected agent/environment access and metadata; authored content, ESS identity, sign-in configuration, instructions and conversation activation; logical-to-physical bindings required by active conversations/flows; and selected local files. Workday and ServiceNow are optional: the report distinguishes enabled, disabled, configured without active use, not configured and uncertain discovery. Enabled integrations receive scoped binding checks; invoked ServiceNow flows receive state checks without requiring legacy templates. Reviewed, enabled OOB Workday topics additionally select package, flow, authorization, wiring, runtime Dataverse binding and local redirect checks; arbitrary custom Workday connectors do not require that package. Dependency reads use the same account and tenant. Limited access or unknown activation is unverified, not a demonstrated configuration defect. This does not execute employee tasks or prove publication/runtime success.
+**Reading your report:** The summary identifies the agent and environment
+checked and separates passed checks, problems, warnings and items needing
+manual verification. Findings that need attention explain the next step and
+who can help. Search or filter the report to focus on those items.
 
-The offline report retains the Fluent report layout, includes the actual agent name/ID, environment details, authenticated account, elapsed time and total FlightCheck count (split into automated and manual), and shows all status totals, including zeros. Technical run settings remain available in JSON rather than cluttering the header. Totals count recorded results, not every entry in the cross-scope catalog; optional integration discovery expands only the applicable diagnostics. Disabled or unconfigured optional integrations do not prevent setup checks from passing. Administrator review applies only to a specific access-denied inspection, not a blanket approval.
+Some settings require inspection in Copilot Studio or help from an
+administrator. Missing access means a setting could not be verified, not
+necessarily that it is configured incorrectly. Follow the specific finding;
+you do not need administrator approval just to start diagnostics.
 
-Customer-facing categories use one **Workday** group rather than internal module names. Run details use two columns on desktop and one on mobile; test cases and their detailed contents use a single column at every size. Each test-case header has two columns: the stable ID above the title on the left, and the recorded status above any custom tags on the right. The reading guide is a short bullet list inside the main header. **Readiness at a glance** includes the colored status totals and category tiles without a duplicate totals table. Each test case is visible by default, with inline purpose and result labels below its header. Passed findings omit repair ownership and next steps; the reading guide gives the rerun-after-configuration-changes reminder once. Findings needing attention retain their responsible person and actionable next steps. Detailed Manual instructions retain their numbering. Setup documentation stays with the finding.
-
-The bottom **Technical details** appendix has its own case-insensitive FlightCheck-ID search and links back to the corresponding findings. It helps administrators/support inspect observed configuration, missing resources and read failures without cluttering the maker's instructions. Repeated Manual steps and common scope metadata are omitted from the appendix; a check with no additional observations says so rather than repeating a JSON block. Neither this appendix nor a Manual status proves readiness. The original JSON download retains all evidence unchanged.
-
-The check tabs are **All, Passed, Failed, Warnings, Manual**, in that order. Warnings includes recommendations and unverified automatic inspections; Manual includes explicit manual and administrator-verification items. Actual recorded statuses and detailed ledger counts remain unchanged. Optional/not-enabled items remain under All, not Passed or Failed. Customer-facing role labels use **Environment Maker user**, while raw role values remain compatible.
-
-Checks can supply optional custom tags, shown with purple borders beneath the finding's status and included in the main search. For example, `WD-RUN-001` carries **Workday Litmus Test**. Tags are defined by the check, not mapped to IDs in the report, and do not change its status, scope or verification claims.
-
-**Agent** groups cloud configuration checks with selected-agent source-file checks. The latter inspect instructions, starter prompts and topic files in the ADK workspace, not personal files. Their local scope remains explicit: they do not prove that the deployed agent has the same content or that employee scenarios work.
+The **Technical details** appendix and JSON results provide supporting
+information for administrators and support. FlightCheck does not publish the
+agent, execute employee tasks, or certify production readiness. Local-file
+checks do not prove that the deployed agent has the same content.
 
 For a focused Workday litmus, use `/flightcheck WD-RUN-001` or
 `/flightcheck wd litmus test`, or run the CLI from the maker-kit directory:
@@ -214,71 +229,17 @@ For a focused Workday litmus, use `/flightcheck WD-RUN-001` or
 python scripts/flightcheck/cli.py --checkpoint WD-RUN-001
 ```
 
-The CLI defaults this check to `workspace/flightcheck/workday-litmus`, preserving
-the full-suite report. The HTML retains the same header and shows only the
-requested finding; prerequisite observations and blockers remain in technical
-details and complete JSON. With no recent completed response, it guides the
-maker through a read-only Copilot Studio Test-pane question and a targeted
-rerun. It only reads existing exact-flow history: even a Passed observation
-does not certify every scenario, the maker's specific prompt or release readiness.
+This reads recent Workday flow history. If there is no recent response to
+inspect, the report guides you through a read-only question in the Copilot
+Studio Test pane and a rerun. A passed observation is not a guarantee that
+every employee scenario works.
 
-Applicable portal-only settings appear together under **Manual verification**. For the enabled Microsoft-provided Workday integration, `WD-DA-ATTACH-001` names both agent connection references (**ESS Workday Runtime** and **ESS Workday Runtime REST Execution**) and guides inspection of their bindings and **Allow permission to share parameters** settings. Flow authorization is checked separately. This is an unverified manual item, not an automatic pass, configuration failure, completion form or release gate.
-
-Native ServiceNow HRSD/ITSM checks distinguish employee-delegated action
-authentication, required setup/system topics and the portal root used for record
-links. They do not require a CEA extension pack, Dataverse templates or legacy
-flows. ServiceNow Knowledge ingestion has its own authentication and
-Simple/Advanced user-criteria contract; a healthy action connection does not
-prove indexing or employee access to knowledge.
-
-Knowledge guidance distinguishes SharePoint site/file scope, indexing and
-allowed/denied employee access. SharePoint filtering and Hub/connected-agent
-setup are optional. When the supported snapshot cannot establish applicability,
-the result stays Manual with conditional steps; it is not an instruction to
-enable the feature. An empty native knowledge projection is not proof that no
-external source is attached. Evaluation guidance separates test-case quality,
-deployed test sets and completed agent evaluations. Publishing guidance
-separates unpublished maker validation, organization approval/audience and
-published non-maker use in Microsoft 365 Copilot Chat.
-
-Graph observations use the existing Microsoft Graph authentication client,
-pinned to the same verified maker and tenant as native inspection; the
-AgentBuilder application is not used to request Graph permissions. Denied
-reads remain scoped Manual findings, while authentication failures remain
-Errors. No administrator role is required merely to start diagnostics, and
-Teams-bearing SKU inventory is not a universal DA licensing requirement.
-
-DA diagnostics exit `1` for confirmed issues or incomplete inspection, and `0` for completed checks with or without non-blocking notes. The diagnostic-only JSON marker and outcome are separate from existing Connect completion rules. DA full diagnostics do not emit the legacy release-outcome telemetry.
-
-**Legacy/custom-engine full checks retain their existing categories:**
-
-| Category | What's validated |
-|----------|------------------|
-| Prerequisites | M365 Copilot, Copilot Studio, and Teams licenses; Global Admin and PP Admin roles |
-| Environment | Power Platform environment, Dataverse provisioning, DLP policies |
-| Authentication | Entra ID configuration, Conditional Access policies, user sync |
-| External Systems | Workday, ServiceNow, and SAP flow discovery and status |
-| Workday Deep | Environment variables, connection references, flow status, 17 SOAP workflow tests |
-| Agent Files | Agent instructions, starter prompts, required topics, variables, template configs |
-| Configuration | Per-agent validation across all extracted agents (HR and IT) |
-| Publishing | Golden prompts, UAT sign-off, managed solution export, admin approval |
-
-**Key capabilities:**
-- **Multi-agent** — DA diagnostics inspect the selected agent only; legacy full checks retain their existing multi-agent scan
-- **HTML report** — opens in your browser with color-coded results, priority highlighting, and clickable remediation links
-- **Run history** — every run is archived in `workspace/flightcheck/history/` for trend tracking
-- **Workday SOAP tests** — available in legacy integration scopes; not executed by the DA maker setup diagnostic
-- **Safe remediation** — DA diagnostics suggest targeted actions without changing tenant configuration; legacy workflows retain their existing repair flow
-- **Graceful degradation** — runs whatever checks your permissions allow; skips the rest with clear messages
-
-**Scopes** for targeted re-runs:
-
-| Scope | What it checks |
-|-------|----------------|
-| `full` | Everything (default) |
-| `workday` | Workday connections, flows, env vars, and SOAP workflow tests |
-| `local` | Agent files only — no API calls |
-| `prerequisites` | Licenses and roles only |
+For the detailed check inventory, coverage limits and contributor guidance,
+see the [FlightCheck validation matrix](src/reference/ess-docs/flightcheck/validation-matrix.md#da-maker-diagnostic-scope).
+For help with a finding, see the
+[remediation guide](src/reference/ess-docs/flightcheck/remediation-guide.md).
+Legacy/custom-engine documentation is available on
+[`main-ca`](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/tree/main-ca).
 
 ---
 
@@ -300,123 +261,63 @@ This toolkit does NOT:
 - Provide hosted runtime, SLAs, or ongoing operations for the agents you build
 - Manage cross-tenant or cross-environment promotion (no built-in CI/CD for Copilot Studio)
 - Ship a production-ready packaged agent — you are authoring components in your own tenant
-- Deploy local DA-GA changes, install product extensions, or configure their connectors
+- Provision arbitrary product extensions or create connector credentials on the maker's behalf
 - Provide official Microsoft support beyond what is described in [SUPPORT.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SUPPORT.md)
 
 ---
 
 ## Integrations
 
-> **DA-GA boundary:** ServiceNow, Workday, and other integrations are delivered
-> through separate product extensions. The current release does not install
-> those extensions, configure their connections, or enter the retired CEA or
-> DA-Preview setup flows. The detailed material below is reference-only until
-> DA-GA product-extension guidance is available.
+Run `/connect` to choose an available integration, or start Workday directly
+with `/connect workday` or `/connect-workday`.
 
-The reference sections below describe how these integrations were configured in
-earlier Dataverse-based releases. They are not executable setup paths in the
-current DA-GA release.
+### Workday (HCM / Payroll / Absence)
+
+Connect your agent to Workday for employee data, compensation, time off and org
+lookups. For Declarative Agents, this release supports the **ESS HR Agent**.
+Workday integration with the ESS IT Agent is not supported in this release.
+
+The guided experience helps you:
+
+- Prepare the agent's local workspace if needed, then continue the same
+  connection request without asking you to restart.
+- Share setup workbooks with your Microsoft Entra and Workday administrators
+  and check their completed responses.
+- Install or verify the Workday package, guide you through connection and
+  sharing settings, and apply approved runtime configuration.
+- Complete a signed-in end-to-end Workday scenario in the Copilot Studio Test
+  pane before finishing the connection.
+
+The skill explains the access needed at each stage and saves your progress.
+Administrators make the Entra and Workday changes; the kit does not create
+connector credentials for you. DA Workday uses employee sign-in through
+Microsoft Entra ID and does not require ISU service accounts.
+
+FlightCheck readiness checks run at the relevant stages. Settings that cannot
+be verified automatically require maker or administrator confirmation.
+
+**Test and Production:** Promote the agent using your organization's approved
+process, then return to `/connect workday` for the promoted target. The skill
+reuses verified administrator setup and guides the remaining connections,
+permissions, sharing and maker validation for that target. Topic enabling and
+content changes happen only in Development; Test and Production verify the
+promoted content without changing it.
+
+Connecting Workday does not publish or promote the agent. See the
+[Workday walkthrough](src/skills/connect/workday/SKILL.md) for the guided
+procedure and the [runtime authorization guide](scripts/alm/README.md) for
+administrator details. Custom-engine Workday guidance is maintained on
+[`main-ca`](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/tree/main-ca).
 
 ### ServiceNow (HRSD / ITSM)
 
 Guided ServiceNow setup is not yet available in ADK. You can configure the ServiceNow connection manually in Copilot Studio or contact admin.
 
-**What the kit sets up:**
-- **Entra ID app registration** for SSO — employees use their Microsoft work account to authenticate, with automatic token refresh
-- **OAuth or Certificate auth** for service-to-service flows — configurable per environment
-- **Power Platform connector** — the `shared_service-now` connector, pre-authorized against your Entra app
-- **Extension pack installation** — installs the ServiceNow HRSD/ITSM extension in Copilot Studio with all connection references wired up
+### Developer integration tools
 
-**Supported auth methods:**
-| Method | Use case |
-|--------|----------|
-| Microsoft Entra ID (interactive) | Production — employees SSO through Microsoft |
-| Certificate (service-to-service) | Non-interactive integrations |
-| OAuth2 (ServiceNow credentials) | Separate ServiceNow login |
-| Basic auth | Dev/test only |
-
-**What you can build after connecting:**
-- Look up or create ServiceNow incidents, HR cases, and catalog requests
-- Query CMDB items, knowledge articles, and user records
-- New scenarios use the **template config + shared flow** pattern — no standalone workflows needed
-
-### Workday (HCM / Payroll / Absence)
-
-Connect your agent to Workday for employee data, compensation, time off, and org lookups. Run `/connect workday` to start.
-
-For Declarative Agents, this release supports the **ESS HR Agent**. Workday
-integration with the ESS IT Agent is not supported in this release.
-
-**Two supported install paths** — the kit detects which one applies and routes automatically:
-
-- **Simplified** (Microsoft's default for new installs) — just one Workday connection (OAuthUser via Entra ID) plus Dataverse. No ISU service accounts, security groups, or custom reports. User context comes from the Workday REST `/workers/me` endpoint.
-- **Legacy** — the older setup with ISU accounts, security groups, domain permissions, and the `WD_User_Context` RaaS report. Still fully supported for existing installs.
-
-**What the kit sets up (simplified path):**
-- **SSO via Entra ID** — verifies or creates the Entra enterprise app, configures trust with Workday, and pre-authorizes the Power Platform connector
-- **Extension pack installation** — installs the Workday extension in Copilot Studio with the OAuthUser and Dataverse connection references configured (including the Workday REST base URL)
-
-**What the kit additionally sets up on the legacy path:**
-- **Integration System Users (ISUs)** — automatically creates `ISU_WQL_COPILOT` (for reports) and `ISU_GENERIC_COPILOT` (for API calls) via the Workday SOAP API
-- **Security groups and domain permissions** — guides you through creating `ISSG_WQL_COPILOT` and `ISSG_GENERIC_COPILOT` with the correct domain policies
-- **OAuth API client** — walks you through registering a SAML Bearer Grant client
-- **WD_User_Context RaaS report** — verifies or guides creation of the custom report that maps Workday usernames to employee context data
-
-**Supported auth methods:**
-| Method | Use case |
-|--------|----------|
-| Microsoft Entra ID Integrated | Both paths — employees SSO through Microsoft, token exchange with Workday |
-| Basic auth | Legacy path's ISU connections (`d6081`, `0786a`) |
-
-**Verify-first approach:** The kit runs API checks against your Workday tenant before asking you to configure anything. On the legacy path, if ISU accounts, auth policies, permissions, or the RaaS report are already set up (common on shared tenants), those tasks are automatically skipped.
-
-**Test and production deployment:** `/connect workday` is the development
-environment experience. After the ESS DA HR agent and Workday package are
-deployed to Test or Production, an administrator runs the post-deployment
-Dataverse authorization script for that target environment. See
-[`scripts/alm/README.md`](scripts/alm/README.md) for the required parameters,
-safe preview, execution, and verification procedure.
-
-For ESS DA HR in development, `/connect workday` also guides the maker through
-the OAuthUser and Dataverse references, shared connection parameters,
-stale-connection recovery, flow enablement, bot-to-flow authorization, V2
-employee context, topic selection, firewall readiness, and a signed-in
-end-to-end Workday scenario. Settings without a reliable DA-scoped API require
-explicit maker or administrator confirmation rather than being reported as
-automatically verified.
-
-At the beginning of the experience, the skill presents the complete setup plan
-and identifies when an Entra administrator, Workday administrator, Power
-Platform/Dataverse administrator, InfoSec administrator, or Workday test user
-is required. This lets the maker arrange the required participants before the
-setup reaches a permission-dependent step.
-
-**What you can build after connecting:**
-- Look up employee information, compensation, service anniversary, cost center
-- Check time off balances and request time off
-- Query emergency contacts, national IDs, passports, visas, certifications
-- Update email and phone number
-- New scenarios use the **template config + shared flow** pattern — no standalone workflows needed
-
-### Workday MCP Server
-
-The kit includes a local Workday MCP server (`src/mcp/workday/`) that enables direct Workday API access from VS Code during setup and development. It supports:
-
-- **SOAP API** — Create integration systems, ISU accounts, and call any Workday web service
-- **RaaS (Reports as a Service)** — Query custom reports like `WD_User_Context`
-- **Worker data** — Get employee details, time off balances, org data
-- **Connection testing** — Verify ISU authentication and permissions
-
-The MCP server uses Basic auth with ISU credentials and is configured automatically during `/connect workday`.
-
-### ServiceNow MCP Server
-
-The kit also includes a local ServiceNow MCP server (`src/mcp/servicenow/`) for direct ServiceNow API access:
-
-- **REST API** — Query and create records in any ServiceNow table
-- **Connection testing** — Verify instance connectivity and credentials
-
-Not configured automatically by ADK.
+The repository also includes [Workday](src/mcp/workday/) and
+[ServiceNow](src/mcp/servicenow/) MCP tools for separate development tasks.
+These are not required by the guided DA Workday connection.
 
 ---
 
@@ -474,7 +375,8 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 |---------|-------------|
 | `/setup` | Connect this workspace to an existing editable DA Dev agent |
 | `/landing-page` | Configure landing-page branding and content |
-| `/connect` | Explain the DA-GA product extension requirement |
+| `/connect` | Choose an available integration |
+| `/connect-workday` | Connect the ESS HR agent to Workday |
 | `/create` | Create a topic, workflow, or evaluation test set locally |
 | `/update` | Update a topic, workflow, or evaluation test set locally |
 | `/delete` | Report that DA-GA deletion is not yet available |
@@ -483,7 +385,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | `/evaluate` | Generate evaluation test sets for your agent |
 | `/run` | Prepare and run selected evaluation sets, or inspect history and results |
 | `/test` | Drive topics in the currently deployed agent; DA-GA workflow diagnostics are not yet available |
-| `/flightcheck` | Selected-agent DA setup diagnostics with the same coverage as standalone; local-only inspection is an explicit scope. Legacy readiness modes remain available. |
+| `/flightcheck` | Check the selected agent's setup and show what needs attention |
 | `/push` | Push explicitly selected evaluation sets where supported; other native DA-GA deployment remains unavailable |
 | `/backup-template-configs` | Capture hybrid Workday reference-data template configs before an extension update |
 | `/restore-template-configs` | Restore hybrid Workday reference-data template configs after an extension update |
