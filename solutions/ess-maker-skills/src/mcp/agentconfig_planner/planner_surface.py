@@ -14,7 +14,6 @@ untransformed (``transform_payload=False``).
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from typing import Any, Awaitable, Callable, Optional
@@ -26,6 +25,16 @@ from typing import Any, Awaitable, Callable, Optional
 # sys.path, so make the sibling ``agentconfig_core`` folder importable.
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agentconfig_core")
+)
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "scripts")
+)
+
+from planner_payload import (  # noqa: E402
+    PlanPayloadTooLarge,
+    ensure_plan_payload_fits,
+    json_utf8_size,
+    plan_metadata,
 )
 
 from _odata import (  # noqa: E402
@@ -119,7 +128,7 @@ def _normalize_completion_outputs(outputs: Any) -> list[dict[str, Any]]:
         if output.get("inventoryRef"):
             artifact["inventoryRef"] = output["inventoryRef"]
         normalized.append(artifact)
-    size = len(json.dumps(normalized, ensure_ascii=False))
+    size = json_utf8_size(normalized)
     if size > _MAX_COMPLETION_OUTPUTS_BYTES:
         raise ValueError(
             f"completion outputs are too large ({size} bytes; limit "
@@ -137,6 +146,13 @@ class PlannerMixin:
     # Provided by the assembled client (PlannerClient).
     projects_base_url: str
     _caller_object_id: Optional[str]
+    tenant_id: str
+
+    def _check_plan_payload(self, plan: dict[str, Any]) -> None:
+        try:
+            ensure_plan_payload_fits(plan)
+        except PlanPayloadTooLarge as exc:
+            raise ValueError(f"{exc} Authenticated tenant: {self.tenant_id}.") from exc
 
     # ------------------------------------------------------------------
     # URL builders
@@ -238,7 +254,7 @@ class PlannerMixin:
                         "The entity changed since you read it (its ETag advanced "
                         f"from {etag} to {fresh}). Re-read it to get the current "
                         "ETag and state, then reapply your change if it is still "
-                        "needed.",
+                        f"needed. Original error: {error}",
                         http_status=412,
                     ) from error
                 raise
@@ -257,7 +273,7 @@ class PlannerMixin:
                         "tasks are read-only. Activate the plan with "
                         'update_project_plan patch {"status": "Active"} (plan '
                         "owner only) before updating, transitioning, "
-                        "completing, or deleting its tasks.",
+                        f"completing, or deleting its tasks. Original error: {error}",
                         http_status=409,
                     ) from error
                 raise
@@ -345,6 +361,7 @@ class PlannerMixin:
     ) -> Any:
         if not isinstance(plan, dict):
             raise ValueError("plan must be an object")
+        self._check_plan_payload(plan)
         return await self._request(
             "POST",
             self._plans_collection_url(project_id),
@@ -370,6 +387,13 @@ class PlannerMixin:
                     "archiving also cancels the plan's tasks. Use "
                     "archive_project_plan for that destructive operation."
                 )
+        metadata_patch = plan_metadata(patch)
+        if metadata_patch:
+            self._check_plan_payload(metadata_patch)
+            current = await self.get_project_plan(project_id, plan_id)
+            if not isinstance(current, dict) or not _entity_scalar(current, "planId", "id"):
+                raise ValueError("Cannot validate aggregate size: the current plan response has no identity.")
+            self._check_plan_payload({**plan_metadata(current, from_readback=True), **metadata_patch})
         return await self._mutate_with_etag_recovery(
             "PATCH",
             self._plan_url(project_id, plan_id),

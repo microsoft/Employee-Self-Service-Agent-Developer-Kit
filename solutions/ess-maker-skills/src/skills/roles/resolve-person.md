@@ -14,6 +14,27 @@ So whenever a maker names a **person** — "make Priya the ServiceNow admin",
 takes the `oid` from here and carries on. It's the one hop the plan can't do for
 you: a live **directory** lookup, so it may ask the maker to sign in.
 
+## Self-assignment and missing answers
+
+For "I" or "me" in an explicit assignment request, reuse a verified signed-in
+identity for the intended tenant when its object id and recognizable name are
+already available. Do not ask for the same name or email again. Do not infer an
+identity from the plan owner, another task's assignee, an operating-system account,
+or a role statement. A role describes responsibility, not who is signed in.
+
+If identity is still unknown, ask once in the main chat for a first or partial
+name or optional work email, with **Leave unassigned for now** available. Then
+use the lookup and confirmation flow below. Apply
+`src/reference/ui-formatting-guidelines.md` -> **Questions that need the maker**.
+A result saying "user is not available" is not an answer: keep the role
+understood but the person unresolved, and do not write an assignment. Return a
+failed delegated question to the main chat; never guess a name, store a deferral
+as if the maker chose it, or claim the role was assigned.
+
+This identity step belongs to assigning a person on the plan. It is not a
+prerequisite for a separate `/setup` request, whose sign-in and actual access
+checks are owned by foundation setup.
+
 ## How to resolve — two tiers
 
 Person resolution has **two tiers**. Tier 1 is the directory (Microsoft Graph)
@@ -36,6 +57,14 @@ It asks the directory for **only** a least-privilege, self-grantable
 read permission, so in a normal tenant the maker can approve the one-time
 sign-in themselves — no directory admin needed.
 
+Say a first name or partial name is fine; do not require a remembered surname or
+email address. Before the first lookup consent, explain that directory read access
+is used to find the colleague to assign, not to grant them admin permissions.
+For candidate selection, use selectable options labeled by **display name +
+initials**, with mail/UPN as disambiguating detail when returned. Include
+**Leave unassigned for now** and return that decision to the caller. Do not invent
+photos, job titles, or role holdings, or broaden Graph permissions for avatars.
+
 Branch on `status`:
 
 - **`ok` with one candidate** — use its `oid`. Confirm the person by name before
@@ -44,8 +73,8 @@ Branch on `status`:
 - **`ok` with several candidates** — **disambiguate.** Show the candidates in
   plain language (name, email — never the raw JSON) and ask which one
   they mean. Use only the `oid` of the person they pick.
-- **`no_match`** — nobody matched. Ask for a more specific name, or their email /
-  user principal name, and resolve again. Never guess an id.
+- **`no_match`** — nobody matched. Offer a more specific name or optional email,
+  and **Leave unassigned for now**. Never guess an id or trap the maker in retries.
 - **`auth_required`** — the directory needs sign-in. Ask the maker to sign in
   once ("I need you to sign in so I can look up people in your directory") and
   run the same command again. **If it still returns `auth_required` after a real

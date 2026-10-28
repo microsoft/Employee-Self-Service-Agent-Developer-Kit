@@ -279,6 +279,8 @@ def main():
     parser.add_argument("--url",
                         help="Power Platform environment URL "
                              "(e.g. https://org.crm.dynamics.com)")
+    parser.add_argument("--environment-id",
+                        help="Verified Power Platform environment ID for this URL")
     parser.add_argument("--bot-id",
                         help="Bot ID (GUID) from Dataverse")
     parser.add_argument("--name",
@@ -290,6 +292,7 @@ def main():
     parser.add_argument("--refresh", action="store_true",
                         help="Re-fetch from existing config (no full setup)")
     args = parser.parse_args()
+    environment_flags = ["--environment-id", args.environment_id] if args.environment_id else []
 
     # --- Refresh mode: reuse stored config, but let explicit CLI overrides
     # retarget to a different env/bot (see _resolve_refresh_target) ---
@@ -320,7 +323,7 @@ def main():
             sys.exit(1)
         paths = save_temp_files(components, template_configs, workflows)
         rc = run_setup(env_url, bot_id, name, schema, managed,
-                       paths, extra_flags=["--refresh"])
+                       paths, extra_flags=["--refresh", *environment_flags])
         sys.exit(rc)
 
     # --- Normal mode: requires all arguments ---
@@ -350,7 +353,7 @@ def main():
         sys.exit(1)
     paths = save_temp_files(components, template_configs, workflows)
     rc = run_setup(env_url, args.bot_id, args.name, args.schema,
-                   args.managed, paths)
+                   args.managed, paths, extra_flags=environment_flags)
     sys.exit(rc)
 
 

@@ -1,5 +1,10 @@
 # Planner — Importing an uploaded plan (make sense of a plan the maker already wrote)
 
+> **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Intent gate**,
+> then **Gate** for the workspace bootstrap on first Planner use. Reuse its successful result
+> in the same chat and workspace before continuing this flow.
+> Apply its **Communication rules** to every reply and next-step handoff.
+
 Sometimes the maker doesn't want to start from a blank interview — they already
 have a plan. They attach it (a doc, a spreadsheet exported to text, a pasted
 outline, a file they point you at) in **their own shape**, not the kit's. This
@@ -71,9 +76,9 @@ their words as-is:
   Manager, HR/IT Ticketing, IT Knowledge, Handoff, or an extensible one). If
   something maps to **no** ESS category, keep it as a note and say so — don't
   force-fit it and don't invent a category.
-- **Systems** — the system that backs each scenario, grounded in the ESS native
-  integrations from Phase-1 research (Workday, ServiceNow HRSD/ITSM, SAP
-  SuccessFactors). SharePoint / M365 is a **knowledge source**, not a connector;
+- **Systems** — capture the system the upload names for each scenario; verify
+  current native support during Phase-2 scoped research. SharePoint / M365 is a
+  **knowledge source**, not a connector;
   a system with **no** native connector (ADP, Jira, custom API) becomes a
   `/create` workflow task later, not a connect task — flag it, don't imply a
   connector exists.
@@ -85,9 +90,10 @@ their words as-is:
 - **Dependencies and tasks** — if the upload already sequences work or names
   owners, carry those across; you'll still complete the task set in Phase 3.
 
-If Phase-1 research hasn't run yet, run it (`src/skills/planner/research.md`) so
-the mapping is grounded — the upload seeds the interview, it doesn't replace the
-grounding.
+Persist the captured intent and fill only its remaining gaps first. Then run
+Phase-2 scoped research (`src/skills/planner/research.md`) before modelling; the
+upload supplies scope, not proof of connector support. Do not start a broad crawl
+before extracting its scenarios and systems.
 
 ## Step 3 — Persist it in one atomic write, and get the gap report
 
@@ -168,12 +174,16 @@ never listed**. Close both.
 **(a) Ask only the missing answers.** Drive from the gap report — not the whole
 question bank:
 
-- **`required` gaps block the build** — a missing objective, no scenarios, or a
-  scenario with no backing system (the Phase-3 mandatory set). Ask these, in the
-  gap report's own words (each gap carries a ready-to-ask `prompt`).
+- **`required` gaps identify unanswered questions**, not a reason to trap the
+  maker in an interview. Ask only what is not already known. "Not sure yet" is
+  recorded as `pendingDecision` (use `add-system --pending` for systems), not a
+  guessed system or a scope change.
+- **`pending` gaps are explicitly deferred.** Keep them visible on the plan,
+  continue modelling the known work, and block only the affected execution.
+  Do not re-ask them each time `gaps` is run.
 - **`recommended` gaps sharpen the plan** — persona, market, business goals,
-  acceptance criteria, and each scenario's enabled capabilities. Ask as scope
-  warrants; don't force them.
+  acceptance criteria, and each scenario's enabled capabilities. Reuse the
+  interview's labeled defaults rather than adding another questionnaire.
 
 Apply each answer through the **same** interview commands as a from-scratch plan
 (`set-context`, `add-scenario`, `add-system`, `add-scenario-dependency`,
@@ -185,7 +195,7 @@ loop — never a re-interrogation of what they already gave you.
 **(b) Proactively propose the tasks their goals need but the upload skipped.**
 This is the point of importing rather than just filing what they wrote. Compare
 the plan's **stated goals and scenarios** against what a grounded rollout of them
-actually requires (Phase-1 research + the Phase-3 decomposition —
+actually requires (Phase-2 research + the Phase-3 decomposition —
 `src/skills/planner/research.md`, `src/skills/planner/model.md`): a scenario with
 no connect/setup path for its system, a write scenario with no governance sign-off,
 knowledge with no source configured, an evals task never listed. Where the maker's
@@ -242,7 +252,7 @@ is empty, the proposed tasks are resolved, and the maker is satisfied.
 
 ## Step 6 — Rejoin the phases, then hand off
 
-An import seeds **Phase 1–2** (research + interview); it does not skip the rest.
+An import seeds **Phase 1-2** (intent capture + scoped research); it does not skip the rest.
 Once the required gaps are filled and the proposed tasks are in, continue exactly
 as a new plan: **Phase 3** completes the *full* atomic task set grounded in the
 captured systems/scenarios (not just the tasks the upload happened to list) with
@@ -258,12 +268,12 @@ to share it.
 the maker opts into after the plan is shown** (`src/skills/planner/interview.md` →
 *After the plan is shown*); editing follows `edit.md`.
 
-Then tell the maker the **one next step** that unblocks the rollout — usually
-handing off to whoever owns setup:
-
-> Your plan's ready and saved. The next step is to ask your **Power Platform
-> Admin** to run setup so we can ground it in a real environment — after that the
-> connect and authoring tasks open up for the people you assigned.
+Choose the requesting person's next step using `status.md` and the communication
+rules, exactly as for a newly created plan. A local draft normally needs review
+and explicit sharing, followed by activation and nominations when requested.
+Do not send an unshared, unassigned draft straight to an admin or imply imported
+role labels are confirmed people. Recommend `/setup` only when this requester's
+own eligible work and the current lifecycle call for it.
 
 Never mention files, JSON, the CLI, or these skills to the maker — speak only in
 terms of their plan, its scenarios, and the tasks.

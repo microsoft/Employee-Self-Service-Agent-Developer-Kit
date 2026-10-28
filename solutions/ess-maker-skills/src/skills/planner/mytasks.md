@@ -1,5 +1,10 @@
 # Planner — Flow 2: "What am I assigned?"
 
+> **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Intent gate**,
+> then **Gate** for the workspace bootstrap on first Planner use. Reuse its successful result
+> in the same chat and workspace before continuing this flow.
+> Apply its **Communication rules** to every reply and next-step handoff.
+
 When a person asks what work is waiting on them, show their Tasks **grouped by
 each role they hold** — which naturally covers a person with more than one role.
 
@@ -78,10 +83,14 @@ task, run `task-brief` and honour its nudge:
 python scripts/planner/cli.py task-brief --task <T#>
 ```
 
-- **Plan has an environment pinned** → `task-brief` prints "First connect your
+- **The brief has `kitSetup` because this task needs the pinned environment** →
+  `task-brief` prints "First connect your
   kit: run /setup and choose environment `<envId>`". Nudge them to `/setup` into
   **that** environment (don't let them pick or create a different one), then they
-  do their task.
+  do their task. The CLI checks `.local/config.json` on every brief and omits
+  this nudge when the workspace is already set up for that environment and
+  recorded agent. Do not add `/setup` back merely because the task consumes an
+  environment; the admin may have just finished it.
 - **This person's own ready task IS the setup task** (it produces the environment
   and none is pinned yet) → `task-brief` prints **"First-run setup…"**. This is
   their first-run experience. Spell out that they can stand up the environment
@@ -92,10 +101,11 @@ python scripts/planner/cli.py task-brief --task <T#>
   persist the environment they created (`src/skills/planner/capture.md` → *When
   `/setup` is blocked before it records the environment*), keeping the setup task
   open.
-- **No environment pinned yet** (and this isn't their setup task) → the admin's
-  `/setup` task is the prerequisite; the environment hasn't been decided. Don't
-  nudge this person to setup — tell them their task is blocked until setup runs,
-  and who owns it.
+- **This task needs an environment that isn't pinned yet** (and this isn't their
+  setup task) → the admin's `/setup` task is the prerequisite. Don't nudge this
+  person to setup — name the missing input and who owns it. Tasks that do not
+  consume an environment, such as firewall preparation, can proceed when their
+  own prerequisites are met; do not invent an environment dependency for them.
 
 Present the result in plain language — role headings with their tasks beneath —
 not as raw output.
@@ -116,18 +126,38 @@ plan — e.g. the environment id to use), the outputs to **capture** when done, 
 the `/setup`-into-the-pinned-environment nudge. On top of that, render the "how"
 by the task's kind:
 
-1. **The task is done by running a kit skill** (its description says run `/setup`,
-   `/connect`, `/create`, `/evaluate`): **hand off to that skill** — it owns the
+**Check readiness before handing off.** A non-empty `blockedBy` means assignment
+is allowed but execution must wait. Name the missing input or pending decision,
+the role/task that supplies it, and any unrelated ready work the caller can do.
+If the user says "start setup" in natural language, enter the setup skill now;
+do not ask them to type `/setup` again. Keep the original task and return to it
+after this person's workspace is bound.
+
+**Recognize foundation work even without a command in the description.**
+Environment provisioning/selection and ESS installation belong to `/setup`
+(`src/skills/foundation-setup/SKILL.md`). Use the task's purpose and its
+`primaryEnvironment`, `provisionedEnvironment`, or `essAgent` outputs to identify
+that workflow. Continue `/setup` when foundation work is already under way,
+reusing the plan's existing environment rather than provisioning another one.
+In a status response, recommend this handoff without entering the skill; run it
+only when the person asks to start or continue.
+
+1. **The task is done by running a kit skill** (from its description or the
+   foundation outputs above, e.g. `/setup`, `/connect`, `/create`, `/evaluate`):
+   **hand off to that skill** — it owns the
    detailed, current, per-tenant steps (that's exactly why `/connect` and `/setup`
    are rich). Read that skill's `SKILL.md` and follow it; don't re-summarise its
    steps from memory. The skill *is* the how-to. (E.g. "create a topic" → `/create`.)
    When the skill finishes, you (the planner) capture its outputs (`capture.md`) —
    and one run can close **more than one** task: a single `/setup` completes both
    the environment task and the base-agent task when the plan splits them.
+   If the skill's handoff already captured this run, do not capture it again.
+   Follow `status.md` → **Refresh after progress** for the same person's next
+   action; never blindly advance to another role's task.
 
 2. **The task is a portal / manual step** with no kit skill (register an Entra app,
-   provision the Power Platform environment, publish the agent): **fetch the how-to
-   from Microsoft Learn at render time** and render a **task walkthrough**:
+   publish the agent): **fetch the how-to from Microsoft Learn at render time**
+   and render a **task walkthrough**:
    - **Role** — taken *verbatim* from the step's Learn page (never relabelled or
      invented; if Learn lists alternatives, name them as Learn does).
    - **What it accomplishes** — a line or two of context.

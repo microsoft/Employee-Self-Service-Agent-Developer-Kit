@@ -12,7 +12,10 @@ agent, product, and connector names before displaying them.
 
 ## Start
 
-Run `python scripts/setup_state.py show --view current`. When `connect_ready` is
+If `.local/setup/config.json` exists, run
+`python scripts/setup_state.py show --view current`. Its absence is normal for a
+new workspace; corrupt or unreadable state is an actionable error, not a fresh
+start. When `connect_ready` is
 true, this is workspace bootstrap after foundation setup:
 
 1. Initialize `workspace/onboarding/steps.md` from the template only when it is
@@ -73,22 +76,16 @@ branch on its fields:
 - **The environment still needs creating** (`setupTaskOpen` true **and**
   `environmentPinned` false) — the plan's "run `/setup`" task is still open and no
   environment is pinned yet, so the maker running this **is the admin who owns
-  environment creation**. Do **not** show the plan-in-progress message; continue
-  the checklist below so they can create the environment.
-- **The environment already exists** (`environmentPinned` true **or**
-  `setupTaskOpen` false) — connecting an environment is **not required** as a
-  separate step. Skip the question, show the **plan-in-progress message**, then
-  read `src/skills/planner/SKILL.md` and resume their plan — unless they
-  explicitly ask to connect a deployed agent now, in which case continue the
-  checklist below.
-
-**Message — a plan is already in progress:**
-
-You already have an ESS plan going, so you don't need to connect an environment as
-a separate step — your plan includes that when it's needed. I'll pick your plan
-back up. If you'd rather connect a deployed agent right now, just say so.
-
-**End message.**
+  environment creation**. Enter `src/skills/foundation-setup/SKILL.md` to
+  provision/select the environment and install ESS; workspace binding alone
+  cannot create these resources.
+- **The environment already exists** (`environmentPinned` true) — this person's
+  workspace may still need binding. Skip the opening question, retain the
+  assigned task, and enter `src/skills/onboarding/step1.md` to reuse that
+  environment. Do not redirect to Planner. Return to the assigned task after
+  binding succeeds.
+- **No open setup task** alone is not evidence that the environment or local
+  workspace is ready. Continue the requested setup path.
 
 Use the `vscode_askQuestions` tool:
 

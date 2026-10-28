@@ -187,6 +187,29 @@ def test_every_tool_has_a_description() -> None:
         assert docstring and docstring.strip(), f"{name} has no description"
 
 
+def test_mcp_instructions_do_not_treat_passive_context_as_a_request() -> None:
+    module = ast.parse(SERVER_PATH.read_text(encoding="utf-8"))
+    constructor = next(
+        node.value for node in module.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "mcp" for target in node.targets)
+    )
+    instructions = ast.literal_eval(next(
+        keyword.value for keyword in constructor.keywords if keyword.arg == "instructions"
+    ))
+    for phrase in ("user-requested workflow", "greeting", "Hi", "plan.json", "not permission"):
+        assert phrase in instructions
+
+
+def test_project_creation_description_requires_requested_planner_work() -> None:
+    description = " ".join(ast.get_docstring(_tool_nodes()["create_agent_configuration_project"]).split())
+    for phrase in (
+        "requested Planner action", "Hi", "open plan.json",
+        "not permission", "can create a project",
+    ):
+        assert phrase in description
+
+
 def test_no_tool_exposes_identity_or_tenant_arguments() -> None:
     for name, node in _tool_nodes().items():
         arg_names = {argument.arg for argument in node.args.args}

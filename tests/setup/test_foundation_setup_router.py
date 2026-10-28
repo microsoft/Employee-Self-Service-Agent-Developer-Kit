@@ -29,7 +29,7 @@ _ONBOARDING_STEP2 = (
     _SOLUTION / "src" / "skills" / "onboarding" / "step2.md"
 )
 _ONBOARDING_TASKS = (
-    _SOLUTION / "src" / "skills" / "onboarding" / "tasks.md"
+    _SOLUTION / "src" / "skills" / "onboarding" / "steps.md"
 )
 _ONBOARDING_STEP3 = (
     _SOLUTION / "src" / "skills" / "onboarding" / "step3-flightcheck.md"
@@ -89,8 +89,10 @@ def test_first_run_gate_is_fre_aware_for_the_environment_owner() -> None:
         assert "environmentPinned" in gate
         # The owner of the open setup task proceeds instead of being bounced.
         assert "owns environment creation" in gate
-        # The bounce is still reachable when the environment already exists.
-        assert "plan-in-progress message" in gate
+        # A shared environment does not initialize another person's workspace.
+        assert "src/skills/onboarding/step1.md" in gate
+        assert "Do not redirect to Planner" in gate
+        assert "plan-in-progress message" not in gate
 
 
 def test_workday_routing_remains_unchanged() -> None:
@@ -151,7 +153,7 @@ def test_alm_step_reuses_env009_as_an_optional_step_checkpoint() -> None:
         _SOLUTION / "src" / "skills" / "foundation-setup" / "alm-baseline.md"
     ).read_text(encoding="utf-8")
     tasks = (
-        _SOLUTION / "src" / "skills" / "foundation-setup" / "tasks.md"
+        _SOLUTION / "src" / "skills" / "foundation-setup" / "steps.md"
     ).read_text(encoding="utf-8")
 
     assert "--checkpoint ENV-009" in alm
@@ -172,6 +174,66 @@ def test_foundation_router_paths_resolve() -> None:
     ]
 
     assert not missing
+
+
+def test_workspace_bootstrap_merges_all_mcp_servers() -> None:
+    for path in (_FOUNDATION_BOOTSTRAP, _ONBOARDING_STEP1):
+        text = path.read_text(encoding="utf-8")
+        assert "python scripts/mcp_config.py materialize-defaults" in text
+        assert 'python scripts/mcp_config.py configure dataverse --environment-url "{ENV_URL}"' in text
+        assert '"servers": {' not in text
+        assert "ess-planner" in text
+
+
+def test_setup_retains_task_context_and_accepts_natural_language() -> None:
+    text = " ".join(_FOUNDATION.read_text(encoding="utf-8").split())
+    assert "natural-language setup request" in text
+    assert "never ask the maker to rewrite the request as a command" in text
+    assert "A plan nomination is not proof of administrative access" in text
+    assert "return to its brief" in text
+    scope = " ".join(_SCOPE.read_text(encoding="utf-8").split())
+    assert "Do not restart persona detection" in scope
+
+
+def test_setup_role_statement_does_not_start_a_plan_identity_interview() -> None:
+    text = " ".join(_FOUNDATION.read_text(encoding="utf-8").split())
+    for phrase in (
+        "A setup role statement is not a plan-assignment request",
+        "I am the Power Platform admin",
+        "Do not require a name or work email",
+        "do not call role-attestation tools",
+        "sign-in and environment-access checks",
+        "main chat",
+    ):
+        assert phrase in text
+
+
+def test_required_questions_stay_in_main_chat_and_unavailable_is_not_consent() -> None:
+    text = " ".join(_UI_FORMATTING_GUIDELINES.read_text(encoding="utf-8").split())
+    for phrase in (
+        "The main chat owns questions",
+        "subagent",
+        "return the missing question",
+        "user is not available",
+        "not an answer",
+        "not consent",
+        "Do not choose a person, tenant, environment",
+        "do not retry the unavailable question in a loop",
+    ):
+        assert phrase in text
+
+
+def test_standalone_setup_handoff_has_a_prominent_next_step() -> None:
+    handoff = (_FOUNDATION.parent / "handoff.md").read_text(encoding="utf-8")
+    standalone = handoff.split("**Without a plan task", 1)[1]
+    assert "## Your next step\n\n**Connect your first system.**" in standalone
+    assert "**Run:** `/connect`" in standalone
+
+
+def test_setup_passes_verified_environment_id_to_extraction() -> None:
+    text = _ONBOARDING_STEP2.read_text(encoding="utf-8")
+    assert '--environment-id "{ENVIRONMENT_ID}"' in text
+    assert "return to that" in text and "task with the verified environment ID/URL" in text
 
 
 def test_foundation_does_not_prompt_for_non_decisions() -> None:
@@ -376,6 +438,24 @@ def test_foundation_handoff_routes_directly_to_agent_inventory() -> None:
     assert "onboarding/step1b.md" in bootstrap
     assert "FOUNDATION_REUSED" in bootstrap
     assert "| # | Task | Status |" not in extraction
+
+
+def test_planned_setup_completion_refreshes_the_callers_next_action() -> None:
+    handoff = (
+        _SOLUTION / "src" / "skills" / "foundation-setup" / "handoff.md"
+    ).read_text(encoding="utf-8")
+    assert "## After workspace binding" in handoff
+    assert "src/skills/planner/capture.md" in handoff
+    assert "src/skills/planner/status.md" in handoff
+    assert "Do not default to `/connect`" in handoff
+    assert "Without a plan task" in handoff
+    assert "only once" in handoff
+    router = " ".join(_FOUNDATION.read_text(encoding="utf-8").split())
+    assert "After workspace binding" in router
+    assert "do not automatically direct an assigned admin to `/connect`" in router
+    extraction = _ONBOARDING_STEP2.read_text(encoding="utf-8")
+    assert extraction.index("For an assigned plan task") < extraction.index("You can now customize")
+    assert "workspace binding alone does not complete the assigned task" in " ".join(extraction.split())
 
 
 def test_onboarding_does_not_offer_legacy_optional_readiness_check() -> None:

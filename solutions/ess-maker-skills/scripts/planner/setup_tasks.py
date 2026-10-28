@@ -309,7 +309,7 @@ _WORKDAY_SLOTS: dict[tuple[int, str], _Slot] = {
         # exercises the Workday REST endpoint, so it stays locked until InfoSec/IT
         # has opened the network path (otherwise the graph would mark Workday
         # connectivity ready while the firewall change is still outstanding).
-        consumes=("workdayEntraApp", "workdayTenantConfig", "workdayNetworkAllowlist"),
+        consumes=("primaryEnvironment", "essAgent", "workdayEntraApp", "workdayTenantConfig", "workdayNetworkAllowlist"),
         command="/connect",
     ),
     (5, "infosec-it"): _Slot(
@@ -323,7 +323,7 @@ _WORKDAY_SLOTS: dict[tuple[int, str], _Slot] = {
         title="Author your first custom Workday topic",
         how="Run /create to author your first custom Workday topic — define its trigger phrases, wire it to Workday with your tenant's reference IDs, and review it for issues",
         produces=("topic:workday",),
-        consumes=("workdayConnection",),
+        consumes=("primaryEnvironment", "essAgent", "workdayConnection"),
         command="/create",
     ),
 }

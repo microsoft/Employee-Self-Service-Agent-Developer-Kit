@@ -323,6 +323,12 @@ class AgentConfigBaseClient:
             message = f"HTTP {status_code}"
         return f"{code}: {message}"
 
+    def _format_error_response(
+        self, response: httpx.Response, body: Any, client_request_id: str,
+    ) -> str:
+        """Allow surfaces to add request diagnostics without changing other clients."""
+        return self._format_api_error(body, response.status_code)
+
     async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is not None and not self._client.is_closed:
             return self._client
@@ -378,6 +384,13 @@ class AgentConfigBaseClient:
         # retry-on-transient behavior; only call sites that would genuinely
         # duplicate on replay (unkeyed creates) opt out with idempotent=False.
         retry_safe = True if idempotent is None else idempotent
+        headers = httpx.Headers(kwargs.get("headers"))
+        try:
+            client_request_id = str(uuid.UUID(headers.get("client-request-id", "")))
+        except ValueError:
+            client_request_id = str(uuid.uuid4())
+        headers["client-request-id"] = client_request_id
+        kwargs["headers"] = headers
         last_error: Optional[Exception] = None
         for attempt in range(self.max_retries):
             client = await self._ensure_client()
@@ -393,6 +406,9 @@ class AgentConfigBaseClient:
                         # request (typically an unkeyed create) may already have
                         # committed server-side; replaying it risks a duplicate,
                         # so surface it instead of retrying.
+                        response.raise_for_status()
+                    if attempt == self.max_retries - 1:
+                        # The final response must keep its status and diagnostics.
                         response.raise_for_status()
                     wait = (2**attempt) + random.uniform(0, 1)
                     last_error = AgentConfigApiError(
@@ -424,7 +440,7 @@ class AgentConfigBaseClient:
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     body = None
                 raise AgentConfigApiError(
-                    self._format_api_error(body, error.response.status_code),
+                    self._format_error_response(error.response, body, client_request_id),
                     http_status=error.response.status_code,
                 ) from error
 

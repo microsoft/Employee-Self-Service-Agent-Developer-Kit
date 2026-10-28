@@ -51,8 +51,8 @@ _CREATE_ANNOTATIONS = ToolAnnotations(
 # Get-or-create / upsert tools converge on the same resource, so a replay is
 # safe: create_agent_configuration_project returns the existing project when one
 # already matches, and attest_plan_role upserts a deterministic grant row. They
-# are creates in name only — non-destructive and idempotent — so clients may
-# safely retry them after an ambiguous failure.
+# can create records; idempotence permits safe replay after an ambiguous failure,
+# not invocation without a requested workflow.
 _CREATE_IDEMPOTENT_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=False,
@@ -74,8 +74,15 @@ _SYNC_INVENTORY_ANNOTATIONS = ToolAnnotations(
 mcp = FastMCP(
     "ess-planner",
     instructions=(
-        "Drive AgentConfiguration projects, plans, tasks, and plan "
-        "role attestation. Identity and tenant come from the access token and "
+        "Use tools only for a user-requested workflow or a genuine continuation, "
+        "including requested planning or inventory/setup discovery. A greeting-only "
+        "message such as Hi, general help, or passive open/attached plan.json context "
+        "does not request work. Tool availability or prior approval is not permission "
+        "to start a workflow. "
+        "ESS Planner reads and updates shared implementation plans, tasks, and "
+        "role assignments. Explain this purpose before a host trust prompt; "
+        "tool approval does not grant environment-admin permissions. "
+        "Identity and tenant come from the access token and "
         "are never tool arguments. For any PATCH/DELETE, read the exact entity "
         "first and pass its current ETag as ``etag`` (sent as If-Match). The "
         "server turns the two conflicts this surface produces into actionable "
@@ -83,7 +90,11 @@ mcp = FastMCP(
         "you read it and to re-read and reapply — it never silently replays "
         "your write over another edit — and when a task mutation is blocked "
         "because its parent plan is not Active it returns an actionable message "
-        "telling you to activate the plan first. Projects and plans have no "
+        "telling you to activate the plan first. Activation requires explicit "
+        "user consent; never activate just to bypass an error. Before starting "
+        "or completing work, verify its prerequisites and pending decisions. "
+        "A local completion is not shared until readback confirms state and outputs. "
+        "Projects and plans have no "
         "DELETE route — archive them instead; only tasks can be deleted."
     ),
 )
@@ -160,8 +171,10 @@ async def create_agent_configuration_project(
     project: dict[str, Any],
     idempotencyKey: Optional[str] = None,
 ) -> str:
-    """Get-or-create a project by name (case/whitespace-insensitive). Supported
-    names: {"name": "Employee Self-Service"} or {"name": "Workforce Insights"};
+    """Get-or-create a project by name (case/whitespace-insensitive). Only use
+    this for a requested Planner action, not Hi alone, general help, or an open plan.json
+    without an action. Passive file context is not permission; this operation can create a project.
+    Supported names: {"name": "Employee Self-Service"} or {"name": "Workforce Insights"};
     optional ownedById? and metadata?. An unsupported name is rejected (400
     ValidationError "name must be one of the supported configuration
     experiences: Employee Self-Service, Workforce Insights"). The returned
@@ -212,10 +225,19 @@ async def create_project_plan(
     """Create a plan in a project. Body: configuringAgentName is REQUIRED — the
     ESS agent this plan configures. The ESS agent ships as a declarative agent
     (DA), which is what merges to main, so name one of EmployeeSelfServiceHRDA or
-    EmployeeSelfServiceITDA (HR vs IT is the only choice; there is no DA-vs-custom-
-    engine option). Then optional ownedById?, acceptanceCriteria?, context?, and
+    EmployeeSelfServiceITDA. Infer the target from the requested scenarios and
+    confirm it with the draft plan, preserving an explicit or saved target;
+    this is not an up-front experience selector or a DA-vs-custom-engine choice.
+    The target is required for this shared create, not for local drafting.
+    Wait for explicit sharing consent and a resolved target before calling.
+    Then optional ownedById?, acceptanceCriteria?, context?, and
     tasks? (inline tasks are created atomically with the plan, max 50). Unknown
-    fields are rejected (400). New plans start in Draft."""
+    fields are rejected (400). New plans start in Draft. Aggregate plan metadata
+    is checked against the 25,600-byte record budget with client headroom for
+    server-added fields. Use the latest export-remote-plan body; it can compact
+    generated workstream metadata without dropping intent. PlanPayloadTooLarge
+    or OpenTypeTooLarge is not transient: do not retry unchanged or rotate keys
+    to bypass it. Confirm the intended tenant if diagnostics report a mismatch."""
     return _format(
         await get_client().create_project_plan(projectId, plan, idempotencyKey)
     )
@@ -234,9 +256,14 @@ async def update_project_plan(
     {"acceptanceCriteria": [...]}, or {"context": [...]}. Send a lifecycle field
     (status or ownedById) on its own — it cannot be combined with the other
     lifecycle field or with an acceptanceCriteria/context edit in one PATCH.
-    Only the plan owner may change status. Requires the plan's current ETag; if
+    Only the plan owner may change status. Activation requires an explicit
+    activation request; a status question is not consent.
+    Requires the plan's current ETag; if
     it is stale the call fails with an actionable 412 telling you to re-read the
-    plan and reapply your change (the write is never silently replayed)."""
+    plan and reapply your change (the write is never silently replayed).
+    Metadata edits are size-checked against the current record, not just the
+    patch, while retaining the caller's ETag. PlanPayloadTooLarge/OpenTypeTooLarge
+    requires reducing redundant metadata and re-exporting, not unchanged retries."""
     return _format(
         await get_client().update_project_plan(projectId, planId, patch, etag)
     )
@@ -255,7 +282,9 @@ async def list_project_plan_tasks(
     planId: str,
     query: Optional[dict[str, Any]] = None,
 ) -> str:
-    """List the tasks in a plan."""
+    """List the tasks in a plan for a team overview, not the caller's assignments.
+    For a personal execution next step, use list_project_plan_tasks_for_caller
+    rather than treating any ready task in this list as the caller's work."""
     return _format(
         await get_client().list_project_plan_tasks(projectId, planId, query)
     )
@@ -276,7 +305,13 @@ async def list_project_plan_tasks_for_caller(
     (assignedToId eq '<caller>') — the service needs it to run the role
     expansion — and always excludes Completed tasks (state ne 'Completed').
     Any query.filter you pass is ANDed on as a residual that narrows further;
-    it cannot drop the marker or surface Completed work."""
+    it cannot drop the marker or surface Completed work.
+    Use this view for a personal next step in a status response. Returning tasks
+    does not make them ready to execute: check the plan lifecycle, task state,
+    and dependencies first; a shared draft is read-only. An empty result is not
+    proof that the caller has no role, and never permits substituting another
+    person's ready work. Query again after completion or reassignment before
+    recommending the next task; do not reuse an earlier task list."""
     return _format(
         await get_client().list_project_plan_tasks_for_caller(
             projectId, planId, query
@@ -377,6 +412,7 @@ async def set_project_plan_task_state(
     InProgress, Completed, Cancelled). A task must be InProgress before it can
     be Completed, and the parent plan must be Active. Use
     complete_project_plan_task when completion must capture outputs. Requires
+    the caller to check task prerequisites before starting/completing work and
     the task's current ETag; a stale ETag fails with an actionable 412 to
     re-read and reapply (never silently replayed), and a non-Active parent plan
     yields an actionable "activate the plan first" message."""
@@ -401,7 +437,8 @@ async def complete_project_plan_task(
     outputs require a non-empty environmentId attribute. Requires the task's
     current ETag; a stale ETag fails with an actionable 412 to re-read and
     reapply (never silently replayed), and a non-Active parent plan yields an
-    actionable "activate the plan first" message."""
+    actionable "activate the plan first" message. Do not fake completion to
+    share partial outputs; confirm state and outputs by reading the plan back."""
     return _format(
         await get_client().complete_project_plan_task(
             projectId, planId, taskId, outputs, etag

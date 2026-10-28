@@ -10,9 +10,13 @@ grouping headers that carry ``children`` but no ``href``.
 
 from __future__ import annotations
 
+import json
+from urllib.error import URLError
+
 import pytest
 
-from planner import research
+from planner import cli, research
+from planner.plan_model import learn_links
 
 TOC = {
     "items": [
@@ -152,6 +156,134 @@ def test_extract_signals_dedupes_and_honours_custom_lexicon():
     sig = research.extract_signals(text, roles=(), outputs=("environment",))
     assert sig["roles"] == []
     assert sig["outputs"] == ["environment"]  # de-duped, case-insensitive
+
+
+@pytest.fixture
+def research_fetches(monkeypatch):
+    calls = {"toc": 0, "pages": []}
+
+    def fetch_toc(*args, **kwargs):
+        calls["toc"] += 1
+        return TOC
+
+    def fetch_page(url, **kwargs):
+        calls["pages"].append(url)
+        return f"Power Platform administrator configures the environment. Source: {url}"
+
+    monkeypatch.setattr(research, "fetch_toc", fetch_toc)
+    monkeypatch.setattr(research, "fetch_page_text", fetch_page)
+    return calls
+
+
+def _research_args(tmp_path, tokens="workday"):
+    return [
+        "--plan", str(tmp_path / "plan.json"), "research", "--fetch", "--extract",
+        "--tokens", tokens, "--budget", "8",
+    ]
+
+
+def test_extraction_returns_readable_pages_and_reuses_fresh_cache(tmp_path, capsys, research_fetches):
+    args = _research_args(tmp_path)
+    assert cli.main(args) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert first["pages"]
+    assert all("configures the environment" in page["text"] for page in first["pages"])
+    assert first["signals"]["roles"]
+    assert cli.main(args) == 0
+    second = json.loads(capsys.readouterr().out)
+    assert second["reusedPages"] == len(first["pages"])
+    assert second["pages"] == first["pages"]
+    assert research_fetches["toc"] == 1
+    assert len(research_fetches["pages"]) == len(set(research_fetches["pages"]))
+    assert not (tmp_path / "plan.json").exists()
+    saved = json.loads((tmp_path / "research-context.json").read_text(encoding="utf-8"))
+    assert {link["url"] for link in learn_links(saved)} == {page["url"] for page in second["pages"]}
+
+
+def test_research_scope_change_only_fetches_missing_pages(tmp_path, capsys, research_fetches):
+    assert cli.main(_research_args(tmp_path)) == 0
+    capsys.readouterr()
+    assert cli.main(_research_args(tmp_path, "workday servicenow")) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert any("servicenow" in page["href"] for page in result["pages"])
+    assert result["reusedPages"] > 0
+    assert research_fetches["toc"] == 1
+    assert len(research_fetches["pages"]) == len(set(research_fetches["pages"]))
+
+
+@pytest.mark.parametrize("refresh", ["expired", "explicit"])
+def test_research_refreshes_expired_or_explicitly_requested_content(tmp_path, capsys, research_fetches, refresh):
+    args = _research_args(tmp_path)
+    assert cli.main(args) == 0
+    first = json.loads(capsys.readouterr().out)
+    if refresh == "expired":
+        path = tmp_path / "research-context.json"
+        context = json.loads(path.read_text(encoding="utf-8"))
+        cache = context["learnCache"]
+        cache["tocFetchedAt"] = "2000-01-01T00:00:00+00:00"
+        for page in cache["pages"].values():
+            page["fetchedAt"] = cache["tocFetchedAt"]
+        path.write_text(json.dumps(context), encoding="utf-8")
+    else:
+        args.append("--refresh")
+    assert cli.main(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["reusedPages"] == 0
+    assert research_fetches["toc"] == 2
+    assert len(research_fetches["pages"]) == 2 * len(first["pages"])
+
+
+def test_managed_research_preserves_existing_notes_and_links(tmp_path, capsys, research_fetches):
+    path = tmp_path / "research-context.json"
+    legacy = {"notes": "Review custom scope", "prerequisites": [{"title": "Original grounding", "url": "https://learn.microsoft.com/original"}]}
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    assert cli.main(_research_args(tmp_path)) == 0
+    capsys.readouterr()
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["notes"] == legacy["notes"]
+    assert saved["prerequisites"] == legacy["prerequisites"]
+    assert legacy["prerequisites"][0]["url"] in {link["url"] for link in learn_links(saved)}
+
+
+@pytest.mark.parametrize("contents", ['{broken', '{"learnCache": {"schemaVersion": 99}}'])
+def test_invalid_research_cache_is_not_silently_overwritten(tmp_path, capsys, research_fetches, contents):
+    path = tmp_path / "research-context.json"
+    path.write_text(contents, encoding="utf-8")
+    assert cli.main(_research_args(tmp_path)) == 1
+    assert capsys.readouterr().err
+    assert path.read_text(encoding="utf-8") == contents
+    assert research_fetches == {"toc": 0, "pages": []}
+
+
+def test_failed_refresh_is_visible_and_retry_does_not_repeat_successful_fetches(tmp_path, capsys, research_fetches, monkeypatch):
+    args = _research_args(tmp_path)
+    assert cli.main(args) == 0
+    first = json.loads(capsys.readouterr().out)
+    failed_url = first["pages"][0]["url"]
+    successful_fetch = research.fetch_page_text
+
+    def fail_one(url, **kwargs):
+        if url == failed_url:
+            research_fetches["pages"].append(url)
+            raise URLError("test network unavailable")
+        return successful_fetch(url, **kwargs)
+
+    monkeypatch.setattr(research, "fetch_page_text", fail_one)
+    assert cli.main([*args, "--refresh"]) == 1
+    output = capsys.readouterr()
+    partial = json.loads(output.out)
+    assert partial["errors"][0]["url"] == failed_url
+    assert "test network unavailable" in output.err
+    assert failed_url not in {page["url"] for page in partial["pages"]}
+    saved = json.loads((tmp_path / "research-context.json").read_text(encoding="utf-8"))
+    assert saved["learnCache"]["pages"][failed_url]["text"] == first["pages"][0]["text"]
+    before_retry = len(research_fetches["pages"])
+
+    monkeypatch.setattr(research, "fetch_page_text", successful_fetch)
+    assert cli.main(args) == 0
+    retried = json.loads(capsys.readouterr().out)
+    assert retried["errors"] == []
+    assert len(research_fetches["pages"]) == before_retry + 1
 
 
 @pytest.mark.live

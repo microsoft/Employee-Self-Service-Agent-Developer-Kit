@@ -376,9 +376,12 @@ def test_setup_status_no_plan_is_safe_noop(tmp_path, capsys):
     assert status == {
         "hasPlan": False,
         "setupTaskId": None,
+        "setupEnvironmentKey": None,
         "setupTaskState": None,
         "setupTaskOpen": False,
+        "firstRunSetupTaskId": None,
         "environmentPinned": False,
+        "agentPinned": False,
         "environment": None,
     }
 
@@ -394,6 +397,7 @@ def test_setup_status_reports_open_setup_task(tmp_path, capsys):
     status = _setup_status(plan_path, capsys)
     assert status["hasPlan"] is True
     assert status["setupTaskId"] == "T1"
+    assert status["setupEnvironmentKey"] == "primaryEnvironment"
     assert status["setupTaskState"] == "NotStarted"
     assert status["setupTaskOpen"] is True        # reconcile should run
     assert status["environmentPinned"] is False   # nothing to offer yet
@@ -438,6 +442,7 @@ def test_setup_status_plan_without_setup_task(tmp_path, capsys):
     status = _setup_status(plan_path, capsys)
     assert status["hasPlan"] is True
     assert status["setupTaskId"] is None
+    assert status["setupEnvironmentKey"] is None
     assert status["setupTaskState"] is None
     assert status["setupTaskOpen"] is False
     assert status["environmentPinned"] is False

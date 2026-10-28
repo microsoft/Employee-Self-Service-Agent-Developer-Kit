@@ -1,10 +1,22 @@
-# Planner — Phase 2: Interview (grounded slot-filling)
+# Planner — Phase 1: Interview (intent capture before scoped research)
+
+> **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Intent gate**,
+> then **Gate** for the workspace bootstrap on first Planner use. Reuse its successful result
+> in the same chat and workspace before continuing this flow.
+> Apply its **Communication rules** to every reply and next-step handoff.
 
 Ask the **fewest questions** that let you commit a buildable, scoped, assigned
 Plan — then **generate the plan from sensible defaults and let the sponsor edit
-it**, rather than interrogating every slot up front. Research (Phase 1) already
-proposed candidate scenarios, prerequisites, and roles — so **propose, don't
-interrogate**.
+it**, rather than interrogating every slot up front. Use the request, an upload,
+and the shipped scenario catalogue to capture intent. Do not start a broad Learn
+crawl before these inputs are known. Phase 2 verifies the captured scope and
+connector support before tasks are modelled.
+
+Keep shared context concise. State a common assumption or governance condition
+once rather than repeating it in every capability's value/description. Preserve
+the meaning and keep detailed grounding in the local research/review artifact.
+Local field validation does not prove shared storage will fit; the final export
+must pass the aggregate budget in `sync.md` before a shared write.
 
 **The question budget: three short turns, then build.** Only three things are
 worth asking before you generate a plan — ask each as one batched turn, then stop
@@ -12,7 +24,19 @@ and build:
 
 1. **Goal + success** (one sentence).
 2. **Scenarios** — the jobs employees self-serve, and (lightly) what's off the table.
-3. **The system behind each scenario area.**
+3. **The systems behind all unresolved scenario areas, together.**
+
+This is a ceiling, not three mandatory questions. Read the request and existing
+plan first; acknowledge already-clear choices instead of reconfirming them.
+For example, "Plan ESS HR with Workday profile updates" already supplies HR, a
+scenario, and its system. Set `set-agent-name --name EmployeeSelfServiceHRDA`
+without asking HR or IT again. Use `EmployeeSelfServiceITDA` for an explicit IT
+target. If the maker names only scenarios, infer the experience from them using
+the policy below; do not insert an experience-selection question before Q1 or Q2.
+
+Before Q1, give the short plan definition and journey in `SKILL.md`. For every
+offered choice, explain the employee outcome, what it needs, and what work it
+adds. Offer peer scenarios, not a base bundle beside an unexplained "add ticketing."
 
 **Everything else is assumed, not asked.** Persona, market/wave, the success
 *measure*, the acceptance bar, and the *per-scenario detail within a category*
@@ -48,6 +72,60 @@ doesn't define, and don't force‑fit a goal that matches no ESS category (say s
 Per‑scenario detail (fields, setup, connectors, roles) is fetched from Microsoft
 Learn at render time, never from the catalogue.
 
+## Infer the experience from the scenarios
+
+The experience is derived from the employee outcomes, **not a fourth interview
+question**. Preserve an explicit or saved target without reconfirming it on every
+resume or refinement. When no target is known, map the captured scenarios to the
+catalogue's **Domain**, then infer the supported experience:
+
+| Captured scenario evidence | Inferred experience for a new plan |
+|---|---|
+| HR knowledge, employee profile read/write, HR cases, or manager scenarios | **ESS HR** (`EmployeeSelfServiceHRDA`) |
+| IT knowledge, troubleshooting (including M365), or IT tickets | **ESS IT** (`EmployeeSelfServiceITDA`) |
+
+Do not infer from a connector alone: SharePoint and ServiceNow can support more
+than one domain. Use the requested jobs and their catalogue categories, not the
+first system mentioned. Unknown systems do not delay inferring an otherwise-clear
+HR or IT experience. There is no declarative-vs-custom-engine interview.
+
+Record a clear inferred target with `set-agent-name` while creating the local
+draft. Treat the inference as a **proposed** target until the maker confirms it
+with the scope; do not claim they explicitly chose it. Put the rationale and
+confirmation in the same readback that presents the draft, **not a separate
+approval turn** or an experience-picker form. For example:
+
+> This looks like an ESS HR rollout because you want profile updates and HR case
+> tracking. I've drafted the ESS HR plan below; please confirm that target along
+> with the scope, or tell me what to change.
+
+> This looks like an ESS IT rollout because you want IT troubleshooting and ticket
+> tracking. I've drafted the ESS IT plan below; please confirm that target along
+> with the scope, or tell me what to change.
+
+If the maker already named the experience, simply acknowledge it in the readback;
+no additional confirmation is needed. Correct an inferred local-draft target
+when asked and refine the affected tasks/evals without restarting the interview.
+Do not silently retarget a shared plan when new scenarios conflict with its
+existing target; surface that conflict during plan review.
+
+For **mixed HR/IT**, generic knowledge/handoff with no domain, or another domain
+such as **Facilities** without a supported target, do not pick by majority, choose
+the first domain, invent an agent name, or force the request into HR. Keep all
+requested scenarios visible and save the specific uncertainty:
+
+```text
+python scripts/planner/cli.py set-context --key experience --group pendingDecision --value "<target or primary scope to confirm during plan review>" --source Agent
+```
+
+Continue creating a local draft without a target; clarify the actual scope with
+that draft, not through an up-front "Which ESS experience?" question. A shared plan
+requires one supported `configuringAgentName`, so sharing waits for this decision,
+not local planning. Do not split into multiple shared plans without approval.
+Once resolved, persist the target with `set-agent-name` and, if present, clear the
+pending entry with `remove-context --key experience`. Do not clear unrelated
+pending system or owner decisions.
+
 ## The question bank — scenarios *before* systems
 
 Capture in this order. **Build the scenario context first** — the jobs the team
@@ -59,8 +137,8 @@ ticketing) they may have wanted.
 | # | Ask | Store as |
 |---|-----|----------|
 | 1 | **Goal + success, together.** "In one sentence — what should this agent do, and for whom? And what does success look like — fewer support tickets, faster policy answers, or something else?" (The success half seeds the default success measure below — you won't ask for it separately.) | `set-context --group objective` |
-| 2 | **Scenarios (jobs‑to‑be‑done) — ask this before any system.** "Which 2–3 things do employees ask about most?" (e.g. *"How many vacation days do I have?"*, *"Reset my password"*, *"Update my phone number"*) — then widen: "Which scenarios are you thinking about beyond that?" To prioritise, offer a starting point: "Pick a focus — HR or IT — and expand from there. Where do employees feel the most friction today?" Map their answer to the **catalogue categories**: **HR Knowledge**, **HR Profile** (read/write), **Manager**, **HR Ticketing**, **IT** (knowledge + ticketing), **Handoff** — plus **extensible** scenarios (e.g. Request Time Off). Offer these, capture the sponsor's own words, and confirm which categories are in scope. | `set-context --group scenarioContext` (key `jtbd`) + `add-scenario` per category |
-| 3 | **System per scenario — only after scenarios are captured.** "For **{scenario/area}**, which system holds the data?" — ground the options in the ESS native integrations from Phase‑1 research (Workday, ServiceNow HRSD/ITSM, SAP SuccessFactors); SharePoint / M365 content is a knowledge source. | `add-system --area {area} --system "{name}"` |
+| 2 | **Scenarios (jobs‑to‑be‑done) — ask this before any system.** "Which 2–3 things do employees ask about most?" (e.g. *"How many vacation days do I have?"*, *"Reset my password"*, *"Update my phone number"*) — then widen: "Which scenarios are you thinking about beyond that?" To prioritise, ask which employee outcomes cause the most friction; do not require an HR-vs-IT choice. Map their answer to the **catalogue categories**: **HR Knowledge**, **HR Profile** (read/write), **Manager**, **HR Ticketing**, **IT** (knowledge + ticketing), **Handoff** — plus **extensible** scenarios (e.g. Request Time Off). Offer these, capture the sponsor's own words, and confirm which categories are in scope. | `set-context --group scenarioContext` (key `jtbd`) + `add-scenario` per category |
+| 3 | **Systems — one batch after scenarios are captured.** Ask only about unanswered areas, together. Use the explained connector examples below; Phase 2 verifies current support for the captured choices. SharePoint / M365 content is a knowledge source. | `add-system --area {area} --system "{name}"` |
 
 That is the whole interview before you build. **Don't ask a fourth kind of
 question** — default the rest and let the sponsor edit it on the generated plan.
@@ -87,23 +165,27 @@ normal), adding anything missing via freeform:
     "question": "Which of these do employees ask about most? Select all that apply — you can add more in your own words.",
     "multiSelect": true,
     "options": [
-      { "label": "HR Knowledge", "description": "Answer policy & benefits questions, e.g. 'How many vacation days do I have?'", "recommended": true },
-      { "label": "HR Profile — view", "description": "Let employees see their own details — job title, manager, address, pay" },
-      { "label": "HR Profile — update", "description": "Let employees change their own details, e.g. phone number or emergency contact" },
-      { "label": "HR Ticketing", "description": "Raise & track HR requests, e.g. 'I need a letter for my visa'" },
-      { "label": "IT (knowledge + ticketing)", "description": "Answer IT questions and raise IT tickets, e.g. 'Reset my password'" },
-      { "label": "Manager", "description": "Tools for people managers (approvals, team info) — usually added later, not a first pilot" },
-      { "label": "Handoff", "description": "Hand the conversation to a live agent when the bot can't help" },
-      { "label": "Something else", "description": "Anything not listed, e.g. 'Request time off' — type it in your own words" }
+      { "label": "HR Knowledge", "description": "Answer policy and benefits questions from approved HR documents; needs a knowledge source, not personal HR records.", "recommended": true },
+      { "label": "HR Profile — view", "description": "Show an employee their own HR details or leave balance; adds an HR-system connection and identity/access configuration." },
+      { "label": "HR Profile — update", "description": "Let employees change supported personal details; needs profile access plus approved write-back permissions and testing." },
+      { "label": "HR Ticketing", "description": "Create and track HR requests; adds a case-management connection. This is a separate scenario, not an unexplained add-on bundle." },
+      { "label": "IT (knowledge + ticketing)", "description": "Answer IT questions and create or track IT tickets; needs approved IT content and an IT service-management system." },
+      { "label": "Manager", "description": "Support managers with approved team information or actions; needs manager authorization and additional governance." },
+      { "label": "Handoff", "description": "Escalate an unresolved conversation to a live agent; needs ticketing and a supported handoff channel." },
+      { "label": "Not sure yet", "description": "Save the scope decision as pending and show a suggested starting point; you can refine it later." },
+      { "label": "Something else", "description": "Describe another employee outcome; we'll check support and call out any custom work before committing to it." }
     ],
     "allowFreeformInput": true
   }
 ]
 ```
 
-**Q3 — the systems behind each scenario area.** Ask once per captured area (or once
-across all areas), grounding the options in the ESS native integrations (Phase 1) and
-letting the sponsor **check every system in play** — an area can span more than one
+**Q3 — the systems behind each scenario area.** Use **one batched
+`vscode_askQuestions` call** containing a question for every unanswered area.
+Do not ask each area in a separate turn. Omit known or already-deferred areas;
+if none remain, skip Q3. The example below is one question object: include the
+remaining areas in the same array, with options relevant to each area.
+Let the sponsor **check every system in play** — an area can span more than one
 (e.g. HR profile on Workday *and* HR tickets on ServiceNow HRSD). SharePoint / M365 is
 a knowledge source, and anything with no native connector needs a custom flow via
 `/create`:
@@ -115,12 +197,13 @@ a knowledge source, and anything with no native connector needs a custom flow vi
     "question": "For {scenario/area}, which systems hold the data? Select all that apply.",
     "multiSelect": true,
     "options": [
-      { "label": "Workday", "description": "Pick this if your HR data lives in Workday (works out of the box)" },
-      { "label": "ServiceNow HRSD", "description": "Pick this if HR cases/requests run on ServiceNow (works out of the box)" },
-      { "label": "ServiceNow ITSM", "description": "Pick this if IT tickets run on ServiceNow (works out of the box)" },
-      { "label": "SAP SuccessFactors", "description": "Pick this if your HR data lives in SAP SuccessFactors (works out of the box)" },
-      { "label": "SharePoint / M365", "description": "Pick this for answers from documents or intranet pages (a knowledge source)" },
-      { "label": "Something else", "description": "Another system with no built-in connector — we'll build a custom link via /create" }
+      { "label": "Workday", "description": "HR profile data or supported HR actions; a supported integration that needs Workday, identity, and Power Platform setup." },
+      { "label": "ServiceNow HRSD", "description": "HR case/request management; needs the HRSD integration and a ServiceNow administrator." },
+      { "label": "ServiceNow ITSM", "description": "IT ticket management; needs the ITSM integration and a ServiceNow administrator." },
+      { "label": "SAP SuccessFactors", "description": "HR data or supported HR actions; needs the SuccessFactors integration and system-admin configuration." },
+      { "label": "SharePoint / M365", "description": "Approved documents or intranet pages for knowledge answers; not a connector for personal HR records or write-backs." },
+      { "label": "Not sure yet", "description": "Keep the scenario in scope and record the system as pending. Only its system-specific work needs to wait." },
+      { "label": "Something else", "description": "Name the system if known; we'll check support. A system without a native integration needs a scoped custom flow." }
     ],
     "allowFreeformInput": true
   }
@@ -133,26 +216,33 @@ changes *how* you ask, not what you capture or how you ground it. Several scenar
 systems in one answer is expected; capture every one (systems are still recorded per
 area, never overwriting each other).
 
-### If the sponsor isn't sure — take the grounded default, don't re-ask
+### If the sponsor isn't sure — record a pending decision, don't guess
 
-"Not sure", "you decide", or silence is a **valid answer**, not a reason to
-interrogate. This flow already runs on defaults — so when the sponsor can't answer,
-pick the grounded default, **name it in one line**, mark it `--source Agent`, and
-move on. They see it on the plan and change it there.
+"Not sure", "I don't know yet", or "we haven't decided" is a **valid answer**.
+Save it, acknowledge it once, and continue. Silence is not consent to a system
+choice. A recommendation is not a confirmed customer fact.
 
-- **Not sure which scenarios (Q2)** → start with the catalogue's default focus,
-  **HR Knowledge** plus its OOB named-scenario set (the recommended option), and say
-  so: *"I'll start you with HR Knowledge; you can add IT, profile, or ticketing on
-  the plan."* Never leave the scope empty.
-- **Not sure which system (Q3)** → use the candidate system Phase-1 research already
-  proposed for that area if there is one. If there genuinely isn't, **default that
-  area to knowledge-first** (a SharePoint/M365 knowledge task — no connector needed)
-  and record the data-system connection as a **to-confirm** edit: *"I'll set {area}
-  up as a knowledge task for now; tell me the system later and I'll add the
-  connection."* Never stall waiting for the answer.
+- **Uncertain scope (Q2)** → keep any already-selected scenarios. Record
+  `set-context --key scope --value "Scenario selection pending" --group pendingDecision`
+  and present a clearly labeled catalogue-based suggestion, not a silently
+  confirmed scope. Build the common foundation and review work now.
+- **Unknown system (Q3)** → run
+  `add-system --area <scenario-id> --pending`. This persists a `pendingDecision`
+  entry with the same `system.<area>` key used when resolved. Keep the requested
+  scenario: do not substitute SharePoint, guess Workday from research, or turn a
+  profile update into a knowledge-only experience. Say: "I'll leave the system
+  pending. We can finish the plan now; that integration waits until it is known."
+- **Some systems known, others uncertain** → record all confirmed selections in
+  one `add-system` call with repeated `--system` arguments. Save a separate
+  `pendingDecision` for the missing area/additional system. Never include "Not sure"
+  as a system name or overwrite confirmed selections with that choice.
+- **Unknown owner** → keep the grounded role and record `owner.<role-id>` in
+  `pendingDecision`. Explain what they own and that independent work can continue.
 
-Never block the build on an unanswered question — a defaulted, clearly-labelled plan
-the sponsor edits beats a stalled interview.
+Do not re-ask deferred questions on resume or block drafting, sharing, or activation
+of unrelated ready work. Use the dependency gates in `model.md` for affected
+execution only. When the maker supplies a system later, `add-system --area ...`
+replaces that pending entry; refine only the affected tasks and evals.
 
 ### Assume these — never ask them up front
 
@@ -174,7 +264,7 @@ of answering a questionnaire to produce one.
 **The catalogue IS the grounded scenario set — map the goal to it, don't invent.**
 The categories above come from `scenario_catalogue.md`; use them to help the maker
 articulate their goal, capture their own words, and confirm each in‑scope category
-against Microsoft Learn (Phase 1). **Priority and order come from the catalogue's
+against Microsoft Learn (Phase 2). **Priority and order come from the catalogue's
 default order** (Knowledge → Ticketing → Profile read/write → Handoff → sensitive
 topics → multi‑language → mobile) and its tiers — emit that order; don't re‑derive
 it. Picking a system (e.g. Workday) does **not** define the scenarios — a maker on
@@ -185,11 +275,11 @@ force‑fit.
 **Ground the systems in Learn — don't improvise the connector list.** ESS ships
 native integrations (extension packs) for a specific set of systems, each with a
 Microsoft Learn page: **Workday**, **ServiceNow** (HRSD/ITSM), and **SAP
-SuccessFactors**. Derive the current native set from Phase‑1 research (the
-integration pages in the ESS Learn TOC — `workday`, `servicenow`,
-`servicenow-hrsd-itsm`, `sapsuccessfactors`, …) rather than naming systems from
-memory; that keeps it correct as Learn adds connectors. Two rules the maker's
-answer must be checked against:
+SuccessFactors**. These shipped examples help capture the maker's intent; verify
+current support in Phase 2 using the captured systems and scenarios. Preserve a
+freeform system choice even if support is not yet verified, rather than starting
+research or another interview inside Q3. Two rules the answer must be checked
+against before modelling:
 
 - **SharePoint (and other M365 content) is a *knowledge source*, not a data‑system
   connector** — capture it as the knowledge task, not a connect task.
@@ -207,21 +297,22 @@ they never overwrite each other:
 python scripts/planner/cli.py add-system --area hr-knowledge --system "SharePoint (knowledge source)"
 python scripts/planner/cli.py add-system --area hr-ticketing --system "ServiceNow HRSD"
 python scripts/planner/cli.py add-system --area it-ticketing --system "ServiceNow ITSM"
+python scripts/planner/cli.py add-system --area hr-profile-read --system "Workday" --system "SAP SuccessFactors"
+python scripts/planner/cli.py add-system --area hr-profile-write --pending
 ```
 
 **Scenarios are the maker's goal mapped to the catalogue categories.** Take the
 scenarios from what the maker describes, map them to `scenario_catalogue.md`
 categories, and confirm; ground each category's per‑scenario detail against
-Microsoft Learn (Phase 1).
+Microsoft Learn (Phase 2).
 
-**Required before Phase 3, in this order.** (1) objective, (2) **the scenarios**
+**Capture before Phase 3, in this order.** (1) objective, (2) **the scenarios**
 (the catalogue categories the maker wants — HR Knowledge, HR/IT Ticketing, Profile
 read/write, Manager, Handoff, or an extensible one), then (3) **the system for
-each scenario** are **mandatory**. Capture scenarios *before* systems — never let
+each scenario or an explicit pending decision**. Capture scenarios *before* systems — never let
 a system choice narrow the scenario set. These determine the connect tasks, the
 authoring tasks, and which Learn docs ground the roles. Do not skip them, and do
-not end the interview (or jump to sponsor/timeframe) until scenarios and their
-systems are captured. Everything beyond these three (persona, market, success
+not keep interviewing after the maker defers a decision. Everything beyond these three (persona, market, success
 measure, acceptance bar, and the per-category detail) is **defaulted, not asked** —
 see *Assume these* above; the sponsor edits it on the generated plan.
 
@@ -263,10 +354,11 @@ Then surface **scenario dependencies** — the catalogue's prerequisite edges
 python scripts/planner/cli.py check-deps
 ```
 
-If an in‑scope scenario depends on one that's not in scope, tell the sponsor in
-plain language — "Deploy HR Knowledge before HR Ticketing so the agent deflects —
-want me to add it?" — and, if they agree, register the prerequisite and record the
-edge (cite the catalogue):
+If an in-scope scenario depends on one that is not in scope, show that dependency
+with the draft rather than opening another pre-draft question. Keep an unresolved
+required scope choice pending and its affected work waiting; distinguish optional
+recommendations from hard prerequisites. Do not silently add a scenario.
+When the maker agrees during review, register it and record the edge:
 
 ```
 python scripts/planner/cli.py add-scenario --id hr-knowledge --label "HR knowledge"
@@ -317,7 +409,7 @@ exactly what the eager eval preview renders as golden prompts (below).
 
 ## Do NOT ask which role a Task needs
 
-The **role** for each Task comes from the Learn docs (Phase 1), not the sponsor.
+The **role** for each Task comes from the Learn docs (Phase 2), not the sponsor.
 The sponsor's only assignment decision is *who* the person is (Phase 4). If a
 prerequisite's role is genuinely unclear from the docs, fall back to a
 conservative default (e.g. `power-platform-admin`) and note it — don't turn it
@@ -332,10 +424,13 @@ sponsor sees the acceptance bar up front — exactly what "good" looks like, the
 the finished agent will be judged. Read `src/skills/planner/evaluate.md` and render
 the golden prompts grouped by scenario category.
 
-This preview **renders only — it generates nothing**: it displays the golden prompts
-in chat but writes no file, creates no eval records, and pushes nothing. Actual eval
-generation stays with the *Generate evaluation tests* task (topic-driven, later).
-It is **non-blocking**: after rendering, continue to the stop condition and Phase 3.
+Generate and persist draft scenario cases using `evaluate.md`; show only a few
+representative examples with their expected behavior, not a wall of prompts.
+Native test generation runs within the guided flow once topics and permissions
+are available. Do not require the maker to discover a separate `/evaluate` command.
+This is **non-blocking**: finish intent capture, then continue to Phase 2 research
+and Phase 3 modelling without demanding another approval turn for the draft.
+Approval is still required before topic/push mutations.
 
 This is the **golden-prompts-in-the-first-couple-of-turns** moment the flow is
 built around: goals first, the bar rendered early, then systems and dependencies
@@ -355,15 +450,29 @@ locally (the download link **then** the grouped task checklist — `SKILL.md` �
 - start assigning roles, open the edit round-trip, or run any other follow-up on
   your own. The plan is complete as-is.
 
-Instead, close with an explicit, scannable **Next steps** readout — plain language,
+Instead, close with a prominent `## Next steps` roadmap — plain language,
 no form, no blocking question — so the sponsor sees exactly what they can do next and
-picks when ready. Make the three paths obvious. Model it on the kit's style:
+picks when ready. Show Share and Activate as separate steps. Explain what each
+does and give a copyable natural-language prompt; displaying an example is not
+permission to perform it. Use this readout:
 
-> Your plan's saved locally and ready to download above. **Next steps — just say the
-> word:** **1) Edit** the scope or any assumption, **2) Share** it to save it to the
-> shared space and **activate** it when it's ready (editing is easiest *before* you
-> share), and **3) Assign the roles to people** once it's active, so each owner can
-> see their tasks.
+> Your plan is saved locally and ready to download above.
+>
+> ## Next steps
+>
+> 1. **Review or edit the plan now.** Refine the proposed target, scope, sensitive fields, or
+>    success target before sharing.
+>    **Prompt:** "Review the plan."
+> 2. **Share the plan when ready.** Save it to the shared space as a **shared draft** so
+>    colleagues with access can review it. Tasks remain read-only until activation.
+>    **Prompt:** "Share this plan."
+> 3. **Activate the plan.** Make the shared draft the **active rollout plan** so
+>    owners can start ready tasks and record progress. This does not run tasks or
+>    deploy ESS automatically.
+>    **Prompt:** "Activate this plan."
+> 4. **Assign people to roles.** Once the plan is active, name the people
+>    responsible for each role so they can see their tasks.
+>    **Prompt:** "Assign people to the roles."
 
 Then **end the turn.** Act on a follow-up **only when the sponsor replies asking for
 it** in a later turn:
@@ -389,8 +498,8 @@ them.
 
 ## Stop condition — enough to generate, then edit
 
-You have enough to **generate** the plan as soon as **objective + scenarios + a
-system per scenario** are captured. Don't keep interviewing for the defaulted slots —
+You have enough to **generate** the plan as soon as the objective and known scope
+are captured, with missing scope/systems explicitly marked **pending**. Don't keep interviewing for the defaulted slots —
 generate the plan, render the eval preview, and present both; the sponsor then
 assigns roles or **edits** from there (the follow-ups above).
 
@@ -402,6 +511,6 @@ assigns roles or **edits** from there (the follow-ups above).
   fields) via a follow-up — acceptance is the edit loop, not a pre-build
   questionnaire.
 
-If a requested scenario isn't ESS-supported, or a prerequisite has no owner, surface
-it and resolve it with the sponsor rather than emitting an unbuildable Plan. When the
+If support is unknown or an owner is missing, record a pending decision and identify
+the affected work; do not assert unsupported capabilities or stop the whole plan. When the
 ADK-satisfied bar holds, show the summary + eval preview and go to Phase 3.

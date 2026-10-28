@@ -1,5 +1,8 @@
 # Roles — who holds what (and revoking)
 
+Apply `roles/SKILL.md` for the shared-plan gate and the main-chat communication
+rules, including the prominent next-step handoff.
+
 ## List assignments on the plan
 
 To answer "who holds the ServiceNow admin role?", "who's assigned on this plan?",
@@ -30,3 +33,8 @@ To take a person off a role ("Priya isn't the ServiceNow admin anymore"):
    role's tasks stop showing up for that person.
 3. Confirm the effect in plain language: that person no longer sees that role's
    work on the plan.
+
+Only confirm revocation after a successful shared result. Then follow
+`src/skills/planner/status.md` -> **Refresh after progress** for the requesting
+person's next action. If unfinished work has lost its owner, identify that
+vacancy without assigning a replacement or starting another person's work.

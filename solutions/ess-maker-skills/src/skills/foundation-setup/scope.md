@@ -133,7 +133,12 @@ Use `vscode_askQuestions` to collect and lock one target environment.
      name}** to use this environment for ESS setup. Ask your Power Platform
      administrator to assign the role, or select a different environment.
 
-     Then return to environment selection.
+     Explain that the plan's Power Platform administrator nomination and the
+     Dataverse System Administrator permission are different. Offer to check
+     this environment again after access is granted, or pause this task.
+     Do not restart persona detection or environment selection in a loop.
+     Choose another environment only if the maker explicitly requests it; a
+     shared rollout must not silently switch environments.
    - If the command fails, show the exact error and stop. Do not treat an
      unavailable role result as successful access.
 

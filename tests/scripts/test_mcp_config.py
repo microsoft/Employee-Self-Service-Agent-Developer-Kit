@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 import mcp_config
+from planner.plan_model import Plan
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -282,3 +284,62 @@ def test_shipped_defaults_materialize_the_active_python_interpreter(
     assert config["servers"]["ess-landing-page-config"]["command"] == str(
         Path(sys.executable).resolve()
     )
+
+
+@pytest.mark.parametrize("partial_config", [False, True], ids=["missing-config", "partial-config"])
+def test_fresh_session_bootstrap_preserves_saved_draft_without_setup(tmp_path, partial_config):
+    script = tmp_path / "scripts" / "mcp_config.py"
+    script.parent.mkdir()
+    shutil.copyfile(SOLUTION_ROOT / "scripts" / "mcp_config.py", script)
+    defaults = tmp_path / mcp_config.DEFAULTS_PATH
+    defaults.parent.mkdir()
+    shutil.copyfile(SOLUTION_ROOT / mcp_config.DEFAULTS_PATH, defaults)
+    path = tmp_path / "workspace" / "plan" / "plan.json"
+    Plan.new(objective="Saved rollout draft").save_all(path)
+    draft_files = [path, path.with_name("ESS-scenario-plan.md")]
+    before = {file: file.read_bytes() for file in draft_files}
+    if partial_config:
+        _write_json(tmp_path / mcp_config.CONFIG_PATH, {"servers": {"custom": {"command": "custom"}}})
+
+    def run(*arguments):
+        result = subprocess.run(
+            [sys.executable, str(script), *arguments],
+            cwd=tmp_path.parent, capture_output=True, text=True, timeout=15,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout.split(": ", 1)[1])
+
+    materialized = run("materialize-defaults")
+    required_servers = {"ess-planner", "workiq-preview"}
+    assert required_servers <= set(materialized["addedServers"])
+    for server in sorted(required_servers):
+        assert run("validate", "--server", server)["status"] == "configured"
+    config_path = tmp_path / mcp_config.CONFIG_PATH
+    config_bytes = config_path.read_bytes()
+    config = json.loads(config_bytes)
+    assert required_servers <= config["servers"].keys()
+    if partial_config:
+        assert config["servers"]["custom"] == {"command": "custom"}
+    assert run("materialize-defaults")["action"] == "unchanged"
+    assert config_path.read_bytes() == config_bytes
+    assert {file: file.read_bytes() for file in draft_files} == before
+    assert not (tmp_path / ".local" / "config.json").exists()
+
+
+def test_deleted_config_is_rematerialized_despite_previous_success(tmp_path):
+    defaults = tmp_path / mcp_config.DEFAULTS_PATH
+    defaults.parent.mkdir()
+    shutil.copyfile(SOLUTION_ROOT / mcp_config.DEFAULTS_PATH, defaults)
+    plan_path = tmp_path / "workspace" / "plan" / "plan.json"
+    Plan.new(objective="Saved rollout draft").save_all(plan_path)
+    before = plan_path.read_bytes()
+    mcp_config.materialize_defaults(tmp_path)
+    assert mcp_config.validate_config("ess-planner", tmp_path)["status"] == "configured"
+    assert (tmp_path / mcp_config.STATE_PATH).is_file()
+    config_path = tmp_path / mcp_config.CONFIG_PATH
+    config_path.unlink()
+    assert mcp_config.validate_config("ess-planner", tmp_path)["status"] == "missing-file"
+    assert mcp_config.materialize_defaults(tmp_path)["action"] == "created"
+    for server in ("ess-planner", "workiq-preview"):
+        assert mcp_config.validate_config(server, tmp_path)["status"] == "configured"
+    assert plan_path.read_bytes() == before

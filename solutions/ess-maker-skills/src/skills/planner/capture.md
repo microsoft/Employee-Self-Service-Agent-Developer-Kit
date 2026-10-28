@@ -1,5 +1,10 @@
 # Planner — Phase 6: Capture what a Task produced
 
+> **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Intent gate**,
+> then **Gate** for the workspace bootstrap on first Planner use. Reuse its successful result
+> in the same chat and workspace before continuing this flow.
+> Apply its **Communication rules** to every reply and next-step handoff.
+
 A Task declares the output **keys** it should yield (`produces`, grounded from
 Learn). When an assignee finishes a Task, fill a value for each key — then
 **confirm with the person who did it** before pinning it onto the Plan. Two
@@ -8,11 +13,11 @@ ways to fill a value:
 ## (a) Observe — read it from what the action changed
 
 Preferred for kit-skill Tasks that leave a signal. The canonical case is the
-setup hand-off: after `/setup` runs (onboarding the ADK to the deployed agent),
+setup hand-off: after `/setup` runs foundation setup and workspace binding,
 it **records ids + names into `.local/config.json`** — the environment it
 connected to (id/URL), the agent it clones into the workspace (`botId`,
 `schemaName`, name, folder/slug), and anything else the run wrote. It doesn't
-create the environment. `capture-setup` is **generic**: it diffs the whole
+describe provisioning by itself; foundation setup owns that. `capture-setup` is **generic**: it diffs the whole
 `config.json` and pins **every** id + name (and any other artifact a skill
 recorded), not just a single value:
 
@@ -21,16 +26,24 @@ python scripts/planner/cli.py capture-setup --complete
 ```
 
 `--task` is optional — with it omitted the CLI **auto-detects the plan's setup
-task** (the task that produces `primaryEnvironment`) and completes it. **You (the
-planner) run this after `/setup` returns** — the unchanged setup/onboarding flow
-does not call it, so confirm the detected values with the assignee and invoke
+task** from `primaryEnvironment` or `provisionedEnvironment`, choosing the first
+unfinished producer in dependency order. The environment is pinned under that
+task's **declared output key**, including when `--task` is supplied; `--key` is an
+explicit override, not required for provisioning. `setup-status` reports the
+selected `setupTaskId` and `setupEnvironmentKey`. Do not relabel a provisioned
+environment as a completed workspace binding. **You (the
+planner) run this after `/setup` returns** — the setup/onboarding handoff returns
+control here; `setup.py` itself does not update the plan. Confirm the detected
+values with the assignee and invoke
 `capture-setup` yourself (use `--dry-run` first to preview, then re-run to pin).
 
 This reads the current `.local/config.json` and prints **every** artifact it will
 pin from what changed — e.g. an `Environment` (the `environmentId` + URL), an
 `Agent` (the cloned agent's `botId`, `schemaName`, name, folder), and any other
 id + name object a skill wrote (a `Connection`, an `EntraApp`, or an unknown
-shape captured as `Custom`). Known shapes get a nice kind/key; everything else is
+shape captured as `Custom`). Local `Agent` and `EntraApp` artifacts are mapped to
+the supported remote `Custom` kind with `artifactType` metadata by the sync adapter.
+Known shapes get a nice kind/key; everything else is
 captured generically. Show the assignee the detected values and confirm before
 they're saved. `--complete` marks the Task done — **and every other plan task this
 run fully produced**: a single `/setup` run records the environment *and* clones
@@ -62,17 +75,26 @@ You never pin `tenantInventory` by hand.
 
 ## Sync each local complete to the shared plan — in the same flow
 
-`capture-setup --complete`, `capture-discover --complete`, and `pin-output
---complete` mark the task **Completed in the local cache and flag it
+`capture-setup --complete`, `capture-discover --complete`, `pin-output
+--complete`, and `set-state --state Completed` mark the task **Completed in the local cache and flag it
 `pendingSync`** — "done locally, not yet on the shared plan". That flag is a
-promise to sync, not a resting state: each prints, on stderr, a *"Syncing
-progress to the shared plan"* note with the exact next step. Act on it
-**immediately, in the same turn, without waiting to be asked**:
+durable retry marker, not confirmation. For an already-shared **Active** plan,
+sync in the same turn. A local draft remains local until explicit first-share
+consent; a Shared draft waits for explicit activation. Never publish or activate
+merely to drain the queue:
 
 1. Read the sync arguments — `python scripts/planner/cli.py pending-sync` prints
    `{projectId, planId, tasks:[{taskId, etag, outputs}, …]}` for every pending
-   task (empty `tasks` → nothing to sync).
-2. For each, call **`complete_project_plan_task`** (`projectId`, `planId`,
+   task, including its `operation`. `pendingOutputs` lists partial artifacts
+   separately; these are not completion requests.
+2. Process the payload in dependency order, upstream tasks first. After each
+   upstream readback, refresh readiness for its dependents. For each task,
+   verify the parent is **Active**, the task has no unmet inputs, and
+   there is no reported conflict. If the remote task is NotStarted, transition it
+   to InProgress only for work the assignee actually performed, using its matching
+   ETag; use the new task ETag from that response for completion. Never use the
+   plan's activation ETag. A 412 requires reconciliation, not blind retry.
+   Call **`complete_project_plan_task`** (`projectId`, `planId`,
    `taskId`, `outputs`, `etag`) — the Ongoing-edits tool in
    `src/skills/planner/sync.md`. The `outputs` `pending-sync` hands you are
    already compact — a key, a kind, a few value-add attributes (id, name, counts)
@@ -81,21 +103,28 @@ progress to the shared plan"* note with the exact next step. Act on it
    stores a task's outputs in a small fixed budget and rejects an oversized
    completion outright — the detail belongs in its durable record, which the
    `inventoryRef` points at.
+   If the payload names `set_project_plan_task_state` because the task has no
+   outputs, use that operation with `state: Completed`; the output-completion
+   endpoint correctly rejects an empty output list.
 3. **On success**, re-hydrate (`get_project_plan` + `list_project_plan_tasks` →
    `import-remote-plan`) so the cache carries the server's confirmation — that
-   clears `pendingSync` on its own. (Quick alternative when you aren't
-   re-hydrating: `python scripts/planner/cli.py mark-synced --task <T#>`.)
+   clears `pendingSync` only when the completed state **and the expected output
+   values** are present. Do not clear it merely because a tool call was attempted.
 4. **On failure**, walk the sign-in ladder at the top of `sync.md` (401 → one MCP
    restart + one retry → then local). If it still can't reach the shared plan the
-   completion **stays saved locally as `pendingSync` and syncs automatically on
-   the next successful entry** — say the one sanctioned plain line from that
-   ladder (*"I'll keep the plan local for now; it'll save to the shared space on
-   the next successful sync"*) and continue. Never name the service/tool.
+   completion stays saved locally as `pendingSync` and can be retried on the next
+   successful entry. Say "Completed locally; the shared plan hasn't confirmed it
+   yet." On a conflict, preserve the original ETag and ask to reconcile; do not
+   replay automatically with a newer tag.
 
 You never have to be asked to sync, and the sponsor never triggers it. The task
-reads **Completed** throughout; `pendingSync` is just the internal "not yet
-confirmed" marker — a later pull **preserves** it (it never reverts an unpushed
-local completion), so the next entry picks the sync back up on its own.
+reads **Complete locally - awaiting shared confirmation** until readback proves
+otherwise. A later pull preserves the completion and its outputs. The initial
+share associates the draft using its successful create response
+(`import-remote-plan --created-plan-file`, as described in `sync.md`) before
+mapping unique task titles to the server's new IDs. A normal pull cannot infer
+that association. Missing proof or ambiguous/missing matches preserve the draft
+and stop for reconciliation, never create duplicate tasks silently.
 
 ## Reconcile a first-run setup that already ran
 
@@ -110,12 +139,15 @@ guard is a read-only status probe:
 python scripts/planner/cli.py setup-status
 ```
 
-It prints JSON: `setupTaskOpen` (the plan has a setup task that isn't Completed),
+It prints JSON: `setupTaskId` and `setupEnvironmentKey` (the selected task and its
+declared environment output), `setupTaskOpen` (that task isn't Completed),
 `environmentPinned` (a reusable environment **URL** is on the plan), and the
 pinned `environment`. When **`setupTaskOpen` is true** *and* `.local/config.json`
 shows setup finished — `setup` is `"complete"` with a `dataverseEndpoint`
-recorded (`setup.py` writes those on a normal first run; it does **not** write an
-`environmentId`) — the setup already ran but was never captured — reconcile it:
+recorded, and a verified `environmentId` for that URL — the setup already ran but
+was never captured. `setup.py` persists an explicitly supplied ID, a matching
+existing ID, or the verified ID from locked foundation state. If it is missing,
+resolve the ID first; a URL alone is not a shareable Environment completion. Reconcile it:
 preview with `capture-setup --dry-run`, confirm the detected environment with the
 person, then pin + complete it:
 
@@ -123,7 +155,7 @@ person, then pin + complete it:
 python scripts/planner/cli.py capture-setup --complete
 ```
 
-That records `primaryEnvironment` (and the cloned agent) and marks the setup
+That records the selected task's `setupEnvironmentKey` (and the cloned agent) and marks the setup
 task — plus every other task this run fully produced — Complete, so from now on
 everyone sees that environment on the plan. When **`setupTaskOpen` is false** (no
 setup task, or it's already Completed) there is nothing to reconcile — **skip
@@ -164,24 +196,37 @@ yet, so the install can't complete — nothing lands in `config.json`, so
 `capture-setup` has nothing to observe and the environment the maker **did**
 create would be lost from the plan. Don't let that happen. When the Power
 Platform admin tells you they created (or decided) the environment but setup
-couldn't finish, persist it from what they tell you via the **ask** path — pin
-`primaryEnvironment` directly, and **without** `--complete`:
+couldn't finish, persist it from what they tell you via the **ask** path. Use the
+selected task's declared `setupEnvironmentKey`, initially **without** `--complete`:
 
 ```
-python scripts/planner/cli.py pin-output --task <setupTaskId> --key primaryEnvironment \
-  --kind Environment --attr environmentUrl=<org-url> [--attr environmentId=<guid>] --source User
+python scripts/planner/cli.py pin-output --task <setupTaskId> --key <setupEnvironmentKey> \
+  --kind Environment --attr environmentUrl=<org-url> --attr environmentId=<verified-guid> --source User
 ```
 
-(`setupTaskId` comes from `setup-status`; confirm the environment URL with them
-first.) This records `primaryEnvironment` on the plan — so `setup-status` now
-reports it and every *other* persona's `task-brief` can nudge them to `/setup`
-into **that** environment — while the setup task stays **open**. Never pass
-`--complete` here: the agent still isn't installed, so the setup task's work isn't
-done. Keep it moving but unfinished:
+(`setupTaskId` and `setupEnvironmentKey` come from `setup-status`; confirm the
+environment URL with them first, or read both environment values from verified
+foundation state.) This saves the declared environment output
+**locally** as `pendingOutputs`, while the setup task stays **open**. It is not
+yet visible to other workspaces: the service has no partial-output write endpoint.
+For a **combined environment-and-agent task**, never pass `--complete` while the
+agent is still missing: the task's work isn't done. Keep it moving but unfinished:
 `python scripts/planner/cli.py set-state --task <setupTaskId> --state InProgress`.
 When the install is later unblocked and `/setup` finishes for real, the normal
 observed capture (`capture-setup --complete`) pins the cloned agent and closes the
 task.
+
+For a **provision-only task**, confirm that its own acceptance criteria and all
+declared outputs are satisfied. It can then be completed with `pin-output
+--complete` under `provisionedEnvironment`, even before workspace config exists.
+Keep the separate installation and binding tasks open until their own work and
+prerequisites are satisfied; do not pin `primaryEnvironment` just to close them.
+
+For new plans, split environment provisioning and agent installation at their
+role/milestone boundary (`model.md`). A genuinely finished environment task can
+then be completed and shared while the agent-install task remains open. For an
+existing combined task, retain its partial output and explain the limitation;
+split it only with approval. Never fake completion to make metadata shareable.
 
 ## Guide the assignee with what earlier tasks produced
 
@@ -194,23 +239,30 @@ python scripts/planner/cli.py task-brief --task <T#>
 
 It prints which skill to run, their role, the **values to use** (e.g.
 `primaryEnvironment: environmentId=<id>` from setup), and the outputs to capture.
+For a shared plan, pending metadata is not an execution-ready shared input.
+Complete the upstream sync and read back its outputs before starting dependent
+work. A blocker naming **shared confirmation** is not a request to provision
+another environment. Already-finished offline work may still be captured locally;
+its pending status remains visible until reconciliation.
 So the Workday assignee is told "use env `<id>`, run `/connect`, then we'll pin
 the connection" — no re-discovery.
 
-**Every non-setup persona connects their own kit first.** The environment id is a
+**Check this person's workspace, not just their role.** The environment id is a
 *plan* fact once the Power Platform admin's `/setup` pins `primaryEnvironment`,
 but each assignee's own kit still has to connect to that same environment before
-their task's skill will work. `task-brief` handles the nudge: for a kit-skill task
-that isn't setup, once the plan has an environment pinned it prints **"First
+their task's skill will work. `task-brief` reads the current workspace config and
+suppresses the nudge when setup is complete for the plan's environment and recorded
+agent. Do not repeat `/setup` for the admin who just completed that binding.
+For a ready task that needs the environment and an unbound workspace, it prints **"First
 connect your kit: run /setup and choose environment `<envId>`"**. So the
 Workday / topics / eval assignee is nudged to `/setup` into the *plan's*
-environment — never to pick or create a different one. If the plan has **no**
-environment pinned yet, the admin's setup task hasn't run — that task is the
-prerequisite, so don't nudge others to setup; tell them it's blocked on setup.
+environment — never to pick or create a different one. If a required environment
+is missing or unconfirmed, name that blocker instead. Work that does not consume
+an environment does not gain an extra setup prerequisite.
 
 ## Downstream reads it off the Plan
 
-Once pinned, a later Task reads the value straight from the Plan — no
+Once pinned (and confirmed shared on a shared plan), a later Task reads the value straight from the Plan — no
 re-discovery. Example: the eval author's Task consumes `primaryEnvironment`, so
 they read the `environmentId` from the summary/plan rather than hunting for it.
 
@@ -223,5 +275,10 @@ they read the `environmentId` from the summary/plan rather than hunting for it.
   shared plan* above; don't leave a completion sitting `pendingSync`.
 - Completing a Task whose `produces` keys are now pinned can unblock downstream
   Tasks that `consume` them — point that out to the sponsor.
-- Show `python scripts/planner/cli.py summary` so "where are we" is answerable
-  at a glance.
+- After capture and any shared readback, follow `status.md` →
+  **Refresh after progress**. Refresh the same caller's remaining work and brief its next action;
+  do not stop at a completion checkmark or reuse the pre-action recommendation.
+  If confirmation is still pending, show that without repeating the finished work.
+- When topic outputs become available during the selected build task, continue
+  the in-flow evaluation generation in `evaluate.md`. Preserve its review/push
+  gates; do not tell the maker to discover and invoke a separate eval command.

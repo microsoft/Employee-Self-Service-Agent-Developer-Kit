@@ -10,21 +10,20 @@ python scripts/setup_state.py show --view report
 ```
 
 Set ENV_URL to `environment.tenant_endpoint`, stripping any trailing slash.
+Set ENVIRONMENT_ID to `environment.id`; keep both together through extraction.
 Create `workspace/onboarding/steps.md` from `src/skills/onboarding/steps.md`
 only when it is missing. Do not display that checklist.
 
-Create `.vscode/mcp.json` with the locked endpoint:
+Merge the committed server defaults and the locked Dataverse endpoint:
 
-```json
-{
-  "servers": {
-    "Dataverse": {
-      "type": "http",
-      "url": "{ENV_URL}/api/mcp"
-    }
-  }
-}
+```text
+python scripts/mcp_config.py materialize-defaults
+python scripts/mcp_config.py configure dataverse --environment-url "{ENV_URL}"
 ```
+
+Never replace `.vscode/mcp.json` with a Dataverse-only object. These commands
+preserve `ess-planner`, `ess-landing-page-config`, other servers, and overrides.
+If either fails, report the error; do not announce successful MCP setup.
 
 Do not recheck environment selection, roles, Dataverse provisioning, or the
 Allowed MCP Client prerequisite. Foundation setup already completed them.

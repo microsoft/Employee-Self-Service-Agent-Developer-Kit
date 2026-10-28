@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from planner.capture import (
     ask_artifact,
     config_snapshot,
@@ -27,10 +29,11 @@ def test_read_config_missing_returns_empty(tmp_path):
     assert read_config(tmp_path / "nope.json") == {}
 
 
-def test_read_config_corrupt_returns_empty(tmp_path):
+def test_read_config_corrupt_surfaces_error(tmp_path):
     path = tmp_path / "config.json"
     path.write_text("{not json", encoding="utf-8")
-    assert read_config(path) == {}
+    with pytest.raises(ValueError, match="invalid JSON"):
+        read_config(path)
 
 
 def test_snapshot_config_returns_full_config(tmp_path):

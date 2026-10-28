@@ -48,13 +48,17 @@ OBSERVE_DETECTORS: dict[str, str] = {
 
 
 def read_config(path: str | os.PathLike[str] = CONFIG_PATH) -> dict[str, Any]:
-    """Load ``.local/config.json`` best-effort; ``{}`` if missing or corrupt."""
+    """An absent first-run config is normal; unreadable/corrupt state is not."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
         return {}
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Cannot read setup configuration {path}: invalid JSON; repair it before capturing setup.") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Setup configuration {path} must be a JSON object.")
+    return data
 
 
 def config_snapshot(config: dict[str, Any]) -> dict[str, Any]:
@@ -82,13 +86,14 @@ def detect_environment(
     Returns a ``PlanArtifact`` when ``/setup`` bound/recorded an environment
     that wasn't reflected before (a new/changed ``dataverseEndpoint`` or
     ``environmentId``, or setup transitioning to ``"complete"``), else ``None``.
-    ``/setup`` connects the kit to an already-deployed agent and records its
-    environment details; it does not create the environment.
+    The workspace-binding stage of ``/setup`` records the environment selected
+    or provisioned by foundation setup and the installed agent.
 
     ``environmentId`` is a GUID assigned when the environment is created and is
-    stable thereafter; ``dataverseEndpoint`` is the org URL. ``setup.py`` writes
-    ``dataverseEndpoint`` today, and ``environmentId`` when the kit resolves it
-    (see the design's open question on persisting the raw GUID).
+    stable thereafter; ``dataverseEndpoint`` is the org URL. ``setup.py`` keeps
+    the verified ID for that endpoint, including a matching locked foundation
+    environment. A URL without an ID is a partial local observation, not a
+    shareable Environment completion.
     """
     endpoint = after.get("dataverseEndpoint")
     env_id = after.get("environmentId")

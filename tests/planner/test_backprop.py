@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from planner import cli
 from planner.plan_model import (
     Plan,
@@ -94,6 +96,75 @@ def test_first_run_setup_pending_is_the_fre_signal():
     assert p.first_run_setup_pending("T1") is False
 
 
+@pytest.mark.parametrize(("overrides", "needs_binding"), [
+    ({}, False),
+    ({"setup": "incomplete"}, True),
+    ({"environmentId": "other-env"}, True),
+    ({"environmentId": None}, True),
+    ({"dataverseEndpoint": "https://other.crm.dynamics.com"}, True),
+    ({"dataverseEndpoint": " HTTPS://TEST.CRM.DYNAMICS.COM/ "}, False),
+    ({"agent": {"botId": "other-bot", "schemaName": "test_ess"}}, True),
+    ({"agent": {}}, True),
+    ({"agent": None}, True),
+    ({"agent": {"botId": "BOT-1", "schemaName": "renamed"}}, False),
+])
+def test_task_brief_checks_current_workspace_binding(overrides, needs_binding):
+    plan = _plan()
+    plan.add_output(plan_artifact(
+        "primaryEnvironment", "Environment",
+        {"environmentId": "env-1", "environmentUrl": "https://test.crm.dynamics.com"},
+        produced_by_task_id="T1",
+    ))
+    plan.add_output(plan_artifact(
+        "essAgent", "Agent", {"botId": "bot-1", "schemaName": "test_ess"},
+        produced_by_task_id="T1",
+    ))
+    config = {
+        "setup": "complete", "environmentId": "env-1",
+        "dataverseEndpoint": "https://test.crm.dynamics.com",
+        "agent": {"botId": "bot-1", "schemaName": "test_ess"},
+        **overrides,
+    }
+    brief = plan.task_brief("T2", workspace_config=config)
+    assert (brief["kitSetup"] is not None) is needs_binding
+    assert brief["blockedBy"] == {}
+    assert brief["state"] == "NotStarted"
+
+
+@pytest.mark.parametrize("state", ["Completed", "Blocked"])
+def test_ineligible_task_does_not_prompt_for_workspace_binding(state):
+    plan = _plan()
+    plan.add_output(plan_artifact(
+        "primaryEnvironment", "Environment", {"environmentId": "env"},
+        produced_by_task_id="T1",
+    ))
+    if state == "Completed":
+        for key in plan.task("T2")["produces"]:
+            plan.add_output(plan_artifact(
+                key, "Custom", {"name": key}, produced_by_task_id="T2",
+            ))
+    plan.set_task_state("T2", state)
+    assert plan.task_brief("T2")["kitSetup"] is None
+
+
+def test_other_missing_inputs_do_not_trigger_workspace_binding():
+    plan = _plan()
+    plan.add_output(plan_artifact(
+        "primaryEnvironment", "Environment", {"environmentId": "env"},
+        produced_by_task_id="T1",
+    ))
+    plan.update_task("T2", consumes=["primaryEnvironment", "tenantConfiguration"])
+    brief = plan.task_brief("T2")
+    assert brief["blockedBy"] == {"tenantConfiguration": []}
+    assert brief["kitSetup"] is None
+
+
+def test_blocked_setup_is_not_a_ready_first_run_task():
+    plan = _plan()
+    plan.set_task_state("T1", "Blocked")
+    assert plan.task_brief("T1")["firstRunSetup"] is False
+
+
 def _run(*argv: str) -> int:
     return cli.main(list(argv))
 
@@ -109,7 +180,8 @@ def test_task_has_only_wevenova_fields():
     assert set(t) == {"id", "title", "description", "assignedTo", "state", "produces", "consumes"}
 
 
-def test_setup_task_id_is_the_env_producer():
+@pytest.mark.parametrize("environment_key", ["primaryEnvironment", "provisionedEnvironment"])
+def test_setup_task_id_is_the_env_producer(environment_key):
     p = Plan.new()
     # A portal "provision" task is NOT the setup task; the task that PRODUCES the
     # environment is.
@@ -119,7 +191,7 @@ def test_setup_task_id_is_the_env_producer():
     p.add_task(new_task("T2", "Run setup",
                         description="Run /setup to onboard the ADK",
                         assigned_to=principal_pool("power-platform-admin"),
-                        produces=["primaryEnvironment"]))
+                        produces=[environment_key]))
     assert p.setup_task_id() == "T2"
     assert Plan.new().setup_task_id() is None  # no task produces the env -> None
 
@@ -140,7 +212,10 @@ def test_discover_task_id_is_the_inventory_producer():
     assert Plan.new().discover_task_id() is None  # no task produces the inventory -> None
 
 
-def test_capture_setup_autodetects_setup_task(tmp_path):
+@pytest.mark.parametrize("environment_key", ["primaryEnvironment", "provisionedEnvironment"])
+@pytest.mark.parametrize("explicit_task", [False, True])
+@pytest.mark.parametrize("explicit_key", [False, True])
+def test_capture_setup_uses_produced_environment_key(tmp_path, environment_key, explicit_task, explicit_key):
     plan_path = str(tmp_path / "plan.json")
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"setup": "complete",
@@ -150,14 +225,45 @@ def test_capture_setup_autodetects_setup_task(tmp_path):
     _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Provision env",
          "--description", "In the portal, provision the environment", "--role", "power-platform-admin")
     _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Run setup",
-         "--description", "Run /setup to onboard the ADK", "--role", "power-platform-admin", "--produces", "primaryEnvironment")
-    # No --task: capture-setup finds the plan's setup task (T2 produces the env), pins env, completes it.
-    rc = _run("--plan", plan_path, "capture-setup", "--config", str(cfg), "--before", "{}", "--complete")
+         "--description", "Run /setup to onboard the ADK", "--role", "power-platform-admin", "--produces", environment_key)
+    options = ["--task", "T2"] if explicit_task else []
+    if explicit_key:
+        options.extend(["--key", environment_key])
+    rc = _run("--plan", plan_path, "capture-setup", "--config", str(cfg), "--before", "{}", "--complete", *options)
     assert rc == 0
     p = Plan.load(plan_path)
-    assert p.output("primaryEnvironment")["attributes"]["environmentId"] == "env-7"
+    assert p.output(environment_key)["attributes"]["environmentId"] == "env-7"
+    assert p.output(environment_key)["producedByTaskId"] == "T2"
+    other_key = "primaryEnvironment" if environment_key == "provisionedEnvironment" else "provisionedEnvironment"
+    assert p.output(other_key) is None
     assert p.task("T2")["state"] == "Completed"
     assert p.task("T1")["state"] == "NotStarted"  # portal task untouched
+
+
+@pytest.mark.parametrize(("environment_key", "options"), [
+    ("provisionedEnvironment", []),
+    ("customEnvironment", ["--task", "setup", "--key", "customEnvironment"]),
+])
+def test_capture_setup_preview_preserves_plan_and_honors_key_override(tmp_path, capsys, environment_key, options):
+    path, config = tmp_path / "plan.json", tmp_path / "config.json"
+    plan = Plan.new()
+    plan.add_task(new_task("setup", "Prepare environment", produces=[environment_key]))
+    plan.save_all(path)
+    config.write_text(json.dumps({
+        "environmentId": "env-id", "dataverseEndpoint": "https://test.crm.dynamics.com",
+    }), encoding="utf-8")
+    before = path.read_bytes()
+    args = ["--plan", str(path), "capture-setup", "--config", str(config), *options]
+    assert _run(*args, "--dry-run") == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert [artifact["key"] for artifact in preview] == [environment_key]
+    assert path.read_bytes() == before
+
+    assert _run(*args, "--complete") == 0
+    saved = Plan.load(path)
+    assert saved.task("setup")["state"] == "Completed"
+    assert saved.output(environment_key)["producedByTaskId"] == "setup"
+    assert saved.output("primaryEnvironment") is None
 
 
 def _write_results(path, **overrides):
@@ -315,9 +421,9 @@ def _plan_with_completed_discover(tmp_path, capsys):
 def test_capture_discover_complete_flags_pending_and_prompts_sync(tmp_path, capsys):
     plan_path = _plan_with_completed_discover(tmp_path, capsys)
     err = capsys.readouterr().err
-    # Softened, sync-progress language — not a hard "push required".
-    assert "Syncing progress to the shared plan" in err
-    assert "pendingSync" in err
+    assert "Progress saved locally" in err
+    assert "not been shared" in err
+    assert "Syncing progress to the shared plan" not in err
     plan = Plan.load(plan_path)
     assert plan.task("T2")["state"] == "Completed"
     assert plan.task("T2")["pendingSync"] is True
@@ -352,6 +458,9 @@ def test_cli_mark_synced_all_clears_everything(tmp_path, capsys):
 
 def test_cli_import_remote_plan_preserves_unpushed_completion(tmp_path, capsys):
     plan_path = _plan_with_completed_discover(tmp_path, capsys)
+    local = Plan.load(plan_path)
+    local.set_remote_identity(project_id="proj-1", plan_id="plan-1")
+    local.save_all(plan_path)
     capsys.readouterr()
     # The service still shows the discover task NotStarted (the completion never
     # reached it). A plain pull would revert it; import must preserve it.
@@ -382,16 +491,23 @@ def test_cli_import_remote_plan_preserves_unpushed_completion(tmp_path, capsys):
 
 def test_cli_import_remote_plan_clears_pending_when_service_confirms(tmp_path, capsys):
     plan_path = _plan_with_completed_discover(tmp_path, capsys)
+    local = Plan.load(plan_path)
+    local.set_remote_identity(project_id="proj-1", plan_id="plan-1")
+    local.save_all(plan_path)
     capsys.readouterr()
+    from planner.sync import to_remote_output
+
+    confirmed_output = {
+        **to_remote_output(Plan.load(plan_path).output("tenantInventory")),
+        "producedByTaskId": "T2", "state": "Active",
+    }
     # The service now agrees the task is Completed (the push landed) -> flag clears.
     remote = {
         "plan": {
             "planId": "plan-1", "projectId": "proj-1",
             "configuringAgentName": "EmployeeSelfServiceHRDA",
             "status": "Active",
-            "outputs": [{"key": "tenantInventory", "kind": "Custom",
-                         "producedByTaskId": "T2", "state": "Active",
-                         "attributes": [{"key": "resourceCount", "value": "3"}]}],
+            "outputs": [confirmed_output],
         },
         "tasks": {"value": [
             {"taskId": "T2", "title": "Discover the tenant inventory",
@@ -477,3 +593,40 @@ def test_task_brief_blocked_when_consumed_not_produced(tmp_path, capsys):
     capsys.readouterr()
     _run("--plan", plan_path, "task-brief", "--task", "T2")
     assert "not produced yet" in capsys.readouterr().out
+
+
+def test_cli_task_brief_uses_workspace_binding_without_mutating_plan(tmp_path, capsys):
+    path, config_path = tmp_path / "plan.json", tmp_path / "config.json"
+    plan = _plan()
+    plan.add_output(plan_artifact(
+        "primaryEnvironment", "Environment",
+        {"environmentId": "env", "environmentUrl": "https://test.crm.dynamics.com"},
+        produced_by_task_id="T1",
+    ))
+    plan.save_all(path)
+    config_path.write_text(json.dumps({
+        "setup": "complete", "environmentId": "env",
+        "dataverseEndpoint": "https://test.crm.dynamics.com",
+    }), encoding="utf-8")
+    before = path.read_bytes()
+    assert _run("--plan", str(path), "task-brief", "--task", "T2", "--config", str(config_path)) == 0
+    output = capsys.readouterr().out
+    assert "Run /connect" in output
+    assert "First connect your kit" not in output
+    assert path.read_bytes() == before
+
+
+def test_cli_task_brief_missing_config_needs_binding_but_corrupt_config_fails(tmp_path, capsys):
+    path, config_path = tmp_path / "plan.json", tmp_path / "config.json"
+    plan = _plan()
+    plan.add_output(plan_artifact(
+        "primaryEnvironment", "Environment", {"environmentId": "env"},
+        produced_by_task_id="T1",
+    ))
+    plan.save_all(path)
+    args = ["--plan", str(path), "task-brief", "--task", "T2", "--config", str(config_path), "--json"]
+    assert _run(*args) == 0
+    assert json.loads(capsys.readouterr().out)["kitSetup"]["environmentId"] == "env"
+    config_path.write_text("{broken", encoding="utf-8")
+    assert _run(*args) == 1
+    assert "invalid JSON" in capsys.readouterr().err

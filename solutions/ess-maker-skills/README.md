@@ -266,6 +266,14 @@ Configured automatically during `/connect servicenow`.
 
 This kit relies on structured instructions and multi-step tool use. Not all models handle this reliably. Behaviors below were observed during kit development; results may change as models are updated.
 
+The solution's `.vscode/settings.json` keeps thinking and grouped tool activity
+collapsed and disables the experimental persistent-progress display. These are
+display defaults only: they do not change the selected model, reasoning effort,
+or token usage, and do not hide approval prompts or every file/tool affordance.
+Open `solutions/ess-maker-skills` as the workspace to use them; adjust the
+workspace settings if you prefer the expanded display. Older VS Code versions
+may not support these experimental settings.
+
 **Last tested:** 2026-05-04
 
 | Model | Status | Notes |

@@ -15,8 +15,10 @@ roles (`PowerPlatformEnvironmentMaker`, `PowerPlatformEnvironmentAdministrator`,
 `PowerPlatformSystemAdministrator`). Map a loose name the maker uses to the
 matching id ("the ServiceNow admin" → `ServiceNowAdmin`, "Power Platform admin" →
 `EntraPowerPlatformAdministrator`). Only if the role genuinely isn't in that list
-do you stop and explain it can't be attested. Confirm the exact role with the
-maker before you write anything.
+do you stop and explain it can't be attested. Reuse an explicit or already-confirmed
+role choice; ask only when the mapping is ambiguous. Confirm the person/role
+pairing once before writing, using the original explicit request or the person's
+selection from the directory results rather than another confirmation turn.
 
 ## 2. Attest
 
@@ -34,6 +36,11 @@ already attested for that role, treat it as success — the outcome the maker
 wanted is already true.
 
 ## 3. Confirm — in terms of what changed for the person
+
+Only confirm an assignment after a successful shared result. A recognized role,
+a resolved name, or an unanswered confirmation is not a saved assignment.
+If the person or their approval is still missing, keep the assignment unresolved
+and return the required question to the main chat via `resolve-person.md`.
 
 State the *effect*, not the mechanics: the person can now see and pick up that
 role's work on the plan.
@@ -75,6 +82,9 @@ repeat themselves one at a time.**
 
 ## After assigning several roles
 
-When the maker has staffed the plan's roles, offer to show who holds what
-(`src/skills/roles/list.md`) so they can confirm nothing is still
-unassigned.
+After a single assignment or a batch, follow `src/skills/planner/status.md` ->
+**Refresh after progress** for the requesting person's next action. Use the
+shared prominent handoff, not a buried one-line offer or the newly assigned
+colleague's task. List only remaining relevant vacancies; when none remain,
+select the caller's next coordination action or eligible work instead of
+repeating the assignment prompt.

@@ -3,7 +3,7 @@
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling.
 
-You should already have these values from Step 1: ENV_URL, BOT_ID, BOT_NAME,
+You should already have these values from Step 1: ENV_URL, ENVIRONMENT_ID, BOT_ID, BOT_NAME,
 SCHEMA_NAME, IS_MANAGED.
 
 ---
@@ -19,7 +19,7 @@ Extracting your agent — this usually takes 10–20 seconds...
 Run this single command in the terminal (substitute all values):
 
 ```
-python scripts/fetch_and_setup.py --url "{ENV_URL}" --bot-id "{BOT_ID}" --name "{BOT_NAME}" --schema "{SCHEMA_NAME}" {--managed if IS_MANAGED is true}
+python scripts/fetch_and_setup.py --url "{ENV_URL}" --environment-id "{ENVIRONMENT_ID}" --bot-id "{BOT_ID}" --name "{BOT_NAME}" --schema "{SCHEMA_NAME}" {--managed if IS_MANAGED is true}
 ```
 
 The script authenticates to Dataverse via the browser (the user will see an
@@ -69,6 +69,19 @@ Wait for the user to respond.
 
 Update `workspace/onboarding/steps.md` — change step 4 from `- [ ]` to `- [x]`.
 
+For an assigned plan task, return to that
+task with the verified environment ID/URL and agent identity. Remember:
+workspace binding alone does not complete the assigned task. If this only
+connected the workspace for another task, resume that task's brief instead of
+claiming its work is done. If this finishes the foundation task itself, follow
+`src/skills/foundation-setup/handoff.md` → **After workspace binding** for
+one capture/readback and a refreshed personal next action.
+Do not show the generic command menu below for either planned path.
+
+If FOUNDATION_REUSED is true without an assigned task, return to that same
+handoff section so it can use any plan for this rollout. Do not rerun foundation
+setup. Only standalone onboarding without that context shows this menu:
+
 **Message:**
 
 ✅ Core setup complete!
@@ -85,5 +98,4 @@ You can now customize your agent or connect an integration.
 
 **End message.**
 
-Onboarding is complete. Return to
-`src/skills/foundation-setup/SKILL.md` so it can show the completed handoff.
+Onboarding is complete. Do not start a fresh interview.

@@ -6,14 +6,37 @@ through the planner tools available to you. This file is the concrete flow for
 keeping the two in step: pull an existing plan on entry, and push a newly
 authored plan as one object.
 
-**Two rules that never bend:**
+## Entry preflight
 
-- **Never name or hint at the backend.** To the sponsor there is just *"the
-  plan"*. Never say where it lives, that it "synced", or that a service/tool was
-  involved. The pull/push is invisible — you just show the plan.
-- **The CLI never talks to the network; the tools never touch local files.** The
-  CLI (`scripts/planner/cli.py`) only reads/writes the local cache. The planner
-  tools only talk to the service. You are the bridge: you carry JSON between
+Apply `src/skills/planner/SKILL.md` -> **Intent gate** first. "Hi" or passive
+`plan.json` context alone is not permission; stop without bootstrap or shared tools.
+Complete the **workspace bootstrap before any shared tool call**. Follow
+`src/skills/planner/SKILL.md` -> **Gate** on first Planner use, including a direct
+pull/share/activate/sync request in a fresh chat. Reuse successful results in the
+same chat and workspace for later turns or phases, following the gate's
+recheck/failure rules. A saved plan, absent setup config, or already-visible
+Planner tools do not replace this chat's bootstrap.
+Apply the same skill's **Communication rules** to every reply and next-step
+handoff, including saves, activation, partial progress, and recovery.
+
+If configuration creation/validation fails, keep the local draft unchanged,
+report that error, and stop shared calls. Configuration, host discovery/trust,
+and a service response are separate evidence: never infer the workspace file
+exists just because a tool is exposed, or label an unavailable tool as a service
+failure. Bootstrap does not grant shared access or authorize plan mutations.
+
+**Rules that never bend:**
+
+- **Make persistence truthful.** Say **Saved in this workspace**, **Shared draft**,
+  **Active**, **Saved locally - awaiting shared confirmation**, or **Confirmed on
+  the shared plan**, as appropriate. Avoid unnecessary backend names, but explain
+  `ess-planner` when the host requests approval. Never hide a failure or equate a
+  local file write with a successful shared update.
+- **Plan mutations stay local in the CLI; shared writes use tools.** The CLI
+  (`scripts/planner/cli.py`) reads/writes the local plan. Its `research`
+  command can fetch public Learn documentation, not the shared planner.
+  The planner tools talk to the service and never touch local files.
+  You are the bridge: you carry JSON between
   `export-remote-plan`/`import-remote-plan` and the tools.
 - **Importing: hand each tool result to the CLI as its own file — never splice
   them yourself.** Re-hydrating always means
@@ -26,33 +49,44 @@ authored plan as one object.
   JSON parser fails with *"Additional text encountered after finished reading
   JSON content"*. The CLI extracts the payload past that envelope for you.
 
-**Sign-in is the tool's job — never ask the sponsor whether to sign in.** Each
-planner tool authenticates itself, and on an expired/rejected token (a 401) it
-renews in place: silently when the refresh token is still good (no window), and
-otherwise by **opening a browser sign-in itself** and replaying the call once the
-sponsor finishes. That browser prompt is the *only* interaction sign-in ever needs —
-so you never diagnose it, never narrate the mechanism, never read any MCP/auth
-source to explain it, and above all **never present an `ask_user` / "how would you
-like to proceed?" choice about signing in.** Treat each call by walking this
-ladder **in order** — never cycle back up it:
+**Sign-in is the tool's job — never ask the sponsor whether to sign in.** A new
+Planner client acquires its configured credentials, opening browser sign-in when
+needed. The transport does not automatically refresh and replay a rejected HTTP
+401. Do not claim a new sign-in or token renewal happened unless it was observed.
+Never inspect MCP/auth source or credential stores during the maker flow, and
+never add a "how would you like to sign in?" interview. Walk this ladder **in
+order** — never cycle back up it:
 
-- **It succeeds** — possibly after a sign-in window appeared mid-call and the
+- **It succeeds** — possibly after a sign-in window appeared when connecting and the
   sponsor completed it. Expected; just carry on. Say nothing about sign-in.
-- **It still returns an explicit "sign in again" (HTTP 401)** after the tool's own
-  browser sign-in — the server can be wedged on a dead in-memory session that only a
-  fresh process clears. Take **one** mechanical recovery, then retry the same call
+- **PlanPayloadTooLarge / OpenTypeTooLarge, or a confirmed storage-size diagnosis**
+  — stop shared writes, even if the outer error says `InternalServerError`.
+  This is not transient. Do not retry unchanged, rotate idempotency keys, restart
+  MCP, or run `/setup` to work around it. Follow **Shared-record size budget**
+  below, keeping the complete local draft intact.
+- **It returns HTTP 401** — take **one** mechanical recovery, then retry the same call
   **once**: restart the `ess-planner` MCP server — run the editor's *MCP: Restart
-  Server* command yourself if that's available to you, otherwise tell the sponsor in
-  one plain line to run it (Command Palette → *MCP: Restart Server* → `ess-planner`).
-  The restart rebuilds the client and re-triggers a clean sign-in.
-- **It 401s again even after that restart + retry** — stop. Say one plain line —
-  *"I'll keep the plan local for now; it'll save to the shared space on the next
-  successful sync"* — and continue locally. A 401 that survives a fresh sign-in and a
-  restart means the account can't reach the shared plan; nothing more you do helps.
-- **Any non-401 failure** (network error, 5xx) — fall back to the local cache the
-  same way, silently.
+  Server* command yourself if that's available to you, otherwise give the sponsor
+  the prominent next-step handoff for Command Palette → *MCP: Restart Server* →
+  `ess-planner`. The restart reruns credential acquisition; it may reuse cached
+  credentials and is not proof of a fresh browser sign-in.
+- **It 401s again even after that restart + retry** — stop. Explain briefly —
+  *"Your saved local copy is available; shared updates are unavailable right now.
+  Pending completions will be retried when access returns."* Continue local drafting.
+  Shared access is still unconfirmed; do not loop, change accounts automatically,
+  or infer the missing permission from the status code alone.
+- **Network error or 5xx** — use the local cache and explicitly say shared status
+  could not be refreshed. Preserve pending completions; do not imply other edits
+  are queued when no durable queue exists.
+- **403/access denied** — explain the missing access and stop shared operations.
+  Do not show restricted shared data via a local-cache fallback.
+- **400/409/412** — surface the specific validation/lifecycle/conflict problem.
+  Re-read and reconcile a conflict with the maker; never auto-activate or replace
+  a stored ETag and replay an offline write over someone else's edit.
 
-That single restart is the **only** mechanical recovery you ever take. Do **not**
+That single restart is the **only** sign-in recovery you ever take. Missing
+configuration or unavailable MCP tools use the separate **Gate** recovery, not
+this HTTP-error ladder. Do **not**
 clear or inspect token caches, read any MCP/auth source, check the token source, or
 reason about the client's internals — that is the spiral to avoid, not a path to a
 fix. The whole budget is: one 401 → at most one restart + one retry → then local.
@@ -62,8 +96,21 @@ proceed?" question. Planning is never blocked by the service.
 
 ## Identify the project (always first)
 
-Every plan lives under the ESS project. Get-or-create it — the call is
-idempotent, so it's safe to run on every entry:
+These shared operations apply only after entry preflight and when the maker has
+accepted shared access.
+For an explicitly local-only draft or declined trust prompt, keep working locally
+and skip this flow until they ask for shared access.
+
+Use the authenticated tenant reported by MCP diagnostics when tracing a failure,
+not an assumed tenant from an earlier conversation. If it differs from the maker's
+intended tenant, stop writes and confirm the intended tenant/account through the
+normal sign-in flow before continuing. Do not change tenant IDs in configuration
+to match telemetry or inspect/edit token caches. Correlate the actual tenant,
+project, request IDs, and failure time; never include access tokens.
+
+Every plan lives under the ESS project. For an admitted request needing shared
+access, get-or-create it. Idempotence makes replay safe; it is not authorization
+to start this flow, and the call can create a project when none exists:
 
 - Call **`create_agent_configuration_project`** with `{"name": "Employee Self-Service"}`.
 - Keep the returned **`projectId`** (and its `etag`); you need `projectId` for
@@ -111,7 +158,14 @@ Run this the moment `/planner` starts, before deciding whether to interview:
 
 `import-remote-plan` writes through without a local validation gate (the service
 is authoritative). It prints any validation notes as warnings — treat them as
-diagnostics, never as a reason to refuse the plan.
+diagnostics. A corrupt local cache or a pending write belonging to another plan
+must stop replacement rather than silently discard local work.
+An unshared draft with pending completions or outputs is **not** associated with
+an existing shared plan merely because task titles or local IDs match. Import
+stops and leaves its JSON and Markdown intact. Reconcile the separate plans
+before resuming; never add a first-share association just to bypass this guard.
+Malformed/error tool results or missing plan/task identities are rejected before
+replacing the cache; they are not an empty shared plan.
 
 **A pull never reverts an unpushed local completion.** If a task was completed
 locally but its push to the service hasn't landed yet (flagged `pendingSync` —
@@ -119,10 +173,39 @@ see `src/skills/planner/capture.md`), `import-remote-plan` **preserves** it
 instead of overwriting it with the service's stale `NotStarted`, and prints
 `Preserved unpushed local completion(s): …`. So on entry, after the hydrate, run
 `python scripts/planner/cli.py pending-sync`; if it lists any task, **sync each
-now** via `complete_project_plan_task` (the capture file's *Sync each local
+now** using the operation in that payload (the capture file's *Sync each local
 complete* flow) before moving on — then re-hydrate so the server's confirmation
-clears the flag. This is what makes a completion that failed to push last time
+clears the flag only when the expected outputs also match. Partial outputs are
+listed separately as `pendingOutputs`, not sent to a completion endpoint.
+This is what makes a completion that failed to push last time
 reach the shared plan on the next successful entry.
+
+## Shared-record size budget
+
+ESS limits one stored plan record to **25,600 bytes**, including server-added
+metadata. Per-field lengths, context count, and the size of the entire HTTP body
+are not sufficient checks. Context and acceptance criteria share the plan record;
+inline tasks are separate records. Shrinking task descriptions alone does not
+fix oversized plan context.
+
+Before a create or metadata update, use a fresh
+`python scripts/planner/cli.py export-remote-plan` result. The export and MCP share
+an aggregate UTF-8 preflight with conservative metadata headroom. Export can pack
+generated workstream labels losslessly into bounded scalar maps; do not hand-edit
+those carriers. Existing workstream entries remain readable.
+
+If export fails, there is no sendable body. Preserve the full local draft and
+review a concise shared version: state common assumptions once, remove repeated
+boilerplate, and shorten redundant descriptions. Preserve scenario scope,
+dependencies, ownership, authorization/confirmation rules, and evaluation
+expectations. Do not truncate fields, silently discard requirements, or claim a
+local attachment is accessible to colleagues. Confirm semantic changes before
+sharing. Re-export and proceed only when the check passes.
+
+The preflight is a conservative client budget, not the exact service serializer.
+If the backend still reports `OpenTypeTooLarge`, retain the diagnostic and stop
+unchanged retries; server-side aggregate validation and a clear error remain
+necessary. A generic 500 without size evidence must not be labelled a size error.
 
 ## Share — store a newly authored plan to the shared planner (explicit)
 
@@ -137,32 +220,39 @@ cache — that is a valid resting state until the sponsor asks to share it, not 
 to chase. **This explicit gate is only for the *first* store**; once the plan has
 been shared, later changes sync automatically (see *Ongoing edits* below).
 
-When the sponsor asks to share the plan you built locally (research → interview →
+When the sponsor asks to share the plan you built locally (interview → research →
 model), store it in **one** create call rather than task-by-task:
 
-1. **Confirm whether this plan targets HR or IT — the only agent axis left.**
-   The create body's `configuringAgentName` is required. The ESS agent ships as
-   a **declarative agent (DA)** — that's what merges to `main` — so there is **no
-   DA-vs-custom-engine choice to make**; every plan targets the DA. The only axis
-   the sponsor still picks is **HR vs IT**:
-   - `EmployeeSelfServiceHRDA` — HR
-   - `EmployeeSelfServiceITDA` — IT
-   HR-vs-IT is usually clear from the interview; confirm it in plain language
-   ("Is this for HR or IT?") rather than guessing. Only once confirmed, set it:
+1. **Reuse the scenario-inferred target confirmed with the draft**, or the
+   maker's explicit/saved target. Do not reopen an HR/IT selector at sharing.
+   `configuringAgentName` is required for this shared create, **not** for local
+   drafting. If it is missing, infer it from the already-captured scenarios using
+   `interview.md` and confirm it with the draft's scope, without restarting the
+   interview. Unknown systems do not prevent that inference. Mixed or unclear
+   experience stays pending until resolved; keep the local draft rather than
+   inventing a target to satisfy the API. Persist the resolved target if needed:
    `python scripts/planner/cli.py set-agent-name --name <AgentName>`
 2. **Build the create body:**
    `python scripts/planner/cli.py export-remote-plan` — this prints the JSON body
    (configuring agent, acceptance criteria, context, and every task inline).
+   Require a successful export before calling MCP. It checks the final aggregate
+   budget, including generated metadata, and packs workstream labels losslessly
+   when needed. Use this freshly exported body verbatim, never an older oversized
+   body or raw `plan.json`.
 3. **Store it (the plan is created in Draft):** call **`create_project_plan`**
    with the `projectId`, that body, and an **`idempotencyKey`**. Generate the key
    once when the share starts (a fresh UUID) and treat it as belonging to this
-   draft — reuse the *exact same* key on every retry of this same store. Keying
+   exact request body — reuse the *exact same* key on a safe retry of the unchanged
+   store. A changed body requires readback/reconciliation of the failed attempt
+   before a new keyed create; never rotate keys merely to bypass an error. Keying
    the create is what makes a retry safe: the service collapses a replay onto the
    same plan instead of creating a duplicate. (An **unkeyed** create is
    deliberately *not* auto-retried, because a blind replay could duplicate the
-   plan — so if a keyless push fails ambiguously, never just fire it again; add a
-   key and retry with that.) The plan and all its tasks are created
-   atomically, in **Draft**. Keep the returned `planId` and `etag`. A Draft plan
+   plan — if a keyless push fails ambiguously, re-read the project's plans and
+   reconcile the result before another create. Adding a key retroactively does
+   not deduplicate the original request.) The plan and all its tasks are created
+   atomically, in **Draft**. Keep the returned `planId`, `etag`, and the raw
+   successful create response for the association in step 4. A Draft plan
    already holds all its tasks with their assignees baked in at creation, but
    those tasks can't be *mutated* (reassigned, state-changed, edited, completed)
    until the plan is **Active** — and **the backend never auto-activates a plan**.
@@ -170,18 +260,30 @@ model), store it in **one** create call rather than task-by-task:
    confirms the plan is ready to run (step 6). Do **not** activate here.
 4. **Re-hydrate so the cache carries the server ids** (planId, task ids, etag):
    `get_project_plan` + `list_project_plan_tasks`, then hand each result to
-   `import-remote-plan --plan-file <get_project_plan result> --tasks-file <list_project_plan_tasks result>`
+   `import-remote-plan --plan-file <get_project_plan result> --tasks-file <list_project_plan_tasks result> --created-plan-file <successful create_project_plan result>`
    (one file per flag — never hand-stitch a combined object or run the results
    through PowerShell JSON cmdlets; the CLI strips the trailing `{"result": …}`
-   envelope itself). The plan is now cached as **Draft** with real ids.
+   envelope itself). Use `--created-plan-file` **only** for the successful create
+   of this local draft, never for a normal pull/resume or another plan's result.
+   Its plan ID and any returned project ID must match the readback. Only this
+   explicit association permits unique title matching to carry offline progress
+   onto newly assigned task IDs; missing/ambiguous matches stop for reconciliation
+   without replacing the draft. Do not fabricate a receipt or use `stamp-remote`
+   to bypass that check. The plan is now cached as **Draft** with real ids.
 5. **Confirm it's saved to the shared space, then offer to activate.** The plan the
    sponsor already reviewed locally is now stored as a **Draft** with its assignees
    baked in — tell them it's saved to the shared space (plain language, never name
    the backend) and re-surface the downloadable *ESS scenario plan* link if helpful
    (the `summary` command prints the exact `📄 [ESS-scenario-plan.md](…)` line). A
    Draft's tasks are **read-only** until it's Active, so name the next step:
-   - **Activate now** — the plan is ready to run; go to step 6. Activation makes
-     the assigned work real and visible. From then on, put people on the
+   render the chosen action with the shared next-step heading, bold action, and
+   separate prompt, not as an inline sentence. The branches below guide the
+   response; they are not a blocking menu.
+   - **Activate the plan** — make this the active rollout plan so owners can start
+     ready tasks and record progress. This does not run tasks or deploy ESS
+     automatically. **Prompt:** "Activate this plan." Go to step 6 only when the
+     sponsor asks to activate, not merely because this option was displayed.
+     From then on, put people on the
      roles (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`), hand
      tasks to named owners (`src/skills/planner/assign.md`), and capture outputs —
      all through the task tools against the **Active** plan.
@@ -189,9 +291,10 @@ model), store it in **one** create call rather than task-by-task:
      once stored, local edits **can't be pushed onto a Draft** — the service has no
      "update a Draft" path (re-running `create_project_plan` makes a *new* plan, and
      a Draft's tasks are read-only), so revisions reach the server only **after
-     activation** (step 6). So steer the sponsor to **finish editing locally before
-     sharing**; if they still need changes once it's a Draft, activate first, then
-     edit.
+     activation** (step 6). Explain this limitation before sharing. If they need
+     changes afterward, preserve the proposed edits as a review copy and explain
+     which changes cannot yet reach the shared Draft. Never activate just to
+     bypass the restriction or claim a local edit updated the shared Draft.
 6. **Activate when the sponsor is ready — explicitly; the backend won't.** When
    the sponsor confirms the plan is ready to run (step 5), activate it: call
    **`update_project_plan`** with `{"status": "Active"}` and the plan's Draft
@@ -206,27 +309,36 @@ model), store it in **one** create call rather than task-by-task:
    - **A role attestation** (`create_role_assigned_project_plan_task`) is a
      create and takes **no** etag at all.
    Once the plan is Active, later edits and assignments need no re-activation.
+   Pending system/owner decisions do not globally block activation: identify
+   the tasks that must wait, while unrelated ready work can proceed.
 
-   **Then make role assignment the explicit next step.** The instant the plan is
-   Active, the headline next action is **assigning the roles to people** so each
-   owner can see their tasks — say so plainly and offer to do it right now
-   (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`). Editing still
+   **Then refresh the maker's next step.** Use `status.md` → **Refresh after progress**.
+   Use its prominent activation handoff with the actual saved state.
+   If required roles for unfinished work are still vacant, recommend assigning
+   them (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`). Do not
+   recommend activation again or ask them to repeat assignments already recorded.
+   Otherwise choose the relevant coordination action or their own eligible task.
+   Editing still
    works after activation, but those edits now reach **both** the local plan **and**
    the shared service — route them through the task tools (*Ongoing edits* below),
    not the local cache alone.
 
-If `export-remote-plan` errors that the configuring agent name is required, you
-skipped step 1 — set it, then re-export.
+If `export-remote-plan` reports a missing configuring agent name, return to the
+scenario-inference and draft-review step above, not an up-front experience
+question. Keep planning locally if the target is still unresolved.
 
 ## Ongoing edits — keep the service authoritative
 
 Once a plan is on the service, route mutations through the tools (not just the
 local cache), then re-hydrate so the cache reflects the server's response:
 
-- **Change a task's state:** `set_project_plan_task_state`.
+- **Change a task's state:** `set_project_plan_task_state`. Before starting or
+  completing work, run `task-brief` and enforce its `blockedBy`/`blockingReason`.
+  Assignment can happen in advance; execution cannot skip missing prerequisites.
 - **Record what a task produced:** `complete_project_plan_task` (Phase 6 capture).
   This is **coupled to the local complete, not a deferred step**: the moment a
-  `capture-setup` / `capture-discover` / `pin-output --complete` flags a task
+  `capture-setup` / `capture-discover` / `pin-output --complete` / `set-state
+  --state Completed` flags a task
   `pendingSync`, push it in the same turn — `pending-sync` prints the exact
   `projectId` / `planId` / `taskId` / `outputs` / `etag`; call the tool, then
   re-hydrate to clear the flag. If the push can't reach the service, the
@@ -236,6 +348,15 @@ local cache), then re-hydrate so the cache reflects the server's response:
 - **Edit task content** (title/description/produces/consumes): `update_project_plan_task`.
 - **Add a task later:** `create_project_plan_task` (or
   `create_role_assigned_project_plan_task` for a role-owned task).
+- **Delete a task:** `delete_project_plan_task`, after confirming affected work.
+- **Plan context / acceptance criteria:** `update_project_plan`, using the
+  plan's ETag. Preserve other entries and verify the returned plan after the write.
+
+For non-completion edits, compute and confirm the change, call the appropriate
+tool with the entity's ETag, then hydrate the local view. A failed ordinary edit
+is not automatically queued by the completion queue: retain the proposal and
+say it has **not** reached the shared plan. Never overwrite edited review files
+before reading and reconciling them.
 
 After a batch of edits, re-pull (`get_project_plan` + `list_project_plan_tasks` →
 `import-remote-plan`) so the local view and the Markdown summary match the service.
@@ -243,9 +364,19 @@ After a batch of edits, re-pull (`get_project_plan` + `list_project_plan_tasks` 
 ## Flow 2 — "what am I assigned?" is answered by the service
 
 The service stores the role→person mapping and scopes tasks to the caller
-itself. So for "what are my tasks?", make **one** call —
+itself. Use this same caller-scoped view for a personal execution next step in a
+status or resume response; the project-wide task list is only team context.
+Apply the requester and lifecycle policy in `status.md` first: a shared Draft
+remains read-only, and returned tasks still need a readiness check with
+`task-brief`. Do not call this flow without a shared plan ID. An empty result
+means no open tasks were returned, not that the caller has no deployment role.
+
+For "what are my tasks?", make **one** call —
 **`list_project_plan_tasks_for_caller`** with just `projectId` and `planId` — and
-present exactly what it returns. The caller's identity comes from the signed-in
+keep that assignment scope. Refresh it after progress, not from an earlier result.
+If the local ledger preserves a completed task as `pendingSync`, label it as
+awaiting shared confirmation rather than recommending it again, even if the
+service list is stale. The caller's identity comes from the signed-in
 token, so:
 
 - **Pass no identity, and don't go looking for one.** Never pass, resolve, or
@@ -261,7 +392,7 @@ token, so:
   plain language ("you hold the Power Platform admin role") — **never ask "which
   role(s) do you hold?"**.
 - **Call out a first-run setup plainly.** If what comes back includes the caller's
-  **setup task** (the one that stands up the environment) still open and no
+  **setup task** (the one that stands up the environment) ready to execute and no
   environment is on the plan yet, that is their first step — they can stand up the
   environment **either manually in Copilot Studio or by running `/setup`**, and
   **`/setup` is the recommended, guided path**, so point them there **now** (their

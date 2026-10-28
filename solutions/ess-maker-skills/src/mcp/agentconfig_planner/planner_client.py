@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+import uuid
 from typing import Any
 
 import httpx
@@ -78,6 +79,7 @@ class PlannerClient(PlannerMixin, RolesMixin, AgentConfigBaseClient):
         generic top-level message.
         """
         message = super()._format_api_error(body, status_code)
+        message += f" [HTTP {status_code}; authenticated tenant: {self.tenant_id}]"
         if not isinstance(body, dict):
             return message
         target = body.get("Target")
@@ -98,4 +100,36 @@ class PlannerClient(PlannerMixin, RolesMixin, AgentConfigBaseClient):
                         rendered.append(detail_message)
             if rendered:
                 message = f"{message} Details: {'; '.join(rendered)}"
+        errors = [body]
+        storage_error = False
+        while errors:
+            error = errors.pop()
+            code = error.get("Code", error.get("code"))
+            if isinstance(code, str) and code.casefold() == "opentypetoolarge":
+                storage_error = True
+            nested = error.get("Details", error.get("details"))
+            if isinstance(nested, list):
+                errors.extend(item for item in nested if isinstance(item, dict))
+        if storage_error:
+            message += (
+                " ESS rejected the aggregate stored record against its 25,600-byte limit. "
+                "Shorten/deduplicate plan context or task output details, then re-export "
+                "and pass the client size check. Do not retry unchanged."
+            )
+        return message
+
+    def _format_error_response(
+        self, response: httpx.Response, body: Any, client_request_id: str,
+    ) -> str:
+        message = super()._format_error_response(response, body, client_request_id)
+        message += f" [client-request-id: {client_request_id}]"
+        for header in ("request-id", "x-ms-request-id", "x-ms-correlation-request-id"):
+            value = response.headers.get(header)
+            if not value:
+                continue
+            try:
+                request_id = str(uuid.UUID(value))
+            except ValueError:
+                continue
+            message += f" [{header}: {request_id}]"
         return message
