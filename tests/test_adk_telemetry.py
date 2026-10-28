@@ -702,15 +702,24 @@ def test_allocated_session_and_run_index_do_not_suppress_start(captured_post):
     adk.next_run_index("synthetic-agent")
     assert captured_post == []
 
-    assert adk.start_session(block=True)["sent"] is True
-    adk.emit_capability_use("setup", block=True)
+    assert adk.emit_capability_use("setup", block=True)["sent"] is True
+    assert adk.emit_capability_use("connect", block=True)["sent"] is True
     assert adk.start_session(block=True)["reason"] == "existing-session"
 
     events = [event for _, batch in captured_post for event in batch]
     assert [event["name"] for event in events] == [
-        adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE,
+        adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE, adk.EVENT_CAPABILITY_USE,
     ]
     assert {event["data"]["session_id"] for event in events} == {sid}
+    for event in events[1:]:
+        for field in ("surface", "instance_id", "tenant_id", "agent_type", "tenant_class"):
+            assert event["data"][field] == events[0]["data"][field]
+        assert event["iKey"] == events[0]["iKey"]
+    print(
+        "PASS: allocated session + capability-first setup + connect produced "
+        "1 matching session start and 2 activities; later start_session did not "
+        "duplicate the start. Transport captured locally; no network or user state."
+    )
 
 
 def test_legacy_session_records_start_once_then_rolls(captured_post):
@@ -1165,6 +1174,217 @@ def test_pending_follower_recovers_after_session_rollover(monkeypatch):
         adk.EVENT_CAPABILITY_USE,
     ]
     assert posted[-1]["data"]["adk_capability"] == "connect"
+
+
+def test_buffered_follower_progresses_through_public_emissions(monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    posted, owner_results = [], []
+    attempts = 0
+
+    def post(_ikey, envelopes):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            entered.set()
+            assert release.wait(5)
+            return 503
+        posted.extend(envelopes)
+        return 200
+
+    monkeypatch.setattr(_fc, "_post", post)
+    owner = threading.Thread(
+        target=lambda: owner_results.append(adk.emit_capability_use("setup", block=True)),
+    )
+    try:
+        owner.start()
+        assert entered.wait(5)
+        follower = adk.emit_capability_use("connect", block=True)
+        assert follower["reason"] == "pending-session-start"
+        assert follower["buffered"] is True
+        release.set()
+        owner.join(timeout=5)
+        assert not owner.is_alive()
+        assert owner_results[0]["status"] == 503
+        assert owner_results[0]["buffered"] is True
+
+        for _ in range(3):
+            adk.emit_capability_use("topic_create", block=True)
+    finally:
+        release.set()
+        owner.join(timeout=5)
+
+    assert [event["data"].get("adk_capability") for event in posted] == [
+        None, "setup", "connect", "topic_create", "topic_create", "topic_create",
+    ]
+    assert posted[0]["name"] == adk.EVENT_SESSION_START
+    assert not Path(adk._pending_buffer_path()).exists()
+    assert not Path(adk.BUFFER_PATH).exists()
+
+
+def test_batch_reservation_failure_preserves_start_order(captured_post, monkeypatch):
+    reserve = adk._reserve_session_start
+    attempts = 0
+
+    def fail_once(*args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise PermissionError("transient reservation failure")
+        return reserve(*args)
+
+    monkeypatch.setattr(adk, "_reserve_session_start", fail_once)
+    assert adk.report_client_events(_client_events_envelope(), block=True) == {
+        "status": "accepted", "acceptedEventCount": 2,
+    }
+    assert captured_post == []
+    assert not Path(adk.BUFFER_PATH).exists()
+    assert Path(adk._pending_buffer_path()).exists()
+
+    for _ in range(3):
+        adk.emit_capability_use("topic_create", block=True)
+    events = _captured_events(captured_post)
+    clients = [event for event in events if event["name"] == adk.EVENT_CLIENT]
+    assert len(clients) == 2
+    assert events[0]["name"] == adk.EVENT_SESSION_START
+    for client in clients:
+        assert client["data"]["session_id"] == events[0]["data"]["session_id"]
+    assert not Path(adk._pending_buffer_path()).exists()
+
+
+@pytest.mark.parametrize("emitter", ["start_session", "emit_capability_use"])
+def test_completion_write_failure_does_not_escape(captured_post, monkeypatch, emitter):
+    write = adk._write_sessions
+    writes = 0
+
+    def fail_completion(sessions):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise PermissionError("completion write denied")
+        return write(sessions)
+
+    monkeypatch.setattr(adk, "_write_sessions", fail_completion)
+    kwargs = {"adk_capability": "setup"} if emitter == "emit_capability_use" else {}
+    result = getattr(adk, emitter)(**kwargs, block=True)
+
+    assert writes == 2
+    assert result["sent"] is True
+    assert _captured_events(captured_post)[0]["name"] == adk.EVENT_SESSION_START
+
+
+@pytest.mark.parametrize("malformed", ['{"interrupted":', "null", '{"name":"bad","data":[]}'])
+def test_malformed_retry_does_not_block_public_emission(captured_post, malformed):
+    Path(adk.BUFFER_PATH).parent.mkdir(parents=True)
+    old = adk.build_event("old-event", {}, "o:test")
+    Path(adk.BUFFER_PATH).write_text(
+        json.dumps(old) + "\n" + malformed + "\n", encoding="utf-8",
+    )
+    Path(adk._pending_buffer_path()).write_text(malformed + "\n", encoding="utf-8")
+
+    assert adk.emit_capability_use("setup", block=True)["sent"] is True
+
+    assert [event["name"] for event in _captured_events(captured_post)] == [
+        "old-event", adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE,
+    ]
+    assert not Path(adk.BUFFER_PATH).exists()
+    assert not Path(adk._pending_buffer_path()).exists()
+    quarantine = Path(adk.BUFFER_PATH + ".invalid")
+    assert malformed in quarantine.read_text(encoding="utf-8")
+    assert quarantine.stat().st_size <= adk.BUFFER_MAX_BYTES
+
+
+@pytest.mark.parametrize("append_after_eviction", [False, True])
+def test_bounded_completion_history_recovers_old_follower(
+    captured_post, monkeypatch, append_after_eviction,
+):
+    monkeypatch.setattr(adk, "SESSION_START_EVIDENCE_MAX_RECORDS", 2)
+    adk.emit_capability_use("setup", block=True)
+    session_id, _ = adk.get_session()
+    data = adk.common_dimensions(adk.SURFACE_CLI, session_id=session_id)
+    data.update(adk_capability="connect", connector="workday")
+    prerequisite = adk._session_start_prerequisite(data)
+    if not append_after_eviction:
+        assert adk._buffer_event_sync(
+            adk.EVENT_CAPABILITY_USE, data, prerequisite,
+        )["buffered"] is True
+
+    sessions = json.loads(Path(adk.SESSION_PATH).read_text(encoding="utf-8"))
+    sessions[adk.SURFACE_CLI]["last"] -= adk.SESSION_TIMEOUT_SECS + 1
+    Path(adk.SESSION_PATH).write_text(json.dumps(sessions), encoding="utf-8")
+    assert adk.get_session()[0] != session_id
+    for index in range(3):
+        adk._record_session_start_evidence(
+            adk.SURFACE_CLI, f"other-session-{index}", prerequisite["context"],
+        )
+    assert len(json.loads(Path(adk._session_starts_path()).read_text())) == 2
+    assert not adk._session_start_evidence_recorded(prerequisite)
+    if append_after_eviction:
+        assert adk._buffer_event_sync(
+            adk.EVENT_CAPABILITY_USE, data, prerequisite,
+        )["buffered"] is True
+
+    captured_post.clear()
+    adk.emit_capability_use("topic_create", block=True)
+    events = _captured_events(captured_post)
+    assert [event["name"] for event in events[:2]] == [
+        adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE,
+    ]
+    assert events[1]["data"]["adk_capability"] == "connect"
+    for key in ("surface", "session_id", "instance_id", "tenant_id", "agent_type"):
+        assert events[0]["data"][key] == events[1]["data"][key] == data[key]
+    assert "adk_capability" not in events[0]["data"]
+    assert "connector" not in events[0]["data"]
+    assert not Path(adk._pending_buffer_path()).exists()
+
+
+def test_current_session_does_not_scan_completion_history(captured_post, monkeypatch):
+    adk.emit_capability_use("setup", block=True)
+
+    def unexpected_scan():
+        raise AssertionError("Current session should not scan historical completions")
+
+    monkeypatch.setattr(adk, "_read_session_start_evidence", unexpected_scan)
+    assert adk.emit_capability_use("connect", block=True)["sent"] is True
+    assert len(_captured_events(captured_post)) == 3
+
+
+@pytest.mark.parametrize("budget", ["events", "bytes"])
+def test_pending_recovery_preserves_followers_that_do_not_fit(monkeypatch, budget):
+    ikey, env = adk.resolve_ikey()
+    data = adk.common_dimensions(adk.SURFACE_CLI, session_id=adk.get_session()[0])
+    data.update(adk_capability="connect", connector="workday", env=env)
+    prerequisite = adk._session_start_prerequisite(data)
+    follower = adk.build_event(adk.EVENT_CAPABILITY_USE, data, _fc.envelope_ikey(ikey))
+    assert adk._buffer_append_pending([follower, follower], prerequisite)
+    old = json.dumps(adk.build_event("old-event", {}, _fc.envelope_ikey(ikey)))
+    start = adk.build_event(
+        adk.EVENT_SESSION_START, adk._session_start_data(data), prerequisite["context"][3],
+    )
+    expected = [
+        old,
+        json.dumps(start, separators=(",", ":")),
+        json.dumps(follower, separators=(",", ":")),
+    ]
+    if budget == "events":
+        monkeypatch.setattr(adk, "BUFFER_MAX_EVENTS", len(expected))
+    else:
+        monkeypatch.setattr(
+            adk, "BUFFER_MAX_BYTES",
+            sum(len(line.encode("utf-8")) + 1 for line in expected),
+        )
+
+    promoted = adk._promote_pending_locked([old])
+
+    assert len(promoted) == 3
+    assert promoted[0] == old
+    assert [json.loads(line)["name"] for line in promoted[1:]] == [
+        adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE,
+    ]
+    assert len(promoted) <= adk.BUFFER_MAX_EVENTS
+    assert Path(adk.BUFFER_PATH).stat().st_size <= adk.BUFFER_MAX_BYTES
+    assert len(Path(adk._pending_buffer_path()).read_text().splitlines()) == 1
+    assert len(adk._promote_pending_locked([])) == 2
+    assert not Path(adk._pending_buffer_path()).exists()
 
 
 def test_pending_sidecar_keeps_legacy_retry_file_raw():

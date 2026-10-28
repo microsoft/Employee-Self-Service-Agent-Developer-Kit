@@ -404,6 +404,7 @@ BUFFER_PATH = os.path.join(CONFIG_DIR, "telemetry-buffer.ndjson")
 
 SESSION_TIMEOUT_SECS = 30 * 60  # 30 min inactivity => new session (spec).
 SESSION_START_RESERVATION_STALE_SECS = 30
+SESSION_START_EVIDENCE_MAX_RECORDS = 1000
 BUFFER_MAX_EVENTS = 1000
 BUFFER_MAX_BYTES = 5 * 1024 * 1024
 BUFFER_SENDING_STALE_SECS = 30
@@ -896,7 +897,7 @@ def _write_buffer_lines(path: str, lines: list[str]) -> None:
         except FileNotFoundError:
             pass
         return
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
 
 
@@ -990,14 +991,47 @@ def _decode_buffer_line(line: str) -> tuple[dict[str, Any], dict[str, Any] | Non
         and isinstance(record.get("envelope"), dict)
         and isinstance(record.get("requiresSessionStart"), dict)
     ):
-        return record["envelope"], record["requiresSessionStart"]
-    return record, None
+        envelope, prerequisite = record["envelope"], record["requiresSessionStart"]
+        if (
+            not isinstance(prerequisite.get("surface"), str)
+            or not isinstance(prerequisite.get("session_id"), str)
+            or not isinstance(prerequisite.get("context"), list)
+            or len(prerequisite["context"]) != 4
+            or not all(isinstance(value, str) for value in prerequisite["context"])
+        ):
+            raise ValueError("Invalid session-start prerequisite")
+    else:
+        envelope, prerequisite = record, None
+    if (
+        not isinstance(envelope, dict)
+        or not isinstance(envelope.get("name"), str)
+        or not isinstance(envelope.get("data"), dict)
+    ):
+        raise ValueError("Invalid telemetry envelope")
+    return envelope, prerequisite
+
+
+def _valid_buffer_lines(lines: list[str]) -> list[str]:
+    valid, invalid = [], []
+    for line in lines:
+        try:
+            _decode_buffer_line(line)
+            valid.append(line)
+        except (TypeError, ValueError):
+            invalid.append(line)
+    if invalid:
+        try:
+            path = BUFFER_PATH + ".invalid"
+            _write_buffer_lines(
+                path, _bounded_buffer_lines(_read_buffer_lines(path) + invalid),
+            )
+        except OSError:
+            pass
+    return valid
 
 
 def _buffer_prerequisite_satisfied(prerequisite: dict[str, Any] | None) -> bool:
     if prerequisite is None:
-        return True
-    if _session_start_evidence_recorded(prerequisite):
         return True
     sessions = _read_sessions()
     entry = sessions.get(prerequisite.get("surface"))
@@ -1005,6 +1039,19 @@ def _buffer_prerequisite_satisfied(prerequisite: dict[str, Any] | None) -> bool:
         isinstance(entry, dict)
         and entry.get("id") == prerequisite.get("session_id")
         and prerequisite.get("context") in entry.get("started_contexts", [])
+    ) or _session_start_evidence_recorded(prerequisite)
+
+
+def _session_start_pending(prerequisite: dict[str, Any]) -> bool:
+    entry = _read_sessions().get(prerequisite["surface"])
+    if not isinstance(entry, dict) or entry.get("id") != prerequisite["session_id"]:
+        return False
+    return any(
+        isinstance(reservation, dict)
+        and reservation.get("context") == prerequisite["context"]
+        and time.time() - float(reservation.get("reserved_at", 0) or 0)
+        <= SESSION_START_RESERVATION_STALE_SECS
+        for reservation in entry.get("starting_contexts", [])
     )
 
 
@@ -1012,7 +1059,7 @@ def _read_session_start_evidence() -> list[dict[str, Any]]:
     try:
         with open(_session_starts_path(), "r", encoding="utf-8") as stream:
             records = json.load(stream)
-        return records if isinstance(records, list) else []
+        return records[-SESSION_START_EVIDENCE_MAX_RECORDS:] if isinstance(records, list) else []
     except (OSError, ValueError):
         return []
 
@@ -1047,6 +1094,7 @@ def _record_session_start_evidence(
     ):
         return
     records.append({**prerequisite, "completed_at": time.time()})
+    records = records[-SESSION_START_EVIDENCE_MAX_RECORDS:]
     path = _session_starts_path()
     temp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
@@ -1074,6 +1122,54 @@ def _read_flush_claim(path: str) -> dict[str, Any] | None:
         return None
 
 
+def _promote_pending_locked(active: list[str]) -> list[str]:
+    """Append eligible followers behind their raw starts without evicting either."""
+    pending_path = _pending_buffer_path()
+    waiting = []
+    promoted = list(active)
+    total_bytes = sum(len(line.encode("utf-8")) + 1 for line in promoted)
+    recovered = set()
+    for line in _valid_buffer_lines(_read_buffer_lines(pending_path)):
+        envelope, prerequisite = _decode_buffer_line(line)
+        ready = _buffer_prerequisite_satisfied(prerequisite)
+        if not ready and _session_start_pending(prerequisite):
+            waiting.append(line)
+            continue
+        additions = []
+        recovery_key = json.dumps(prerequisite, sort_keys=True)
+        if not ready and recovery_key not in recovered:
+            context = prerequisite["context"]
+            data = {
+                **envelope["data"],
+                "surface": prerequisite["surface"],
+                "session_id": prerequisite["session_id"],
+                "instance_id": context[0],
+                "tenant_id": context[1],
+                "agent_type": context[2],
+            }
+            start = build_event(
+                EVENT_SESSION_START, _session_start_data(data), context[3],
+            )
+            additions.append(json.dumps(start, separators=(",", ":")))
+        additions.append(json.dumps(envelope, separators=(",", ":")))
+        added_bytes = sum(len(item.encode("utf-8")) + 1 for item in additions)
+        if (
+            len(promoted) + len(additions) > BUFFER_MAX_EVENTS
+            or total_bytes + added_bytes > BUFFER_MAX_BYTES
+        ):
+            waiting.append(line)
+            continue
+        promoted.extend(additions)
+        total_bytes += added_bytes
+        if not ready:
+            recovered.add(recovery_key)
+    # Persist the destination before removing the source; a failed write may
+    # duplicate work but must not lose a follower or its recovery start.
+    _write_buffer_lines(BUFFER_PATH, promoted)
+    _write_buffer_lines(pending_path, waiting)
+    return promoted
+
+
 def _buffer_flush(ikey: str) -> bool:
     """Flush one detached snapshot; return whether no queued work remains."""
     claim_path = BUFFER_PATH + ".sending.claim"
@@ -1089,7 +1185,7 @@ def _buffer_flush(ikey: str) -> bool:
                     if time.time() - claimed_at <= BUFFER_SENDING_STALE_SECS:
                         return False
                     stale_path = str(claim.get("path", ""))
-                    stranded = _read_buffer_lines(stale_path) if stale_path else []
+                    stranded = _valid_buffer_lines(_read_buffer_lines(stale_path)) if stale_path else []
                     active = _read_buffer_lines(BUFFER_PATH)
                     _write_buffer_lines(
                         BUFFER_PATH,
@@ -1108,8 +1204,10 @@ def _buffer_flush(ikey: str) -> bool:
                     except FileNotFoundError:
                         pass
 
-                active = _read_buffer_lines(BUFFER_PATH)
-                pending = _read_buffer_lines(pending_path)
+                active = _valid_buffer_lines(_read_buffer_lines(BUFFER_PATH))
+                pending = _valid_buffer_lines(_read_buffer_lines(pending_path))
+                _write_buffer_lines(BUFFER_PATH, active)
+                _write_buffer_lines(pending_path, pending)
                 raw_active = []
                 migrated = []
                 for line in active:
@@ -1129,47 +1227,13 @@ def _buffer_flush(ikey: str) -> bool:
                     _write_buffer_lines(BUFFER_PATH, active)
 
                 if not active:
-                    eligible = []
-                    waiting = []
-                    for line in pending:
-                        try:
-                            envelope, prerequisite = _decode_buffer_line(line)
-                        except (TypeError, ValueError):
-                            waiting.append(line)
-                            continue
-                        if _buffer_prerequisite_satisfied(prerequisite):
-                            eligible.append(
-                                json.dumps(envelope, separators=(",", ":"))
-                            )
-                        else:
-                            waiting.append(line)
-                    _write_buffer_lines(
-                        pending_path,
-                        _bounded_buffer_lines(waiting),
-                    )
-                    if not eligible:
-                        return not waiting
-                    active = _bounded_buffer_lines(eligible)
-                    _write_buffer_lines(BUFFER_PATH, active)
-
-                eligible = []
-                waiting = []
-                for line in active:
-                    try:
-                        _envelope, prerequisite = _decode_buffer_line(line)
-                    except (TypeError, ValueError):
-                        eligible.append(line)
-                        continue
-                    if _buffer_prerequisite_satisfied(prerequisite):
-                        eligible.append(line)
-                    else:
-                        waiting.append(line)
-                if not eligible:
-                    return False
+                    active = _promote_pending_locked([])
+                    if not active:
+                        return not os.path.exists(pending_path)
 
                 token = uuid.uuid4().hex
                 sending_path = f"{BUFFER_PATH}.sending.{token}"
-                _write_buffer_lines(sending_path, eligible)
+                _write_buffer_lines(sending_path, active)
                 with open(claim_path, "w", encoding="utf-8") as stream:
                     json.dump(
                         {
@@ -1179,7 +1243,7 @@ def _buffer_flush(ikey: str) -> bool:
                         },
                         stream,
                     )
-                _write_buffer_lines(BUFFER_PATH, waiting)
+                _write_buffer_lines(BUFFER_PATH, [])
     except OSError:
         return False
 
@@ -1211,10 +1275,9 @@ def _buffer_flush(ikey: str) -> bool:
                         os.remove(claim_path)
                     except FileNotFoundError:
                         pass
-                    return (
-                        not os.path.exists(BUFFER_PATH)
-                        and not os.path.exists(pending_path)
-                    )
+                    active = _valid_buffer_lines(_read_buffer_lines(BUFFER_PATH))
+                    active = _promote_pending_locked(active)
+                    return not active and not os.path.exists(pending_path)
                 stranded = _read_buffer_lines(sending_path)
                 active = _read_buffer_lines(BUFFER_PATH)
                 _write_buffer_lines(
@@ -1299,17 +1362,20 @@ def _reserve_session_start(
     """Return ``started``, ``pending``, or ``owner`` under short state locks."""
     now = time.time()
     with _SESSION_START_LOCK, _file_lock(SESSION_PATH + ".start.lock"):
-        if _session_start_evidence_recorded(
-            {"surface": surface, "session_id": sid, "context": context}
-        ):
-            return "started"
         with _SESSION_LOCK, _file_lock(SESSION_PATH + ".lock"):
             sessions = _read_sessions()
             entry = sessions.get(surface)
+            if (
+                isinstance(entry, dict) and entry.get("id") == sid
+                and context in entry.get("started_contexts", [])
+            ):
+                return "started"
+            if _session_start_evidence_recorded(
+                {"surface": surface, "session_id": sid, "context": context}
+            ):
+                return "started"
             if not isinstance(entry, dict) or entry.get("id") != sid:
                 return "owner"
-            if context in entry.get("started_contexts", []):
-                return "started"
             reservations = entry.setdefault("starting_contexts", [])
             for reservation in reservations:
                 if not isinstance(reservation, dict):
@@ -1358,21 +1424,39 @@ def _finish_session_start(
             _write_sessions(sessions)
 
 
+def _session_start_prerequisite(data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "surface": data["surface"],
+        "session_id": data["session_id"],
+        "context": [
+            data["instance_id"], data["tenant_id"], data["agent_type"],
+            _fc.envelope_ikey(resolve_ikey()[0]),
+        ],
+    }
+
+
+def _session_start_data(data: dict[str, Any]) -> dict[str, Any]:
+    start_data = common_dimensions(
+        data["surface"],
+        session_id=data["session_id"],
+        instance_id=data["instance_id"],
+        tenant_id=data["tenant_id"],
+        tenant_name=data.get("tenant_name", ""),
+    )
+    for field in start_data:
+        if field in data:
+            start_data[field] = data[field]
+    if "env" in data:
+        start_data["env"] = data["env"]
+    return start_data
+
+
 def _prepare_session_start(data: dict[str, Any]) -> dict[str, Any]:
     """Reserve or identify the start required by ``data`` without network I/O."""
-    surface = data["surface"]
-    sid = data["session_id"]
-    # The session file is user-global, while dashboards separate installs,
-    # tenants, and CA/DA. An anonymous/other-clone start cannot cover this one.
-    context = [
-        data["instance_id"], data["tenant_id"], data["agent_type"],
-        _fc.envelope_ikey(resolve_ikey()[0]),
-    ]
-    prerequisite = {
-        "surface": surface,
-        "session_id": sid,
-        "context": context,
-    }
+    prerequisite = _session_start_prerequisite(data)
+    surface, sid, context = (
+        prerequisite["surface"], prerequisite["session_id"], prerequisite["context"],
+    )
     reservation = _reserve_session_start(surface, sid, context)
     if reservation == "started":
         return {"sent": False, "reason": "existing-session", "session_id": sid}
@@ -1386,16 +1470,6 @@ def _prepare_session_start(data: dict[str, Any]) -> dict[str, Any]:
             "prerequisite": prerequisite,
         }
 
-    start_data = common_dimensions(
-        surface,
-        session_id=sid,
-        instance_id=data["instance_id"],
-        tenant_id=data["tenant_id"],
-        tenant_name=data["tenant_name"],
-    )
-    for field in start_data:
-        if field in data:
-            start_data[field] = data[field]
     return {
         "sent": False,
         "owner": True,
@@ -1404,7 +1478,7 @@ def _prepare_session_start(data: dict[str, Any]) -> dict[str, Any]:
         "surface": surface,
         "context": context,
         "prerequisite": prerequisite,
-        "start_data": start_data,
+        "start_data": _session_start_data(data),
     }
 
 
@@ -1412,15 +1486,18 @@ def _complete_session_start(
     preparation: dict[str, Any],
     result: dict[str, Any],
 ) -> None:
-    recorded = bool(result["sent"] or result.get("buffered"))
-    _finish_session_start(
-        preparation["surface"],
-        preparation["session_id"],
-        preparation["context"],
-        recorded=recorded,
-    )
-    if result["sent"]:
-        _buffer_flush(resolve_ikey()[0])
+    try:
+        recorded = bool(result["sent"] or result.get("buffered"))
+        _finish_session_start(
+            preparation["surface"],
+            preparation["session_id"],
+            preparation["context"],
+            recorded=recorded,
+        )
+        if result["sent"]:
+            _buffer_flush(resolve_ikey()[0])
+    except Exception:  # noqa: BLE001 — bookkeeping must not break an emitter
+        pass
 
 
 def _post_ordered_events_sync(
@@ -1667,7 +1744,10 @@ def _emit_many_sync(event_name: str, rows: list[dict[str, Any]]) -> dict[str, An
                 data = dict(row)
                 data.setdefault("env", env)
                 buffered.append(build_event(event_name, data, _fc.envelope_ikey(ikey)))
-            _buffer_append(buffered)
+            if rows and rows[0].get("session_id"):
+                _buffer_append_pending(buffered, _session_start_prerequisite(rows[0]))
+            else:
+                _buffer_append(buffered)
         except Exception:  # noqa: BLE001
             pass
         return {

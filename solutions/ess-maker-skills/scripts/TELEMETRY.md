@@ -113,7 +113,12 @@ session/context prerequisite instead of being sent ahead of it; unrelated
 contexts may continue flushing without releasing the waiting activity.
 Completed start evidence is persisted separately from the current 30-minute
 session record, so a queued follower remains eligible after session rollover
-or after an older clone rewrites `session.json`.
+or after an older clone rewrites `session.json`. The completion ledger retains
+the latest 1,000 contexts; current-session starts use the session record without
+scanning that history. If a late follower outlives its completion evidence and
+has no unexpired start reservation, retry reconstructs a matching recovery start
+ahead of it. This can duplicate an older start, so count distinct session IDs,
+not start-event rows, even within a cohort.
 
 The legacy `telemetry-buffer.ndjson` compatibility boundary remains a sequence
 of raw Common Schema envelopes. Prerequisite-bearing followers use a new
@@ -121,7 +126,12 @@ sidecar queue; older clones ignore that sidecar instead of uploading its wrapper
 objects as malformed telemetry, and a current clone promotes eligible nested
 envelopes back into the legacy queue. Current readers also migrate wrapper rows
 written by prerelease revisions of this change. Failed buffered events are
-retried by the normal transport.
+retried by the normal transport. Successful raw-buffer flushes promote eligible
+followers before the current activity is appended, so repeated public emissions
+do not indefinitely starve the sidecar. Promotion respects the retry-buffer count
+and UTF-8 byte budgets; followers that do not fit remain pending. Invalid retry
+rows are removed into a bounded local `telemetry-buffer.ndjson.invalid`
+quarantine rather than blocking all later valid events.
 
 File locks coordinate overlapping CLI processes; network requests do not hold
 the session-state lock or the active retry-buffer lock. A flush atomically
@@ -136,6 +146,91 @@ unwritable state, and bounded-buffer eviction can still cause loss or duplicates
 The active-user charts deduplicate session starts by `instance_id`; they measure
 active installs, not identified people. The fix is prospective: it does not
 backfill historical capability events whose session starts were never emitted.
+
+### Validating capability-first session recording
+
+You do not need to reproduce a missing session in a real tenant. From the
+**repository root**, run this deterministic, offline check:
+
+```powershell
+python -m pytest -q -s tests\test_adk_telemetry.py::test_allocated_session_and_run_index_do_not_suppress_start
+```
+
+It allocates a session and FlightCheck run index **without starting telemetry**,
+then emits `setup` and `connect` capabilities before calling `start_session`.
+Expected: a printed `PASS` explanation and `1 passed`. Assertions require one
+start followed by both activities, the same session and attribution/project on
+all three, and no duplicate from the later explicit start. The test captures the
+real SDK's outgoing envelopes in memory, uses temporary state, and makes no
+network requests or changes to your existing `~/.adk` files. It fails if
+capability-first activity can bypass recording its start.
+
+Run the transport/session regressions, including Dawn's concurrent-owner failure
+case, with:
+
+```powershell
+python -m pytest -q tests\test_adk_telemetry.py
+```
+
+The public-emission follower regression deliberately holds the first collector
+request open, buffers a concurrent capability, returns HTTP 503 for the owner,
+then emits more capabilities. It requires the waiting capability to arrive
+behind its start without manually draining private queues. Other regressions
+cover failed state writes, malformed retry files, legacy state, rollover, and
+followers arriving both before and after completion-history eviction.
+
+**Optional live ingestion check:** offline assertions prove emitter behavior,
+not collector ingestion or dashboard freshness. This PowerShell command routes
+two test capabilities to the **dev project only**, respects your existing
+telemetry consent, and prints the session ID and synchronous results. It uses
+your normal local session/identity; do not delete session files or disable
+consent to run it.
+
+```powershell
+@'
+import json
+import os
+import sys
+from pathlib import Path
+
+os.environ["ESS_ADK_ARIA_ENV"] = "dev"
+os.environ.pop("ESS_ADK_ARIA_IKEY", None)
+sys.path.insert(0, str(Path("solutions") / "ess-maker-skills" / "scripts"))
+import adk_telemetry as adk
+
+print("session_id:", adk.get_session()[0])
+print("setup:", json.dumps(adk.emit_capability_use("setup", block=True)))
+print("connect:", json.dumps(adk.emit_capability_use("connect", block=True)))
+print("later start:", json.dumps(adk.start_session(block=True)))
+'@ | python -
+```
+
+`sent: true` with HTTP 200/204 means collector acceptance, not proof that Kusto
+or Aria has processed the events. `disabled` means consent is off; `buffered`
+means delivery needs a later successful retry. If both capability deliveries
+succeed, the later start should report `existing-session`.
+
+In the **dev** Kusto database `08e397b2c6c243eeaeb341e111c36167`, substitute the
+printed ID:
+
+```kusto
+let validationSession = "<printed-session-id>";
+union withsource=EventTable adk_session_start, adk_capability_use
+| where session_id == validationSession
+| project EventInfo_Time, EventTable, session_id, instance_id, tenant_id,
+          tenant_class, agent_type, surface, adk_capability
+| order by EventInfo_Time asc
+```
+
+After ingestion, verify both capabilities have a matching start for their
+session/install/tenant/agent-type/surface. The session may already have a dev
+start, so it need not be newly timestamped; recovery can also duplicate starts.
+Agent type follows the checkout (`main` = DA, `main-ca` = CA, PR branch =
+`unknown`); local cohort correctness is separately asserted by
+`test_first_activity_records_start_with_matching_attribution`.
+Do not use production dashboard changes as the immediate pass/fail signal.
+The existing `--emit-synthetic` smoke test explicitly starts a session first,
+so it is not a reproduction of the capability-first defect.
 
 ## What each identifier means
 
