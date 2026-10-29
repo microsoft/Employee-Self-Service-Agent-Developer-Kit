@@ -11,6 +11,7 @@ import subprocess
 import sys
 
 import pytest
+import responses
 
 import workday_connect_prerequisites as prerequisites
 from workday_connect_model import default_state, PHASE_REQUIRED_ACTIONS
@@ -86,6 +87,7 @@ def test_healthy_probes_are_read_only_and_use_selected_identity(tmp_path, probes
         "tenantId": "tenant-id",
         "ring": "test",
         "maker": "maker@example.com",
+        "agentBuilderApiVersion": prerequisites.configured_connection_api_version(tmp_path),
     }]
     assert all(kwargs["timeout"] == 60 for _, kwargs in probes["commands"])
     assert all(kwargs["cwd"] == tmp_path for _, kwargs in probes["commands"])
@@ -94,6 +96,56 @@ def test_healthy_probes_are_read_only_and_use_selected_identity(tmp_path, probes
         for command, _ in probes["commands"]
     )
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("configured_version", [None, "2022-03-01-preview"])
+@responses.activate
+def test_prerequisite_discovery_preserves_configured_api_version(
+    tmp_path, probes, monkeypatch, configured_version,
+):
+    from copy import deepcopy
+    from urllib.parse import parse_qs, urlsplit
+
+    import workday_connect_runtime as runtime
+    from tests.conftest import require_validated_mock
+    from tests.mocks import agentbuilder_connectivity as native
+    from tests.scripts.test_workday_connect_runtime import _api_token, TENANT_ID
+
+    require_validated_mock(native)
+    config = {} if configured_version is None else {
+        "agentBuilderApiVersion": configured_version,
+    }
+    foundation = tmp_path / ".local" / "config.json"
+    foundation.parent.mkdir()
+    foundation.write_text(json.dumps(config), encoding="utf-8")
+    original_config = foundation.read_bytes()
+    state = _state()
+    state["scope"].update({
+        "environmentId": native.MOCK_ENV_ID, "entraTenantId": TENANT_ID,
+    })
+    original_state = deepcopy(state)
+    monkeypatch.setattr(prerequisites, "_api_connections", runtime._api_connections)
+    monkeypatch.setattr(
+        runtime, "authenticate_connections",
+        lambda *_a, **_k: _api_token(username="maker@example.com"),
+    )
+    expected_version = configured_version or runtime.DEFAULT_API_VERSION
+    response = native.list_connections(items=[])
+    response["url"] = response["url"].split("?")[0]
+    responses.add(**response)
+
+    checks = prerequisites.check_prerequisites(
+        tmp_path, state, package_installed=True,
+        pac_resolver=probes["pac_resolver"], runner=probes["runner"],
+    )
+
+    assert next(row for row in checks if row["id"] == "connection-api")["status"] == "verified"
+    assert len(responses.calls) == 1
+    request = responses.calls[0].request
+    assert request.method == "GET"
+    assert parse_qs(urlsplit(request.url).query)["api-version"] == [expected_version]
+    assert foundation.read_bytes() == original_config
+    assert state == original_state
 
 
 @pytest.mark.parametrize("installed", [False, True])
