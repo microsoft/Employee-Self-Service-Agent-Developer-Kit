@@ -45,6 +45,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from .da_checks import DAValidation, attach_inventory, validate_da_definitions
+
 from flightcheck.runner import Priority, Role
 from flightcheck.checks.entra_app import run_entra_app_checks
 from flightcheck.checks.environment import (
@@ -56,7 +58,7 @@ from flightcheck.checks.native_agent import run_native_agent_checks
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
-from flightcheck.checks.workday import run_workday_checks
+from flightcheck.checks.workday import WORKDAY_LITMUS_TAG, run_workday_checks
 from flightcheck.checks.workday_da import run_workday_da_checks
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
@@ -148,6 +150,9 @@ class CheckpointSpec:
     # WD-001 is an External-Systems checkpoint we only register because the
     # below-early-return Workday checks need it to hydrate _workday_flows).
     listable: bool = True
+    da: DAValidation | None = None
+    legacy_family: str = ""
+    custom_tags: tuple[str, ...] = ()
 
 
 @dataclass
@@ -297,7 +302,7 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.CRITICAL.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # ---- Workday DA: WD-DA-PKG-001 (setup/workday-da skill, step DA1.1) ----
+    # ---- Workday DA: WD-DA-PKG-001 (connect/workday lifecycle) ----
     # WD-DA-PKG-001: the Workday extension package for the Declarative Agent
     # (DA) flavor of ESS is installed in the target env. Queries the
     # Dataverse `solutions` table for the DA parent (HR/IT) plus its Workday
@@ -448,6 +453,7 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("WD-001",),
         priority=Priority.HIGH.value,
         roles=(Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value),
+        custom_tags=(WORKDAY_LITMUS_TAG,),
     ),
     # ---- Workday: connection-reference binding completeness ----
     # Reads cached refs from WD-PKG-001 and needs _workday_flows (WD-001).
@@ -754,6 +760,7 @@ _SPECS: list[CheckpointSpec] = [
     ),
 ]
 
+_SPECS = attach_inventory(_SPECS, CheckpointSpec)
 REGISTRY: dict[str, CheckpointSpec] = {spec.key: spec for spec in _SPECS}
 
 
@@ -1167,6 +1174,7 @@ def matches(target: str, emitted_id: str) -> bool:
             emitted_spec is not None
             and not emitted_spec.is_family
             and emitted_spec.key != fam_key
+            and emitted_spec.legacy_family != fam_key
         ):
             return False
         return emitted_id == fam_key or emitted_id.startswith(fam_key + "-")
@@ -1207,6 +1215,10 @@ def validate_registry() -> None:
     # deliberately stubbed/narrowed REGISTRY in a unit test doesn't trip on
     # profiles referencing checkpoints it left out.
     if _SHIPPED_REGISTRY_KEYS <= frozenset(REGISTRY):
+        try:
+            validate_da_definitions(REGISTRY)
+        except ValueError as exc:
+            raise RegistryError(str(exc)) from exc
         for profile in PROFILES.values():
             for checkpoint_id in profile.checkpoint_ids:
                 if resolve(checkpoint_id) is None:

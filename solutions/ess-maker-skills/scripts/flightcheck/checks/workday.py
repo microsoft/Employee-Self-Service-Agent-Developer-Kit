@@ -53,6 +53,7 @@ from .connections import check_connector_connections, filter_connections_by_conn
 from ..agent_scope import is_declarative_agent
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+WORKDAY_LITMUS_TAG = "Workday Litmus Test"
 
 # The 3 critical Dataverse environment variables for Workday
 ENV_VARS = {
@@ -163,13 +164,12 @@ _REF_SUFFIX_ROLES = {
 #     }
 #
 #   The ``ff0df`` connection is configured with Power Platform's
-#   "Microsoft Entra ID Integrated" authentication type (per skill-5,
-#   src/skills/setup/workday/install-workday-extension-pack.md S5.3), not
-#   Basic auth. That auth type authenticates the signed-in employee
+#   "Microsoft Entra ID Integrated" authentication type, not Basic auth.
+#   This CEA runtime reference is not a DA installation procedure.
+#   That auth type authenticates the signed-in employee
 #   against a federated Workday enterprise app in Entra (Application ID
 #   URI ``http://www.workday.com/{WD_TENANT}``), which is the same
-#   enterprise app the setup flow provisions in skill-3,
-#   src/skills/setup/workday/provision-workday-entra-app.md. The X.509
+#   enterprise app configured for Workday federation. The X.509
 #   signing certificate WD-CONN-102 inspects lives
 #   on that enterprise app as a keyCredential. It is the most visible
 #   expiry-driven health signal on the federation app that the
@@ -646,7 +646,7 @@ def run_workday_checks(runner) -> list[CheckResult]:
             targets = (scope.split(":", 1)[1],)
         for target in targets:
             spec = registry.resolve(target)
-            if spec is not None and spec.key == family:
+            if spec is not None and (spec.key == family or spec.legacy_family == family):
                 return True
         return False
 
@@ -3887,7 +3887,10 @@ def _check_workday_run_health(runner, prior_results=None) -> list[CheckResult]:
     remediation point the operator at a failed prerequisite rung instead of
     asking them to run a scenario that cannot pass.
     """
-    return _check_workday_run_health_passive(runner, prior_results)
+    rows = _check_workday_run_health_passive(runner, prior_results)
+    for row in rows:
+        row.custom_tags = [WORKDAY_LITMUS_TAG]
+    return rows
 
 
 def _check_workday_run_health_passive(runner, prior_results=None) -> list[CheckResult]:

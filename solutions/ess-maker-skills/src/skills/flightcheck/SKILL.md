@@ -1,8 +1,10 @@
 # FlightCheck Skill
 
-Pre-deployment readiness validation for ESS agents. Runs automated checks
-against the live environment (licenses, Entra, Power Platform, Workday/
-ServiceNow/SAP integrations) and validates extracted agent files on disk.
+Setup diagnostics for ESS makers. The maker workspace and standalone command
+use the same CLI, selected target, scopes and structured result contract.
+DA full checks inspect selected-agent configuration; local-only checks remain
+an explicit option and never substitute for a requested full run.
+Legacy/custom-engine scopes retain their broader environment checks.
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling.
@@ -15,19 +17,73 @@ The calling prompt applies the **FlightCheck entry contract** in
 `.github/copilot-instructions.md`. When this skill is invoked directly, apply
 that contract before continuing.
 
-Continue with this skill for the contract's **Standalone FlightCheck** and
-**Canonical setup ready** states. The contract owns the maker interaction and
-next route for its other states.
+Continue with this skill for the contract's **Standalone FlightCheck**,
+**Canonical setup ready**, and **Selected DA diagnostics** states. The contract
+owns the maker interaction and next route for its other states. A selected DA
+does not need completed connection readiness before running read-only
+diagnostics; do not send it to setup merely because `connect_ready` is false.
 
-Treat a config with `releaseLine: "da"` and no `dataverseEndpoint` as a native
-no-Dataverse agent. Its supported scopes are `full`, `environment`,
-`servicenow`, `workday`, `local`, and `infrastructure`. If
-`dataverseEndpoint` is present, use the existing hybrid/legacy path even when
-the release line is `da`.
+Resolve the exact selected agent and its release line. DA `full` uses maker
+setup diagnostics whether or not `dataverseEndpoint` is present. Do not switch
+a hybrid DA to legacy full checks. A missing/ambiguous selection must be
+resolved before continuing; never borrow a sibling's identity.
+
+For a native no-Dataverse agent, supported scopes are `full`, `environment`,
+`servicenow`, `workday`, `local`, and `infrastructure`.
+DA `workday` and `servicenow` use the same selected-agent diagnostic producers
+as full, restricted to the requested provider plus required prerequisites.
+Other narrow scopes retain their existing behavior.
+Honor the requested scope identically in the maker workspace and standalone
+command. Invocation source identifies the caller, not different check coverage
+or elevated permissions. With the same target, scope, permissions and evidence,
+findings must agree; execution timestamps and durations can differ.
+
+An explicit `--workday-app-id` overrides the saved Workday application selection
+for this run only; it does not update workspace configuration. An explicit
+`--environment-url` must match the selected environment's verified Dataverse
+web or API root. An equivalent alias is allowed, not a different target.
 
 ---
 
 ## Step 1: Ask scope (optional)
+
+### Focused Workday litmus request
+
+If the maker requests `WD-RUN-001`, `/flightcheck WD-RUN-001`,
+`/flightcheck wd litmus test`, or the Workday litmus test by name, skip the
+scope picker and runtime-probe consent. Resolve the same exact selected DA
+and run the existing checkpoint command, not the Workday scope or full suite:
+
+```powershell
+python scripts/flightcheck/cli.py --checkpoint WD-RUN-001 --agent-slug {AGENT_SLUG} --invocation-source adk --select-targets never --output workspace/flightcheck/workday-litmus
+```
+
+The separate folder preserves the full-suite report. Let the CLI open its
+report once; do not open another browser tab. Its focused HTML shows only the
+requested finding, while necessary prerequisite results remain in technical
+details and the original JSON. Present any prerequisite blocker rather than
+hiding it. Keep the same selected target for subsequent reruns.
+
+For a DA litmus Manual finding, display the recorded
+`evidence.manualVerificationSteps` in order and
+`evidence.ifMissingOrIncorrect` as the exception guidance. These are the
+code-defined customer instructions from `checks/da_validation.py`, shared with
+the report. Preserve their wording, selected agent/environment names, sample
+question and rerun instruction; do not generate or paraphrase another procedure.
+Keep the Copilot Studio Test-pane question separate from the VS Code rerun.
+Wait for the answer/completion before rerunning this checkpoint. Do not
+automatically trigger a flow, enable scenarios, collect employee answers or
+ask the maker to repeat prompts when history access is denied. If a run is
+in progress, wait; if a confirmed failure is reported, follow that failure's
+remediation first. Rerun only when the maker requests it or confirms completion.
+
+At least one recent scoreable agent-facing success satisfies this passive
+litmus; a top-level flow Succeeded is not enough and mixed failures remain
+visible. It does not prove the maker's specific prompt, every scenario or
+published employee success. Do not invoke the legacy Step 3d loop for a
+diagnostic-only DA result. Other named-check aliases are not introduced here.
+
+### Scope selection
 
 Use `vscode_askQuestions`:
 
@@ -37,7 +93,7 @@ Use `vscode_askQuestions`:
     "header": "Scope",
     "question": "What would you like to check?",
     "options": [
-      { "label": "Full check", "description": "All categories — licenses, environment, auth, integrations, agent files, publishing", "recommended": true },
+      { "label": "Full check", "description": "Selected-agent setup for DA; comprehensive environment checks for legacy agents", "recommended": true },
       { "label": "Workday only", "description": "Workday connections, flows, env vars, and SOAP workflow tests" },
       { "label": "ServiceNow only", "description": "ServiceNow connections, flows, template configs, and local topics" },
       { "label": "Local files only", "description": "Validate extracted topic files, agent config, variables" },
@@ -57,10 +113,41 @@ Map the selection to a scope flag:
 - "Environment only" → `environment`
 - "Prerequisites only" → `prerequisites`
 
-For a native no-Dataverse agent, omit "Prerequisites only". Its full scope
-runs exact-agent access, authored-content, native connection readiness,
-environment capacity, and applicable local-file checks; it does not run
-Dataverse, Graph, Power Platform Admin, or legacy flow checks.
+For DA, omit "Prerequisites only" and describe Workday/ServiceNow choices as
+connection and configuration checks, not legacy SOAP tests or templates.
+If the maker already requested a scope, use it without asking again.
+DA full checks exact-agent access/content,
+ESS identity, environment metadata, conversation activation, instructions,
+sign-in configuration, used connection bindings and applicable local setup.
+The shared registry also includes tenant SKU/role observations, exact
+environment capacity/billing/DLP, knowledge/access and manual QA/publishing
+guidance. Attempt supported delegated reads; denied access or an unsupported
+observation gets scoped Manual steps, while malformed data and unexpected
+auth/service errors stay Errors. Inventory observations never prove
+intended-user entitlement or current employee success.
+Workday and ServiceNow are optional. Report enabled, disabled, configured
+without active use, not configured and uncertain discovery distinctly.
+Check enabled integrations' exact bindings and any invoked ServiceNow flows;
+do not require legacy ServiceNow templates for native direct connector actions.
+Run OOB Workday package/runtime checks only for enabled reviewed OOB topics,
+not an arbitrary custom Workday connector. Disabled or unconfigured integrations
+do not create defects or compulsory manual reviews.
+They do not collect release approvals or submitted employee test evidence.
+Native ServiceNow action checks cover employee-delegated authentication,
+HRSD/ITSM setup/system topics and portal record links without requiring legacy
+flows/templates. Knowledge-ingestion authentication and source ACLs are separate.
+SharePoint filtering and Hub/connected-agent setup are optional: unknown
+applicability gets conditional Manual guidance, not mandatory setup or an
+assumed absence. Evaluation and publishing guidance distinguishes test-case
+quality, completed agent evaluation, unpublished maker validation, catalog
+approval/audience and published non-maker use in Microsoft 365 Copilot Chat.
+Skills that need selected validations reference registered checkpoint IDs or
+profiles through the CLI and consume structured JSON. Full discovers eligible
+definitions automatically. Do not duplicate check logic in a skill or turn a
+Manual result into Passed. Native-selected profiles share the producers while
+retaining the existing Connect aggregate contract.
+Dependency reads use the maker's access; inability to
+inspect a resource is an explicit limitation, not proof that setup is broken.
 
 ---
 
@@ -73,6 +160,8 @@ of them together and a healthy prod app could be masked by an unrelated
 sandbox app. This step lets the user pin the one they are verifying.
 
 **Only run this step for scopes that touch those integrations:**
+- DA full, Workday, ServiceNow, or local-only → **skip this step**; dependencies come from the exact selected
+  agent, not Graph SSO-app discovery or unrelated connection candidates
 - native no-Dataverse agent → **skip this step entirely**; connection checks
   use the exact active agent and never guess among physical candidates
 - scope is `full` or `workday` → discover Workday SSO apps
@@ -143,14 +232,18 @@ chat (it is a non-interactive subprocess), so **you own the consent question**.
 
 **WD-RUN-001** (the Workday run-health check) is **passive-only** and does **not**
 use this probe: it grades a real, recent end-to-end Workday run from run history
-and never writes to the tenant. If no fresh run exists it returns a guided
-NOT_CONFIGURED — see the **WD-RUN-001 user-assisted run** loop in Step 3. So this
+and never writes to the tenant. Selected-DA diagnostics return **Manual** when
+no scoreable recent response is available; use the focused Workday litmus
+instructions above. Only legacy results use **NotConfigured** and the
+**WD-RUN-001 user-assisted run** loop in Step 3. So this
 gate is about INFRA-003 only.
 
 **This gate applies only when INFRA-003 runs its mutating probe: scope `full`.**
 For `workday`, `workdayextension`, ServiceNow-only, Local-files-only, or
 Prerequisites-only scopes, skip this gate and go straight to Step 2b.
 
+For DA full, skip this gate even when Dataverse is configured. Never append
+`--runtime-reachability` or an import probe: the DA maker diagnostic is read-only.
 For a native no-Dataverse agent, skip this gate for every supported scope.
 Its AgentBuilder, connection-inventory, capacity, and local checks are
 read-only and never create a transient flow.
@@ -194,7 +287,7 @@ Keep them in whatever phrasing you use.
 
 **Message:**
 
-Running readiness checks — this takes 1–3 minutes depending on scope...
+Running setup checks — this takes 1–3 minutes depending on scope...
 
 **End message.**
 
@@ -218,7 +311,8 @@ python scripts/flightcheck/cli.py --scope {SCOPE} --invocation-source adk --sele
 
 Wait for the script to finish.
 
-`cli.py` automatically opens the HTML report (`workspace/flightcheck/report.html`)
+`cli.py` automatically opens `report.html` from the executed run's output
+directory (normally `workspace/flightcheck`)
 in the user's default browser when it finishes. **Do not open it yourself** — a
 second `webbrowser.open` / `Start-Process` would launch a duplicate tab pointing
 at the same file. If the report does not appear (Codespaces, headless box, or
@@ -229,7 +323,33 @@ explorer rather than spawning another tab from this skill.
 
 ## Step 3: Read results and present findings
 
-Read `workspace/flightcheck/results.json` and format the output below **yourself,
+Read `results.json` from the executed run's output directory and link
+`report.html` in that same directory. Use the command's `--output` value,
+or the CLI default `workspace/flightcheck` when omitted. The focused litmus
+command above uses `workspace/flightcheck/workday-litmus`; never substitute
+an older full-suite JSON or report. Call this directory `{OUTPUT_DIRECTORY}`
+in the presentation below.
+
+For a DA result with `diagnostic_only: true`, present the actual diagnostic
+outcome: setup checks passed, completed with notes, issues found, or some checks
+could not run. Show confirmed problems separately from inaccessible/inconclusive
+checks, with a compact area/finding/next-step/owner table and a passed count.
+Explain local-only versus deployed inspection and link the generated HTML.
+Keep portal suggestions and unperformed employee scenarios visibly unverified.
+Use customer-facing category names: combine Workday implementation-module
+labels into Workday, while preserving checkpoint IDs. Present each check's
+purpose, recorded status and status-specific next step. Group applicable
+portal-only and explicit administrator-verification items under Manual
+verification with the responsible person, detailed steps and what to do if
+the setting is missing or incorrect. Manual means unverified by automation,
+not Passed or a confirmed defect; do not collect completion forms.
+Do not translate the verdict to READY/NOT_READY, request attestations/review JSON,
+claim release approval, or automatically change tenant configuration. Stop after
+this summary unless the maker explicitly requests a repair.
+
+For other results, retain the following legacy presentation:
+
+Read `{OUTPUT_DIRECTORY}/results.json` and format the output below **yourself,
 directly in your chat reply**. You MUST follow this exact format every time. Do
 not improvise, add prose between sections, or skip any section.
 
@@ -258,7 +378,7 @@ Always show this first:
 | ℹ️ Not Configured | {not_configured} |
 | **Total** | **{total}** |
 
-*Completed in {duration_secs}s — [View full report](workspace/flightcheck/report.html)*
+*Completed in {duration_secs}s — [View full report]({OUTPUT_DIRECTORY}/report.html)*
 ```
 
 Where VERDICT_EMOJI and VERDICT_TEXT are:

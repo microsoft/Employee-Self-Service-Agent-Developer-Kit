@@ -115,18 +115,22 @@ _POST_TIMEOUT = (3.05, 5)
 
 
 # --- Tenant classification (ADO 7558661) ----------------------------------
-# Report internal Microsoft dogfood/testing traffic separately from real
-# external customer usage. ``tenant_class`` is DERIVED from ``tenant_id`` — a
-# coarse, non-identifying bucket (strictly lower sensitivity than the raw
-# tenant GUID it is computed from). It is classified at EMIT time, not in the
-# Aria cube, because 1DS RTA cubes map an event property straight to a
-# dimension and cannot derive one dimension's value from another.
+# Report known non-customer traffic separately from external customer usage.
+# ``internal`` is the historical telemetry bucket name; it includes Microsoft
+# corporate/dogfood tenancy plus explicitly verified partner, self-service, and
+# demo test tenants. It does not assert that every listed tenant is
+# Microsoft-owned. ``tenant_class`` is DERIVED from ``tenant_id`` — a coarse,
+# non-identifying bucket (strictly lower sensitivity than the raw tenant GUID
+# it is computed from). It is classified at EMIT time, not in the Aria cube,
+# because 1DS RTA cubes map an event property straight to a dimension and
+# cannot derive one dimension's value from another.
 #
-# Seeded with the Microsoft corporate Entra tenant plus known internal
-# dogfood/demo tenants that we own. Additional internal / dogfood tenants
-# can be added WITHOUT a code change via the ``ESS_ADK_INTERNAL_TENANTS``
-# env var (comma-separated GUIDs) — preferred for one-off / short-lived
-# additions; the hard-coded list is for well-known, long-lived tenancies.
+# Seeded with the Microsoft corporate Entra tenant plus known non-customer
+# dogfood/test/demo tenants. Additional non-customer tenants can be added
+# WITHOUT a code change via the ``ESS_ADK_INTERNAL_TENANTS`` env var
+# (comma-separated GUIDs) — preferred for one-off / short-lived additions; the
+# hard-coded list is for well-known, long-lived tenancies with recorded
+# provenance.
 MICROSOFT_CORP_TENANT_ID = "72f988bf-86f1-41af-91ab-2d7cd011db47"
 # EmployeeHub dogfood tenant (team-owned; see PR #242 / customer-attribution
 # analysis).
@@ -140,8 +144,29 @@ CRONTOSO_INTERNAL_TENANT_ID = "99f9fd00-6145-4c3e-b3ba-d4c7e59470d8"
 # ``devtestcocreate0630.onmicrosoft.com``); internal dev/test only.
 COCREATE_TEST_TENANT_ID = "8d36aacf-bbb3-4388-ac14-8844210f377b"
 
-# Well-known internal Microsoft tenancies. Kept as a module-level constant
-# so tests and analytics tooling can enumerate the same set.
+# These six tenants were identified in production external-usage investigations
+# by resolving their Entra display names through Microsoft Graph, then
+# explicitly designated by the telemetry owner as non-customer test/demo
+# traffic and excluded from the external dashboards. PR #458 is the durable
+# change record. Match exact IDs only; display-name patterns are not evidence.
+COPILOT_PARTNER_TEST_TENANT_ID = "142b48c2-943c-4d07-ad6b-b0eb5cd0e5f2"
+M365E5_PARTNER_TEST_TENANT_ID = "440d6412-bc8e-49a0-9913-9f8be786b89e"
+OFFICE365E5_SELF_SERVICE_TEST_TENANT_ID = "4636dd08-fdd9-4610-a443-762fb320fb4e"
+CONTOSOTPM_TEST_TENANT_ID = "6936469c-696e-4fe2-a0c8-dd16f54b1b45"
+CONTOSO_DEMO_TENANT_ID = "4345eb96-df8a-464a-9eb8-72253571a621"
+CONTOSO_DEMO_2_TENANT_ID = "2d5577b0-a83c-436c-9582-1c3bcd2ab0d3"
+
+KNOWN_NON_CUSTOMER_TEST_TENANT_IDS: tuple[str, ...] = (
+    COPILOT_PARTNER_TEST_TENANT_ID,
+    M365E5_PARTNER_TEST_TENANT_ID,
+    OFFICE365E5_SELF_SERVICE_TEST_TENANT_ID,
+    CONTOSOTPM_TEST_TENANT_ID,
+    CONTOSO_DEMO_TENANT_ID,
+    CONTOSO_DEMO_2_TENANT_ID,
+)
+
+# Well-known non-customer tenancies. Kept as a module-level constant so tests
+# and analytics tooling can enumerate the same set.
 _HARDCODED_INTERNAL_TENANT_IDS: frozenset[str] = frozenset(
     {
         MICROSOFT_CORP_TENANT_ID,
@@ -149,6 +174,7 @@ _HARDCODED_INTERNAL_TENANT_IDS: frozenset[str] = frozenset(
         CONTOSO_INTERNAL_TENANT_ID,
         CRONTOSO_INTERNAL_TENANT_ID,
         COCREATE_TEST_TENANT_ID,
+        *KNOWN_NON_CUSTOMER_TEST_TENANT_IDS,
     }
 )
 
@@ -169,7 +195,7 @@ _GUID_RE = re.compile(
 
 
 def _internal_tenant_ids() -> frozenset[str]:
-    """Allow-list of tenant GUIDs treated as internal Microsoft tenancy.
+    """Allow-list of tenant GUIDs treated as known non-customer tenancy.
 
     The env var is still consulted on every call (a cheap dict lookup), so a
     changed ``ESS_ADK_INTERNAL_TENANTS`` is honored without a restart, but the

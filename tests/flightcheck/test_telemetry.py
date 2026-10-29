@@ -166,6 +166,31 @@ def test_build_events_shape_and_required_fields(monkeypatch):
         assert event["data"]["automationType"] == "automated"
 
 
+@pytest.mark.parametrize(
+    "tenant_id",
+    telemetry.KNOWN_NON_CUSTOMER_TEST_TENANT_IDS,
+)
+def test_build_events_classifies_known_non_customer_tenants_as_internal(
+    tenant_id,
+):
+    events = telemetry.build_events(
+        FakeRun(),
+        env="prod",
+        instance_id="inst-test",
+        tenant_id=tenant_id,
+        agent_id="bot-test",
+        agent_count=1,
+        scope="full",
+        invocation_source="cli",
+        ikey_envelope=f"o:{PROD_TOKEN}",
+        run_id="run-test",
+    )
+
+    assert {event["data"]["tenantClass"] for event in events} == {
+        telemetry.TENANT_CLASS_INTERNAL
+    }
+
+
 def test_get_toolkit_git_sha_prefers_env_override(monkeypatch):
     monkeypatch.setenv("ESS_ADK_GIT_SHA", "1234567")
     telemetry.get_toolkit_git_sha.cache_clear()

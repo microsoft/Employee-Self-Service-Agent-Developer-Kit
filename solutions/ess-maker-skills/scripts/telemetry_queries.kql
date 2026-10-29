@@ -35,6 +35,19 @@
 //  Time column on every table: EventInfo_Time (UTC).
 // =============================================================================
 
+// CUSTOMER-ONLY QUERY GUARD
+// `tenantClass` / `tenant_class` is assigned by the emitting clone. Historical
+// rows and older clones can therefore label these known test/demo tenants as
+// customers. Include this declaration with customer-only queries and exclude
+// the IDs even when filtering on the derived class.
+let knownNonCustomerTenantIds = dynamic([
+    "142b48c2-943c-4d07-ad6b-b0eb5cd0e5f2",
+    "440d6412-bc8e-49a0-9913-9f8be786b89e",
+    "4636dd08-fdd9-4610-a443-762fb320fb4e",
+    "6936469c-696e-4fe2-a0c8-dd16f54b1b45",
+    "4345eb96-df8a-464a-9eb8-72253571a621",
+    "2d5577b0-a83c-436c-9582-1c3bcd2ab0d3"
+]);
 
 // -----------------------------------------------------------------------------
 // 1) USAGE — total runs, DAU/WAU/MAU, active tenants (last 30 days)
@@ -110,6 +123,7 @@ essmakerkit_flightcheck_check
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(90d)
 | where tenantClass == "customer" and isnotempty(tenantId)
+| where tenantId !in (knownNonCustomerTenantIds)
 | where blockReason == "adminApiAuthorization"
 | summarize BlockedRuns = count(), BlockedCustomers = dcount(tenantId)
           by bin(EventInfo_Time, 7d)
@@ -119,6 +133,7 @@ essmakerkit_flightcheck_run
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(30d)
 | where tenantClass == "customer" and isnotempty(tenantId)
+| where tenantId !in (knownNonCustomerTenantIds)
 | where isnotempty(blockReason)
 | summarize Runs = count(), Customers = dcount(tenantId) by blockReason
 | order by Runs desc
@@ -127,6 +142,7 @@ essmakerkit_flightcheck_run
 essmakerkit_flightcheck_check
 | where EventInfo_Time > ago(30d)
 | where tenantClass == "customer" and isnotempty(tenantId)
+| where tenantId !in (knownNonCustomerTenantIds)
 | where blockReason == "adminApiAuthorization"
 | summarize Checks = count(), Customers = dcount(tenantId) by checkpointId, category
 | order by Checks desc

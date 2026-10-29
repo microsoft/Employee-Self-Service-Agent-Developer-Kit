@@ -43,8 +43,8 @@ _DA_PRODUCT_REGISTRY = (
 _UI_FORMATTING = _SOLUTION / "src" / "reference" / "ui-formatting-guidelines.md"
 _PREPARE_FRESH_WORKSPACE = _SOLUTION / "scripts" / "prepare_fresh_workspace.py"
 _RESET_LOCAL_WORKSPACE = _SOLUTION / "scripts" / "reset_local_workspace.py"
-_WORKDAY = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
-_CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
+_WORKDAY = _SOLUTION / "src" / "skills" / "connect" / "workday" / "SKILL.md"
+_WORKDAY_ENTRY = _SOLUTION / "src" / "skills" / "connect" / "workday" / "entry.md"
 _INSTRUCTIONS = _SOLUTION / ".github" / "copilot-instructions.md"
 _SETUP_PROMPT = _SOLUTION / ".github" / "prompts" / "setup.prompt.md"
 _PROMPTS = _SOLUTION / ".github" / "prompts"
@@ -750,6 +750,7 @@ def test_global_gate_routes_flightcheck_through_setup_evidence() -> None:
     assert "Apply the first matching state" in normalized
     assert "**Standalone FlightCheck:**" in instructions
     assert "**Canonical setup ready:**" in instructions
+    assert "**Selected DA diagnostics:**" in instructions
     assert "**Setup readiness outstanding:**" in instructions
     assert "**Workspace preparation required:**" in instructions
     assert "exact maker-facing copy" in normalized
@@ -793,6 +794,27 @@ def test_global_gate_routes_flightcheck_through_setup_evidence() -> None:
     assert entry_contract.count("```json") == 2
 
 
+def test_da_flightcheck_entry_does_not_require_completed_connections() -> None:
+    instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
+    entry = instructions.split("#### FlightCheck entry contract", 1)[1]
+    entry = entry.split("### If canonical setup is ready", 1)[0]
+    da_entry = entry.split("**Selected DA diagnostics:**", 1)[1]
+    da_entry = " ".join(da_entry.split("**Setup readiness outstanding:**", 1)[0].split())
+    assert 'one selected Declarative Agent (`releaseLine: "da"`)' in da_entry
+    assert "canonical setup state is absent" in da_entry
+    assert "must not require `connect_ready: true`" in da_entry
+    assert "same selected target, scope and CLI as standalone execution" in da_entry
+    assert "Never borrow another agent's identity or change setup state" in da_entry
+    assert "`/flightcheck` may run only its local-files scope" not in instructions
+
+    prompt = (_PROMPTS / "flightcheck.prompt.md").read_text(encoding="utf-8")
+    skill = (_SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Selected DA diagnostics" in prompt
+    assert "Do not substitute local-only checks for a requested full run" in prompt
+    assert "do not send it to setup merely because `connect_ready` is false" in skill
+    assert "never substitute for a requested full run" in skill
+
+
 def test_maker_profile_requires_only_canonical_completion() -> None:
     text = _MAKER_PROFILE.read_text(encoding="utf-8")
 
@@ -808,18 +830,20 @@ def test_maker_profile_requires_only_canonical_completion() -> None:
 
 
 def test_workday_da_setup_routes_only_supported_hr_agents() -> None:
-    step1 = _CONNECT_STEP1.read_text(encoding="utf-8")
+    step1 = _WORKDAY_ENTRY.read_text(encoding="utf-8")
     normalized_step1 = " ".join(step1.split())
     workday = _WORKDAY.read_text(encoding="utf-8")
 
-    assert "src/skills/setup/workday-da/SKILL.md" in step1
+    assert "src/skills/connect/workday/SKILL.md" in step1
     assert "gptagent_copilotforemployeeselfservicehr" in step1
     assert "Workday integration with the ESS IT Agent isn't supported" in step1
     assert "or run `WD-PKG-001`" in normalized_step1
-    assert "src/skills/foundation-setup/SKILL.md" not in step1
+    assert "src/skills/foundation-setup/SKILL.md" in step1
+    assert "product boundaries below before invoking Setup" in normalized_step1
     assert _WORKDAY.is_file()
-    assert "Hybrid Workday extension setup is not available" in workday
-    assert "Do not run the retained Workday setup playbooks" in workday
+    assert "This branch is DA-only" in workday
+    assert "main-ca" in workday
+    assert "scripts/workday_connect.py" in workday
 
 
 def test_foundation_routes_supported_da_setup_paths() -> None:
@@ -893,10 +917,11 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert '--agent-id "{AGENT_ID}"' in text
     assert '--ring "{RING}"' in text
     assert "resolve the service ring" in normalized.casefold()
-    assert text.index("setup_existing_da.py inspect-agent") < text.index(
+    start = text.split("## Start", 1)[1]
+    assert start.index("setup_existing_da.py inspect-agent") < start.index(
         "da-existing-dev.md"
     )
-    assert text.index("setup_existing_da.py inspect-agent") < text.index(
+    assert start.index("setup_existing_da.py inspect-agent") < start.index(
         "da-prod-to-dev.md"
     )
     assert _DA_MOS_STARTER.is_file()
@@ -2649,3 +2674,20 @@ def test_flightcheck_preserves_standalone_and_configured_scope_modes() -> None:
     assert "scope selection supported by the active configuration" in normalized
     assert "supported scopes are `full`, `environment`" in skill
     assert "scope fixed to `local`" not in normalized
+
+
+def test_flightcheck_renders_the_executed_output_and_allows_interpreted_findings() -> None:
+    instructions = " ".join(_INSTRUCTIONS.read_text(encoding="utf-8").split())
+    prompt = " ".join((_PROMPTS / "flightcheck.prompt.md").read_text(encoding="utf-8").split())
+    skill = (_SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md").read_text(encoding="utf-8")
+    rendering = skill.split("## Step 3: Read results and present findings", 1)[1]
+
+    for text in (instructions, " ".join(rendering.split())):
+        assert "executed run's output directory" in text
+        assert "workspace/flightcheck/workday-litmus" in text
+        assert "report.html" in text
+    assert "Read `workspace/flightcheck/results.json`" not in rendering
+    assert "[View full report]({OUTPUT_DIRECTORY}/report.html)" in rendering
+    assert "interpreted DA diagnostic summary and findings table" in prompt
+    assert "Do not add process narration" in prompt
+    assert "pre-deployment readiness" not in prompt
