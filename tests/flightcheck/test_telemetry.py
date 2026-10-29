@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
@@ -535,6 +536,23 @@ def test_derive_run_outcome_blocked_only_is_not_ready():
         FakeRun(errors=0, failed=0, blocked=1, warnings=0)
     ) == telemetry.RUN_OUTCOME_BLOCKED
     assert telemetry.RUN_OUTCOME_BLOCKED != telemetry.RUN_OUTCOME_READY
+
+
+@pytest.mark.parametrize("section", ["5) TIME-TO-GREEN", "6) PER-TENANT"])
+def test_readiness_queries_exclude_diagnostic_and_unknown_verdicts(section):
+    query_pack = (
+        Path(__file__).parents[2] / "solutions" / "ess-maker-skills"
+        / "scripts" / "telemetry_queries.kql"
+    ).read_text(encoding="utf-8")
+    query = re.split(r"// -+\n", query_pack.split(section, 1)[1], maxsplit=2)[1]
+    cohort_filter = re.search(r"\| where overall in \(([^)]+)\)", query)
+    assert cohort_filter is not None, "Readiness denominators must exclude diagnostic-only runs"
+    cohort = set(re.findall(r'"([^"]+)"', cohort_filter.group(1)))
+    assert cohort == {"READY", "READY_WITH_WARNINGS", "NOT_READY"}
+    green_filter = re.search(r"(?:ready =|countif\()\s*overall in \(([^)]+)\)", query)
+    assert green_filter is not None, "Only explicit ready verdicts may count as green"
+    green = set(re.findall(r'"([^"]+)"', green_filter.group(1)))
+    assert green == {"READY", "READY_WITH_WARNINGS"}
 
 
 # --- blockReason: splitting the Blocked wedge by cause (schema 1.5) --------

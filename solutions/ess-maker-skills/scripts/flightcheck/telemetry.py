@@ -878,16 +878,27 @@ RUN_OUTCOME_ERRORED = "Blocked (check errored)"
 # NOT_READY with exit code 1 (ADO 7943641 carry-over).
 RUN_OUTCOME_BLOCKED = "Blocked (gate)"
 
+_DIAGNOSTIC_RUN_OUTCOMES = {
+    "SETUP_CHECKS_PASSED": "Setup checks passed",
+    "CHECKED_WITH_NOTES": "Checked with notes",
+    "SOME_CHECKS_UNVERIFIED": "Some checks could not run",
+    "ISSUES_FOUND": "Setup issues found",
+}
+
 
 def derive_run_outcome(run_result: Any) -> str:
     """Bucket a run into a single verdict slice.
 
-    Precedence: errored > failed > blocked > warnings > ready. ``errored`` and
+    Diagnostic overalls describe inspection, not release readiness.
+    For readiness runs: errored > failed > blocked > warnings > ready. ``errored`` and
     ``failed`` rank above ``blocked`` only to keep the pre-existing slice
     ordering stable; all three are NOT_READY. ``blocked`` stays above
     ``warnings`` because a blocked essential capability is a release gate while
     warnings are advisory.
     """
+    diagnostic_outcome = _DIAGNOSTIC_RUN_OUTCOMES.get(getattr(run_result, "overall", ""))
+    if diagnostic_outcome is not None:
+        return diagnostic_outcome
     errors = getattr(run_result, "errors", 0) or 0
     failed = getattr(run_result, "failed", 0) or 0
     blocked = getattr(run_result, "blocked", 0) or 0
