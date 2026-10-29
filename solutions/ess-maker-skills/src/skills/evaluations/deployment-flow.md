@@ -12,12 +12,17 @@ action, and local/deployed review state. Require explicit set selection. Run
 also retains its separate discovery/selection turn and connection selection.
 Do not switch targets or choose a connection automatically.
 
+Deployment requires a supported AgentBuilder evaluation workspace. Legacy
+Dataverse deployment is unavailable; report that boundary while preserving
+local files and any saved review intent. Existing read-only review discovery
+does not authorize a different deployment backend.
+
 The selected Request Review action authorizes its required non-destructive,
 selected-set push. Preview and deploy it immediately without showing a separate
 scope confirmation or asking "would you like to push?". Run, explicit push, and
 reviewer completion retain their existing confirmation rules. Request Review
-must still stop for explicit approval when its preview reveals destructive
-Dataverse deletions or replacement of different local files; after approval,
+must still stop for explicit approval when its preview reveals replacement
+of different local files; after approval,
 preview again with the approved flags before deploying.
 
 1. Run `python scripts/evaluation_method_policy.py --evaluation-folder "{set-folder}"`.
@@ -29,9 +34,7 @@ preview again with the approved flags before deploying.
 3. Reconcile the selected set's `localStatus`, `deployedStatus`, and `nextAction`
    using `evaluation_review.py --list-all`. Ordinary Run never creates a review
    request or marks review complete. Pending-review gates remain effective.
-4. Use the existing push APIs for the selected backend. Dataverse `push.py`
-   persists `review.json` in the evaluation-parent description, preserving
-   human-authored description text. Native MinimalBot uploads YAML through
+4. Use the existing native evaluation APIs. Native MinimalBot uploads YAML through
    `BotComponentInsert`: new or changed YAML creates a new deployed copy and
    leaves the old remote copy intact. Unchanged YAML, including local
    review-only changes, uses verified reuse. Do not require a new in-place update/delete API.
@@ -98,12 +101,10 @@ python scripts/evaluation_deployment.py deploy --set-folder "{set-folder}" --act
 
 For explicit push, obtain scope/side-effect confirmation before running the same
 command with action=`push`. Keep `--replace` consistent with approved local
-replacement. Add
-`--force-delete` only for exact approved remote deletions on the existing
-Dataverse path, not case omissions in a native new copy. A stale-token error
+replacement. A stale-token error
 means preview and confirm again, not bypassing the check. `blocked`, `cancelled`,
 and `failed` are not successful deployment statuses.
-Native `--force-delete` remains rejected; case omissions in a new copy use
+Native `--force-delete` remains rejected; case omissions in a native new copy use
 normal scoped confirmation without that flag.
 
 For **Run**, do not call `deploy` separately. Give the confirmed action=`run`
@@ -129,9 +130,7 @@ python scripts/evaluation_review.py --set-folder "{set-folder}" --status review_
 ```
 
 Then preview action=`push` again, show the changed metadata/diff, obtain consent,
-and deploy with this new token. Never reuse the pre-marker token. On Dataverse,
-confirm `reviewMetadataPersisted=true` and
-`sets[].deployedReviewStatus=review_completed` after success. On native, report
+and deploy with this new token. Never reuse the pre-marker token. Report
 the uploaded/reused set ID, local completion, `reviewMetadataPersisted=false`,
 `deployedReviewStatus=null`, and `reviewWarning`; do not claim remote completion.
 Ordinary explicit push must never perform this marker step.
@@ -145,10 +144,8 @@ an unscoped `push.py` call if preparation or verification fails:
 1. Checkpoint before staging changes. For a workspace source, inspect both
    `{agent.folder}/evaluations/{set}/` and
    `{agent.folder}/.baseline/evaluations/{set}/`.
-2. Show collisions and local-file replacement before promotion. On Dataverse,
-   explain that pushing a replacement will delete those cases from Copilot
-   Studio only when the preview lists remote deletions. On native, explain
-   new-copy behavior and old-copy retention instead; do not describe missing
+2. Show collisions and local-file replacement before promotion. Explain
+   new-copy behavior and old-copy retention; do not describe missing
    cases in the new copy as remote deletion. Require explicit replacement
    approval; keep/cancel performs no mutation.
 3. Promotion uses `evaluation_promotion.py promote`, preserving `review.json`
@@ -161,8 +158,7 @@ an unscoped `push.py` call if preparation or verification fails:
    python scripts/push.py --only "evaluations/{set}/*" --dry-run
    ```
 
-   Include Dataverse review-only metadata changes even if every case YAML is
-   unchanged. Preserve native review sidecars locally without inventing a wire
+   Preserve native review sidecars locally without inventing a wire
    field or requiring an API-parity implementation.
    Never use an unscoped push: unrelated pending topics, workflows, and sets
    must remain local.
@@ -174,12 +170,11 @@ an unscoped `push.py` call if preparation or verification fails:
    python scripts/push.py --only "evaluations/{set}/*" --yes
    ```
 
-   Use `--yes --force-delete` only after showing and approving the exact selected
-   Dataverse remote deletions. Prior replacement consent counts only for those
-   same files. Preserve unrelated local topic or workflow deletions.
+   Preserve unrelated local topic or workflow deletions. Missing cases in a new
+   copy do not delete cases from the retained old remote set.
 6. Verify the deployed identity and complete selected YAML content before
-   reporting success or starting a run. Verify intended remote review markers
-   on Dataverse; native local sidecars are not remote-marker evidence. Use the
+   reporting success or starting a run. Native local sidecars are not
+   remote-marker evidence. Use the
    returned new ID for a native new copy, not the retained old remote ID.
    An unchanged reuse and any pending insertion retry retain their verified or
    confirmed planned IDs. A synchronized no-op requires verification; do not
@@ -189,9 +184,7 @@ an unscoped `push.py` call if preparation or verification fails:
    failure, cancellation, or failed verification never authorizes cleanup.
 
 Success is only `status=pushed` or `status=up_to_date`, with matching returned
-`sets[].sourceFolder`, `agentSetFolder`, and a verified `testSetId`. Dataverse
-success reports `reviewMetadataPersisted=true`; Request Review also requires
-`deployedReviewStatus=review_requested`. Native success reports
+`sets[].sourceFolder`, `agentSetFolder`, and a verified `testSetId`. Native success reports
 `reviewMetadataPersisted=false` and `deployedReviewStatus=null`, even when local
 review is requested/completed. Report its `deploymentBehavior`, actual deployed
 ID, retained old copy when applicable, local review status, and `reviewWarning`.
@@ -204,10 +197,10 @@ its recovery instructions instead of manually deleting files.
 
 | Action | After verified deployment |
 |---|---|
-| Request Review / Flow R1 | Dataverse: confirm the deployed requested marker and give reviewer handoff. Native: report the actual uploaded/reused set and local request with the shared-review warning. Neither starts a run or sends notification |
+| Request Review / Flow R1 | Report the actual uploaded/reused set and local request with the shared-review warning. Do not start a run or send notification |
 | Run | Pass the verified deployed set identity to `run/SKILL.md`; complete connection prerequisites and start exactly once |
 | Explicit evaluation push | Report deployment only, preserving any existing review state; do not tag or run. After verified success, run `python scripts/analytics_pointer.py --post-deploy` and show any stdout verbatim. This is a one-time reminder for the current DA environment/agent association; it is silent after completion |
-| Reviewer completion / Flow R2 | Dataverse: verify deployed completion. Native: confirm local completion and successful YAML push/reuse, not shared completion. Offer Run subject to the existing review/connection gates |
+| Reviewer completion / Flow R2 | Confirm local completion and successful YAML push/reuse, not shared completion. Offer Run subject to the existing review/connection gates |
 
 On error or cancellation, distinguish saved locally, staged, deployed, and
 started. Preserve the source and retry context; never claim review availability

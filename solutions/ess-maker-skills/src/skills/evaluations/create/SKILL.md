@@ -35,8 +35,14 @@ actions. Explicit evaluation push remains available through
 > command to follow.
 
 1. Read `.local/config.json` to get `agent.folder` and `agent.slug`.
-2. Read ALL topic files in `{agent.folder}/topics/` — every `.mcs.yml` file.
-3. Classify each topic:
+2. When canonical setup is ready, run `topic_authoring.py list`, then read
+   relevant mapped topics with `topic_authoring.py read` into
+   `.local/evaluation-context/`. Use this current remote inventory/content as
+   deployed-state evidence without overwriting local drafts.
+3. Read local topic drafts for intended pending behavior. Treat them as drafts,
+   not proof of current remote state. A missing local file does not prove a
+   topic is absent remotely.
+4. Classify each topic:
 
 | Trigger type | Classification | Use in test generation |
 |-------------|---------------|----------------------|
@@ -49,19 +55,19 @@ actions. Explicit evaluation push remains available through
 | `OnUnknownIntent` | System | Skip |
 | `OnGeneratedResponse` | System | Skip |
 
-4. For each user-facing topic, extract:
+5. For each user-facing topic, extract:
    - `triggerQueries` (if present) — these become test prompts
    - `modelDescription` — describes what the topic does (use for expected response and for generating natural-language prompt variants)
    - First `SendActivity` message — can inform expected response
    - Whether the topic calls a workflow (`InvokeFlowAction`) — indicates integration data tests
    - Whether the topic calls a shared system topic (`BeginDialog`) — indicates template-config-based integration
 
-5. Take note of special topics by display name or content:
+6. Take note of special topics by display name or content:
    - Topics related to **sensitive content** → generate SensitiveTopic tests
    - Topics related to **emotional intelligence / empathy** → generate EQTopic tests
    - Topics related to **clarification / ambiguity** → generate AmbiguousTopic tests
 
-6. **Group user-facing topics by area.** Look at the file names of all
+7. **Group user-facing topics by area.** Look at the file names of all
    user-facing topic files and find **common words or prefixes** shared across
    multiple files (e.g., all files starting with `Workday`, or containing
    `ServiceNow`, `SuccessFactors`, etc.). Use those shared words as the area

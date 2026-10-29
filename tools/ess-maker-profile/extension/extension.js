@@ -107,12 +107,12 @@ const GUIDED_LAYOUT = {
 // `requires` records setup prerequisites; Customization keeps every action clickable.
 const ACTIONS = [
     { id: 'setup',       icon: '🔌', label: 'Setup',                  sub: 'Sign in to your environment',  query: '/setup',                    requires: [] },
-    { id: 'create',      icon: '✨', label: 'Create a topic', sub: 'Add an approved fixed answer', query: 'Create a topic',            requires: ['setup'] },
-    { id: 'update',      icon: '✏️', label: 'Update a topic', sub: 'Change a supported fixed answer', query: 'Update a topic',            requires: ['setup'] },
+    { id: 'create',      icon: '✨', label: 'Create a topic', sub: 'Draft and save a conversation topic', query: 'Create a topic',            requires: ['setup'] },
+    { id: 'update',      icon: '✏️', label: 'Update a topic', sub: 'Review and save a topic change', query: 'Update a topic',            requires: ['setup'] },
     { id: 'scan',        icon: '🔍', label: 'Scan for issues',        sub: 'Find broken bindings',         query: '/scan',                     requires: ['setup'] },
     { id: 'flightcheck', icon: '✈️', label: 'Run a flightcheck',      sub: '41+ readiness checks',         query: '/flightcheck',              requires: ['setup'] },
     { id: 'evaluate',    icon: '📊', label: 'Generate tests',         sub: 'Build evaluation test sets',   query: '/evaluate',                 requires: ['setup'] },
-    { id: 'push',        icon: '🚀', label: 'Push to Copilot Studio', sub: 'Safely deploy your changes',   query: '/push',                     requires: ['setup'] },
+    { id: 'push',        icon: '🚀', label: 'Push to Copilot Studio', sub: 'Review selected pending changes', query: '/push',                     requires: ['setup'] },
     { id: 'landingPage', icon: '🎨', label: 'Customize landing page', sub: 'Branding, links, prompts, cards', query: '/landing-page',           requires: ['setup'] },
 ];
 
@@ -561,12 +561,12 @@ function getTutorialHtml() {
         <h3>The workflow</h3>
         <ol>
             <li><strong>Setup</strong> \u2014 Sign in to your Power Platform environment.</li>
-            <li><strong>Create a topic</strong>: Add one approved fixed answer and optional support link.</li>
-            <li><strong>Update a topic</strong>: Change a supported fixed-answer topic after reviewing the exact change.</li>
+            <li><strong>Create a topic</strong>: Draft a conversation and approve its save to the selected Dev agent.</li>
+            <li><strong>Update a topic</strong>: Read a mapped topic, review the proposed change, and approve its save.</li>
             <li><strong>Scan</strong> \u2014 Check for broken references and configuration issues.</li>
             <li><strong>Run a flightcheck</strong> \u2014 Run 41+ automated readiness checks.</li>
             <li><strong>Generate tests</strong> \u2014 Create evaluation test sets for regression testing.</li>
-            <li><strong>Push</strong> \u2014 Safely deploy your changes to Copilot Studio.</li>
+            <li><strong>Push</strong>: Preview selected changes and approve supported saves.</li>
             <li><strong>Customize landing page</strong> \u2014 Configure branding, quick links, starter prompts, and insight cards.</li>
         </ol>
         <p>Start setup from <strong>Quick start</strong>, then choose an action in the <strong>Customization</strong> panel on the left. Each action opens a guided chat \u2014 just answer the prompts.</p>
@@ -587,24 +587,24 @@ function getTutorialHtml() {
 
     <section id="create">
         <h2>\u2728 Create a topic</h2>
-        <p>Create a topic that answers one intent with your approved fixed response and an optional support link, then ends.</p>
+        <p>Describe the conversation you want your agent to handle and review the proposed topic draft.</p>
         <p>When you click <strong>Create a topic</strong>, chat guides you through the supported details and asks for approval before saving.</p>
         <ul>
-            <li>Review the intent, trigger phrases, exact answer, and optional link.</li>
+            <li>Review triggering behavior, conversation actions, and user-facing wording.</li>
             <li>Save one inactive topic to the selected editable Dev agent.</li>
             <li>Verify the saved topic without activating or publishing it.</li>
         </ul>
-        <p>Backend calls, forms, branching, handoffs, and unrelated changes to agent-wide instructions are not supported. Saving is not publication and does not verify employee chat behavior.</p>
+        <p>Related instruction changes have separate previews and approvals. Power Automate authoring takes place outside ADK. Saving does not publish or verify employee chat behavior.</p>
         <h3>Examples</h3>
         <blockquote><p>\u201cWhen someone asks where the equipment policy is, show this approved answer and support link.\u201d</p></blockquote>
     </section>
 
     <section id="update">
         <h2>\u270f\ufe0f Update a topic</h2>
-        <p>Update only a fixed-answer topic created through this native authoring path. Packaged, system, and integration topics are not supported.</p>
+        <p>Read the selected topic's current saved content and draft the requested change while preserving unrelated behavior and existing contracts.</p>
         <ul>
-            <li>Select the exact supported topic in the current Dev agent.</li>
-            <li>Review the current and proposed intent, trigger phrases, answer, and optional link.</li>
+            <li>Select the exact mapped topic in the current Dev agent.</li>
+            <li>Review the current and proposed behavior and any separately proposed instruction change.</li>
             <li>Approve a save to the same topic identity, without activation or publication.</li>
         </ul>
         <h3>Examples</h3>
@@ -652,15 +652,15 @@ function getTutorialHtml() {
 
     <section id="push">
         <h2>\u{1f680} Push to Copilot Studio</h2>
-        <p>The <strong>Push to Copilot Studio</strong> button safely deploys your changes:</p>
+        <p>The <strong>Push to Copilot Studio</strong> button reviews selected pending changes:</p>
         <ol>
-            <li><strong>Checkpoint</strong> \u2014 back up the current state so you can roll back.</li>
-            <li><strong>Dry-run diff</strong> \u2014 preview exactly what will change.</li>
-            <li><strong>Push</strong> \u2014 apply the changes to your Copilot Studio environment.</li>
-            <li><strong>Verify</strong> \u2014 confirm the deployment succeeded.</li>
+            <li><strong>Inspect</strong>: Show local changes without saving.</li>
+            <li><strong>Select</strong>: Choose supported topic, instruction, or evaluation changes.</li>
+            <li><strong>Approve</strong>: Review each operation and approve instructions separately.</li>
+            <li><strong>Save and verify</strong>: Report each remote outcome and any local bookkeeping issue.</li>
         </ol>
         <p>You\u2019ll see a preview of every change before anything is committed, and you can cancel at any point.</p>
-        <blockquote><p>Rollback is always one command away \u2014 just ask the chat to \u201croll back the last push\u201d if something goes wrong.</p></blockquote>
+        <p>Unsupported changes and later edits remain pending. Saving does not automatically activate or publish.</p>
     </section>
 
     <section id="landing-page">
@@ -1111,8 +1111,8 @@ async function openGettingStarted(stepId, { required = false } = {}) {
 
 // Customization actions stay clickable; the walkthrough explains setup prerequisites.
 const CUSTOMIZATION_ITEMS = [
-    { id: 'create',      label: 'Create a topic', run: 'essMaker.runCreate', icon: 'add',  requires: ['setup'], desc: 'Save one approved fixed-answer topic to the selected Dev agent without publishing.' },
-    { id: 'update',      label: 'Update a topic', run: 'essMaker.runUpdate', icon: 'edit', requires: ['setup'], desc: 'Update one supported fixed-answer topic while keeping its native identity.' },
+    { id: 'create',      label: 'Create a topic', run: 'essMaker.runCreate', icon: 'add',  requires: ['setup'], desc: 'Draft and approve a topic save to the selected Dev agent without publishing.' },
+    { id: 'update',      label: 'Update a topic', run: 'essMaker.runUpdate', icon: 'edit', requires: ['setup'], desc: 'Read and approve a mapped topic update while keeping its identity and state.' },
     { id: 'scan',        label: 'Scan for issues',        run: 'essMaker.runScan',         icon: 'search',    requires: ['setup'], desc: 'Scan your agent for errors and common configuration problems.' },
     { id: 'flightcheck', label: 'Run a flightcheck',      run: 'essMaker.runFlightcheck',  icon: 'checklist', requires: ['setup'], desc: 'Run 41+ readiness checks on your agent before you deploy.' },
     { id: 'evaluate',    label: 'Generate tests',         run: 'essMaker.run_evaluate',    icon: 'beaker',    requires: ['setup'], desc: 'Generate evaluation tests to validate your agent behaves as expected.' },

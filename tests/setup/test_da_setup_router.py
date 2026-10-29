@@ -2525,7 +2525,7 @@ def test_non_da_ga_setup_implementation_is_absent() -> None:
 
 def test_da_commands_degrade_by_operation() -> None:
     expected_text = {
-        "push.prompt.md": "DA-GA agent is not yet available",
+        "push.prompt.md": "## Compose the supported operations",
         "delete.prompt.md": "DA-GA agent is not yet available",
         "troubleshoot.prompt.md": (
             "requires the corresponding product extension guidance"
@@ -2563,59 +2563,25 @@ def test_hybrid_workday_config_commands_remain_available() -> None:
         assert (_SOLUTION / script_path).is_file(), name
 
 
-def test_da_topic_authoring_is_blocked_before_local_changes() -> None:
+def test_da_topic_authoring_routes_to_current_owners() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
-    normalized_instructions = " ".join(instructions.split())
     create = (_PROMPTS / "create.prompt.md").read_text(encoding="utf-8")
     update = (_PROMPTS / "update.prompt.md").read_text(encoding="utf-8")
-    menu = (_PROMPTS / "menu.prompt.md").read_text(encoding="utf-8")
 
-    assert (
-        "Topic creation is not yet available in this release. No local or "
-        "remote files have been changed."
-    ) in " ".join(create.split())
-    assert (
-        "Topic updates are not yet available in this release. No local or "
-        "remote files have been changed."
-    ) in " ".join(update.split())
-    assert "Topic creation is not yet available in this release." in create
-    assert "Topic updates are not yet available in this release." in update
-    assert "Topic creation is not available in this release." not in create
-    assert "Topic updates are not available in this release." not in update
-    for prompt in (create, update):
-        normalized = " ".join(prompt.split())
-        assert "every explicit or implicit request" in normalized.casefold()
-        assert "topic intent, whether explicit or implicit, always wins" in normalized
-        assert "before reading a topic-authoring skill" in normalized
-        assert "or direct file edits" in normalized
-        assert "Render only that message" in normalized
-        assert "do not add product-specific capability claims" in normalized
-        assert "or other alternatives" in normalized
-        assert "or a follow-up question" in normalized
-        assert "tooling that remains visible in this repository is legacy" in normalized
-        assert "It has not been cleared for use with DA" in normalized
-        assert "must not be invoked for direct user requests" in normalized
-    assert (
-        "Create a topic | Stop: topic creation is not yet available"
-        in normalized_instructions
-    )
-    assert (
-        "Update/modify a topic | Stop: topic updates are not yet available"
-        in normalized_instructions
-    )
-    assert "Create a workflow or evaluation test set locally" in menu
-    assert "Update a workflow or evaluation test set locally" in menu
-    assert "Create a topic, workflow" not in menu
-    assert "Update a topic, workflow" not in menu
+    assert "src/skills/topics/create/SKILL.md" in create
+    assert "src/skills/topics/update/SKILL.md" in update
+    assert "src/skills/topics/create/SKILL.md" in instructions
+    assert "src/skills/topics/update/SKILL.md" in instructions
+    assert "crafted-response" not in create + update + instructions
 
 
-def test_da_workflow_local_authoring_remains_available() -> None:
+def test_da_workflow_authoring_routes_are_notice_only() -> None:
     for name in ("create.prompt.md", "update.prompt.md"):
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")
         normalized = " ".join(prompt.split()).casefold()
         assert "workflow" in normalized, name
-        assert "continue with local authoring" in normalized, name
-        assert "skip every instruction to push, publish" in normalized, name
+        assert "notice-only" in normalized, name
+        assert "does not author power automate flows" in normalized, name
 
     evaluate = (_PROMPTS / "evaluate.prompt.md").read_text(encoding="utf-8")
     normalized_evaluate = " ".join(evaluate.split()).casefold()
@@ -2626,15 +2592,16 @@ def test_da_workflow_local_authoring_remains_available() -> None:
 
     test_prompt = (_PROMPTS / "test.prompt.md").read_text(encoding="utf-8")
     normalized_test = " ".join(test_prompt.split()).casefold()
-    assert "retain browser-based topic driving" in normalized_test
-    assert "server-side diagnostics are not yet available" in normalized_test
-    assert "da-ga workflow testing is not yet available" in normalized_test
+    assert "scripts/native_topic_test.py" in normalized_test
+    assert "conversation acceptance as pending" in normalized_test
+    assert "power automate authoring and runtime changes take place outside adk" in normalized_test
+    assert "independent target/authentication prerequisites" in normalized_test
+    assert "do not route backend conversations" in normalized_test
 
     for name in ("create.prompt.md", "update.prompt.md"):
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")
         normalized = " ".join(prompt.split())
         assert "Do not offer `/test`" in normalized, name
-        assert "unchanged deployed" in normalized, name
 
 
 def test_flightcheck_preserves_standalone_and_configured_scope_modes() -> None:

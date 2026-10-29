@@ -108,7 +108,7 @@ test('landing-page action sends the slash command', () => {
     assert.deepStrictEqual(landingPage.requires, ['setup']);
 });
 
-test('topic actions send explicit intent for native fixed-answer authoring', () => {
+test('topic actions send explicit intent to the normal authoring owners', () => {
     const create = ACTIONS.find(a => a.id === 'create');
     const update = ACTIONS.find(a => a.id === 'update');
     assert.strictEqual(create.label, 'Create a topic');

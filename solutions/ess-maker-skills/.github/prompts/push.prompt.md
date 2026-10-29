@@ -1,6 +1,6 @@
 ---
 mode: agent
-description: "Push local changes to Copilot Studio"
+description: "Preview selected local changes and save supported topics, instructions, or evaluations"
 ---
 
 # Push
@@ -15,7 +15,7 @@ and STOP. Otherwise proceed.
 
 ## Explicit evaluation push
 
-If the request explicitly targets evaluation test sets, route before the
+If the request explicitly targets only evaluation test sets, route before the
 general-component instructions below. Discover/select the exact workspace or
 current-agent set using `src/skills/evaluations/update/SKILL.md`, then follow
 `src/skills/evaluations/deployment-flow.md` with helper action `push`.
@@ -27,8 +27,7 @@ Native review sidecars remain local, not shared review metadata. Follow the
 shared guide's `reviewMetadataPersisted`/`reviewWarning` outcome rules rather
 than adding an in-place-update or remote-review prerequisite.
 
-This branch supports standalone evaluation push even though the normal maker
-menu has no Push item. Method admission, target checks, selected-set scope,
+This branch supports standalone evaluation push. Method admission, target checks, selected-set scope,
 dry-run visibility, and required destructive approval remain mandatory.
 Use noninteractive execution only after the shared flow obtains chat approval;
 its authorized `--yes` does not bypass that consent. Never launch an
@@ -39,7 +38,7 @@ Return after this branch; do not also execute the general push below.
 After the shared deployment flow reports a verified successful deployment,
 run the one-time DA post-deployment analytics reminder:
 
-```
+```powershell
 python scripts/analytics_pointer.py --post-deploy
 ```
 
@@ -49,40 +48,43 @@ only after deployment verification; do not show an analytics link after a
 preview, cancellation, or failed deployment. If the resolver cannot build the
 link, do not substitute the Copilot Studio home page.
 
-## General component push
+## Inspect pending changes
 
-For a general component push, show:
+For a general push request, inspect the selected agent's local changes:
 
-> General component push for a DA-GA agent is not yet available in this release. No local or remote files have been changed.
-
-and STOP. The explicit evaluation-push branch above remains available.
-
-Run a dry-run first so the user sees the exact diff before any mutation:
-
-```
+```powershell
 python scripts/push.py --dry-run
 ```
 
-Show the dry-run output to the user. Then ask: "Push these changes to Copilot Studio? (yes/no)"
+This operation only compares working files with `.baseline`. It does not authenticate, save, activate, publish, or verify remote state. The baseline records acknowledged submitted content, not a remote mirror or concurrency token.
 
-Only after the user answers `yes` (or `y`), run:
+Show the changed paths and agree the exact requested scope. Preserve unrelated pending changes. Read current remote state through the selected operation's owner before proposing a save.
 
-```
-python scripts/push.py
-```
+## Compose the supported operations
 
-Do NOT add `--yes` to the invocation. The script's interactive prompt is the second confirmation layer; bypassing it relies on the chat-side confirmation alone, which is brittle if the user did not actually intend to push.
+Use these existing owners:
 
-If the diff includes deletions and the user has confirmed they want to delete, run with `--force-delete` so the script's destructive-op gate accepts:
+| Selected change | Owner |
+| --- | --- |
+| New topic draft | `src/skills/topics/create/SKILL.md`, using `topic_authoring.py create --draft` |
+| Existing mapped topic | `src/skills/topics/update/SKILL.md`, using its fresh read and `topic_authoring.py update --draft` |
+| Instructions in `agent.mcs.yml` | `agent_instructions.py read`, then `agent_instructions.py update --draft` against that read snapshot |
+| Evaluation sets | The selected-set evaluation deployment flow above, retaining its review state and separate consent |
 
-```
-python scripts/push.py --force-delete
-```
+For mixed scope, apply that evaluation flow to the selected evaluation portion and continue the other approved operations. Run its analytics reminder only after verified evaluation deployment.
 
-The script will:
-1. Compare your working files against the baseline (last known environment state)
-2. Authenticate to Dataverse (re-uses cached credentials when possible)
-3. Push each create / update / delete in dependency order
-4. Update the baseline only after a fully-successful push (zero errors)
+Topic creation uses ordinary YAML and separate creation metadata. Existing topics use their mapped identities. Follow the normal topic owner's overlap and instruction-alignment assessment without repeating still-current warnings.
 
-If the script reports any errors, the baseline is intentionally NOT updated so the next push retries the failed components. Do not pass `--yes` as a workaround - investigate the errors first.
+For instructions, read current native instructions and preview only the instruction-section change. Preserve unrelated draft fields. Obtain separate instruction approval even when a topic save is also requested.
+
+Show each selected operation's exact preview and obtain its required approval before using its noninteractive `--yes`. A general push request or "push anyway" does not combine topic, instruction, and evaluation approvals. It may override disclosed advisory review/alignment concerns, not unsupported scope or failed/uncertain operations.
+
+Workflows, template configurations, deployed deletions, and non-instruction agent metadata are outside this general save path. Explain the boundary and leave those local changes pending. Direct Power Automate authoring, deployment, registration, and repair outside ADK. Preserve separately authorized product-extension setup and explicit activation operations; do not invoke them to make a topic save or test runnable.
+
+## Report each outcome
+
+Report topic, instruction, and evaluation results separately, including known remote outcomes and any subsequent local output or bookkeeping failure. Each owner acknowledges only its captured submitted content. Later disk edits and unsupported changes remain pending.
+
+If a request failed or its outcome is uncertain, preserve the causal evidence and let the session select the next read or recovery action. Do not replay a create/save merely to repair output, refresh setup automatically, or reset the whole baseline.
+
+Offer supported conversation testing for a plain save request; run it when already requested and available, carrying the selected topic. If `scripts/native_topic_test.py` is absent, report conversation acceptance as pending. Saving does not activate or publish. Preserve local review/catalog evidence; a save alone does not refresh review coverage or resolve findings.

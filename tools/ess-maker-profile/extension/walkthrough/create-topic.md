@@ -1,17 +1,17 @@
 # Create a topic
 
-A **fixed-answer topic** answers one intent with your approved response and an optional approved support link, then ends.
+Describe the conversation you want your agent to handle.
 
 Complete setup, then click **Create a topic**. Copilot will:
 
-- Collect the topic name, intent, trigger phrases, exact answer, and optional link.
+- Read relevant current topics and draft the requested conversation.
 - Show the selected agent and exact proposed content.
 - Ask whether to save, change the details, or cancel.
 - Save one inactive topic to the selected editable Dev agent and verify its saved content.
 
-Saving does not activate or publish the topic or verify employee chat behavior. Use **Update a topic** to change a supported fixed-answer topic created through this path while keeping the same topic identity and state.
+Saving does not activate or publish the topic or verify employee chat behavior. Use **Update a topic** to change a selected mapped topic while keeping its identity and active state.
 
-Backend calls, questions, cards, branching, handoffs, and unrelated agent-wide instruction changes are not supported. Packaged, system, and integration topics cannot be changed through this path.
+Related instruction changes have their own preview and approval. Existing integration dependencies need a supported contract; Power Automate authoring takes place outside ADK. Conversation testing depends on the installed bounded capability and topic readiness.
 
 ## Example
 

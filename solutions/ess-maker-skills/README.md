@@ -1,12 +1,12 @@
 # ESS Maker Kit
 
-Customize your Employee Self-Service (ESS) agent using GitHub Copilot in VS Code — no deep platform knowledge required. Describe what you need in plain English and the kit generates topic YAML, workflow JSON, adaptive cards, and integration configurations for you.
+Customize your Employee Self-Service (ESS) agent using GitHub Copilot in VS Code. Describe what you need in plain English, review the proposed topic or instruction changes, and approve a save to the selected editable Dev agent.
 
 > **This repo is intended as an example or learning tool.** It demonstrates how to customize Employee Self-Service (ESS) agents using GitHub Copilot in VS Code. It is not a Microsoft product or a supported service. See [SUPPORT.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SUPPORT.md) for the support model and [SECURITY.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SECURITY.md) for reporting security issues.
 
 ## Why This Kit
 
-Building and customizing an ESS agent means working across topic YAML, Power Automate workflow schemas, ServiceNow/Workday connector patterns, adaptive card JSON, and Dataverse template configurations. The ESS Maker Kit packages all of that domain knowledge into a VS Code workspace so GitHub Copilot can do the heavy lifting — you describe the scenario, and the agent builds it.
+The ESS Maker Kit brings topic authoring, relevant integration references, local review, and evaluation authoring into a VS Code workspace. It uses existing integration contracts when they apply. Power Automate authoring, deployment, registration, and repair take place outside ADK.
 
 ---
 
@@ -59,36 +59,23 @@ The kit ships with a complete reference library that the AI agent reads at task 
 - **Best practices** — Evaluation strategies, conversational design patterns, responsible AI test sets, and the ESS template config + shared flow architecture
 - **Integration-specific guidance** — Connector setup, SOAP/REST template patterns, and extensibility docs for each supported system
 
-The agent uses this knowledge automatically when generating topics, workflows, or test sets.
+The agent uses this knowledge when drafting topics or evaluation sets and inspecting existing integration contracts.
 
-### ✏️ Create, Update & Delete Topics
+### ✏️ Create and Update Topics
 
-Create or update simple conversation topics from plain English, an approved
-eval scenario, or existing evaluation files. The agent first creates an eval
-contract, then writes the topic YAML and matching native evaluations.
+Describe the intended conversation or supply relevant evaluation cases. Copilot reads current topics, drafts ordinary `.mcs.yml` content, and previews the proposed behavior for approval.
 
-- **Create** (`/create`) — Approve the intended evals, then generate a new
-  simple informational, clarification, routing, or handoff topic
-- **Update** (`/update`) — Approve updated and regression evals, then modify an
-  existing simple topic and create or refresh its generated evals
-- **Delete** (`/delete`) — Remove topics cleanly with dependency checking
+- **Create** (`/create`): save one new inactive topic to the selected editable Dev agent after approval.
+- **Update** (`/update`): read and save the selected mapped topic while preserving its identity, active state, and unrelated behavior.
+- **Instructions**: preview and approve matching instruction-section changes separately from topic changes.
 
-Workday, ServiceNow, SAP, connector-backed, and flow-backed customization
-requires the corresponding DA-GA product extension guidance, which is not yet
-available in this release.
+Save/readback verification is not activation, publication, or conversation acceptance. Supported conversation testing is offered when installed and the saved topic meets its conditions; otherwise acceptance remains pending. Deployed-topic deletion is not supported.
 
-The current pipeline is checkpoint → local edit → error scan. Native DA-GA
-deployment is not yet available, so the kit leaves the live agent unchanged.
+Existing evaluation intent and thresholds remain unchanged by a topic save. Separately requested evaluation work retains its own authoring, review, deployment, and execution flow.
 
-### ⚡ Create, Update & Delete Workflows
+### ⚡ Power Automate Boundary
 
-Generate Power Automate cloud flows for integrations that don't have an ESS shared orchestrator (custom APIs, Jira, ADP, etc.).
-
-- Generates `workflow.json` with proper trigger/action structure and Copilot Studio response bindings
-- Creates connection reference entries for new connectors
-- Wires the workflow into your topic's `InvokeFlowAction`
-
-For ServiceNow and Workday, the kit uses the **template config + shared flow** pattern instead — no standalone workflows needed.
+Create, update, deploy, register, and repair flows outside ADK. Topic authoring may use an existing integration's verified contract; it does not create that integration or provide general backend conversation testing. Product-owned setup and read-only inspection retain their separate supported paths.
 
 ### 🔍 Error Scanning & Cleanup
 
@@ -132,8 +119,7 @@ review/connection prerequisites. A separate push command is not required;
 explicit evaluation push remains available outside this menu. Successful run
 initiation includes the current run's Copilot Studio link.
 
-These flows use the existing push APIs. Dataverse push stores `review.json`
-metadata in the evaluation-parent description. New or changed native MinimalBot
+These flows use the existing push APIs for evaluations. New or changed native MinimalBot
 YAML uploads a **new copy with a new deployed ID**, retaining the old remote copy;
 unchanged YAML, including local review-only changes, reuses its verified copy. The preview explains
 this before consent. Removing cases from a new native copy does not delete
@@ -151,17 +137,15 @@ execution or inspect its history/results.
 
 ### 🚀 Local-First Authoring
 
-Every supported change follows the same safe local pipeline:
+Draft locally, review the exact requested change, and approve its supported save:
 
-```
-Checkpoint (backup) → Local edit → Error scan
+```text
+Local draft -> Review and preview -> Scoped approval -> Native save and readback
 ```
 
-For topics and workflows, `/push` reports that native DA-GA deployment is not
-yet available; it does not fall back to the retired Dataverse mutation path.
-Explicit evaluation push uses its separate selected-set deployment flow and
-the existing evaluation APIs, including the native new-copy behavior described
-above. It does not add new native update/delete or review-metadata endpoints.
+General `/push` first shows local pending changes, then delegates selected topics, separately approved instructions, and evaluation sets to their owners. Each owner acknowledges only its submitted content; later edits and unsupported changes remain pending. A local baseline is not a remote mirror.
+
+Explicit evaluation push retains its selected-set flow and native new-copy behavior. Workflow and template-config deployment, deployed-topic deletion, activation, and publication are not part of general Push. Publication remains separately approved.
 
 ### ✈️ FlightCheck — Pre-Deployment Readiness Validation
 
@@ -409,16 +393,16 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | `/setup` | Connect this workspace to an existing editable DA Dev agent |
 | `/landing-page` | Configure landing-page branding and content |
 | `/connect` | Explain the DA-GA product extension requirement |
-| `/create` | Create a topic, workflow, or evaluation test set locally |
-| `/update` | Update a topic, workflow, or evaluation test set locally |
+| `/create` | Draft and approve a topic save, or separately author evaluation sets; flow authoring is outside ADK |
+| `/update` | Read and approve a mapped topic save, or separately edit evaluation sets |
 | `/delete` | Report that DA-GA deletion is not yet available |
 | `/scan` | Scan your agent for compile errors and fix them |
 | `/review` | Review local topics or evaluation test sets tagged for review |
 | `/evaluate` | Generate evaluation test sets for your agent |
 | `/run` | Prepare and run selected evaluation sets, or inspect history and results |
-| `/test` | Drive topics in the currently deployed agent; DA-GA workflow diagnostics are not yet available |
+| `/test` | Use installed bounded saved-topic testing when compatible and ready; otherwise report acceptance pending |
 | `/flightcheck` | Validate local agent files; standalone FlightCheck retains its full mode |
-| `/push` | Push explicitly selected evaluation sets where supported; other native DA-GA deployment remains unavailable |
+| `/push` | Inspect pending changes and compose selected topic, instruction, and evaluation saves with separate approvals |
 | `/backup-template-configs` | Capture hybrid Workday reference-data template configs before an extension update |
 | `/restore-template-configs` | Restore hybrid Workday reference-data template configs after an extension update |
 | `/menu` | See all available commands |
@@ -434,11 +418,11 @@ You describe what you need
         ↓
 GitHub Copilot reads the kit's reference docs and templates
         ↓
-The agent generates topic YAML, workflow JSON, or adaptive cards
+The agent drafts topic YAML or separately requested evaluation cases
         ↓
 Files are written to your local agent folder
         ↓
-The kit reports the current DA-GA deployment boundary
+Review and approve a supported save, then inspect its verified outcome
 ```
 
 ## Repository Structure

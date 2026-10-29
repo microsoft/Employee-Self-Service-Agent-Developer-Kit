@@ -1,12 +1,12 @@
 # Push to Copilot Studio
 
-The **Push to Copilot** button safely deploys your changes:
+The **Push to Copilot** button opens a guided review of selected pending changes:
 
-1. **Checkpoint** — back up the current state so you can roll back.
-2. **Dry-run diff** — preview exactly what will change.
-3. **Push** — apply the changes to your Copilot Studio environment.
-4. **Verify** — confirm the deployment succeeded.
+1. **Inspect**: show local changes without saving anything.
+2. **Select**: choose supported topic, instruction, or evaluation changes.
+3. **Approve**: review each operation and approve instruction changes separately.
+4. **Save and verify**: report each remote outcome and any local bookkeeping issue.
 
 You'll see a preview of every change before anything is committed, and you can cancel at any point.
 
-> Rollback is always one command away — just ask the chat to "roll back the last push" if something goes wrong.
+Unsupported changes and later edits remain pending. Recovery depends on the observed outcome; a save is not automatic activation, publication, or rollback.

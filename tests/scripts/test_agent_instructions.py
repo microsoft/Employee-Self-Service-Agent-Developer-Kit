@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Native instruction text editing, based on the observed TemplateLine contract."""
+"""Native instruction YAML and concurrency contracts."""
 
 from __future__ import annotations
 
@@ -29,22 +29,18 @@ def component():
         "id": "native-gpt",
         "parentBotId": BOT_ID,
         "schemaName": "contoso_agent.gpt.default",
+        "displayName": "Contoso agent",
         "version": 2,
-        "state": "Active",
-        "status": "Active",
         "auditInfo": {"modifiedOn": "before"},
         "unknownComponentField": {"keep": True},
         "metadata": {
+            "$kind": "GptComponentMetadata",
             "unknownSetting": {"keep": [1, 2]},
             "instructions": {
                 "$kind": "TemplateLine",
                 "unknownInstructionField": "keep",
                 "segments": [
-                    {
-                        "$kind": "TextSegment",
-                        "value": "Old route. Other rule.",
-                        "keep": True,
-                    },
+                    {"$kind": "TextSegment", "value": "Old route.", "keep": True},
                     {
                         "$kind": "ExpressionSegment",
                         "expression": {
@@ -52,15 +48,10 @@ def component():
                             "variableReference": "System.User.DisplayName",
                         },
                     },
-                    {"$kind": "TextSegment", "value": "End of instructions."},
                 ],
             },
         },
     }
-
-
-def _edits():
-    return [{"segmentIndex": 0, "oldText": "Old route", "newText": "New route"}]
 
 
 def _payload(component):
@@ -87,7 +78,8 @@ def _client(monkeypatch, payloads, *, status=200, body=None):
     request = Mock(
         return_value=(
             SimpleNamespace(
-                status_code=status, headers={"x-ms-request-id": "correlation-id"}
+                status_code=status,
+                headers={"x-ms-request-id": "correlation-id"},
             ),
             body if body is not None else {"nativeExtension": {"preserved": True}},
         )
@@ -96,208 +88,104 @@ def _client(monkeypatch, payloads, *, status=200, body=None):
     return client, request
 
 
-def test_text_replacements_preserve_native_structure_and_use_original_offsets(
-    component,
-):
-    before = copy.deepcopy(component)
-    edits = [
-        {"segmentIndex": 0, "oldText": "Old route", "newText": "Other rule"},
-        {"segmentIndex": 0, "oldText": "Other rule", "newText": ""},
-        {"segmentIndex": 2, "oldText": "End", "newText": "Approved end"},
-    ]
-    desired = native.build_agent_instruction_update(component, edits)
-    assert component == before
-    expected = copy.deepcopy(before)
-    expected["metadata"]["instructions"]["segments"][0]["value"] = "Other rule. ."
-    expected["metadata"]["instructions"]["segments"][2]["value"] = (
-        "Approved end of instructions."
+def _desired(component):
+    instructions = copy.deepcopy(component["metadata"]["instructions"])
+    instructions["segments"][0]["value"] = "New route."
+    return instructions
+
+
+def test_native_update_preserves_fresh_unrelated_gpt_fields(component, monkeypatch):
+    fresh = copy.deepcopy(component)
+    fresh["unknownComponentField"]["concurrent"] = "preserve"
+    desired_instructions = _desired(component)
+    saved = copy.deepcopy(fresh)
+    saved["metadata"]["instructions"] = desired_instructions
+    saved["version"] += 1
+    saved["auditInfo"]["modifiedOn"] = "after"
+    after = _payload(saved)
+    client, request = _client(monkeypatch, [_payload(fresh), after])
+
+    result = client.update_agent_instructions(
+        component,
+        desired_instructions=desired_instructions,
     )
-    assert desired == expected
 
-
-@pytest.mark.parametrize(
-    "problem",
-    [
-        "expression",
-        "ambiguous",
-        "self-overlap",
-        "overlap",
-        "boolean-index",
-        "extra-field",
-    ],
-)
-def test_unsupported_text_edits_fail_without_mutation(component, problem):
-    edits = _edits()
-    if problem == "expression":
-        edits[0]["segmentIndex"] = 1
-    elif problem == "ambiguous":
-        component["metadata"]["instructions"]["segments"][0]["value"] += " Old route."
-    elif problem == "self-overlap":
-        component["metadata"]["instructions"]["segments"][0]["value"] = "ababa"
-        edits[0]["oldText"] = "aba"
-    elif problem == "overlap":
-        edits.append({"segmentIndex": 0, "oldText": "route", "newText": "answer"})
-    elif problem == "boolean-index":
-        edits[0]["segmentIndex"] = False
-    else:
-        edits[0]["expression"] = "unexpected"
-    before = copy.deepcopy(component)
-    with pytest.raises(native.MinimalBotEvaluationError):
-        native.build_agent_instruction_update(component, edits)
-    assert component == before
-
-
-@pytest.mark.parametrize(
-    "problem", ["missing", "duplicate", "wrong-bot", "wrong-parent", "missing-token"]
-)
-def test_native_read_requires_one_current_gpt_for_the_selected_agent(
-    component, monkeypatch, problem
-):
-    payload = _payload(component)
-    if problem == "missing":
-        payload["botComponentChanges"].pop(0)
-    elif problem == "duplicate":
-        duplicate = copy.deepcopy(component)
-        duplicate["id"] = "another-gpt"
-        payload["botComponentChanges"].append({"component": duplicate})
-    elif problem == "wrong-bot":
-        payload["bot"]["cdsBotId"] = "another-agent"
-    elif problem == "wrong-parent":
-        payload["botComponentChanges"][0]["component"]["parentBotId"] = "another-agent"
-    else:
-        payload.pop("changeToken")
-    client, request = _client(monkeypatch, [payload])
-    with pytest.raises(native.MinimalBotEvaluationError):
-        client.read_agent_instructions()
-    request.assert_not_called()
-
-
-def test_native_update_uses_fresh_token_one_gpt_and_authoritative_readback(
-    component, monkeypatch
-):
-    desired = native.build_agent_instruction_update(component, _edits())
-    after = _payload(desired)
-    after["changeToken"] = "saved-token"
-    after["botComponentChanges"][0]["component"]["version"] += 1
-    after["botComponentChanges"][0]["component"]["auditInfo"]["modifiedOn"] = "after"
-    after["botComponentChanges"][1]["component"]["version"] += 1
-    client, request = _client(monkeypatch, [_payload(component), after])
-    result = client.update_agent_instructions(component, _edits())
-    request.assert_called_once()
-    assert request.call_args.args == ("PUT", client._components_url)
     payload = request.call_args.kwargs["body"]
-    assert payload["changeToken"] == "current-token"
-    assert payload["botComponentChanges"] == [
-        {"$kind": "BotComponentUpdate", "component": desired},
-    ]
-    assert "bot" not in payload
-    assert all(
-        value == []
-        for key, value in payload.items()
-        if key.endswith("Changes") and key != "botComponentChanges"
+    updated = payload["botComponentChanges"][0]["component"]
+    assert updated["unknownComponentField"]["concurrent"] == "preserve"
+    assert updated["metadata"]["unknownSetting"] == {"keep": [1, 2]}
+    assert updated["metadata"]["instructions"] == desired_instructions
+    assert result["component"]["metadata"]["instructions"] == desired_instructions
+
+
+def test_native_update_rejects_instruction_drift_but_not_other_gpt_drift(
+    component,
+    monkeypatch,
+):
+    drifted = copy.deepcopy(component)
+    drifted["metadata"]["instructions"]["segments"][0]["value"] = "Concurrent route."
+    client, request = _client(monkeypatch, [_payload(drifted)])
+
+    with pytest.raises(native.MinimalBotEvaluationError, match="instructions changed"):
+        client.update_agent_instructions(
+            component,
+            desired_instructions=_desired(component),
+        )
+
+    request.assert_not_called()
+
+
+def test_native_noop_is_verified_without_write(component, monkeypatch):
+    client, request = _client(monkeypatch, [_payload(component)])
+
+    result = client.update_agent_instructions(
+        component,
+        desired_instructions=component["metadata"]["instructions"],
     )
-    assert result["component"] == after["botComponentChanges"][0]["component"]
-    assert result["updatedComponents"] == result["verifiedComponents"] == 1
-    assert result["verified"] is True
-    assert "unchangedOtherComponents" not in result
-    assert result["requestId"] == "correlation-id"
-    assert result["response"]["nativeExtension"] == {"preserved": True}
 
-
-def test_stale_native_baseline_is_rejected_before_write(component, monkeypatch):
-    stale = copy.deepcopy(component)
-    stale["metadata"]["instructions"]["segments"][0]["value"] = "Stale instructions"
-    client, request = _client(monkeypatch, [_payload(component)])
-    with pytest.raises(native.MinimalBotEvaluationError, match="changed since"):
-        client.update_agent_instructions(stale, _edits())
-    request.assert_not_called()
-
-
-def test_native_noop_is_a_read_not_a_write(component, monkeypatch):
-    edits = _edits()
-    edits[0]["newText"] = edits[0]["oldText"]
-    client, request = _client(monkeypatch, [_payload(component)])
-    result = client.update_agent_instructions(component, edits)
     assert result["updatedComponents"] == 0
-    assert result["component"] == component
+    assert result["verifiedComponents"] == 1
     request.assert_not_called()
 
 
-@pytest.mark.parametrize("status", [400, 409, 500])
-def test_service_failure_retains_causal_details_and_does_not_reconcile(
-    component, monkeypatch, status
+@pytest.mark.parametrize("status", [400, 409, 412, 500])
+def test_native_service_failure_retains_status_and_request_evidence(
+    component,
+    monkeypatch,
+    status,
 ):
     body = {
         "error": {"code": "native-code", "unknownDetails": {"reason": "preserve"}},
         "access_token": "do-not-emit",
     }
     client, request = _client(
-        monkeypatch, [_payload(component)], status=status, body=body
+        monkeypatch,
+        [_payload(component)],
+        status=status,
+        body=body,
     )
-    with pytest.raises(native.AgentInstructionEditError) as error:
-        client.update_agent_instructions(component, _edits())
-    assert error.value.evidence["httpStatus"] == status
-    assert error.value.evidence["requestId"] == "correlation-id"
-    assert error.value.evidence["response"]["error"] == body["error"]
-    assert error.value.evidence["writeAttempted"] is True
-    assert error.value.evidence["verified"] is False
-    assert "do-not-emit" not in str(error.value)
-    request.assert_called_once()
+
+    with pytest.raises(native.AgentInstructionEditError) as exc_info:
+        client.update_agent_instructions(
+            component,
+            desired_instructions=_desired(component),
+        )
+
+    assert exc_info.value.evidence["httpStatus"] == status
+    assert exc_info.value.evidence["requestId"] == "correlation-id"
+    assert "do-not-emit" not in str(exc_info.value)
     assert client.read_components.call_count == 1
-
-
-def test_transport_uncertainty_keeps_the_original_cause(component, monkeypatch):
-    client, request = _client(monkeypatch, [_payload(component)])
-    cause = requests.ReadTimeout("response was lost")
-    transport_error = native.MinimalBotEvaluationError("instruction transport failed")
-    transport_error.__cause__ = cause
-    request.side_effect = transport_error
-    with pytest.raises(
-        native.AgentInstructionEditError, match="outcome is unknown"
-    ) as error:
-        client.update_agent_instructions(component, _edits())
-    assert error.value.__cause__ is transport_error
-    assert error.value.__cause__.__cause__ is cause
-    assert "httpStatus" not in error.value.evidence
-    assert error.value.evidence["verified"] is False
-    request.assert_called_once()
-
-
-@pytest.mark.parametrize(
-    "problem",
-    ["instructions", "read-failed"],
-)
-def test_accepted_write_does_not_claim_success_when_verification_fails(
-    component, monkeypatch, problem
-):
-    desired = native.build_agent_instruction_update(component, _edits())
-    after = _payload(desired)
-    if problem == "instructions":
-        after = _payload(component)
-    else:
-        after = native.MinimalBotEvaluationError("readback unavailable")
-    client, request = _client(monkeypatch, [_payload(component), after])
-    with pytest.raises(
-        native.AgentInstructionEditError, match="verification failed"
-    ) as error:
-        client.update_agent_instructions(component, _edits())
-    assert error.value.evidence["httpStatus"] == 200
-    assert error.value.evidence["verified"] is False
-    assert isinstance(error.value.__cause__, native.MinimalBotEvaluationError)
     request.assert_called_once()
 
 
 @pytest.mark.parametrize("drift", ["metadata", "other-content", "other-deleted"])
-def test_instruction_object_model_save_ignores_unrelated_drift(
-    component, monkeypatch, drift,
-):
-    desired = copy.deepcopy(component["metadata"]["instructions"])
-    desired["segments"][0]["value"] = "Approved text with the original expression."
+def test_instruction_save_ignores_unrelated_readback_drift(component, monkeypatch, drift):
     current = copy.deepcopy(component)
     current["metadata"]["unknownSetting"] = {"newer": "preserve"}
-    current["version"] += 1
     after = _payload(current)
-    after["botComponentChanges"][0]["component"]["metadata"]["instructions"] = desired
+    after["botComponentChanges"][0]["component"]["metadata"]["instructions"] = (
+        _desired(component)
+    )
     if drift == "metadata":
         after["botComponentChanges"][0]["component"]["metadata"]["unknownSetting"] = {}
     elif drift == "other-content":
@@ -305,23 +193,54 @@ def test_instruction_object_model_save_ignores_unrelated_drift(
     else:
         after["botComponentChanges"].pop()
     client, request = _client(monkeypatch, [_payload(current), after])
-    result = client.update_agent_instructions(component, desired_instructions=desired)
+
+    result = client.update_agent_instructions(
+        component, desired_instructions=_desired(component),
+    )
+
     submitted = request.call_args.kwargs["body"]["botComponentChanges"][0]["component"]
     assert submitted["metadata"]["unknownSetting"] == {"newer": "preserve"}
-    assert submitted["metadata"]["instructions"]["segments"][1] == (
-        component["metadata"]["instructions"]["segments"][1]
-    )
-    assert result["component"] == after["botComponentChanges"][0]["component"]
     assert result["verified"] is True
+    assert result["component"] == after["botComponentChanges"][0]["component"]
 
 
-def test_unexpected_failure_is_not_swallowed(component, monkeypatch):
+@pytest.mark.parametrize("problem", ["instructions", "read-failed"])
+def test_accepted_instruction_write_retains_failed_verification(
+    component, monkeypatch, problem,
+):
+    after = (
+        _payload(component)
+        if problem == "instructions"
+        else native.MinimalBotEvaluationError("readback unavailable")
+    )
+    client, request = _client(monkeypatch, [_payload(component), after])
+
+    with pytest.raises(native.AgentInstructionEditError) as error:
+        client.update_agent_instructions(
+            component, desired_instructions=_desired(component),
+        )
+
+    assert error.value.evidence["writeAccepted"] is True
+    assert error.value.evidence["verified"] is False
+    assert error.value.__cause__ is not None
+    request.assert_called_once()
+
+
+def test_instruction_transport_uncertainty_preserves_cause(component, monkeypatch):
     client, request = _client(monkeypatch, [_payload(component)])
-    failure = RuntimeError("unexpected failure")
-    request.side_effect = failure
-    with pytest.raises(RuntimeError) as error:
-        client.update_agent_instructions(component, _edits())
-    assert error.value is failure
+    cause = requests.ConnectionError("Connection lost after request submission")
+    request.side_effect = native.MinimalBotEvaluationError("transport unavailable")
+    request.side_effect.__cause__ = cause
+
+    with pytest.raises(native.AgentInstructionEditError) as error:
+        client.update_agent_instructions(
+            component, desired_instructions=_desired(component),
+        )
+
+    assert error.value.evidence["writeAttempted"] is True
+    assert error.value.evidence["verified"] is False
+    assert error.value.__cause__.__cause__ is cause
+    request.assert_called_once()
 
 
 def test_instruction_ack_preserves_other_baseline_fields_and_later_edits(tmp_path):
@@ -338,217 +257,278 @@ def test_instruction_ack_preserves_other_baseline_fields_and_later_edits(tmp_pat
     baseline.write_text(yaml.safe_dump(original), encoding="utf-8")
     working = tmp_path / "agent.mcs.yml"
     working.write_text("instructions: Later local edit\n", encoding="utf-8")
+
     cli.acknowledge_instruction_baseline(tmp_path, yaml.safe_dump(submitted))
-    acknowledged = yaml.safe_load(baseline.read_text(encoding="utf-8"))
-    assert acknowledged == {**original, "instructions": submitted["instructions"]}
+
+    assert yaml.safe_load(baseline.read_text(encoding="utf-8")) == {
+        **original, "instructions": submitted["instructions"],
+    }
     assert working.read_text(encoding="utf-8") == "instructions: Later local edit\n"
 
 
 @pytest.fixture
-def instruction_cli(component, monkeypatch, tmp_path, fake_token, fake_tenant_id):
+def instruction_cli(component, monkeypatch, tmp_path, fake_tenant_id):
+    agent_folder = tmp_path / "workspace" / "agents" / "selected"
+    baseline_folder = agent_folder / ".baseline"
+    baseline_folder.mkdir(parents=True)
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / "config.json").write_text(
+        json.dumps({"agent": {"folder": str(agent_folder)}}),
+        encoding="utf-8",
+    )
+    metadata = {
+        **copy.deepcopy(component["metadata"]),
+        "displayName": component["displayName"],
+    }
+    agent_file = agent_folder / "agent.mcs.yml"
+    agent_file.write_text(json.dumps(metadata), encoding="utf-8")
+    (baseline_folder / "agent.mcs.yml").write_text(
+        json.dumps(metadata),
+        encoding="utf-8",
+    )
     target = {
         "environment": {
             "id": ENV_ID,
             "tenantId": fake_tenant_id,
             "ring": "test",
-            "powerPlatformApiEndpoint": native._environment_host(ENV_ID, "test"),
+            "powerPlatformApiEndpoint": "https://api.test.example",
         },
         "agent": {"id": BOT_ID, "schemaName": "contoso_agent", "realm": "dev"},
     }
     connection = SimpleNamespace(
         host=target["environment"]["powerPlatformApiEndpoint"],
-        headers={"Authorization": f"Bearer {fake_token}"},
+        headers={"Authorization": "Bearer test-token"},
         session=object(),
     )
-    transport = Mock()
     snapshot = {
         "component": component,
         "changeToken": "current-token",
         "componentCount": 2,
     }
+    transport = Mock()
     transport.read_agent_instructions.side_effect = lambda: copy.deepcopy(snapshot)
-    transport.update_agent_instructions.side_effect = lambda expected, edits: {
-        "component": native.build_agent_instruction_update(expected, edits),
-        "updatedComponents": 1,
-        "verifiedComponents": 1,
-        "changeToken": "saved-token",
-        "unchangedOtherComponents": 1,
-    }
-    monkeypatch.setattr(cli, "connect_selected_dev_workspace", Mock(return_value=(connection, target)))
+    transport.update_agent_instructions.side_effect = (
+        lambda expected_component, *, desired_instructions: {
+            "component": {
+                **copy.deepcopy(expected_component),
+                "metadata": {
+                    **copy.deepcopy(expected_component["metadata"]),
+                    "instructions": copy.deepcopy(desired_instructions),
+                },
+            },
+            "updatedComponents": 1,
+            "verifiedComponents": 1,
+            "changeToken": "saved-token",
+            "unchangedOtherComponents": 1,
+        }
+    )
+    connect = Mock(return_value=(connection, target))
+    monkeypatch.setattr(cli, "connect_selected_dev_workspace", connect)
     monkeypatch.setattr(cli, "MinimalBotEvaluationClient", Mock(return_value=transport))
+    monkeypatch.setattr(
+        cli,
+        "yaml_to_object_models",
+        lambda items: [
+            {
+                "key": item["key"],
+                "success": True,
+                "elementType": "GptComponentMetadata",
+                "objectModel": json.loads(item["yaml"]),
+            }
+            for item in items
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "object_models_to_yaml",
+        lambda items: [
+            {
+                "key": item["key"],
+                "success": True,
+                "elementType": "GptComponentMetadata",
+                "yaml": json.dumps(item["objectModel"]),
+            }
+            for item in items
+        ],
+    )
     monkeypatch.chdir(tmp_path)
-    baseline = tmp_path / "baseline.json"
-    cli.main(["read", "--output", str(baseline)])
-    request = tmp_path / "request.json"
-    request.write_text(json.dumps({"edits": _edits()}), encoding="utf-8")
+    expected = tmp_path / "expected.json"
+    cli.main(["read", "--output", str(expected)])
     return SimpleNamespace(
         root=tmp_path,
+        agent_folder=agent_folder,
+        agent_file=agent_file,
+        expected=expected,
+        component=component,
+        metadata=metadata,
         target=target,
-        snapshot=snapshot,
         transport=transport,
-        baseline=baseline,
-        request=request,
-        preview=tmp_path / "preview.json",
+        connect=connect,
     )
 
 
-def _preview(fixture):
-    return cli.main(
+def test_cli_uses_agent_yaml_and_acknowledges_only_instruction_section(
+    instruction_cli,
+):
+    fixture = instruction_cli
+    desired_metadata = copy.deepcopy(fixture.metadata)
+    desired_metadata["instructions"]["segments"][0]["value"] = "New route."
+    desired_metadata["unknownSetting"] = {"draft-only": True}
+    fixture.agent_file.write_text(json.dumps(desired_metadata), encoding="utf-8")
+
+    cli.main(
         [
             "update",
-            "--request",
-            str(fixture.request),
+            "--draft",
+            str(fixture.agent_file),
             "--expected",
-            str(fixture.baseline),
-            "--output",
-            str(fixture.preview),
+            str(fixture.expected),
+            "--yes",
         ]
     )
 
-
-def test_cli_read_and_preview_compose_without_writes_then_explicit_save(
-    instruction_cli,
-):
-    fixture = instruction_cli
-    assert _preview(fixture) == 0
-    preview = json.loads(fixture.preview.read_text(encoding="utf-8"))
-    assert preview["component"] == fixture.snapshot["component"]
-    assert preview["desiredComponent"]["metadata"]["instructions"]["segments"][0][
-        "value"
-    ] == ("New route. Other rule.")
-    assert preview["saved"] is False and preview["changed"] is True
-    fixture.transport.update_agent_instructions.assert_not_called()
-    result = fixture.root / "result.json"
-    assert (
-        cli.main(
-            [
-                "update",
-                "--request",
-                str(fixture.request),
-                "--expected",
-                str(fixture.preview),
-                "--yes",
-                "--output",
-                str(result),
-            ]
-        )
-        == 0
-    )
     fixture.transport.update_agent_instructions.assert_called_once_with(
-        fixture.snapshot["component"],
-        _edits(),
+        fixture.component,
+        desired_instructions=desired_metadata["instructions"],
     )
-    saved = json.loads(result.read_text(encoding="utf-8"))
-    assert saved["saved"] is True
-    assert saved["published"] is False and saved["conversationVerified"] is False
+    baseline = yaml.safe_load(
+        (fixture.agent_folder / ".baseline" / "agent.mcs.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert baseline["instructions"] == desired_metadata["instructions"]
+    assert baseline["unknownSetting"] == fixture.metadata["unknownSetting"]
 
 
-def test_verified_instruction_noop_is_already_saved(instruction_cli, capsys):
+def test_cli_acknowledges_capture_not_later_instruction_edit(instruction_cli):
     fixture = instruction_cli
-    edits = _edits()
-    edits[0]["newText"] = edits[0]["oldText"]
-    fixture.request.write_text(json.dumps({"edits": edits}), encoding="utf-8")
-    _preview(fixture)
-    fixture.transport.update_agent_instructions.side_effect = lambda *args: {
-        "component": fixture.snapshot["component"],
-        "updatedComponents": 0, "verifiedComponents": 1,
+    submitted = copy.deepcopy(fixture.metadata)
+    submitted["instructions"]["segments"][0]["value"] = "Submitted route."
+    later = copy.deepcopy(submitted)
+    later["instructions"]["segments"][0]["value"] = "Later route."
+    fixture.agent_file.write_text(json.dumps(submitted), encoding="utf-8")
+
+    def update(expected_component, *, desired_instructions):
+        fixture.agent_file.write_text(json.dumps(later), encoding="utf-8")
+        return {
+            "component": {
+                **copy.deepcopy(expected_component),
+                "metadata": {
+                    **copy.deepcopy(expected_component["metadata"]),
+                    "instructions": copy.deepcopy(desired_instructions),
+                },
+            },
+            "updatedComponents": 1,
+            "verifiedComponents": 1,
+        }
+
+    fixture.transport.update_agent_instructions.side_effect = update
+    cli.main(
+        [
+            "update",
+            "--draft",
+            str(fixture.agent_file),
+            "--expected",
+            str(fixture.expected),
+            "--yes",
+        ]
+    )
+
+    baseline = yaml.safe_load(
+        (fixture.agent_folder / ".baseline" / "agent.mcs.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert baseline["instructions"] == submitted["instructions"]
+    assert json.loads(fixture.agent_file.read_text())["instructions"] == later[
+        "instructions"
+    ]
+
+
+def test_cli_verified_noop_is_saved_and_acknowledged(instruction_cli, capsys):
+    fixture = instruction_cli
+
+    fixture.transport.update_agent_instructions.side_effect = None
+    fixture.transport.update_agent_instructions.return_value = {
+        "component": fixture.component,
+        "updatedComponents": 0,
+        "verifiedComponents": 1,
     }
-    capsys.readouterr()
-    cli.main([
-        "update", "--request", str(fixture.request),
-        "--expected", str(fixture.preview), "--yes",
-    ])
+    cli.main(
+        [
+            "update",
+            "--draft",
+            str(fixture.agent_file),
+            "--expected",
+            str(fixture.expected),
+            "--yes",
+        ]
+    )
+
     result = json.loads(capsys.readouterr().out)
-    assert result["saved"] is True and result["changed"] is False
-    assert result["updatedComponents"] == 0
+    assert result["changed"] is False
+    assert result["saved"] is True
+    assert result["bookkeepingComplete"] is True
 
 
-@pytest.mark.parametrize("drift", ["request", "target", "native", "read-not-preview"])
-def test_cli_save_requires_the_same_preview_request_target_and_baseline(
-    instruction_cli, drift
-):
-    fixture = instruction_cli
-    _preview(fixture)
-    expected = fixture.preview
-    if drift == "request":
-        edits = _edits()
-        edits[0]["newText"] = "Unapproved change"
-        fixture.request.write_text(json.dumps({"edits": edits}), encoding="utf-8")
-    elif drift == "target":
-        fixture.target["environment"]["ring"] = "prod"
-    elif drift == "native":
-        fixture.snapshot["component"]["metadata"]["instructions"]["segments"][0][
-            "value"
-        ] = "Newer native instructions"
-    else:
-        expected = fixture.baseline
-    with pytest.raises(
-        ValueError, match="different target|changed since|approved preview"
-    ):
-        cli.main(
-            [
-                "update",
-                "--request",
-                str(fixture.request),
-                "--expected",
-                str(expected),
-                "--yes",
-            ]
-        )
-    fixture.transport.update_agent_instructions.assert_not_called()
-
-
-def test_cli_does_not_overwrite_existing_evidence(instruction_cli):
-    fixture = instruction_cli
-    with pytest.raises(FileExistsError):
-        cli.main(
-            [
-                "update",
-                "--request",
-                str(fixture.request),
-                "--expected",
-                str(fixture.baseline),
-                "--yes",
-                "--output",
-                str(fixture.baseline),
-            ]
-        )
-    fixture.transport.update_agent_instructions.assert_not_called()
-
-
-def test_cli_output_failure_does_not_hide_an_observed_native_save(
+def test_cli_bookkeeping_failure_retains_verified_remote_result(
     instruction_cli,
     monkeypatch,
-    capsys,
 ):
     fixture = instruction_cli
-    _preview(fixture)
-    original_open = cli.Path.open
-    result = fixture.root / "result.json"
+    desired = copy.deepcopy(fixture.metadata)
+    desired["instructions"]["segments"][0]["value"] = "New route."
+    fixture.agent_file.write_text(json.dumps(desired), encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "acknowledge_instruction_baseline",
+        Mock(side_effect=PermissionError("baseline unavailable")),
+    )
 
-    def fail_result_open(path, mode="r", *args, **kwargs):
-        if path == result and mode == "x":
-            raise PermissionError("result output is unavailable")
-        return original_open(path, mode, *args, **kwargs)
-
-    monkeypatch.setattr(cli.Path, "open", fail_result_open)
-    capsys.readouterr()
-    with pytest.raises(native.ComponentEditError, match="output failed") as error:
+    with pytest.raises(cli.InstructionBookkeepingError) as exc_info:
         cli.main(
             [
                 "update",
-                "--request",
-                str(fixture.request),
+                "--draft",
+                str(fixture.agent_file),
                 "--expected",
-                str(fixture.preview),
+                str(fixture.expected),
                 "--yes",
-                "--output",
-                str(result),
             ]
         )
-    assert isinstance(error.value.__cause__, PermissionError)
-    assert str(error.value.__cause__) == "result output is unavailable"
-    assert error.value.evidence["operationResult"]["verifiedComponents"] == 1
-    observed = json.loads(capsys.readouterr().out)
-    assert observed["saved"] is True and observed["verifiedComponents"] == 1
-    fixture.transport.update_agent_instructions.assert_called_once()
+
+    remote = exc_info.value.evidence["remoteResult"]
+    assert remote["saved"] is True
+    assert remote["verifiedComponents"] == 1
+    assert remote["bookkeepingComplete"] is False
+
+
+def test_cli_output_failure_retains_verified_remote_result(
+    instruction_cli,
+    monkeypatch,
+):
+    fixture = instruction_cli
+    monkeypatch.setattr(
+        cli,
+        "_emit_result",
+        Mock(side_effect=PermissionError("output unavailable")),
+    )
+
+    with pytest.raises(cli.InstructionBookkeepingError) as exc_info:
+        cli.main(
+            [
+                "update",
+                "--draft",
+                str(fixture.agent_file),
+                "--expected",
+                str(fixture.expected),
+                "--yes",
+            ]
+        )
+
+    remote = exc_info.value.evidence["remoteResult"]
+    assert remote["saved"] is True
+    assert remote["verifiedComponents"] == 1
+    assert remote["bookkeepingComplete"] is True
+    assert remote["outputComplete"] is False

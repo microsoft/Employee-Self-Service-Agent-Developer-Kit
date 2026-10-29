@@ -1,19 +1,11 @@
 ---
 mode: agent
-description: "Type Enter to drive and debug a topic or workflow's runtime behaviour until it's right"
+description: "Check availability and run supported saved-topic testing"
 ---
 
 # Test
 
-You are helping a customer drive and debug an existing component in their ESS agent —
-running it, confirming the reply is real, checking the behaviour against the intent its
-evaluation cases encode, and localizing any fault. Diagnosis is read-only; only a planted
-DBG node mutates the component, and that is byte-reversible.
-
-**Scope.** `/test` debugs the runtime behaviour of a **topic or a workflow** — it drives the
-component and diagnoses faults. It is **not** the eval gate: to author evaluation cases use
-`/evaluate`, and running an eval set as a graded pass/fail over the deployed agent is a
-separate runtime-eval runner, not this command.
+Carry an already selected topic from the authoring request. Ask for the target only when it is genuinely unknown. Evaluation generation and graded evaluation execution retain their separate owners.
 
 **Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`. If canonical state does not have `schema_version: 4` and an `agents` entry matching the active workspace slug with `connect_ready: true`, show:
 
@@ -21,25 +13,12 @@ separate runtime-eval runner, not this command.
 
 and STOP. Otherwise proceed.
 
-Retain browser-based topic driving and reply classification, but do not run
-`flow_run_inspect.py`, `plant_debug.py`, or `strip_debug.py`. Report that these
-server-side diagnostics are not yet available for DA-GA workspaces. Workflow
-testing depends on run-history inspection, so if the requested component is a
-workflow, report that DA-GA workflow testing is not yet available and STOP.
+## Topic testing
 
-**IMPORTANT: When the user just types `/test` with no additional text, do
-NOT silently route anywhere. Ask the user what they want to test first.**
+Check `scripts/native_topic_test.py` directly. If it is absent, explain that this installation does not include bounded conversation testing, report conversation acceptance as pending, and stop.
 
-## Flow
+When installed, read `src/skills/topics/test/SKILL.md` and follow its saved-topic compatibility, active-state, browser-preparation, approval, and evidence requirements. Saving/readback is separate from conversation acceptance. Do not activate or publish to make a test runnable.
 
-1. Ask the user: "What would you like to test - a **topic** or a **workflow**?"
-2. Wait for the user to answer.
-3. Route based on their answer:
-   - **topic** (e.g., "topic", "a topic", "the topic I just made")
-     -> Read `src/skills/topics/test/SKILL.md` and follow its instructions.
-   - **workflow** (e.g., "workflow", "a workflow", "the flow")
-     -> For an AgentBuilder workspace, report that DA-GA workflow testing is
-        not yet available and STOP. Otherwise, read
-        `src/skills/workflows/test/SKILL.md` and follow its instructions.
+## Workflow requests
 
-Do NOT proceed without reading the appropriate skill file first.
+Power Automate authoring and runtime changes take place outside ADK. For separately requested read-only run inspection, follow `src/skills/workflows/test/SKILL.md` and its independent target/authentication prerequisites. Do not route backend conversations through the bounded topic test.
