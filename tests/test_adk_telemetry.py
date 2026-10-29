@@ -2238,7 +2238,129 @@ def test_emit_flightcheck_error_carries_connector(captured_post, monkeypatch):
 
 def test_schema_version_bump_records_agent_type_dim():
     # agent_type is added in 1.7.0 so cubes can version-gate the CA/DA split.
-    assert adk.SCHEMA_VERSION == "1.7.0"
+    assert adk.SCHEMA_VERSION == "1.8.0"
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure"])
+def test_legacy_api_call_shape_is_exactly_compatible(monkeypatch, outcome):
+    captured = []
+    common = {"schema_version": "1.8.0", "agent_type": "declarative_agent"}
+    monkeypatch.setattr(adk, "get_session", lambda surface: ("session", False))
+    monkeypatch.setattr(adk, "common_dimensions", lambda *args, **kwargs: dict(common))
+    monkeypatch.setattr(
+        adk, "_emit", lambda name, data, **kwargs: captured.append((name, data)),
+    )
+    # Existing integrations supply no MCP metadata and retain their error fields.
+    adk.emit_api_call(
+        api_endpoint="create_announcement", outcome=outcome, latency_ms=12,
+        error_code="api_error" if outcome == "failure" else "",
+        error_category="api" if outcome == "failure" else "",
+        error_message="safe message" if outcome == "failure" else "",
+    )
+    expected = {
+        **common, "api_endpoint": "create_announcement",
+        "outcome": outcome, "latency_ms": 12,
+    }
+    if outcome == "failure":
+        expected.update(
+            error_code="api_error", error_category="api", error_message="safe message",
+        )
+    assert captured == [(adk.EVENT_API_CALL, expected)]
+
+
+def test_mcp_optional_projection_preserves_safe_values_and_identity(captured_post):
+    adk._IDENTITY.update(
+        tenant_id="00000000-0000-0000-0000-000000001111",
+        tenant_name="Stale organization",
+    )
+    adk.emit_api_call(
+        api_endpoint="registered_business_tool", mcp_server="code-owned-server",
+        server_operation_id="7d556dce-36c8-45db-a6cd-b23d3c091898",
+        result_kind="success", tenant_id="", tenant_name="",
+        http_attempt_count=0, retry_count=0, auth_refresh_count=0,
+        retry_exhausted=False,
+        usage={
+            "quick_link_count": 3, "prompt_count": 5, "category_count": 2,
+            "config_branding_present": False, "draft_present": True,
+            "widget": "quick-links",
+        },
+        block=True,
+    )
+    row = captured_post[0][1][0]["data"]
+    assert row["tenant_id"] == row["tenant_name"] == ""
+    assert row["tenant_class"] == "unknown"
+    assert row["mcp_server"] == "code-owned-server"
+    assert row["quick_link_count"] == 3
+    assert row["prompt_count"] == 5
+    assert row["category_count"] == 2
+    assert row["config_branding_present"] is False
+    assert row["widget"] == "quick-links"
+    assert row["http_attempt_count"] == 0
+    assert row["retry_exhausted"] is False
+    assert "http_status" not in row
+    assert "failure_http_status" not in row
+    assert "write_state" not in row
+    assert "agent_type" in row
+    assert "toolkit_git_sha" in row
+
+
+def test_mcp_operation_id_survives_buffer_redelivery(monkeypatch, captured_post):
+    operation_id = "7d556dce-36c8-45db-a6cd-b23d3c091898"
+    monkeypatch.setattr(_fc, "_post", lambda *args: 503)
+    adk.emit_api_call(
+        mcp_server="test-server", server_operation_id=operation_id,
+        result_kind="exception", outcome="failure", block=True,
+    )
+    with open(adk.BUFFER_PATH, encoding="utf-8") as handle:
+        buffered = json.loads(handle.read())
+    redelivered = []
+    monkeypatch.setattr(
+        _fc, "_post", lambda ikey, events: redelivered.extend(events) or 200,
+    )
+    adk._buffer_flush(adk.resolve_ikey()[0])
+    assert redelivered == [buffered]
+    assert redelivered[0]["data"]["server_operation_id"] == operation_id
+
+
+def test_mcp_async_collector_failure_does_not_block_caller(monkeypatch):
+    import threading
+
+    entered, release = threading.Event(), threading.Event()
+
+    def unavailable(*args):
+        entered.set()
+        assert release.wait(timeout=5)
+        raise OSError("collector unavailable")
+
+    monkeypatch.setattr(_fc, "_post", unavailable)
+    monkeypatch.setattr(adk, "_SYNC", False)
+    monkeypatch.setattr(adk, "_THREADS", [])
+    try:
+        verdict = adk.emit_api_call(
+            mcp_server="test-server", server_operation_id="stable-operation",
+            result_kind="success",
+        )
+        assert verdict["async"] is True
+        assert entered.wait(timeout=5)
+        assert not release.is_set()
+    finally:
+        release.set()
+        adk.flush(timeout=5)
+    with open(adk.BUFFER_PATH, encoding="utf-8") as handle:
+        assert json.loads(handle.read())["data"]["server_operation_id"] == "stable-operation"
+
+
+def test_tenant_snapshot_normalizes_without_mutating_global_identity(monkeypatch, tmp_path):
+    tenant = "00000000-0000-0000-0000-0000000000ab"
+    _fc.cache_tenant_name(tenant, "Contoso", local_dir=str(tmp_path))
+    initial = dict(adk._IDENTITY)
+    assert adk.get_tenant_identity(
+        f"  {tenant.upper()}  ", local_dir=str(tmp_path),
+    ) == {"tenant_id": tenant, "tenant_name": "Contoso"}
+    assert adk.get_tenant_identity(
+        "QuarterlyPayrollReview", local_dir=str(tmp_path),
+    ) == {"tenant_id": "", "tenant_name": ""}
+    assert adk._IDENTITY == initial
 
 
 # --- emit_capability.py shim --connector plumbing -------------------------
