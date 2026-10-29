@@ -39,7 +39,33 @@ standing portal's existence excuse naming a *specific* contact without grounding
 requirement seems to add or change what counts as standing vs. named, confirm with the maker before
 assuming.
 
-## Step 3: Apply the escalation pattern for the new requirement
+## Step 3: Classify the requirement, then apply
+
+First decide what kind of requirement you were given:
+
+- **Extends or modifies one of the 5 known escalation scenarios** (opening request, in-scope
+  unanswerable, broad/ambiguous, out-of-scope, stuck-after-attempts) → follow the worked pattern in
+  Step 3a below. This pattern is validated against real tester failures (the UAT "Gold Prompt"
+  findings in Step 6b), not just hypothetical cases.
+- **A new rule category entirely** — tone, formatting, a citation requirement, a new ticket-routing
+  or eligibility rule, a new prohibition, anything that isn't about when/how to escalate or name a
+  resource → there is no pre-validated pattern for this. Don't force it into the 5-scenario shape.
+  Instead:
+  1. Find the most structurally similar existing section in the current instructions (or decide a
+     new section is genuinely warranted) and state the new rule there, once. Remember this file's
+     history of a rule getting restated across sections when added carelessly — check for that risk
+     specifically before finishing.
+  2. Hold it to the same grounding discipline as everything else in the document: never assert a
+     fact, capability, or exception the document doesn't already authorize from an approved
+     knowledge source or configured tool.
+  3. Explicitly tell the maker in your output that this is a **novel rule category without a
+     pre-validated pattern** — recommend they review it more carefully than an escalation-scenario
+     change, and treat your first eval cases for it (Step 6) as a first draft to refine, not a
+     proven-correct pattern.
+  Still run Steps 4-8 (dedup, char budget, eval sandbox, runtime-feasibility flag, approval) exactly
+  as written — those are general-purpose and apply regardless of which kind of requirement this is.
+
+## Step 3a: Apply the escalation pattern for the new requirement
 
 The IT agent's instructions should already have a dedicated "Support resources and escalation"
 section covering these five rules, gated by one grounding sentence that governs all of them: **name

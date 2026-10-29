@@ -36,7 +36,32 @@ introduce something that behaves like a standing resource (e.g., "always mention
 case form"), stop and ask the maker to confirm that's really intended, since it changes the
 escalation model materially.
 
-## Step 3: Apply the escalation pattern for the new requirement
+## Step 3: Classify the requirement, then apply
+
+First decide what kind of requirement you were given:
+
+- **Extends or modifies one of the 5 known escalation scenarios** (opening request, in-scope
+  unanswerable, broad/ambiguous, out-of-scope, stuck-after-attempts) → follow the worked pattern in
+  Step 3a below. This pattern is validated: it's been built, tested, and fixed against real gaps
+  (the rule-1 "already stated subject" carve-out was a real bug found by testing, not a
+  hypothetical).
+- **A new rule category entirely** — tone, formatting, a citation requirement, a new eligibility or
+  routing rule, a new prohibition, anything that isn't about when/how to escalate or name a
+  resource → there is no pre-validated pattern for this. Don't force it into the 5-scenario shape.
+  Instead:
+  1. Find the most structurally similar existing section in the current instructions (or decide a
+     new section is genuinely warranted) and state the new rule there, once.
+  2. Hold it to the same grounding discipline as everything else in the document: never assert a
+     fact, capability, or exception the document doesn't already authorize from an approved source
+     or configured tool.
+  3. Explicitly tell the maker in your output that this is a **novel rule category without a
+     pre-validated pattern** — recommend they review it more carefully than an escalation-scenario
+     change, and treat your first eval cases for it (Step 6) as a first draft to refine, not a
+     proven-correct pattern.
+  Still run Steps 4-8 (dedup, char budget, eval sandbox, runtime-feasibility flag, approval) exactly
+  as written — those are general-purpose and apply regardless of which kind of requirement this is.
+
+## Step 3a: Apply the escalation pattern for the new requirement
 
 The HR agent's instructions should already have (or should gain, if missing) a dedicated
 escalation section covering these five rules, each gated by one grounding sentence that governs
