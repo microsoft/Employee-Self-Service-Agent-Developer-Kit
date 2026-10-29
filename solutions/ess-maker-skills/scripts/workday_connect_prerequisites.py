@@ -29,6 +29,7 @@ from workday_connect_auth import WorkdayConnectIdentityError
 from workday_connect_runtime import (
     AUTHORIZATION_SCRIPT,
     WorkdayConnectRuntimeError,
+    configured_connection_api_version,
     _api_connections,
     _pac_upgrade_guidance,
     _powershell_literal,
@@ -311,12 +312,14 @@ def check_prerequisites(
         return checks
     scope = state["scope"]
     maker = state["operators"]["powerPlatformMaker"]["username"]
+    api_version = configured_connection_api_version(root)
     try:
         _api_connections({
             "environmentId": scope["environmentId"],
             "tenantId": scope["entraTenantId"],
             "ring": scope["ring"],
             "maker": maker,
+            "agentBuilderApiVersion": api_version,
         })
     except WorkdayConnectIdentityError as exc:
         checks.append(_result(
