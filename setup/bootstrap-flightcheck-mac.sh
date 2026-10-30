@@ -9,7 +9,7 @@ set -euo pipefail
 
 export FLIGHTCHECK_ONLY="true"
 
-# Parse optional --branch / --source-base-url / --ring arguments
+# Parse optional --branch / --source-base-url / --ring / --scope arguments
 BRANCH="main"
 SOURCE_BASE_URL=""
 RING_ARG=""
@@ -18,9 +18,77 @@ while [[ $# -gt 0 ]]; do
         --branch)       BRANCH="$2"; shift 2 ;;
         --source-base-url) SOURCE_BASE_URL="$2"; shift 2 ;;
         --ring)         RING_ARG="$2"; shift 2 ;;
+        --scope)
+            if [[ $# -lt 2 || -z "$2" ]]; then
+                echo "ERROR: --scope requires a scope name; Full is never selected by default." >&2
+                exit 2
+            fi
+            FLIGHTCHECK_SCOPE="$2"; shift 2 ;;
         *) shift ;;
     esac
 done
+
+resolve_flightcheck_scope() {
+    local interactive="$1"
+    local entry name
+    # Keep this preflight self-contained: bootstrap runs it before downloading.
+    # Scope names mirror cli.py, not its separate litmus profiles.
+    local scopes=(
+        'full|All applicable validation categories'
+        'prerequisites|Prerequisite access and setup'
+        'infrastructure|Infrastructure and connectivity'
+        'environment|Power Platform environment'
+        'solution|Installed solution configuration'
+        'authentication|Authentication configuration'
+        'entraapp|Microsoft Entra application'
+        'workdaytenant|Workday tenant configuration'
+        'external|External system configuration'
+        'workday|External system and Workday checks'
+        'workdayextension|Workday checks and extension'
+        'workdayda|Workday declarative-agent package'
+        'topics|Workday topics'
+        'graphconnector|External system and Graph connector knowledge'
+        'handoff|Agent handoff topics'
+        'servicenow|External system and ServiceNow checks'
+        'local|Local agent files'
+        'publishing|Agent publishing'
+        'licensing|Licensing'
+        'cloudpolicy|Cloud policies'
+    )
+    local instructions="Specify --scope <scope> or set FLIGHTCHECK_SCOPE. Full requires explicit selection."
+    if [[ -z "${FLIGHTCHECK_SCOPE:-}" ]]; then
+        if [[ "$interactive" != "true" || -n "${CI:-}" || -n "${TF_BUILD:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
+            echo "ERROR: FlightCheck scope is required for unattended installation. $instructions" >&2
+            printf '  %s\n' "${scopes[@]//|/ - }" >&2
+            return 2
+        fi
+        echo "Choose a FlightCheck scope (no default):"
+        printf '  %s\n' "${scopes[@]//|/ - }"
+        printf 'Enter a scope name: '
+        if ! read -r FLIGHTCHECK_SCOPE; then
+            echo "ERROR: FlightCheck scope input is unavailable. $instructions" >&2
+            return 2
+        fi
+    fi
+    FLIGHTCHECK_SCOPE="$(printf '%s' "$FLIGHTCHECK_SCOPE" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    for entry in "${scopes[@]}"; do
+        name="${entry%%|*}"
+        if [[ "$FLIGHTCHECK_SCOPE" == "$name" ]]; then
+            export FLIGHTCHECK_SCOPE
+            return 0
+        fi
+    done
+    echo "ERROR: A valid FlightCheck scope is required; empty input does not select Full. $instructions" >&2
+    printf '  %s\n' "${scopes[@]//|/ - }" >&2
+    return 2
+}
+
+if [[ -t 0 ]]; then
+    resolve_flightcheck_scope true
+else
+    resolve_flightcheck_scope false
+fi
+
 SOURCE_BASE_URL="${SOURCE_BASE_URL:-${ESS_ADK_SOURCE_URL:-https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/$BRANCH/setup}}"
 # Forward the ring choice to install-ess-adk.sh via the RING env var. Explicit
 # --ring wins over an inherited RING env from the caller so a mistake in the
@@ -67,4 +135,4 @@ fi
 
 # Run in-memory (source) to avoid any permission issues
 export ESS_ADK_BRANCH="$BRANCH"
-bash "$TEMP_DIR/install-ess-adk.sh"
+bash "$TEMP_DIR/install-ess-adk.sh" --scope "$FLIGHTCHECK_SCOPE"
