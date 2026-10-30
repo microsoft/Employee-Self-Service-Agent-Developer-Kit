@@ -50,6 +50,8 @@ Copilot Studio and deployed to the organization. `/setup` installs and extracts
 the Power Platform agent; publication, admin approval, and Integrated apps
 deployment are separate steps.
 
+Landing-page sign-in renews automatically when the service rejects an expired session. The server tries silent refresh, then opens browser sign-in if needed, using an available account hint to target the original account. Entra may require MFA or account selection. The server verifies the original account and tenant before retrying the request once. Explicit access-token files and environment variables are caller-managed.
+
 ### 📖 Pre-Loaded ESS Documentation, Samples & Best Practices
 
 The kit ships with a complete reference library that the AI agent reads at task time — you don't need to look anything up yourself.
