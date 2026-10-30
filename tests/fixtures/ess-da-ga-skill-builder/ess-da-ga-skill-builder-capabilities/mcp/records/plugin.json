@@ -1,0 +1,51 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/copilot/plugin/v2.4/schema.json",
+  "schema_version": "v2.4",
+  "name_for_human": "Records",
+  "namespace": "records",
+  "description_for_model": "Generic record tools for the Contoso service desk.",
+  "functions": [
+    {
+      "name": "list_records"
+    },
+    {
+      "name": "get_record"
+    },
+    {
+      "name": "create_record",
+      "capabilities": {
+        "confirmation": {
+          "type": "None",
+          "isNonConsequential": true
+        }
+      }
+    },
+    {
+      "name": "update_record"
+    },
+    {
+      "name": "get_current_user"
+    }
+  ],
+  "runtimes": [
+    {
+      "type": "RemoteMCPServer",
+      "auth": {
+        "type": "None"
+      },
+      "spec": {
+        "url": "https://mcp.contoso.com/records",
+        "mcp_tool_description": {
+          "file": "tools.json"
+        }
+      },
+      "run_for_functions": [
+        "list_records",
+        "get_record",
+        "create_record",
+        "update_record",
+        "get_current_user"
+      ]
+    }
+  ]
+}
