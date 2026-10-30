@@ -1192,6 +1192,27 @@ def _run_single_checkpoint(args, *, compact_stream=None):
 
     target = args.checkpoint
     explicit_agent_slug = getattr(args, "agent_slug", None)
+    service_now_profile = (
+        "itsm"
+        if str(target).startswith("SN-DA-ITSM-")
+        else (
+            "hrsd"
+            if str(target).startswith("SN-DA-HRSD-")
+            else None
+        )
+    )
+    if (
+        compact_stream is not None
+        and service_now_profile is not None
+        and not explicit_agent_slug
+    ):
+        message = (
+            "ERROR: ServiceNow lifecycle checkpoint requires the exact "
+            "selected --agent-slug; refusing to fall back to activeAgent."
+        )
+        args._compact_error_message = message.removeprefix("ERROR: ")
+        print(message)
+        sys.exit(2)
     if explicit_agent_slug is not None:
         try:
             validate_agent_slug(explicit_agent_slug)
@@ -1224,7 +1245,34 @@ def _run_single_checkpoint(args, *, compact_stream=None):
         config = _merge_connect_config(config, getattr(args, "connect_config", None))
         _profile_target_matches_config(args, config)
         _runtime_evidence_values(args)
+        if service_now_profile is not None and explicit_agent_slug:
+            from connect_servicenow_da import product_profile_for_schema
+
+            selected_agents = [
+                item
+                for item in config.get("agents", [])
+                if isinstance(item, dict)
+                and item.get("slug") == explicit_agent_slug
+            ]
+            if len(selected_agents) != 1:
+                raise ValueError(
+                    "The selected ServiceNow agent slug is not uniquely "
+                    "configured in this workspace."
+                )
+            selected_profile = product_profile_for_schema(
+                str(selected_agents[0].get("schemaName") or "")
+            )
+            if (
+                selected_profile is None
+                or selected_profile.key != service_now_profile
+            ):
+                raise ValueError(
+                    "The selected ServiceNow agent does not match the "
+                    f"{service_now_profile.upper()} checkpoint profile."
+                )
     except (OSError, ValueError, json.JSONDecodeError) as e:
+        if compact_stream is not None:
+            args._compact_error_message = str(e)
         print(f"ERROR: Unable to resolve the profile target: {e}")
         sys.exit(1)
 
@@ -1268,7 +1316,9 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     alm_import_target = None
     connectivity = None
     preferred_username = str(
-        getattr(args, "preferred_username", "") or ""
+        getattr(args, "preferred_username", "")
+        or config.get("account")
+        or ""
     ).strip() or None
     canonical_username = preferred_username
     account_verification_required = (
@@ -1673,7 +1723,10 @@ def _run_single_checkpoint(args, *, compact_stream=None):
         runner.register(label, fn)
     runner.register(
         "FlightCheck Checkpoint",
-        _single_checkpoint_contract_check(target),
+        _single_checkpoint_contract_check(
+            target,
+            allow_evaluated_nonready=compact_stream is not None,
+        ),
     )
 
     if not quiet_auth:
@@ -1756,9 +1809,13 @@ def _run_compact_checkpoint(args):
                 payload = compact_checkpoint_error_to_dict(
                     target=args.checkpoint,
                     error_type="checkpoint-execution",
-                    message=(
-                        "Checkpoint execution ended before a result contract "
-                        "was produced. Review stderr."
+                    message=getattr(
+                        args,
+                        "_compact_error_message",
+                        (
+                            "Checkpoint execution ended before a result "
+                            "contract was produced. Review stderr."
+                        ),
                     ),
                     exit_code=exit_code,
                 )
@@ -1789,7 +1846,11 @@ def _run_compact_checkpoint(args):
             raise SystemExit(1) from exc
 
 
-def _single_checkpoint_contract_check(target: str):
+def _single_checkpoint_contract_check(
+    target: str,
+    *,
+    allow_evaluated_nonready: bool = False,
+):
     """Fail closed when a requested checkpoint cannot be evaluated."""
     from flightcheck import registry
 
@@ -1817,7 +1878,7 @@ def _single_checkpoint_contract_check(target: str):
             ))
             return rows
 
-        if all(
+        if not allow_evaluated_nonready and all(
             row.status in {
                 Status.NOT_CONFIGURED.value,
                 Status.SKIPPED.value,

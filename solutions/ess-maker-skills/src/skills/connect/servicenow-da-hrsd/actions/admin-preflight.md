@@ -3,13 +3,12 @@
 Preflight is state/API driven. It does not ask the Maker to classify setup
 progress.
 
-- **Goal:** discover remote setup first, automatically reuse each valid
-  existing item, and send only missing or unhealthy items to their owning
-  setup phase.
+- **Goal:** confirm the exact prepared ESS agent, environment, realm, and one
+  Maker-selected public ServiceNow instance before configuration begins.
 - **Owner role:** the skill reads canonical `/setup` state, lifecycle state,
   and supported read-only discovery.
-- **Completion evidence:** a trusted or explicitly supplied public ServiceNow
-  instance URL plus current read-only resource discovery.
+- **Completion evidence:** a valid prior confirmation for the same target or
+  one explicit Maker-confirmed public ServiceNow instance URL.
 
 Read `adminSetup.phaseHandoffs.preflight` first. If it is already
 `completed`, refresh `inspect-admin-setup`. If the stored instance is still
@@ -26,14 +25,54 @@ below.
 Run:
 
 ```text
-python scripts/connect_servicenow_da.py migrate-state
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} migrate-state
 ```
+
+Run migration and discovery as two separate terminal invocations. Never chain
+them into one command: migration is local, while discovery can authenticate
+and call a remote read API.
 
 Run read-only discovery:
 
 ```text
-python scripts/connect_servicenow_da.py inspect-admin-setup
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} inspect-admin-setup
 ```
+
+Before running discovery, tell the Maker:
+
+> Preparing read-only ServiceNow connection discovery. If Microsoft sign-in
+> opens, complete it; while the browser is waiting, setup is waiting for
+> authorization, not processing the ServiceNow API. After authorization, the
+> connection inventory request uses a 60-second HTTP connect/read timeout.
+> That is not a 60-second limit for the whole invocation, and a server that
+> continues returning bytes may keep a read active.
+
+Parse the first `DA_ADMIN_PREFLIGHT_PROGRESS_JSON:` marker with
+`stage: authentication` as client/auth preparation. Do not say that the HTTP
+inventory read has started at that marker. Parse the later marker with
+`stage: connection-inventory` as proof that authentication completed and the
+HTTP read is starting.
+
+When optional connection discovery returns an error:
+
+- preserve and show the exact error and its details; never describe it as an
+  empty inventory;
+- do not automatically select a cached or discovered instance;
+- allow the Maker to provide one public HTTPS root URL for target
+  confirmation; later credential discovery and health checks still fail
+  closed if their required reads fail;
+- for `category: timeout`, say that the configured HTTP connect/read timeout
+  was reached, not that the whole invocation lasted exactly 60 seconds. State
+  that no remote write was attempted and the Maker can retry
+  `/connect servicenow` after checking network access;
+- for `category: throttled`, show `retryAfter`, wait at least that long, and do
+  not automatically retry;
+- for another HTTP/transport error, preserve its status, error code, request
+  ID, and supported retry instruction.
+
+Do not describe authorization waiting as API processing. Do not start another
+discovery while the first command is running. A read-only discovery failure
+does not authorize continuing with cached connection evidence.
 
 Show the discovery exactly as evidence:
 
@@ -46,26 +85,35 @@ Local state absence is not evidence that a remote app, OIDC provider, plugin,
 or connection is absent. Never create, patch, or recreate a remote object from
 this action.
 
-If `instanceInputRequired` is `false`, briefly summarize what was found and do
-not ask a progress/scenario question. When discovery returned
-`links.serviceNowInstance`, show its descriptive link once:
+If `instanceInputRequired` is `false`, reuse the valid prior confirmation,
+briefly summarize discovery, and do not ask again. A newly visible connection
+never changes the confirmed instance automatically.
 
-[Open this ServiceNow instance]({SERVICENOW_INSTANCE_URL})
+When `instanceInputRequired` is `true`, send the exact returned
+`instanceQuestion` through `vscode_askQuestions`:
 
-Use the exact URL from `links.serviceNowInstance.url`.
+- With candidates, every normalized URL is a separate **Use <URL>** choice,
+  even when there is only one, plus **Provide another ServiceNow instance
+  URL**. Translate the selected label through `instanceChoices`; never ask the
+  Maker to copy an internal key.
+- **Provide another ServiceNow instance URL** opens the exact returned
+  `manualInstanceQuestion`. Do not construct or shorten another free-form
+  question.
+- With no candidates, the returned question is already that free-form URL
+  question.
+- Discovery errors remain visible in the question. Manual target confirmation
+  does not prove connection health, select/reuse a credential, create an
+  instance, or bind the agent.
 
-Only when `instanceInputRequired` is `true`, use one standalone
-`vscode_askQuestions` free-form question for the public ServiceNow HTTPS
-instance URL. Never ask for credentials, tokens, secrets, or a portal URL.
-Use this visible payload after rendering `{CURRENT_PROGRESS}` and the bounded
-discovery summary:
+The no-candidate/manual-URL form uses this supported visible shape. The
+runtime-rendered question may add the bounded discovery error:
 
 <!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "ServiceNow instance",
-    "question": "{CURRENT_PROGRESS}\n\nPurpose: identify the public ServiceNow instance so later phases can verify and repair only their own missing or unhealthy resources.\n\nOwner: the skill performs read-only discovery; provide only the public instance URL.\n\nCurrent discovery:\n{DISCOVERY_SUMMARY}\n\nLocal state absence does not prove a remote app, plugin, OIDC provider, user mapping, or connection is absent. This question does not request credentials, tokens, secrets, or a portal/module URL.\n\nWhat is the public ServiceNow HTTPS instance URL? Example: `https://instance.service-now.com`",
+    "question": "{CURRENT_PROGRESS}\n\nFor {AGENT_DISPLAY_NAME} (`{SELECTED_AGENT_SLUG}`) in environment `{ENVIRONMENT_ID}` and {REALM} realm, enter the intended public ServiceNow HTTPS root URL.\n\nExample: `https://dev184242.service-now.com`\n\nUse only the instance root (`https://<instance>.service-now.com`). Do not enter a portal or module path such as `/sp`, `/esc`, or `/now/...`. Do not enter a username, password, credential, token, secret, or certificate. If you do not know the URL, ask your ServiceNow administrator for the public instance root.\n\n{DISCOVERY_ERROR_IF_ANY}",
     "allowFreeformInput": true
   }
 ]
@@ -73,19 +121,23 @@ discovery summary:
 
 While that question is pending, do not return an action result. If the Maker
 is not ready to provide the URL, return `ACTION_RESULT = "waiting"`. After the
-answer, persist the normalized instance and refresh discovery:
+selected or entered URL is confirmed, persist it and refresh discovery:
+
+Do not call `next-step`, `resume-handoff`, or the preflight checkpoint between
+showing the question and recording its answer. If a redundant provider
+`resume-handoff` call occurs, its top-level `pendingInput` is authoritative:
+show that exact question and stop without running a checkpoint.
 
 ```text
-python scripts/connect_servicenow_da.py record-preflight --instance-url <https://instance.service-now.com>
-python scripts/connect_servicenow_da.py inspect-admin-setup
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-preflight --instance-url <https://instance.service-now.com>
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} inspect-admin-setup
 ```
 
-If the refreshed result contains `links.serviceNowInstance`, show the same
-[Open this ServiceNow instance]({SERVICENOW_INSTANCE_URL}) link once using its
-exact URL.
+If the refreshed result contains `links.serviceNowInstance`, preserve it for
+later phases and do not display an action link before the Entra step.
 
 Return `ACTION_RESULT = "recorded"` after discovery is persisted. The
 subsequent plugin, Entra, OIDC, and credential phases independently reverify
-their own evidence and automatically skip only the valid item they own.
-A Connected physical connection does not prove that the Entra app, consent,
-HR Core, OIDC provider, or user mapping are complete.
+their own evidence.
+A Connected physical connection does not prove that the Entra app, connector
+authorization, HR Core, OIDC provider, or user mapping are complete.

@@ -34,6 +34,64 @@ AGENT_URL = (
     "https://copilotstudio.test.microsoft.com/environments/"
     f"{ENVIRONMENT_ID}/bots/{AGENT_ID}/overview"
 )
+PREVIEW_AGENT_URL = (
+    "https://copilotstudio.preview.microsoft.com/environments/"
+    f"{ENVIRONMENT_ID}/copilots/{AGENT_ID}/tools?agentBackend=cosmos"
+)
+PREVIEW_ENVIRONMENT_URL = (
+    "https://copilotstudio.preview.microsoft.com/environments/"
+    f"{ENVIRONMENT_ID}/agents"
+)
+UNKNOWN_ENVIRONMENT_URL = (
+    "https://studio.example.test/environments/"
+    f"{ENVIRONMENT_ID}/agents"
+)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path behavior")
+def test_extended_length_path_supports_long_windows_paths(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "nested" / "file.txt"
+
+    assert setup_existing_da._extended_length_path(path).startswith("\\\\?\\")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path behavior")
+def test_create_baseline_copies_and_cleans_exact_long_topic_path(
+    tmp_path: Path,
+) -> None:
+    filename = "WorkdaySystemSetRuntimeTemplateConfigurations.mcs.yml"
+    fixed_length = len(str(tmp_path / "x" / "topics" / filename))
+    segment_length = 254 - fixed_length + 1
+    if segment_length < 1:
+        pytest.skip("Temporary root is too long for exact fixture")
+    destination = tmp_path / ("x" * segment_length)
+    topic = destination / "topics" / filename
+    topic.parent.mkdir(parents=True)
+    expected = "kind: AdaptiveDialog\n"
+    topic.write_text(expected, encoding="utf-8")
+    baseline_topic = destination / ".baseline" / "topics" / filename
+
+    assert len(str(topic)) == 254
+    assert len(str(baseline_topic)) == 264
+
+    setup_existing_da._create_baseline(destination)
+
+    extended_baseline = Path(
+        setup_existing_da._extended_length_path(baseline_topic)
+    )
+    assert extended_baseline.read_text(encoding="utf-8") == expected
+    assert (
+        setup_existing_da._remove_directory(
+            destination,
+            "Long-path fixture",
+        )
+        is None
+    )
+    assert not Path(
+        setup_existing_da._extended_length_path(destination)
+    ).exists()
 
 
 def _normalize_object_model_keys(value: Any) -> Any:
@@ -231,6 +289,7 @@ class FakeClient:
         include_collection_schema: bool = True,
         published_config_available: bool = True,
         changeset: dict[str, Any] | None = None,
+        authenticated_account: str | None = None,
     ) -> None:
         self.agent_name = agent_name
         self.agent_id = agent_id
@@ -241,6 +300,7 @@ class FakeClient:
         self.include_agent_schema = include_agent_schema
         self.include_collection_schema = include_collection_schema
         self.published_config_available = published_config_available
+        self.authenticated_account = authenticated_account
         self.changeset = changeset or _changeset(
             agent_id=agent_id,
             schema_name=schema_name,
@@ -423,7 +483,128 @@ def test_target_url_resolves_ids_and_ring() -> None:
     assert target["environmentId"] == ENVIRONMENT_ID
     assert target["agentId"] == AGENT_ID
     assert target["ring"] == "test"
+    assert target["ringSource"] == "recognized-target"
     assert target["agentSelection"] == "copilot-studio-url"
+
+
+def test_preview_target_url_resolves_to_prod_ring() -> None:
+    target = setup_existing_da.resolve_da_target(
+        target_url=PREVIEW_AGENT_URL,
+        environment_id=None,
+        agent_id=None,
+        ring=None,
+        require_agent=True,
+    )
+
+    assert target["environmentId"] == ENVIRONMENT_ID
+    assert target["agentId"] == AGENT_ID
+    assert target["ring"] == "prod"
+    assert target["ringSource"] == "recognized-target"
+    assert target["source"] == "copilot-studio-url"
+
+
+@pytest.mark.parametrize("ring", ["preprod", "test"])
+def test_preview_target_rejects_conflicting_explicit_ring(ring: str) -> None:
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="different service rings",
+    ):
+        setup_existing_da.resolve_da_target(
+            target_url=PREVIEW_AGENT_URL,
+            environment_id=None,
+            agent_id=None,
+            ring=ring,
+            require_agent=True,
+        )
+
+
+def test_resolve_target_cli_is_local_and_returns_supported_ring(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda *_args, **_kwargs: pytest.fail(
+            "resolve-target must not authenticate"
+        ),
+    )
+
+    assert setup_existing_da.main(
+        [
+            "resolve-target",
+            "--target-url",
+            PREVIEW_AGENT_URL,
+            "--require-agent",
+        ]
+    ) == 0
+
+    output = capsys.readouterr().out
+    result = json.loads(output.split("DA_TARGET_JSON:", 1)[1])
+    assert result["ring"] == "prod"
+    assert result["ringSource"] == "recognized-target"
+    assert result["source"] == "copilot-studio-url"
+
+
+def test_preview_environment_only_url_resolves_without_agent_or_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda *_args, **_kwargs: pytest.fail(
+            "environment-only target resolution must not authenticate"
+        ),
+    )
+
+    assert setup_existing_da.main(
+        [
+            "resolve-target",
+            "--target-url",
+            PREVIEW_ENVIRONMENT_URL,
+        ]
+    ) == 0
+
+    result = json.loads(
+        capsys.readouterr().out.split("DA_TARGET_JSON:", 1)[1]
+    )
+    assert result["environmentId"] == ENVIRONMENT_ID
+    assert result["ring"] == "prod"
+    assert result["ringSource"] == "recognized-target"
+    assert "agentId" not in result
+
+
+@pytest.mark.parametrize(
+    ("target_url", "environment_id"),
+    [
+        (UNKNOWN_ENVIRONMENT_URL, None),
+        (None, ENVIRONMENT_ID),
+    ],
+)
+def test_unrecognized_target_marks_prod_as_legacy_fallback(
+    target_url: str | None,
+    environment_id: str | None,
+) -> None:
+    target = setup_existing_da.resolve_da_target(
+        target_url=target_url,
+        environment_id=environment_id,
+        ring=None,
+    )
+
+    assert target["ring"] == "prod"
+    assert target["ringSource"] == "legacy-default"
+
+
+def test_unrecognized_target_accepts_explicit_ring_after_picker() -> None:
+    target = setup_existing_da.resolve_da_target(
+        target_url=UNKNOWN_ENVIRONMENT_URL,
+        environment_id=None,
+        ring="preprod",
+    )
+
+    assert target["ring"] == "preprod"
+    assert target["ringSource"] == "explicit"
 
 
 def test_target_rejects_conflicting_ring() -> None:
@@ -1002,7 +1183,11 @@ def test_print_exception_includes_type_and_notes(
 
 
 def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
-    result = _attach(FakeClient(), tmp_path)
+    account = "maker@example.test"
+    result = _attach(
+        FakeClient(authenticated_account=account),
+        tmp_path,
+    )
     agent_root = _agent_root(tmp_path)
 
     assert result["status"] == "created"
@@ -1042,12 +1227,15 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     )
     assert config["setup"] == "complete"
     assert config["ring"] == "test"
+    assert config["tenantId"] == TENANT_ID
+    assert config["account"] == account
     assert config["agent"]["botId"] == AGENT_ID
 
     canonical_state = _setup_state(tmp_path)
     setup_state = _agent_setup_state(tmp_path)
     assert canonical_state["schema_version"] == 4
     assert canonical_state["environment"]["id"] == ENVIRONMENT_ID
+    assert canonical_state["environment"]["account"] == account
     assert setup_state["authoring_ready"] is False
     assert setup_state["connect_ready"] is False
     assert setup_state["active_step"] == "SETUP-02.1"
@@ -2343,6 +2531,7 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
         "list-environments",
         "list-agents",
         "maintain-flightcheck",
+        "resolve-target",
         "select-agent",
         "sync-authoring-readiness",
         "validate-agent",
@@ -2379,7 +2568,11 @@ def test_list_environments_emits_visible_non_dataverse_targets(
     monkeypatch.setattr(
         setup_existing_da,
         "_authentication_from_args",
-        lambda _args, _ring: ("token", TENANT_ID),
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
     )
     monkeypatch.setattr(
         setup_existing_da,
@@ -2420,6 +2613,7 @@ def test_list_environments_emits_visible_non_dataverse_targets(
     assert result == {
         "tenantId": TENANT_ID,
         "ring": "test",
+        "account": "test.user@example.test",
         "evidencePath": str(evidence_path.resolve()),
         "environments": [
             {
@@ -2456,7 +2650,11 @@ def test_list_environments_preserves_empty_result(
     monkeypatch.setattr(
         setup_existing_da,
         "_authentication_from_args",
-        lambda _args, _ring: ("token", TENANT_ID),
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
     )
     monkeypatch.setattr(
         setup_existing_da,
@@ -2492,7 +2690,11 @@ def test_list_environments_preserves_authorization_failure(
     monkeypatch.setattr(
         setup_existing_da,
         "_authentication_from_args",
-        lambda _args, _ring: ("token", TENANT_ID),
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
     )
     response = SimpleNamespace(
         json=lambda: {"error": {"code": "AuthorizationFailed"}},
@@ -2744,16 +2946,20 @@ def test_authentication_uses_workspace_cache_and_account_hint(
         cache_path: Path,
         force_account_selection: bool,
         account_hint: str,
-    ) -> tuple[str, str]:
+            return_account_identity: bool,
+            require_account_identity: bool,
+        ) -> tuple[str, str, str]:
         observed.update(
             {
                 "ring": ring,
                 "cache_path": cache_path,
                 "force_account_selection": force_account_selection,
                 "account_hint": account_hint,
+                "return_account_identity": return_account_identity,
+                "require_account_identity": require_account_identity,
             }
         )
-        return "token", TENANT_ID
+        return "token", TENANT_ID, account_hint
 
     monkeypatch.setattr(
         setup_existing_da,
@@ -2770,12 +2976,15 @@ def test_authentication_uses_workspace_cache_and_account_hint(
     assert setup_existing_da._authentication_from_args(args, "test") == (
         "token",
         TENANT_ID,
+        "test.user@example.test",
     )
     assert observed == {
         "ring": "test",
         "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
         "force_account_selection": False,
         "account_hint": "test.user@example.test",
+        "return_account_identity": True,
+        "require_account_identity": True,
     }
 
 
@@ -2792,7 +3001,9 @@ def test_list_agents_authentication_uses_read_only_inventory_scopes(
         cache_path: Path,
         force_account_selection: bool,
         account_hint: str,
-    ) -> tuple[str, str]:
+            return_account_identity: bool,
+            require_account_identity: bool,
+        ) -> tuple[str, str, str]:
         observed.update(
             {
                 "ring": ring,
@@ -2800,9 +3011,11 @@ def test_list_agents_authentication_uses_read_only_inventory_scopes(
                 "cache_path": cache_path,
                 "force_account_selection": force_account_selection,
                 "account_hint": account_hint,
+                "return_account_identity": return_account_identity,
+                "require_account_identity": require_account_identity,
             }
         )
-        return "token", TENANT_ID
+        return "token", TENANT_ID, account_hint
 
     monkeypatch.setattr(
         setup_existing_da,
@@ -2820,6 +3033,7 @@ def test_list_agents_authentication_uses_read_only_inventory_scopes(
     assert setup_existing_da._authentication_from_args(args, "test") == (
         "token",
         TENANT_ID,
+        "test.user@example.test",
     )
     assert observed == {
         "ring": "test",
@@ -2827,7 +3041,36 @@ def test_list_agents_authentication_uses_read_only_inventory_scopes(
         "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
         "force_account_selection": False,
         "account_hint": "test.user@example.test",
+        "return_account_identity": True,
+        "require_account_identity": True,
     }
+
+
+def test_list_agents_authentication_rejects_unknown_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def authenticate_inventory(*_args, **_kwargs):
+        return "token", TENANT_ID, None
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "authenticate_agent_inventory",
+        authenticate_inventory,
+    )
+    args = SimpleNamespace(
+        command="list-agents",
+        tenant_id=TENANT_ID,
+        select_account=False,
+        account=None,
+        kit_root=tmp_path,
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="could not verify the selected Microsoft account",
+    ):
+        setup_existing_da._authentication_from_args(args, "test")
 
 
 def test_cached_accounts_command_reads_workspace_cache(

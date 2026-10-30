@@ -6,6 +6,29 @@ Use this shared path to resolve the Power Platform environment for DA foundation
 
 ## Resolve the service ring
 
+When the request supplies target text or a Copilot Studio URL, resolve it
+before the first account selection, authentication, or environment listing:
+
+```text
+python scripts/setup_existing_da.py resolve-target \
+  --target-url "{SUPPLIED_TARGET}"
+```
+
+Parse `DA_TARGET_JSON:` and retain its exact `environmentId`, `agentId`,
+`source`, `ring`, and `ringSource`. This command is local-only and does not
+authenticate. An environment-only URL is valid; require an agent only in the
+later direct-agent branch.
+
+- For `ringSource: recognized-target` or `ringSource: explicit`, use its
+  `ring` in every later command.
+- For `ringSource: legacy-default`, the returned `prod` value preserves CLI
+  compatibility but is not confirmed ring evidence. Show the standard ring
+  picker below, then rerun `resolve-target` with the selected
+  `--ring "{RING}"` before authentication.
+
+Do not construct `--ring` from a hostname word, and never pass `preview` as a
+service ring; the supported API rings are `prod`, `preprod`, and `test`.
+
 Treat a recognized Copilot Studio hostname as authoritative ring evidence that completes ring selection. Map `copilotstudio.microsoft.com` and `copilotstudio.preview.microsoft.com` to `prod`, and infer `test` or `preprod` when the supplied URL explicitly identifies either ring. Whenever the current request and supplied target do not identify a ring, render this exact decision surface:
 
 > Which Power Platform service ring should setup use?

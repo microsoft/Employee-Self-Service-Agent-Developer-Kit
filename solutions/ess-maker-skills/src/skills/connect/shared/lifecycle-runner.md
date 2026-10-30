@@ -13,11 +13,80 @@ Do not rephrase, add commentary, or tell the user what tools you are calling
 or what files you are reading. Never surface a checkpoint ID, phase ID, file
 path, or the word "checkpoint"/"contract"/"state file" to the user.
 
+**Visible ServiceNow handoff style:** Render one task per question with real
+blank lines and markdown-friendly bullets. Put literal bold headings on their
+own lines and separate sections with two newlines, for example
+`**Purpose**\n...\n\n**Owner**\n...\n\n**Action**\n1. ...`.
+Use numbered or bulleted lines under Action so renderers cannot collapse the
+question into one paragraph. Say exactly what value or choice the user must
+provide. Show only current missing work; do not repeat passed steps or
+internal IDs/status machinery. Prefer buttons with no recommended,
+preselected, default, or automatic answer.
+Freeform is allowed only for one genuinely unknown value: the public
+ServiceNow instance URL, employee portal URL, or an unknown/replaced Entra
+Application client ID. Never combine multiple values in one blank field.
+Detailed technical navigation belongs in the linked administrator guide or
+workbook Steps page, while the question names the result to return.
+
 **Inputs from the calling file:**
 - `PROVIDER` — the provider key (e.g. `"workday"`), matching a contract at
   `src/skills/connect/{PROVIDER}/contract.json`.
-- `AGENT_SLUG` — the active agent's slug from `.local/config.json`
-  (`activeAgent`, falling back to `agent.slug`).
+- `AGENT_SLUG` — the exact caller-selected agent slug. Existing callers may
+  pass the active agent slug, while a chooser may select another locally
+  configured agent without changing `.local/config.json.activeAgent`.
+
+**ServiceNow phase-progress extension:** ServiceNow callers receive a
+`servicenow.phase-progress.v1` object inside the mandatory `resume-handoff`.
+This is display metadata derived from the same contract, lifecycle state, and
+invocation-local executed/verified markers; it adds no remote read, polling,
+or progress process. Each item retains its internal contract `label` for
+validation and supplies a short `customerLabel` for every visible checklist.
+Other providers retain this runner's existing output.
+
+After plan acceptance, show its short headline once and its current phase
+checklist. Re-emit the freshly returned checklist only on an actual phase
+completion/next-phase transition, waiting pause, or blocked/error transition.
+A cached `done` phase displays **Rechecking** until this invocation adds its
+verified marker. Before each meaningful action or checkpoint run, show the
+exact current-phase `startText`. After `applied`/`recorded`, show
+`actionFinishedText` and continue checking; an action receipt is never phase
+completion. When an action asks a question, prepend the exact `questionText`
+to the durable question body; it contains the latest checklist with the
+current phase marked waiting. Use `waitingText` for the pause. This does not
+add a question. For a failure, show `errorChecklistText`,
+`needsAttentionText`, and the exact full remediation returned by the
+checkpoint. For ServiceNow, that remediation is the branch-loaded recovery
+handoff: problem, category, owner, exact location, values, action, success
+condition, and local recheck/resume point. Render it in full in the same
+visible turn; do not summarize it into the generic stop message.
+
+**ServiceNow preflight pending input:** When the preflight provider action
+returns `instanceInputRequired: true`, show its exact `instanceQuestion` and
+stop with `ACTION_RESULT = "waiting"` before running the preflight checkpoint.
+This is normal Maker target confirmation, not a blocking checkpoint result.
+Do not render the checkpoint's `NotConfigured` recovery handoff around or
+before this question. If the Maker chooses **Provide another ServiceNow
+instance URL**, show the exact returned `manualInstanceQuestion` once. A real
+discovery error remains embedded in those questions; it does not convert an
+empty or failed discovery into success.
+
+The ServiceNow provider `resume-handoff` also enforces this boundary. If it
+returns top-level `pendingInput`, show `pendingInput.question` exactly and stop
+without running or reconstructing a checkpoint command. Use
+`pendingInput.choiceValues` to translate a selected option. Only
+`pendingInput.manualQuestion` may be shown after **Provide another ServiceNow
+instance URL**. This barrier covers first-run and historical `NotConfigured`
+state so normal unanswered Maker input is never rendered as an eight-section
+configuration failure.
+
+Only a verified phase may display **Complete — checked**,
+**Complete — admin confirmed**, or **Reused — checked**. Waiting remains
+waiting; Test requires the actual maker result, and any contract-defined
+interactive mutation requires its actual maker choice and validation. Show
+`finalText` only when the controller
+returns complete and every contract phase has a current invocation verified
+marker. Keep these updates short: one current step and one result update, not
+per-subrequest heartbeats or repeated full tables.
 
 **Files:**
 - **Contract (read-only):** `src/skills/connect/{PROVIDER}/contract.json`
@@ -34,8 +103,9 @@ Read `src/skills/connect/{PROVIDER}/contract.json`. If it does not exist,
 
 Resolve `contractRevision` as the positive integer in the contract, defaulting
 to `1`. If the canonical state file already exists and the contract has
-`stateMigrationCommand`, run that exact checked-in command before reading the
-state. A migration failure is blocking; do not discard or recreate the state.
+`stateMigrationCommand`, replace `{agentSlug}` with the exact `AGENT_SLUG`,
+then run that exact checked-in command before reading the state. A migration
+failure is blocking; do not discard or recreate the state.
 Do not run a migration command on a first run, because the plan must be
 accepted before the initial state file is written.
 
@@ -54,6 +124,11 @@ and `attested` as false. If the contract has `stateInitializationCommand`,
 the provider owns the complete canonical initial state; do not construct or
 persist a generic substitute. Providers without that command retain the
 generic first-run state described in L.1.
+
+Track this distinction explicitly as `stateExists: false` /
+`planReason: "first-run"` for an absent state and `stateExists: true` for an
+existing state. A contract-revision mismatch on an existing attested state is
+`planReason: "revision-reapproval"`, never a first run.
 
 If existing state identifies a different provider or agent slug, stop instead
 of reusing it. Never copy plan or role attestation across provider/agent
@@ -74,6 +149,12 @@ Initialize an invocation-local empty set named `executedActionPhases`. Add a
 phase ID after its action returns `applied` or `recorded`; this prevents an
 `every-invocation` action from running twice during L.2 and L.4 of the same
 invocation.
+
+Initialize a second invocation-local empty set named `verifiedPhases`. This set
+records only phases whose current live checkpoint results satisfied their
+completion statuses and acknowledgement requirements during this invocation.
+Never initialize it from persisted `lastVerifiedAt`, `status: done`, or any
+earlier invocation.
 
 ---
 
@@ -106,7 +187,7 @@ Use the `vscode_askQuestions` tool with this rendered payload:
     "header": "Start connection",
     "question": "Here's what I'll do to connect this agent to {displayName}:\n\n{numbered list of every phase label, in contract order}\n\nAccess needed: {comma-separated required and display-only plan roles}.\n\nI'll check as I go and stop to explain anything that needs attention.\n\nReady to start?",
     "options": [
-      { "label": "Yes, let's go", "recommended": true },
+      { "label": "Yes, let's go" },
       { "label": "Not now" }
     ],
     "allowFreeformInput": false
@@ -124,14 +205,15 @@ for the complete question body.
 contract-revision re-attestation, preserve the existing state unchanged. The
 next invocation should show this same plan again.
 
-**If "Yes, let's go" on a first run:** If the contract has
-`stateInitializationCommand`, replace `{contractRevision}` in that exact
-checked-in command and run it now. Require exit code `0` and a structured
-success result. Then read the canonical state file and verify its provider,
-profile when present, agent slug, agent ID and environment ID when present,
-`attested: true`, and exact `acceptedContractRevision`. Verify every contract
-phase exists at `status: "pending"` with empty checkpoint results. Any command
-failure, missing file, malformed schema, identity mismatch, missing phase, or
+**If "Yes, let's go" on a first run (`stateExists: false`):** If the contract has
+`stateInitializationCommand`, replace `{contractRevision}` and `{agentSlug}`
+in that exact checked-in command and run it now. Require exit code `0` and a
+structured `status: "initialized"` success result. Then read the canonical
+state file and verify its provider, profile when present, agent slug, agent ID
+and environment ID when present, `attested: true`, and exact
+`acceptedContractRevision`. Verify every contract phase exists at
+`status: "pending"` with empty checkpoint results. Any command failure,
+missing file, malformed schema, identity mismatch, missing phase, or
 non-pending phase blocks the lifecycle; never write a generic fallback and
 never silently repair an existing file.
 
@@ -146,6 +228,16 @@ every phase at `status: "pending"` with empty checkpoint results.
 initialized in L.0. Do not reset or delete existing phase status, action
 receipts, evidence, transactions, role attestations, or provider-owned admin
 progress.
+
+This path has `stateExists: true`,
+`planReason: "revision-reapproval"`, and
+`stateInitializationRequired: false`. Do **not** run
+`stateInitializationCommand` after this update. If a host redundantly invokes
+the provider's `initialize-state` command anyway, only a typed
+`status: "existing-compatible-state"` result for the exact provider/profile/
+agent/environment/ring, attested state, and accepted current revision is a
+safe no-op. It must preserve the state byte-for-byte. Any other existing-state
+result is blocking.
 
 Continue to L.2. Accepting the plan does not claim a
 role; the first required role gate remains explicit.
@@ -182,7 +274,8 @@ For every phase in that contiguous `done` prefix:
 3. If every checkpoint still resolves to a status allowed by that phase's
    `completionStatuses`, and every `Manual`/`Warning` result has a matching
    persisted `checkpointAcknowledgements` entry for that checkpoint and
-   status, update `lastVerifiedAt` and leave the phase `done`. For an
+   status,    update `lastVerifiedAt`, add the phase ID to `verifiedPhases`, and leave the
+   phase `done`. For an
    acknowledgement whose source is `matching-action-evidence`, also re-resolve
    the configured safe evidence path and require the current evidence kind and
    `recordedAt` to equal the acknowledgement provenance. If they differ or the
@@ -202,10 +295,16 @@ For every phase in that contiguous `done` prefix:
    so a `"once"` action can run again through a fresh gate
    and fresh rollback checkpoint. A rollback checkpoint from an earlier
    invocation must never be reused after drift.
+   Remove this phase and every later phase ID from `verifiedPhases` and
+   `executedActionPhases`. A marker is invocation-local routing evidence, not
+   a substitute for the updated persisted state.
 
    - For `Failed`/`Error`, set the phase to `blocked`, persist the current
-     checkpoint results, render the result without executing L.4b rollback,
-     and stop for remediation.
+     checkpoint results, render the result and its exact full remediation
+     without executing L.4b rollback, and stop for remediation. For
+     ServiceNow, a missing structured recovery handoff is an
+     execution-contract error: do not replace it with a generic retry
+     sentence.
    - For every other regression, set the phase to `in-progress`, persist the
      current checkpoint results, and render the result without executing L.4b
      rollback. End the completed-prefix scan and continue to L.3 in this same
@@ -221,11 +320,36 @@ stopped above.
 
 ## L.3 — Find the current phase
 
-Walk the phases in contract order. The **current phase** is the first one
-whose `status` is not `done`.
+Run the executable decision controller before choosing an action or checkpoint:
 
-- If every phase is `done`: go to L.5 (completion).
-- Otherwise: set `currentPhase` to that phase's `id` and continue to L.4.
+```text
+python scripts/connect_lifecycle.py next-step \
+  --provider "{PROVIDER}" \
+  --agent-slug "{AGENT_SLUG}" \
+  {one --executed-action "{PHASE_ID}" argument for every phase in executedActionPhases} \
+  {one --verified-phase "{PHASE_ID}" argument for every phase in verifiedPhases}
+```
+
+Parse exactly one `DA_LIFECYCLE_NEXT_JSON:` object. It is the required
+execution boundary, not optional diagnostics. Validate its schema version,
+provider, agent slug, contract revision and phase identity against the loaded
+contract/state. A command failure, malformed result or identity mismatch
+blocks the lifecycle. Do not fall back to interpreting
+`resumeActionWhenIncomplete`, `actionApplied` or phase status yourself.
+
+Controller decisions:
+
+- `plan-required` — return to L.1. Read `stateExists`, `planReason`,
+  `stateInitializationRequired`, and `stateInitializationCommand`; never infer
+  first-run initialization when `stateExists` is true.
+- `complete` — go to L.5.
+- `run-action` — set `currentPhase` from the result and continue to L.4a. Read
+  only the exact returned `actionDoc`.
+- `run-checkpoints` — set `currentPhase` from the result and continue directly
+  to L.4b.
+
+After an action or checkpoint updates state and returns to L.3, rerun the
+controller. Never reuse a prior decision after state changed.
 
 ---
 
@@ -233,11 +357,26 @@ whose `status` is not `done`.
 
 ### L.4a — Run the provider action
 
-If the current phase has an `actionDoc`, execute it when:
+The controller has already decided that this action must execute. Do not
+re-evaluate or override its decision from prose. The following rules define
+how to execute the returned action safely:
 
 - `actionExecution` is `"every-invocation"` and this phase's action has not
   run during this invocation; or
-- `actionExecution` is omitted/`"once"` and `actionApplied` is not yet `true`.
+- `actionExecution` is omitted/`"once"` and `actionApplied` is not yet `true`;
+  or
+- `actionExecution` is omitted/`"once"`,
+  `resumeActionWhenIncomplete` is `true`, the phase status is not `done`, and
+  this phase's action has not run during this invocation.
+
+For `resumeActionWhenIncomplete`, the earlier `actionApplied`, `lastActionAt`,
+transactions, rollback receipts, and provider evidence are historical facts,
+not authorization for the newly observed state. Preserve them while the
+provider action performs fresh read-only inspection. The action must expose
+the current actionable state and obtain a new maker choice before another
+mutation. It may return `applied` as a verified no-op when fresh inspection
+shows the target already satisfied. Never automatically replay the prior
+mutation or infer the old maker choice applies to newly discovered resources.
 
 For a phase with `mutates: true`, resolve its `gateMode` (default
 `"attested"`).
@@ -299,6 +438,23 @@ asking one completion question. It must not persist or ask separate questions
 for checklist items inside that phase. On resume, accept the one phase return,
 run the phase's complete verification set, and only then advance.
 
+The ServiceNow Entra action has one bounded pre-handoff exception when its
+producer returns `handoffMode: identity-requirement`: show that routing-only
+Maker question before any workbook exists. Its options identify only the
+intended user identifier type; they are not `Completed`/`Not yet` admin
+evidence. Pass the returned question to the question tool unchanged: its
+options are label-only. Use the separate `identityRequirementChoices`
+envelope mapping to translate the selected label to the recorder's CLI choice;
+never add `value` or another unsupported option field. A specific answer may
+persist only the scoped routing intent, then
+the caller reruns the producer and shows the normal one-workbook admin
+completion question. `Not sure` returns waiting, writes no receipt, and
+generates no workbook. This clarification must not set `actionApplied`, mark
+the phase done, confirm claim emission, or replace the later admin completion
+question. Once a valid scoped requirement receipt exists, do not ask the
+routing question again. Never dereference a missing `workbookPath` from the
+routing response.
+
 For every interactive provider action, the question tool body is the durable
 visible handoff. Read the action document's
 `<!-- visible-handoff-question:v1 -->` JSON payload, render its placeholders,
@@ -340,33 +496,51 @@ applies only when the action genuinely needs a new interactive pause.
   file immediately. This does not complete the phase; continue to its
   checkpoints.
 - **`"waiting"`** — a delegated administrator operation or interactive
-  question is still pending. Keep `actionApplied = false`, leave the phase
+  question is still pending. For a normal first action, keep
+  `actionApplied = false`. For a `resumeActionWhenIncomplete` re-entry,
+  preserve the historical `actionApplied`, `lastActionAt`, transaction, and
+  rollback receipts because no new action completed. Leave the phase
   `in-progress`, preserve all provider-owned question, discovery, decision,
   and operation evidence exactly, write the state file, and stop. This is a
   resumable pause, not cancellation, failure, or completion. An unanswered
   question remains pending and is not cancellation.
 - **`"cancelled"`** — the user declined before mutation. Keep
-  `actionApplied = false`, remove `lastActionAt` and `rollbackPushGlob`, leave
-  the phase `in-progress`, write the state file, and stop. Do not run the phase
+  `actionApplied = false` and remove `lastActionAt` and `rollbackPushGlob` for
+  a normal first action. For a `resumeActionWhenIncomplete` re-entry, preserve
+  those historical fields and all prior transactions. Leave the phase
+  `in-progress`, write the state file, and stop. Do not run the phase
   checkpoints.
 
-Any missing, unknown, or failure result is not success: keep
-`actionApplied = false`, remove `lastActionAt` and `rollbackPushGlob`, report
-the action failure, write the state file, and stop.
+Any missing, unknown, or failure result is not success. For a normal first
+action, keep `actionApplied = false` and remove `lastActionAt` and
+`rollbackPushGlob`. For a `resumeActionWhenIncomplete` re-entry, preserve the
+historical fields and prior transactions because they describe the earlier
+attempt, not the failed new inspection/choice. Report the action failure,
+write the state file, and stop.
+
+Any gate stop, cancellation, waiting result, action failure, rollback or
+checkpoint failure must not add the phase to `verifiedPhases`. When it
+invalidates current/later phase state, remove the current and later phase IDs
+from both invocation-local marker sets before stopping or returning to L.3.
 
 ### L.4b — Run the phase's checkpoints
 
 For each checkpoint target the current phase lists, run:
 
 ```
-python scripts/flightcheck/cli.py --checkpoint {TARGET}
+python scripts/flightcheck/cli.py --checkpoint {TARGET} \
+  --agent-slug "{AGENT_SLUG}"
 ```
 
 If the contract sets `checkpointResultMode: "compact-stdout-v1"`, generate a
 new opaque `CHECKPOINT_INVOCATION_ID` for this command and instead run:
 
 ```
-python scripts/flightcheck/cli.py --checkpoint {TARGET} --compact-result --invocation-id "{CHECKPOINT_INVOCATION_ID}" --quiet-auth
+python scripts/flightcheck/cli.py --checkpoint {TARGET} \
+  --compact-result \
+  --invocation-id "{CHECKPOINT_INVOCATION_ID}" \
+  --quiet-auth \
+  --agent-slug "{AGENT_SLUG}"
 ```
 
 Capture stdout exactly. It must contain one JSON object and no surrounding
@@ -391,11 +565,17 @@ state:
   roles, bounded evidence, severity, automation type, and remediation ID;
 - statuses are known FlightCheck statuses, `overall` agrees with the rows, and
   `exitCode` is 1 exactly when a row is `Failed`, `Blocked`, or `Error`.
+  `NotConfigured` and `Skipped` are evaluated, bounded non-ready results:
+  their contract has `overall: "NOT_READY"` with `exitCode: 0`, preserves the
+  target row and remediation, and is consumed by the normal phase-status
+  rules below. They are not client, identity, execution, or contract errors.
 
 Malformed, truncated, empty, extra-text, unsupported-version, wrong-target,
 wrong-identity, wrong-invocation, zero-row, or internally inconsistent output
 blocks the phase. Report the typed stderr/`checkpoint-error` condition; never
 invent a success-shaped default and never fall back to an older result file.
+Missing/failed required clients and a missing target row remain blocking
+contract errors. Do not convert them into `NotConfigured` or `Skipped`.
 This compact path writes no per-step `results.json`, history HTML, or latest
 HTML. Render the validated rows directly with the same U.0/U.0a content and
 status rules below. The contract must never contain tokens, raw prompts,
@@ -410,6 +590,14 @@ consume and render every matching emitted row, and persist each result under
 its actual checkpoint ID. Do not invoke family members again as separate
 processes. A family that emits zero matching rows blocks the phase.
 
+For ServiceNow, the provider `resume-handoff` returns the complete exact
+checkpoint `argv`, invocation marker, selected agent slug, and expected
+provider/profile/agent/environment identity. Execute that argv verbatim and
+validate the returned compact identity; never reconstruct it from
+`activeAgent` or prose. A compact ServiceNow command without
+`--agent-slug "{AGENT_SLUG}"` is an execution-contract error and must stop
+before authentication or API reads.
+
 If the contract has `connectConfig` and that file exists, add
 `--connect-config "{connectConfig}"`. For agent-local checkpoints or profiles,
 also add `--agent-slug "{AGENT_SLUG}"`. Use the same target and arguments when
@@ -420,6 +608,16 @@ After each run, render the result using the exact U.0 and U.0a routines from
 sections and apply them verbatim against the validated compact rows, or against
 `workspace/flightcheck/results.json` for a provider using the legacy transport
 — do not re-implement or paraphrase that rendering logic here).
+
+For every non-completing ServiceNow row with status `Blocked`, `Error`,
+`Failed`, `NotConfigured`, or `Warning`, require the returned remediation to
+contain these literal headings: `**Problem**`, `**Category**`, `**Owner**`,
+`**Where**`, `**Values to use**`, `**Action**`, `**Success**`, and
+`**Recheck and resume**`. Render the whole remediation in the same visible
+row or question. If a heading is absent, stop as an execution-contract error
+rather than showing an incomplete generic handoff. This validation applies
+equally on first execution, completed-phase re-verification, and resume.
+Other providers retain their existing remediation format.
 
 Aggregate the phase's outcome using the phase's `completionStatuses`
 (default `["Passed"]`) and the status rules in
@@ -460,9 +658,12 @@ Aggregate the phase's outcome using the phase's `completionStatuses`
   `Manual`/`Warning` result, also record
   `checkpointAcknowledgements.{checkpointId} = {status, acknowledgedAt}`.
   Remove an old acknowledgement when that checkpoint now returns a different
-  status. Write the state file. Return to L.3 to advance to the next phase.
+  status. Add the current phase ID to `verifiedPhases`. Write the state file.
+  Return to L.3 to advance to the next phase, passing the updated marker set.
 - **Any checkpoint `Failed`/`Error`:** set `phases.{id}.status = "blocked"`,
   record `checkpointResults`. Write the state file.
+  Do not add it to `verifiedPhases`; remove this and later phase IDs from both
+  invocation-local marker sets.
 
   If this phase has `actionApplied: true` and `rollbackLabel`, resolve
   `{ROLLBACK_PUSH_GLOB}` from `phases.{id}.rollbackPushGlob` when
@@ -486,9 +687,10 @@ Aggregate the phase's outcome using the phase's `completionStatuses`
 
   **Message:**
 
-  I can't complete this step yet — {plain-language summary of what's
-  blocking it, drawn from the remediation text already shown above}. Fix
-  that, then tell me to continue and I'll pick up right here.
+  I can't complete this step yet. The recovery handoff above identifies the
+  owner, exact location, values, success condition, and the current-step
+  recheck. Complete that handoff, then tell me to continue and I'll resume at
+  this step.
 
   **End message.**
 
@@ -496,7 +698,8 @@ Aggregate the phase's outcome using the phase's `completionStatuses`
 
 - **Any status not in `completionStatuses`:** keep the phase
   `in-progress`, record the result, show its remediation, and stop. Do not
-  describe the provider as connected.
+  add it to `verifiedPhases`; remove this and later phase IDs from both
+  invocation-local marker sets. Do not describe the provider as connected.
 
 ---
 

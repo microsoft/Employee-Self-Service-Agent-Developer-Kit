@@ -21,7 +21,7 @@ handoff payload after rendering `{CURRENT_PROGRESS}`,
     "header": "Connect ServiceNow to agent",
     "question": "{CURRENT_PROGRESS}\n\nPurpose: bind the selected current ServiceNow credential to this exact HR agent.\n\nOwner: ESS Maker / Agent Developer in Copilot Studio.\n\nOpen Employee Self-Service (HR): {COPILOT_STUDIO_AGENT_URL}\n\nIn this exact agent:\n1. Open Settings -> Connection settings.\n2. Find the ServiceNow row.\n3. Select Connect.\n4. Choose the selected credential `{CONNECTION_DISPLAY_NAME}` (`{CONNECTION_ID}`).\n5. Save and confirm the ServiceNow row currently shows Connected.\n\nDo not substitute the UI `user-connections` endpoint, browser tokens, or a MinimalBot reference update.\n\nDoes the ServiceNow row currently show Connected with this selected credential?",
     "options": [
-      { "label": "Yes, Connected", "recommended": true },
+      { "label": "Yes, Connected" },
       { "label": "Not yet" }
     ],
     "allowFreeformInput": false
@@ -32,7 +32,7 @@ handoff payload after rendering `{CURRENT_PROGRESS}`,
 After explicit confirmation run:
 
 ```text
-python scripts/connect_servicenow_da.py record-agent-connection --connection-id <id>
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-agent-connection --connection-id <id>
 ```
 
 Do not call the UI `user-connections` endpoint, reuse browser tokens, or use a

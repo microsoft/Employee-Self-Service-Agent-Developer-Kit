@@ -503,6 +503,7 @@ def _acquire_token(
     scopes: tuple[str, ...] | None = None,
     emit_account_identity: bool = True,
     return_account_identity: bool = False,
+    require_account_identity: bool = False,
 ) -> str | tuple[str, str | None]:
     cache = _load_token_cache(cache_path)
     app = msal.PublicClientApplication(
@@ -551,12 +552,24 @@ def _acquire_token(
         raise AgentBuilderError(
             f"AgentBuilder authentication failed ({error}){detail}"
         )
-    if cache.has_state_changed:
-        _persist_token_cache(cache, cache_path)
     account_name = _authenticated_account_name(
         result,
         selected_account,
     )
+    if account_hint or require_account_identity:
+        if not account_name:
+            raise AgentBuilderError(
+                "AgentBuilder authentication could not verify the actual "
+                "signed-in account identity."
+            )
+    if account_hint:
+        if account_name.casefold() != account_hint.strip().casefold():
+            raise AgentBuilderError(
+                "AgentBuilder authenticated a different account than the "
+                "requested setup account."
+            )
+    if cache.has_state_changed:
+        _persist_token_cache(cache, cache_path)
     if account_name and emit_account_identity:
         print(
             "DA_AGENTBUILDER_AUTH_JSON:"
@@ -575,7 +588,9 @@ def authenticate(
     force_account_selection: bool = False,
     account_hint: str | None = None,
     scopes: tuple[str, ...] | None = None,
-) -> str:
+    return_account_identity: bool = False,
+    require_account_identity: bool = False,
+) -> str | tuple[str, str | None]:
     """Acquire an ESS ADK delegated token without contacting Dataverse."""
     try:
         normalized_tenant = str(uuid.UUID(tenant_id))
@@ -589,6 +604,8 @@ def authenticate(
         force_account_selection=force_account_selection,
         account_hint=account_hint,
         scopes=scopes,
+        return_account_identity=return_account_identity,
+        require_account_identity=require_account_identity,
     )
 
 
@@ -598,15 +615,23 @@ def authenticate_selected_tenant(
     cache_path: Path = DEFAULT_TOKEN_CACHE,
     force_account_selection: bool = False,
     account_hint: str | None = None,
-) -> tuple[str, str]:
+    return_account_identity: bool = False,
+    require_account_identity: bool = False,
+) -> tuple[str, str] | tuple[str, str, str | None]:
     """Reuse or select an account and return its token and tenant."""
-    token = _acquire_token(
+    acquired = _acquire_token(
         authority="https://login.microsoftonline.com/organizations",
         ring=ring,
         cache_path=cache_path,
         force_account_selection=force_account_selection,
         account_hint=account_hint,
+        return_account_identity=return_account_identity,
+        require_account_identity=require_account_identity,
     )
+    if return_account_identity:
+        token, account_name = acquired
+        return token, tenant_id_from_access_token(token), account_name
+    token = acquired
     return token, tenant_id_from_access_token(token)
 
 
@@ -617,7 +642,9 @@ def authenticate_agent_inventory(
     cache_path: Path = DEFAULT_TOKEN_CACHE,
     force_account_selection: bool = False,
     account_hint: str | None = None,
-) -> tuple[str, str]:
+    return_account_identity: bool = False,
+    require_account_identity: bool = False,
+) -> tuple[str, str] | tuple[str, str, str | None]:
     """Acquire read-only scopes for agent collection and direct inspection."""
     if tenant_id:
         try:
@@ -628,14 +655,24 @@ def authenticate_agent_inventory(
     else:
         normalized_tenant = None
         authority = "https://login.microsoftonline.com/organizations"
-    token = _acquire_token(
+    acquired = _acquire_token(
         authority=authority,
         ring=ring,
         cache_path=cache_path,
         force_account_selection=force_account_selection,
         account_hint=account_hint,
         scopes=agent_inventory_read_scopes(ring),
+        return_account_identity=return_account_identity,
+        require_account_identity=require_account_identity,
     )
+    if return_account_identity:
+        token, account_name = acquired
+        return (
+            token,
+            normalized_tenant or tenant_id_from_access_token(token),
+            account_name,
+        )
+    token = acquired
     return token, normalized_tenant or tenant_id_from_access_token(token)
 
 

@@ -74,6 +74,14 @@ def _validate_payload(
     return question
 
 
+def _visible_prose_budget(text: str) -> tuple[int, int]:
+    without_links = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    without_literals = re.sub(r"`[^`]+`", "", without_links)
+    words = re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", without_literals)
+    lines = [line for line in text.splitlines() if line.strip()]
+    return len(words), len(lines)
+
+
 @pytest.mark.parametrize(
     ("path", "required_phrases"),
     [
@@ -89,10 +97,13 @@ def _validate_payload(
         (
             _ACTIONS / "admin-preflight.md",
             (
-                "Purpose:",
-                "Owner:",
-                "Current discovery:",
-                "public ServiceNow HTTPS instance URL",
+                "For {AGENT_DISPLAY_NAME}",
+                "`https://dev184242.service-now.com`",
+                "ask your ServiceNow administrator",
+                "public ServiceNow HTTPS root URL",
+                "portal or module path",
+                "password",
+                "token",
             ),
         ),
         (
@@ -101,29 +112,9 @@ def _validate_payload(
                 "Purpose:",
                 "Owner:",
                 "{HR_CORE_PLUGIN_URL}",
-                "Plugin ID: `com.sn_hr_core`",
-                "Scope: `sn_hr_core`",
-            ),
-        ),
-        (
-            _ACTIONS / "guide-servicenow-oidc.md",
-            (
-                "Purpose:",
-                "Owner:",
-                "{SERVICENOW_INSTANCE_URL}",
-                "Complete or re-verify all seven operations:",
-                "1. Elevate to `security_admin`",
-                "2. Open All -> System OAuth",
-                "3. Select `Configure an OIDC provider",
-                "4. Create or reuse `Microsoft Entra ID - ESS Copilot`",
-                "metadata URL is already used",
-                "do not assume a universal one-provider limit",
-                "Do not duplicate the same metadata",
-                "STOP, choose Not yet, and do not attest Completed",
-                "5. Set metadata URL",
-                "6. Set the verified User Claim/User Field mapping",
-                "7. Confirm one real signed-in test user",
-                "Have you completed or re-verified",
+                "Plugin id: `com.sn_hr_core`",
+                "Version Details: `Installed`",
+                "installed and ready for you to use",
             ),
         ),
         (
@@ -154,8 +145,8 @@ def _validate_payload(
                 "Owner:",
                 "1. Save the current authored draft",
                 "3. Run exactly: **List my open HR cases**",
-                "Pass only if",
-                "What happened?",
+                "4. Decide whether the ServiceNow functionality worked correctly",
+                "What was the result?",
             ),
         ),
         (
@@ -191,76 +182,98 @@ def test_visible_handoff_payloads_are_supported_and_complete(
         assert "above" not in question["question"].casefold()
 
 
-def test_publish_has_complete_reconcile_and_publish_payloads() -> None:
-    payloads = _payloads(_ACTIONS / "publish-agent.md")
-    assert len(payloads) == 2
-    reconcile = _validate_payload(
-        payloads[0],
-        required_phrases=(
-            "Purpose:",
-            "Owner:",
-            "{COMPONENT_HASH}",
-            "{SERVER_LAST_PUBLISHED_AT}",
-            "never publishes or unpublishes",
-            "still show Published",
-        ),
-    )
-    publish = _validate_payload(
-        payloads[1],
-        required_phrases=(
-            "Purpose:",
-            "Owner:",
-            "{DRAFT_SEMANTIC_HASH}",
-            "{CONNECTION_ID}",
-            "needs_remediation",
-            "Publish this exact tested revision now?",
-        ),
-    )
-    assert "{CURRENT_PROGRESS}" in reconcile["question"]
-    assert "{CURRENT_PROGRESS}" in publish["question"]
+def test_publish_action_is_retired_without_visible_question() -> None:
+    text = (_ACTIONS / "publish-agent.md").read_text(encoding="utf-8")
+    assert "<!-- visible-handoff-question:" not in text
+    assert "This action is retired" in text
+    assert "Do not invoke `publish`" in text
+    assert "historical evidence" in text
 
 
-def test_entra_has_complete_runbook_and_visible_guid_clarification() -> None:
-    payloads = _payloads(_ACTIONS / "guide-entra-registration.md")
-    assert len(payloads) == 2
-    initial = _validate_payload(
-        payloads[0],
-        required_phrases=(
-            "Purpose:",
-            "Owner:",
-            "https://entra.microsoft.com/",
-            "Complete or re-verify all six operations:",
-            "1. In App registrations",
-            "2. In Token configuration",
-            "3. In Expose an API",
-            "4. In Authorized client applications",
-            "5. In API permissions",
-            "6. Grant tenant-wide admin consent",
-            "What is the completed or reused Application (client) ID?",
-        ),
-    )
-    clarification = _validate_payload(
-        payloads[1],
-        required_phrases=(
-            "selected reuse/completion",
-            "did not include",
-            "non-secret client ID GUID",
-            "six verified Entra settings",
-            "What is the existing Application (client) ID?",
-        ),
-    )
-    assert "{CURRENT_PROGRESS}" in initial["question"]
-    assert "{CURRENT_PROGRESS}" not in clarification["question"]
-    assert clarification["allowFreeformInput"] is True
-    source = (
-        _ACTIONS / "guide-entra-registration.md"
-    ).read_text(encoding="utf-8")
-    assert "do not tell them to restart `/connect`" in source
-    assert "does not infer Entra configuration from the physical connection" in source
+def test_servicenow_questions_use_buttons_and_bounded_freeform() -> None:
+    allowed_freeform = {
+        "admin-preflight.md",
+        "configure-portal-url.md",
+    }
+    paths = [
+        _CONNECT / "shared" / "lifecycle-runner.md",
+        *(_CONNECT / "servicenow-da-hrsd" / "actions").glob("*.md"),
+        *(_CONNECT / "servicenow-da-itsm" / "actions").glob("*.md"),
+    ]
+
+    for path in paths:
+        for payload in _payloads(path) if _MARKER.search(
+            path.read_text(encoding="utf-8")
+        ) else []:
+            question = _validate_payload(payload, required_phrases=())
+            assert question["question"].strip().splitlines()[0] != (
+                question["header"]
+            )
+            assert not any(
+                option.get("recommended")
+                for option in question.get("options") or []
+            )
+            if question.get("allowFreeformInput") is True:
+                assert path.name in allowed_freeform
 
 
-def test_credential_has_completed_question_and_bounded_candidate_selector() -> None:
-    payloads = _payloads(_ACTIONS / "prepare-credential.md")
+@pytest.mark.parametrize("provider", ("servicenow-da-hrsd", "servicenow-da-itsm"))
+def test_identity_admin_guides_use_only_executable_stage_questions(
+    provider: str,
+) -> None:
+    actions = _CONNECT / provider / "actions"
+    entra = (actions / "guide-entra-registration.md").read_text(
+        encoding="utf-8"
+    )
+    entra_normalized = " ".join(entra.split())
+    oidc = (actions / "guide-servicenow-oidc.md").read_text(
+        encoding="utf-8"
+    )
+    oidc_normalized = " ".join(oidc.split())
+
+    assert "<!-- visible-handoff-question:" not in entra
+    assert "<!-- visible-handoff-question:" not in oidc
+    assert "{TOKEN_CLAIM_NAME}" not in oidc
+    assert '"label": "Completed"' not in oidc
+    assert "question itself must contain all seven operations" not in oidc
+    assert "send the returned `question` object unchanged" in entra
+    assert "identity-mapping-handoff --stage entra" in entra
+    assert "instructionTitle`, `instruction`, and one short" in entra
+    assert "`allowFreeformInput: true`" in entra
+    assert (
+        "`Please enter the returned Entra admin handoff workbook URL.`"
+        in entra
+    )
+    assert "generated workbook link" in entra
+    assert "not the returned answer" in entra_normalized
+    assert "successful validation and import are still\nrequired" in entra
+    assert "missing actual claim\nnames" in entra
+    assert "There is no separate client-ID question" in entra
+    assert "Before the single visible handoff, run:" in oidc
+    assert "identity-mapping-handoff --stage servicenow" in oidc
+    assert "Render the exact returned `instructionTitle` and `instruction`" in (
+        oidc
+    )
+    assert "`allowFreeformInput: true`" in oidc
+    assert (
+        "`Please enter the returned ServiceNow admin handoff workbook URL.`"
+        in oidc
+    )
+    assert "they are not the returned answer" in oidc_normalized
+    assert "Import only the exact local path returned by the question" in oidc
+    assert "record-identity-mapping" in entra
+    assert "record-identity-mapping" in oidc
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ("servicenow-da-hrsd", "servicenow-da-itsm"),
+)
+def test_credential_has_completed_question_and_bounded_candidate_selector(
+    provider: str,
+) -> None:
+    action = _CONNECT / provider / "actions" / "prepare-credential.md"
+    payloads = _payloads(action)
     assert len(payloads) == 2
     completion = _validate_payload(
         payloads[0],
@@ -270,8 +283,15 @@ def test_credential_has_completed_question_and_bounded_candidate_selector() -> N
             "Expected values:",
             "{POWER_AUTOMATE_CONNECTIONS_URL}",
             "1. If an exact candidate is unhealthy",
-            "2. Only if no exact candidate exists",
+            "2. Only if no usable exact candidate exists",
+            "search box in the upper-right to search `ServiceNow`",
+            "Microsoft-published `ServiceNow` connector using its `+` action",
+            "choose Microsoft Entra ID User Login",
+            "enter the exact Instance Name and Resource URI",
             "3. If sign-in reports `Invalid redirect_uri`",
+            "current maker's own Microsoft account",
+            "do not impersonate that owner",
+            "Never ask for or display passwords",
             "system will freshly discover the connection",
         ),
     )
@@ -293,12 +313,15 @@ def test_credential_has_completed_question_and_bounded_candidate_selector() -> N
     assert completion["allowFreeformInput"] is False
     assert selector["allowFreeformInput"] is False
     assert "{CANDIDATE_LABEL_1}" in json.dumps(selector)
-    source = (_ACTIONS / "prepare-credential.md").read_text(encoding="utf-8")
+    source = action.read_text(encoding="utf-8")
     source_normalized = " ".join(source.split())
     assert "Do not ask the Maker for a connection display name" in source_normalized
     assert "never ask them to copy the key or connection ID" in source_normalized
     assert "This is the only question for that path" in source_normalized
     assert "do not show the **Completed / Not yet**" in source_normalized
+    assert "Never ask for or display a password" in source_normalized
+    assert "another maker owns it" in source_normalized
+    assert "never an observed failed-connection value" in source_normalized
     assert (
         "payload only when an exact connection needs repair or no exact "
         "connection exists"
@@ -306,9 +329,50 @@ def test_credential_has_completed_question_and_bounded_candidate_selector() -> N
     assert "must never run for the multiple-healthy-candidate path" in (
         source_normalized
     )
+    assert source_normalized.index("choose `New connection`") < (
+        source_normalized.index("search box in the upper-right")
+    )
+    assert source_normalized.index("search box in the upper-right") < (
+        source_normalized.index("connector published by **Microsoft**")
+    )
+    assert source_normalized.index("connector published by **Microsoft**") < (
+        source_normalized.index("Choose `Microsoft Entra ID User Login`")
+    )
     assert "build the supported selector options directly from" in (
         source_normalized
     )
+
+
+@pytest.mark.parametrize(
+    ("provider", "prompt"),
+    (
+        ("servicenow-da-hrsd", "List my open HR cases"),
+        ("servicenow-da-itsm", "List my open IT tickets"),
+    ),
+)
+def test_servicenow_test_question_has_only_neutral_pass_choices(
+    provider: str,
+    prompt: str,
+) -> None:
+    payload = _validate_payload(
+        _payloads(
+            _CONNECT / provider / "actions" / "test-connection.md"
+        )[0],
+        required_phrases=(
+            "verify whether ServiceNow functionality works correctly",
+            "{COPILOT_STUDIO_AGENT_URL}",
+            "Save the current authored draft",
+            prompt,
+            "Do not include or return",
+        ),
+    )
+
+    assert [option["label"] for option in payload["options"]] == [
+        "Pass",
+        "Not pass",
+    ]
+    assert not any(option.get("recommended") for option in payload["options"])
+    assert payload["allowFreeformInput"] is False
 
 
 def test_portal_has_url_input_and_manual_fallback_payloads() -> None:

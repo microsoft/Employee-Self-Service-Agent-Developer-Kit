@@ -40,7 +40,7 @@ minimalBots components + ALM API (client ``AGENTBUILDER``). See
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
 from flightcheck.runner import Priority, Role
@@ -53,6 +53,9 @@ from flightcheck.checks.environment import (
 from flightcheck.checks.native_agent import run_native_agent_checks
 from flightcheck.checks.servicenow_da_hrsd import (
     run_servicenow_da_hrsd_checks,
+)
+from flightcheck.checks.servicenow_da_itsm import (
+    run_servicenow_da_itsm_checks,
 )
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
@@ -104,6 +107,7 @@ CATEGORY_ORDER = [
     "Environment",
     "Native Agent",
     "ServiceNow DA HRSD",
+    "ServiceNow DA ITSM",
     "Solution",
     "Authentication",
     "Entra App",
@@ -380,43 +384,13 @@ _SPECS: list[CheckpointSpec] = [
         family_key="SN-DA-HRSD-ENTRA",
     ),
     CheckpointSpec(
-        key="SN-DA-HRSD-ENTRA-PERMISSIONS-001",
-        category_fn=run_servicenow_da_hrsd_checks,
-        category_label="ServiceNow DA HRSD",
-        clients=frozenset({AGENTBUILDER, GRAPH}),
-        requires_config=True,
-        requires_dataverse_endpoint=False,
-        prereqs=("SN-DA-HRSD-ENTRA-PREAUTH-001",),
-        priority=Priority.HIGH.value,
-        roles=(Role.ENTRA_ADMIN.value,),
-        inherit_prereq_clients=False,
-        provider="servicenow-da-hrsd",
-        profile="hrsd",
-        family_key="SN-DA-HRSD-ENTRA",
-    ),
-    CheckpointSpec(
-        key="SN-DA-HRSD-ENTRA-CONSENT-001",
-        category_fn=run_servicenow_da_hrsd_checks,
-        category_label="ServiceNow DA HRSD",
-        clients=frozenset({AGENTBUILDER, GRAPH}),
-        requires_config=True,
-        requires_dataverse_endpoint=False,
-        prereqs=("SN-DA-HRSD-ENTRA-PERMISSIONS-001",),
-        priority=Priority.HIGH.value,
-        roles=(Role.ENTRA_ADMIN.value,),
-        inherit_prereq_clients=False,
-        provider="servicenow-da-hrsd",
-        profile="hrsd",
-        family_key="SN-DA-HRSD-ENTRA",
-    ),
-    CheckpointSpec(
         key="SN-DA-HRSD-OIDC-001",
         category_fn=run_servicenow_da_hrsd_checks,
         category_label="ServiceNow DA HRSD",
         clients=frozenset({AGENTBUILDER}),
         requires_config=True,
         requires_dataverse_endpoint=False,
-        prereqs=("SN-DA-HRSD-ENTRA-CONSENT-001",),
+        prereqs=("SN-DA-HRSD-ENTRA-PREAUTH-001",),
         priority=Priority.HIGH.value,
         roles=(Role.SERVICENOW_ADMIN.value,),
         inherit_prereq_clients=False,
@@ -1024,6 +998,41 @@ _SPECS: list[CheckpointSpec] = [
     ),
 ]
 
+
+def _itsm_specs_from_hrsd() -> list[CheckpointSpec]:
+    specs = []
+    for spec in _SPECS:
+        if not spec.key.startswith("SN-DA-HRSD"):
+            continue
+        if spec.key == "SN-DA-HRSD-PLUGIN-001":
+            continue
+        prereqs = tuple(
+            prereq.replace("SN-DA-HRSD", "SN-DA-ITSM")
+            for prereq in spec.prereqs
+            if prereq != "SN-DA-HRSD-PLUGIN-001"
+        )
+        if spec.key in {"SN-DA-HRSD-ENTRA", "SN-DA-HRSD-ENTRA-APP-001"}:
+            prereqs = ("SN-DA-ITSM-ADMIN-PREFLIGHT-001",)
+        specs.append(
+            replace(
+                spec,
+                key=spec.key.replace("SN-DA-HRSD", "SN-DA-ITSM"),
+                category_fn=run_servicenow_da_itsm_checks,
+                category_label="ServiceNow DA ITSM",
+                prereqs=prereqs,
+                provider="servicenow-da-itsm",
+                profile="itsm",
+                family_key=spec.family_key.replace(
+                    "SN-DA-HRSD",
+                    "SN-DA-ITSM",
+                ),
+            )
+        )
+    return specs
+
+
+_SPECS.extend(_itsm_specs_from_hrsd())
+
 REGISTRY: dict[str, CheckpointSpec] = {spec.key: spec for spec in _SPECS}
 
 
@@ -1191,6 +1200,7 @@ OWNED_PREFIXES: tuple = (
     "TOPIC-TRIGGER",
     "TOPIC-INTEGRATION",
     "SN-DA-HRSD",
+    "SN-DA-ITSM",
 )
 
 

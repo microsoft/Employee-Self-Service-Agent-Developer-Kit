@@ -15,12 +15,12 @@ reverify the exact current connection. A prior result outside
 - **Goal:** automatically reuse one exact healthy Connected
   `entraIDUserLogin` ServiceNow physical connection.
 - **Owner role:** Power Platform Maker/Admin who can create the connection and
-  complete Microsoft Entra sign-in.
+  complete Microsoft Entra sign-in with their own Microsoft account.
 
 Run:
 
 ```text
-python scripts/connect_servicenow_da.py inspect-admin-setup
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} inspect-admin-setup
 ```
 
 Match candidates against the confirmed Instance Name and verified App A
@@ -28,7 +28,7 @@ Application client ID:
 
 - Read `credentialResolution` from `inspect-admin-setup`.
 - If exactly one candidate is healthy and exact, run
-  `python scripts/connect_servicenow_da.py resolve-credential`. It performs a
+  `python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} resolve-credential`. It performs a
   new connector-scoped read and records that connection only if the exact
   healthy match is still unique. Do not ask a completion question.
 - If multiple exact healthy candidates match, use the bounded selector below.
@@ -39,6 +39,10 @@ Application client ID:
   connection and use its `Repair`, `Fix connection`, or sign-in action to
   reauthenticate it. Refetch inventory and require `Connected` plus the exact
   auth mode, Instance Name, and Resource URI before recording it.
+- If the current maker cannot repair an unhealthy candidate because another
+  maker owns it, say so plainly. Do not impersonate the owner or request their
+  credentials; create a separate exact connection only when the current maker
+  is authorized to do so.
 - Only when no exact candidate exists, continue to the new-connection handoff
   below.
 
@@ -49,7 +53,7 @@ user-mapping phase complete.
 When no exact candidate exists, run:
 
 ```text
-python scripts/connect_servicenow_da.py create
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} create
 ```
 
 Show the exact field table from the output:
@@ -75,15 +79,23 @@ Use `links.powerApps.url`; never substitute a production origin for a
 non-production ring.
 
 Then select the exact environment, open `Connections`, and choose
-`New connection`.
+`New connection`. In the connector picker, use the search box in the
+upper-right to search for `ServiceNow`, then select the **ServiceNow**
+connector published by **Microsoft** by choosing its `+` action. Choose
+`Microsoft Entra ID User Login` only after selecting that connector, then enter
+the exact Instance Name and Resource URI shown above and complete sign-in.
 
 Guide the Maker/Admin through Copilot Studio connection creation and Entra
-sign-in. While the completion question is pending, do not return an action
-result. If they are not finished, return `ACTION_RESULT = "waiting"`.
+sign-in with their own Microsoft account. Never ask for or display a password,
+client secret, access or refresh token, PFX, or browser/session artifact.
+While the completion question is pending, do not return an action result. If
+they are not finished, return `ACTION_RESULT = "waiting"`.
 
-Microsoft Entra ID User Login connections are not shareable. This step proves
-only the current Maker's physical connection; do not describe it as a
-tenant-wide or shared credential.
+Microsoft Entra ID User Login connections are not shared across makers. The
+same maker may reuse one exact healthy connection for the other ESS agent in
+the same environment only after the consolidated shared-configuration
+confirmation. This step proves the current maker's physical connection; it
+does not prove another maker can use it and does not prove Entra/OIDC setup.
 
 If sign-in fails with `Invalid redirect_uri`, do not add another normal-flow
 pause. As conditional remediation, copy the popup's `redirect_uri`, URL-decode
@@ -108,7 +120,7 @@ required field values:
 [
   {
     "header": "ServiceNow connection",
-    "question": "{CURRENT_PROGRESS}\n\nPurpose: repair or create one exact healthy Connected Microsoft Entra ID User Login ServiceNow connection when automatic reuse is not currently possible.\n\nOwner: Power Platform Maker/Admin who can repair/create the connection and complete Entra sign-in.\n\nExpected values:\n- Authentication Type: Microsoft Entra ID User Login (`entraIDUserLogin`)\n- Instance Name: `{INSTANCE_NAME}` (name only, not the full URL)\n- Resource URI: `{APP_CLIENT_ID}` (the Application client ID, never `api://`, object ID, or connector app ID)\n\nCurrent exact candidates: {CONNECTION_CANDIDATE_SUMMARY}\n\nWhat to do:\n1. If an exact candidate is unhealthy, open it and use Repair, Fix connection, or sign-in; require Connected plus the exact auth mode, Instance Name, and Resource URI.\n2. Only if no exact candidate exists, open {POWER_AUTOMATE_CONNECTIONS_URL}; fallback {POWER_APPS_URL}; select the exact environment -> Connections -> New connection, enter the expected values, and complete Entra sign-in.\n3. If sign-in reports `Invalid redirect_uri`, URL-decode that exact URI, update the ServiceNow OIDC Application Registry redirect URL, and retry without adding another normal-flow pause.\n\nThis connection is not shareable and proves only the current maker's physical connection. Do not return secrets or connection identifiers.\n\nWhen the row shows Connected, choose Completed. The system will freshly discover the connection, verify the exact environment/auth/Instance Name/Resource URI, and record it automatically.",
+    "question": "{CURRENT_PROGRESS}\n\nPurpose: repair or create one exact healthy Connected Microsoft Entra ID User Login ServiceNow connection when automatic reuse is not currently possible.\n\nOwner: Power Platform Maker/Admin who can repair/create the connection and complete Entra sign-in with their own Microsoft account.\n\nExpected values:\n- Authentication Type: Microsoft Entra ID User Login (`entraIDUserLogin`)\n- Instance Name: `{INSTANCE_NAME}` (name only, not the full URL)\n- Resource URI: `{APP_CLIENT_ID}` (the verified Application client ID, never an observed failed-connection value, `api://`, object ID, or connector app ID)\n\nCurrent exact candidates: {CONNECTION_CANDIDATE_SUMMARY}\n\nWhat to do:\n1. If an exact candidate is unhealthy and the current maker can repair it, open it and use Repair, Fix connection, or sign-in; require Connected plus the exact auth mode, Instance Name, and Resource URI. If another maker owns it and repair is unavailable, do not impersonate that owner or request their credentials.\n2. Only if no usable exact candidate exists and the current maker is authorized to create one, open {POWER_AUTOMATE_CONNECTIONS_URL}; fallback {POWER_APPS_URL}; select the exact environment -> Connections -> New connection -> use the search box in the upper-right to search `ServiceNow` -> select the Microsoft-published `ServiceNow` connector using its `+` action -> choose Microsoft Entra ID User Login -> enter the exact Instance Name and Resource URI -> complete Entra sign-in with the current maker's own Microsoft account.\n3. If sign-in reports `Invalid redirect_uri`, URL-decode that exact URI, update the ServiceNow OIDC Application Registry redirect URL, and retry without adding another normal-flow pause.\n\nThis connection is not shareable and proves only the current maker's physical connection. Never ask for or display passwords, client secrets, tokens, PFX files, browser/session artifacts, or connection identifiers.\n\nWhen the row shows Connected, choose Completed. The system will freshly discover the connection, verify the exact environment/auth/Instance Name/Resource URI, and record it automatically.",
     "options": [
       { "label": "Completed" },
       { "label": "Not yet" }
@@ -121,7 +133,7 @@ required field values:
 After **Completed**, run:
 
 ```text
-python scripts/connect_servicenow_da.py resolve-credential
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} resolve-credential
 ```
 
 The command performs a fresh connector-scoped read:
@@ -166,7 +178,7 @@ Replace the example options with exactly one option per returned candidate.
 Map the selected label to its returned `selectionKey`, then run:
 
 ```text
-python scripts/connect_servicenow_da.py resolve-credential --selection-key <internal-selection-key>
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} resolve-credential --selection-key <internal-selection-key>
 ```
 
 This second command performs another fresh inventory read and records the

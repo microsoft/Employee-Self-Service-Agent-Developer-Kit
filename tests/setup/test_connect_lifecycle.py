@@ -44,6 +44,7 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     runner = (_CONNECT / "shared" / "lifecycle-runner.md").read_text(
         encoding="utf-8"
     )
+    runner_normalized = " ".join(runner.split())
 
     assert "Live re-verification on resume" in runner
     assert "permission-gate.md" in runner
@@ -82,12 +83,67 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert 'acceptedContractRevision' in runner
     assert "Do not run a migration command on a first run" in runner
     assert "stateInitializationCommand" in runner
+    assert "**Visible ServiceNow handoff style:**" in runner
+    assert "separate sections with two newlines" in runner
+    assert "Use numbered or bulleted lines under Action" in runner
+    assert "Prefer buttons with no recommended" in runner
+    assert "Freeform is allowed only for one genuinely unknown value" in runner
+    assert "**ServiceNow phase-progress extension:**" in runner
+    assert "Other providers retain this runner's existing output" in runner
+    assert "show its short headline once" in runner
+    assert "Re-emit the freshly returned checklist" in runner
+    assert "phase checklist once" not in runner
+    assert "cached `done` phase displays **Rechecking**" in runner
+    assert "**Complete — admin confirmed**" in runner
+    assert "**Reused — checked**" in runner
+    assert "an action receipt is never phase\ncompletion" in runner
+    assert "Show\n`finalText` only when the controller" in runner
+    assert '`planReason: "revision-reapproval"`' in runner
+    assert "`stateInitializationRequired: false`" in runner
+    assert '`status: "existing-compatible-state"`' in runner
+    assert "preserve the state byte-for-byte" in runner
+    assert "never infer\n  first-run initialization" in runner
     assert "never write a generic fallback" in runner
     assert "Do not write a state file before the plan" in runner
     assert '**`"waiting"`**' in runner
     assert "provider-owned question, discovery, decision" in runner
     assert "exactly one pause boundary per attempt" in runner
     assert "must not persist or ask separate questions" in runner
+    assert "`handoffMode: identity-requirement`" in runner
+    assert "routing-only Maker question" in runner_normalized
+    assert "they are not `Completed`/`Not yet` admin evidence" in (
+        runner_normalized
+    )
+    assert "options are label-only" in runner_normalized
+    assert "`identityRequirementChoices`" in runner
+    assert "never add `value`" in runner_normalized
+    assert "`Not sure` returns waiting, writes no receipt" in runner_normalized
+    assert "must not set `actionApplied`" in runner_normalized
+    assert "Never dereference a missing `workbookPath`" in runner_normalized
+    assert "`resumeActionWhenIncomplete` is `true`" in runner
+    assert "historical facts,\nnot authorization" in runner
+    assert "fresh read-only inspection" in runner
+    assert "Never automatically replay the prior\nmutation" in runner
+    assert "preserve the historical `actionApplied`" in runner
+    assert '`NotConfigured` and `Skipped` are evaluated' in runner
+    assert 'overall: `"NOT_READY"`' not in runner
+    assert '`overall: "NOT_READY"` with `exitCode: 0`' in runner
+    assert "Missing/failed required clients" in runner
+    assert "python scripts/connect_lifecycle.py next-step" in runner
+    assert "python scripts/flightcheck/cli.py --checkpoint {TARGET} \\" in runner
+    assert '--agent-slug "{AGENT_SLUG}"' in runner
+    assert "returns the complete exact\ncheckpoint `argv`" in runner
+    assert "never reconstruct it from\n`activeAgent`" in runner
+    assert "DA_LIFECYCLE_NEXT_JSON:" in runner
+    assert "Do not fall back to interpreting" in runner
+    assert "After an action or checkpoint updates state" in runner
+    assert "empty set named `verifiedPhases`" in runner
+    assert 'one --verified-phase "{PHASE_ID}" argument' in runner
+    assert "Never initialize it from persisted `lastVerifiedAt`" in runner
+    assert "add the phase ID to `verifiedPhases`" in runner
+    assert "Add the current phase ID to `verifiedPhases`" in runner
+    assert "must not add the phase to `verifiedPhases`" in runner
+    assert "remove this and later phase IDs from both" in runner
 
     recorded_section = runner.split('- **`"recorded"`**', 1)[1].split(
         '- **`"cancelled"`**',
@@ -114,6 +170,33 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "continue to L.3 in this same" in repairable_branch
     assert "interactive question" in repairable_branch
     assert "do not end the turn" in repairable_branch
+    assert "exact full remediation" in runner
+    assert "branch-loaded recovery" in runner
+    for heading in (
+        "**Problem**",
+        "**Category**",
+        "**Owner**",
+        "**Where**",
+        "**Values to use**",
+        "**Action**",
+        "**Success**",
+        "**Recheck and resume**",
+    ):
+        assert heading in runner
+    assert "first execution, completed-phase re-verification, and resume" in (
+        runner
+    )
+    assert "Other providers retain their existing remediation format" in runner
+    assert "**ServiceNow preflight pending input:**" in runner
+    assert "instanceInputRequired: true" in runner
+    assert "stop with `ACTION_RESULT = \"waiting\"`" in runner
+    assert "before running the preflight checkpoint" in runner
+    assert "Do not render the checkpoint's `NotConfigured` recovery" in runner
+    assert "returns top-level `pendingInput`" in runner
+    assert "show `pendingInput.question` exactly and stop" in runner
+    assert "without running or reconstructing a checkpoint command" in runner
+    assert "historical `NotConfigured`\nstate" in runner
+    assert "exact returned `manualInstanceQuestion` once" in runner
 
 
 def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
@@ -126,16 +209,22 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert contract["provider"] == "servicenow-da-hrsd"
     assert contract["checkpointResultMode"] == "compact-stdout-v1"
     assert contract["attestedRoleScope"] == "lifecycle"
-    assert contract["contractRevision"] == 6
+    assert contract["contractRevision"] == 10
     assert contract["planRoles"] == [
         "ESS Maker / Agent Developer",
         "ServiceNow Admin / security_admin",
         "Microsoft Entra Application Administrator or higher",
         "Power Platform Maker / Admin",
     ]
-    assert contract["stateMigrationCommand"].endswith("migrate-state")
+    assert contract["stateMigrationCommand"] == (
+        "python scripts/connect_servicenow_da.py "
+        "--provider servicenow-da-hrsd --agent-slug {agentSlug} "
+        "migrate-state"
+    )
     assert contract["stateInitializationCommand"] == (
-        "python scripts/connect_servicenow_da.py initialize-state "
+        "python scripts/connect_servicenow_da.py "
+        "--provider servicenow-da-hrsd --agent-slug {agentSlug} "
+        "initialize-state "
         "--contract-revision {contractRevision}"
     )
     assert [phase["id"] for phase in contract["phases"]] == [
@@ -148,7 +237,6 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "portal-url",
         "agent-connection",
         "test",
-        "publish",
     ]
     by_id = {phase["id"]: phase for phase in contract["phases"]}
     assert by_id["preflight"]["actionExecution"] == "every-invocation"
@@ -161,6 +249,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "portal-url",
     ):
         assert by_id[phase_id]["actionExecution"] == "once"
+    assert by_id["topics"]["resumeActionWhenIncomplete"] is True
     assert by_id["agent-connection"]["actionExecution"] == "every-invocation"
     assert by_id["test"]["actionExecution"] == "every-invocation"
     assert by_id["test"]["mutates"] is False
@@ -179,7 +268,6 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "topics",
         "agent-connection",
         "test",
-        "publish",
     ):
         acknowledgement = by_id[phase_id]["manualAcknowledgementEvidence"]
         assert "path" in acknowledgement
@@ -196,7 +284,8 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     )
     assert "When `TARGET` is a registered family/wildcard" in runner
     assert "Do not invoke family members again" in runner
-    assert "--compact-result --invocation-id" in runner
+    assert "--compact-result" in runner
+    assert "--invocation-id" in runner
     assert "flightcheck.lifecycle-checkpoint.v1" in runner
     assert "wrong-identity" in runner
     assert "never fall back to an older result file" in runner
@@ -222,6 +311,54 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert "checkpointResultMode" not in workday
     assert "Append the contract's optional display-only `planRoles`" in runner
     assert "they do not create a role gate" in runner
+
+
+def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
+    contract = json.loads(
+        (_CONNECT / "servicenow-da-itsm" / "contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert contract["provider"] == "servicenow-da-itsm"
+    assert contract["profile"] == "itsm"
+    assert contract["contractRevision"] == 5
+    assert "stateMigrationCommand" not in contract
+    assert contract["stateInitializationCommand"] == (
+        "python scripts/connect_servicenow_da.py "
+        "--provider servicenow-da-itsm --agent-slug {agentSlug} "
+        "initialize-state --contract-revision {contractRevision}"
+    )
+    assert [phase["id"] for phase in contract["phases"]] == [
+        "preflight",
+        "entra-registration",
+        "servicenow-oidc",
+        "credential",
+        "topics",
+        "portal-url",
+        "agent-connection",
+        "test",
+    ]
+    assert all(
+        "SN-DA-ITSM" in checkpoint
+        for phase in contract["phases"]
+        for checkpoint in phase["checkpoints"]
+    )
+    assert contract["phases"][-1][
+        "manualAcknowledgementEvidence"
+    ]["requiredValues"]["promptCategory"] == "list-my-open-it-tickets"
+    by_id = {phase["id"]: phase for phase in contract["phases"]}
+    assert by_id["topics"]["resumeActionWhenIncomplete"] is True
+    for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
+        skill = (
+            _CONNECT / provider / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        action = (
+            _CONNECT / provider / "actions" / "prepare-topics.md"
+        ).read_text(encoding="utf-8")
+        assert "connect_lifecycle.py next-step" in skill
+        assert "topic-action-handoff" in action
+        assert "exact returned" in action or "exactly as returned" in action
 
 
 def _resolve_safe_path(value: object, path: str) -> object:
@@ -316,9 +453,13 @@ def test_matching_admin_evidence_skips_only_same_phase_manual_ack() -> None:
         {
             "oidcCapabilityConfirmed": True,
             "runbookCompleted": True,
-            "mappingDetailsCollected": False,
+            "mappingDetailsCollected": True,
+            "claimMappingConfirmed": True,
         }
     )
+    state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"][
+        "tokenClaimEmissionConfirmed"
+    ] = True
 
     for phase_id in (
         "plugin-prerequisites",
@@ -478,12 +619,7 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
         },
     }
 
-    for phase_id in (
-        "topics",
-        "agent-connection",
-        "test",
-        "publish",
-    ):
+    for phase_id in ("topics", "agent-connection", "test"):
         assert _matching_action_evidence_acknowledges(
             phases[phase_id],
             "Manual",
@@ -492,7 +628,7 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
         )
 
     state["componentHash"] = "later-drift"
-    for phase_id in ("topics", "publish"):
+    for phase_id in ("topics",):
         assert not _matching_action_evidence_acknowledges(
             phases[phase_id],
             "Manual",
@@ -501,7 +637,7 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
         )
     state["componentHash"] = "component-hash"
     state["draftSemanticHash"] = "later-draft"
-    for phase_id in ("agent-connection", "test", "publish"):
+    for phase_id in ("agent-connection", "test"):
         assert not _matching_action_evidence_acknowledges(
             phases[phase_id],
             "Manual",
@@ -510,7 +646,7 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
         )
     state["draftSemanticHash"] = "draft-semantic-hash"
     state["connectionBindingHash"] = "later-connection"
-    for phase_id in ("test", "publish"):
+    for phase_id in ("test",):
         assert not _matching_action_evidence_acknowledges(
             phases[phase_id],
             "Manual",

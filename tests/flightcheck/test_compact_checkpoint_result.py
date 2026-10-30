@@ -244,6 +244,21 @@ def test_compact_checkpoint_failure_exit_semantics_round_trip() -> None:
     assert payload["results"][0]["status"] == Status.FAILED.value
 
 
+@pytest.mark.parametrize(
+    "status",
+    [Status.NOT_CONFIGURED.value, Status.SKIPPED.value],
+)
+def test_compact_checkpoint_evaluated_nonready_round_trip(
+    status: str,
+) -> None:
+    payload = _parse(_payload(status))
+
+    assert payload["overall"] == "NOT_READY"
+    assert payload["exitCode"] == 0
+    assert payload["results"][0]["status"] == status
+    assert payload["results"][0]["remediation"]
+
+
 def test_compact_checkpoint_warning_preserves_manual_content() -> None:
     payload = _parse(_payload(Status.WARNING.value))
     row = payload["results"][0]

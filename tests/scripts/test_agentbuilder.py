@@ -1701,7 +1701,12 @@ def test_account_hint_prepopulates_interactive_selection(
 
         def acquire_token_interactive(self, **kwargs):
             observed["interactive"] = kwargs
-            return {"access_token": "test-token"}
+            return {
+                "access_token": "test-token",
+                "id_token_claims": {
+                    "preferred_username": "test.user@example.test",
+                },
+            }
 
     monkeypatch.setattr(
         agentbuilder.msal,
@@ -1719,6 +1724,121 @@ def test_account_hint_prepopulates_interactive_selection(
     assert result == "test-token"
     assert observed["interactive"]["login_hint"] == "test.user@example.test"
     assert "prompt" not in observed["interactive"]
+
+
+def test_account_hint_rejects_different_interactive_account(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class FakeApp:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_accounts(self):
+            return []
+
+        def acquire_token_interactive(self, **_kwargs):
+            return {
+                "access_token": "test-token",
+                "id_token_claims": {
+                    "preferred_username": "other.user@example.test",
+                },
+            }
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="different account",
+    ):
+        agentbuilder.authenticate(
+            "00000000-0000-4000-8000-000000009999",
+            "prod",
+            cache_path=tmp_path / "token-cache.bin",
+            account_hint="test.user@example.test",
+        )
+
+
+def test_account_hint_rejects_unverifiable_interactive_account(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class FakeApp:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_accounts(self):
+            return []
+
+        def acquire_token_interactive(self, **_kwargs):
+            return {"access_token": "test-token"}
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="could not verify",
+    ):
+        agentbuilder.authenticate(
+            "00000000-0000-4000-8000-000000009999",
+            "prod",
+            cache_path=tmp_path / "token-cache.bin",
+            account_hint="test.user@example.test",
+        )
+
+
+def test_required_account_identity_fails_before_cache_persistence(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    persisted = False
+
+    class FakeCache:
+        has_state_changed = True
+
+    class FakeApp:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_accounts(self):
+            return []
+
+        def acquire_token_interactive(self, **_kwargs):
+            return {"access_token": "test-token"}
+
+    def persist(*_args, **_kwargs):
+        nonlocal persisted
+        persisted = True
+
+    monkeypatch.setattr(agentbuilder, "_load_token_cache", lambda _path: FakeCache())
+    monkeypatch.setattr(agentbuilder, "_persist_token_cache", persist)
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="could not verify the actual signed-in account",
+    ):
+        agentbuilder.authenticate(
+            "00000000-0000-4000-8000-000000009999",
+            "prod",
+            cache_path=tmp_path / "token-cache.bin",
+            return_account_identity=True,
+            require_account_identity=True,
+        )
+
+    assert persisted is False
 
 
 def test_interactive_fallback_reports_interactive_account_not_stale_cache(
@@ -1752,21 +1872,22 @@ def test_interactive_fallback_reports_interactive_account_not_stale_cache(
         FakeApp,
     )
 
-    token, username = agentbuilder._acquire_token(
-        authority=(
-            "https://login.microsoftonline.com/"
-            "00000000-0000-4000-8000-000000009999"
-        ),
-        ring="prod",
-        cache_path=tmp_path / "token-cache.bin",
-        force_account_selection=False,
-        account_hint="cached@example.test",
-        emit_account_identity=False,
-        return_account_identity=True,
-    )
-
-    assert token == "interactive-token"
-    assert username == "interactive@example.test"
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="different account",
+    ):
+        agentbuilder._acquire_token(
+            authority=(
+                "https://login.microsoftonline.com/"
+                "00000000-0000-4000-8000-000000009999"
+            ),
+            ring="prod",
+            cache_path=tmp_path / "token-cache.bin",
+            force_account_selection=False,
+            account_hint="cached@example.test",
+            emit_account_identity=False,
+            return_account_identity=True,
+        )
 
 
 def test_interactive_fallback_without_identity_does_not_use_stale_cache(
@@ -1795,21 +1916,22 @@ def test_interactive_fallback_without_identity_does_not_use_stale_cache(
         FakeApp,
     )
 
-    token, username = agentbuilder._acquire_token(
-        authority=(
-            "https://login.microsoftonline.com/"
-            "00000000-0000-4000-8000-000000009999"
-        ),
-        ring="prod",
-        cache_path=tmp_path / "token-cache.bin",
-        force_account_selection=False,
-        account_hint="cached@example.test",
-        emit_account_identity=False,
-        return_account_identity=True,
-    )
-
-    assert token == "interactive-token"
-    assert username is None
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="could not verify",
+    ):
+        agentbuilder._acquire_token(
+            authority=(
+                "https://login.microsoftonline.com/"
+                "00000000-0000-4000-8000-000000009999"
+            ),
+            ring="prod",
+            cache_path=tmp_path / "token-cache.bin",
+            force_account_selection=False,
+            account_hint="cached@example.test",
+            emit_account_identity=False,
+            return_account_identity=True,
+        )
 
 
 def test_account_hint_preserves_interactive_authentication_error(

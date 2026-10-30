@@ -1,0 +1,272 @@
+{
+  "contractRevision": 5,
+  "provider": "servicenow-da-itsm",
+  "displayName": "ServiceNow ITSM",
+  "profile": "itsm",
+  "checkpointResultMode": "compact-stdout-v1",
+  "attestedRoleScope": "lifecycle",
+  "planRoles": [
+    "ESS Maker / Agent Developer",
+    "ServiceNow Admin / security_admin",
+    "Microsoft Entra Application Administrator or higher",
+    "Power Platform Maker / Admin"
+  ],
+  "stateInitializationCommand": "python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {agentSlug} initialize-state --contract-revision {contractRevision}",
+  "detect": {
+    "checkpoint": "SN-DA-ITSM-PKG-001",
+    "meansInstalled": "Passed",
+    "meansNotInstalled": "NotConfigured"
+  },
+  "phases": [
+    {
+      "id": "preflight",
+      "label": "Discover existing ServiceNow admin setup and identify missing or unhealthy items",
+      "checkpoints": [
+        "SN-DA-ITSM-ADMIN-PREFLIGHT-001"
+      ],
+      "completionStatuses": [
+        "Passed"
+      ],
+      "actionDoc": "src/skills/connect/servicenow-da-itsm/actions/admin-preflight.md",
+      "actionExecution": "every-invocation",
+      "mutates": false
+    },
+    {
+      "id": "entra-registration",
+      "label": "Guide and verify the Microsoft Entra User Login application setup",
+      "checkpoints": [
+        "SN-DA-ITSM-ENTRA-*"
+      ],
+      "completionStatuses": [
+        "Passed",
+        "Manual"
+      ],
+      "actionDoc": "src/skills/connect/servicenow-da-itsm/actions/guide-entra-registration.md",
+      "actionExecution": "once",
+      "manualAcknowledgementEvidence": {
+        "path": "adminSetup.phaseHandoffs.{phaseId}",
+        "evidenceObjectPath": "evidence",
+        "acceptedRecordStatuses": [
+          "completed",
+          "reused"
+        ],
+        "requiredEvidenceKind": "structured-admin-attestation",
+        "requiredValues": {
+          "tokenClaimEmissionConfirmed": true
+        }
+      },
+      "mutates": false
+    },
+    {
+      "id": "servicenow-oidc",
+      "label": "Guide the ServiceNow OIDC provider and active-user mapping setup",
+      "checkpoints": [
+        "SN-DA-ITSM-OIDC-001"
+      ],
+      "completionStatuses": [
+        "Manual"
+      ],
+      "actionDoc": "src/skills/connect/servicenow-da-itsm/actions/guide-servicenow-oidc.md",
+      "actionExecution": "once",
+      "manualAcknowledgementEvidence": {
+        "path": "adminSetup.phaseHandoffs.{phaseId}",
+        "evidenceObjectPath": "evidence",
+        "acceptedRecordStatuses": [
+          "completed",
+          "reused"
+        ],
+        "requiredEvidenceKind": "structured-admin-attestation",
+        "requiredValues": {
+          "oidcCapabilityConfirmed": true,
+          "runbookCompleted": true,
+          "mappingDetailsCollected": true,
+          "claimMappingConfirmed": true
+        }
+      },
+      "mutates": false
+    },
+    {
+      "id": "credential",
+      "label": "Create or explicitly reuse the exact ServiceNow physical connection",
+      "checkpoints": [
+        "SN-DA-ITSM-CREDENTIAL-001"
+      ],
+      "completionStatuses": [
+        "Passed"
+      ],
+      "actionDoc": "src/skills/connect/servicenow-da-itsm/actions/prepare-credential.md",
+      "actionExecution": "once",
+      "resumeActionWhenIncomplete": true,
+      "mutates": false
+    },
+    {
+      "id": "topics",
+      "label": "Prepare the ServiceNow ITSM topics for this agent",
+      "checkpoints": [
+        "SN-DA-ITSM-TOPICS-001"
+      ],
+      "completionStatuses": [
+        "Passed",
+        "Manual"
+      ],
+      "actionDoc": "src/skills/connect/servicenow-da-itsm/actions/prepare-topics.md",
+      "actionExecution": "once",
+      "resumeActionWhenIncomplete": true,
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.topics",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": [
+          "recorded"
+        ],
+        "requiredEvidenceKind": "maker-attestation",
+        "requiredValues": {
+          "customerChoice": "keep-current",
+          "makerAttested": true
+        },
+        "bindings": [
+          {
+            "evidencePath": "boundComponentHash",
+            "statePath": "componentHash"
+          }
+        ]
+      },
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    },
+    {
+      "id": "portal-url",
+      "label": "Configure the ServiceNow employee portal Base URI",
+      "checkpoints": [
+        "SN-DA-ITSM-PORTAL-001"
+      ],
+      "completionStatuses": [
+        "Passed"
+      ],
+      "actionDoc": "src/skills/connect/servicenow-da-itsm/actions/configure-portal-url.md",
+      "actionExecution": "once",
+      "resumeActionWhenIncomplete": true,
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    },
+    {
+      "id": "agent-connection",
+      "label": "Connect the selected ServiceNow credential to this agent",
+      "checkpoints": [
+        "SN-DA-ITSM-AGENT-CONNECTION-001"
+      ],
+      "completionStatuses": [
+        "Manual"
+      ],
+      "actionDoc": "src/skills/connect/servicenow-da-itsm/actions/connect-agent.md",
+      "actionExecution": "every-invocation",
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.agentConnection",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": [
+          "completed"
+        ],
+        "requiredEvidenceKind": "maker-attestation",
+        "requiredValues": {
+          "makerAttested": true,
+          "physicalStatus": "Connected",
+          "authMode": "entraIDUserLogin"
+        },
+        "bindings": [
+          {
+            "evidencePath": "binding.provider",
+            "statePath": "provider"
+          },
+          {
+            "evidencePath": "binding.profile",
+            "statePath": "profile"
+          },
+          {
+            "evidencePath": "binding.agentSlug",
+            "statePath": "agentSlug"
+          },
+          {
+            "evidencePath": "binding.agentId",
+            "statePath": "agentId"
+          },
+          {
+            "evidencePath": "binding.environmentId",
+            "statePath": "environmentId"
+          },
+          {
+            "evidencePath": "binding.draftSemanticHash",
+            "statePath": "draftSemanticHash"
+          },
+          {
+            "evidencePath": "connectionId",
+            "statePath": "evidence.credential.connectionId"
+          }
+        ]
+      },
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    },
+    {
+      "id": "test",
+      "label": "Confirm a ServiceNow ITSM request works in the Test pane",
+      "checkpoints": [
+        "SN-DA-ITSM-TEST-001"
+      ],
+      "completionStatuses": [
+        "Manual"
+      ],
+      "actionDoc": "src/skills/connect/servicenow-da-itsm/actions/test-connection.md",
+      "actionExecution": "every-invocation",
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.test",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": [
+          "completed"
+        ],
+        "requiredEvidenceKind": "maker-attestation",
+        "requiredValues": {
+          "promptCategory": "list-my-open-it-tickets",
+          "result": "pass",
+          "failureCategory": null
+        },
+        "bindings": [
+          {
+            "evidencePath": "binding.provider",
+            "statePath": "provider"
+          },
+          {
+            "evidencePath": "binding.profile",
+            "statePath": "profile"
+          },
+          {
+            "evidencePath": "binding.agentSlug",
+            "statePath": "agentSlug"
+          },
+          {
+            "evidencePath": "binding.agentId",
+            "statePath": "agentId"
+          },
+          {
+            "evidencePath": "binding.environmentId",
+            "statePath": "environmentId"
+          },
+          {
+            "evidencePath": "binding.connectionId",
+            "statePath": "evidence.credential.connectionId"
+          },
+          {
+            "evidencePath": "binding.draftSemanticHash",
+            "statePath": "draftSemanticHash"
+          },
+          {
+            "evidencePath": "binding.connectionBindingHash",
+            "statePath": "connectionBindingHash"
+          }
+        ]
+      },
+      "mutates": false
+    }
+  ]
+}

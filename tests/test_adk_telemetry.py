@@ -701,6 +701,103 @@ def test_connect_lifecycle_event_normalizes_unbounded_values(captured_post):
     assert data["agent_id"] == ""
 
 
+def test_connect_lifecycle_accepts_bounded_servicenow_remediation(
+    captured_post,
+):
+    adk.emit_connect_lifecycle(
+        "blocked",
+        connector="servicenow",
+        phase="connections",
+        outcome="blocked",
+        blocker_category="connection",
+        remediation_id="SN-DA-ITSM-CREDENTIAL-001",
+        block=True,
+    )
+
+    data = captured_post[0][1][0]["data"]
+    assert data["connector"] == "servicenow"
+    assert data["phase"] == "connections"
+    assert data["remediation_id"] == "SN-DA-ITSM-CREDENTIAL-001"
+
+
+@pytest.mark.parametrize(
+    "remediation_id",
+    [
+        "SN-DA-HRSD-PLUGIN-001",
+        *[
+            f"SN-DA-{profile}-{suffix}-001"
+            for profile in ("HRSD", "ITSM")
+            for suffix in (
+                "ADMIN-PREFLIGHT",
+                "ENTRA-APP",
+                "ENTRA-CLAIMS",
+                "ENTRA-SCOPE",
+                "ENTRA-PREAUTH",
+                "OIDC",
+                "CREDENTIAL",
+                "TOPICS",
+                "PORTAL",
+                "AGENT-CONNECTION",
+                "TEST",
+            )
+        ],
+    ],
+)
+def test_connect_lifecycle_preserves_registered_servicenow_remediation(
+    captured_post,
+    remediation_id,
+):
+    adk.emit_connect_lifecycle(
+        "blocked",
+        connector="servicenow",
+        phase="runtime",
+        outcome="blocked",
+        remediation_id=remediation_id,
+        block=True,
+    )
+
+    assert captured_post[0][1][0]["data"]["remediation_id"] == remediation_id
+
+
+@pytest.mark.parametrize(
+    "remediation_id",
+    (
+        "SN-DA-HRSD-EMPLOYEE-ALICE-001",
+        "SN-DA-HRSD-ENTRA-PERMISSIONS-001",
+        "SN-DA-ITSM-ENTRA-CONSENT-001",
+    ),
+)
+def test_connect_lifecycle_drops_unregistered_servicenow_remediation(
+    captured_post,
+    remediation_id,
+):
+    adk.emit_connect_lifecycle(
+        "blocked",
+        connector="servicenow",
+        phase="runtime",
+        outcome="blocked",
+        remediation_id=remediation_id,
+        block=True,
+    )
+
+    assert captured_post[0][1][0]["data"]["remediation_id"] == ""
+
+
+def test_connect_lifecycle_honors_opt_out(monkeypatch, captured_post):
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+
+    result = adk.emit_connect_lifecycle(
+        "phase-started",
+        connector="servicenow",
+        phase="connections",
+        block=True,
+    )
+
+    assert result["sent"] is False
+    assert result["reason"] == "disabled"
+    assert captured_post == []
+
+
 def test_api_call_error_outcome_carries_error_fields(captured_post):
     adk.emit_api_call(
         api_endpoint="dataverse/bots",

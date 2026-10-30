@@ -3,14 +3,21 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
 from pathlib import Path
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
+from openpyxl import load_workbook
 
 from agentbuilder import AgentBuilderHTTPError
+import flightcheck.checks.servicenow_da_hrsd as hrsd_checks
 from flightcheck.checks.servicenow_da_hrsd import (
+    _acquire_servicenow_reads,
+    invalidate_servicenow_read_snapshot,
     run_servicenow_da_hrsd_checks,
 )
 from flightcheck.runner import FlightCheckRunner, Status
@@ -21,10 +28,21 @@ from tests.mocks import graph as graph_mock
 
 
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
+TENANT_ID = "00000000-0000-4000-8000-000000009999"
 AGENT_ID = "00000000-0000-4000-8000-000000002222"
 CONNECTION_ID = "00000000000040008000000000003333"
 APP_CLIENT_ID = "00000000-0000-4000-8000-000000006666"
 AGENT_SLUG = "employee-self-service-hr"
+_RECOVERY_HEADINGS = (
+    "**Problem**",
+    "**Category**",
+    "**Owner**",
+    "**Where**",
+    "**Values to use**",
+    "**Action**",
+    "**Success**",
+    "**Recheck and resume**",
+)
 
 
 def _components() -> dict:
@@ -111,6 +129,94 @@ def _components() -> dict:
     }
 
 
+def test_all_hrsd_blocking_phase_outputs_include_actionable_recovery() -> None:
+    results = run_servicenow_da_hrsd_checks(
+        SimpleNamespace(config={}, checkpoint_target=None)
+    )
+
+    expected_suffixes = {
+        "PKG",
+        "ADMIN-PREFLIGHT",
+        "PLUGIN",
+        "ENTRA-APP",
+        "ENTRA-CLAIMS",
+        "ENTRA-SCOPE",
+        "ENTRA-PREAUTH",
+        "OIDC",
+        "TOPICS",
+        "PORTAL",
+        "CREDENTIAL",
+        "AGENT-CONNECTION",
+        "TEST",
+        "PUBLISH",
+    }
+    assert {
+        result.checkpoint_id.removeprefix("SN-DA-HRSD-").removesuffix("-001")
+        for result in results
+    } == expected_suffixes
+    for result in results:
+        assert result.status == Status.FAILED.value
+        assert result.result in result.remediation
+        assert all(
+            heading in result.remediation for heading in _RECOVERY_HEADINGS
+        )
+        assert "{" not in result.remediation
+        assert "dependent later steps remain pending" in result.remediation
+
+
+@pytest.mark.parametrize(
+    ("status", "problem", "category", "retry"),
+    (
+        (
+            Status.ERROR.value,
+            "HTTP 429 throttled",
+            "Read throttled",
+            "Retry-After",
+        ),
+        (
+            Status.ERROR.value,
+            "HTTP 401 authentication required",
+            "Read permission",
+            "minimum read permission",
+        ),
+        (
+            Status.ERROR.value,
+            "HTTP 403 permission denied",
+            "Read permission",
+            "minimum read permission",
+        ),
+        (
+            Status.ERROR.value,
+            "Socket timeout",
+            "Read or network error",
+            "Do not treat the error as missing configuration",
+        ),
+        (
+            Status.NOT_CONFIGURED.value,
+            "The value is absent",
+            "Missing or repairable configuration",
+            "Repair the current value",
+        ),
+    ),
+)
+def test_recovery_output_preserves_error_category(
+    status: str,
+    problem: str,
+    category: str,
+    retry: str,
+) -> None:
+    result = hrsd_checks._result(
+        "SN-DA-HRSD-PORTAL-001",
+        status,
+        "Portal",
+        problem,
+        "Repair the current value",
+    )
+
+    assert f"**Category**\n{category}" in result.remediation
+    assert retry in result.remediation
+
+
 def _connection() -> dict:
     return {
         "name": CONNECTION_ID,
@@ -161,6 +267,223 @@ def _runner(components: dict):
     )
 
 
+def test_servicenow_read_acquisition_overlaps_two_independent_sources() -> None:
+    lock = threading.Lock()
+    barrier = threading.Barrier(2)
+    active = 0
+    max_active = 0
+    calls = {"components": 0, "connections": 0}
+
+    def read(name: str, value):
+        nonlocal active, max_active
+        with lock:
+            calls[name] += 1
+            active += 1
+            max_active = max(max_active, active)
+        barrier.wait(timeout=1)
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+        return value
+
+    runner = SimpleNamespace(
+        agentbuilder=SimpleNamespace(
+            fetch_components=lambda _agent_id: read(
+                "components",
+                _components(),
+            )
+        ),
+        connectivity=SimpleNamespace(
+            list_connector_connections=lambda _env_id, _connector: read(
+                "connections",
+                [_connection()],
+            )
+        ),
+    )
+
+    started = time.perf_counter()
+    components, component_error, connections, connectivity_error = (
+        _acquire_servicenow_reads(
+            runner,
+            agent_id=AGENT_ID,
+            environment_id=ENVIRONMENT_ID,
+            needs_inventory=True,
+        )
+    )
+    elapsed = time.perf_counter() - started
+
+    assert component_error is None
+    assert connectivity_error is None
+    assert components == _components()
+    assert connections == [_connection()]
+    assert calls == {"components": 1, "connections": 1}
+    assert max_active == 2
+    assert elapsed < 0.09
+
+
+def test_servicenow_read_snapshot_reuses_one_exact_components_read() -> None:
+    calls = {"components": 0, "connections": 0}
+    runner = SimpleNamespace(
+        servicenow_parallel_reads=False,
+        agentbuilder=SimpleNamespace(
+            fetch_components=lambda _agent_id: (
+                calls.__setitem__("components", calls["components"] + 1)
+                or _components()
+            )
+        ),
+        connectivity=SimpleNamespace(
+            list_connector_connections=lambda _env_id, _connector: (
+                calls.__setitem__("connections", calls["connections"] + 1)
+                or [_connection()]
+            )
+        ),
+    )
+
+    for _ in range(2):
+        _acquire_servicenow_reads(
+            runner,
+            agent_id=AGENT_ID,
+            environment_id=ENVIRONMENT_ID,
+            needs_inventory=True,
+        )
+
+    assert calls == {"components": 1, "connections": 1}
+
+
+def test_servicenow_parallel_read_output_matches_serial_evaluation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    serial = _runner(_components())
+    serial.checkpoint_target = "SN-DA-HRSD-TEST-001"
+    serial.servicenow_parallel_reads = False
+    parallel = _runner(_components())
+    parallel.checkpoint_target = "SN-DA-HRSD-TEST-001"
+
+    serial_rows = run_servicenow_da_hrsd_checks(serial)
+    parallel_rows = run_servicenow_da_hrsd_checks(parallel)
+
+    assert [asdict(row) for row in parallel_rows] == [
+        asdict(row) for row in serial_rows
+    ]
+    assert not (tmp_path / ".local").exists()
+
+
+def test_servicenow_throttle_quiesces_new_read_dispatch() -> None:
+    calls = {"components": 0, "connections": 0}
+
+    def throttled(_agent_id: str):
+        calls["components"] += 1
+        raise AgentBuilderHTTPError("Component fetch", 429)
+
+    runner = SimpleNamespace(
+        agentbuilder=SimpleNamespace(fetch_components=throttled),
+        connectivity=SimpleNamespace(
+            list_connector_connections=lambda _env_id, _connector: (
+                calls.__setitem__("connections", calls["connections"] + 1)
+                or [_connection()]
+            )
+        ),
+    )
+
+    first = _acquire_servicenow_reads(
+        runner,
+        agent_id=AGENT_ID,
+        environment_id=ENVIRONMENT_ID,
+        needs_inventory=True,
+    )
+    first_calls = dict(calls)
+    second = _acquire_servicenow_reads(
+        runner,
+        agent_id=AGENT_ID,
+        environment_id=ENVIRONMENT_ID,
+        needs_inventory=True,
+    )
+    invalidate_servicenow_read_snapshot(runner)
+    third = _acquire_servicenow_reads(
+        runner,
+        agent_id=AGENT_ID,
+        environment_id=ENVIRONMENT_ID,
+        needs_inventory=True,
+    )
+
+    assert isinstance(first[1], AgentBuilderHTTPError)
+    assert runner._servicenow_read_quiesced is True
+    assert calls == first_calls
+    assert second[0] is None
+    assert isinstance(second[1], AgentBuilderHTTPError)
+    assert second[1].status_code == 429
+    assert isinstance(third[1], AgentBuilderHTTPError)
+    assert third[1].status_code == 429
+
+
+def test_servicenow_serial_throttle_stops_second_prepared_dispatch() -> None:
+    calls = {"components": 0, "connections": 0}
+
+    def throttled(_agent_id: str):
+        calls["components"] += 1
+        raise AgentBuilderHTTPError("Component fetch", 429)
+
+    runner = SimpleNamespace(
+        servicenow_parallel_reads=False,
+        agentbuilder=SimpleNamespace(fetch_components=throttled),
+        connectivity=SimpleNamespace(
+            list_connector_connections=lambda _env_id, _connector: (
+                calls.__setitem__("connections", calls["connections"] + 1)
+                or [_connection()]
+            )
+        ),
+    )
+
+    result = _acquire_servicenow_reads(
+        runner,
+        agent_id=AGENT_ID,
+        environment_id=ENVIRONMENT_ID,
+        needs_inventory=True,
+    )
+
+    assert calls == {"components": 1, "connections": 0}
+    assert isinstance(result[1], AgentBuilderHTTPError)
+    assert isinstance(result[3], AgentBuilderHTTPError)
+    assert result[1].status_code == result[3].status_code == 429
+
+
+def test_servicenow_read_snapshot_invalidates_at_external_boundary() -> None:
+    calls = {"components": 0, "connections": 0}
+    runner = SimpleNamespace(
+        servicenow_parallel_reads=False,
+        agentbuilder=SimpleNamespace(
+            fetch_components=lambda _agent_id: (
+                calls.__setitem__("components", calls["components"] + 1)
+                or _components()
+            )
+        ),
+        connectivity=SimpleNamespace(
+            list_connector_connections=lambda _env_id, _connector: (
+                calls.__setitem__("connections", calls["connections"] + 1)
+                or [_connection()]
+            )
+        ),
+    )
+
+    _acquire_servicenow_reads(
+        runner,
+        agent_id=AGENT_ID,
+        environment_id=ENVIRONMENT_ID,
+        needs_inventory=True,
+    )
+    invalidate_servicenow_read_snapshot(runner)
+    _acquire_servicenow_reads(
+        runner,
+        agent_id=AGENT_ID,
+        environment_id=ENVIRONMENT_ID,
+        needs_inventory=True,
+    )
+
+    assert calls == {"components": 2, "connections": 2}
+
+
 def _registered_runner(
     components: dict,
     *,
@@ -193,6 +516,7 @@ def _checkpoint(results, checkpoint_id: str):
 def _graph_client(
     *,
     missing_claims: bool = False,
+    optional_claim_names: tuple[str, ...] | None = None,
     foreign_consent: bool = False,
 ):
     require_validated_mock(graph_mock)
@@ -200,7 +524,11 @@ def _graph_client(
         app_id=APP_CLIENT_ID,
         connector_app_id=snow.SERVICENOW_CONNECTOR_APP_ID,
         optional_claim_names=(
-            ("email",) if missing_claims else ("email", "upn")
+            optional_claim_names
+            if optional_claim_names is not None
+            else ("email",)
+            if missing_claims
+            else ("email", "upn")
         ),
     )
     service_principal = graph_mock.service_principal(
@@ -262,7 +590,14 @@ def _state_path(root: Path) -> Path:
     )
 
 
-def _write_state(root: Path, components: dict) -> None:
+def _write_state(
+    root: Path,
+    components: dict,
+    *,
+    candidates: tuple[str, ...] = ("upn",),
+    selected_claim: str = "upn",
+    user_field: str = "user_name",
+) -> None:
     path = _state_path(root)
     path.parent.mkdir(parents=True)
     component_hash = snow._component_hash(components)
@@ -282,12 +617,29 @@ def _write_state(root: Path, components: dict) -> None:
         }
         for phase in snow.ADMIN_PHASES
     }
-    handoffs["entra-registration"]["evidence"]["clientId"] = APP_CLIENT_ID
+    handoffs["entra-registration"]["evidence"].update(
+        {
+            "clientId": APP_CLIENT_ID,
+            "tokenClaimCandidates": list(candidates),
+            "tokenClaimEmissionConfirmed": True,
+        }
+    )
+    handoffs["plugin-prerequisites"]["evidence"].update(
+        {
+            "pluginId": "com.sn_hr_core",
+            "applicationTitle": "Human Resources Scoped App: Core",
+            "versionDetails": "Installed",
+            "installedReadyMessageConfirmed": True,
+        }
+    )
     handoffs["servicenow-oidc"]["evidence"].update(
         {
             "oidcCapabilityConfirmed": True,
             "runbookCompleted": True,
-            "mappingDetailsCollected": False,
+            "mappingDetailsCollected": True,
+            "claimMappingConfirmed": True,
+            "tokenClaimName": selected_claim,
+            "serviceNowUserField": user_field,
         }
     )
     draft_semantic_hash = snow._draft_semantic_hash(components)
@@ -309,6 +661,7 @@ def _write_state(root: Path, components: dict) -> None:
         "profile": snow.PROFILE_KEY,
         "agentSlug": AGENT_SLUG,
         "agentId": AGENT_ID,
+        "tenantId": TENANT_ID,
         "environmentId": ENVIRONMENT_ID,
         "draftSemanticHash": draft_semantic_hash,
         "adminSetup": {
@@ -322,10 +675,80 @@ def _write_state(root: Path, components: dict) -> None:
             "phaseHandoffs": handoffs,
         },
         "evidence": {
+            "identityClaimCandidates": {
+                "kind": "administrator-confirmed-claim-candidates",
+                "status": "entra-confirmed",
+                "applicationClientId": APP_CLIENT_ID,
+                "candidates": list(candidates),
+                "entraAdministratorConfirmed": True,
+                "tokenClaimEmissionConfirmed": True,
+                "binding": {
+                    "tenantId": TENANT_ID,
+                    "environmentId": ENVIRONMENT_ID,
+                    "instanceName": "dev123",
+                    "applicationClientId": APP_CLIENT_ID,
+                    "provider": snow.PROVIDER_KEY,
+                    "profile": snow.PROFILE_KEY,
+                    "agentSlug": AGENT_SLUG,
+                    "agentId": AGENT_ID,
+                },
+            },
+            "identityMapping": {
+                "kind": "administrator-confirmed-identity-mapping",
+                "status": "servicenow-confirmed",
+                "applicationClientId": APP_CLIENT_ID,
+                "tokenClaimName": selected_claim,
+                "serviceNowUserField": user_field,
+                "entraAdministratorConfirmed": True,
+                "tokenClaimEmissionConfirmed": True,
+                "serviceNowAdministratorConfirmed": True,
+                "binding": {
+                    "tenantId": TENANT_ID,
+                    "environmentId": ENVIRONMENT_ID,
+                    "instanceName": "dev123",
+                    "applicationClientId": APP_CLIENT_ID,
+                    "provider": snow.PROVIDER_KEY,
+                    "profile": snow.PROFILE_KEY,
+                    "agentSlug": AGENT_SLUG,
+                    "agentId": AGENT_ID,
+                },
+            },
             "credential": {"connectionId": CONNECTION_ID},
             "agentConnection": agent_connection,
         },
     }
+    candidate_hash = snow._identity_candidate_set_hash(
+        application_client_id=APP_CLIENT_ID,
+        candidates=list(candidates),
+        binding=state["evidence"]["identityClaimCandidates"]["binding"],
+    )
+    state["evidence"]["identityClaimCandidates"]["candidateSetSha256"] = (
+        candidate_hash
+    )
+    state["evidence"]["identityMapping"]["candidateSetSha256"] = candidate_hash
+    relationship_hash = snow._identity_mapping_relationship_hash(
+        state["evidence"]["identityMapping"]
+    )
+    state["evidence"]["identityMapping"]["relationshipSha256"] = (
+        relationship_hash
+    )
+    state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"][
+        "candidateSetSha256"
+    ] = candidate_hash
+    state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"]["evidence"][
+        "mappingRelationshipSha256"
+    ] = relationship_hash
+    for phase in ("entra-registration", "servicenow-oidc"):
+        state["adminSetup"]["phaseHandoffs"][phase]["evidence"]["binding"] = {
+            "tenantId": TENANT_ID,
+            "environmentId": ENVIRONMENT_ID,
+            "instanceName": "dev123",
+            "applicationClientId": APP_CLIENT_ID,
+            "provider": snow.PROVIDER_KEY,
+            "profile": snow.PROFILE_KEY,
+            "agentSlug": AGENT_SLUG,
+            "agentId": AGENT_ID,
+        }
     connection_binding_hash = snow._connection_binding_hash(
         {
             "agent": {
@@ -368,6 +791,102 @@ def _write_state(root: Path, components: dict) -> None:
     )
 
 
+def _record_new_mapping_workflow(
+    root: Path,
+    *,
+    candidates: tuple[str, ...],
+    selected_claim: str,
+    user_field: str,
+) -> None:
+    context = {
+        "root": root,
+        "agent": {
+            "id": AGENT_ID,
+            "schema_name": snow.HR_SCHEMA_NAME,
+            "workspace_slug": AGENT_SLUG,
+        },
+        "active": {"slug": AGENT_SLUG},
+        "environment": {
+            "id": ENVIRONMENT_ID,
+            "tenant_id": TENANT_ID,
+            "ring": "test",
+        },
+    }
+    state_path = _state_path(root)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.setdefault("phases", {})["entra-registration"] = {
+        "status": "in-progress",
+        "checkpointResults": {
+            "SN-DA-HRSD-ENTRA-CLAIMS-001": Status.NOT_CONFIGURED.value
+        },
+    }
+    state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
+        "status": "pending"
+    }
+    state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] = {
+        "status": "pending"
+    }
+    state.setdefault("evidence", {}).pop("identityClaimCandidates", None)
+    state["evidence"].pop("identityMapping", None)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    snow.record_identity_requirement(context, choice="email")
+    entra = snow.identity_mapping_handoff(
+        context,
+        stage="entra",
+        client_id=APP_CLIENT_ID,
+    )
+    entra_path = Path(entra["workbookPath"])
+    workbook = load_workbook(entra_path)
+    sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
+    for offset, claim in enumerate(candidates):
+        sheet.cell(
+            snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW + offset,
+            1,
+        ).value = claim
+    workbook.save(entra_path)
+    workbook.close()
+    snow.record_identity_mapping(
+        context,
+        stage="entra",
+        workbook_path=entra_path,
+        client_id=APP_CLIENT_ID,
+        confirmed=True,
+    )
+    snow.record_admin_phase(
+        context,
+        phase="entra-registration",
+        status="completed",
+        client_id=APP_CLIENT_ID,
+    )
+    service_now = snow.identity_mapping_handoff(
+        context,
+        stage="servicenow",
+    )
+    service_now_path = Path(service_now["workbookPath"])
+    workbook = load_workbook(service_now_path)
+    sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
+    for row in range(
+        snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW,
+        sheet.max_row + 1,
+    ):
+        if sheet.cell(row, 1).value == selected_claim:
+            sheet.cell(row, 2).value = user_field
+    workbook.save(service_now_path)
+    workbook.close()
+    snow.record_identity_mapping(
+        context,
+        stage="servicenow",
+        workbook_path=service_now_path,
+        client_id=None,
+        confirmed=True,
+    )
+    snow.record_admin_phase(
+        context,
+        phase="servicenow-oidc",
+        status="completed",
+    )
+
+
 def test_hrsd_checks_preserve_manual_maker_evidence(
     monkeypatch,
     tmp_path: Path,
@@ -392,6 +911,27 @@ def test_hrsd_checks_preserve_manual_maker_evidence(
     assert statuses["SN-DA-HRSD-TEST-001"] == Status.MANUAL.value
 
 
+def test_hrsd_package_and_topics_remain_dynamic_with_one_matching_topic() -> None:
+    components = _components()
+    components["botComponentChanges"] = components["botComponentChanges"][:1]
+
+    package = next(
+        result
+        for result in run_servicenow_da_hrsd_checks(_runner(components))
+        if result.checkpoint_id == "SN-DA-HRSD-PKG-001"
+    )
+    topics = next(
+        result
+        for result in run_servicenow_da_hrsd_checks(_runner(components))
+        if result.checkpoint_id == "SN-DA-HRSD-TOPICS-001"
+    )
+
+    assert package.status == Status.PASSED.value
+    assert package.result.endswith("contains 1 ServiceNow HRSD topic(s).")
+    assert topics.status == Status.PASSED.value
+    assert topics.result == "1/1 ServiceNow HRSD topics are Active."
+
+
 @pytest.mark.parametrize(
     ("case", "expected_phrase"),
     [
@@ -401,7 +941,7 @@ def test_hrsd_checks_preserve_manual_maker_evidence(
         ("wrong-resource", "different Instance Name or Resource URI"),
     ],
 )
-def test_test_checkpoint_propagates_current_credential_failure(
+def test_test_checkpoint_propagates_remediable_credential_state(
     monkeypatch,
     tmp_path: Path,
     case: str,
@@ -438,9 +978,9 @@ def test_test_checkpoint_propagates_current_credential_failure(
     credential = _checkpoint(results, "SN-DA-HRSD-CREDENTIAL-001")
     test = _checkpoint(results, "SN-DA-HRSD-TEST-001")
 
-    assert credential.status == Status.FAILED.value
-    assert test.status == Status.FAILED.value
-    assert "Current credential prerequisite is Failed" in test.result
+    assert credential.status == Status.NOT_CONFIGURED.value
+    assert test.status == Status.NOT_CONFIGURED.value
+    assert "Current credential prerequisite is NotConfigured" in test.result
     assert expected_phrase in test.result
     assert test.remediation == credential.remediation
 
@@ -604,17 +1144,99 @@ def test_admin_prerequisites_pass_with_graph_and_structured_evidence(
     assert statuses["SN-DA-HRSD-PLUGIN-001"] == Status.MANUAL.value
     for suffix in (
         "APP",
-        "CLAIMS",
         "SCOPE",
         "PREAUTH",
-        "PERMISSIONS",
-        "CONSENT",
     ):
         assert (
             statuses[f"SN-DA-HRSD-ENTRA-{suffix}-001"]
             == Status.PASSED.value
         )
+    assert statuses["SN-DA-HRSD-ENTRA-CLAIMS-001"] == Status.MANUAL.value
     assert statuses["SN-DA-HRSD-OIDC-001"] == Status.MANUAL.value
+
+
+@pytest.mark.parametrize(
+    ("candidates", "optional_claim_names"),
+    [
+        (("upn",), ("upn",)),
+        (("email",), ("email",)),
+        (("employee_id",), ()),
+        (("email", "upn", "employee_id"), ("email", "upn")),
+    ],
+)
+def test_claim_checkpoint_uses_confirmed_candidate_set(
+    monkeypatch,
+    tmp_path: Path,
+    candidates: tuple[str, ...],
+    optional_claim_names: tuple[str, ...],
+) -> None:
+    components = _components()
+    _write_state(
+        tmp_path,
+        components,
+        candidates=candidates,
+        selected_claim=candidates[0],
+    )
+    runner = _runner(components)
+    runner.graph = _graph_client(
+        optional_claim_names=optional_claim_names,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = _checkpoint(
+        run_servicenow_da_hrsd_checks(runner),
+        "SN-DA-HRSD-ENTRA-CLAIMS-001",
+    )
+
+    assert result.status == Status.MANUAL.value
+    assert all(candidate in result.result for candidate in candidates)
+    assert "administrator confirmed actual claim emission" in result.result
+    assert result.remediation == ""
+
+
+def test_claim_checkpoint_rejects_missing_or_mismatched_confirmation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"][
+        "tokenClaimEmissionConfirmed"
+    ] = False
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    runner = _runner(components)
+    runner.graph = _graph_client(optional_claim_names=("upn",))
+    monkeypatch.chdir(tmp_path)
+
+    missing = _checkpoint(
+        run_servicenow_da_hrsd_checks(runner),
+        "SN-DA-HRSD-ENTRA-CLAIMS-001",
+    )
+    assert missing.status == Status.NOT_CONFIGURED.value
+    assert "claim candidates" in missing.result
+    assert "record the emitted employee identity claim candidates" in (
+        missing.remediation
+    )
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"][
+        "tokenClaimEmissionConfirmed"
+    ] = True
+    state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"][
+        "tokenClaimCandidates"
+    ] = ["email"]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    mismatched = _checkpoint(
+        run_servicenow_da_hrsd_checks(runner),
+        "SN-DA-HRSD-ENTRA-CLAIMS-001",
+    )
+    assert mismatched.status == Status.NOT_CONFIGURED.value
+    assert "does not match the Entra handoff" in (
+        mismatched.result
+    )
 
 
 def test_oidc_checkpoint_requires_capability_owned_by_oidc_phase(
@@ -681,6 +1303,62 @@ def test_oidc_checkpoint_rejects_legacy_mapping_details(
 
     assert result.status == Status.NOT_CONFIGURED.value
     assert "privacy-minimized" in result.result
+
+
+def test_oidc_checkpoint_rejects_legacy_bounded_shape_without_two_names(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    evidence = state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
+        "evidence"
+    ]
+    evidence["mappingDetailsCollected"] = False
+    evidence.pop("claimMappingConfirmed")
+    evidence.pop("tokenClaimName")
+    evidence.pop("serviceNowUserField")
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-OIDC-001",
+    )
+
+    assert result.status == Status.NOT_CONFIGURED.value
+    assert "legacy OIDC attestation" in result.result
+    assert "two-name mapping handoff" in result.remediation
+
+
+def test_recorded_mapping_workflow_reaches_real_hr_checkpoints(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    monkeypatch.chdir(tmp_path)
+    _record_new_mapping_workflow(
+        tmp_path,
+        candidates=("email", "upn", "employee_id"),
+        selected_claim="employee_id",
+        user_field="employee_number",
+    )
+    runner = _runner(components)
+    runner.graph = _graph_client(optional_claim_names=())
+
+    results = run_servicenow_da_hrsd_checks(runner)
+    claims = _checkpoint(results, "SN-DA-HRSD-ENTRA-CLAIMS-001")
+    oidc = _checkpoint(results, "SN-DA-HRSD-OIDC-001")
+
+    assert claims.status == Status.MANUAL.value
+    assert "employee_id" in claims.result
+    assert oidc.status == Status.MANUAL.value
+    assert "employee_id" in oidc.result
+    assert "employee_number" in oidc.result
+    assert oidc.remediation == ""
 
 
 @pytest.mark.parametrize(
@@ -763,6 +1441,21 @@ def test_portal_checkpoint_requires_explicit_root_url_evidence(
     assert rolled_back.status == Status.NOT_CONFIGURED.value
 
     state["transactions"]["portal"]["operation-root"]["status"] = "committed"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    legacy_transaction = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-PORTAL-001",
+    )
+    assert legacy_transaction.status == Status.NOT_CONFIGURED.value
+
+    topic = snow._portal_topic_component(components)
+    snow._record_portal_confirmation(
+        state,
+        topic=topic,
+        portal_url="https://dev123.service-now.com",
+        instance_name="dev123",
+        source="already-configured",
+    )
     state_path.write_text(json.dumps(state), encoding="utf-8")
     confirmed = _checkpoint(
         run_servicenow_da_hrsd_checks(_runner(components)),
@@ -871,6 +1564,10 @@ def test_publish_checkpoint_ignores_metadata_only_drift_and_reopens_on_semantic_
         if row.checkpoint_id == "SN-DA-HRSD-PUBLISH-001"
     )
     assert publish.status == Status.PASSED.value
+    target_runner = _runner(components)
+    target_runner.checkpoint_target = "SN-DA-HRSD-PUBLISH-001"
+    targeted = run_servicenow_da_hrsd_checks(target_runner)
+    assert targeted[0].status == Status.PASSED.value
 
     components["changeToken"] = "later-edit"
     metadata_only = run_servicenow_da_hrsd_checks(_runner(components))
@@ -1038,6 +1735,74 @@ def test_test_checkpoint_accepts_bounded_failure_evidence(
     assert result.status == Status.FAILED.value
 
 
+def test_test_checkpoint_accepts_maker_failure_without_category(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    current_binding = state["evidence"]["test"]["binding"]
+    state["evidence"]["test"] = {
+        "kind": "maker-attestation",
+        "status": "failed",
+        "promptCategory": "list-my-open-hr-cases",
+        "result": "fail",
+        "failureCategory": None,
+        "binding": current_binding,
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(_runner(components))
+    test_result = _checkpoint(results, "SN-DA-HRSD-TEST-001")
+    publish = _checkpoint(results, "SN-DA-HRSD-PUBLISH-001")
+
+    assert test_result.status == Status.FAILED.value
+    assert publish.status == Status.FAILED.value
+    assert "maker recorded Not pass" in publish.result
+
+    target_runner = _runner(components)
+    target_runner.checkpoint_target = "SN-DA-HRSD-PUBLISH-001"
+    targeted = run_servicenow_da_hrsd_checks(target_runner)
+    assert targeted[0].status == Status.FAILED.value
+
+
+@pytest.mark.parametrize("result", ["pass", "fail"])
+def test_publish_rejects_test_bound_to_previous_connection(
+    monkeypatch,
+    tmp_path: Path,
+    result: str,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["evidence"]["test"]["result"] = result
+    state["evidence"]["test"]["status"] = (
+        "completed" if result == "pass" else "failed"
+    )
+    state["evidence"]["test"]["failureCategory"] = None
+    state["evidence"]["credential"]["connectionId"] = (
+        "00000000000040008000000000009999"
+    )
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    full_publish = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-PUBLISH-001",
+    )
+    target_runner = _runner(components)
+    target_runner.checkpoint_target = "SN-DA-HRSD-PUBLISH-001"
+    targeted = run_servicenow_da_hrsd_checks(target_runner)
+
+    assert full_publish.status == Status.NOT_CONFIGURED.value
+    assert targeted[0].status == Status.NOT_CONFIGURED.value
+    assert "current passing Test pane result" in targeted[0].result
+
+
 def test_entra_phase_evaluation_uses_one_logical_read_set(
     monkeypatch,
     tmp_path: Path,
@@ -1119,14 +1884,14 @@ def test_entra_phase_evaluation_uses_one_logical_read_set(
         if result.checkpoint_id.startswith("SN-DA-HRSD-ENTRA-")
     ]
 
-    assert len(entra_results) == 6
+    assert len(entra_results) == 4
     assert counters == {
         "agentbuilder": 1,
         "connectivity": 1,
         "applications": 1,
-        "app_service_principal": 1,
-        "graph_service_principal": 1,
-        "permission_grants": 1,
+        "app_service_principal": 0,
+        "graph_service_principal": 0,
+        "permission_grants": 0,
     }
 
 
@@ -1136,8 +1901,8 @@ def test_entra_phase_evaluation_uses_one_logical_read_set(
         ("SN-DA-HRSD-PKG-001", 1, 0, 0),
         ("SN-DA-HRSD-ADMIN-PREFLIGHT-001", 1, 0, 0),
         ("SN-DA-HRSD-PLUGIN-001", 1, 0, 0),
-        ("SN-DA-HRSD-ENTRA-*", 6, 0, 4),
-        ("SN-DA-HRSD-ENTRA-CLAIMS-001", 1, 0, 4),
+        ("SN-DA-HRSD-ENTRA-*", 4, 0, 1),
+        ("SN-DA-HRSD-ENTRA-CLAIMS-001", 1, 0, 1),
         ("SN-DA-HRSD-OIDC-001", 1, 0, 0),
         ("SN-DA-HRSD-CREDENTIAL-001", 1, 1, 0),
         ("SN-DA-HRSD-TOPICS-001", 1, 0, 0),
@@ -1238,7 +2003,7 @@ def test_preflight_discovery_change_does_not_require_global_reapproval(
     )
 
     assert result.status == Status.PASSED.value
-    assert "reused automatically" in result.result
+    assert "exact supported agent target" in result.result
 
 
 def test_connected_connection_does_not_complete_other_admin_phases(
@@ -1275,7 +2040,7 @@ def test_connected_connection_does_not_complete_other_admin_phases(
     assert statuses["SN-DA-HRSD-OIDC-001"] == Status.NOT_CONFIGURED.value
 
 
-def test_graph_failure_cannot_be_overridden_by_admin_attestation(
+def test_optional_claim_absence_does_not_override_confirmed_emission(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1292,30 +2057,13 @@ def test_graph_failure_cannot_be_overridden_by_admin_attestation(
         if result.checkpoint_id == "SN-DA-HRSD-ENTRA-CLAIMS-001"
     )
 
-    assert claim_result.status == Status.FAILED.value
-    assert "upn" in claim_result.result
-    assert "correct this exact application setting" in claim_result.remediation
-
-
-def test_foreign_resource_consent_does_not_satisfy_graph_admin_consent(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    components = _components()
-    _write_state(tmp_path, components)
-    runner = _runner(components)
-    runner.graph = _graph_client(foreign_consent=True)
-    monkeypatch.chdir(tmp_path)
-
-    result = next(
-        item
-        for item in run_servicenow_da_hrsd_checks(runner)
-        if item.checkpoint_id == "SN-DA-HRSD-ENTRA-CONSENT-001"
+    assert claim_result.status == Status.MANUAL.value
+    assert "upn: not listed in optionalClaims" in claim_result.result
+    assert "administrator confirmed actual claim emission" in (
+        claim_result.result
     )
-
-    assert result.status == Status.FAILED.value
-    assert "openid" in result.result
-    assert "tenant-wide admin consent" in result.description.casefold()
+    assert "does not prove emitted token contents" in claim_result.result
+    assert claim_result.remediation == ""
 
 
 def test_graph_unavailable_uses_manual_fallback_only_with_evidence(
@@ -1386,7 +2134,7 @@ def test_credential_rejects_resource_uri_mismatch(
         if item.checkpoint_id == "SN-DA-HRSD-CREDENTIAL-001"
     )
 
-    assert result.status == Status.FAILED.value
+    assert result.status == Status.NOT_CONFIGURED.value
     assert "different Instance Name or Resource URI" in result.result
     assert "exact Application client ID" in result.result
 

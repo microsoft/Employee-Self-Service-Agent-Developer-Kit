@@ -681,10 +681,18 @@ def compact_checkpoint_result_to_dict(
     warnings = any(
         result.status == Status.WARNING.value for result in target_results
     )
+    evaluated_nonready = any(
+        result.status
+        in {
+            Status.NOT_CONFIGURED.value,
+            Status.SKIPPED.value,
+        }
+        for result in target_results
+    )
     compact_exit_code = 1 if blocking else 0
     compact_overall = (
         "NOT_READY"
-        if blocking
+        if blocking or evaluated_nonready
         else "READY_WITH_WARNINGS"
         if warnings
         else "READY"
@@ -866,10 +874,18 @@ def parse_compact_checkpoint_result(
     warnings = any(
         result["status"] == Status.WARNING.value for result in results
     )
+    evaluated_nonready = any(
+        result["status"]
+        in {
+            Status.NOT_CONFIGURED.value,
+            Status.SKIPPED.value,
+        }
+        for result in results
+    )
     expected_exit = 1 if blocking else 0
     expected_overall = (
         "NOT_READY"
-        if blocking
+        if blocking or evaluated_nonready
         else "READY_WITH_WARNINGS"
         if warnings
         else "READY"

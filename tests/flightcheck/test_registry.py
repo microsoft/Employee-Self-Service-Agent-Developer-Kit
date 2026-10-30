@@ -253,8 +253,6 @@ class TestTransitiveRequirements:
             "SN-DA-HRSD-ENTRA-CLAIMS-001",
             "SN-DA-HRSD-ENTRA-SCOPE-001",
             "SN-DA-HRSD-ENTRA-PREAUTH-001",
-            "SN-DA-HRSD-ENTRA-PERMISSIONS-001",
-            "SN-DA-HRSD-ENTRA-CONSENT-001",
         }
         emitted = expected | {
             "SN-DA-HRSD-PLUGIN-001",
@@ -275,7 +273,7 @@ class TestTransitiveRequirements:
         ]
 
         entra = registry.transitive_requirements(
-            "SN-DA-HRSD-ENTRA-CONSENT-001"
+            "SN-DA-HRSD-ENTRA-PREAUTH-001"
         )
         assert entra.clients == frozenset(
             {registry.AGENTBUILDER, registry.GRAPH}

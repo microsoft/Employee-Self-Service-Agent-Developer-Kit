@@ -27,6 +27,12 @@ Use the host's interactive single-selection control and present these choices in
 
 Leave the selection initially unset and disable free-form input. Selecting **Continue (Recommended)** is the confirmation for the exact remote ALM-setting change described above.
 
+Apply the parent setup skill's unavailable-user and automated-answer guard.
+An unavailable placeholder, `autoReply`, `answeredExternally`, command
+approval, or tool approval is neither **Continue (Recommended)** nor **Skip
+enrollment**. Keep enrollment pending and perform no enrollment or attachment
+until the maker explicitly submits one of those two choices.
+
 ## Continue with enrollment
 
 Run:

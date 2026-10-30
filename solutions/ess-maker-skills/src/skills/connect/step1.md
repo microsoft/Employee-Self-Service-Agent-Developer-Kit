@@ -68,13 +68,10 @@ non-blocking — no user-facing message, and it never fails the step):
 Before reading or creating any retained Preview ServiceNow state, read
 `.local/config.json` and resolve `activeAgent` against `agents`.
 
-- If the active entry has `releaseLine: "da"` and `schemaName:
-  "gptagent_copilotforemployeeselfservicehr"`, read
-  `src/skills/connect/servicenow-da-hrsd/SKILL.md` and follow it. Stop this
+- If any configured entry has `releaseLine: "da"`, read
+  `src/skills/connect/servicenow-da/SKILL.md` and follow it. The chooser will
+  list the exact supported HR and IT agents for this invocation. Stop this
   routing file; do not inspect or create `.local/connect/servicenow/` state.
-- If the active entry has `releaseLine: "da"` but is not the exact HR schema,
-  stop before the retained Preview route. The HRSD lifecycle supports only
-  Employee Self-Service (HR); another DA profile requires its own provider.
 
 Check if `.local/connect/servicenow/steps.md` exists.
 

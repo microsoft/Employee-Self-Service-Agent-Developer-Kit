@@ -125,6 +125,7 @@ SETUP_SOURCE_PRIORITY = {
 }
 STUDIO_RING_BY_HOST = {
     "copilotstudio.microsoft.com": "prod",
+    "copilotstudio.preview.microsoft.com": "prod",
     "copilotstudio.preprod.microsoft.com": "preprod",
     "copilotstudio.test.microsoft.com": "test",
 }
@@ -356,6 +357,13 @@ def resolve_da_target(
             "Supplied target and --ring identify different service rings."
         )
     resolved["ring"] = ring or derived_ring or "prod"
+    resolved["ringSource"] = (
+        "explicit"
+        if ring
+        else "recognized-target"
+        if derived_ring
+        else "legacy-default"
+    )
     if resolved_agent := (explicit_agent or derived_agent):
         resolved["agentId"] = resolved_agent
         if derived_agent:
@@ -650,6 +658,8 @@ def _canonical_environment_matches_connection(
     connection: dict[str, Any],
 ) -> bool:
     environment = state["environment"]
+    recorded_account = str(environment.get("account") or "").strip()
+    connection_account = str(connection.get("account") or "").strip()
     return (
         environment.get("id") == connection["environment"]["id"]
         and environment.get("tenant_id")
@@ -659,6 +669,11 @@ def _canonical_environment_matches_connection(
         and environment.get("ring") == connection["environment"]["ring"]
         and environment.get("api_version")
         == connection["environment"]["apiVersion"]
+        and (
+            not recorded_account
+            or not connection_account
+            or recorded_account.casefold() == connection_account.casefold()
+        )
     )
 
 
@@ -718,7 +733,7 @@ def _remove_directory(path: Path, label: str) -> str | None:
     if not path.exists():
         return None
     try:
-        shutil.rmtree(path)
+        shutil.rmtree(_extended_length_path(path))
     except OSError as exc:
         return f"{label} cleanup failed ({type(exc).__name__}: {exc})"
     return None
@@ -928,6 +943,11 @@ def _new_canonical_setup_state(
             ],
             "ring": connection["environment"]["ring"],
             "api_version": connection["environment"]["apiVersion"],
+            **(
+                {"account": connection["account"]}
+                if connection.get("account")
+                else {}
+            ),
         },
         "agents": {},
         "created_at": now,
@@ -949,6 +969,8 @@ def _store_canonical_agent_state(
             "This workspace already targets another Power Platform "
             "environment. Create and open a new workspace for that environment."
         )
+    if connection.get("account") and not updated["environment"].get("account"):
+        updated["environment"]["account"] = connection["account"]
     updated["agents"][connection["agent"]["id"]] = agent_state
     updated["updated_at"] = _utc_now()
     _write_json(kit_root / CANONICAL_SETUP_STATE, updated)
@@ -1730,6 +1752,9 @@ def validate_existing_dev_connection(
         if isinstance(managed_properties, dict)
         else False
     )
+    authenticated_account = str(
+        getattr(client, "authenticated_account", "") or ""
+    ).strip()
     return {
         "schemaVersion": 1,
         "stateKind": "da-existing-dev-connection",
@@ -1755,6 +1780,11 @@ def validate_existing_dev_connection(
         },
         "selectedBy": selection_source or "direct-id",
         "verifiedAt": _utc_now(),
+        **(
+            {"account": authenticated_account}
+            if authenticated_account
+            else {}
+        ),
     }
 
 
@@ -2184,9 +2214,24 @@ def _create_baseline(destination: Path) -> None:
             continue
         target = baseline / child.name
         if child.is_dir():
-            shutil.copytree(child, target)
+            shutil.copytree(
+                _extended_length_path(child),
+                _extended_length_path(target),
+            )
         else:
-            shutil.copy2(child, target)
+            shutil.copy2(
+                _extended_length_path(child),
+                _extended_length_path(target),
+            )
+
+
+def _extended_length_path(path: Path) -> str:
+    resolved = str(path.resolve())
+    if os.name != "nt" or resolved.startswith("\\\\?\\"):
+        return resolved
+    if resolved.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + resolved[2:]
+    return "\\\\?\\" + resolved
 
 
 def _load_config(config_path: Path) -> dict[str, Any]:
@@ -2200,9 +2245,11 @@ def _write_config(
     *,
     agent_entry: dict[str, Any],
     environment_id: str,
+    tenant_id: str,
     host: str,
     ring: str,
     api_version: str,
+    account: str | None,
     component_counts: Counter[str],
 ) -> None:
     existing = _load_config(config_path)
@@ -2232,6 +2279,7 @@ def _write_config(
         "setup": "complete",
         "releaseLine": "da",
         "environmentId": environment_id,
+        "tenantId": tenant_id,
         "powerPlatformApiEndpoint": host,
         "ring": ring,
         "agentBuilderApiVersion": api_version,
@@ -2247,6 +2295,8 @@ def _write_config(
             component_counts.get("TestCaseComponent", 0)
         ),
     }
+    if account:
+        config["account"] = account
     config_path.parent.mkdir(parents=True, exist_ok=True)
     handle, temporary = tempfile.mkstemp(
         prefix=f"{config_path.name}.",
@@ -2651,7 +2701,7 @@ def attach_existing_dev(
                 )
                 baseline = destination / ".baseline"
                 if baseline.exists():
-                    shutil.rmtree(baseline)
+                    shutil.rmtree(_extended_length_path(baseline))
                 restore_from(str(destination), str(temporary))
                 cleanup_failure = _remove_directory(
                     temporary,
@@ -2732,9 +2782,11 @@ def attach_existing_dev(
             kit_root / ".local" / "config.json",
             agent_entry=agent_entry,
             environment_id=normalized_environment_id,
+            tenant_id=connection["environment"]["tenantId"],
             host=client.host,
             ring=client.ring,
             api_version=client.api_version,
+            account=connection.get("account"),
             component_counts=component_counts,
         )
     except Exception as exc:
@@ -2986,6 +3038,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="List cached AgentBuilder sign-in names without authenticating.",
     )
     cached_accounts.add_argument("--kit-root", type=Path, default=Path.cwd())
+    resolve_target = commands.add_parser(
+        "resolve-target",
+        help=(
+            "Resolve environment, agent, and supported service ring from "
+            "target text without authenticating."
+        ),
+    )
+    resolve_target.add_argument("--target-url")
+    resolve_target.add_argument("--environment-id")
+    resolve_target.add_argument("--agent-id")
+    resolve_target.add_argument(
+        "--ring",
+        choices=("prod", "preprod", "test"),
+    )
+    resolve_target.add_argument("--require-agent", action="store_true")
     maintain_flightcheck = commands.add_parser(
         "maintain-flightcheck",
         help="Apply one native FlightCheck result to canonical setup state.",
@@ -3145,48 +3212,61 @@ def _client_from_args(
         if args.host
         else derive_environment_host(environment_id, ring)
     )
-    token, tenant_id = _authentication_from_args(args, ring)
-    return AgentBuilderClient(
+    token, tenant_id, account = _authentication_from_args(args, ring)
+    client = AgentBuilderClient(
         host,
         token,
         ring=ring,
         tenant_id=tenant_id,
         api_version=args.api_version,
     )
+    client.authenticated_account = account
+    return client
 
 
 def _authentication_from_args(
     args: argparse.Namespace,
     ring: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, str | None]:
     account = getattr(args, "account", None)
     kit_root = args.kit_root.resolve()
     cache_path = kit_root / ".local" / ".agentbuilder_token_cache.bin"
     if getattr(args, "command", None) == "list-agents":
-        return authenticate_agent_inventory(
+        token, tenant_id, authenticated_account = authenticate_agent_inventory(
             ring,
             tenant_id=args.tenant_id,
             cache_path=cache_path,
             force_account_selection=args.select_account,
             account_hint=account,
+            return_account_identity=True,
+            require_account_identity=True,
         )
-    if args.tenant_id:
-        token = authenticate(
+    elif args.tenant_id:
+        token, authenticated_account = authenticate(
             args.tenant_id,
             ring,
             cache_path=cache_path,
             force_account_selection=args.select_account,
             account_hint=account,
+            return_account_identity=True,
+            require_account_identity=True,
         )
         tenant_id = args.tenant_id
     else:
-        token, tenant_id = authenticate_selected_tenant(
+        token, tenant_id, authenticated_account = authenticate_selected_tenant(
             ring,
             cache_path=cache_path,
             force_account_selection=args.select_account,
             account_hint=account,
+            return_account_identity=True,
+            require_account_identity=True,
         )
-    return token, tenant_id
+    if not authenticated_account:
+        raise ExistingDASetupError(
+            "AgentBuilder authentication could not verify the selected "
+            "Microsoft account."
+        )
+    return token, tenant_id, authenticated_account
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3204,8 +3284,24 @@ def main(argv: list[str] | None = None) -> int:
                 f"{json.dumps(result, ensure_ascii=True)}"
             )
             return 0
+        if args.command == "resolve-target":
+            result = resolve_da_target(
+                target_url=args.target_url,
+                environment_id=args.environment_id,
+                agent_id=args.agent_id,
+                ring=args.ring,
+                require_agent=args.require_agent,
+            )
+            print(
+                "DA_TARGET_JSON:"
+                f"{json.dumps(result, ensure_ascii=True)}"
+            )
+            return 0
         if args.command == "list-environments":
-            token, tenant_id = _authentication_from_args(args, args.ring)
+            token, tenant_id, account = _authentication_from_args(
+                args,
+                args.ring,
+            )
             environments = list_environments(
                 token,
                 args.ring,
@@ -3220,6 +3316,7 @@ def main(argv: list[str] | None = None) -> int:
             result = {
                 "tenantId": tenant_id,
                 "ring": args.ring,
+                "account": account,
                 "environments": summarize_environments(environments),
                 "evidencePath": str(evidence_path),
             }

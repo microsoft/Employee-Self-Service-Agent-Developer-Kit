@@ -1,5 +1,5 @@
 {
-  "contractRevision": 6,
+  "contractRevision": 10,
   "provider": "servicenow-da-hrsd",
   "displayName": "ServiceNow HRSD",
   "profile": "hrsd",
@@ -11,8 +11,8 @@
     "Microsoft Entra Application Administrator or higher",
     "Power Platform Maker / Admin"
   ],
-  "stateMigrationCommand": "python scripts/connect_servicenow_da.py migrate-state",
-  "stateInitializationCommand": "python scripts/connect_servicenow_da.py initialize-state --contract-revision {contractRevision}",
+  "stateMigrationCommand": "python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {agentSlug} migrate-state",
+  "stateInitializationCommand": "python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {agentSlug} initialize-state --contract-revision {contractRevision}",
   "detect": {
     "checkpoint": "SN-DA-HRSD-PKG-001",
     "meansInstalled": "Passed",
@@ -30,7 +30,7 @@
     },
     {
       "id": "plugin-prerequisites",
-      "label": "Confirm HR Service Delivery Core is installed and Active",
+      "label": "Confirm HR Service Delivery Core is installed and ready",
       "checkpoints": ["SN-DA-HRSD-PLUGIN-001"],
       "completionStatuses": ["Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/verify-plugin-prerequisites.md",
@@ -54,7 +54,10 @@
         "path": "adminSetup.phaseHandoffs.{phaseId}",
         "evidenceObjectPath": "evidence",
         "acceptedRecordStatuses": ["completed", "reused"],
-        "requiredEvidenceKind": "structured-admin-attestation"
+        "requiredEvidenceKind": "structured-admin-attestation",
+        "requiredValues": {
+          "tokenClaimEmissionConfirmed": true
+        }
       },
       "mutates": false
     },
@@ -73,7 +76,8 @@
         "requiredValues": {
           "oidcCapabilityConfirmed": true,
           "runbookCompleted": true,
-          "mappingDetailsCollected": false
+          "mappingDetailsCollected": true,
+          "claimMappingConfirmed": true
         }
       },
       "mutates": false
@@ -85,6 +89,7 @@
       "completionStatuses": ["Passed"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/prepare-credential.md",
       "actionExecution": "once",
+      "resumeActionWhenIncomplete": true,
       "mutates": false
     },
     {
@@ -94,6 +99,7 @@
       "completionStatuses": ["Passed", "Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/prepare-topics.md",
       "actionExecution": "once",
+      "resumeActionWhenIncomplete": true,
       "manualAcknowledgementEvidence": {
         "path": "evidence.topics",
         "evidenceObjectPath": "",
@@ -121,6 +127,7 @@
       "completionStatuses": ["Passed"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/configure-portal-url.md",
       "actionExecution": "once",
+      "resumeActionWhenIncomplete": true,
       "mutates": true,
       "requiredRole": "ESS Maker / Agent Developer",
       "gateMode": "attested"
@@ -206,41 +213,6 @@
         ]
       },
       "mutates": false
-    },
-    {
-      "id": "publish",
-      "label": "Publish the tested ServiceNow HRSD agent revision",
-      "checkpoints": ["SN-DA-HRSD-PUBLISH-001"],
-      "completionStatuses": ["Passed", "Manual"],
-      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/publish-agent.md",
-      "actionExecution": "once",
-      "manualAcknowledgementEvidence": {
-        "path": "evidence.publish",
-        "evidenceObjectPath": "",
-        "acceptedRecordStatuses": ["confirmation-required"],
-        "requiredEvidenceKind": "maker-attestation",
-        "bindings": [
-          {
-            "evidencePath": "publishedComponentHash",
-            "statePath": "componentHash"
-          },
-          {
-            "evidencePath": "testedDraftSemanticHash",
-            "statePath": "draftSemanticHash"
-          },
-          {
-            "evidencePath": "publishedSemanticHash",
-            "statePath": "draftSemanticHash"
-          },
-          {
-            "evidencePath": "connectionBindingHash",
-            "statePath": "connectionBindingHash"
-          }
-        ]
-      },
-      "mutates": true,
-      "requiredRole": "ESS Maker / Agent Developer",
-      "gateMode": "attested"
     }
   ]
 }

@@ -20,6 +20,7 @@ Contracts pinned:
   * plan producing a FAILED row               -> SystemExit code 1
   * plan producing an ERROR row                -> SystemExit code 1
   * plan producing only SKIPPED/NOT_CONFIGURED -> SystemExit code 1
+  * compact SKIPPED/NOT_CONFIGURED -> bounded NOT_READY result / exit 0
   * plan producing a MANUAL row                -> READY_WITH_WARNINGS / 0
   * exact checkpoint producing no row          -> SystemExit code 1
 """
@@ -621,8 +622,6 @@ class TestHermeticRun:
             "SN-DA-HRSD-ENTRA-CLAIMS-001",
             "SN-DA-HRSD-ENTRA-SCOPE-001",
             "SN-DA-HRSD-ENTRA-PREAUTH-001",
-            "SN-DA-HRSD-ENTRA-PERMISSIONS-001",
-            "SN-DA-HRSD-ENTRA-CONSENT-001",
         )
         calls = 0
         saved = {}
@@ -784,6 +783,128 @@ class TestHermeticRun:
             "preferred_username": "maker@example.com",
         }
 
+    def test_configured_setup_account_is_reused_and_verified_for_graph(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps({
+                "tenantId": "00000000-0000-0000-0000-000000001111",
+                "account": "maker@example.com",
+            }),
+            encoding="utf-8",
+        )
+        observed = {}
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            requires_config = True
+
+        class _Plan:
+            clients = frozenset({registry.GRAPH})
+            requires_config = True
+            requires_dataverse_endpoint = False
+            ordered_fns = [(
+                "Fake",
+                lambda _runner: [_row("FAKE-001", Status.PASSED.value)],
+            )]
+
+        class _Graph:
+            signed_in_username = "maker@example.com"
+
+            def __init__(self, tenant_id: str) -> None:
+                observed["tenant_id"] = tenant_id
+
+            def authenticate(self, preferred_username=None):
+                observed["preferred_username"] = preferred_username
+                return "token"
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(cli, "GraphClient", _Graph)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
+
+        assert exc.value.code == 0
+        assert observed == {
+            "tenant_id": "00000000-0000-0000-0000-000000001111",
+            "preferred_username": "maker@example.com",
+        }
+
+    def test_configured_setup_account_mismatch_blocks_checkpoint(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps({
+                "tenantId": "00000000-0000-0000-0000-000000001111",
+                "account": "maker@example.com",
+            }),
+            encoding="utf-8",
+        )
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            requires_config = True
+
+        class _Plan:
+            clients = frozenset({registry.GRAPH})
+            requires_config = True
+            requires_dataverse_endpoint = False
+            ordered_fns = [(
+                "Fake",
+                lambda runner: [
+                    _row(
+                        "FAKE-001",
+                        (
+                            Status.ERROR.value
+                            if runner.graph is None
+                            else Status.PASSED.value
+                        ),
+                    )
+                ],
+            )]
+
+        class _Graph:
+            signed_in_username = "other@example.com"
+
+            def __init__(self, _tenant_id: str) -> None:
+                pass
+
+            def authenticate(self, preferred_username=None):
+                assert preferred_username == "maker@example.com"
+                return "token"
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(cli, "GraphClient", _Graph)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
+
+        assert exc.value.code == 1
+
     def test_required_client_auth_failure_blocks_checkpoint(
         self,
         tmp_path: Path,
@@ -933,6 +1054,297 @@ class TestHermeticRun:
             cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
         assert exc.value.code == 1
 
+    @pytest.mark.parametrize(
+        "status",
+        [Status.SKIPPED.value, Status.NOT_CONFIGURED.value],
+    )
+    def test_compact_unresolved_row_emits_bounded_nonready_result(
+        self,
+        status: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        target = "FAKE-001"
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            provider = "servicenow-da-itsm"
+            profile = "itsm"
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+            ordered_fns = [
+                ("Fake", lambda _runner: [_row(target, status)])
+            ]
+
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps(
+                {
+                    "activeAgent": "employee-self-service-it",
+                    "environmentId": (
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                    "agents": [
+                        {
+                            "slug": "employee-self-service-it",
+                            "botId": (
+                                "00000000-0000-4000-8000-000000002222"
+                            ),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    target,
+                    tmp_path,
+                    agent_slug="employee-self-service-it",
+                    compact_result=True,
+                    invocation_id="repairable-nonready",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert payload["kind"] == "checkpoint-result"
+        assert payload["overall"] == "NOT_READY"
+        assert payload["exitCode"] == 0
+        assert payload["results"][0]["status"] == status
+        assert "CHECKPOINT-CONTRACT-UNRESOLVED" not in captured.out
+
+    def test_compact_required_client_failure_stays_typed_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps(
+                {
+                    "tenantId": "00000000-0000-0000-0000-000000001111",
+                    "activeAgent": "employee-self-service-it",
+                    "environmentId": (
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                    "agents": [
+                        {
+                            "slug": "employee-self-service-it",
+                            "botId": (
+                                "00000000-0000-4000-8000-000000002222"
+                            ),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            provider = "servicenow-da-itsm"
+            profile = "itsm"
+            requires_config = True
+
+        class _Plan:
+            clients = frozenset({registry.GRAPH})
+            requires_config = True
+            requires_dataverse_endpoint = False
+            ordered_fns = [
+                (
+                    "Fake",
+                    lambda _runner: [
+                        _row("FAKE-001", Status.NOT_CONFIGURED.value)
+                    ],
+                )
+            ]
+
+        class _Graph:
+            signed_in_username = None
+
+            def __init__(self, _tenant_id: str) -> None:
+                pass
+
+            def authenticate(self, preferred_username=None):
+                raise RuntimeError("sign-in failed")
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(cli, "GraphClient", _Graph)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    "FAKE-001",
+                    tmp_path,
+                    agent_slug="employee-self-service-it",
+                    compact_result=True,
+                    invocation_id="client-failure",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 1
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["kind"] == "checkpoint-error"
+        assert payload["error"]["exitCode"] == 1
+
+    def test_real_itsm_topics_compact_flow_preserves_repairable_nonready(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        import copy
+
+        from tests.flightcheck.checks.test_servicenow_da_itsm import (
+            _itsm_components,
+        )
+
+        environment_id = "6c606f06-ea15-e785-b31c-9158232e9502"
+        agent_id = "e912a2fc-5ff3-4bc6-83a9-fdce46db2883"
+        slug = "employee-self-service-it"
+        components = copy.deepcopy(_itsm_components())
+        for index, suffix in enumerate(
+            (
+                "ServiceNowITSMSystemReadExecution",
+                "ServiceNowITSMSystemWriteExecution",
+            )
+        ):
+            components["botComponentChanges"].append(
+                {
+                    "$kind": "BotComponentInsert",
+                    "component": {
+                        "$kind": "DialogComponent",
+                        "id": (
+                            "00000000-0000-4000-8000-"
+                            f"{9900 + index:012d}"
+                        ),
+                        "displayName": suffix,
+                        "schemaName": (
+                            "gptagent_copilotforemployeeselfserviceit."
+                            f"topic.{suffix}"
+                        ),
+                        "state": "Inactive",
+                        "status": "Inactive",
+                        "dialog": {"$kind": "TaskDialog"},
+                    },
+                }
+            )
+
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps(
+                {
+                    "activeAgent": "employee-self-service-hr",
+                    "account": "maker@example.test",
+                    "tenantId": "935884d7-bdee-469b-a461-fcc530a3ac83",
+                    "environmentId": environment_id,
+                    "ring": "prod",
+                    "powerPlatformApiEndpoint": (
+                        "https://6c606f06ea15e785b31c9158232e95.02."
+                        "environment.api.powerplatform.com"
+                    ),
+                    "agents": [
+                        {
+                            "slug": "employee-self-service-hr",
+                            "botId": (
+                                "00000000-0000-4000-8000-000000009998"
+                            ),
+                            "schemaName": (
+                                "gptagent_copilotforemployeeselfservicehr"
+                            ),
+                        },
+                        {
+                            "slug": slug,
+                            "botId": agent_id,
+                            "schemaName": (
+                                "gptagent_copilotforemployeeselfserviceit"
+                            ),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        config_before = (local / "config.json").read_bytes()
+
+        monkeypatch.setattr(
+            cli,
+            "authenticate_flightcheck",
+            lambda *_args, **_kwargs: (
+                "token",
+                "935884d7-bdee-469b-a461-fcc530a3ac83",
+                "maker@example.test",
+            ),
+        )
+
+        class _AgentBuilder:
+            def __init__(self, *_args, **_kwargs) -> None:
+                pass
+
+            def fetch_components(self, requested_id: str) -> dict:
+                assert requested_id == agent_id
+                return components
+
+        monkeypatch.setattr(cli, "AgentBuilderClient", _AgentBuilder)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    "SN-DA-ITSM-TOPICS-001",
+                    tmp_path,
+                    agent_slug=slug,
+                    compact_result=True,
+                    invocation_id="real-itsm-repairable",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["kind"] == "checkpoint-result"
+        assert payload["overall"] == "NOT_READY"
+        assert payload["exitCode"] == 0
+        assert payload["results"][0]["status"] == Status.NOT_CONFIGURED.value
+        assert payload["results"][0]["result"] == (
+            "13/15 ServiceNow ITSM topics are Active."
+        )
+        assert "Enable the inactive ITSM topics" in (
+            payload["results"][0]["remediation"]
+        )
+        assert payload["identity"]["agentSlug"] == slug
+        assert payload["identity"]["agentId"] == agent_id
+        assert (local / "config.json").read_bytes() == config_before
+
     def test_manual_row_adds_guided_warning_and_exits_0(
         self,
         tmp_path: Path,
@@ -1074,6 +1486,109 @@ class TestHermeticRun:
         assert payload["invocation"]["id"] == "invocation-123"
         assert payload["results"][0]["status"] == Status.MANUAL.value
         assert not (tmp_path / "out").exists()
+
+    def test_compact_servicenow_requires_explicit_selected_agent_before_auth(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(
+            cli,
+            "authenticate_flightcheck",
+            lambda *_args, **_kwargs: pytest.fail(
+                "missing selected agent must fail before auth"
+            ),
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    "SN-DA-ITSM-TOPICS-001",
+                    tmp_path,
+                    compact_result=True,
+                    invocation_id="missing-selected-agent",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 2
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert payload["kind"] == "checkpoint-error"
+        assert "exact selected --agent-slug" in payload["error"]["message"]
+        assert "refusing to fall back to activeAgent" in captured.err
+
+    @pytest.mark.parametrize(
+        ("target", "selected_slug"),
+        [
+            ("SN-DA-ITSM-TOPICS-001", "employee-self-service-hr"),
+            ("SN-DA-HRSD-TOPICS-001", "employee-self-service-it"),
+        ],
+    )
+    def test_compact_servicenow_rejects_wrong_selected_profile_before_auth(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        target: str,
+        selected_slug: str,
+    ) -> None:
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps(
+                {
+                    "activeAgent": "employee-self-service-hr",
+                    "agents": [
+                        {
+                            "slug": "employee-self-service-hr",
+                            "botId": (
+                                "00000000-0000-4000-8000-000000009998"
+                            ),
+                            "schemaName": (
+                                "gptagent_copilotforemployeeselfservicehr"
+                            ),
+                        },
+                        {
+                            "slug": "employee-self-service-it",
+                            "botId": (
+                                "00000000-0000-4000-8000-000000002222"
+                            ),
+                            "schemaName": (
+                                "gptagent_copilotforemployeeselfserviceit"
+                            ),
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            cli,
+            "authenticate_flightcheck",
+            lambda *_args, **_kwargs: pytest.fail(
+                "wrong profile must fail before auth"
+            ),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    target,
+                    tmp_path,
+                    agent_slug=selected_slug,
+                    compact_result=True,
+                    invocation_id="wrong-selected-profile",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 1
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["kind"] == "checkpoint-error"
+        assert "does not match" in payload["error"]["message"]
 
     def test_compact_result_emits_typed_error_when_no_rows(
         self,

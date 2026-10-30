@@ -13,16 +13,18 @@ If the user specified an integration as an argument (e.g., the user said
 pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 "which system" question and go directly to routing for that integration.
 
-Read `.local/config.json`.
+Read `.local/config.json` and `.local/setup/config.json`.
 
-Resolve the entry in `agents` whose `slug` equals `activeAgent`. If that
-entry's `releaseLine` is `da` and the selected integration is ServiceNow,
+If the selected integration is ServiceNow and canonical setup has
+`schema_version: 4` with an environment binding,
 record anonymous usage telemetry attributed to ServiceNow (best-effort,
 non-blocking, and with no user-facing message):
 `python scripts/emit_capability.py connect --connector servicenow`.
-Then read `src/skills/connect/servicenow-da-hrsd/SKILL.md` and follow it. This
-is the DA-GA HRSD lifecycle and it must not route through the retained
-Preview-era ServiceNow steps.
+Then read `src/skills/connect/servicenow-da/SKILL.md` and follow it. This
+local-ready/explicit-link chooser works even when no agent is prepared in the
+workspace, dispatches a selected prepared HR or IT agent to its own shared
+lifecycle, and must not route through the retained Preview-era ServiceNow
+steps.
 
 Otherwise read `src/skills/connect/step1.md` and follow it. That file records
 anonymous usage telemetry after routing knows which integration was chosen, so
@@ -41,11 +43,14 @@ already-installed lifecycle or the existing unsupported-install boundary.)
 Each integration routes differently — ServiceNow has its own step files;
 Workday routes by architecture before package detection:
 
-- **ServiceNow DA-GA HRSD lifecycle**:
-  `src/skills/connect/servicenow-da-hrsd/SKILL.md`
-  - State:
+- **ServiceNow DA-GA chooser**:
+  `src/skills/connect/servicenow-da/SKILL.md`
+  - HR state:
     `.local/connect/servicenow-da-hrsd/agents/<agent-slug>/lifecycle.json`
+  - IT state:
+    `.local/connect/servicenow-da-itsm/agents/<agent-slug>/lifecycle.json`
   - Uses MinimalBot Components and Power Platform Connectivity APIs.
+  - Never changes `.local/config.json.activeAgent`.
   - Does not use Dataverse connection-reference or workflow operations.
 
 - **ServiceNow retained Preview path**: `src/skills/connect/servicenow/`

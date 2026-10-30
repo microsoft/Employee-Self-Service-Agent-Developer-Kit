@@ -323,7 +323,12 @@ _CONNECT_LIFECYCLE_CORRELATION_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
-_CONNECT_LIFECYCLE_REMEDIATION_RE = re.compile(r"^WD-E2E-\d{3}$")
+_CONNECT_LIFECYCLE_REMEDIATION_RE = re.compile(
+    r"^(?:WD-E2E-\d{3}|SN-DA-HRSD-PLUGIN-001|"
+    r"SN-DA-(?:HRSD|ITSM)-(?:ADMIN-PREFLIGHT|"
+    r"ENTRA-(?:APP|CLAIMS|SCOPE|PREAUTH)|"
+    r"OIDC|CREDENTIAL|TOPICS|PORTAL|AGENT-CONNECTION|TEST)-001)$"
+)
 
 
 def normalize_connector(connector: str) -> str:
