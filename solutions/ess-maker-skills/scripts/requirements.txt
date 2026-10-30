@@ -21,6 +21,11 @@ defusedxml>=0.7.1,<0.8
 # Microsoft Object Model serialization through the installed .NET runtime.
 pythonnet>=3.1.0,<4.0
 
+# Authenticated CDP attach for browser-context MinimalBot operations.
+# The installer attaches to an existing Edge/Chromium process; it does not
+# download or launch a browser.
+playwright>=1.49.0,<2.0
+
 # FlightCheck only - safe defaults; the flightcheck CLI is opt-in.
 # (msal/requests/defusedxml already covered above; no flightcheck-specific deps yet.)
 
