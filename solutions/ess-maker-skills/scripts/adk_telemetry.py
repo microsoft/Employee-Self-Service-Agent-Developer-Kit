@@ -2372,6 +2372,7 @@ def emit_flightcheck_run(
     adk_capability: str = "flightcheck",
     connector: str = "",
     run_index: int = 0,
+    invocation_source: str = "cli",
     surface: str = SURFACE_CLI,
     block: bool = False,
 ) -> dict[str, Any]:
@@ -2379,6 +2380,9 @@ def emit_flightcheck_run(
     data = common_dimensions(surface, session_id=sid)
     data.update({
         "agent_id": agent_id,
+        "agent_type": _fc.classify_flightcheck_agent_type(
+            _fc.get_toolkit_git_branch(), invocation_source,
+        ),
         "adk_capability": normalize_capability(adk_capability),
         "connector": normalize_connector(connector),
         "run_index": int(run_index),
@@ -2394,6 +2398,7 @@ def emit_flightcheck_result(
     run_index: int = 0,
     result: str = "pass",
     duration_ms: int = 0,
+    invocation_source: str = "cli",
     surface: str = SURFACE_CLI,
     block: bool = False,
 ) -> dict[str, Any]:
@@ -2401,6 +2406,9 @@ def emit_flightcheck_result(
     data = common_dimensions(surface, session_id=sid)
     data.update({
         "agent_id": agent_id,
+        "agent_type": _fc.classify_flightcheck_agent_type(
+            _fc.get_toolkit_git_branch(), invocation_source,
+        ),
         "adk_capability": normalize_capability(adk_capability),
         "connector": normalize_connector(connector),
         "run_index": int(run_index),

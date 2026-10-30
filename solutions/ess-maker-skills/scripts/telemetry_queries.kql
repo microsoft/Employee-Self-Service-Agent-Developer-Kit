@@ -70,7 +70,7 @@ essmakerkit_flightcheck_run
 // -----------------------------------------------------------------------------
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(30d)
-| summarize Runs = count() by overall            // READY / READY_WITH_WARNINGS / NOT_READY
+| summarize Runs = count() by overall            // Readiness and diagnostic outcomes remain distinct.
 | extend Pct = round(100.0 * Runs / toscalar(
       essmakerkit_flightcheck_run | where EventInfo_Time > ago(30d) | count), 1)
 | order by Runs desc
@@ -183,9 +183,12 @@ chk
 // 5) TIME-TO-GREEN, EXCLUDING WEEKENDS  (ADO 7590588)
 //    Median (and p90) hours from a series' first NOT_READY run to its first
 //    subsequent READY run, subtracting whole weekend days (Sat/Sun).
+//    Excludes diagnostic overalls: even SETUP_CHECKS_PASSED is inspection,
+//    not release readiness, and must neither start nor finish this clock.
 // -----------------------------------------------------------------------------
 let runs = essmakerkit_flightcheck_run
     | where EventInfo_Time > ago(90d)
+    | where overall in ("READY", "READY_WITH_WARNINGS", "NOT_READY")
     | extend grp = strcat(env, "|", agentId, "|", instanceId)
     | extend ready = overall in ("READY", "READY_WITH_WARNINGS")
     | project grp, t = EventInfo_Time, ready;
@@ -207,16 +210,18 @@ pairs
 
 
 // -----------------------------------------------------------------------------
-// 6) PER-TENANT breakdown (ADO 7590589)
+// 6) PER-TENANT READINESS breakdown (ADO 7590589)
 //    tenantName is now emitted on run + check events (privacy-reviewed org
 //    display name). Falls back to "(unknown)" for events emitted before the
 //    tenant_name change shipped — those carry tenantId (GUID) only.
+//    Runs and ReadyRate include readiness verdicts only, not diagnostics.
 // -----------------------------------------------------------------------------
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(30d)
+| where overall in ("READY", "READY_WITH_WARNINGS", "NOT_READY")
 | extend Tenant = iff(isempty(tenantName), "(unknown)", tenantName)
 | summarize Runs = count(), Users = dcount(instanceId),
-            ReadyRate = round(100.0 * countif(overall != "NOT_READY") / count(), 1)
+            ReadyRate = round(100.0 * countif(overall in ("READY", "READY_WITH_WARNINGS")) / count(), 1)
     by Tenant
 | order by Runs desc
 

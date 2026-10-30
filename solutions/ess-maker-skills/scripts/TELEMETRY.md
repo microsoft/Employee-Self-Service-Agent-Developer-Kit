@@ -89,6 +89,32 @@ Raw customer-only queries must apply the canonical
 [`telemetry_queries.kql`](telemetry_queries.kql), because historical rows and
 events from older clones may still say `tenantClass == "customer"`.
 
+## Diagnostic outcomes are not release readiness
+
+Native DA diagnostic runs retain their diagnostic `overall` in legacy
+FlightCheck events. Their `runOutcome` labels describe inspection, never
+release approval:
+
+| `overall` | Legacy `runOutcome` | Additive `adk.flightcheck.result` |
+|---|---|---|
+| `SETUP_CHECKS_PASSED` | Setup checks passed | `pass` |
+| `CHECKED_WITH_NOTES` | Checked with notes | `partial` |
+| `SOME_CHECKS_UNVERIFIED` | Some checks could not run | `partial` |
+| `ISSUES_FOUND` | Setup issues found | `fail` |
+
+A skipped-only diagnostic is unverified even when failure, error, blocked,
+and warning counts are zero. Legacy readiness runs and profiles that retain
+the `READY` / `READY_WITH_WARNINGS` / `NOT_READY` contract keep their existing
+count-based projection.
+
+The time-to-green and per-tenant readiness queries explicitly restrict both
+their denominators and verdict predicates to readiness outcomes. Diagnostic
+runs remain in usage and outcome distributions, but do not start a readiness
+failure clock, end one, or inflate the ready rate. For historical data, use
+`overall` for that exclusion: older emitters could label diagnostic
+`runOutcome` as `Ready`. This updates emitted payloads and the checked-in query
+pack, not deployed dashboards or historical events.
+
 ## Sessions and active-install reporting
 
 All SDK activity emitters, including the capability shim and validated client

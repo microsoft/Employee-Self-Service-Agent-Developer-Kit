@@ -3223,6 +3223,28 @@ def test_emit_flightcheck_result_carries_connector(captured_post, monkeypatch):
     assert _last_activity(captured_post)["data"]["connector"] == "workday"
 
 
+@pytest.mark.parametrize("emit", [adk.emit_flightcheck_run, adk.emit_flightcheck_result])
+@pytest.mark.parametrize(
+    ("branch", "invocation_source", "expected"),
+    [
+        ("other", "adk", "declarative_agent"),
+        ("main-ca", "adk", "custom_agent"),
+        ("other", "cli", "unknown"),
+        ("main", "installer", "declarative_agent"),
+        ("main-ca", "connect", "custom_agent"),
+    ],
+)
+def test_flightcheck_agent_type_uses_invocation_source(
+    captured_post, monkeypatch, emit, branch, invocation_source, expected,
+):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    monkeypatch.setattr(_fc, "get_toolkit_git_branch", lambda: branch)
+
+    emit(invocation_source=invocation_source, block=True)
+
+    assert captured_post[0][1][0]["data"]["agent_type"] == expected
+
+
 def test_emit_flightcheck_error_carries_connector(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
     adk.emit_flightcheck_error(agent_id="a1", connector="workday", error_code="X", block=True)

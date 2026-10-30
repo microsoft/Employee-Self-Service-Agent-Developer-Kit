@@ -796,6 +796,19 @@ def classify_agent_type(git_branch: str) -> str:
     return AGENT_TYPE_UNKNOWN
 
 
+def classify_flightcheck_agent_type(
+    git_branch: str,
+    invocation_source: str,
+) -> str:
+    """Classify ADK-invoked FlightCheck runs as DA unless shipped from CA."""
+    normalized_branch = str(git_branch or "").strip().lower()
+    if normalized_branch == "main-ca":
+        return AGENT_TYPE_CUSTOM
+    if str(invocation_source or "").strip().lower() == "adk":
+        return AGENT_TYPE_DECLARATIVE
+    return classify_agent_type(normalized_branch)
+
+
 def _build_event(name: str, ikey_envelope: str, data: dict[str, Any]) -> dict[str, Any]:
     """Build a minimal Common Schema 4.0 envelope.
 
@@ -865,16 +878,27 @@ RUN_OUTCOME_ERRORED = "Blocked (check errored)"
 # NOT_READY with exit code 1 (ADO 7943641 carry-over).
 RUN_OUTCOME_BLOCKED = "Blocked (gate)"
 
+_DIAGNOSTIC_RUN_OUTCOMES = {
+    "SETUP_CHECKS_PASSED": "Setup checks passed",
+    "CHECKED_WITH_NOTES": "Checked with notes",
+    "SOME_CHECKS_UNVERIFIED": "Some checks could not run",
+    "ISSUES_FOUND": "Setup issues found",
+}
+
 
 def derive_run_outcome(run_result: Any) -> str:
     """Bucket a run into a single verdict slice.
 
-    Precedence: errored > failed > blocked > warnings > ready. ``errored`` and
+    Diagnostic overalls describe inspection, not release readiness.
+    For readiness runs: errored > failed > blocked > warnings > ready. ``errored`` and
     ``failed`` rank above ``blocked`` only to keep the pre-existing slice
     ordering stable; all three are NOT_READY. ``blocked`` stays above
     ``warnings`` because a blocked essential capability is a release gate while
     warnings are advisory.
     """
+    diagnostic_outcome = _DIAGNOSTIC_RUN_OUTCOMES.get(getattr(run_result, "overall", ""))
+    if diagnostic_outcome is not None:
+        return diagnostic_outcome
     errors = getattr(run_result, "errors", 0) or 0
     failed = getattr(run_result, "failed", 0) or 0
     blocked = getattr(run_result, "blocked", 0) or 0
@@ -1168,7 +1192,10 @@ def build_events(
 ) -> list[dict[str, Any]]:
     """Build the run envelope + one envelope per check (testable, no IO)."""
     run_id = run_id or str(uuid.uuid4())
-    agent_type = classify_agent_type(get_toolkit_git_branch())
+    agent_type = classify_flightcheck_agent_type(
+        get_toolkit_git_branch(),
+        invocation_source,
+    )
     events = [
         _build_event(
             EVENT_RUN,

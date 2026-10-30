@@ -303,6 +303,72 @@ def test_da_local_descriptions_do_not_impose_legacy_word_counts(setup_workspace,
     assert not any(row.status == "Warning" for row in descriptions)
 
 
+@pytest.mark.parametrize("variant,overall,run_outcome,adk_result,exit_code", [
+    ("passed", "SETUP_CHECKS_PASSED", "Setup checks passed", "pass", 0),
+    ("notes", "CHECKED_WITH_NOTES", "Checked with notes", "partial", 0),
+    ("skipped", "SOME_CHECKS_UNVERIFIED", "Some checks could not run", "partial", 1),
+    ("failed", "ISSUES_FOUND", "Setup issues found", "fail", 1),
+])
+def test_real_local_diagnostics_keep_telemetry_distinct_from_readiness(
+    setup_workspace, monkeypatch, variant, overall, run_outcome, adk_result, exit_code,
+):
+    import adk_telemetry as adk
+    from flightcheck import telemetry
+
+    ws = setup_workspace
+    agent_path = ws.root / "workspace" / "agents" / "hr"
+    topics = agent_path / "topics"
+    topics.mkdir()
+    topic = {
+        "skipped": "modelDescription: [\n",
+        "failed": "modelDescription: '[TODO]'\n",
+    }.get(variant, "modelDescription: Find current leave balances.\n")
+    (topics / "leave.mcs.yml").write_text(topic, encoding="utf-8")
+    if variant == "notes":
+        agent_file = agent_path / "agent.mcs.yml"
+        identity = yaml.safe_load(agent_file.read_text(encoding="utf-8"))
+        identity["conversationStarters"] = identity["conversationStarters"][:1]
+        agent_file.write_text(yaml.safe_dump(identity), encoding="utf-8")
+    (ws.root / ".local" / "config.json").write_text(json.dumps(ws.config), encoding="utf-8")
+    legacy_events, adk_events = [], []
+
+    def capture_post(_ikey, events):
+        legacy_events.extend(events)
+        return 204
+
+    monkeypatch.setattr(telemetry, "_post", capture_post)
+    monkeypatch.setattr(telemetry, "resolve_ikey", lambda: (telemetry.ARIA_IKEYS["dev"], "dev"))
+    monkeypatch.setattr(adk, "_emit", lambda name, data, **_kw: adk_events.append((name, data)))
+    monkeypatch.setattr(adk, "get_session", lambda _surface: ("test-session", False))
+    monkeypatch.setattr(adk, "next_run_index", lambda _agent_id: 1)
+    monkeypatch.setattr(adk, "flush", lambda **_kw: None)
+    monkeypatch.setattr(adk, "_IDENTITY", {"instance_id": "", "tenant_id": "", "tenant_name": ""})
+    monkeypatch.setattr("sys.argv", [
+        "flightcheck", "--scope", "local", "--output", "report",
+        "--invocation-source", "adk", "--no-open",
+    ])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == exit_code
+    ws.auth.assert_not_called()
+    result = json.loads((ws.root / "report" / "results.json").read_text(encoding="utf-8"))
+    assert result["overall"] == overall
+    if variant == "skipped":
+        assert result["skipped"] == 1
+        assert all(result[field] == 0 for field in ("failed", "errors", "blocked", "warnings"))
+        row = next(row for row in result["results"] if row["checkpoint_id"] == "CONFIG-014")
+        assert row["status"] == "Skipped"
+        assert "Could not inspect YAML files: leave.mcs.yml" in row["result"]
+    run = next(event["data"] for event in legacy_events if event["name"] == telemetry.EVENT_RUN)
+    assert run["overall"] == overall
+    assert run["runOutcome"] == run_outcome
+    additive = [data for name, data in adk_events if name == adk.EVENT_FLIGHTCHECK_RESULT]
+    assert len(additive) == 1
+    assert additive[0]["result"] == adk_result
+
+
 def test_absent_local_extraction_is_a_limitation_not_a_cloud_defect(setup_workspace):
     ws = setup_workspace
     (ws.root / "workspace" / "agents" / "hr" / "agent.mcs.yml").unlink()
