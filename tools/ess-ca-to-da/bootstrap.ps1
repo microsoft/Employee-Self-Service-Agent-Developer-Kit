@@ -63,9 +63,12 @@ Write-Ok "Using Git: $((Get-Command git).Source)"
 # --- 2. Clone or update the repository --------------------------------------
 if (Test-Path (Join-Path $Root '.git')) {
     Write-Info "Updating existing clone at $Root ..."
+    # A shallow `fetch origin <branch>` populates FETCH_HEAD but does NOT create
+    # a remote-tracking ref (origin/<branch>), so checking out the branch name or
+    # resetting to origin/<branch> fails. Check out FETCH_HEAD directly instead.
     & git -C $Root fetch --depth 1 origin $Branch | Out-Host
-    & git -C $Root checkout $Branch | Out-Host
-    & git -C $Root reset --hard "origin/$Branch" | Out-Host
+    & git -C $Root checkout -B $Branch FETCH_HEAD | Out-Host
+    & git -C $Root reset --hard FETCH_HEAD | Out-Host
 } else {
     Write-Info "Cloning $Branch into $Root ..."
     & git clone --depth 1 --branch $Branch $RepoUrl $Root | Out-Host
