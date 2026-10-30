@@ -191,9 +191,21 @@ When a definitive create response returns HTTP 401 or 403, preserve its evidence
 Say setup stopped only after reconciliation cannot prove an identity and the
 maker selects a stop or escalation action.
 
-When the annotations report `outcome: created`, keep the distinction between `catalogPackageVersion` and `templateVersion` in diagnostic evidence; do not explain those internal version concepts to the maker. Say that the new agent was created and setup is not complete.
+When the annotations report `outcome: created`, keep the distinction between `catalogPackageVersion` and `templateVersion` in diagnostic evidence; do not explain those internal version concepts to the maker.
 
-The successful native create result is authoritative identity and environment-scoped installation evidence. Record its exact package, catalog, returned schema, environment, and ring through `da_product_registry.py observe` with source `setup_mos_starter.py create`, then run the parent's selected-agent product-line reconciliation with the returned identity and `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before the enable-ALM operation.
+Build `{ACTUAL_AGENT_URL}` as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/{RETURNED_AGENT_ID}/details?agentBackend=cosmos`, using the origin retained by **Resolve the service ring** and the exact environment and agent IDs from the successful create result. An explicit Preview target keeps its Preview origin even though its logical ring is `prod`.
+
+Immediately show the successful creation result before recording product evidence, running reconciliation, inspecting the authoring route, or performing another operation:
+
+**Message:**
+
+The agent was created. Setup is not complete yet.
+
+> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
+
+**End message.**
+
+The successful native create result is authoritative identity and environment-scoped installation evidence. Record its exact package, catalog, returned schema, environment, and ring through `da_product_registry.py observe` with source `setup_mos_starter.py create`, then run the parent's selected-agent product-line reconciliation with the returned identity and `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before route inspection.
 
 When the annotations report `outcome: collision`, preserve the exact selected package ID and catalog name. Do not render an intermediate collision message. Before listing or validating collision candidates, complete the parent checkpoint for the current existing-agent path, environment, and Microsoft login and use **Existing-agent setup** from `permission-guidance.md`. When `list-agents` or `validate-agent` returns an authentication or authorization failure, follow **Existing-agent discovery and access** there; do not recommend **Environment Maker** as remediation for existing-agent access. First record and reconcile all available evidence, then render exactly one outcome-specific message immediately followed by the choice set it explains. A collision message must never be separated from its next interactive choice set by another operation or maker-facing message.
 
@@ -251,18 +263,6 @@ For **Go back**, preserve the collided create result and its client request UUID
 
 ## Prepare the authoring route
 
-Build `{ACTUAL_AGENT_URL}` as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/{RETURNED_AGENT_ID}/details?agentBackend=cosmos`, using the origin retained by **Resolve the service ring** and the exact environment and agent IDs from the successful create result. An explicit Preview target keeps its Preview origin even though its logical ring is `prod`.
-
-After a successful create, show:
-
-**Message:**
-
-The agent was created.
-
-> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
-
-**End message.**
-
 Inspect the service-owned authoring route before offering enrollment:
 
 ```text
@@ -289,7 +289,7 @@ python scripts/setup_existing_da.py attach \
   --expected-schema-name "{RETURNED_SCHEMA_NAME}"
 ```
 
-Append `--allow-unenrolled-authoring` only for the shared path's explicit **Skip enrollment** result. Preserve `--setup-source mos-starter` and `--expected-schema-name`.
+Append `--allow-unenrolled-authoring` only for the shared path's explicit **Skip enrollment** result. Preserve `--setup-source mos-starter` and `--expected-schema-name`. For an integration's entry-only preparation request, return to the retained caller using the parent skill's **Prepare the workspace for an integration** boundary after verified workspace materialization, before the ordinary readiness-check and completion handoff below.
 
 The normal attachment validates the returned agent through its direct Dev route and component identity. The skip attachment validates exact direct identity and `/components` without establishing or recording a Dev ALM realm. Neither mode requires published Dev configuration. It resolves any connection requirement from the product registry by exact agent identity and records that requirement on canonical `SETUP-05`. On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. Publishing is outside foundation setup and is not remediation for an attachment failure. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. When attachment reports `connectionStatus: workspace-ready`, mark the access, identity, editable-agent, and materialization stages complete, then run the three setup-readiness FlightChecks and broad connection diagnostic as the single presentation unit defined in `da-existing-dev.md`. Complete every check whose prerequisites remain available before producing the factual workspace and runtime-readiness handoff. When an operation requires maker action or prevents later checks from running, state the observed blocker and supported recovery. The request-scoped create evidence intentionally remains as an audit note. Do not publish, remove, or replace components from this path.
 

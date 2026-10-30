@@ -29,6 +29,10 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
+import threading
+from pathlib import Path
 
 import pytest
 
@@ -105,6 +109,22 @@ def captured_post(monkeypatch):
 
     monkeypatch.setattr(_fc, "_post", _fake_post)
     return calls
+
+
+def _captured_events(calls):
+    return [event for _, batch in calls for event in batch]
+
+
+def _activity_events(calls):
+    return [
+        event
+        for event in _captured_events(calls)
+        if event["name"] != adk.EVENT_SESSION_START
+    ]
+
+
+def _last_activity(calls):
+    return _activity_events(calls)[-1]
 
 
 def _client_events_envelope(**overrides):
@@ -379,6 +399,34 @@ def test_classify_tenant_hardcoded_internal_dogfood_tenants(monkeypatch):
     assert _fc.classify_tenant(f"  {_fc.CONTOSO_INTERNAL_TENANT_ID.upper()} ") == "internal"
 
 
+@pytest.mark.parametrize(
+    "tenant_id",
+    _fc.KNOWN_NON_CUSTOMER_TEST_TENANT_IDS,
+)
+def test_known_non_customer_tenants_use_shared_classifier_and_adk_dimensions(
+    monkeypatch, tenant_id,
+):
+    monkeypatch.delenv("ESS_ADK_INTERNAL_TENANTS", raising=False)
+    assert _fc.classify_tenant(tenant_id) == _fc.TENANT_CLASS_INTERNAL
+    assert _fc.classify_tenant(f" {tenant_id.upper()} ") == _fc.TENANT_CLASS_INTERNAL
+    dimensions = adk.common_dimensions(adk.SURFACE_CLI, tenant_id=tenant_id)
+    assert dimensions["tenant_class"] == _fc.TENANT_CLASS_INTERNAL
+    assert dimensions["tenant_id"] == tenant_id
+
+
+def test_customer_query_exclusions_match_known_non_customer_tenants():
+    query_pack = (
+        Path(__file__).parents[1]
+        / "solutions"
+        / "ess-maker-skills"
+        / "scripts"
+        / "telemetry_queries.kql"
+    ).read_text(encoding="utf-8")
+
+    for tenant_id in _fc.KNOWN_NON_CUSTOMER_TEST_TENANT_IDS:
+        assert query_pack.count(tenant_id) == 1
+
+
 def test_classify_tenant_non_guid_maps_to_unknown():
     # Defense-in-depth: a non-empty tenant_id that isn't a canonical Entra
     # tenant GUID must NEVER classify as "customer" — otherwise the External
@@ -614,6 +662,889 @@ def test_run_index_increments_per_agent_within_session():
     assert adk.next_run_index("bot-B") == 1  # independent per agent
 
 
+@pytest.mark.parametrize(
+    "emitter,kwargs,event_name",
+    [
+        ("emit_capability_use", {"adk_capability": "setup"}, adk.EVENT_CAPABILITY_USE),
+        ("emit_agent_create", {}, adk.EVENT_AGENT_CREATE),
+        ("emit_build_start", {}, adk.EVENT_BUILD_START),
+        ("emit_api_call", {}, adk.EVENT_API_CALL),
+    ],
+)
+def test_first_activity_records_start_with_matching_attribution(
+    captured_post, monkeypatch, emitter, kwargs, event_name,
+):
+    monkeypatch.setattr(_fc, "get_toolkit_git_branch", lambda: "main")
+    adk.set_identity(
+        tenant_id="00000000-0000-0000-0000-000000001111",
+        instance_id="00000000-0000-0000-0000-000000002222",
+        tenant_name="Synthetic Organization",
+    )
+
+    result = getattr(adk, emitter)(**kwargs, block=True)
+
+    assert result["sent"] is True
+    start, activity = [event for _, batch in captured_post for event in batch]
+    assert [start["name"], activity["name"]] == [adk.EVENT_SESSION_START, event_name]
+    for field in (
+        "session_id", "instance_id", "tenant_id", "tenant_name",
+        "tenant_class", "agent_type", "surface", "env",
+    ):
+        assert start["data"][field] == activity["data"][field]
+    assert start["data"]["agent_type"] == _fc.AGENT_TYPE_DECLARATIVE
+    assert start["data"]["tenant_class"] == _fc.TENANT_CLASS_CUSTOMER
+    assert "adk_capability" not in start["data"]
+    assert "connector" not in start["data"]
+
+
+def test_allocated_session_and_run_index_do_not_suppress_start(captured_post):
+    sid, _ = adk.get_session()
+    adk.next_run_index("synthetic-agent")
+    assert captured_post == []
+
+    assert adk.emit_capability_use("setup", block=True)["sent"] is True
+    assert adk.emit_capability_use("connect", block=True)["sent"] is True
+    assert adk.start_session(block=True)["reason"] == "existing-session"
+
+    events = [event for _, batch in captured_post for event in batch]
+    assert [event["name"] for event in events] == [
+        adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE, adk.EVENT_CAPABILITY_USE,
+    ]
+    assert {event["data"]["session_id"] for event in events} == {sid}
+    for event in events[1:]:
+        for field in ("surface", "instance_id", "tenant_id", "agent_type", "tenant_class"):
+            assert event["data"][field] == events[0]["data"][field]
+        assert event["iKey"] == events[0]["iKey"]
+    print(
+        "PASS: allocated session + capability-first setup + connect produced "
+        "1 matching session start and 2 activities; later start_session did not "
+        "duplicate the start. Transport captured locally; no network or user state."
+    )
+
+
+def test_legacy_session_records_start_once_then_rolls(captured_post):
+    sid, _ = adk.get_session()
+    path = Path(adk.SESSION_PATH)
+    sessions = json.loads(path.read_text(encoding="utf-8"))
+    sessions[adk.SURFACE_CLI].pop("started_contexts")
+    path.write_text(json.dumps(sessions), encoding="utf-8")
+
+    adk.emit_capability_use("setup", block=True)
+    adk.emit_capability_use("connect", block=True)
+    assert adk.start_session(block=True)["reason"] == "existing-session"
+    sessions = json.loads(path.read_text(encoding="utf-8"))
+    assert len(sessions[adk.SURFACE_CLI]["started_contexts"]) == 1
+    sessions[adk.SURFACE_CLI]["last"] -= adk.SESSION_TIMEOUT_SECS + 1
+    path.write_text(json.dumps(sessions), encoding="utf-8")
+    adk.emit_capability_use("setup", block=True)
+
+    starts = [
+        event for _, batch in captured_post for event in batch
+        if event["name"] == adk.EVENT_SESSION_START
+    ]
+    assert len(starts) == 2
+    assert starts[0]["data"]["session_id"] == sid
+    assert starts[1]["data"]["session_id"] != sid
+
+
+def test_opt_out_does_not_mark_start_recorded(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+    adk.emit_capability_use("setup", block=True)
+    assert captured_post == []
+    sessions = json.loads(Path(adk.SESSION_PATH).read_text(encoding="utf-8"))
+    assert sessions[adk.SURFACE_CLI]["started_contexts"] == []
+
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "on")
+    adk.emit_capability_use("connect", block=True)
+    assert [event["name"] for event in _captured_events(captured_post)] == [
+        adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE,
+    ]
+
+
+def test_failed_unbuffered_start_is_retried(captured_post, monkeypatch):
+    real_post = _fc._post
+    monkeypatch.setattr(_fc, "_post", lambda *_args: 503)
+    with monkeypatch.context() as patch:
+        patch.setattr(adk, "_buffer_append", lambda _events: False)
+        patch.setattr(adk, "_buffer_prepend", lambda _events: False)
+        result = adk.emit_capability_use("setup", block=True)
+    assert result["sent"] is False
+    assert result["reason"] == "http 503"
+    assert result["buffered"] is False
+    sessions = json.loads(Path(adk.SESSION_PATH).read_text(encoding="utf-8"))
+    assert sessions[adk.SURFACE_CLI]["started_contexts"] == []
+
+    monkeypatch.setattr(_fc, "_post", real_post)
+    assert adk.emit_capability_use("connect", block=True)["sent"] is True
+    assert [event["name"] for event in _captured_events(captured_post)] == [
+        adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE,
+    ]
+
+
+def test_async_start_does_not_block_foreground_session_allocation(monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+    allocated = threading.Event()
+
+    def post(_ikey, _envelopes):
+        entered.set()
+        assert release.wait(5)
+        return 200
+
+    monkeypatch.setattr(_fc, "_post", post)
+    monkeypatch.setattr(adk, "_SYNC", False)
+    result = adk.emit_capability_use("setup")
+    assert result["async"] is True
+    reader = threading.Thread(target=lambda: (adk.get_session(), allocated.set()))
+    try:
+        assert entered.wait(5)
+        reader.start()
+        assert allocated.wait(2)
+    finally:
+        release.set()
+        adk.flush(timeout=5)
+        if reader.ident is not None:
+            reader.join(timeout=5)
+
+
+@pytest.mark.parametrize("change", ["tenant", "install", "agent_type", "project"])
+def test_session_start_is_recorded_for_each_attribution_context(
+    captured_post, monkeypatch, change,
+):
+    monkeypatch.setattr(_fc, "get_toolkit_git_branch", lambda: "unknown")
+    adk.set_identity(instance_id="synthetic-install-1", tenant_id="")
+    adk.emit_capability_use("setup", block=True)
+    if change == "tenant":
+        adk.set_identity(tenant_id="00000000-0000-0000-0000-000000001111")
+    elif change == "install":
+        adk.set_identity(instance_id="synthetic-install-2")
+    elif change == "agent_type":
+        monkeypatch.setattr(_fc, "get_toolkit_git_branch", lambda: "main")
+    else:
+        monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_capability_use("connect", block=True)
+    adk.emit_capability_use("setup", block=True)
+    assert adk.start_session(block=True)["reason"] == "existing-session"
+
+    events = [event for _, batch in captured_post for event in batch]
+    assert [event["name"] for event in events] == [
+        adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE,
+        adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE, adk.EVENT_CAPABILITY_USE,
+    ]
+    assert len({event["data"]["session_id"] for event in events}) == 1
+    for field in ("instance_id", "tenant_id", "agent_type", "env"):
+        assert events[2]["data"][field] == events[3]["data"][field]
+
+
+def test_concurrent_shim_processes_share_one_recorded_start(tmp_path):
+    # Every worker replaces the real transport before exercising the actual
+    # shim worker entry point. No subprocess can send events to OneCollector.
+    script = r"""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+import adk_telemetry as adk
+import emit_capability
+from flightcheck import telemetry as fc
+
+root = Path(sys.argv[2])
+adk.CONFIG_DIR = str(root / ".adk")
+adk.CONFIG_PATH = str(root / ".adk" / "config")
+adk.SESSION_PATH = str(root / ".adk" / "session.json")
+adk.BUFFER_PATH = str(root / ".adk" / "telemetry-buffer.ndjson")
+os.environ["ESS_ADK_TELEMETRY"] = "on"
+fc.get_instance_id = lambda: "00000000-0000-0000-0000-000000002222"
+fc.get_cached_tenant_id = lambda: "00000000-0000-0000-0000-000000001111"
+fc.get_cached_tenant_name = lambda _tid: "Synthetic Organization"
+events = []
+def post(_ikey, envelopes):
+    events.extend(envelopes)
+    time.sleep(0.05)
+    return 200
+fc._post = post
+deadline = time.monotonic() + 15
+while not (root / "go").exists():
+    if time.monotonic() > deadline:
+        raise TimeoutError("worker barrier")
+    time.sleep(0.01)
+assert emit_capability.main(["emit_capability.py", "--worker", "setup"]) == 0
+(root / (sys.argv[3] + ".json")).write_text(json.dumps(events), encoding="utf-8")
+"""
+    command = [
+        sys.executable, "-c", script, str(Path(adk.__file__).parent), str(tmp_path),
+    ]
+    workers = [
+        subprocess.Popen(command + [str(index)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        for index in range(4)
+    ]
+    try:
+        (tmp_path / "go").touch()
+        for worker in workers:
+            stdout, stderr = worker.communicate(timeout=30)
+            assert worker.returncode == 0, (stdout, stderr)
+        # A later fresh interpreter must honor the persisted start marker too.
+        subprocess.run(command + ["later"], check=True, capture_output=True, timeout=30)
+    finally:
+        for worker in workers:
+            if worker.poll() is None:
+                worker.kill()
+                worker.communicate()
+
+    events = [
+        event for path in tmp_path.glob("*.json")
+        for event in json.loads(path.read_text(encoding="utf-8"))
+    ]
+    assert len([e for e in events if e["name"] == adk.EVENT_SESSION_START]) == 1
+    assert len([e for e in events if e["name"] == adk.EVENT_CAPABILITY_USE]) == 5
+    assert len({e["data"]["session_id"] for e in events}) == 1
+
+
+def test_slow_session_start_buffers_waiter_without_reordering(tmp_path):
+    script = r"""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+import adk_telemetry as adk
+from flightcheck import telemetry as fc
+
+root = Path(sys.argv[2])
+adk.CONFIG_DIR = str(root / ".adk")
+adk.CONFIG_PATH = str(root / ".adk" / "config")
+adk.SESSION_PATH = str(root / ".adk" / "session.json")
+adk.BUFFER_PATH = str(root / ".adk" / "telemetry-buffer.ndjson")
+os.environ["ESS_ADK_TELEMETRY"] = "on"
+fc.get_instance_id = lambda: "00000000-0000-0000-0000-000000002222"
+fc.get_cached_tenant_id = lambda: "00000000-0000-0000-0000-000000001111"
+fc.get_cached_tenant_name = lambda _tid: "Synthetic Organization"
+
+def post(_ikey, envelopes):
+    if any(event["name"] == adk.EVENT_SESSION_START for event in envelopes):
+        (root / "start-posting").touch()
+        time.sleep(6.2)
+    with adk._file_lock(str(root / "posted.lock")):
+        with open(root / "posted.ndjson", "a", encoding="utf-8") as stream:
+            for event in envelopes:
+                stream.write(json.dumps(event) + "\n")
+    return 200
+
+fc._post = post
+deadline = time.monotonic() + 15
+while not (root / "go").exists():
+    if time.monotonic() > deadline:
+        raise TimeoutError("worker barrier")
+    time.sleep(0.01)
+result = adk.emit_capability_use("setup", block=True)
+(root / (sys.argv[3] + ".result.json")).write_text(
+    json.dumps(result), encoding="utf-8"
+)
+"""
+    command = [
+        sys.executable,
+        "-c",
+        script,
+        str(Path(adk.__file__).parent),
+        str(tmp_path),
+    ]
+    workers = [
+        subprocess.Popen(
+            command + [str(index)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for index in range(2)
+    ]
+    try:
+        (tmp_path / "go").touch()
+        for worker in workers:
+            stdout, stderr = worker.communicate(timeout=30)
+            assert worker.returncode == 0, (stdout, stderr)
+    finally:
+        for worker in workers:
+            if worker.poll() is None:
+                worker.kill()
+                worker.communicate()
+
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "posted.ndjson").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert [event["name"] for event in events] == [
+        adk.EVENT_SESSION_START,
+        adk.EVENT_CAPABILITY_USE,
+        adk.EVENT_CAPABILITY_USE,
+    ]
+    results = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in tmp_path.glob("*.result.json")
+    ]
+    assert any(result.get("reason") == "pending-session-start" for result in results)
+
+
+def test_fresh_session_start_and_activity_fit_bounded_shutdown(
+    captured_post,
+    monkeypatch,
+):
+    def delayed_post(ikey, envelopes):
+        import time
+
+        time.sleep(2)
+        captured_post.append((ikey, envelopes))
+        return 200
+
+    monkeypatch.setattr(_fc, "_post", delayed_post)
+    monkeypatch.setattr(adk, "_SYNC", False)
+
+    assert adk.emit_capability_use("setup")["async"] is True
+    adk.flush(timeout=3)
+
+    assert [event["name"] for event in _captured_events(captured_post)] == [
+        adk.EVENT_SESSION_START,
+        adk.EVENT_CAPABILITY_USE,
+    ]
+
+
+def test_stale_claim_owner_cannot_delete_successor_retry(tmp_path, monkeypatch):
+    import os
+    import time
+
+    start = adk.build_event(
+        adk.EVENT_SESSION_START,
+        {"session_id": "session-1"},
+        "o:test",
+    )
+    assert adk._buffer_append([start]) is True
+    old_mtime = time.time() - (adk.BUFFER_SENDING_STALE_SECS * 2)
+    os.utime(adk.BUFFER_PATH, (old_mtime, old_mtime))
+
+    owner_posting = threading.Event()
+    release_owner = threading.Event()
+
+    def post(_ikey, _envelopes):
+        if threading.current_thread().name == "original-owner":
+            owner_posting.set()
+            assert release_owner.wait(5)
+            return 200
+        return 503
+
+    monkeypatch.setattr(_fc, "_post", post)
+    owner = threading.Thread(
+        target=adk._buffer_flush,
+        args=("test-key",),
+        name="original-owner",
+    )
+    owner.start()
+    assert owner_posting.wait(5)
+
+    claim_path = Path(adk.BUFFER_PATH + ".sending.claim")
+    claim = json.loads(claim_path.read_text(encoding="utf-8"))
+    assert claim["claimed_at"] > old_mtime + adk.BUFFER_SENDING_STALE_SECS
+    claim["claimed_at"] = 0
+    claim_path.write_text(json.dumps(claim), encoding="utf-8")
+
+    assert adk._buffer_flush("test-key") is False
+    release_owner.set()
+    owner.join(timeout=5)
+    assert not owner.is_alive()
+
+    buffered = [
+        json.loads(line)
+        for line in Path(adk.BUFFER_PATH).read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["name"] for event in buffered] == [adk.EVENT_SESSION_START]
+
+
+def test_pending_context_is_not_replayed_by_other_context(
+    captured_post,
+):
+    adk.set_identity(
+        instance_id="00000000-0000-0000-0000-00000000000a",
+        tenant_id="00000000-0000-0000-0000-00000000000b",
+    )
+    session_id, _ = adk.get_session()
+    pending_data = adk.common_dimensions(
+        adk.SURFACE_CLI,
+        session_id=session_id,
+    )
+    pending_data["adk_capability"] = "setup"
+    pending_data["connector"] = ""
+    preparation = adk._prepare_session_start(pending_data)
+    assert preparation["owner"] is True
+    assert adk._buffer_event_sync(
+        adk.EVENT_CAPABILITY_USE,
+        pending_data,
+        preparation["prerequisite"],
+    )["buffered"] is True
+
+    assert adk._buffer_flush(adk.resolve_ikey()[0]) is False
+    assert captured_post == []
+
+    adk.set_identity(
+        instance_id="00000000-0000-0000-0000-00000000000c",
+        tenant_id="00000000-0000-0000-0000-00000000000d",
+    )
+    result = adk.emit_capability_use("connect", block=True)
+    assert result["reason"] == "buffer-pending"
+    assert result["buffered"] is True
+    assert adk._buffer_flush(adk.resolve_ikey()[0]) is False
+
+    events = _captured_events(captured_post)
+    assert [event["name"] for event in events] == [
+        adk.EVENT_SESSION_START,
+        adk.EVENT_CAPABILITY_USE,
+    ]
+    assert {event["data"]["instance_id"] for event in events} == {
+        "00000000-0000-0000-0000-00000000000c"
+    }
+
+    waiting = [
+        json.loads(line)
+        for line in Path(adk._pending_buffer_path()).read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert len(waiting) == 1
+    assert waiting[0]["envelope"]["data"]["instance_id"] == (
+        "00000000-0000-0000-0000-00000000000a"
+    )
+    assert waiting[0]["requiresSessionStart"] == preparation["prerequisite"]
+
+
+def test_pending_follower_recovers_after_session_rollover(monkeypatch):
+    adk.set_identity(
+        instance_id="00000000-0000-0000-0000-00000000000a",
+        tenant_id="00000000-0000-0000-0000-00000000000b",
+    )
+    session_id, _ = adk.get_session()
+    owner_data = adk.common_dimensions(
+        adk.SURFACE_CLI,
+        session_id=session_id,
+    )
+    owner_data["adk_capability"] = "setup"
+    owner_data["connector"] = ""
+    preparation = adk._prepare_session_start(owner_data)
+
+    monkeypatch.setattr(_fc, "_post", lambda *_args: 503)
+    result = adk._post_ordered_events_sync(
+        [
+            (adk.EVENT_SESSION_START, preparation["start_data"]),
+            (adk.EVENT_CAPABILITY_USE, owner_data),
+        ],
+        result_event=adk.EVENT_CAPABILITY_USE,
+        reported_events=1,
+    )
+    assert result["buffered"] is True
+    adk._complete_session_start(preparation, result)
+
+    sessions = json.loads(Path(adk.SESSION_PATH).read_text(encoding="utf-8"))
+    sessions[adk.SURFACE_CLI]["last"] -= adk.SESSION_TIMEOUT_SECS + 1
+    Path(adk.SESSION_PATH).write_text(json.dumps(sessions), encoding="utf-8")
+    next_session_id, _ = adk.get_session()
+    assert next_session_id != session_id
+
+    follower_data = dict(owner_data)
+    follower_data["adk_capability"] = "connect"
+    assert adk._buffer_event_sync(
+        adk.EVENT_CAPABILITY_USE,
+        follower_data,
+        preparation["prerequisite"],
+    )["buffered"] is True
+
+    posted = []
+
+    def post(_ikey, envelopes):
+        posted.extend(envelopes)
+        return 200
+
+    monkeypatch.setattr(_fc, "_post", post)
+    assert adk._buffer_flush(adk.resolve_ikey()[0]) is False
+    assert adk._buffer_flush(adk.resolve_ikey()[0]) is True
+    assert [event["name"] for event in posted] == [
+        adk.EVENT_SESSION_START,
+        adk.EVENT_CAPABILITY_USE,
+        adk.EVENT_CAPABILITY_USE,
+    ]
+    assert posted[-1]["data"]["adk_capability"] == "connect"
+
+
+def test_buffered_follower_progresses_through_public_emissions(monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    posted, owner_results = [], []
+    attempts = 0
+
+    def post(_ikey, envelopes):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            entered.set()
+            assert release.wait(5)
+            return 503
+        posted.extend(envelopes)
+        return 200
+
+    monkeypatch.setattr(_fc, "_post", post)
+    owner = threading.Thread(
+        target=lambda: owner_results.append(adk.emit_capability_use("setup", block=True)),
+    )
+    try:
+        owner.start()
+        assert entered.wait(5)
+        follower = adk.emit_capability_use("connect", block=True)
+        assert follower["reason"] == "pending-session-start"
+        assert follower["buffered"] is True
+        release.set()
+        owner.join(timeout=5)
+        assert not owner.is_alive()
+        assert owner_results[0]["status"] == 503
+        assert owner_results[0]["buffered"] is True
+
+        for _ in range(3):
+            adk.emit_capability_use("topic_create", block=True)
+    finally:
+        release.set()
+        owner.join(timeout=5)
+
+    assert [event["data"].get("adk_capability") for event in posted] == [
+        None, "setup", "connect", "topic_create", "topic_create", "topic_create",
+    ]
+    assert posted[0]["name"] == adk.EVENT_SESSION_START
+    assert not Path(adk._pending_buffer_path()).exists()
+    assert not Path(adk.BUFFER_PATH).exists()
+
+
+def test_batch_reservation_failure_preserves_start_order(captured_post, monkeypatch):
+    reserve = adk._reserve_session_start
+    attempts = 0
+
+    def fail_once(*args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise PermissionError("transient reservation failure")
+        return reserve(*args)
+
+    monkeypatch.setattr(adk, "_reserve_session_start", fail_once)
+    assert adk.report_client_events(_client_events_envelope(), block=True) == {
+        "status": "accepted", "acceptedEventCount": 2,
+    }
+    assert captured_post == []
+    assert not Path(adk.BUFFER_PATH).exists()
+    assert Path(adk._pending_buffer_path()).exists()
+
+    for _ in range(3):
+        adk.emit_capability_use("topic_create", block=True)
+    events = _captured_events(captured_post)
+    clients = [event for event in events if event["name"] == adk.EVENT_CLIENT]
+    assert len(clients) == 2
+    assert events[0]["name"] == adk.EVENT_SESSION_START
+    for client in clients:
+        assert client["data"]["session_id"] == events[0]["data"]["session_id"]
+    assert not Path(adk._pending_buffer_path()).exists()
+
+
+@pytest.mark.parametrize("emitter", ["start_session", "emit_capability_use"])
+def test_completion_write_failure_does_not_escape(captured_post, monkeypatch, emitter):
+    write = adk._write_sessions
+    writes = 0
+
+    def fail_completion(sessions):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise PermissionError("completion write denied")
+        return write(sessions)
+
+    monkeypatch.setattr(adk, "_write_sessions", fail_completion)
+    kwargs = {"adk_capability": "setup"} if emitter == "emit_capability_use" else {}
+    result = getattr(adk, emitter)(**kwargs, block=True)
+
+    assert writes == 2
+    assert result["sent"] is True
+    assert _captured_events(captured_post)[0]["name"] == adk.EVENT_SESSION_START
+
+
+@pytest.mark.parametrize("malformed", ['{"interrupted":', "null", '{"name":"bad","data":[]}'])
+def test_malformed_retry_does_not_block_public_emission(captured_post, malformed):
+    Path(adk.BUFFER_PATH).parent.mkdir(parents=True)
+    old = adk.build_event("old-event", {}, "o:test")
+    Path(adk.BUFFER_PATH).write_text(
+        json.dumps(old) + "\n" + malformed + "\n", encoding="utf-8",
+    )
+    Path(adk._pending_buffer_path()).write_text(malformed + "\n", encoding="utf-8")
+
+    assert adk.emit_capability_use("setup", block=True)["sent"] is True
+
+    assert [event["name"] for event in _captured_events(captured_post)] == [
+        "old-event", adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE,
+    ]
+    assert not Path(adk.BUFFER_PATH).exists()
+    assert not Path(adk._pending_buffer_path()).exists()
+    quarantine = Path(adk.BUFFER_PATH + ".invalid")
+    assert malformed in quarantine.read_text(encoding="utf-8")
+    assert quarantine.stat().st_size <= adk.BUFFER_MAX_BYTES
+
+
+@pytest.mark.parametrize("append_after_eviction", [False, True])
+def test_bounded_completion_history_recovers_old_follower(
+    captured_post, monkeypatch, append_after_eviction,
+):
+    monkeypatch.setattr(adk, "SESSION_START_EVIDENCE_MAX_RECORDS", 2)
+    adk.emit_capability_use("setup", block=True)
+    session_id, _ = adk.get_session()
+    data = adk.common_dimensions(adk.SURFACE_CLI, session_id=session_id)
+    data.update(adk_capability="connect", connector="workday")
+    prerequisite = adk._session_start_prerequisite(data)
+    if not append_after_eviction:
+        assert adk._buffer_event_sync(
+            adk.EVENT_CAPABILITY_USE, data, prerequisite,
+        )["buffered"] is True
+
+    sessions = json.loads(Path(adk.SESSION_PATH).read_text(encoding="utf-8"))
+    sessions[adk.SURFACE_CLI]["last"] -= adk.SESSION_TIMEOUT_SECS + 1
+    Path(adk.SESSION_PATH).write_text(json.dumps(sessions), encoding="utf-8")
+    assert adk.get_session()[0] != session_id
+    for index in range(3):
+        adk._record_session_start_evidence(
+            adk.SURFACE_CLI, f"other-session-{index}", prerequisite["context"],
+        )
+    assert len(json.loads(Path(adk._session_starts_path()).read_text())) == 2
+    assert not adk._session_start_evidence_recorded(prerequisite)
+    if append_after_eviction:
+        assert adk._buffer_event_sync(
+            adk.EVENT_CAPABILITY_USE, data, prerequisite,
+        )["buffered"] is True
+
+    captured_post.clear()
+    adk.emit_capability_use("topic_create", block=True)
+    events = _captured_events(captured_post)
+    assert [event["name"] for event in events[:2]] == [
+        adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE,
+    ]
+    assert events[1]["data"]["adk_capability"] == "connect"
+    for key in ("surface", "session_id", "instance_id", "tenant_id", "agent_type"):
+        assert events[0]["data"][key] == events[1]["data"][key] == data[key]
+    assert "adk_capability" not in events[0]["data"]
+    assert "connector" not in events[0]["data"]
+    assert not Path(adk._pending_buffer_path()).exists()
+
+
+def test_current_session_does_not_scan_completion_history(captured_post, monkeypatch):
+    adk.emit_capability_use("setup", block=True)
+
+    def unexpected_scan():
+        raise AssertionError("Current session should not scan historical completions")
+
+    monkeypatch.setattr(adk, "_read_session_start_evidence", unexpected_scan)
+    assert adk.emit_capability_use("connect", block=True)["sent"] is True
+    assert len(_captured_events(captured_post)) == 3
+
+
+@pytest.mark.parametrize("budget", ["events", "bytes"])
+def test_pending_recovery_preserves_followers_that_do_not_fit(monkeypatch, budget):
+    ikey, env = adk.resolve_ikey()
+    data = adk.common_dimensions(adk.SURFACE_CLI, session_id=adk.get_session()[0])
+    data.update(adk_capability="connect", connector="workday", env=env)
+    prerequisite = adk._session_start_prerequisite(data)
+    follower = adk.build_event(adk.EVENT_CAPABILITY_USE, data, _fc.envelope_ikey(ikey))
+    assert adk._buffer_append_pending([follower, follower], prerequisite)
+    old = json.dumps(adk.build_event("old-event", {}, _fc.envelope_ikey(ikey)))
+    start = adk.build_event(
+        adk.EVENT_SESSION_START, adk._session_start_data(data), prerequisite["context"][3],
+    )
+    expected = [
+        old,
+        json.dumps(start, separators=(",", ":")),
+        json.dumps(follower, separators=(",", ":")),
+    ]
+    if budget == "events":
+        monkeypatch.setattr(adk, "BUFFER_MAX_EVENTS", len(expected))
+    else:
+        monkeypatch.setattr(
+            adk, "BUFFER_MAX_BYTES",
+            sum(len(line.encode("utf-8")) + 1 for line in expected),
+        )
+
+    promoted = adk._promote_pending_locked([old])
+
+    assert len(promoted) == 3
+    assert promoted[0] == old
+    assert [json.loads(line)["name"] for line in promoted[1:]] == [
+        adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE,
+    ]
+    assert len(promoted) <= adk.BUFFER_MAX_EVENTS
+    assert Path(adk.BUFFER_PATH).stat().st_size <= adk.BUFFER_MAX_BYTES
+    assert len(Path(adk._pending_buffer_path()).read_text().splitlines()) == 1
+    assert len(adk._promote_pending_locked([])) == 2
+    assert not Path(adk._pending_buffer_path()).exists()
+
+
+def test_pending_sidecar_keeps_legacy_retry_file_raw():
+    start = adk.build_event(adk.EVENT_SESSION_START, {"session_id": "s1"}, "o:test")
+    owner = adk.build_event(adk.EVENT_CAPABILITY_USE, {"owner": True}, "o:test")
+    follower = adk.build_event(
+        adk.EVENT_CAPABILITY_USE,
+        {"owner": False},
+        "o:test",
+    )
+    prerequisite = {
+        "surface": adk.SURFACE_CLI,
+        "session_id": "s1",
+        "context": ["install", "tenant", "unknown", "o:test"],
+    }
+
+    assert adk._buffer_prepend([start, owner]) is True
+    assert adk._buffer_append_pending([follower], prerequisite) is True
+
+    legacy_records = [
+        json.loads(line)
+        for line in Path(adk.BUFFER_PATH).read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["name"] for record in legacy_records] == [
+        adk.EVENT_SESSION_START,
+        adk.EVENT_CAPABILITY_USE,
+    ]
+    pending_records = [
+        json.loads(line)
+        for line in Path(adk._pending_buffer_path()).read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert pending_records == [
+        {
+            "envelope": follower,
+            "requiresSessionStart": prerequisite,
+        }
+    ]
+
+
+def test_prerelease_wrapper_in_legacy_buffer_is_migrated(captured_post):
+    prerequisite = {
+        "surface": adk.SURFACE_CLI,
+        "session_id": "s1",
+        "context": ["install", "tenant", "unknown", "o:test"],
+    }
+    follower = adk.build_event(
+        adk.EVENT_CAPABILITY_USE,
+        {"session_id": "s1"},
+        "o:test",
+    )
+    Path(adk.BUFFER_PATH).parent.mkdir(parents=True)
+    Path(adk.BUFFER_PATH).write_text(
+        json.dumps(
+            {
+                "envelope": follower,
+                "requiresSessionStart": prerequisite,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    adk._record_session_start_evidence(
+        prerequisite["surface"],
+        prerequisite["session_id"],
+        prerequisite["context"],
+    )
+
+    assert adk._buffer_flush("test-key") is True
+    assert _captured_events(captured_post) == [follower]
+    assert not Path(adk._pending_buffer_path()).exists()
+
+
+def test_slow_buffer_flush_preserves_concurrent_append(tmp_path):
+    script = r"""
+import json
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+import adk_telemetry as adk
+from flightcheck import telemetry as fc
+
+root = Path(sys.argv[2])
+adk.CONFIG_DIR = str(root / ".adk")
+adk.CONFIG_PATH = str(root / ".adk" / "config")
+adk.SESSION_PATH = str(root / ".adk" / "session.json")
+adk.BUFFER_PATH = str(root / ".adk" / "telemetry-buffer.ndjson")
+mode = sys.argv[3]
+
+if mode == "flush":
+    def post(_ikey, _envelopes):
+        (root / "flush-posting").touch()
+        time.sleep(6.2)
+        return 200
+    fc._post = post
+    adk._buffer_flush("test-key")
+else:
+    deadline = time.monotonic() + 15
+    while not (root / "flush-posting").exists():
+        if time.monotonic() > deadline:
+            raise TimeoutError("flush barrier")
+        time.sleep(0.01)
+    fc._post = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("queued telemetry must not be overtaken by a live post")
+    )
+    result = adk._post_event_sync("new-event", {"sequence": 2})
+    (root / "append-result.json").write_text(
+        json.dumps(result), encoding="utf-8"
+    )
+"""
+    buffer_dir = tmp_path / ".adk"
+    buffer_dir.mkdir()
+    buffer_path = buffer_dir / "telemetry-buffer.ndjson"
+    buffer_path.write_text(
+        json.dumps({"name": "old-event", "data": {"sequence": 1}}) + "\n",
+        encoding="utf-8",
+    )
+    command = [
+        sys.executable,
+        "-c",
+        script,
+        str(Path(adk.__file__).parent),
+        str(tmp_path),
+    ]
+    flusher = subprocess.Popen(
+        command + ["flush"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    appender = subprocess.Popen(
+        command + ["append"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        for worker in (flusher, appender):
+            stdout, stderr = worker.communicate(timeout=30)
+            assert worker.returncode == 0, (stdout, stderr)
+    finally:
+        for worker in (flusher, appender):
+            if worker.poll() is None:
+                worker.kill()
+                worker.communicate()
+
+    result = json.loads(
+        (tmp_path / "append-result.json").read_text(encoding="utf-8")
+    )
+    assert result["reason"] == "buffer-pending"
+    assert result["buffered"] is True
+    buffered = [
+        json.loads(line)
+        for line in buffer_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["name"] for event in buffered] == ["new-event"]
+    assert buffered[0]["data"]["sequence"] == 2
+
+
 # --- ikey resolution ------------------------------------------------------
 def test_resolve_ikey_default_matches_shared_default():
     ikey, env = adk.resolve_ikey()
@@ -636,9 +1567,12 @@ def test_emit_happy_path_posts_envelope(captured_post, monkeypatch):
     assert res["sent"] is True
     assert len(captured_post) == 1
     _ikey, envelopes = captured_post[0]
-    assert envelopes[0]["name"] == "adk.capability.use"
-    assert envelopes[0]["data"]["adk_capability"] == "evaluation_validate"
-    assert envelopes[0]["iKey"] == f"o:{DEV_TOKEN}"
+    assert [envelope["name"] for envelope in envelopes] == [
+        adk.EVENT_SESSION_START,
+        adk.EVENT_CAPABILITY_USE,
+    ]
+    assert envelopes[1]["data"]["adk_capability"] == "evaluation_validate"
+    assert envelopes[1]["iKey"] == f"o:{DEV_TOKEN}"
 
 
 def test_connect_lifecycle_event_uses_bounded_privacy_safe_dimensions(
@@ -662,7 +1596,7 @@ def test_connect_lifecycle_event_uses_bounded_privacy_safe_dimensions(
         block=True,
     )
 
-    envelope = captured_post[0][1][0]
+    envelope = _last_activity(captured_post)
     assert envelope["name"] == "adk.connect.lifecycle"
     assert envelope["data"]["connector"] == "workday"
     assert envelope["data"]["lifecycle_event"] == "phase_completed"
@@ -693,7 +1627,7 @@ def test_connect_lifecycle_normalizes_legacy_validation_phase(
         block=True,
     )
 
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert data["phase"] == "maker_validation"
 
 
@@ -709,7 +1643,7 @@ def test_connect_lifecycle_event_normalizes_unbounded_values(captured_post):
         block=True,
     )
 
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert data["lifecycle_event"] == "unknown"
     assert data["outcome"] == "unknown"
     assert data["phase"] == "unknown"
@@ -729,7 +1663,7 @@ def test_api_call_error_outcome_carries_error_fields(captured_post):
         error_category="infra",
         block=True,
     )
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert data["outcome"] == "server_error"
     assert data["error_code"] == "503"
     assert data["error_category"] == "infra"
@@ -746,8 +1680,9 @@ def test_failing_post_is_swallowed_and_buffered(monkeypatch):
     assert os.path.exists(adk.BUFFER_PATH)
     with open(adk.BUFFER_PATH, "r", encoding="utf-8") as f:
         lines = [ln for ln in f.read().splitlines() if ln.strip()]
-    assert len(lines) == 1
-    assert json.loads(lines[0])["name"] == "adk.capability.use"
+    assert [json.loads(line)["name"] for line in lines] == [
+        adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE,
+    ]
 
 
 def test_buffer_flushes_on_next_successful_emit(monkeypatch):
@@ -769,7 +1704,9 @@ def test_buffer_flushes_on_next_successful_emit(monkeypatch):
     assert not os.path.exists(adk.BUFFER_PATH)
     # The buffered event was replayed (its own POST) plus the live event.
     flushed_names = [e["name"] for envs in posted for e in envs]
-    assert "adk.capability.use" in flushed_names
+    assert flushed_names == [
+        adk.EVENT_SESSION_START, adk.EVENT_CAPABILITY_USE, adk.EVENT_CAPABILITY_USE,
+    ]
 
 
 def test_buffer_oversize_drops_oldest_and_accepts_newest(monkeypatch):
@@ -789,6 +1726,29 @@ def test_buffer_oversize_drops_oldest_and_accepts_newest(monkeypatch):
     assert "adk.evt.0" not in names   # oldest dropped
 
 
+def test_buffer_prepend_preserves_session_start_under_cap(monkeypatch):
+    monkeypatch.setattr(adk, "BUFFER_MAX_EVENTS", 3)
+    for i in range(3):
+        adk._buffer_append(
+            [adk.build_event(f"adk.activity.{i}", {"n": i}, "o:tok")]
+        )
+
+    start = adk.build_event(adk.EVENT_SESSION_START, {"session_id": "s1"}, "o:tok")
+    assert adk._buffer_prepend([start]) is True
+
+    with open(adk.BUFFER_PATH, "r", encoding="utf-8") as f:
+        names = [
+            json.loads(line)["name"]
+            for line in f.read().splitlines()
+            if line.strip()
+        ]
+    assert names == [
+        adk.EVENT_SESSION_START,
+        "adk.activity.1",
+        "adk.activity.2",
+    ]
+
+
 # --- Vorpal client event bridge --------------------------------------------
 def test_report_client_events_accepts_and_posts_valid_batch(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
@@ -797,7 +1757,9 @@ def test_report_client_events_accepts_and_posts_valid_batch(captured_post, monke
 
     assert result == {"status": "accepted", "acceptedEventCount": 2}
     assert len(captured_post) == 1
-    _ikey, envelopes = captured_post[0]
+    _ikey, batch = captured_post[0]
+    assert batch[0]["name"] == adk.EVENT_SESSION_START
+    envelopes = _activity_events(captured_post)
     assert [envelope["name"] for envelope in envelopes] == [
         "adk.client.event",
         "adk.client.event",
@@ -856,7 +1818,7 @@ def test_v2_optional_fields_are_projected_without_generic_scrubbing(captured_pos
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 1}
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert data["client_build_number"] == ""
     assert data["client_platform"] == "Win32"
     assert data["client_user_agent"] == user_agent
@@ -889,7 +1851,7 @@ def test_unavailable_v2_optional_fields_remain_absent(captured_post, monkeypatch
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 1}
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     for field in (
         "client_tool_call_id",
         "client_platform",
@@ -935,7 +1897,7 @@ def test_vorpal_owns_event_names_and_sequence_order(captured_post, monkeypatch):
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 3}
-    rows = [envelope["data"] for envelope in captured_post[0][1]]
+    rows = [envelope["data"] for envelope in _activity_events(captured_post)]
     assert [row["client_event_name"] for row in rows] == [
         "WidgetReady",
         "Widget.Ready",
@@ -1049,7 +2011,10 @@ def test_client_source_chronology_survives_buffer_reemission(monkeypatch):
     )
 
     assert second == {"status": "accepted", "acceptedEventCount": 1}
-    replayed = calls[0][0]["data"]
+    replayed = next(
+        event["data"] for event in calls[0]
+        if event["name"] == adk.EVENT_CLIENT
+    )
     assert replayed["client_batch_id"] == "batch-retry"
     assert replayed["client_event_timestamp"] == "2026-09-11T23:21:26.198Z"
     assert replayed["client_time_since_mount_ms"] == 12.25
@@ -1188,7 +2153,7 @@ def test_well_formed_client_identifiers_are_accepted(captured_post, monkeypatch)
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 2}
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert data["client_batch_id"] == "batch-6f7c8f9c-1234-4abc-9def-0123456789ab"
     assert data["client_mount_id"] == "mount-1a2b_3c.4d"
     assert data["client_tool_call_id"] == "tool-Call.42"
@@ -1212,7 +2177,7 @@ def test_identifiers_without_the_legacy_prefixes_are_accepted(captured_post, mon
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 2}
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert data["client_batch_id"] == "6f7c8f9c-1234-4abc-9def-0123456789ab"
     assert data["client_tool_call_id"] == "call_abc.42"
 
@@ -1247,7 +2212,10 @@ def test_free_text_event_names_are_scrubbed_not_rejected(captured_post, monkeypa
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 2}
-    names = [envelope["data"]["client_event_name"] for envelope in captured_post[0][1]]
+    names = [
+        envelope["data"]["client_event_name"]
+        for envelope in _activity_events(captured_post)
+    ]
     assert names[0] == "Widget\U0001f600Ready"
     # Redact the path and email embedded in the event name.
     assert names[1] == "opened <path> for <email>"
@@ -1271,7 +2239,7 @@ def test_oversized_property_strings_are_truncated_not_rejected(captured_post, mo
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 1}
-    props = json.loads(captured_post[0][1][0]["data"]["client_properties"])
+    props = json.loads(_last_activity(captured_post)["data"]["client_properties"])
     assert props["blob"] == "x" * adk.CLIENT_EVENTS_MAX_STRING_LENGTH
 
 
@@ -1293,7 +2261,7 @@ def test_long_appname_and_locale_are_truncated_not_rejected(captured_post, monke
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 1}
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert data["client_app_name"] == "A" * adk.CLIENT_EVENTS_MAX_STRING_LENGTH
     assert data["client_locale"] == "L" * adk.CLIENT_EVENTS_MAX_STRING_LENGTH
 
@@ -1319,7 +2287,7 @@ def test_many_properties_and_long_arrays_are_accepted(captured_post, monkeypatch
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 1}
-    props = json.loads(captured_post[0][1][0]["data"]["client_properties"])
+    props = json.loads(_last_activity(captured_post)["data"]["client_properties"])
     assert len(props) == 41
     assert props["tags"] == list(range(50))
 
@@ -1432,7 +2400,7 @@ def test_malformed_property_bag_costs_the_bag_not_the_event(captured_post, monke
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 2}
-    first, second = (e["data"] for e in captured_post[0][1])
+    first, second = (e["data"] for e in _activity_events(captured_post))
     assert json.loads(first["client_properties"]) == {}
     # A dropped bag stays distinguishable from an event that had no properties.
     assert first["client_prop_dropped_count"] == 1
@@ -1454,7 +2422,7 @@ def test_bad_tool_call_id_omits_the_field_and_keeps_the_batch(captured_post, mon
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 2}
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert "client_tool_call_id" not in data
     # The fields that DO stitch a mount together are still rejected, not omitted.
     assert data["client_batch_id"] == "batch-test"
@@ -1474,7 +2442,7 @@ def test_client_level_is_required_and_emitted(captured_post, monkeypatch):
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 2}
-    first, second = (e["data"] for e in captured_post[0][1])
+    first, second = (e["data"] for e in _activity_events(captured_post))
     assert first["client_level"] == "error"
     assert second["client_level"] == "info"
 
@@ -1494,7 +2462,7 @@ def test_unknown_envelope_fields_are_ignored_not_rejected(captured_post, monkeyp
 
     assert result == {"status": "accepted", "acceptedEventCount": 2}
     # The unknown key is not carried onto the emitted rows either.
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert not any("rawPayload" in key for key in data)
 
 
@@ -1522,7 +2490,7 @@ def test_unknown_event_fields_are_ignored_not_rejected(captured_post, monkeypatc
 
     assert result == {"status": "accepted", "acceptedEventCount": 1}
     # Only recognized event fields contribute to the emitted Aria columns.
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert not any("someFutureField" in key for key in data)
     assert not any(value == "not yet known to ADK" for value in data.values())
     assert data["client_event_name"] == "WidgetReady"
@@ -1555,7 +2523,7 @@ def test_report_client_events_scrubs_paths_urls_emails_and_guids(captured_post, 
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 1}
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     props = json.loads(data["client_properties"])
     assert props["note"] == "<path> see <url>"
     assert props["owner"] == "<email>"
@@ -1639,7 +2607,7 @@ def test_missing_properties_still_emit_a_parseable_blob(captured_post, monkeypat
     )
 
     assert result == {"status": "accepted", "acceptedEventCount": 1}
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert json.loads(data["client_properties"]) == {}
     assert data["client_prop_dropped_count"] == 0
 
@@ -1681,6 +2649,57 @@ def test_report_client_events_fails_open_on_internal_fault(monkeypatch, captured
 def test_batch_cap_is_an_oom_guard_not_a_vorpal_contract():
     """The out-of-memory guard leaves room for independent client batch sizing."""
     assert adk.CLIENT_EVENTS_MAX_BATCH_EVENTS >= 1000
+
+
+def test_failed_maximum_client_batch_preserves_start_within_event_cap(monkeypatch):
+    monkeypatch.setattr(_fc, "_post", lambda *_args: 503)
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {"eventName": f"E{index}", "timeSinceMount": index}
+                for index in range(adk.CLIENT_EVENTS_MAX_BATCH_EVENTS)
+            ]
+        ),
+        block=True,
+    )
+
+    assert result == {
+        "status": "accepted",
+        "acceptedEventCount": adk.CLIENT_EVENTS_MAX_BATCH_EVENTS,
+    }
+    buffered = Path(adk.BUFFER_PATH).read_text(encoding="utf-8").splitlines()
+    assert len(buffered) == adk.BUFFER_MAX_EVENTS
+    records = [json.loads(line) for line in buffered]
+    assert records[0]["name"] == adk.EVENT_SESSION_START
+    assert all("envelope" not in record for record in records)
+
+
+def test_failed_maximum_client_batch_stays_within_byte_cap(monkeypatch):
+    monkeypatch.setattr(_fc, "_post", lambda *_args: 503)
+    properties = {f"k{index}": "x" * 200 for index in range(35)}
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {
+                    "eventName": f"E{index}",
+                    "timeSinceMount": index,
+                    "properties": properties,
+                }
+                for index in range(adk.CLIENT_EVENTS_MAX_BATCH_EVENTS)
+            ]
+        ),
+        block=True,
+    )
+
+    assert result == {
+        "status": "accepted",
+        "acceptedEventCount": adk.CLIENT_EVENTS_MAX_BATCH_EVENTS,
+    }
+    assert Path(adk.BUFFER_PATH).stat().st_size <= adk.BUFFER_MAX_BYTES
+    first = json.loads(
+        Path(adk.BUFFER_PATH).read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert first["name"] == adk.EVENT_SESSION_START
 
 
 def test_fail_open_echoes_the_full_sent_count(monkeypatch, captured_post):
@@ -1754,7 +2773,7 @@ def test_normalize_capability_unknown_bucketed():
 def test_emit_capability_use_coerces_unknown(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
     adk.emit_capability_use("not-a-real-cap", block=True)
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     # Out-of-taxonomy values still emit, but land in the controlled bucket so
     # the "Capability Usage by Type" dimension never mints stray slices.
     assert data["adk_capability"] == adk.CAPABILITY_UNKNOWN
@@ -1763,7 +2782,7 @@ def test_emit_capability_use_coerces_unknown(captured_post, monkeypatch):
 def test_emit_capability_use_known_value_preserved(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
     adk.emit_capability_use("Topic_Create", block=True)
-    assert captured_post[0][1][0]["data"]["adk_capability"] == "topic_create"
+    assert _last_activity(captured_post)["data"]["adk_capability"] == "topic_create"
 
 
 # --- session start no longer carries a capability dimension ---------------
@@ -1922,7 +2941,7 @@ def test_shim_emits_capability_and_exits_zero(captured_post, monkeypatch):
     rc = emit_capability.main(["emit_capability.py", "topic_create"])
     assert rc == 0
     assert len(captured_post) == 1
-    envelope = captured_post[0][1][0]
+    envelope = _last_activity(captured_post)
     assert envelope["name"] == "adk.capability.use"
     assert envelope["data"]["adk_capability"] == "topic_create"
 
@@ -1934,7 +2953,10 @@ def test_shim_unknown_capability_still_exits_zero(captured_post, monkeypatch):
     assert rc == 0
     # Emitted, but bucketed — a bad SKILL.md argument can't fail the step and
     # can't pollute the dashboard dimension.
-    assert captured_post[0][1][0]["data"]["adk_capability"] == adk.CAPABILITY_UNKNOWN
+    assert (
+        _last_activity(captured_post)["data"]["adk_capability"]
+        == adk.CAPABILITY_UNKNOWN
+    )
 
 
 def test_shim_list_and_help_do_not_emit(captured_post):
@@ -2168,7 +3190,7 @@ def test_normalize_connector_unknown_bucketed():
 def test_emit_capability_use_stamps_connector(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
     adk.emit_capability_use("connect", connector="workday", block=True)
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert data["adk_capability"] == "connect"
     assert data["connector"] == "workday"
 
@@ -2176,7 +3198,7 @@ def test_emit_capability_use_stamps_connector(captured_post, monkeypatch):
 def test_emit_capability_use_omitted_connector_is_empty(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
     adk.emit_capability_use("topic_create", block=True)
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     # Topic authoring is not connector-scoped; the field is always present
     # (Kusto column shape stays stable) but empty.
     assert data["connector"] == ""
@@ -2185,26 +3207,48 @@ def test_emit_capability_use_omitted_connector_is_empty(captured_post, monkeypat
 def test_emit_capability_use_unknown_connector_bucketed(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
     adk.emit_capability_use("connect", connector="Sap", block=True)
-    assert captured_post[0][1][0]["data"]["connector"] == adk.CONNECTOR_UNKNOWN
+    assert _last_activity(captured_post)["data"]["connector"] == adk.CONNECTOR_UNKNOWN
 
 
 def test_emit_flightcheck_run_carries_connector(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
     adk.emit_flightcheck_run(agent_id="a1", connector="servicenow", block=True)
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert data["connector"] == "servicenow"
 
 
 def test_emit_flightcheck_result_carries_connector(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
     adk.emit_flightcheck_result(agent_id="a1", connector="workday", result="pass", block=True)
-    assert captured_post[0][1][0]["data"]["connector"] == "workday"
+    assert _last_activity(captured_post)["data"]["connector"] == "workday"
+
+
+@pytest.mark.parametrize("emit", [adk.emit_flightcheck_run, adk.emit_flightcheck_result])
+@pytest.mark.parametrize(
+    ("branch", "invocation_source", "expected"),
+    [
+        ("other", "adk", "declarative_agent"),
+        ("main-ca", "adk", "custom_agent"),
+        ("other", "cli", "unknown"),
+        ("main", "installer", "declarative_agent"),
+        ("main-ca", "connect", "custom_agent"),
+    ],
+)
+def test_flightcheck_agent_type_uses_invocation_source(
+    captured_post, monkeypatch, emit, branch, invocation_source, expected,
+):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    monkeypatch.setattr(_fc, "get_toolkit_git_branch", lambda: branch)
+
+    emit(invocation_source=invocation_source, block=True)
+
+    assert captured_post[0][1][0]["data"]["agent_type"] == expected
 
 
 def test_emit_flightcheck_error_carries_connector(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
     adk.emit_flightcheck_error(agent_id="a1", connector="workday", error_code="X", block=True)
-    assert captured_post[0][1][0]["data"]["connector"] == "workday"
+    assert _last_activity(captured_post)["data"]["connector"] == "workday"
 
 
 def test_schema_version_bump_records_agent_type_dim():
@@ -2220,7 +3264,7 @@ def test_shim_parses_connector_flag_before_capability(captured_post, monkeypatch
         "emit_capability.py", "--connector", "servicenow", "connect",
     ])
     assert rc == 0
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert data["adk_capability"] == "connect"
     assert data["connector"] == "servicenow"
 
@@ -2232,7 +3276,7 @@ def test_shim_parses_connector_flag_after_capability(captured_post, monkeypatch)
         "emit_capability.py", "connect", "--connector", "workday",
     ])
     assert rc == 0
-    assert captured_post[0][1][0]["data"]["connector"] == "workday"
+    assert _last_activity(captured_post)["data"]["connector"] == "workday"
 
 
 def test_shim_parses_connector_equals_form(captured_post, monkeypatch):
@@ -2242,7 +3286,7 @@ def test_shim_parses_connector_equals_form(captured_post, monkeypatch):
         "emit_capability.py", "connect", "--connector=workday",
     ])
     assert rc == 0
-    assert captured_post[0][1][0]["data"]["connector"] == "workday"
+    assert _last_activity(captured_post)["data"]["connector"] == "workday"
 
 
 def test_shim_omitted_connector_yields_empty(captured_post, monkeypatch):
@@ -2250,7 +3294,7 @@ def test_shim_omitted_connector_yields_empty(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
     rc = emit_capability.main(["emit_capability.py", "topic_create"])
     assert rc == 0
-    assert captured_post[0][1][0]["data"]["connector"] == ""
+    assert _last_activity(captured_post)["data"]["connector"] == ""
 
 
 def test_shim_dangling_connector_flag_still_emits(captured_post, monkeypatch):
@@ -2261,7 +3305,7 @@ def test_shim_dangling_connector_flag_still_emits(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
     rc = emit_capability.main(["emit_capability.py", "connect", "--connector"])
     assert rc == 0
-    data = captured_post[0][1][0]["data"]
+    data = _last_activity(captured_post)["data"]
     assert data["adk_capability"] == "connect"
     assert data["connector"] == ""
 
@@ -2276,4 +3320,4 @@ def test_shim_worker_mode_preserves_connector(captured_post, monkeypatch):
         "emit_capability.py", "--worker", "connect", "--connector", "workday",
     ])
     assert rc == 0
-    assert captured_post[0][1][0]["data"]["connector"] == "workday"
+    assert _last_activity(captured_post)["data"]["connector"] == "workday"

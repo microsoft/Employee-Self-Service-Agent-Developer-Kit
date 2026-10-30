@@ -57,8 +57,9 @@ from flightcheck.runner import (
     BLOCK_REASON_ADMIN_API_UNAVAILABLE,
     BLOCK_REASON_CHECKPOINT_CONTRACT,
     BLOCK_REASON_PROFILE_CARDINALITY,
+    maker_diagnostic_outcome,
 )
-from flightcheck.agent_scope import active_agent, validate_agent_slug
+from flightcheck.agent_scope import active_agent, configured_agents, is_declarative_agent, validate_agent_slug
 from flightcheck.graph_client import GraphClient
 from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
 from flightcheck.pva_client import PVAClient
@@ -93,7 +94,7 @@ from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
 from flightcheck.checks.servicenow import run_servicenow_checks
-from flightcheck.checks.local_files import run_local_file_checks
+from flightcheck.checks.local_files import run_da_local_file_checks, run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.licensing import run_licensing_checks
 from flightcheck.checks.cloud_policy import run_cloud_policy_checks
@@ -1029,17 +1030,75 @@ def _run_exit_code(result) -> int:
     blocked essential capability can never exit 0 and read as success to a
     CI/Connect caller keying on the exit code.
     """
+    if getattr(result, "diagnostic_only", False) and not result.profile:
+        return 1 if result.overall in {"ISSUES_FOUND", "SOME_CHECKS_UNVERIFIED"} else 0
     return 1 if result.failed > 0 or result.blocked > 0 or result.errors > 0 else 0
+
+
+def _run_da_selection_if_applicable(args, config):
+    from types import SimpleNamespace
+
+    selected = _active_agent_config(config, args.agent_slug)
+    slug = args.agent_slug or config.get("activeAgent") or selected.get("slug")
+    if not is_declarative_agent(SimpleNamespace(config=config, agent_slug=slug)):
+        return
+    if not selected.get("botId"):
+        # Pre-agent foundation/setup consumers retain their environment-only
+        # contract; there is no native agent subject for selected-DA execution.
+        return
+    if args.profile and args.profile.startswith("workday-legacy:"):
+        return
+    if args.profile:
+        try:
+            _validation_context_from_args(
+                args, config, args.environment_url or config.get("dataverseEndpoint", ""),
+                args.environment_id or config.get("environmentId"),
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
+    if args.runtime_reachability or args.alm_import_probe:
+        print("ERROR: DA diagnostics are read-only; runtime and import probes are not allowed.")
+        sys.exit(2)
+    from flightcheck.maker_diagnostics import run_maker_diagnostics
+
+    try:
+        result = run_maker_diagnostics(args, config)
+    except ValueError as exc:
+        print(f"ERROR: Unable to plan the selected DA checks: {exc}")
+        sys.exit(2)
+    _print_prioritized_summary(result)
+    save_results(result, args.output)
+    _emit_run_telemetry(
+        result, args, config, graph=None, tenant_id="",
+        scope=f"profile:{args.profile}" if args.profile else f"checkpoint:{args.checkpoint}",
+    )
+    if not getattr(args, "no_open", False):
+        open_report_in_browser(args.output)
+    sys.exit(_run_exit_code(result))
+
+
+def _adk_flightcheck_result(overall: str) -> str:
+    """Map standard and diagnostic FlightCheck outcomes to ADK telemetry."""
+    return {
+        "READY": "pass",
+        "READY_WITH_WARNINGS": "partial",
+        "NOT_READY": "fail",
+        "SETUP_CHECKS_PASSED": "pass",
+        "CHECKED_WITH_NOTES": "partial",
+        "SOME_CHECKS_UNVERIFIED": "partial",
+        "ISSUES_FOUND": "fail",
+    }.get(overall, "fail")
 
 
 def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
     """Emit anonymous outcome telemetry for a completed run (best-effort).
 
-    Shared by the --checkpoint and --profile paths so both single-purpose
-    "connect" runs surface on the Aria dashboards the same way a --scope run
-    does. Never raises: telemetry must not change the run's exit code. The
-    caller passes the run ``scope`` (e.g. ``checkpoint:<id>`` or
-    ``profile:<name>``); everything else is derived from the shared run state.
+    Shared by DA diagnostics, --checkpoint, and --profile paths so runs that
+    return before the normal scope telemetry block still surface on the Aria
+    dashboards. Never raises: telemetry must not change the run's exit code.
+    The caller passes the run ``scope`` (e.g. ``local``, ``checkpoint:<id>``,
+    or ``profile:<name>``); everything else is derived from shared run state.
     """
     if getattr(args, "no_telemetry", False):
         return
@@ -1049,18 +1108,14 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
     _tele_debug = os.environ.get(
         "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
     ).strip().lower() in ("1", "on", "true", "yes")
-    # Resolve the active agent from config (may be empty for Entra-only
-    # checkpoints run before /setup writes a full config).
-    _agents = config.get("agents", [])
-    if not _agents:
-        _agent_entry = config.get("agent", {})
-        if _agent_entry:
-            _agents = [_agent_entry]
-    _active = config.get("activeAgent", config.get("agent", {}).get("slug", ""))
-    _active_agent = next(
-        (a for a in _agents if a.get("slug") == _active),
-        _agents[0] if _agents else {},
-    )
+    _agents = configured_agents(config)
+    _active_agent = _active_agent_config(config, getattr(args, "agent_slug", None))
+    _context = getattr(result, "validation_context", {}) or {}
+    _agent_id = _context.get("agentId") or _active_agent.get("botId", "")
+    tenant_id = str(
+        _context.get("tenantId") or tenant_id
+        or config.get("tenantId") or _active_agent.get("tenantId") or ""
+    ).strip()
     # Best-effort tenant display name (OII; privacy-approved). Reuses the
     # already-authenticated Graph client when one was needed; never re-auths.
     # Falls back to the persisted ``.local/.tenant_name`` cache when the
@@ -1087,7 +1142,7 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
             result,
             tenant_id=tenant_id or "",
             tenant_name=tenant_name,
-            agent_id=_active_agent.get("botId", ""),
+            agent_id=_agent_id,
             scope=scope,
             agent_count=len(_agents),
             invocation_source=_inv_source,
@@ -1106,36 +1161,31 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
     # --scope emit so these runs also count toward the adk.* cubes.
     try:
         import adk_telemetry as _adk
-        from flightcheck.telemetry import derive_connector_from_category
+        from flightcheck.telemetry import (
+            derive_connector_from_category, derive_connector_from_scope,
+        )
 
-        _agent_id = _active_agent.get("botId", "")
         if tenant_id or tenant_name:
             _adk.set_identity(tenant_id=tenant_id or "", tenant_name=tenant_name)
         _ridx = _adk.next_run_index(_agent_id)
-        # The first result row's category is the run's connector (or "" for
-        # cross-cutting checkpoints like Environment / Authentication).
-        # Derived here rather than passed by the caller so the CLI runtime
-        # path matches the same connector attribution as the legacy
-        # ESSMakerKit.FlightCheck.* events (ADO 7943641 review).
-        _connector = ""
-        if result.results:
+        _connector = derive_connector_from_scope(scope)
+        # Preserve category attribution for targeted checks without a
+        # connector-prefixed ID; scope runs must not inherit a prerequisite.
+        if not _connector and scope.startswith(("checkpoint:", "profile:")) and result.results:
             _connector = derive_connector_from_category(
                 getattr(result.results[0], "category", "") or ""
             )
         _adk.emit_flightcheck_run(
-            agent_id=_agent_id, run_index=_ridx, connector=_connector
+            agent_id=_agent_id, run_index=_ridx, connector=_connector,
+            invocation_source=_inv_source,
         )
-        _result_map = {
-            "READY": "pass",
-            "READY_WITH_WARNINGS": "partial",
-            "NOT_READY": "fail",
-        }
         _adk.emit_flightcheck_result(
             agent_id=_agent_id,
             run_index=_ridx,
-            result=_result_map.get(result.overall, "fail"),
+            result=_adk_flightcheck_result(result.overall),
             duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
             connector=_connector,
+            invocation_source=_inv_source,
         )
         _adk.flush(timeout=3)
     except Exception:  # noqa: BLE001 — adk telemetry must never break the run
@@ -1194,6 +1244,7 @@ def _run_single_checkpoint(args):
         print(f"ERROR: Unable to resolve the profile target: {e}")
         sys.exit(1)
 
+    _run_da_selection_if_applicable(args, config)
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
     if plan.requires_dataverse_endpoint and not env_url:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
@@ -2022,9 +2073,13 @@ def _run_profile(args):
         )
         sys.exit(2)
 
-    config_path = os.path.join(".local", "config.json")
-    if not os.path.exists(config_path) and plan.requires_config:
-        print("ERROR: .local/config.json not found. Run /setup first.")
+    explicit_config = getattr(args, "profile_config", None)
+    config_path = explicit_config or os.path.join(".local", "config.json")
+    if not os.path.exists(config_path) and (explicit_config or plan.requires_config):
+        if explicit_config:
+            print(f"ERROR: Profile configuration not found: {config_path}.")
+        else:
+            print("ERROR: .local/config.json not found. Run /setup first.")
         sys.exit(1)
 
     try:
@@ -2038,10 +2093,17 @@ def _run_profile(args):
                 )
         config = _merge_connect_config(config, getattr(args, "connect_config", None))
         _profile_target_matches_config(args, config)
+        if explicit_config:
+            requested_realm = getattr(args, "validation_realm", None)
+            if requested_realm and requested_realm != config.get("realm"):
+                raise ValueError(
+                    "--validation-realm does not match --profile-config."
+                )
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"ERROR: Unable to resolve the profile target: {e}")
         sys.exit(1)
 
+    _run_da_selection_if_applicable(args, config)
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
     if plan.requires_dataverse_endpoint and not env_url:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
@@ -2589,8 +2651,8 @@ def main():
         help="Validation scope (default: full). Mutually exclusive with --checkpoint/--profile.",
     )
     parser.add_argument(
-        "--output", default="workspace/flightcheck",
-        help="Output directory (default: workspace/flightcheck)",
+        "--output", default=None,
+        help="Output directory (default: workspace/flightcheck; WD-RUN-001 uses its workday-litmus subdirectory)",
     )
     parser.add_argument(
         "--environment-url",
@@ -2650,6 +2712,16 @@ def main():
     parser.add_argument(
         "--agent-schema-name",
         help="Agent schema name for a --profile validation context.",
+    )
+    parser.add_argument(
+        "--profile-config",
+        default=None,
+        help=(
+            "Use this complete target configuration JSON instead of "
+            ".local/config.json for a read-only --profile run. Connect uses "
+            "a temporary verified realm snapshot; the workspace is not changed. "
+            "Unlike --connect-config, this explicitly selects the full target."
+        ),
     )
     parser.add_argument(
         "--connect-config",
@@ -2762,6 +2834,13 @@ def main():
              "JSON, then exit without running any checks.",
     )
     args = parser.parse_args()
+    if args.profile_config and not args.profile:
+        parser.error("--profile-config requires --profile.")
+    if args.output is None:
+        args.output = (
+            os.path.join("workspace", "flightcheck", "workday-litmus")
+            if args.checkpoint == "WD-RUN-001" else "workspace/flightcheck"
+        )
     if args.alm_import_probe and not args.alm_import_target_environment_id:
         parser.error(
             "--alm-import-target-environment-id is required with "
@@ -2824,6 +2903,48 @@ def main():
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"ERROR: Unable to load --connect-config: {e}")
         sys.exit(1)
+
+    from types import SimpleNamespace
+
+    selected = _active_agent_config(config, args.agent_slug)
+    if args.agent_slug and not selected:
+        print("ERROR: --agent-slug does not identify exactly one configured agent.")
+        sys.exit(1)
+    selected_slug = args.agent_slug or config.get("activeAgent") or (config.get("agent") or {}).get("slug")
+    da_context = str(config.get("releaseLine") or "").strip().casefold() == "da" or any(
+        str(agent.get("releaseLine") or "").strip().casefold() == "da"
+        for agent in configured_agents(config)
+    )
+    da_diagnostic_scopes = {"full", "local", "workday", "servicenow"}
+    if da_context and args.scope in da_diagnostic_scopes and (
+        ((config.get("agents") or config.get("agent")) and not selected)
+        or (not selected_slug and len(config.get("agents") or []) > 1)
+    ):
+        print("ERROR: Select exactly one configured agent with --agent-slug before running these checks.")
+        sys.exit(1)
+    da_selected = is_declarative_agent(SimpleNamespace(
+        config=config, agent_slug=selected_slug or selected.get("slug"),
+    ))
+    if args.scope in da_diagnostic_scopes and da_selected:
+        if args.runtime_reachability or args.alm_import_probe:
+            print("ERROR: DA maker diagnostics are read-only; runtime and import probes are not allowed.")
+            sys.exit(2)
+        from flightcheck.maker_diagnostics import run_maker_diagnostics
+
+        result = run_maker_diagnostics(args, config)
+        _print_prioritized_summary(result)
+        save_results(result, args.output)
+        _emit_run_telemetry(
+            result,
+            args,
+            config,
+            graph=None,
+            tenant_id="",
+            scope=args.scope,
+        )
+        if not args.no_open:
+            open_report_in_browser(args.output)
+        sys.exit(_run_exit_code(result))
 
     infra_only_scope = args.scope == "infrastructure"
     da_local_scope = args.scope == "local"
@@ -3209,7 +3330,7 @@ def main():
         getattr(args, "agent_slug", None)
         or config.get("activeAgent")
         or (config.get("agent") or {}).get("slug")
-        or ""
+        or (selected.get("slug", "") if da_selected else "")
     )
     runner.env_url = env_url
     runner.dv_token = dv_token
@@ -3239,6 +3360,9 @@ def main():
     # Register checks based on scope
     if native_remote_scope:
         checks = NATIVE_NO_DATAVERSE_SCOPE_MAP[args.scope]
+    elif da_selected and args.scope == "local":
+        runner.maker_diagnostics = True
+        checks = [("Local Files", run_da_local_file_checks)]
     elif args.scope == "full":
         checks = FULL_SCOPE
     else:
@@ -3255,6 +3379,10 @@ def main():
     # --- Execute ---
     print("\nRunning checks...\n")
     result = runner.run()
+    if da_selected and args.scope == "local":
+        result.diagnostic_only = True
+        result.overall = maker_diagnostic_outcome(result)
+        result.validation_context = {"agentSlug": runner.agent_slug}
 
     # --- Print summary ---
     _print_prioritized_summary(result)
@@ -3263,7 +3391,7 @@ def main():
     save_results(result, args.output)
 
     # Emit anonymous outcome telemetry (best-effort; never affects exit code).
-    if not args.no_telemetry:
+    if not args.no_telemetry and not getattr(result, "diagnostic_only", False):
         # Telemetry status is internal detail makers shouldn't normally see;
         # only surface it when explicitly debugging telemetry.
         _tele_debug = os.environ.get(
@@ -3271,10 +3399,7 @@ def main():
         ).strip().lower() in ("1", "on", "true", "yes")
         # Resolve the active agent once, up front, so both the legacy and the
         # adk.* telemetry blocks can use it even if the first block raises early.
-        active_agent = next(
-            (a for a in agents if a.get("slug") == active),
-            agents[0] if agents else {},
-        )
+        active_agent = _active_agent_config(config, args.agent_slug)
         # Best-effort tenant display name (OII; privacy-approved). Reuses the
         # already-authenticated Graph client's /organization record — no extra
         # auth. Falls back to the persisted ``.local/.tenant_name`` cache when
@@ -3331,19 +3456,16 @@ def main():
             # per-check attribution lives on the check events, not run events.
             _connector = derive_connector_from_scope(args.scope)
             _adk.emit_flightcheck_run(
-                agent_id=_agent_id, run_index=_ridx, connector=_connector
+                agent_id=_agent_id, run_index=_ridx, connector=_connector,
+                invocation_source=args.invocation_source,
             )
-            _result_map = {
-                "READY": "pass",
-                "READY_WITH_WARNINGS": "partial",
-                "NOT_READY": "fail",
-            }
             _adk.emit_flightcheck_result(
                 agent_id=_agent_id,
                 run_index=_ridx,
-                result=_result_map.get(result.overall, "fail"),
+                result=_adk_flightcheck_result(result.overall),
                 duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
                 connector=_connector,
+                invocation_source=args.invocation_source,
             )
             _adk.flush(timeout=3)
         except Exception:  # noqa: BLE001 — adk telemetry must never break the run
@@ -3352,7 +3474,10 @@ def main():
         if os.environ.get(
             "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
         ).strip().lower() in ("1", "on", "true", "yes"):
-            print("[telemetry] disabled via --no-telemetry")
+            if args.no_telemetry:
+                print("[telemetry] suppressed: --no-telemetry")
+            elif getattr(result, "diagnostic_only", False):
+                print("[telemetry] suppressed: diagnostic-only FlightCheck run")
 
     # Open the HTML report only when the run includes a MANUAL check — those
     # need the browser's rich remediation view. Runs with no manual items are
@@ -3367,21 +3492,20 @@ def main():
 
 
 def _print_prioritized_summary(result, *, verbose_manual=False):
-    """Print a triage-first summary that mirrors the HTML layout.
-
-    Three sections, biggest signal first:
-      1. Verdict banner (one line).
-      2. Counts strip.
-      3. ACTION REQUIRED — full per-row detail (Failed / Error).
-      4. NEEDS MANUAL VERIFICATION — one line per row (Warning /
-         Manual / NotConfigured).
-      5. SKIPPED — count only, when present.
-      6. PASSED — count only; point to report.html for the list.
-
-    The goal is for an operator scanning the terminal to see, in
-    order: am I OK? what must I fix? what must I verify? — without
-    having to read every passing row.
-    """
+    """Print the appropriate maker diagnostic or legacy triage summary."""
+    if getattr(result, "diagnostic_only", False):
+        print(f"\nMAKER SETUP DIAGNOSTIC: {result.overall.replace('_', ' ').title()}")
+        print(
+            f"{result.total} results; {result.passed} passed; {result.failed} confirmed issues; "
+            f"{result.manual} need manual verification."
+        )
+        print("Configuration inspection only; not release approval or proof of employee execution.")
+        for row in result.results:
+            if row.status != Status.PASSED.value:
+                print(f"\n  {row.checkpoint_id}: {row.description} [{row.status}]\n  {row.result}")
+                if row.remediation:
+                    print(f"  Next step: {row.remediation}")
+        return
     buckets = bucket_results(result.results)
     action = buckets[BUCKET_ACTION]
     manual = buckets[BUCKET_MANUAL]

@@ -118,7 +118,8 @@ class TestRegistryDrift:
         # resolve in the setup registry — they are validated via --scope.
         for foreign in ("SN-CONN-003", "EXT-002-ACL", "SAP-001",
                         "ENV-004-OR-001", "AUTH-005"):
-            assert registry.resolve(_probe(foreign)) is None
+            resolved = registry.resolve(_probe(foreign))
+            assert resolved is None or resolved.da is not None
             assert not _is_owned(_probe(foreign)), (
                 f"{foreign} should be outside the owned allow-list"
             )

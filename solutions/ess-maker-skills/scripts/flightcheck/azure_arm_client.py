@@ -74,8 +74,10 @@ class AzureArmClient:
         tenant_id: str,
         *,
         cache_path: str | os.PathLike[str] | None = None,
+        strict_reads: bool = False,
     ):
         self.tenant_id = tenant_id
+        self.strict_reads = strict_reads
         self.cache_path = Path(
             cache_path or os.path.join(".local", ".token_cache.bin")
         )
@@ -242,13 +244,40 @@ class AzureArmClient:
             "/providers/Microsoft.Consumption/budgets"
         )
         params: dict | None = {"api-version": BUDGETS_API_VERSION}
+        expected_path = urlparse(url).path
+        seen: set[str] = set()
         while url:
+            if self.strict_reads:
+                if url in seen:
+                    raise ValueError("ARM returned a repeated budget collection continuation.")
+                seen.add(url)
             resp = _SESSION.get(url, headers=self.headers, params=params, timeout=60)
             if resp.status_code in (401, 403):
                 return {"_error": "insufficient_permissions", "_status": resp.status_code}
             resp.raise_for_status()
             data = resp.json()
+            if self.strict_reads and (
+                not isinstance(data, dict) or not isinstance(data.get("value"), list)
+                or any(not isinstance(item, dict) for item in data["value"])
+            ):
+                raise ValueError("ARM returned an invalid budget collection.")
             items.extend(data.get("value", []))
-            url = data.get("nextLink") or data.get("@odata.nextLink")
+            continuations = [
+                data[key] for key in ("nextLink", "@odata.nextLink")
+                if data.get(key) is not None
+            ]
+            if self.strict_reads and (
+                any(not isinstance(link, str) or not link for link in continuations)
+                or len(set(continuations)) > 1
+            ):
+                raise ValueError("ARM returned invalid or conflicting budget continuations.")
+            url = next((link for link in continuations if link), None)
+            if self.strict_reads and url is not None:
+                parsed = urlparse(url)
+                if (
+                    parsed.scheme != "https" or parsed.netloc != "management.azure.com"
+                    or parsed.path != expected_path or parsed.fragment
+                ):
+                    raise ValueError("ARM returned an invalid budget collection continuation.")
             params = None
         return items

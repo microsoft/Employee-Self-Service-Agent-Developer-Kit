@@ -288,9 +288,7 @@ ADMINISTRATOR_PARTIAL_FIELDS = {
 ADMINISTRATOR_REQUIRED_FIELDS = {
     Phase.ENTRA.value: frozenset(
         {
-            "selectedDirectoryDisplayName",
             "applicationId",
-            "applicationDisplayName",
             "replyUrl",
             "entraChecks",
             "nameIdSource",
@@ -304,6 +302,8 @@ ADMINISTRATOR_REQUIRED_FIELDS = {
         - {
             "certificateValidFrom",
             "employeeSecurityGroup",
+            "networkReadinessOutcome",
+            "apiClientOutcome",
             "optionalDomains",
         }
     ),
@@ -1592,8 +1592,17 @@ def next_phase_summary(state: Mapping[str, Any]) -> dict[str, Any] | None:
     if phase_id is None:
         return None
     definition = PHASE_BY_ID[phase_id]
+    what_happens = list(definition.what_happens)
+    if phase_id == Phase.RUNTIME.value and state.get("activeTargetRealm") in {
+        "test", "prod",
+    }:
+        what_happens[1] = (
+            "Bind connections, activate required flows, configure permissions "
+            "and employee context, and verify the promoted Workday topic state "
+            "without changing it."
+        )
     return {
         "id": phase_id,
         "title": definition.title,
-        "whatHappens": list(definition.what_happens),
+        "whatHappens": what_happens,
     }

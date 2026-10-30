@@ -91,9 +91,14 @@ def _administrator_handoff_phase(
 
 
 def _customer_remediation(phase_id: str, error_type: str) -> str:
+    if error_type == "flightcheck-transport-error":
+        return (
+            "Readiness validation did not finish. Review the validation error "
+            "before retrying; keep the existing package and completed setup "
+            "unchanged."
+        )
     if error_type in {
         "flightcheck-timeout",
-        "flightcheck-transport-error",
         "flightcheck-execution-error",
     }:
         return (
@@ -182,7 +187,7 @@ def effective_validation_state(
     root: Path,
     state: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Add the foundation validation realm without mutating lifecycle state."""
+    """Resolve the active target realm without mutating lifecycle state."""
     effective_state = dict(state)
     effective_scope = dict(state.get("scope") or {})
     foundation_path = root.resolve() / ".local" / "config.json"
@@ -198,13 +203,16 @@ def effective_validation_state(
         except (OSError, json.JSONDecodeError):
             foundation_error = True
     realm = _text(
-        effective_scope.get("validationRealm")
+        ("invalid-foundation-config" if foundation_error else "")
+        or state.get("activeTargetRealm")
+        or effective_scope.get("validationRealm")
         or foundation.get("realm")
-        or ("invalid-foundation-config" if foundation_error else "")
         or "dev"
     ).casefold()
     effective_scope["validationRealm"] = realm
     effective_scope["validationRealmSourceValid"] = not foundation_error
+    if "agentBuilderApiVersion" in foundation:
+        effective_scope["agentBuilderApiVersion"] = foundation["agentBuilderApiVersion"]
     effective_state["scope"] = effective_scope
     return effective_state
 
@@ -236,6 +244,7 @@ def _config_projection(state: Mapping[str, Any]) -> dict[str, Any]:
         **scope,
         **identifiers,
         **endpoints,
+        "releaseLine": "da",
         "realm": scope.get("validationRealm") or "dev",
         "tenantId": scope.get("entraTenantId"),
         "dataverseEndpoint": scope.get("dataverseUrl"),
@@ -269,7 +278,7 @@ def _command(
         str(Path(__file__).with_name("flightcheck") / "cli.py"),
         "--output",
         str(output_dir),
-        "--connect-config",
+        "--profile-config",
         str(config_path),
         "--profile",
         profile_name,
@@ -470,11 +479,43 @@ def _has_action(
 def _manual_accepted(
     state: Mapping[str, Any],
     checkpoint_id: str,
+    row: Mapping[str, Any],
 ) -> bool:
     requirements = manual_evidence_for(checkpoint_id)
-    return bool(requirements) and all(
+    accepted = bool(requirements) and all(
         _has_action(state, phase_id, action)
         for phase_id, action in requirements
+    )
+    if not accepted or checkpoint_id != "WD-REST-001":
+        return accepted
+    scope = state.get("scope") or {}
+    endpoints = state.get("endpoints") or {}
+    maker = ((state.get("operators") or {}).get("powerPlatformMaker") or {}).get("username")
+    records = ((state.get("phases") or {}).get("connections") or {}).get("evidence") or []
+    record = next(
+        (item for item in records if isinstance(item, Mapping) and item.get("action") == "physical-connections-verified"),
+        {},
+    )
+    target = record.get("workdayTarget") or {}
+    observed = row.get("evidence") or {}
+    connection_ids = record.get("connectionIds") or {}
+    rest = endpoints.get("restBaseUrl")
+    return (
+        record.get("outcome") == "verified"
+        and record.get("source") == "live-power-platform-discovery"
+        and record.get("workdayTargetOutcome") == "maker-confirmed-against-workday-packet"
+        and bool(maker) and _normalized(record.get("makerUsername")) == _normalized(maker)
+        and isinstance(target, Mapping)
+        and bool(scope.get("environmentId"))
+        and _normalized(target.get("environmentId")) == _normalized(scope.get("environmentId"))
+        and bool(scope.get("workdayTenant"))
+        and _normalized(target.get("workdayTenant")) == _normalized(scope.get("workdayTenant"))
+        and bool(rest) and _normalized(target.get("restBaseUrl")) == _normalized(rest)
+        and isinstance(observed, Mapping)
+        and _normalized(observed.get("configuredRestBaseUrl")) == _normalized(rest)
+        and isinstance(connection_ids, Mapping)
+        and bool(target.get("connectionId"))
+        and target.get("connectionId") == connection_ids.get("workday")
     )
 
 
@@ -569,7 +610,7 @@ def _validate_results(
         remediation_id = _text(row.get("remediationId"))
         if status == "Passed":
             continue
-        if status == "Manual" and _manual_accepted(state, checkpoint_id):
+        if status == "Manual" and _manual_accepted(state, checkpoint_id, row):
             suppressions.append(
                 {
                     "checkpointId": checkpoint_id,

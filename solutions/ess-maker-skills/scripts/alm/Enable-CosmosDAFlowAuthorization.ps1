@@ -37,6 +37,12 @@
 .PARAMETER BusinessUnitId
     Optional business unit. Defaults to the org's root business unit.
 
+.PARAMETER ExpectedAuthorizationId
+    Optional exact delegated-authorization ID from the approved runtime plan.
+
+.PARAMETER ExpectedTeamId
+    Optional exact access-team ID from the approved runtime plan.
+
 .PARAMETER AccessMask
     Access rights granted to the team on each workflow. WriteAccess is the significant one -
     Flow-RP maps a mask containing WriteAccess to UserAccessType.Owner.
@@ -51,8 +57,9 @@
         -WorkflowId 3164dae9-3a2b-5843-98dd-e62bb5123324
 
 .NOTES
-    Requires Azure CLI, signed in to an account with Dataverse system-administrator rights on
-    the target org. Run Steps in the ESS runbook order: this script covers steps 2-4.
+    Uses the kit's Python authentication for the selected maker account. Azure CLI is only
+    an optional token source when PreferredUsername is omitted. The account must have the
+    Dataverse privileges required for the authorization records and flow sharing.
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true)]
@@ -64,6 +71,8 @@ param(
     [string] $TeamName,
     [guid]   $AdministratorId,
     [guid]   $BusinessUnitId,
+    [guid]   $ExpectedAuthorizationId,
+    [guid]   $ExpectedTeamId,
     [string] $AccessMask = "ReadAccess,WriteAccess,AppendAccess,AppendToAccess,ShareAccess"
 )
 
@@ -126,7 +135,8 @@ function Get-DataverseToken {
         Write-Host "  Azure CLI token was unavailable or rejected; using the kit's Dataverse sign-in." -ForegroundColor Yellow
     }
     $helper = Join-Path $PSScriptRoot 'get_dataverse_token.py'
-    $python = Get-Command python -ErrorAction SilentlyContinue
+    $python = Get-Command python -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
     if (-not $python -or -not (Test-Path $helper)) {
         throw "Could not acquire a valid Dataverse token. Install Python, then run the kit setup or sign in with an account that can access $Resource."
     }
@@ -186,6 +196,52 @@ function Invoke-Dv {
     }
 }
 
+function Read-AgentAuthorization {
+    $daResponse = Invoke-Dv -Path $daFilter
+    $teamResponse = Invoke-Dv -Path $teamFilter
+    if ($null -eq $daResponse.value -or $null -eq $teamResponse.value) {
+        throw '[WD-AUTH-INVALID-RECORDS] Could not read authorization ownership. Ask the Dataverse administrator to investigate before retrying.'
+    }
+    $daExisting = @($daResponse.value)
+    $teamExisting = @($teamResponse.value)
+    if ($daExisting.Count -gt 1) {
+        throw '[WD-AUTH-INVALID-RECORDS] Multiple delegated authorizations; expected exactly one. Ask the Dataverse administrator to resolve duplicates.'
+    }
+    if ($teamExisting.Count -gt 1) {
+        throw '[WD-AUTH-INVALID-RECORDS] Multiple linked teams; expected exactly one. Ask the Dataverse administrator to resolve duplicates.'
+    }
+    $authorization = if ($daExisting.Count -eq 1) { $daExisting[0] } else { $null }
+    $team = if ($teamExisting.Count -eq 1) { $teamExisting[0] } else { $null }
+    if ($null -ne $authorization -and (
+        -not $authorization.delegatedauthorizationid -or
+        $authorization.botid -ne $BotId.ToString() -or
+        $authorization.providertype -ne $ProviderTypeMcsBot
+    )) {
+        throw '[WD-AUTH-INVALID-RECORDS] Unexpected authorization owner or provider type. Ask the Dataverse administrator to inspect the selected agent.'
+    }
+    if ($null -ne $team -and (
+        -not $authorization -or -not $team.teamid -or
+        $team.teamtype -ne $TeamTypeAccess -or
+        $team._delegatedauthorizationid_value -ne $authorization.delegatedauthorizationid
+    )) {
+        throw '[WD-AUTH-INVALID-RECORDS] The access team does not belong to the selected authorization. Do not adopt or relink another team.'
+    }
+    if (($ExpectedAuthorizationId -and (
+        -not $authorization -or $authorization.delegatedauthorizationid -ne $ExpectedAuthorizationId.ToString()
+    )) -or ($ExpectedTeamId -and (
+        -not $team -or $team.teamid -ne $ExpectedTeamId.ToString()
+    ))) {
+        throw '[WD-AUTH-INVALID-RECORDS] The reviewed authorization identity changed. Refresh the runtime plan before retrying.'
+    }
+    if ($team -and $BusinessUnitId -and (
+        ($TeamName -and $team.name -ne $TeamName) -or
+        $team._businessunitid_value -ne $BusinessUnitId.ToString()
+    )) {
+        throw '[WD-AUTH-INVALID-RECORDS] The linked team differs from the reviewed name or business unit. Refresh the runtime plan.'
+    }
+    return [pscustomobject]@{ Authorization = $authorization; Team = $team }
+}
+
 # --------------------------------------------------------------------------------------------
 Write-Step "Connecting to $OrgUrl"
 $script:Token = Get-DataverseToken `
@@ -212,67 +268,31 @@ if ($missingWorkflow) {
 }
 
 # --------------------------------------------------------------------------------------------
-Write-Step "Step 2/4 - delegatedauthorization for bot $BotId"
-
-$daFilter = "delegatedauthorizations?`$select=delegatedauthorizationid,name,providertype&`$filter=botid eq '$BotId'"
-$daExisting = (Invoke-Dv -Path $daFilter).value
-
-if ($daExisting.Count -gt 1) {
-    Write-Fail "Found $($daExisting.Count) delegated authorizations for bot $BotId; expected exactly one. Resolve the duplicates before continuing."
-    exit 1
+$daFilter = "delegatedauthorizations?`$select=delegatedauthorizationid,botid,name,providertype&`$filter=botid eq '$BotId'"
+$teamFilter = "teams?`$expand=delegatedauthorizationid&`$filter=delegatedauthorizationid/botid eq '$BotId'&`$select=teamid,name,teamtype,_delegatedauthorizationid_value,_businessunitid_value"
+$snapshot = Read-AgentAuthorization
+if (-not $TeamName) {
+    $TeamName = if ($snapshot.Team) { $snapshot.Team.name } else { "Cosmos DA bot team ($BotId)" }
 }
 
-if ($daExisting.Count -eq 1) {
-    $daId = $daExisting[0].delegatedauthorizationid
-    Write-Reuse "delegatedauthorization $daId (providertype $($daExisting[0].providertype))"
-    if ($daExisting[0].providertype -ne $ProviderTypeMcsBot) {
-        Write-Fail "Existing delegated authorization has providertype $($daExisting[0].providertype); expected $ProviderTypeMcsBot (MCSBot). Resolve manually."
-        exit 1
-    }
-} else {
-    $daBody = @{
-        name         = if ($TeamName) { "$TeamName delegated auth" } else { "Cosmos DA delegated auth ($BotId)" }
-        providertype = $ProviderTypeMcsBot
-        botid        = $BotId.ToString()
-    }
-    if ($PSCmdlet.ShouldProcess("delegatedauthorization for bot $BotId", 'Create')) {
-        $r = Invoke-Dv -Method POST -Path 'delegatedauthorizations?$select=delegatedauthorizationid' -Body $daBody
-        $daId = $r.delegatedauthorizationid
-        Write-Create "delegatedauthorization $daId"
-    } else {
-        Write-Create "would create delegatedauthorization (providertype $ProviderTypeMcsBot)"
-        $daId = '<whatif>'
-    }
-}
-
-# --------------------------------------------------------------------------------------------
-Write-Step "Step 3/4 - access team linked to the delegated authorization"
-
-# Query exactly the way Flow-RP does (XrmRequestFactory.GetTeamsForBotIdUri), so a hit here
-# means Flow-RP will resolve the bot successfully.
-$teamFilter = "teams?`$expand=delegatedauthorizationid&`$filter=delegatedauthorizationid/botid eq '$BotId'&`$select=teamid,name,teamtype"
-$teamExisting = (Invoke-Dv -Path $teamFilter).value
-
-if ($teamExisting.Count -gt 1) {
-    Write-Fail "Found $($teamExisting.Count) linked teams for bot $BotId; expected exactly one. Resolve the duplicates before continuing."
-    exit 1
-}
-
-if ($teamExisting.Count -eq 1) {
-    $teamId = $teamExisting[0].teamid
-    Write-Reuse "team $teamId '$($teamExisting[0].name)' (teamtype $($teamExisting[0].teamtype))"
-    if ($teamExisting[0].teamtype -ne $TeamTypeAccess) {
-        Write-Fail "Existing team is teamtype $($teamExisting[0].teamtype); must be $TeamTypeAccess (Access). Resolve manually."
-        exit 1
-    }
-} else {
+if (-not $snapshot.Team) {
     if (-not $BusinessUnitId) {
-        $bu = (Invoke-Dv -Path 'businessunits?$select=businessunitid,name&$filter=parentbusinessunitid eq null').value
-        if (-not $bu) { throw 'Could not resolve the root business unit. Pass -BusinessUnitId explicitly.' }
+        $bu = @((Invoke-Dv -Path 'businessunits?$select=businessunitid,name&$filter=parentbusinessunitid eq null').value)
+        if ($bu.Count -ne 1 -or -not $bu[0].businessunitid) {
+            throw 'Could not resolve exactly one root business unit. Ask the Dataverse administrator to inspect it.'
+        }
         $BusinessUnitId = $bu[0].businessunitid
         Write-Ok "Resolved root business unit $BusinessUnitId ($($bu[0].name))"
     }
-
+    $escapedName = $TeamName.Replace("'", "''")
+    $nameQuery = "teams?`$select=teamid&`$filter=_businessunitid_value eq $BusinessUnitId and name eq '$escapedName'"
+    $nameResponse = Invoke-Dv -Path $nameQuery
+    if ($null -eq $nameResponse.value) {
+        throw '[WD-AUTH-INVALID-RECORDS] Could not check the proposed team name. Ask the Dataverse administrator to verify read access.'
+    }
+    if (@($nameResponse.value).Count -gt 0) {
+        throw '[WD-AUTH-TEAM-NAME-CONFLICT] The proposed team name is already in use in this business unit. Refresh the runtime plan; do not delete or adopt another team.'
+    }
     if (-not $AdministratorId) {
         # The team administrator must hold System Administrator, otherwise team creation fails
         # with 0x80041d0a "The team administrator does not have privilege read team."
@@ -286,17 +306,74 @@ if ($teamExisting.Count -eq 1) {
         $AdministratorId = $admin[0].systemuserid
         Write-Ok "Resolved team administrator $AdministratorId ($($admin[0].fullname))"
     }
+}
 
+Write-Step "Step 2/4 - delegatedauthorization for bot $BotId"
+if ($snapshot.Authorization) {
+    $daId = $snapshot.Authorization.delegatedauthorizationid
+    Write-Reuse "delegatedauthorization $daId (providertype $ProviderTypeMcsBot)"
+} else {
+    $daBody = @{
+        name         = "$TeamName delegated auth"
+        providertype = $ProviderTypeMcsBot
+        botid        = $BotId.ToString()
+    }
+    if ($PSCmdlet.ShouldProcess("delegatedauthorization for bot $BotId", 'Create')) {
+        try {
+            $r = Invoke-Dv -Method POST -Path 'delegatedauthorizations?$select=delegatedauthorizationid' -Body $daBody
+            $daId = $r.delegatedauthorizationid
+        } catch {
+            $concurrent = Read-AgentAuthorization
+            if (-not $concurrent.Authorization) { throw }
+            $daId = $concurrent.Authorization.delegatedauthorizationid
+        }
+        if (-not $daId) { throw '[WD-AUTH-INVALID-RECORDS] Authorization creation returned no record ID. Check the selected agent before retrying.' }
+        Write-Create "delegatedauthorization $daId"
+    } else {
+        Write-Create "would create delegatedauthorization (providertype $ProviderTypeMcsBot)"
+        $daId = '<whatif>'
+    }
+}
+
+Write-Step "Step 3/4 - access team linked to the delegated authorization"
+if ($daId -ne '<whatif>') {
+    $current = Read-AgentAuthorization
+    if (-not $current.Authorization -or $current.Authorization.delegatedauthorizationid -ne $daId) {
+        throw '[WD-AUTH-INVALID-RECORDS] Authorization ownership changed. Refresh the runtime plan before retrying.'
+    }
+    if (-not $snapshot.Team -and $current.Team -and (
+        $current.Team.name -ne $TeamName -or
+        $current.Team._businessunitid_value -ne $BusinessUnitId.ToString()
+    )) {
+        throw '[WD-AUTH-INVALID-RECORDS] A concurrent team differs from the reviewed name or business unit. Refresh the runtime plan.'
+    }
+    $snapshot = $current
+}
+if ($snapshot.Team) {
+    $teamId = $snapshot.Team.teamid
+    Write-Reuse "team $teamId '$($snapshot.Team.name)' (teamtype $TeamTypeAccess)"
+} else {
     $teamBody = @{
-        name                                  = if ($TeamName) { $TeamName } else { "Cosmos DA bot team ($BotId)" }
+        name                                  = $TeamName
         teamtype                              = $TeamTypeAccess
         'businessunitid@odata.bind'           = "/businessunits($BusinessUnitId)"
         'administratorid@odata.bind'          = "/systemusers($AdministratorId)"
         'delegatedauthorizationid@odata.bind' = "/delegatedauthorizations($daId)"
     }
     if ($PSCmdlet.ShouldProcess("access team for bot $BotId", 'Create')) {
-        $r = Invoke-Dv -Method POST -Path 'teams?$select=teamid' -Body $teamBody
-        $teamId = $r.teamid
+        try {
+            $r = Invoke-Dv -Method POST -Path 'teams?$select=teamid' -Body $teamBody
+            $teamId = $r.teamid
+        } catch {
+            $concurrent = Read-AgentAuthorization
+            if (-not $concurrent.Team -or
+                $concurrent.Authorization.delegatedauthorizationid -ne $daId -or
+                $concurrent.Team.name -ne $TeamName -or
+                $concurrent.Team._businessunitid_value -ne $BusinessUnitId.ToString()
+            ) { throw }
+            $teamId = $concurrent.Team.teamid
+        }
+        if (-not $teamId) { throw '[WD-AUTH-INVALID-RECORDS] Team creation returned no record ID. Check the selected agent before retrying.' }
         Write-Create "team $teamId"
     } else {
         Write-Create "would create access team (teamtype $TeamTypeAccess)"
@@ -356,12 +433,16 @@ Write-Step 'Verification - replaying the exact lookups Flow-RP performs'
 
 $ok = $true
 
-$teamCheck = (Invoke-Dv -Path $teamFilter).value
-if ($teamCheck.Count -eq 1) {
+$verification = Read-AgentAuthorization
+$teamCheck = @()
+if ($verification.Team) { $teamCheck = @($verification.Team) }
+if ($teamCheck.Count -eq 1 -and $teamCheck[0].teamid -eq $teamId -and
+    $verification.Authorization.delegatedauthorizationid -eq $daId
+) {
     $verifiedTeamId = $teamCheck[0].teamid
     Write-Ok "GetTeamsForBotId returns 1 team ($verifiedTeamId)"
 } else {
-    Write-Fail "GetTeamsForBotId returned $($teamCheck.Count) teams; Flow-RP takes the first and expects exactly one"
+    Write-Fail "GetTeamsForBotId returned $($teamCheck.Count) teams or a different authorization target; expected the exact reviewed team"
     $verifiedTeamId = $null
     $ok = $false
 }

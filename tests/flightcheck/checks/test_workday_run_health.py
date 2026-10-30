@@ -58,6 +58,7 @@ def runner(pp_client) -> _MinimalRunner:
 
 def _only(results: list):
     assert len(results) == 1, [r.checkpoint_id for r in results]
+    assert results[0].custom_tags == ["Workday Litmus Test"]
     return results[0]
 
 
@@ -809,4 +810,3 @@ class TestNegativeSkewClamp:
         assert "started about 0 minute(s) ago" in r.result
         assert "minute(s) ago" in r.result
         assert "-" not in r.result.split("minute(s) ago")[0].split("about ")[-1]
-

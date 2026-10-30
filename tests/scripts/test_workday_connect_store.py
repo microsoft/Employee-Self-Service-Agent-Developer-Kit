@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -946,6 +947,123 @@ def test_approved_plan_rejects_changed_target(tmp_path: Path) -> None:
         store.verify_plan("runtime", changed, approved_hash)
 
 
+@pytest.mark.parametrize("existing", ["absent", "authorization-only", "team-missing"])
+def test_runtime_creation_progress_preserves_approval_and_verified_stages(
+    tmp_path, existing,
+):
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        _complete_phase(store, phase_id, set(model.PHASE_REQUIRED_ACTIONS[phase_id]))
+    authorization_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    team_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    plan = {
+        "phase": "runtime",
+        "scope": {"botId": "agent-a"},
+        "actions": ["Apply reviewed runtime bindings"],
+        "delegatedAuthorization": {
+            "authorizationId": None if existing != "team-missing" else authorization_id,
+            "teamId": None,
+            "teamName": "Reviewed access team",
+            "businessUnitId": "reviewed-business-unit",
+        },
+    }
+    _, approved_hash = store.approve_plan("runtime", plan)
+    for action in ("connection-references-bound", "runtime-flows-active"):
+        store.complete_action("runtime", action, evidence={"outcome": "verified"})
+    store.set_phase_status("runtime", "blocked", blocker={
+        "operation": "runtime-apply",
+        "errorType": "WorkdayConnectRuntimeError",
+        "message": "Authorization verification did not finish.",
+    })
+    before = store.load()
+    current = copy.deepcopy(plan)
+    current["delegatedAuthorization"]["authorizationId"] = authorization_id
+    if existing != "authorization-only":
+        current["delegatedAuthorization"]["teamId"] = team_id
+
+    assert store.verify_plan("runtime", current, approved_hash) == approved_hash
+    assert store.load() == before
+    state, refreshed_hash = store.approve_plan("runtime", current)
+    assert refreshed_hash == model.plan_hash(current)
+    assert state["phases"]["runtime"]["status"] == "active"
+    for key in ("completedActions", "evidence"):
+        assert state["phases"]["runtime"][key] == before["phases"]["runtime"][key]
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        assert state["phases"][phase_id] == before["phases"][phase_id]
+
+
+@pytest.mark.parametrize("drift", [
+    "authorization-replaced", "team-replaced", "id-removed", "scope",
+    "team-name", "business-unit", "flow", "invalid-id",
+    "team-without-authorization", "stale-hash", "value-type",
+])
+def test_runtime_creation_progress_does_not_bypass_other_approval_guards(
+    tmp_path, drift,
+):
+    import workday_connect_model as model
+    from workday_connect_store import (
+        WorkdayConnectPlanChangedError,
+        WorkdayConnectStore,
+    )
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        _complete_phase(store, phase_id, set(model.PHASE_REQUIRED_ACTIONS[phase_id]))
+    authorization_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    team_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    plan = {
+        "phase": "runtime",
+        "scope": {"botId": "agent-a", "approvalGeneration": 1},
+        "actions": ["Apply reviewed runtime bindings"],
+        "flows": [{"workflowId": "reviewed-flow"}],
+        "delegatedAuthorization": {
+            "authorizationId": authorization_id if drift in {
+                "authorization-replaced", "team-replaced", "id-removed",
+            } else None,
+            "teamId": team_id if drift == "team-replaced" else None,
+            "teamName": "Reviewed access team",
+            "businessUnitId": "reviewed-business-unit",
+        },
+    }
+    _, approved_hash = store.approve_plan("runtime", plan)
+    before = store.load()
+    current = copy.deepcopy(plan)
+    authorization = current["delegatedAuthorization"]
+    authorization.update(authorizationId=authorization_id, teamId=team_id)
+    if drift == "authorization-replaced":
+        authorization["authorizationId"] = team_id
+    elif drift == "team-replaced":
+        authorization["teamId"] = authorization_id
+    elif drift == "id-removed":
+        authorization["authorizationId"] = None
+        authorization["teamId"] = None
+    elif drift == "scope":
+        current["scope"]["botId"] = "another-agent"
+    elif drift == "team-name":
+        authorization["teamName"] = "Another team"
+    elif drift == "business-unit":
+        authorization["businessUnitId"] = "another-business-unit"
+    elif drift == "flow":
+        current["flows"][0]["workflowId"] = "another-flow"
+    elif drift == "invalid-id":
+        authorization["teamId"] = "not-a-guid"
+    elif drift == "team-without-authorization":
+        authorization["authorizationId"] = None
+    elif drift == "value-type":
+        current["scope"]["approvalGeneration"] = True
+    else:
+        approved_hash = "0" * 64
+
+    with pytest.raises(WorkdayConnectPlanChangedError):
+        store.verify_plan("runtime", current, approved_hash)
+    assert store.load() == before
+
+
 def test_approving_completed_runtime_invalidates_maker_validation(
     tmp_path: Path,
 ) -> None:
@@ -1214,6 +1332,24 @@ def test_promoted_target_reuses_complete_tenant_foundation(
         evidence["action"] == "tenant-foundation-reused"
         for evidence in initialized["phases"]["entra"]["evidence"]
     )
+
+    initialized["targets"]["dev"]["phases"]["workday-admin"]["evidence"].append(
+        {
+            "action": "tenant-foundation-reused",
+            "outcome": "verified",
+            "provenance": "stored-tenant-foundation",
+        }
+    )
+    store.config_path.write_text(json.dumps(initialized), encoding="utf-8")
+    resumed = store.load()
+
+    assert resumed["activeTargetRealm"] == "test"
+    assert resumed["phases"]["workday-admin"]["status"] == "complete"
+    assert resumed["targets"]["test"]["phases"]["workday-admin"]["status"] == "complete"
+    assert resumed["targets"]["dev"]["phases"]["entra"]["status"] == "complete"
+    assert resumed["targets"]["dev"]["phases"]["workday-admin"]["status"] == "pending"
+    assert resumed["targets"]["dev"]["deploymentStatus"] == "partially-configured"
+    assert json.loads(store.config_path.read_text(encoding="utf-8")) == resumed
 
 
 def test_promoted_target_foundation_failure_is_atomic(
@@ -2664,7 +2800,7 @@ def test_profile_result_is_rejected_after_target_changes(
         store.record_validation_profile("preflight", summary)
 
 
-def test_matching_foundation_restores_workday_after_entra_reread(
+def test_matching_foundation_keeps_workday_pending_after_entra_reread(
     tmp_path: Path,
 ) -> None:
     import workday_connect_model as model
@@ -2719,19 +2855,16 @@ def test_matching_foundation_restores_workday_after_entra_reread(
         "entra",
         set(model.PHASE_REQUIRED_ACTIONS["entra"]),
     )
-    restored, reused = store.restore_workday_foundation()
+    restored = store.load()
 
-    assert reused is True
-    assert restored["phases"]["workday-admin"]["status"] == "active"
+    assert restored["tenantFoundation"] is not None
+    assert restored["phases"]["workday-admin"]["status"] == "pending"
     assert (
         restored["phases"]["workday-admin"]["administrator"]["substage"]
-        == "collecting-evidence"
+        == "not-started"
     )
     assert restored["phases"]["connections"]["status"] == "pending"
-    assert any(
-        evidence["action"] == "tenant-foundation-reused"
-        for evidence in restored["phases"]["workday-admin"]["evidence"]
-    )
+    assert restored["phases"]["workday-admin"]["evidence"] == []
 
 
 def test_foundation_is_not_reused_for_a_different_workday_tenant(
@@ -2759,11 +2892,60 @@ def test_foundation_is_not_reused_for_a_different_workday_tenant(
     store.capture_tenant_foundation()
 
     store.merge_section("scope", {"workdayTenant": "fabrikam"})
-    restored, reused = store.restore_workday_foundation()
+    restored = store.load()
 
-    assert reused is False
     assert restored["tenantFoundation"] is None
     assert restored["phases"]["workday-admin"]["status"] == "pending"
+
+
+@pytest.mark.parametrize("schema_version", [11, 12])
+@pytest.mark.parametrize("operation", ["load", "initialize"])
+def test_old_automatic_workday_completion_reopens_on_resume(
+    tmp_path: Path,
+    schema_version: int,
+    operation: str,
+) -> None:
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "scope",
+        {"entraTenantId": "tenant-id", "workdayTenant": "contoso"},
+    )
+    _set_foundation_data(store)
+    for definition in model.PHASE_DEFINITIONS:
+        phase_id = definition.identifier.value
+        _complete_phase(store, phase_id, set(model.PHASE_REQUIRED_ACTIONS[phase_id]))
+    state = store.capture_tenant_foundation()
+    entra = state["phases"]["entra"]
+    foundation = state["tenantFoundation"]
+    state["schemaVersion"] = schema_version
+    state["phases"]["workday-admin"]["evidence"].append(
+        {
+            "action": "tenant-foundation-reused",
+            "outcome": "verified",
+            "provenance": "stored-tenant-foundation",
+        }
+    )
+    store.config_path.write_text(json.dumps(state), encoding="utf-8")
+
+    resumed = getattr(store, operation)()
+
+    assert resumed["status"] == "in-progress"
+    assert resumed["phases"]["preflight"]["status"] == "complete"
+    assert resumed["phases"]["entra"] == entra
+    assert resumed["tenantFoundation"] == foundation
+    for phase_id in ("workday-admin", "connections", "runtime", "maker-validation"):
+        assert resumed["phases"][phase_id]["status"] == "pending"
+        assert resumed["phases"][phase_id]["completedActions"] == []
+        assert resumed["phases"][phase_id]["evidence"] == []
+        assert resumed["phases"][phase_id]["validationProfiles"] == {}
+    assert resumed["phases"]["workday-admin"]["administrator"]["partialEvidence"] == {}
+    assert store.status()["nextPhaseId"] == "workday-admin"
+    assert store.load() == resumed
+    assert json.loads(store.config_path.read_text(encoding="utf-8")) == resumed
 
 
 def test_workday_endpoint_drift_clears_tenant_foundation(

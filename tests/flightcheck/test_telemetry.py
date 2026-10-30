@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
@@ -164,6 +165,31 @@ def test_build_events_shape_and_required_fields(monkeypatch):
     for event in events[1:]:
         assert event["data"]["severity"] == "info"
         assert event["data"]["automationType"] == "automated"
+
+
+@pytest.mark.parametrize(
+    "tenant_id",
+    telemetry.KNOWN_NON_CUSTOMER_TEST_TENANT_IDS,
+)
+def test_build_events_classifies_known_non_customer_tenants_as_internal(
+    tenant_id,
+):
+    events = telemetry.build_events(
+        FakeRun(),
+        env="prod",
+        instance_id="inst-test",
+        tenant_id=tenant_id,
+        agent_id="bot-test",
+        agent_count=1,
+        scope="full",
+        invocation_source="cli",
+        ikey_envelope=f"o:{PROD_TOKEN}",
+        run_id="run-test",
+    )
+
+    assert {event["data"]["tenantClass"] for event in events} == {
+        telemetry.TENANT_CLASS_INTERNAL
+    }
 
 
 def test_get_toolkit_git_sha_prefers_env_override(monkeypatch):
@@ -413,16 +439,52 @@ def test_classify_agent_type_unknown_branches_bucketed(branch):
     assert telemetry.classify_agent_type(branch) == telemetry.AGENT_TYPE_UNKNOWN
 
 
-def test_build_events_derives_agent_type_once(monkeypatch):
+@pytest.mark.parametrize("branch", [
+    "main",
+    "other",
+    "detached",
+    "unknown",
+    "",
+])
+def test_adk_flightcheck_runs_classify_as_declarative(branch):
+    assert (
+        telemetry.classify_flightcheck_agent_type(branch, "adk")
+        == telemetry.AGENT_TYPE_DECLARATIVE
+    )
+
+
+def test_main_ca_adk_flightcheck_run_remains_custom():
+    assert (
+        telemetry.classify_flightcheck_agent_type("main-ca", "adk")
+        == telemetry.AGENT_TYPE_CUSTOM
+    )
+
+
+def test_non_adk_flightcheck_runs_keep_branch_classification():
+    assert (
+        telemetry.classify_flightcheck_agent_type("main", "cli")
+        == telemetry.AGENT_TYPE_DECLARATIVE
+    )
+    assert (
+        telemetry.classify_flightcheck_agent_type("main-ca", "installer")
+        == telemetry.AGENT_TYPE_CUSTOM
+    )
+    assert (
+        telemetry.classify_flightcheck_agent_type("other", "connect")
+        == telemetry.AGENT_TYPE_UNKNOWN
+    )
+
+
+def test_build_events_derives_flightcheck_agent_type_once(monkeypatch):
     calls = []
 
-    monkeypatch.setattr(telemetry, "get_toolkit_git_branch", lambda: "main")
+    monkeypatch.setattr(telemetry, "get_toolkit_git_branch", lambda: "other")
 
-    def fake_classify(branch):
-        calls.append(branch)
+    def fake_classify(branch, invocation_source):
+        calls.append((branch, invocation_source))
         return telemetry.AGENT_TYPE_DECLARATIVE
 
-    monkeypatch.setattr(telemetry, "classify_agent_type", fake_classify)
+    monkeypatch.setattr(telemetry, "classify_flightcheck_agent_type", fake_classify)
     events = telemetry.build_events(
         FakeRun(),
         env="dev",
@@ -435,7 +497,7 @@ def test_build_events_derives_agent_type_once(monkeypatch):
         ikey_envelope=f"o:{DEV_TOKEN}",
     )
 
-    assert calls == ["main"]
+    assert calls == [("other", "cli")]
     assert all(
         event["data"]["agentType"] == telemetry.AGENT_TYPE_DECLARATIVE
         for event in events
@@ -474,6 +536,23 @@ def test_derive_run_outcome_blocked_only_is_not_ready():
         FakeRun(errors=0, failed=0, blocked=1, warnings=0)
     ) == telemetry.RUN_OUTCOME_BLOCKED
     assert telemetry.RUN_OUTCOME_BLOCKED != telemetry.RUN_OUTCOME_READY
+
+
+@pytest.mark.parametrize("section", ["5) TIME-TO-GREEN", "6) PER-TENANT"])
+def test_readiness_queries_exclude_diagnostic_and_unknown_verdicts(section):
+    query_pack = (
+        Path(__file__).parents[2] / "solutions" / "ess-maker-skills"
+        / "scripts" / "telemetry_queries.kql"
+    ).read_text(encoding="utf-8")
+    query = re.split(r"// -+\n", query_pack.split(section, 1)[1], maxsplit=2)[1]
+    cohort_filter = re.search(r"\| where overall in \(([^)]+)\)", query)
+    assert cohort_filter is not None, "Readiness denominators must exclude diagnostic-only runs"
+    cohort = set(re.findall(r'"([^"]+)"', cohort_filter.group(1)))
+    assert cohort == {"READY", "READY_WITH_WARNINGS", "NOT_READY"}
+    green_filter = re.search(r"(?:ready =|countif\()\s*overall in \(([^)]+)\)", query)
+    assert green_filter is not None, "Only explicit ready verdicts may count as green"
+    green = set(re.findall(r'"([^"]+)"', green_filter.group(1)))
+    assert green == {"READY", "READY_WITH_WARNINGS"}
 
 
 # --- blockReason: splitting the Blocked wedge by cause (schema 1.5) --------

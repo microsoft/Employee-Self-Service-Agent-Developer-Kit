@@ -60,7 +60,9 @@ from workday_connect_realms import (
     revalidate_active_realm_target,
 )
 from workday_connect_runtime import (
+    REALM_DISPLAY_NAMES,
     WorkdayConnectRuntimeError,
+    configured_connection_api_version,
     run_runtime_operation,
     verify_physical_connections,
 )
@@ -72,6 +74,12 @@ from workday_connect_store import (
 from workday_connect_telemetry import (
     emit_lifecycle_event,
     flush_lifecycle_telemetry,
+)
+from workday_connect_workbook import (
+    ENTRA_ADMIN_WORKBOOK_PATH,
+    WORKDAY_ADMIN_WORKBOOK_PATH,
+    WorkdayConnectWorkbookError,
+    read_administrator_workbook,
 )
 
 
@@ -113,7 +121,8 @@ def _add_json_input(
             f"--{name}-worksheet-file",
             type=Path,
             help=(
-                "Path to the exact labeled administrator worksheet text."
+                "Path to the completed administrator .xlsx workbook or exact "
+                "labeled worksheet text."
             ),
         )
 
@@ -138,12 +147,19 @@ def _json_input(
             raise WorkdayConnectStoreError(
                 f"{label} does not support worksheet input."
             )
-        try:
-            worksheet = worksheet_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise WorkdayConnectStoreError(
-                f"{label} worksheet could not be read: {worksheet_path}: {exc}"
-            ) from exc
+        if worksheet_path.suffix.casefold() == ".xlsx":
+            try:
+                worksheet = read_administrator_workbook(worksheet_path)
+            except WorkdayConnectWorkbookError as exc:
+                raise WorkdayConnectStoreError(str(exc)) from exc
+        else:
+            try:
+                worksheet = worksheet_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise WorkdayConnectStoreError(
+                    f"{label} worksheet could not be read: "
+                    f"{worksheet_path}: {exc}"
+                ) from exc
         return worksheet_parser(worksheet_state, worksheet)
     file_path = getattr(args, f"{name.replace('-', '_')}_file", None)
     if file_path is not None:
@@ -302,7 +318,10 @@ def _status(
     _args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    return store.status()
+    result = store.status()
+    if result["status"] == "ready":
+        result.update(_completion_handoff(result["activeTargetRealm"]))
+    return result
 
 
 def _discover_realm_target(
@@ -484,20 +503,49 @@ def _action_evidence(
     return None
 
 
+def _completion_handoff(realm: str) -> dict[str, Any]:
+    next_steps = _post_skill_next_steps(realm)
+    return {
+        "lifecycleComplete": True,
+        "completionMessage": (
+            f"Workday Connect is complete in {REALM_DISPLAY_NAMES[realm]}. "
+            "The maker Test pane validation "
+            "passed. No further Workday Connect action is required in this realm."
+        ),
+        "postSkillNextSteps": next_steps,
+    }
+
+
 def _post_skill_next_steps(realm: str) -> list[str]:
     if realm == "dev":
         return [
-            "Promote the agent from Development to Test when ready.",
             (
-                "Return to Connect Workday and say that the agent was "
+                "Promote the agent from Development to Test "
+                "when ready. "
+                "Open the source agent in Copilot Studio and use your "
+                "organization's approved promotion process. Ask the maker "
+                "responsible for agent deployment if you need access or "
+                "instructions."
+            ),
+            (
+                "After promotion is complete, return to Connect Workday "
+                "and say that the agent was "
                 "promoted to Test."
             ),
         ]
     if realm == "test":
         return [
-            "Promote the agent from Test to Production when ready.",
             (
-                "Return to Connect Workday and say that the agent was "
+                "Promote the agent from Test to Production "
+                "when ready. "
+                "Open the source agent in Copilot Studio and use your "
+                "organization's approved promotion process. Ask the maker "
+                "responsible for agent deployment if you need access or "
+                "instructions."
+            ),
+            (
+                "After promotion is complete, return to Connect Workday "
+                "and say that the agent was "
                 "promoted to Production."
             ),
         ]
@@ -505,17 +553,25 @@ def _post_skill_next_steps(realm: str) -> list[str]:
         return [
             "Publish and deploy the Production agent when ready.",
             (
-                "Have each non-maker employee establish their own Workday "
+                "After deployment, have each non-maker employee establish their own Workday "
                 "connections in Microsoft 365 Chat."
             ),
             (
-                "Validate an enabled Workday scenario with the published "
+                "After deployment, validate an enabled Workday scenario with the published "
                 "Production agent."
             ),
         ]
     raise WorkdayConnectStoreError(
         f"Unsupported Workday target realm: {realm}"
     )
+
+
+def _administrator_workbook_path(path: Path) -> str:
+    if not path.is_file():
+        raise WorkdayConnectStoreError(
+            f"Administrator workbook template is missing: {path}"
+        )
+    return str(path)
 
 
 def _entra_handoff(
@@ -539,6 +595,9 @@ def _entra_handoff(
     ) >= ADMINISTRATOR_SUBSTAGES.index("handoff-presented")
     return {
         "packet": packet,
+        "workbookFile": _administrator_workbook_path(
+            ENTRA_ADMIN_WORKBOOK_PATH
+        ),
         "alreadyPresented": already_presented,
         "rediscoveryRequired": packet["requiresRediscovery"],
         "status": store.status(),
@@ -678,10 +737,7 @@ def _record_entra(
             return {
                 "verified": True,
                 "replayed": True,
-                "tenantFoundationReused": (
-                    state["phases"]["workday-admin"]["status"]
-                    == "complete"
-                ),
+                "tenantFoundationReused": False,
                 "status": store.status(),
             }
         store.merge_section("identifiers", result["identifiers"])
@@ -728,19 +784,9 @@ def _record_entra(
         once_per_lifecycle=True,
     )
     store.set_phase_status("entra", "complete")
-    _, reused = store.restore_workday_foundation()
-    if reused:
-        _run_profile_gate(store, "workday-da:external-prerequisites")
-        store.set_phase_status("workday-admin", "complete")
-        store.record_lifecycle_event(
-            "roles-attested",
-            phase="workday-admin",
-            outcome="success",
-            once_per_lifecycle=True,
-        )
     return {
         "verified": True,
-        "tenantFoundationReused": reused,
+        "tenantFoundationReused": False,
         "status": store.status(),
     }
 
@@ -762,6 +808,9 @@ def _workday_admin_packet(
     ) >= ADMINISTRATOR_SUBSTAGES.index("handoff-presented")
     return {
         "packet": packet,
+        "workbookFile": _administrator_workbook_path(
+            WORKDAY_ADMIN_WORKBOOK_PATH
+        ),
         "alreadyPresented": already_presented,
         "status": store.status(),
     }
@@ -882,6 +931,7 @@ def _runtime_plan(
     result = run_runtime_operation(
         store.load(),
         apply=False,
+        api_version=configured_connection_api_version(store.workspace_root),
         workday_connection_id=args.workday_connection_id,
         dataverse_connection_id=args.dataverse_connection_id,
     )
@@ -893,10 +943,11 @@ def _runtime_apply(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    revalidate_active_realm_target(args.root, store)
+    revalidate_active_realm_target(Path(args.root), store)
     result = run_runtime_operation(
         store.load(),
         apply=True,
+        api_version=configured_connection_api_version(store.workspace_root),
         approved_hash=args.plan_hash,
         verifier=lambda plan, approved_hash: store.verify_plan(
             "runtime",
@@ -945,6 +996,7 @@ def _record_connections(
         )
     evidence = verify_physical_connections(
         state,
+        api_version=configured_connection_api_version(store.workspace_root),
         workday_connection_id=args.workday_connection_id,
         dataverse_connection_id=args.dataverse_connection_id,
     )
@@ -977,6 +1029,12 @@ def _record_connections(
             "connections": evidence["connections"],
             "connectionIds": evidence["connectionIds"],
             "workdayTargetOutcome": "maker-confirmed-against-workday-packet",
+            "workdayTarget": {
+                "environmentId": state["scope"]["environmentId"],
+                "workdayTenant": state["scope"]["workdayTenant"],
+                "restBaseUrl": state["endpoints"]["restBaseUrl"],
+                "connectionId": evidence["connectionIds"]["workday"],
+            },
         },
     )
     store.set_phase_status("connections", "complete")
@@ -993,6 +1051,7 @@ def _record_agent_binding(
         "Workday flow attachment confirmation",
     )
     state = store.load()
+    revalidate_active_realm_target(store.workspace_root, store)
     live_evidence = verify_agent_binding(store.workspace_root, state)
     live_evidence["flowAttachment"] = flow_attachment
     evidence = validate_agent_binding_evidence(
@@ -1065,6 +1124,7 @@ def _record_topic_activation(
     _args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
+    revalidate_active_realm_target(store.workspace_root, store)
     evidence = verify_topic_activation(
         store.workspace_root,
         store.load(),
@@ -1104,6 +1164,7 @@ def _record_runtime_template_wiring(
             "Enable and verify all Workday topics before wiring the runtime "
             "template into Conversation Start."
         )
+    revalidate_active_realm_target(store.workspace_root, store)
     evidence = verify_runtime_template_wiring(
         store.workspace_root,
         state,
@@ -1183,22 +1244,15 @@ def _record_validation(
         final_state = store.finalize_maker_validation_success()
         active_realm = final_state["activeTargetRealm"]
         status = store.status()
-        if replayed:
-            return {
-                "verified": True,
-                "replayed": True,
-                "lifecycleComplete": True,
-                "activeTargetRealm": active_realm,
-                "postSkillNextSteps": _post_skill_next_steps(active_realm),
-                "status": status,
-            }
-        return {
+        result = {
             "verified": True,
-            "lifecycleComplete": True,
+            **_completion_handoff(active_realm),
             "activeTargetRealm": active_realm,
-            "postSkillNextSteps": _post_skill_next_steps(active_realm),
             "status": status,
         }
+        if replayed:
+            result["replayed"] = True
+        return result
 
 
 def _record_validation_failure(
@@ -1390,6 +1444,9 @@ def main() -> None:
                     "errorType": type(exc).__name__,
                     "message": str(exc),
                 }
+                remediation = str(getattr(exc, "customer_remediation", "") or "").strip()
+                if remediation:
+                    blocker["remediation"] = remediation
                 if phase_id == "maker-validation":
                     existing_phase = (
                         store.load().get("phases", {}).get(phase_id, {})

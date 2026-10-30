@@ -16,6 +16,13 @@ BOT_ID = "00000000-0000-4000-8000-000000000001"
 ENV_URL = "https://target.crm.dynamics.com"
 
 
+@pytest.fixture(autouse=True)
+def isolate_local_prerequisites(monkeypatch):
+    # Target/package tests isolate local probes covered in test_workday_connect_prerequisites.
+    import workday_connect_preflight as preflight
+    monkeypatch.setattr(preflight, "check_prerequisites", lambda *_args, **_kwargs: [])
+
+
 def _write_foundation(
     root: Path,
     *,
@@ -111,6 +118,28 @@ def test_resolve_target_rejects_unsupported_power_platform_ring(
             tmp_path,
             dataverse_url=ENV_URL,
             state=model.default_state(),
+        )
+
+
+def test_preflight_rejects_tenant_different_from_step_one_before_queries(tmp_path):
+    import workday_connect_preflight as preflight
+
+    _write_foundation(tmp_path, dataverse_url=ENV_URL)
+    setup_path = tmp_path / ".local" / "setup" / "config.json"
+    setup = json.loads(setup_path.read_text(encoding="utf-8"))
+    setup["environment"] = {"id": "agent-environment", "tenant_id": "setup-tenant"}
+    setup_path.write_text(json.dumps(setup), encoding="utf-8")
+
+    with pytest.raises(preflight.WorkdayConnectPreflightError, match="different tenant from Step 1"):
+        preflight.run_preflight(
+            tmp_path,
+            dataverse_url=ENV_URL,
+            maker_username="maker@example.com",
+            token_provider=lambda *_args, **_kwargs: "token",
+            identity_provider=lambda *_args, **_kwargs: {
+                "username": "maker@example.com", "tenantId": "other-tenant",
+            },
+            query=lambda *_args: pytest.fail("Do not query a mismatched tenant."),
         )
 
 
