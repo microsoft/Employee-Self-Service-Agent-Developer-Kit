@@ -9,7 +9,8 @@
 
       1. Verifies prerequisites (Windows 10/11, winget present).
       2. Uses winget to install VS Code, Python 3.12, PowerShell 7, Git,
-         GitHub CLI, the .NET 10 runtime, and NuGet.
+         the .NET 10 runtime, and NuGet, and attempts a user-scope GitHub CLI
+         install for automated evaluation scoring.
       3. Installs Python pip and Microsoft Object Model dependencies so that
          /setup scripts work immediately.
       4. Installs the VS Code extensions required by the maker kit
@@ -592,20 +593,20 @@ if (-not $wingetAvailable) {
 # ---------------------------------------------------------------------------
 Write-Step 'Installing toolchain via winget'
 
-# Packages must match ess-adk-setup.winget.yaml. Keep these two in sync.
+# Required packages must match ess-adk-setup.winget.yaml. Optional GitHub CLI
+# installation is handled separately below so it cannot block setup.
 if ($FlightCheckOnly) {
     # Minimal set: just Python + Git (no VS Code, PowerShell 7, or GH CLI)
     $packages = @(
         @{ Id = 'Python.Python.3.12'; Name = 'Python 3.12'; Cmd = 'python' },
-        @{ Id = 'Git.Git';            Name = 'Git for Windows'; Cmd = 'git' }
+        @{ Id = 'Git.Git';            Name = 'Git for Windows'; Cmd = 'git'; Scope = 'user' }
     )
 } else {
     $packages = @(
         @{ Id = 'Microsoft.VisualStudioCode'; Name = 'Visual Studio Code'; Cmd = 'code' },
         @{ Id = 'Python.Python.3.12';         Name = 'Python 3.12'; Cmd = 'python'      },
         @{ Id = 'Microsoft.PowerShell';       Name = 'PowerShell 7'; Cmd = 'pwsh'       },
-        @{ Id = 'Git.Git';                    Name = 'Git for Windows'; Cmd = 'git'     },
-        @{ Id = 'GitHub.cli';                 Name = 'GitHub CLI'; Cmd = 'gh'           }
+        @{ Id = 'Git.Git';                    Name = 'Git for Windows'; Cmd = 'git'; Scope = 'user' }
     )
 }
 
@@ -639,7 +640,6 @@ if (-not $wingetAvailable) {
         if (-not $FlightCheckOnly) {
             Write-Err2 '  VS Code: https://code.visualstudio.com/download'
             Write-Err2 '  PowerShell 7: https://aka.ms/powershell-release?tag=stable'
-            Write-Err2 '  GitHub CLI: https://cli.github.com/'
         }
         throw "Required tools are missing and winget is not available to install them."
     }
@@ -688,6 +688,9 @@ if (-not $wingetAvailable) {
             '--accept-source-agreements',
             '--disable-interactivity'
         )
+        if ($pkg.ContainsKey('Scope') -and $pkg['Scope']) {
+            $wingetArgs += @('--scope', $pkg['Scope'])
+        }
         $wingetOutput = Invoke-Native {
             & winget @wingetArgs
         }
@@ -713,6 +716,50 @@ if (-not $wingetAvailable) {
             } else {
                 throw "winget install $($pkg.Id) failed with exit code $code"
             }
+        }
+    }
+}
+
+if (-not $FlightCheckOnly) {
+    $gh = Get-Command gh -ErrorAction SilentlyContinue
+    if ($gh) {
+        Write-Ok "GitHub CLI (already installed at $($gh.Source))"
+    } elseif (-not $wingetAvailable) {
+        Write-Warn2 'GitHub CLI was not installed because winget is unavailable.'
+        Write-Warn2 '/setup and /connect workday can continue without it.'
+        Write-Warn2 'Automated /evaluate scoring requires GitHub CLI and a Copilot-enabled GitHub account.'
+        Write-Warn2 'Install it later from https://cli.github.com/ if needed.'
+    } else {
+        Start-Spinner 'installing GitHub CLI (GitHub.cli) for the current user'
+        $ghWingetArgs = @(
+            'install',
+            '--id', 'GitHub.cli',
+            '--source', 'winget',
+            '--exact',
+            '--scope', 'user',
+            '--silent',
+            '--accept-package-agreements',
+            '--accept-source-agreements',
+            '--disable-interactivity'
+        )
+        $ghOutput = Invoke-Native {
+            & winget @ghWingetArgs
+        }
+        $ghCode = $LASTEXITCODE
+        Stop-Spinner
+        foreach ($rawLine in $ghOutput) {
+            $line = "$rawLine".Trim()
+            if ($line -and $line -notmatch '^[\\/\|\-]$' -and $line -notmatch '[^\x20-\x7E]') {
+                Write-Host "      $line"
+            }
+        }
+        if ($ghCode -eq 0 -or $ghCode -eq -1978335189) {
+            Write-Ok 'GitHub CLI'
+        } else {
+            Write-Warn2 "GitHub CLI user-scope install exited $ghCode."
+            Write-Warn2 '/setup and /connect workday can continue without it.'
+            Write-Warn2 'Automated /evaluate scoring requires GitHub CLI and a Copilot-enabled GitHub account.'
+            Write-Warn2 'Install it later from https://cli.github.com/ if needed.'
         }
     }
 }
