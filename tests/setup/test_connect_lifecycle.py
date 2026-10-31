@@ -12,6 +12,89 @@ _SOLUTION = _ROOT / "solutions" / "ess-maker-skills"
 _CONNECT = _SOLUTION / "src" / "skills" / "connect"
 
 
+def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> None:
+    runner = (_CONNECT / "shared" / "lifecycle-runner.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(runner.split())
+    plan = runner.split("## L.1", 1)[1].split("## L.2", 1)[0]
+    plan_normalized = " ".join(plan.split())
+
+    assert "after rendering its declared placeholders" in normalized
+    assert "Contract phase `label` values are customer-facing text" in normalized
+    assert "ordinary visible agent response before calling" in plan_normalized
+    assert "It is a **Message**, not tool commentary or a question body" in (
+        plan_normalized
+    )
+    assert "Showing the plan is not execution approval" in plan
+    assert "One line per phase using its `label` verbatim" in plan
+    assert "union** of `requiredRole` across every `mutates: true` phase" in plan
+    assert "de-duplicated, in the order phases appear" in plan_normalized
+    assert "optional display-only `planRoles`, de-duplicated" in plan
+    assert "they do not create a role gate" in plan
+    assert "must never be treated as authorization" in plan
+    assert "Before sending this ordinary reply, render every placeholder" in plan
+    assert "every contract phase label exactly once, in order" in plan_normalized
+    assert "all plan roles once. Stop if it is incomplete" in plan_normalized
+    assert "both first run and revision reapproval" in plan_normalized
+    assert "does not mark any phase executing or complete" in plan_normalized
+    assert "host reports a display failure" in plan_normalized
+    assert (
+        "explicitly report the host display limitation and stop before asking "
+        "for approval or starting"
+    ) in plan_normalized
+    assert "Do not silently start or move the complete plan back" in plan_normalized
+    assert "not an unobservable render result" in plan_normalized
+    assert "sending a reply is not proof the host displayed it" in plan_normalized
+    assert "does not promise a pinned, persistent, or non-collapsible UI" in (
+        plan_normalized
+    )
+    assert "no recommended, preselected, default, or automatic answer" in (
+        plan_normalized
+    )
+    assert "only after the user explicitly selects **Yes, let's go**" in (
+        plan_normalized
+    )
+    assert "The `question` field itself must contain the complete" not in plan
+    assert "rendered question" not in plan
+
+    refusal = plan.split('**If "Not now":**', 1)[1].split(
+        '**If "Yes, let\'s go" on a first run', 1
+    )[0]
+    assert "Stop here. On a first run, do not write the state file" in refusal
+    assert "preserve the existing state unchanged" in refusal
+    assert "byte-for-byte" in refusal
+    assert "next invocation should show this same plan again" in (
+        " ".join(refusal.split())
+    )
+    acceptance = plan.split('**If "Yes, let\'s go" on a first run', 1)[1].split(
+        '**If "Yes, let\'s go" after a contract revision changed', 1
+    )[0]
+    assert "stateInitializationCommand" in acceptance
+    assert 'structured `status: "initialized"` success result' in acceptance
+    assert 'every phase at `status: "pending"`' in acceptance
+    reapproval = plan.split(
+        '**If "Yes, let\'s go" after a contract revision changed', 1
+    )[1]
+    assert "update only" in reapproval
+    assert "Do not reset or delete existing phase status, action" in reapproval
+    assert "receipts, evidence, transactions, role attestations" in reapproval
+    assert "stateInitializationCommand` after this update" in reapproval
+    assert "Accepting the plan does not claim a\nrole" in reapproval
+    resume = runner.split("## L.2", 1)[1].split("## L.3", 1)[0]
+    assert "without re-showing the plan" in resume
+    assert "without re-showing the\n   up-front plan" in resume
+    assert "Do **not**\n   re-render the U.0 table" in resume
+    assert (
+        "complete L.1 plan has already been shown in its ordinary reply; "
+        "do not repeat it inside `{CURRENT_PROGRESS}`"
+    ) in normalized
+    assert "Keep the ServiceNow current-phase checklist and `questionText`" in (
+        normalized
+    )
+    assert "For these provider-action handoffs" in normalized
+
+
 def test_workday_contract_uses_generic_lifecycle() -> None:
     contract = json.loads(
         (_CONNECT / "workday" / "contract.json").read_text(encoding="utf-8")

@@ -8,10 +8,11 @@ integration-specific logic. Adding a new provider never requires changing this
 file when its needs fit the documented contract; shared backward-compatible
 contract evolution belongs here rather than in provider-specific branches.
 
-Every **Message** block is the exact text to show the user. Copy it verbatim.
-Do not rephrase, add commentary, or tell the user what tools you are calling
-or what files you are reading. Never surface a checkpoint ID, phase ID, file
-path, or the word "checkpoint"/"contract"/"state file" to the user.
+Every **Message** block is the exact text to show the user after rendering its
+declared placeholders. Do not rephrase, add commentary, or tell the user what
+tools you are calling or what files you are reading. Never surface a checkpoint
+ID, phase ID, file path, or the word "checkpoint"/"contract"/"state file" to the
+user. Contract phase `label` values are customer-facing text, not phase IDs.
 
 **Visible ServiceNow handoff style:** Render one task per question with real
 blank lines and markdown-friendly bullets. Put literal bold headings on their
@@ -173,19 +174,47 @@ Build the plan from the contract, in phase order:
   These roles explain external admin ownership; they do not create a role gate
   and must never be treated as authorization for an action.
 
-Do not rely on a separate ordinary assistant message to make the plan visible.
-Some host execution paths display the question tool but omit preceding
-assistant commentary. The `question` field itself must contain the complete
-numbered plan, roles, progress promise, and final confirmation prompt.
+Render this complete plan as an ordinary visible agent response before calling
+`vscode_askQuestions`. It is a **Message**, not tool commentary or a question
+body. Showing the plan is not execution approval.
 
-Use the `vscode_askQuestions` tool with this rendered payload:
+**Message:**
+
+Here's what I'll do to connect this agent to {displayName}:
+
+{numbered list of every phase label, in contract order}
+
+Access needed: {comma-separated required and display-only plan roles}.
+
+I'll check as I go and stop to explain anything that needs attention.
+
+Current step: Awaiting approval to start.
+
+**End message.**
+
+Before sending this ordinary reply, render every placeholder and verify that
+the rendered plan contains every contract phase label exactly once, in order,
+and all plan roles once. Stop if it is incomplete. The current-step line
+describes the approval wait on both first run and revision reapproval; it does
+not mark any phase executing or complete.
+
+If available host information says ordinary replies cannot be displayed, or
+the host reports a display failure, explicitly report the host display
+limitation and stop before asking for approval or starting. Do not silently
+start or move the complete plan back into the question. Verify the prepared
+reply's content, not an unobservable render result: sending a reply is not
+proof the host displayed it. This ordinary reply does not promise a pinned,
+persistent, or non-collapsible UI.
+
+After sending the complete ordinary reply, use `vscode_askQuestions` with only
+this one short confirmation question:
 
 <!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "Start connection",
-    "question": "Here's what I'll do to connect this agent to {displayName}:\n\n{numbered list of every phase label, in contract order}\n\nAccess needed: {comma-separated required and display-only plan roles}.\n\nI'll check as I go and stop to explain anything that needs attention.\n\nReady to start?",
+    "question": "Ready to start?",
     "options": [
       { "label": "Yes, let's go" },
       { "label": "Not now" }
@@ -195,15 +224,14 @@ Use the `vscode_askQuestions` tool with this rendered payload:
 ]
 ```
 
-Before calling the question tool, render every placeholder and verify that the
-question contains every contract phase exactly once and all plan roles. If the
-rendered question is incomplete, stop instead of asking or accepting an
-answer. A separate plan message may also be shown, but it never substitutes
-for the complete question body.
+Keep its options label-only, with no recommended, preselected, default, or
+automatic answer. The plan, roles, and progress belong only in the ordinary
+reply. This is the only plan confirmation question; initialize or continue
+only after the user explicitly selects **Yes, let's go**.
 
 **If "Not now":** Stop here. On a first run, do not write the state file. On a
-contract-revision re-attestation, preserve the existing state unchanged. The
-next invocation should show this same plan again.
+contract-revision re-attestation, preserve the existing state unchanged,
+byte-for-byte. The next invocation should show this same plan again.
 
 **If "Yes, let's go" on a first run (`stateExists: false`):** If the contract has
 `stateInitializationCommand`, replace `{contractRevision}` and `{agentSlug}`
@@ -459,10 +487,12 @@ For every interactive provider action, the question tool body is the durable
 visible handoff. Read the action document's
 `<!-- visible-handoff-question:v1 -->` JSON payload, render its placeholders,
 and use that supported `header`/`question`/`options`/`allowFreeformInput`
-shape exactly. `{CURRENT_PROGRESS}` must be replaced with every plan or
-checkpoint result produced in this invocation but not yet shown inside a
-prior question body. Include checkpoint status, description, result, and
-remediation when non-empty.
+shape exactly. The complete L.1 plan has already been shown in its ordinary
+reply; do not repeat it inside `{CURRENT_PROGRESS}`. Replace that placeholder
+with every checkpoint result produced in this invocation but not yet shown
+inside a prior question body. Include checkpoint status, description, result,
+and remediation when non-empty. Keep the ServiceNow current-phase checklist
+and `questionText` rules unchanged.
 
 `{CURRENT_PROGRESS}` is bounded FlightCheck/lifecycle display content only.
 Never insert tokens, raw prompts or responses, employee/case data, full config
@@ -472,8 +502,9 @@ Do not call the question tool if the payload is missing, malformed, truncated,
 still contains placeholders, omits the action owner/instructions/completion
 evidence, or references "above" content that is not in the question itself.
 Stop and report the visible-handoff contract error instead of accepting
-confirmation without current instructions. Ordinary assistant messages remain
-useful, but are never the only copy of content required to answer a question.
+confirmation without current instructions. For these provider-action handoffs,
+ordinary assistant messages remain useful, but are never the only copy of
+content required to answer a question.
 A completed phase on quiet resume does not redisplay its runbook; this rule
 applies only when the action genuinely needs a new interactive pause.
 

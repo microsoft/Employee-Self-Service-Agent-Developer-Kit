@@ -82,18 +82,126 @@ def _visible_prose_budget(text: str) -> tuple[int, int]:
     return len(words), len(lines)
 
 
+def test_lifecycle_plan_confirmation_is_exact_and_separate_from_reply() -> None:
+    path = _CONNECT / "shared" / "lifecycle-runner.md"
+    assert _payloads(path) == [
+        [
+            {
+                "header": "Start connection",
+                "question": "Ready to start?",
+                "options": [
+                    {"label": "Yes, let's go"},
+                    {"label": "Not now"},
+                ],
+                "allowFreeformInput": False,
+            }
+        ]
+    ]
+    source = path.read_text(encoding="utf-8")
+    plan_section = source.split("## L.1", 1)[1].split("## L.2", 1)[0]
+    assert plan_section.index("**Message:**") < plan_section.index(
+        "**End message.**"
+    ) < plan_section.index("<!-- visible-handoff-question:v1 -->")
+    ordinary_reply = plan_section.split("**Message:**", 1)[1].split(
+        "**End message.**", 1
+    )[0]
+    assert "Ready to start?" not in ordinary_reply
+    assert plan_section.count("Ready to start?") == 1
+
+
+@pytest.mark.parametrize(
+    ("provider", "phase_count", "expected_roles"),
+    [
+        (
+            "servicenow-da-hrsd",
+            9,
+            [
+                "ESS Maker / Agent Developer",
+                "ServiceNow Admin / security_admin",
+                "Microsoft Entra Application Administrator or higher",
+                "Power Platform Maker / Admin",
+            ],
+        ),
+        (
+            "servicenow-da-itsm",
+            8,
+            [
+                "ESS Maker / Agent Developer",
+                "ServiceNow Admin / security_admin",
+                "Microsoft Entra Application Administrator or higher",
+                "Power Platform Maker / Admin",
+            ],
+        ),
+        ("workday", 3, ["Environment Maker"]),
+    ],
+)
+def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
+    provider: str,
+    phase_count: int,
+    expected_roles: list[str],
+) -> None:
+    source = (_CONNECT / "shared" / "lifecycle-runner.md").read_text(
+        encoding="utf-8"
+    )
+    plan_section = source.split("## L.1", 1)[1].split("## L.2", 1)[0]
+    template = plan_section.split("**Message:**", 1)[1].split(
+        "**End message.**", 1
+    )[0].strip()
+    assert template == (
+        "Here's what I'll do to connect this agent to {displayName}:\n\n"
+        "{numbered list of every phase label, in contract order}\n\n"
+        "Access needed: {comma-separated required and display-only plan roles}."
+        "\n\nI'll check as I go and stop to explain anything that needs "
+        "attention.\n\nCurrent step: Awaiting approval to start."
+    )
+
+    contract = json.loads(
+        (_CONNECT / provider / "contract.json").read_text(encoding="utf-8")
+    )
+    labels = [phase["label"] for phase in contract["phases"]]
+    roles = list(
+        dict.fromkeys(
+            [
+                phase["requiredRole"]
+                for phase in contract["phases"]
+                if phase["mutates"]
+            ] + contract.get("planRoles", [])
+        )
+    )
+    assert len(labels) == phase_count
+    assert roles == expected_roles
+    rendered = template.format_map(
+        {
+            "displayName": contract["displayName"],
+            "numbered list of every phase label, in contract order": "\n".join(
+                f"{index}. {label}"
+                for index, label in enumerate(labels, start=1)
+            ),
+            "comma-separated required and display-only plan roles": ", ".join(roles),
+        }
+    )
+
+    assert not re.search(r"\{[^{}\n]+\}", rendered)
+    assert rendered.split("\n\n")[1].splitlines() == [
+        f"{index}. {label}" for index, label in enumerate(labels, start=1)
+    ]
+    for label in labels:
+        assert rendered.count(label) == 1
+    for role in expected_roles:
+        assert rendered.count(role) == 1
+    assert f"Access needed: {', '.join(expected_roles)}." in rendered
+    assert contract["displayName"] in rendered
+    assert rendered.endswith("Current step: Awaiting approval to start.")
+    assert "Ready to start?" not in rendered
+    assert "Complete" not in rendered
+    assert "Executing" not in rendered
+    assert ".local" not in rendered
+    assert not any(f"`{phase['id']}`" in rendered for phase in contract["phases"])
+
+
 @pytest.mark.parametrize(
     ("path", "required_phrases"),
     [
-        (
-            _CONNECT / "shared" / "lifecycle-runner.md",
-            (
-                "Here's what I'll do",
-                "numbered list of every phase label",
-                "Access needed:",
-                "Ready to start?",
-            ),
-        ),
         (
             _ACTIONS / "admin-preflight.md",
             (
@@ -196,7 +304,6 @@ def test_servicenow_questions_use_buttons_and_bounded_freeform() -> None:
         "configure-portal-url.md",
     }
     paths = [
-        _CONNECT / "shared" / "lifecycle-runner.md",
         *(_CONNECT / "servicenow-da-hrsd" / "actions").glob("*.md"),
         *(_CONNECT / "servicenow-da-itsm" / "actions").glob("*.md"),
     ]
