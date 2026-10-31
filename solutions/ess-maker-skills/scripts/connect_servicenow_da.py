@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import csv
 import datetime as dt
 import hashlib
 import json
@@ -80,6 +81,59 @@ RETIRED_ENTRA_CHECKPOINT_SUFFIXES = (
 IDENTITY_WORKBOOK_STEPS_SHEET = "Steps"
 IDENTITY_WORKBOOK_SHEET = "Worksheet"
 IDENTITY_WORKBOOK_METADATA_SHEET = "_metadata"
+IDENTITY_ENTRA_HANDOFF_SHEET = "Entra Handoff"
+IDENTITY_ENTRA_HANDOFF_HEADERS = (
+    "Instructions",
+    "Client ID",
+    "User Claim",
+)
+IDENTITY_ENTRA_HANDOFF_FORMAT = "servicenow.entra-handoff.v2"
+IDENTITY_SERVICENOW_CSV_FORMAT = "servicenow.servicenow-handoff.v2"
+IDENTITY_ENTRA_METADATA_KEYS = (
+    "format_version",
+    "purpose",
+    "target_agent",
+    "tenant_id",
+    "environment_id",
+    "servicenow_instance",
+    "application_client_id",
+    "stage",
+    "owner",
+    "admin_instruction",
+    "privacy_note",
+    "provider",
+    "profile",
+    "agent_slug",
+    "agent_id",
+    "binding_sha256",
+)
+IDENTITY_CSV_BINDING_HEADERS = (
+    "Tenant ID",
+    "Environment ID",
+    "ServiceNow Instance",
+    "Provider",
+    "Profile",
+    "Target Agent Slug",
+    "Target Agent ID",
+    "Binding SHA256",
+)
+IDENTITY_ENTRA_CSV_HEADERS = (
+    "Format Version",
+    "Instructions",
+    "Client ID",
+    "User Claim",
+    *IDENTITY_CSV_BINDING_HEADERS,
+)
+IDENTITY_SERVICENOW_CSV_HEADERS = (
+    "Format Version",
+    "Record",
+    "Content",
+    "Client ID",
+    "User Claim",
+    "ServiceNow User Field",
+    *IDENTITY_CSV_BINDING_HEADERS,
+    "Candidate Set SHA256",
+)
 IDENTITY_WORKBOOK_STEPS_HEADER_ROW = 1
 IDENTITY_WORKBOOK_STEPS_FIRST_DATA_ROW = 2
 IDENTITY_WORKBOOK_TABLE_HEADER_ROW = 12
@@ -181,6 +235,11 @@ SERVICENOW_OIDC_SETUP_INSTRUCTIONS_URL = (
     "https://review.learn.microsoft.com/en-us/microsoft-365/copilot/"
     "employee-self-service/declarative-agent-servicenow-hr-it"
     "?branch=main#task-2-register-oidc-provider-in-servicenow"
+)
+SERVICENOW_NON_EMAIL_USER_MATCH_URL = (
+    "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
+    "employee-self-service/declarative-agent-servicenow-hr-it"
+    "?branch=main#match-users-when-the-servicenow-user-id-isnt-an-email-or-upn"
 )
 IDENTITY_WORKBOOK_TEMP_PREFIX = ".identity-"
 IDENTITY_WORKBOOK_TEMP_SUFFIX = ".tmp.xlsx"
@@ -804,7 +863,82 @@ def _identity_workbook_context_values(
             "Do not add employee values, tokens, secrets, passwords, "
             "or free-form notes."
         ),
+        "provider": PROVIDER_KEY,
+        "profile": PROFILE_KEY,
+        "agent_slug": _agent_slug(context),
+        "agent_id": str(context["agent"]["id"]),
     }
+
+
+def _identity_file_binding(context_values: dict[str, str]) -> dict[str, str]:
+    return {
+        "tenantId": context_values["tenant_id"],
+        "environmentId": context_values["environment_id"],
+        "instanceName": context_values["servicenow_instance"],
+        "provider": context_values.get("provider", PROVIDER_KEY),
+        "profile": context_values.get("profile", PROFILE_KEY),
+        "agentSlug": context_values.get(
+            "agent_slug",
+            context_values.get("target_agent", ""),
+        ),
+        "agentId": context_values.get("agent_id", ""),
+    }
+
+
+def _identity_file_binding_sha256(
+    context_values: dict[str, str],
+) -> str:
+    return _canonical_json_hash(_identity_file_binding(context_values))
+
+
+def _entra_admin_instruction() -> str:
+    instruction = (
+        "1. Sign into the Microsoft Entra admin center as a Global "
+        "Administrator or Cloud App Administrator. "
+        "2. Go to **Applications** then **App registrations**. "
+        "3. If an Entra app already exists: "
+        "3.1 The Entra administrator needs to share the Application (client) "
+        "ID and one selected User Claim name with the maker. "
+        "4. If a new app should be created: "
+        "4.1 The Entra administrator needs to register the app and add user "
+        "claims. "
+        "4.1.1 Select **New registration.** "
+        "4.1.2 In the new registration form, fill in the following fields: "
+        "4.1.2.1 **Name:** Any name that represents the purpose of the app "
+        "registration. "
+        "4.1.2.2 **Redirect URL:** Not needed. "
+        "4.1.3 Choose **Register** to complete creation of the new app "
+        "registration. "
+        "4.1.4 Select **Token configuration** then **Add optional claim** to "
+        "add claims settings. "
+        "4.1.5 Select **Token type** as **Access** and choose the following "
+        "claims: "
+        "4.1.5.1 *Aud* - for audience validation. "
+        "4.1.5.2 *Email* - addressable email for the user. "
+        "4.1.5.3 *UPN* - an identifier for the user. "
+        "4.1.6 Select **Add** to complete adding the claims. "
+        "4.1.7 If this is the first time OpenID Connect is being set up using "
+        "claims such as email or UPN, a confirmation screen may ask to enable "
+        "Microsoft Graph permissions. If shown, check the box and select "
+        "**Add**. "
+        "4.2 Then share the Application (client) ID and one selected User "
+        "Claim name with the maker. "
+        "4.3 If the selected User Claim is not email or Microsoft Entra UPN: "
+        "4.3.1 The Entra administrator needs to perform the extra work "
+        "documented at "
+        f"{SERVICENOW_NON_EMAIL_USER_MATCH_URL}. "
+        "4.3.2 The Entra administrator needs to share the Application "
+        "(client) ID and one selected User Claim name with the maker. "
+        "The User Claim field accepts a claim name only, never a personal "
+        "identifier or claim value. The *Aud* claim is only for access-token "
+        "audience validation and must not be entered as the selected User "
+        "Claim."
+    )
+    if "\r" in instruction or "\n" in instruction or "<br>" in instruction.lower():
+        raise ServiceNowConnectError(
+            "The Entra administrator instruction must be a single line."
+        )
+    return instruction
 
 
 def _identity_requirement_binding(
@@ -995,6 +1129,14 @@ def _identity_workbook_path(
     )
 
 
+def _identity_csv_path(
+    context: dict[str, Any],
+    *,
+    stage: str,
+) -> Path:
+    return _identity_workbook_path(context, stage=stage).with_suffix(".csv")
+
+
 def _identity_workbook_template_sha256(stage: str) -> str:
     template = SOLUTION_ROOT / (
         IDENTITY_WORKBOOK_TEMPLATE_ENTRA
@@ -1057,6 +1199,15 @@ def _identity_workbook_has_admin_values(
     except Exception:
         return True
     try:
+        if (
+            stage == "entra"
+            and IDENTITY_ENTRA_HANDOFF_SHEET in workbook.sheetnames
+        ):
+            sheet = workbook[IDENTITY_ENTRA_HANDOFF_SHEET]
+            return bool(
+                str(sheet["B2"].value or "").strip()
+                or str(sheet["C2"].value or "").strip()
+            )
         if IDENTITY_WORKBOOK_SHEET not in workbook.sheetnames:
             return True
         sheet = workbook[IDENTITY_WORKBOOK_SHEET]
@@ -1318,6 +1469,17 @@ def _checked_in_entra_workbook_steps() -> list[tuple[str, str]]:
             f"read: {template}"
         ) from exc
     try:
+        if workbook.sheetnames == [
+            IDENTITY_ENTRA_HANDOFF_SHEET,
+            IDENTITY_WORKBOOK_METADATA_SHEET,
+        ]:
+            handoff = workbook[IDENTITY_ENTRA_HANDOFF_SHEET]
+            instruction = str(handoff["A2"].value or "")
+            if instruction != _entra_admin_instruction():
+                raise ServiceNowConnectError(
+                    "The checked-in Entra handoff instruction changed."
+                )
+            return [("1", instruction)]
         if workbook.sheetnames != [
             IDENTITY_WORKBOOK_STEPS_SHEET,
             IDENTITY_WORKBOOK_SHEET,
@@ -2401,35 +2563,84 @@ def _template_steps(
         identity_requirement
     )
     if stage == "servicenow":
-        if len(rows) != 33:
+        if len(rows) not in {3, 33}:
             raise ServiceNowConnectError(
                 "The checked-in ServiceNow identity workbook template has an "
                 "unsupported Steps contract."
             )
-        replacements = {
-            "<service-now-instance>": context_values["servicenow_instance"],
-            "<customer-tenant-id>": context_values["tenant_id"],
-            "<application-client-id>": context_values[
-                "application_client_id"
-            ],
-        }
-        result = []
-        for label, action, hyperlink in rows:
-            if (
-                label == "Custom identity validation"
-                and requirement_category != "custom"
-            ):
-                continue
-            for placeholder, value in replacements.items():
-                action = action.replace(placeholder, value)
-            if hyperlink is not None:
-                hyperlink = copy.copy(hyperlink)
-                target = str(hyperlink.target or "")
+        if len(rows) == 3 and [row[0] for row in rows] != [
+            "Overview",
+            "Entra handoff",
+            "1",
+        ]:
+            raise ServiceNowConnectError(
+                "The checked-in ServiceNow identity workbook template "
+                "opening rows changed."
+            )
+        if not context_values.get("confirmed_user_claim_name"):
+            if len(rows) == 3:
+                raise ServiceNowConnectError(
+                    "ServiceNow workbook generation requires one confirmed "
+                    "User Claim name."
+                )
+            replacements = {
+                "<service-now-instance>": context_values[
+                    "servicenow_instance"
+                ],
+                "<customer-tenant-id>": context_values["tenant_id"],
+                "<application-client-id>": context_values[
+                    "application_client_id"
+                ],
+            }
+            result = []
+            for label, action, hyperlink in rows:
+                if (
+                    label == "Custom identity validation"
+                    and requirement_category != "custom"
+                ):
+                    continue
                 for placeholder, value in replacements.items():
-                    target = target.replace(placeholder, value)
-                hyperlink.target = target
-            result.append((label, action, hyperlink))
-        return result
+                    action = action.replace(placeholder, value)
+                if hyperlink is not None:
+                    hyperlink = copy.copy(hyperlink)
+                    target = str(hyperlink.target or "")
+                    for placeholder, value in replacements.items():
+                        target = target.replace(placeholder, value)
+                    hyperlink.target = target
+                result.append((label, action, hyperlink))
+            return result
+        confirmed_claim_name = _safe_identity_name(
+            context_values.get("confirmed_user_claim_name"),
+            "confirmed_user_claim_name",
+        )
+        return [
+            (
+                "Overview",
+                "ServiceNow administrator handoff",
+                None,
+            ),
+            (
+                "Entra handoff",
+                _servicenow_entra_handoff_summary(
+                    application_client_id=context_values[
+                        "application_client_id"
+                    ],
+                    confirmed_claim_name=confirmed_claim_name,
+                ),
+                None,
+            ),
+            (
+                "1",
+                _servicenow_admin_instruction(
+                    application_client_id=context_values[
+                        "application_client_id"
+                    ],
+                    confirmed_claim_name=confirmed_claim_name,
+                    tenant_id=context_values["tenant_id"],
+                ),
+                None,
+            )
+        ]
     if len(rows) != 26:
         raise ServiceNowConnectError(
             "The checked-in Entra identity workbook template has an "
@@ -2517,6 +2728,186 @@ def _template_steps(
     return result
 
 
+def _servicenow_admin_instruction(
+    *,
+    application_client_id: str,
+    confirmed_claim_name: str,
+    tenant_id: str,
+) -> str:
+    instruction = (
+        "ServiceNow administrator configuration steps (PM-spec flowchart): "
+        "1. Sign in to the ServiceNow instance that needs to be integrated "
+        "with the Employee Self-Service agent. "
+        "2. Elevate access permissions using **Elevate role**. "
+        "3. Select **All** in the top navigation bar. "
+        "4. Search for \"OAuth\" in the search box within the dropdown "
+        "navigation menu. "
+        "5. Select **System OAuth -> Application Registry** from the search "
+        "results; if this option is not visible, you do not have sufficient "
+        "privileges. "
+        "6. Check whether an OAuth provider already exists with the "
+        "auto-supplied confirmed Application (client) ID "
+        f"`{application_client_id}`. "
+        "6.1 YES - Reuse the existing provider: "
+        "6.1.1 Verify that the existing provider Client ID is "
+        f"`{application_client_id}`. "
+        "6.1.2 Ensure the user claim is the same as that configured by Entra "
+        "(Entra-confirmed User Claim: "
+        f"`{confirmed_claim_name}`). "
+        "6.1.3 Identify the ServiceNow User Field that stores the same "
+        "identity key. Do not apply the new-provider settings below to this "
+        "YES/reuse branch. "
+        "6.2 NO - Create a new OAuth provider app: "
+        "6.2.1 Check whether an OAuth OIDC Provider Configuration exists. "
+        "6.2.1.1 YES - Reuse it. "
+        "6.2.1.2 NO - Create a new one. "
+        "6.2.2 New-provider application configuration: "
+        "Name: Enter a meaningful name that identifies this OIDC provider as "
+        "created for the Employee Self-Service agent; "
+        "Client ID: Auto-populated from the confirmed Microsoft Entra "
+        f"administrator result: `{application_client_id}`; "
+        "Client secret: This value is not used and can be any value; "
+        "Scope Restriction: Broadly scoped; "
+        "OAuth OIDC provider configuration: When a new configuration is "
+        "required, select the search icon, choose **New** in the search "
+        "popup, and complete these fields: "
+        "OIDC Provider: Enter a name that represents the Microsoft Entra "
+        "tenant from Task 1 above; "
+        "OIDC Metadata URL: "
+        f"`login.microsoftonline.com/{tenant_id}/"
+        ".well-known/openid-configuration`; "
+        "use the Microsoft Entra tenant ID from Task 1 above; "
+        "OIDC Configuration Cache Life Span: 120; "
+        "Application: Global; "
+        "User Claim: Auto-populated from the confirmed Entra administrator "
+        f"result: `{confirmed_claim_name}`; "
+        "User Field: The ServiceNow administrator must confirm and enter the "
+        "actual `sys_user` field that stores the same identity key; do not "
+        "use a default; "
+        "Enable JTI claim verification: disabled; "
+        "select **Submit** and update the OIDC Entity form. "
+        "7. Final identity-key checks for the selected or created provider: "
+        "ii. Ensure the user claim is the same as that configured by Entra "
+        "(Entra-confirmed User Claim: "
+        f"`{confirmed_claim_name}`). "
+        "iii. Confirm the ServiceNow User Field stores the same identity key."
+    )
+    if "\r" in instruction or "\n" in instruction or "<br>" in instruction.lower():
+        raise ServiceNowConnectError(
+            "The ServiceNow administrator instruction must be a single line."
+        )
+    return instruction
+
+
+def _servicenow_entra_handoff_summary(
+    *,
+    application_client_id: str,
+    confirmed_claim_name: str,
+) -> str:
+    return (
+        "Entra handoff - Client ID: "
+        f"`{application_client_id}`  "
+        "User Claim: "
+        f"`{confirmed_claim_name}`"
+    )
+
+
+def _entra_handoff_metadata_values(
+    context_values: dict[str, str],
+) -> dict[str, str]:
+    return {
+        "format_version": IDENTITY_ENTRA_HANDOFF_FORMAT,
+        **{
+            key: context_values[key]
+            for key in IDENTITY_WORKBOOK_CONTEXT_FIELDS
+        },
+        "provider": context_values.get("provider", PROVIDER_KEY),
+        "profile": context_values.get("profile", PROFILE_KEY),
+        "agent_slug": context_values.get(
+            "agent_slug",
+            context_values.get("target_agent", ""),
+        ),
+        "agent_id": context_values.get("agent_id", ""),
+        "binding_sha256": _identity_file_binding_sha256(context_values),
+    }
+
+
+def _write_entra_handoff_workbook(
+    workbook,
+    *,
+    template: Path,
+    path: Path,
+    context_values: dict[str, str],
+) -> None:
+    if workbook.sheetnames != [
+        IDENTITY_ENTRA_HANDOFF_SHEET,
+        IDENTITY_WORKBOOK_METADATA_SHEET,
+    ]:
+        raise ServiceNowConnectError(
+            "The checked-in Entra handoff template sheet contract changed."
+        )
+    handoff = workbook[IDENTITY_ENTRA_HANDOFF_SHEET]
+    metadata = workbook[IDENTITY_WORKBOOK_METADATA_SHEET]
+    headers = tuple(
+        str(handoff.cell(1, column).value or "")
+        for column in range(1, 4)
+    )
+    if headers != IDENTITY_ENTRA_HANDOFF_HEADERS:
+        raise ServiceNowConnectError(
+            "The checked-in Entra handoff headers changed."
+        )
+    if handoff.max_row != 2 or handoff.max_column != 3:
+        raise ServiceNowConnectError(
+            "The checked-in Entra handoff visible shape changed."
+        )
+    instruction_cell = handoff["A2"]
+    instruction_cell.value = _entra_admin_instruction()
+    instruction_cell.hyperlink = SERVICENOW_NON_EMAIL_USER_MATCH_URL
+    application_client_id = context_values["application_client_id"]
+    handoff["B2"] = (
+        ""
+        if application_client_id
+        in {
+            IDENTITY_WORKBOOK_PENDING_CLIENT_ID,
+            IDENTITY_WORKBOOK_TEMPLATE_CLIENT_ID,
+        }
+        else application_client_id
+    )
+    handoff["C2"] = ""
+    *_unused, Protection = _identity_workbook_openpyxl()
+    for cell in (handoff["B2"], handoff["C2"]):
+        cell.fill = _identity_workbook_fill(True)
+        cell.protection = Protection(locked=False)
+    metadata_values = _entra_handoff_metadata_values(context_values)
+    if (
+        metadata.max_row != len(IDENTITY_ENTRA_METADATA_KEYS) + 1
+        or metadata.max_column != 2
+        or tuple(
+            str(metadata.cell(1, column).value or "")
+            for column in range(1, 3)
+        )
+        != ("key", "value")
+    ):
+        raise ServiceNowConnectError(
+            "The checked-in Entra handoff metadata shape changed."
+        )
+    for row_number, key in enumerate(
+        IDENTITY_ENTRA_METADATA_KEYS,
+        start=2,
+    ):
+        if str(metadata.cell(row_number, 1).value or "") != key:
+            raise ServiceNowConnectError(
+                "The checked-in Entra handoff metadata keys changed."
+            )
+        metadata.cell(row_number, 2).value = metadata_values[key]
+    workbook.properties.identifier = (
+        "ess-servicenow-template-sha256:"
+        + hashlib.sha256(template.read_bytes()).hexdigest().upper()
+    )
+    workbook.active = handoff
+    _save_identity_workbook_atomic(workbook, path)
+
+
 def _write_identity_workbook(
     path: Path,
     *,
@@ -2571,6 +2962,23 @@ def _write_identity_workbook(
             f"{template}"
         ) from exc
     try:
+        if (
+            stage == "entra"
+            and workbook.sheetnames
+            == [
+                IDENTITY_ENTRA_HANDOFF_SHEET,
+                IDENTITY_WORKBOOK_METADATA_SHEET,
+            ]
+        ):
+            _write_entra_handoff_workbook(
+                workbook,
+                template=template,
+                path=path,
+                context_values=context_values,
+            )
+            workbook.close()
+            workbook = None
+            return path
         if workbook.sheetnames != [
             IDENTITY_WORKBOOK_STEPS_SHEET,
             IDENTITY_WORKBOOK_SHEET,
@@ -2615,14 +3023,29 @@ def _write_identity_workbook(
             steps_sheet.cell(row, 2)._style = copy.copy(base_styles[1])
             if hyperlink is not None:
                 steps_sheet.cell(row, 2).hyperlink = copy.copy(hyperlink)
+            height_cap = 105
+            if (
+                stage == "servicenow"
+                and action.startswith(
+                    "ServiceNow administrator configuration steps"
+                )
+            ):
+                height_cap = 409.5
             steps_sheet.row_dimensions[row].height = max(
                 30,
-                min(105, 18 * (1 + len(action) // 95)),
+                min(height_cap, 18 * (1 + len(action) // 95)),
             )
         steps_sheet.auto_filter.ref = (
             f"A{IDENTITY_WORKBOOK_STEPS_HEADER_ROW}:"
             f"B{IDENTITY_WORKBOOK_STEPS_FIRST_DATA_ROW + len(selected_steps) - 1}"
         )
+        if (
+            stage == "servicenow"
+            and context_values.get("confirmed_user_claim_name")
+        ):
+            steps_sheet.freeze_panes = (
+                f"A{IDENTITY_WORKBOOK_STEPS_FIRST_DATA_ROW + 2}"
+            )
         for row_number, (_label, key) in enumerate(
             IDENTITY_WORKBOOK_VISIBLE_CONTEXT,
             start=2,
@@ -2732,6 +3155,558 @@ def _write_identity_workbook(
     return path
 
 
+def _identity_csv_binding_values(
+    context_values: dict[str, str],
+) -> dict[str, str]:
+    return {
+        "Tenant ID": context_values["tenant_id"],
+        "Environment ID": context_values["environment_id"],
+        "ServiceNow Instance": context_values["servicenow_instance"],
+        "Provider": context_values["provider"],
+        "Profile": context_values["profile"],
+        "Target Agent Slug": context_values["agent_slug"],
+        "Target Agent ID": context_values["agent_id"],
+        "Binding SHA256": _identity_file_binding_sha256(context_values),
+    }
+
+
+def _write_identity_csv(
+    path: Path,
+    *,
+    context_values: dict[str, str],
+    stage: str,
+    candidates: list[str],
+    candidate_set_sha256: str | None = None,
+) -> Path:
+    if stage not in {"entra", "servicenow"}:
+        raise ServiceNowConnectError("Identity CSV stage is invalid.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    binding_values = _identity_csv_binding_values(context_values)
+    if stage == "entra":
+        client_id = context_values["application_client_id"]
+        row = {
+            "Format Version": IDENTITY_ENTRA_HANDOFF_FORMAT,
+            "Instructions": _entra_admin_instruction(),
+            "Client ID": (
+                ""
+                if client_id
+                in {
+                    IDENTITY_WORKBOOK_PENDING_CLIENT_ID,
+                    IDENTITY_WORKBOOK_TEMPLATE_CLIENT_ID,
+                }
+                else client_id
+            ),
+            "User Claim": "",
+            **binding_values,
+        }
+        headers = IDENTITY_ENTRA_CSV_HEADERS
+        rows = [row]
+    else:
+        if len(candidates) != 1:
+            raise ServiceNowConnectError(
+                "ServiceNow CSV generation requires exactly one confirmed "
+                "User Claim name."
+            )
+        claim_name = _safe_identity_name(
+            candidates[0],
+            "confirmed_user_claim_name",
+        )
+        client_id = normalize_client_id(
+            context_values["application_client_id"]
+        )
+        candidate_hash = str(candidate_set_sha256 or "").strip()
+        if not re.fullmatch(r"[0-9a-f]{64}", candidate_hash):
+            raise ServiceNowConnectError(
+                "ServiceNow CSV generation requires the confirmed candidate "
+                "set hash."
+            )
+        common = {
+            "Format Version": IDENTITY_SERVICENOW_CSV_FORMAT,
+            "Client ID": client_id,
+            "User Claim": claim_name,
+            **binding_values,
+            "Candidate Set SHA256": candidate_hash,
+        }
+        rows = [
+            {
+                **common,
+                "Record": "Entra handoff",
+                "Content": _servicenow_entra_handoff_summary(
+                    application_client_id=client_id,
+                    confirmed_claim_name=claim_name,
+                ),
+                "ServiceNow User Field": "",
+            },
+            {
+                **common,
+                "Record": "Steps",
+                "Content": _servicenow_admin_instruction(
+                    application_client_id=client_id,
+                    confirmed_claim_name=claim_name,
+                    tenant_id=context_values["tenant_id"],
+                ),
+                "ServiceNow User Field": "",
+            },
+        ]
+        headers = IDENTITY_SERVICENOW_CSV_HEADERS
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    try:
+        with temporary_path.open(
+            "w",
+            encoding="utf-8-sig",
+            newline="",
+        ) as stream:
+            writer = csv.DictWriter(
+                stream,
+                fieldnames=list(headers),
+                lineterminator="\r\n",
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+    return path
+
+
+def _identity_csv_has_admin_values(
+    path: Path,
+    *,
+    stage: str,
+) -> bool:
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            rows = list(csv.DictReader(stream))
+    except (OSError, UnicodeError, csv.Error):
+        return True
+    if stage == "entra":
+        return bool(
+            rows
+            and (
+                str(rows[0].get("Client ID") or "").strip()
+                or str(rows[0].get("User Claim") or "").strip()
+            )
+        )
+    return any(
+        str(row.get("ServiceNow User Field") or "").strip()
+        for row in rows
+    )
+
+
+def _ensure_identity_csv(
+    context: dict[str, Any],
+    *,
+    context_values: dict[str, str],
+    stage: str,
+    candidates: list[str],
+    candidate_set_sha256: str | None = None,
+) -> tuple[Path, str]:
+    path = _identity_csv_path(context, stage=stage)
+    if path.is_file() and _identity_csv_has_admin_values(
+        path,
+        stage=stage,
+    ):
+        return path, "preserved-existing"
+    if path.exists() and not path.is_file():
+        raise ServiceNowConnectError(
+            "The identity CSV path is not a regular file."
+        )
+    _write_identity_csv(
+        path,
+        context_values=context_values,
+        stage=stage,
+        candidates=candidates,
+        candidate_set_sha256=candidate_set_sha256,
+    )
+    return path, "generated"
+
+
+def _validate_identity_csv_binding(
+    row: dict[str, str],
+    *,
+    expected_context: dict[str, str],
+) -> None:
+    expected = _identity_csv_binding_values(expected_context)
+    if any(str(row.get(key) or "").strip() != value for key, value in expected.items()):
+        raise ServiceNowConnectError(
+            "The identity CSV binding does not match the active tenant, "
+            "environment, instance, provider, profile, or agent."
+        )
+
+
+def _parse_identity_csv(
+    path: Path,
+    *,
+    stage: str,
+    expected_context: dict[str, str],
+    expected_candidates: list[str] | None = None,
+    expected_candidate_set_sha256: str | None = None,
+) -> dict[str, Any]:
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            expected_headers = (
+                IDENTITY_ENTRA_CSV_HEADERS
+                if stage == "entra"
+                else IDENTITY_SERVICENOW_CSV_HEADERS
+            )
+            if tuple(reader.fieldnames or ()) != expected_headers:
+                raise ServiceNowConnectError(
+                    "The identity CSV headers changed."
+                )
+            rows = list(reader)
+    except ServiceNowConnectError:
+        raise
+    except (OSError, UnicodeError, csv.Error) as exc:
+        raise ServiceNowConnectError(
+            "The identity CSV could not be read safely."
+        ) from exc
+    if any(
+        "\r" in str(value or "") or "\n" in str(value or "")
+        for row in rows
+        for value in row.values()
+    ):
+        raise ServiceNowConnectError(
+            "Identity CSV fields must not contain embedded line breaks."
+        )
+    if stage == "entra":
+        if len(rows) != 1:
+            raise ServiceNowConnectError(
+                "The Entra identity CSV must contain exactly one data record."
+            )
+        row = rows[0]
+        if (
+            row["Format Version"] != IDENTITY_ENTRA_HANDOFF_FORMAT
+            or row["Instructions"] != _entra_admin_instruction()
+        ):
+            raise ServiceNowConnectError(
+                "The Entra identity CSV format or instructions changed."
+            )
+        _validate_identity_csv_binding(
+            row,
+            expected_context=expected_context,
+        )
+        visible_client_id = row["Client ID"].strip()
+        expected_client_id = expected_context["application_client_id"]
+        if not visible_client_id:
+            raise ServiceNowConnectError(
+                "Enter the exact Application (client) ID in the Entra "
+                "CSV Client ID field."
+            )
+        else:
+            resolved_client_id = normalize_client_id(visible_client_id)
+            if (
+                expected_client_id
+                != IDENTITY_WORKBOOK_PENDING_CLIENT_ID
+                and resolved_client_id
+                != normalize_client_id(expected_client_id)
+            ):
+                raise ServiceNowConnectError(
+                    "The Entra CSV Client ID does not match the active "
+                    "lifecycle."
+                )
+        claim_name = _safe_identity_name(
+            row["User Claim"],
+            "user_claim",
+        )
+        if claim_name.casefold() == "aud":
+            raise ServiceNowConnectError(
+                "The aud audience claim cannot be selected as the "
+                "user-matching User Claim."
+            )
+        return {
+            "candidates": [claim_name],
+            "applicationClientId": resolved_client_id,
+            "selection": None,
+            "sheetProtected": False,
+        }
+    if len(rows) != 2 or [row["Record"] for row in rows] != [
+        "Entra handoff",
+        "Steps",
+    ]:
+        raise ServiceNowConnectError(
+            "The ServiceNow identity CSV must contain exactly one Entra "
+            "handoff record and one Steps record."
+        )
+    for row in rows:
+        if row["Format Version"] != IDENTITY_SERVICENOW_CSV_FORMAT:
+            raise ServiceNowConnectError(
+                "The ServiceNow identity CSV format changed."
+            )
+        _validate_identity_csv_binding(
+            row,
+            expected_context=expected_context,
+        )
+    client_ids = {
+        normalize_client_id(row["Client ID"])
+        for row in rows
+    }
+    if len(client_ids) != 1:
+        raise ServiceNowConnectError(
+            "The ServiceNow identity CSV contains conflicting Client IDs."
+        )
+    resolved_client_id = client_ids.pop()
+    if resolved_client_id != normalize_client_id(
+        expected_context["application_client_id"]
+    ):
+        raise ServiceNowConnectError(
+            "The ServiceNow identity CSV Client ID does not match the active "
+            "lifecycle."
+        )
+    claims = {
+        _safe_identity_name(row["User Claim"], "user_claim")
+        for row in rows
+    }
+    if len(claims) != 1:
+        raise ServiceNowConnectError(
+            "The ServiceNow identity CSV contains conflicting User Claims."
+        )
+    claim_name = claims.pop()
+    if claim_name.casefold() == "aud":
+        raise ServiceNowConnectError(
+            "The aud audience claim cannot be selected as the user-matching "
+            "User Claim."
+        )
+    if expected_candidates != [claim_name]:
+        raise ServiceNowConnectError(
+            "The ServiceNow identity CSV User Claim does not match the "
+            "Entra-confirmed selection."
+        )
+    candidate_hashes = {
+        str(row["Candidate Set SHA256"] or "").strip()
+        for row in rows
+    }
+    if candidate_hashes != {str(expected_candidate_set_sha256 or "")}:
+        raise ServiceNowConnectError(
+            "The ServiceNow identity CSV candidate receipt is stale."
+        )
+    if rows[0]["Content"] != _servicenow_entra_handoff_summary(
+        application_client_id=resolved_client_id,
+        confirmed_claim_name=claim_name,
+    ):
+        raise ServiceNowConnectError(
+            "The ServiceNow identity CSV Entra handoff changed."
+        )
+    if rows[1]["Content"] != _servicenow_admin_instruction(
+        application_client_id=resolved_client_id,
+        confirmed_claim_name=claim_name,
+        tenant_id=expected_context["tenant_id"],
+    ):
+        raise ServiceNowConnectError(
+            "The ServiceNow identity CSV instructions changed."
+        )
+    if rows[0]["ServiceNow User Field"].strip():
+        raise ServiceNowConnectError(
+            "The ServiceNow identity CSV handoff record must not contain a "
+            "User Field."
+        )
+    user_field = str(rows[1]["ServiceNow User Field"] or "").strip()
+    if not _SAFE_USER_FIELD.fullmatch(user_field):
+        raise ServiceNowConnectError(
+            "ServiceNow User Field must be one explicit safe sys_user field "
+            "name."
+        )
+    return {
+        "candidates": [claim_name],
+        "applicationClientId": resolved_client_id,
+        "selection": {
+            "tokenClaimName": claim_name,
+            "serviceNowUserField": user_field,
+        },
+        "sheetProtected": False,
+    }
+
+
+def _parse_identity_handoff_file(
+    path: Path,
+    *,
+    stage: str,
+    expected_context: dict[str, str],
+    expected_candidates: list[str] | None = None,
+    expected_candidate_set_sha256: str | None = None,
+    allow_pending_client_id_fallback: bool = False,
+) -> dict[str, Any]:
+    if not path.is_file():
+        raise ServiceNowConnectError(
+            "The identity handoff path does not exist or is not a local file."
+        )
+    if path.suffix.casefold() == ".csv":
+        return _parse_identity_csv(
+            path,
+            stage=stage,
+            expected_context=expected_context,
+            expected_candidates=expected_candidates,
+            expected_candidate_set_sha256=(
+                expected_candidate_set_sha256
+            ),
+        )
+    return _parse_identity_workbook(
+        path,
+        stage=stage,
+        expected_context=expected_context,
+        expected_candidates=expected_candidates,
+        allow_pending_client_id_fallback=(
+            allow_pending_client_id_fallback
+        ),
+    )
+
+
+def _parse_entra_handoff_workbook(
+    workbook,
+    *,
+    expected_context: dict[str, str],
+) -> dict[str, Any]:
+    handoff = workbook[IDENTITY_ENTRA_HANDOFF_SHEET]
+    metadata = workbook[IDENTITY_WORKBOOK_METADATA_SHEET]
+    if (
+        handoff.sheet_state != "visible"
+        or metadata.sheet_state != "hidden"
+    ):
+        raise ServiceNowConnectError(
+            "The Entra handoff sheet visibility changed."
+        )
+    if not handoff.protection.sheet or not metadata.protection.sheet:
+        raise ServiceNowConnectError(
+            "The Entra handoff workbook protection changed."
+        )
+    if handoff.max_row != 2 or handoff.max_column != 3:
+        raise ServiceNowConnectError(
+            "The Entra handoff visible shape changed."
+        )
+    if tuple(
+        str(handoff.cell(1, column).value or "")
+        for column in range(1, 4)
+    ) != IDENTITY_ENTRA_HANDOFF_HEADERS:
+        raise ServiceNowConnectError(
+            "The Entra handoff headers changed."
+        )
+    if str(handoff["A2"].value or "") != _entra_admin_instruction():
+        raise ServiceNowConnectError(
+            "The Entra administrator instructions changed."
+        )
+    hyperlink = handoff["A2"].hyperlink
+    if (
+        hyperlink is None
+        or str(hyperlink.target or "")
+        != SERVICENOW_NON_EMAIL_USER_MATCH_URL
+    ):
+        raise ServiceNowConnectError(
+            "The Entra administrator instruction link changed."
+        )
+    if (
+        not handoff["A2"].protection.locked
+        or handoff["B2"].protection.locked
+        or handoff["C2"].protection.locked
+    ):
+        raise ServiceNowConnectError(
+            "The Entra handoff editable ownership changed."
+        )
+    for worksheet in (handoff, metadata):
+        for row in worksheet.iter_rows():
+            for cell in row:
+                if cell.data_type == "f" or (
+                    isinstance(cell.value, str)
+                    and cell.value.lstrip().startswith("=")
+                ):
+                    raise ServiceNowConnectError(
+                        "The Entra handoff workbook must not contain formulas."
+                    )
+    if (
+        metadata.max_row != len(IDENTITY_ENTRA_METADATA_KEYS) + 1
+        or metadata.max_column != 2
+        or tuple(
+            str(metadata.cell(1, column).value or "")
+            for column in range(1, 3)
+        )
+        != ("key", "value")
+    ):
+        raise ServiceNowConnectError(
+            "The Entra handoff metadata shape changed."
+        )
+    metadata_values: dict[str, str] = {}
+    for row_number, key in enumerate(
+        IDENTITY_ENTRA_METADATA_KEYS,
+        start=2,
+    ):
+        if str(metadata.cell(row_number, 1).value or "") != key:
+            raise ServiceNowConnectError(
+                "The Entra handoff metadata keys changed."
+            )
+        metadata_values[key] = str(
+            metadata.cell(row_number, 2).value or ""
+        ).strip()
+    expected_metadata = _entra_handoff_metadata_values(expected_context)
+    for key in IDENTITY_ENTRA_METADATA_KEYS:
+        if key == "application_client_id":
+            continue
+        if metadata_values[key] != expected_metadata[key]:
+            raise ServiceNowConnectError(
+                "The Entra handoff metadata does not match the active "
+                "tenant, environment, instance, provider, profile, or agent."
+            )
+    visible_client_id = str(handoff["B2"].value or "").strip()
+    expected_client_id = expected_context["application_client_id"]
+    metadata_client_id = metadata_values["application_client_id"]
+    if metadata_client_id in {
+        IDENTITY_WORKBOOK_PENDING_CLIENT_ID,
+        IDENTITY_WORKBOOK_TEMPLATE_CLIENT_ID,
+    }:
+        if not visible_client_id:
+            raise ServiceNowConnectError(
+                "Enter the exact Application (client) ID in the Entra "
+                "handoff Client ID cell."
+            )
+        else:
+            resolved_client_id = normalize_client_id(visible_client_id)
+            if (
+                expected_client_id
+                != IDENTITY_WORKBOOK_PENDING_CLIENT_ID
+                and resolved_client_id
+                != normalize_client_id(expected_client_id)
+            ):
+                raise ServiceNowConnectError(
+                    "The Entra handoff Client ID does not match the supplied "
+                    "Application client ID."
+                )
+    else:
+        if not visible_client_id:
+            raise ServiceNowConnectError(
+                "The Entra handoff Client ID is blank."
+            )
+        if expected_client_id == IDENTITY_WORKBOOK_PENDING_CLIENT_ID:
+            raise ServiceNowConnectError(
+                "The Application client ID in this Entra handoff is not "
+                "bound to the active lifecycle. Import it once with the "
+                "matching --client-id, or generate a current handoff from "
+                "the active lifecycle."
+            )
+        resolved_client_id = normalize_client_id(visible_client_id)
+        if (
+            resolved_client_id != normalize_client_id(metadata_client_id)
+            or resolved_client_id != normalize_client_id(expected_client_id)
+        ):
+            raise ServiceNowConnectError(
+                "The Entra handoff Client ID does not match the active "
+                "lifecycle."
+            )
+    claim_name = _safe_identity_name(
+        handoff["C2"].value,
+        "user_claim",
+    )
+    if claim_name.casefold() == "aud":
+        raise ServiceNowConnectError(
+            "The aud audience claim cannot be selected as the user-matching "
+            "User Claim."
+        )
+    return {
+        "candidates": [claim_name],
+        "applicationClientId": resolved_client_id,
+        "selection": None,
+        "sheetProtected": True,
+    }
+
+
 def _parse_identity_workbook(
     path: Path,
     *,
@@ -2778,6 +3753,18 @@ def _parse_identity_workbook(
             "The identity mapping workbook could not be read safely."
         ) from exc
     try:
+        if (
+            stage == "entra"
+            and workbook.sheetnames
+            == [
+                IDENTITY_ENTRA_HANDOFF_SHEET,
+                IDENTITY_WORKBOOK_METADATA_SHEET,
+            ]
+        ):
+            return _parse_entra_handoff_workbook(
+                workbook,
+                expected_context=expected_context,
+            )
         if workbook.sheetnames != [
             IDENTITY_WORKBOOK_STEPS_SHEET,
             IDENTITY_WORKBOOK_SHEET,
@@ -3115,11 +4102,17 @@ def record_identity_mapping(
         ),
         stage=stage,
     )
-    parsed = _parse_identity_workbook(
+    parsed = _parse_identity_handoff_file(
         workbook_path,
         stage=stage,
         expected_context=expected_context,
         expected_candidates=expected_candidates,
+        expected_candidate_set_sha256=(
+            candidate_receipt.get("candidateSetSha256")
+            if stage == "servicenow"
+            and isinstance(candidate_receipt, dict)
+            else None
+        ),
         allow_pending_client_id_fallback=(
             stage == "entra" and supplied_client_id is not None
         ),
@@ -3168,6 +4161,7 @@ def record_identity_mapping(
             "tokenClaimEmissionConfirmed": True,
             "binding": binding,
             "importedWorkbookSha256": workbook_hash,
+            "importedFileFormat": workbook_path.suffix.casefold().lstrip("."),
             "sheetProtected": parsed["sheetProtected"],
             "recordedAt": recorded_at,
         }
@@ -3199,6 +4193,7 @@ def record_identity_mapping(
             "serviceNowAdministratorConfirmed": True,
             "binding": binding,
             "importedWorkbookSha256": workbook_hash,
+            "importedFileFormat": workbook_path.suffix.casefold().lstrip("."),
             "sheetProtected": parsed["sheetProtected"],
             "recordedAt": recorded_at,
         }
@@ -3639,8 +4634,10 @@ def identity_mapping_handoff(
         except ServiceNowConnectError as exc:
             if stage == "servicenow":
                 raise ServiceNowConnectError(
-                    "The Entra claim-candidate evidence is stale or "
-                    "unconfirmed. Resume the Entra stage and import a current "
+                    "The ServiceNow identity handoff is not ready. The Entra "
+                    "claim evidence is missing, unconfirmed, stale, or bound "
+                    "to a different tenant, environment, instance, or target "
+                    "agent. Resume the Entra stage and import a current "
                     f"administrator-confirmed workbook. {exc}"
                 ) from exc
     candidate_receipt = validated_candidate_receipt
@@ -3648,27 +4645,60 @@ def identity_mapping_handoff(
     final_mapping = (
         final_mapping if isinstance(final_mapping, dict) else None
     )
-    application_client_id = (
-        normalize_client_id(client_id)
-        if client_id is not None
-        else (
-            normalize_client_id(
-                str(candidate_receipt.get("applicationClientId"))
+    existing_servicenow_handoff_ready = (
+        stage == "servicenow"
+        and _identity_admin_handoff_is_ready(
+            context,
+            state,
+            phase="servicenow-oidc",
+        )
+    )
+    confirmed_user_claim_name: str | None = None
+    if stage == "servicenow":
+        if candidate_receipt is None:
+            raise ServiceNowConnectError(
+                "The ServiceNow identity handoff is not ready. Import a "
+                "current Entra administrator-confirmed Application client ID "
+                "and selected User Claim name first."
             )
-            if candidate_receipt
-            and candidate_receipt.get("applicationClientId")
-            else _known_entra_client_id(state)
+        raw_application_client_id = str(
+            candidate_receipt.get("applicationClientId") or ""
+        ).strip()
+        if not raw_application_client_id:
+            raise ServiceNowConnectError(
+                "The ServiceNow identity handoff is not ready. The confirmed "
+                "Microsoft Entra Application client ID is missing."
+            )
+        application_client_id = normalize_client_id(
+            raw_application_client_id
         )
-    )
-    candidates = (
-        list(candidate_receipt.get("candidates") or [])
-        if stage == "servicenow" and candidate_receipt
-        else []
-    )
-    if stage == "servicenow" and not candidates:
-        raise ServiceNowConnectError(
-            "The Entra administrator claim candidates are not recorded."
+        candidates = list(candidate_receipt.get("candidates") or [])
+        if len(candidates) != 1 and not existing_servicenow_handoff_ready:
+            raise ServiceNowConnectError(
+                "The ServiceNow identity handoff is not ready. The Entra "
+                "administrator must confirm exactly one selected User Claim "
+                "name for this tenant, environment, instance, and target "
+                "agent; multiple unselected candidates cannot be guessed."
+            )
+        if len(candidates) == 1:
+            confirmed_user_claim_name = _safe_identity_name(
+                candidates[0],
+                "confirmed_user_claim_name",
+            )
+    else:
+        application_client_id = (
+            normalize_client_id(client_id)
+            if client_id is not None
+            else (
+                normalize_client_id(
+                    str(candidate_receipt.get("applicationClientId"))
+                )
+                if candidate_receipt
+                and candidate_receipt.get("applicationClientId")
+                else _known_entra_client_id(state)
+            )
         )
+        candidates = []
     identity_requirement = _validated_identity_requirement(context, state)
     admin_guide_path = (
         _entra_admin_guide_path()
@@ -3771,6 +4801,15 @@ def identity_mapping_handoff(
         application_client_id=application_client_id,
         stage=stage,
     )
+    if confirmed_user_claim_name is not None:
+        context_values["confirmed_user_claim_name"] = (
+            confirmed_user_claim_name
+        )
+        context_values["admin_instruction"] = (
+            "Use the locked Entra-confirmed User Claim name and enter the "
+            "matching ServiceNow sys_user field in the editable User Field "
+            "cell."
+        )
     workbook_steps = _identity_workbook_steps(
         stage=stage,
         context_values=context_values,
@@ -3786,8 +4825,22 @@ def identity_mapping_handoff(
         missing_items=missing_items,
         identity_requirement=identity_requirement,
     )
+    generated_csv_path, csv_file_status = _ensure_identity_csv(
+        context,
+        context_values=context_values,
+        stage=stage,
+        candidates=candidates,
+        candidate_set_sha256=(
+            candidate_receipt.get("candidateSetSha256")
+            if stage == "servicenow"
+            and isinstance(candidate_receipt, dict)
+            else None
+        ),
+    )
     generated_path = generated_path.resolve()
     generated_uri = generated_path.as_uri()
+    generated_csv_path = generated_csv_path.resolve()
+    generated_csv_uri = generated_csv_path.as_uri()
     entra_target_summary = (
         f"- Tenant: `{context['environment'].get('tenant_id')}`\n"
         f"- Environment: `{context['environment']['id']}`\n"
@@ -3811,13 +4864,14 @@ def identity_mapping_handoff(
             "1. Open [Microsoft Entra admin center]"
             "(https://entra.microsoft.com/).\n"
             f"2. Open [the protected Entra workbook]({generated_uri}) "
-            f"or use `{generated_path}`, and share it with the Entra "
-            "administrator.\n"
-            "3. Follow `Steps`. Complete only the yellow `Worksheet` cells "
-            "with the Application Client ID when requested and the actual "
-            "emitted claim names. Do not enter `aud`.\n"
-            "4. Keep `Steps`, `Worksheet`, hidden `_metadata`, and workbook "
-            "protection intact. Save the completed workbook."
+            f"or use `{generated_path}`. Alternatively use [the equivalent "
+            f"Entra CSV]({generated_csv_uri}) or `{generated_csv_path}`.\n"
+            "3. In either file, enter the exact Application (client) ID and "
+            "one selected User Claim name. Do not enter `aud`, a personal "
+            "claim value, Object ID, token, secret, or user identifier.\n"
+            "4. For XLSX, keep the protected `Entra Handoff` and hidden "
+            "`_metadata` sheets intact. Save and return exactly one completed "
+            "XLSX or CSV file."
         )
         maker_question = (
             "Please enter the returned Entra admin handoff workbook URL."
@@ -3848,11 +4902,12 @@ def identity_mapping_handoff(
             f"(https://{expected_identity['instanceName']}.service-now.com) "
             "and elevate to `security_admin` when authorized.\n"
             f"2. Open [the protected ServiceNow workbook]({generated_uri}) "
-            f"or use `{generated_path}`, and share it with the "
-            "ServiceNow administrator.\n"
-            "3. Follow `Steps`. On `Worksheet`, match one locked Entra claim "
-            "to the correct internal `sys_user` column and fill exactly one "
-            "yellow User Field cell.\n"
+            f"or use `{generated_path}`. Alternatively use [the equivalent "
+            f"ServiceNow CSV]({generated_csv_uri}) or "
+            f"`{generated_csv_path}`.\n"
+            "3. Follow the generated instructions. In XLSX, fill the one "
+            "yellow User Field cell on `Worksheet`; in CSV, fill the "
+            "`ServiceNow User Field` on the `Steps` record.\n"
             "4. Configure and verify the OIDC User Claim/User Field mapping and "
             "one matching Active user, without returning employee values.\n"
             "5. Preserve the locked claim rows, `Steps`, `Worksheet`, hidden "
@@ -3870,6 +4925,9 @@ def identity_mapping_handoff(
         "decision": "no-action" if handoff_mode == "complete" else "question-required",
         "workbookPath": str(generated_path),
         "workbookUri": generated_uri,
+        "csvPath": str(generated_csv_path),
+        "csvUri": generated_csv_uri,
+        "csvFileStatus": csv_file_status,
         "entraWorkbookUri": generated_uri if stage == "entra" else None,
         "serviceNowWorkbookUri": (
             generated_uri if stage == "servicenow" else None
@@ -3918,7 +4976,7 @@ def identity_mapping_handoff(
         "secretsAccepted": False,
         "employeeValuesAccepted": False,
         "editableFields": (
-            ["token_claim_name"]
+            ["application_client_id", "user_claim"]
             if stage == "entra"
             else ["servicenow_user_field"]
         ),
@@ -13302,8 +14360,8 @@ def build_parser() -> argparse.ArgumentParser:
     mapping_parser = subparsers.add_parser(
         "record-identity-mapping",
         help=(
-            "Import a completed protected identity workbook after explicit "
-            "Maker confirmation."
+            "Import a completed protected identity XLSX or equivalent CSV "
+            "after explicit Maker confirmation."
         ),
     )
     mapping_parser.add_argument(
@@ -13311,7 +14369,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("entra", "servicenow"),
         required=True,
     )
-    mapping_parser.add_argument("--workbook-file", type=Path, required=True)
+    mapping_parser.add_argument(
+        "--workbook-file",
+        type=Path,
+        required=True,
+        help="Path to the completed .xlsx or .csv handoff file.",
+    )
     mapping_parser.add_argument("--client-id")
     mapping_parser.add_argument("--yes", action="store_true")
     phase_parser = subparsers.add_parser(

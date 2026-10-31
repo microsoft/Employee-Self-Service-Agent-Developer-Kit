@@ -28,17 +28,15 @@ artifacts, admin roles, auth requirements, or acceptance criteria, stop and
 report the old PR behavior, current evidence, proposed deviation, and impact
 for a user decision. The explicit DA-GA scope exclusions above remain approved.
 For Entra access tokens, do not assume UPN or email. The Entra administrator
-returns one or more confirmed employee-identity token claim candidates through
-the protected XLSX workbook. The ServiceNow administrator then chooses exactly
-one candidate and fills its matching `sys_user` field in a second protected
-XLSX workbook. Both files open on a ServiceNow-specific `Steps` sheet, use a
-two-column `Worksheet`, and retain hidden locked `_metadata` for import
-integrity. The current administrator's editable cells are yellow and all
-locked cells are gray. The ServiceNow workbook is generated from the confirmed
-Entra return and preserves the exact claim row order; claims are not manually
-recopied or guessed.
-`aud` is a built-in audience claim. Validate it instead of adding it as an
-optional claim. The approved
+returns exactly one selected employee-identity claim name plus the Application
+(client) ID through the protected one-row XLSX or equivalent CSV. `aud` may be
+configured for audience validation but is never accepted as that selected
+user-matching claim. The ServiceNow XLSX/CSV is generated from the same bound
+values and leaves only the actual matching `sys_user` field for the
+ServiceNow administrator to confirm. XLSX uses protected visible inputs plus
+hidden locked metadata; CSV carries the same values and binding columns.
+Neither format guesses, defaults, or manually recopies the claim.
+The approved
 manual runbook also covers Broadly scoped ServiceNow scope
 restriction, non-email custom user identifiers, and safe coexistence with a
 separate Graph Connector app-only configuration.
