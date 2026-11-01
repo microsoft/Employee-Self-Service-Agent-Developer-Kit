@@ -1,5 +1,5 @@
 {
-  "contractRevision": 10,
+  "contractRevision": 11,
   "provider": "servicenow-da-hrsd",
   "displayName": "ServiceNow HRSD",
   "profile": "hrsd",

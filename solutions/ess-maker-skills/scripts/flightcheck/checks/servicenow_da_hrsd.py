@@ -16,7 +16,6 @@ from connect_servicenow_da import (
     CONNECTOR_NAME,
     HR_SCHEMA_NAME,
     PROVIDER_KEY,
-    SERVICENOW_CONNECTOR_APP_ID,
     _connection_binding_hash,
     _draft_semantic_hash,
     _identity_candidate_set_hash,
@@ -669,14 +668,12 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         return _target_rows(
             target,
             _entra_results(
-                getattr(runner, "graph", None),
                 admin_setup,
                 state,
             ),
         )
     if target in {_ENTRA_PREFIX, f"{_ENTRA_PREFIX}-*"}:
         return _entra_results(
-            getattr(runner, "graph", None),
             admin_setup,
             state,
         )
@@ -833,7 +830,6 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         _preflight_result(admin_setup),
         _plugin_result(admin_setup),
         *_entra_results(
-            getattr(runner, "graph", None),
             admin_setup,
             state,
         ),
@@ -1012,29 +1008,6 @@ def _entra_client_id(admin_setup: dict[str, Any]) -> str:
     return str(value or "")
 
 
-def _entra_manual_or_missing(
-    admin_setup: dict[str, Any],
-    checkpoint_id: str,
-    description: str,
-    reason: str,
-) -> CheckResult:
-    attested = _phase_attested(admin_setup, "entra-registration")
-    return _result(
-        checkpoint_id,
-        Status.MANUAL.value if attested else Status.NOT_CONFIGURED.value,
-        description,
-        (
-            f"{reason} Structured admin evidence is present."
-            if attested
-            else f"{reason} Structured admin evidence is also missing."
-        ),
-        (
-            "Have the Entra admin complete or confirm the full registration, "
-            "then rerun with Microsoft Graph read access when available."
-        ),
-    )
-
-
 def _entra_error_results(message: str) -> list[CheckResult]:
     rows = (
         ("APP", "Entra application registration exists"),
@@ -1048,7 +1021,10 @@ def _entra_error_results(message: str) -> list[CheckResult]:
             Status.ERROR.value,
             description,
             message,
-            "Restore read-only Microsoft Graph access and retry.",
+            (
+                "Correct the target-bound administrator handoff and import it "
+                "again. Do not add Microsoft Graph permissions to FlightCheck."
+            ),
         )
         for suffix, description in rows
     ]
@@ -1178,60 +1154,114 @@ def _identity_mapping_contract(
     return mapping, None
 
 
-def _entra_claim_result(
+def _historical_entra_graph_pass(
+    state: dict[str, Any],
+) -> bool:
+    phase = state.get("phases", {}).get("entra-registration")
+    results = (
+        phase.get("checkpointResults") if isinstance(phase, dict) else None
+    )
+    if not isinstance(results, dict):
+        return False
+    return all(
+        any(
+            isinstance(checkpoint_id, str)
+            and checkpoint_id.endswith(f"-{suffix}-001")
+            and status == Status.PASSED.value
+            for checkpoint_id, status in results.items()
+        )
+        for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH")
+    )
+
+
+def _entra_confirmation(
     admin_setup: dict[str, Any],
     state: dict[str, Any],
-    *,
-    claim_names: set[str] | None,
-    graph_note: str = "",
-) -> CheckResult:
+) -> tuple[dict[str, Any] | None, str | None]:
     receipt, error = _identity_claim_candidates_contract(
         admin_setup,
         state,
     )
-    description = "Entra employee identity claim candidates"
     if error or receipt is None:
-        return _result(
-            "SN-DA-HRSD-ENTRA-CLAIMS-001",
-            Status.NOT_CONFIGURED.value,
-            description,
-            error or "The scoped claim candidate receipt is missing.",
-            (
-                "Have the Entra administrator confirm actual claim emission, "
-                "then record the emitted employee identity claim candidates."
-            ),
+        return None, error or (
+            "The target-bound Entra handoff receipt is missing."
         )
-    candidates = list(receipt["candidates"])
-    observations = []
-    for candidate in candidates:
-        if claim_names is None:
-            observation = graph_note or (
-                "Microsoft Graph optionalClaims verification is unavailable."
+    handoff = _phase_handoff(admin_setup, "entra-registration")
+    evidence = handoff.get("evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    if not _phase_attested(admin_setup, "entra-registration"):
+        return None, (
+            "The complete Entra administrator confirmation is missing."
+        )
+    binding = evidence.get("binding")
+    receipt_binding = receipt.get("binding")
+    if not isinstance(binding, dict) or binding != receipt_binding:
+        return None, (
+            "The Entra administrator confirmation does not match the "
+            "target-bound handoff receipt."
+        )
+    try:
+        evidence_client_id = normalize_client_id(
+            str(evidence.get("clientId") or "")
+        )
+    except Exception:
+        return None, (
+            "The Entra administrator confirmation has an invalid client ID."
+        )
+    if (
+        evidence_client_id != receipt.get("applicationClientId")
+        or evidence.get("tokenClaimCandidates") != receipt.get("candidates")
+        or evidence.get("candidateSetSha256")
+        != receipt.get("candidateSetSha256")
+        or evidence.get("mappingWorkbookSha256")
+        != receipt.get("importedWorkbookSha256")
+    ):
+        return None, (
+            "The Entra administrator confirmation does not match the "
+            "locally validated handoff values and provenance."
+        )
+    source = evidence.get("currentSource")
+    if source == "administrator-confirmed":
+        required = (
+            "entraAdministratorConfirmed",
+            "applicationRegistrationConfirmed",
+            "tokenClaimEmissionConfirmed",
+            "userImpersonationScopeConfirmed",
+            "connectorPreauthorizationConfirmed",
+        )
+        missing = [
+            field for field in required if evidence.get(field) is not True
+        ]
+        selected_claim = str(evidence.get("selectedClaimName") or "")
+        candidates = list(receipt.get("candidates") or [])
+        if missing:
+            return None, (
+                "The Entra administrator confirmation is missing: "
+                + ", ".join(missing)
+                + "."
             )
-        elif candidate.casefold() in claim_names:
-            observation = "listed in Microsoft Graph optionalClaims"
-        else:
-            observation = (
-                "not listed in optionalClaims; a custom claims-mapping policy "
-                "may emit it"
+        if len(candidates) != 1 or selected_claim != candidates[0]:
+            return None, (
+                "The Entra administrator confirmation must identify the one "
+                "selected emitted user claim from the current handoff."
             )
-        observations.append(f"{candidate}: {observation}")
-    return _result(
-        "SN-DA-HRSD-ENTRA-CLAIMS-001",
-        Status.MANUAL.value,
-        description,
-        (
-            "Confirmed employee identity claim candidates: "
-            + "; ".join(observations)
-            + ". The administrator confirmed actual claim emission. "
-            "optionalClaims is configuration evidence and does not prove "
-            "emitted token contents."
-        ),
+        return evidence, None
+    if (
+        source == "historical-graph-pass"
+        and evidence.get("historicalGraphPassCompatible") is True
+        and isinstance(evidence.get("historicalGraphPassMigratedAt"), str)
+        and evidence["historicalGraphPassMigratedAt"]
+    ) or _historical_entra_graph_pass(state):
+        historical = dict(evidence)
+        historical["currentSource"] = "historical-graph-pass"
+        return historical, None
+    return None, (
+        "The current Entra source is neither a complete administrator "
+        "confirmation nor compatible historical Graph-pass evidence."
     )
 
 
 def _entra_results(
-    graph,
     admin_setup: dict[str, Any],
     state: dict[str, Any],
 ) -> list[CheckResult]:
@@ -1266,194 +1296,48 @@ def _entra_results(
             for checkpoint_id, description in rows
         ]
     try:
-        normalized_client_id = normalize_client_id(client_id)
+        normalize_client_id(client_id)
     except Exception as exc:
         return _entra_error_results(str(exc))
-    if graph is None:
-        return [
-            (
-                _entra_claim_result(
-                    admin_setup,
-                    state,
-                    claim_names=None,
-                    graph_note="Microsoft Graph verification is unavailable.",
-                )
-                if checkpoint_id == "SN-DA-HRSD-ENTRA-CLAIMS-001"
-                else _entra_manual_or_missing(
-                    admin_setup,
-                    checkpoint_id,
-                    description,
-                    "Microsoft Graph verification is unavailable.",
-                )
-            )
-            for checkpoint_id, description in rows
-        ]
-
-    try:
-        applications = graph.get_all(
-            "/applications",
-            params={
-                "$filter": f"appId eq '{normalized_client_id}'",
-                "$select": (
-                    "id,appId,displayName,signInAudience,identifierUris,"
-                    "optionalClaims,api"
-                ),
-            },
-            raise_on_permission_error=True,
-        )
-    except PermissionError:
-        return [
-            (
-                _entra_claim_result(
-                    admin_setup,
-                    state,
-                    claim_names=None,
-                    graph_note=(
-                        "Microsoft Graph denied read-only application access."
-                    ),
-                )
-                if checkpoint_id == "SN-DA-HRSD-ENTRA-CLAIMS-001"
-                else _entra_manual_or_missing(
-                    admin_setup,
-                    checkpoint_id,
-                    description,
-                    "Microsoft Graph denied read-only application access.",
-                )
-            )
-            for checkpoint_id, description in rows
-        ]
-    except Exception as exc:
-        return _entra_error_results(
-            f"Unable to query Microsoft Graph: {type(exc).__name__}: {exc}"
-        )
-
-    if not applications:
+    confirmation, error = _entra_confirmation(admin_setup, state)
+    if error or confirmation is None:
         return [
             _result(
                 checkpoint_id,
-                Status.FAILED.value,
+                Status.NOT_CONFIGURED.value,
                 description,
+                error or "The Entra administrator confirmation is missing.",
                 (
-                    "Microsoft Graph confirms that no application with the "
-                    f"recorded client ID {normalized_client_id} exists."
+                    "Have the Entra administrator complete APP, CLAIMS, SCOPE, "
+                    "and PREAUTH for this exact target, return the structured "
+                    "handoff, and record the full administrator confirmation."
                 ),
-                "Correct the client ID or have the Entra admin create the app.",
             )
             for checkpoint_id, description in rows
         ]
-    application = applications[0]
-    api = application.get("api")
-    api = api if isinstance(api, dict) else {}
-    scopes = api.get("oauth2PermissionScopes")
-    scopes = scopes if isinstance(scopes, list) else []
-    scope = next(
-        (
-            value
-            for value in scopes
-            if isinstance(value, dict)
-            and value.get("value") == "user_impersonation"
-            and value.get("isEnabled", True)
-        ),
-        None,
-    )
-    scope_id = str((scope or {}).get("id") or "")
-    optional_claims = application.get("optionalClaims")
-    optional_claims = (
-        optional_claims if isinstance(optional_claims, dict) else {}
-    )
-    access_token_claims = optional_claims.get("accessToken")
-    access_token_claims = (
-        access_token_claims if isinstance(access_token_claims, list) else []
-    )
-    claim_names = {
-        str(value.get("name") or "").casefold()
-        for value in access_token_claims
-        if isinstance(value, dict)
-    }
-    identifiers = {
-        str(value).casefold()
-        for value in application.get("identifierUris") or []
-    }
-    scope_ok = (
-        f"api://{normalized_client_id}".casefold() in identifiers
-        and bool(scope_id)
-    )
-    preauthorized = any(
-        isinstance(value, dict)
-        and str(value.get("appId") or "").casefold()
-        == SERVICENOW_CONNECTOR_APP_ID.casefold()
-        and scope_id
-        in {
-            str(permission_id)
-            for permission_id in value.get("delegatedPermissionIds") or []
-        }
-        for value in api.get("preAuthorizedApplications") or []
-    )
-    def programmatic(
-        checkpoint_id: str,
-        description: str,
-        passed: bool,
-        failure: str,
-    ) -> CheckResult:
-        if not passed:
-            return _result(
-                checkpoint_id,
-                Status.FAILED.value,
-                description,
-                failure,
-                "Have the Entra admin correct this exact application setting.",
-            )
-        if not _phase_attested(admin_setup, "entra-registration"):
-            return _result(
-                checkpoint_id,
-                Status.NOT_CONFIGURED.value,
-                description,
-                "Microsoft Graph verifies the setting, but explicit Maker reuse approval is not recorded.",
-                "Confirm this exact existing setting with the admin and record it as reused.",
-            )
-        return _result(
-            checkpoint_id,
-            Status.PASSED.value,
-            description,
-            "Microsoft Graph read-only verification passed.",
+    source = confirmation["currentSource"]
+    if source == "historical-graph-pass":
+        result = (
+            "Compatible historical Microsoft Graph pass evidence is retained "
+            "for this target. No current Graph authentication or read was "
+            "performed; currentSource=historical-graph-pass."
         )
-
-    results = [
-        programmatic(
-            rows[0][0],
-            rows[0][1],
-            (
-                str(application.get("appId") or "").casefold()
-                == normalized_client_id.casefold()
-                and application.get("signInAudience") == "AzureADMyOrg"
-            ),
-            "The application is missing or is not single-tenant.",
-        ),
-        _entra_claim_result(
-            admin_setup,
-            state,
-            claim_names=claim_names,
-        ),
-        programmatic(
-            rows[2][0],
-            rows[2][1],
-            scope_ok,
-            (
-                "The application must expose api://<client-id> and an enabled "
-                "user_impersonation scope."
-            ),
-        ),
-        programmatic(
-            rows[3][0],
-            rows[3][1],
-            preauthorized,
-            (
-                "The ServiceNow connector application is not pre-authorized "
-                "for the user_impersonation scope."
-            ),
-        ),
+    else:
+        result = (
+            "The Entra administrator confirmed this required setting for the "
+            "exact target, and the local handoff binding and provenance were "
+            "validated. Cloud configuration was not queried; "
+            "currentSource=administrator-confirmed."
+        )
+    return [
+        _result(
+            checkpoint_id,
+            Status.MANUAL.value,
+            description,
+            result,
+        )
+        for checkpoint_id, description in rows
     ]
-    return results
 
 
 def _oidc_result(

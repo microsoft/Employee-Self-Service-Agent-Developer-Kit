@@ -8,7 +8,10 @@ pre-authorization, permissions, and consent.
 This is always an admin-owned guided workflow. Never run `az ad app create`,
 Graph `POST`/`PATCH`, admin-consent mutation, or any equivalent write
 operation. Never request or persist a client secret, certificate, password,
-token, or PFX.
+token, or PFX. Connect must not authenticate to Microsoft Graph, request Graph
+read scopes, initialize a Graph client, or query the application. The Entra
+administrator owns the cloud checks; Connect validates only the returned local
+handoff, target binding, and confirmation receipt.
 
 Read `adminSetup.phaseHandoffs.entra-registration` first. If it is already
 `completed` or `reused` and stored checkpoint results are empty or all in the
@@ -16,8 +19,9 @@ phase's `completionStatuses`, rerun
 `identity-mapping-handoff --stage entra` to validate the current target-bound
 evidence and reconcile any older derived reused handoff. Require
 `decision: no-action`; do not ask again. Then return
-`ACTION_RESULT = "recorded"` and let all four Entra checkpoints reverify the
-current app. A prior `Failed`/`Error` or any other result outside
+`ACTION_RESULT = "recorded"` and let all four Entra checkpoints validate the
+current administrator confirmation locally. A prior `Failed`/`Error` or any
+other result outside
 `completionStatuses` requires one new complete Entra handoff so the Maker can
 return corrected bundled evidence.
 
@@ -147,3 +151,19 @@ Successfully imported XLSX and CSV produce the same scoped
 `identityClaimCandidates` receipt with one confirmed claim. Existing issued
 legacy XLSX handoffs remain importable through the legacy parser; generation
 does not rewrite issued runtime files or lifecycle state.
+
+The file alone does not confirm APP, SCOPE, or PREAUTH. Before recording the
+phase, the Entra administrator must explicitly confirm that all four checks
+were completed for the exact target: the returned app/client ID is correct,
+the returned user claim is actually emitted, `api://<client-id>` exposes the
+enabled `user_impersonation` scope, and the Microsoft ServiceNow connector is
+preauthorized for that scope. Then record the bundled confirmation:
+
+```text
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-admin-phase --phase entra-registration --status completed
+```
+
+This command fails closed unless the locally imported handoff has one selected
+claim and matches the active tenant, environment, instance, provider, profile,
+and agent. It records no token, claim value, personal identifier, or live
+Graph result. Return `ACTION_RESULT = "recorded"` only after it succeeds.

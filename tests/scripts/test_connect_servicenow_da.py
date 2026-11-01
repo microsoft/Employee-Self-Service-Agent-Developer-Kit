@@ -764,12 +764,15 @@ def _write_shared_source_state(
     candidates = {
         "kind": "administrator-confirmed-claim-candidates",
         "status": "entra-confirmed",
+        "currentSource": "local-handoff",
         "applicationClientId": APP_CLIENT_ID,
         "candidates": ["employee_id"],
         "entraAdministratorConfirmed": True,
         "tokenClaimEmissionConfirmed": True,
         "binding": binding,
         "importedWorkbookSha256": "entra-workbook-hash",
+        "importedFileFormat": "xlsx",
+        "sheetProtected": True,
         "recordedAt": "2026-10-01T00:01:00Z",
     }
     candidates["candidateSetSha256"] = snow._identity_candidate_set_hash(
@@ -807,10 +810,18 @@ def _write_shared_source_state(
             "status": "completed",
             "evidence": {
                 "kind": "structured-admin-attestation",
+                "currentSource": "administrator-confirmed",
+                "entraAdministratorConfirmed": True,
+                "applicationRegistrationConfirmed": True,
                 "clientId": APP_CLIENT_ID,
                 "tokenClaimCandidates": candidates["candidates"],
+                "selectedClaimName": "employee_id",
                 "tokenClaimEmissionConfirmed": True,
+                "userImpersonationScopeConfirmed": True,
+                "connectorPreauthorizationConfirmed": True,
                 "candidateSetSha256": candidates["candidateSetSha256"],
+                "mappingWorkbookSha256": "entra-workbook-hash",
+                "binding": binding,
                 "recordedAt": "2026-10-01T00:00:00Z",
             },
         },
@@ -5972,19 +5983,30 @@ def test_shared_reuse_can_apply_oidc_only_against_current_target_entra(
         "evidence": {
             "kind": "structured-admin-attestation",
             "recordedAt": "2026-10-01T00:00:00Z",
+            "currentSource": "administrator-confirmed",
+            "entraAdministratorConfirmed": True,
+            "applicationRegistrationConfirmed": True,
             "clientId": APP_CLIENT_ID,
             "tokenClaimCandidates": candidates,
+            "selectedClaimName": "employee_id",
             "tokenClaimEmissionConfirmed": True,
+            "userImpersonationScopeConfirmed": True,
+            "connectorPreauthorizationConfirmed": True,
+            "mappingWorkbookSha256": "entra-workbook-hash",
         },
     }
     state["evidence"]["identityClaimCandidates"] = {
         "kind": "administrator-confirmed-claim-candidates",
         "status": "entra-confirmed",
+        "currentSource": "local-handoff",
         "applicationClientId": APP_CLIENT_ID,
         "candidates": candidates,
         "entraAdministratorConfirmed": True,
         "tokenClaimEmissionConfirmed": True,
         "binding": binding,
+        "importedWorkbookSha256": "entra-workbook-hash",
+        "importedFileFormat": "xlsx",
+        "sheetProtected": True,
         "candidateSetSha256": snow._identity_candidate_set_hash(
             application_client_id=APP_CLIENT_ID,
             candidates=candidates,
@@ -9987,8 +10009,122 @@ def test_unknown_client_id_workbook_reimports_after_admin_phase_without_argument
 
     assert first["applicationClientId"] == APP_CLIENT_ID
     assert phase["evidence"]["clientId"] == APP_CLIENT_ID
+    assert phase["verifiedBy"] == (
+        "administrator-confirmed-local-validation"
+    )
+    assert phase["evidence"]["currentSource"] == "administrator-confirmed"
+    assert phase["evidence"]["applicationRegistrationConfirmed"] is True
+    assert phase["evidence"]["selectedClaimName"] == "employee_id"
+    assert phase["evidence"]["userImpersonationScopeConfirmed"] is True
+    assert phase["evidence"]["connectorPreauthorizationConfirmed"] is True
     assert second["applicationClientId"] == APP_CLIENT_ID
     assert second["candidateSetSha256"] == first["candidateSetSha256"]
+
+
+@pytest.mark.parametrize(
+    ("profile", "agent_id", "agent_slug", "old_revision", "prefix"),
+    (
+        (
+            "hrsd",
+            AGENT_ID,
+            "employee-self-service-hr",
+            10,
+            "SN-DA-HRSD-ENTRA",
+        ),
+        (
+            "itsm",
+            OTHER_AGENT_ID,
+            "employee-self-service-it",
+            5,
+            "SN-DA-ITSM-ENTRA",
+        ),
+    ),
+)
+def test_historical_graph_pass_reapproval_advances_without_new_admin_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    agent_id: str,
+    agent_slug: str,
+    old_revision: int,
+    prefix: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    state_path = _write_shared_source_state(
+        tmp_path,
+        profile=profile,
+        agent_id=agent_id,
+        agent_slug=agent_slug,
+        include_oidc=False,
+        include_credential=False,
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["attested"] = True
+    state["attestedAt"] = "2026-10-01T00:00:00Z"
+    state["acceptedContractRevision"] = old_revision
+    evidence = state["adminSetup"]["phaseHandoffs"]["entra-registration"][
+        "evidence"
+    ]
+    for field in (
+        "currentSource",
+        "entraAdministratorConfirmed",
+        "applicationRegistrationConfirmed",
+        "selectedClaimName",
+        "userImpersonationScopeConfirmed",
+        "connectorPreauthorizationConfirmed",
+    ):
+        evidence.pop(field, None)
+    state["phases"]["entra-registration"]["checkpointResults"] = {
+        f"{prefix}-{suffix}-001": "Passed"
+        for suffix in snow.ENTRA_CHECKPOINT_SUFFIXES
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    context = _profile_context(
+        profile,
+        agent_id=agent_id,
+        agent_slug=agent_slug,
+    )
+
+    with snow.product_profile_context(profile):
+        loaded = snow._load_lifecycle_state(context)
+        snow._write_lifecycle_state(context, loaded)
+        assert snow._identity_admin_handoff_is_ready(
+            context,
+            loaded,
+            phase="entra-registration",
+        )
+
+    migrated = json.loads(state_path.read_text(encoding="utf-8"))
+    migrated_evidence = migrated["adminSetup"]["phaseHandoffs"][
+        "entra-registration"
+    ]["evidence"]
+    assert migrated_evidence["currentSource"] == "historical-graph-pass"
+    assert migrated_evidence["historicalGraphPassCompatible"] is True
+    assert migrated_evidence["historicalGraphPassMigratedAt"]
+    assert migrated["adminSetup"]["phaseHandoffs"]["entra-registration"][
+        "verifiedBy"
+    ] == "historical-graph-pass-migration"
+
+    migrated["acceptedContractRevision"] = old_revision + 1
+    migrated["phases"]["entra-registration"]["checkpointResults"] = {
+        f"{prefix}-{suffix}-001": "Manual"
+        for suffix in snow.ENTRA_CHECKPOINT_SUFFIXES
+    }
+    state_path.write_text(json.dumps(migrated), encoding="utf-8")
+    with snow.product_profile_context(profile):
+        contract = snow._load_json(snow.SOLUTION_ROOT / snow.CONTRACT_PATH)
+        phase_contract = next(
+            phase
+            for phase in contract["phases"]
+            if phase["id"] == "entra-registration"
+        )
+        assert snow._manual_evidence_current(migrated, phase_contract)
+        assert snow._phase_contract_complete(migrated, phase_contract)
+        assert snow._identity_admin_handoff_is_ready(
+            context,
+            migrated,
+            phase="entra-registration",
+        )
 
 
 def test_known_client_id_workbook_mismatch_is_zero_write(

@@ -242,9 +242,7 @@ class TestTransitiveRequirements:
             "SN-DA-HRSD-ENTRA-APP-001"
         )
         plan = registry.transitive_requirements("SN-DA-HRSD-ENTRA-*")
-        assert plan.clients == frozenset(
-            {registry.AGENTBUILDER, registry.GRAPH}
-        )
+        assert plan.clients == frozenset({registry.AGENTBUILDER})
         assert plan.ordered_fns == [
             ("ServiceNow DA HRSD", run_servicenow_da_hrsd_checks)
         ]
@@ -275,9 +273,7 @@ class TestTransitiveRequirements:
         entra = registry.transitive_requirements(
             "SN-DA-HRSD-ENTRA-PREAUTH-001"
         )
-        assert entra.clients == frozenset(
-            {registry.AGENTBUILDER, registry.GRAPH}
-        )
+        assert entra.clients == frozenset({registry.AGENTBUILDER})
         assert entra.requires_dataverse_endpoint is False
 
         test = registry.transitive_requirements("SN-DA-HRSD-TEST-001")
@@ -311,6 +307,15 @@ class TestTransitiveRequirements:
             "SN-DA-HRSD-ADMIN-PREFLIGHT-001"
         )
         assert preflight.clients == frozenset({registry.AGENTBUILDER})
+
+    def test_servicenow_graph_removal_does_not_change_workday_graph(self):
+        for prefix in ("SN-DA-HRSD-ENTRA", "SN-DA-ITSM-ENTRA"):
+            plan = registry.transitive_requirements(f"{prefix}-*")
+            assert plan.clients == frozenset({registry.AGENTBUILDER})
+            assert registry.GRAPH not in plan.clients
+
+        workday = registry.transitive_requirements("WD-CONN-102")
+        assert registry.GRAPH in workday.clients
 
     def test_prerequisite_client_pruning_is_servicenow_opt_in(self):
         servicenow = registry.resolve("SN-DA-HRSD-TEST-001")

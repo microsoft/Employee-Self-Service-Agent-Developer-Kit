@@ -292,7 +292,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert contract["provider"] == "servicenow-da-hrsd"
     assert contract["checkpointResultMode"] == "compact-stdout-v1"
     assert contract["attestedRoleScope"] == "lifecycle"
-    assert contract["contractRevision"] == 10
+    assert contract["contractRevision"] == 11
     assert contract["planRoles"] == [
         "ESS Maker / Agent Developer",
         "ServiceNow Admin / security_admin",
@@ -344,6 +344,9 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert by_id["entra-registration"]["checkpoints"] == [
         "SN-DA-HRSD-ENTRA-*"
     ]
+    assert by_id["entra-registration"][
+        "manualAcknowledgementEvidence"
+    ]["requiredValues"] == {"tokenClaimEmissionConfirmed": True}
     for phase_id in (
         "plugin-prerequisites",
         "entra-registration",
@@ -405,13 +408,21 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
 
     assert contract["provider"] == "servicenow-da-itsm"
     assert contract["profile"] == "itsm"
-    assert contract["contractRevision"] == 5
+    assert contract["contractRevision"] == 6
     assert "stateMigrationCommand" not in contract
     assert contract["stateInitializationCommand"] == (
         "python scripts/connect_servicenow_da.py "
         "--provider servicenow-da-itsm --agent-slug {agentSlug} "
         "initialize-state --contract-revision {contractRevision}"
     )
+    entra_ack = next(
+        phase["manualAcknowledgementEvidence"]
+        for phase in contract["phases"]
+        if phase["id"] == "entra-registration"
+    )
+    assert entra_ack["requiredValues"] == {
+        "tokenClaimEmissionConfirmed": True
+    }
     assert [phase["id"] for phase in contract["phases"]] == [
         "preflight",
         "entra-registration",
@@ -515,7 +526,14 @@ def test_matching_admin_evidence_skips_only_same_phase_manual_ack() -> None:
     )
     phases = {phase["id"]: phase for phase in contract["phases"]}
     state = {
+        "provider": "servicenow-da-hrsd",
+        "profile": "hrsd",
+        "agentSlug": "employee-self-service-hr",
+        "agentId": "agent-id",
+        "tenantId": "tenant-id",
+        "environmentId": "environment-id",
         "adminSetup": {
+            "preflight": {"instanceName": "dev123"},
             "phaseHandoffs": {
                 phase_id: {
                     "status": "completed",
@@ -540,9 +558,25 @@ def test_matching_admin_evidence_skips_only_same_phase_manual_ack() -> None:
             "claimMappingConfirmed": True,
         }
     )
-    state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"][
-        "tokenClaimEmissionConfirmed"
-    ] = True
+    state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"].update(
+        {
+            "currentSource": "administrator-confirmed",
+            "entraAdministratorConfirmed": True,
+            "applicationRegistrationConfirmed": True,
+            "tokenClaimEmissionConfirmed": True,
+            "userImpersonationScopeConfirmed": True,
+            "connectorPreauthorizationConfirmed": True,
+            "binding": {
+                "tenantId": "tenant-id",
+                "environmentId": "environment-id",
+                "instanceName": "dev123",
+                "provider": "servicenow-da-hrsd",
+                "profile": "hrsd",
+                "agentSlug": "employee-self-service-hr",
+                "agentId": "agent-id",
+            },
+        }
+    )
 
     for phase_id in (
         "plugin-prerequisites",

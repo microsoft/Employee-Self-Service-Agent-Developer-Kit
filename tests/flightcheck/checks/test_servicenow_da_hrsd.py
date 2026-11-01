@@ -692,6 +692,10 @@ def _write_state(
                     "agentSlug": AGENT_SLUG,
                     "agentId": AGENT_ID,
                 },
+                "importedWorkbookSha256": "a" * 64,
+                "importedFileFormat": "xlsx",
+                "sheetProtected": True,
+                "recordedAt": "2026-09-29T00:00:00Z",
             },
             "identityMapping": {
                 "kind": "administrator-confirmed-identity-mapping",
@@ -735,6 +739,17 @@ def _write_state(
     state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"][
         "candidateSetSha256"
     ] = candidate_hash
+    state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"].update(
+        {
+            "currentSource": "administrator-confirmed",
+            "entraAdministratorConfirmed": True,
+            "applicationRegistrationConfirmed": True,
+            "selectedClaimName": candidates[0],
+            "userImpersonationScopeConfirmed": True,
+            "connectorPreauthorizationConfirmed": True,
+            "mappingWorkbookSha256": "a" * 64,
+        }
+    )
     state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"]["evidence"][
         "mappingRelationshipSha256"
     ] = relationship_hash
@@ -837,12 +852,20 @@ def _record_new_mapping_workflow(
     )
     entra_path = Path(entra["workbookPath"])
     workbook = load_workbook(entra_path)
-    sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-    for offset, claim in enumerate(candidates):
-        sheet.cell(
-            snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW + offset,
-            1,
-        ).value = claim
+    if snow.IDENTITY_ENTRA_HANDOFF_SHEET in workbook.sheetnames:
+        if len(candidates) != 1:
+            workbook.close()
+            raise AssertionError(
+                "The current Entra handoff requires one selected claim."
+            )
+        workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["C2"] = candidates[0]
+    else:
+        sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
+        for offset, claim in enumerate(candidates):
+            sheet.cell(
+                snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW + offset,
+                1,
+            ).value = claim
     workbook.save(entra_path)
     workbook.close()
     snow.record_identity_mapping(
@@ -1127,14 +1150,18 @@ def test_test_checkpoint_full_and_fixed_runs_match(
     assert fixed.overall == full.overall
 
 
-def test_admin_prerequisites_pass_with_graph_and_structured_evidence(
+def test_admin_prerequisites_use_manual_confirmation_without_graph(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     components = _components()
     _write_state(tmp_path, components)
     runner = _runner(components)
-    runner.graph = _graph_client()
+    runner.graph = SimpleNamespace(
+        get_all=lambda *_args, **_kwargs: pytest.fail(
+            "ServiceNow Entra checks must not read Microsoft Graph."
+        )
+    )
     monkeypatch.chdir(tmp_path)
 
     results = run_servicenow_da_hrsd_checks(runner)
@@ -1149,7 +1176,7 @@ def test_admin_prerequisites_pass_with_graph_and_structured_evidence(
     ):
         assert (
             statuses[f"SN-DA-HRSD-ENTRA-{suffix}-001"]
-            == Status.PASSED.value
+            == Status.MANUAL.value
         )
     assert statuses["SN-DA-HRSD-ENTRA-CLAIMS-001"] == Status.MANUAL.value
     assert statuses["SN-DA-HRSD-OIDC-001"] == Status.MANUAL.value
@@ -1161,7 +1188,6 @@ def test_admin_prerequisites_pass_with_graph_and_structured_evidence(
         (("upn",), ("upn",)),
         (("email",), ("email",)),
         (("employee_id",), ()),
-        (("email", "upn", "employee_id"), ("email", "upn")),
     ],
 )
 def test_claim_checkpoint_uses_confirmed_candidate_set(
@@ -1178,8 +1204,10 @@ def test_claim_checkpoint_uses_confirmed_candidate_set(
         selected_claim=candidates[0],
     )
     runner = _runner(components)
-    runner.graph = _graph_client(
-        optional_claim_names=optional_claim_names,
+    runner.graph = SimpleNamespace(
+        get_all=lambda *_args, **_kwargs: pytest.fail(
+            "ServiceNow Entra checks must not read Microsoft Graph."
+        )
     )
     monkeypatch.chdir(tmp_path)
 
@@ -1189,8 +1217,7 @@ def test_claim_checkpoint_uses_confirmed_candidate_set(
     )
 
     assert result.status == Status.MANUAL.value
-    assert all(candidate in result.result for candidate in candidates)
-    assert "administrator confirmed actual claim emission" in result.result
+    assert "currentSource=administrator-confirmed" in result.result
     assert result.remediation == ""
 
 
@@ -1216,9 +1243,7 @@ def test_claim_checkpoint_rejects_missing_or_mismatched_confirmation(
     )
     assert missing.status == Status.NOT_CONFIGURED.value
     assert "claim candidates" in missing.result
-    assert "record the emitted employee identity claim candidates" in (
-        missing.remediation
-    )
+    assert "record the full administrator confirmation" in missing.remediation
 
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"][
@@ -1237,6 +1262,127 @@ def test_claim_checkpoint_rejects_missing_or_mismatched_confirmation(
     assert "does not match the Entra handoff" in (
         mismatched.result
     )
+
+
+def test_client_and_claim_without_full_admin_confirmation_block_entra_family(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    evidence = state["adminSetup"]["phaseHandoffs"]["entra-registration"][
+        "evidence"
+    ]
+    for field in (
+        "currentSource",
+        "entraAdministratorConfirmed",
+        "applicationRegistrationConfirmed",
+        "selectedClaimName",
+        "userImpersonationScopeConfirmed",
+        "connectorPreauthorizationConfirmed",
+    ):
+        evidence.pop(field, None)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(_runner(components))
+
+    for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH"):
+        row = _checkpoint(
+            results,
+            f"SN-DA-HRSD-ENTRA-{suffix}-001",
+        )
+        assert row.status == Status.NOT_CONFIGURED.value
+        assert "complete administrator confirmation" in row.remediation
+
+
+@pytest.mark.parametrize(
+    "binding_field",
+    (
+        "tenantId",
+        "environmentId",
+        "instanceName",
+        "provider",
+        "profile",
+        "agentSlug",
+        "agentId",
+    ),
+)
+def test_entra_confirmation_rejects_wrong_target_binding(
+    monkeypatch,
+    tmp_path: Path,
+    binding_field: str,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["evidence"]["identityClaimCandidates"]["binding"][
+        binding_field
+    ] = "wrong-target"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(_runner(components))
+
+    assert all(
+        _checkpoint(
+            results,
+            f"SN-DA-HRSD-ENTRA-{suffix}-001",
+        ).status
+        == Status.NOT_CONFIGURED.value
+        for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH")
+    )
+
+
+def test_historical_graph_pass_remains_compatible_without_fresh_graph_claim(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    evidence = state["adminSetup"]["phaseHandoffs"]["entra-registration"][
+        "evidence"
+    ]
+    for field in (
+        "currentSource",
+        "entraAdministratorConfirmed",
+        "applicationRegistrationConfirmed",
+        "selectedClaimName",
+        "userImpersonationScopeConfirmed",
+        "connectorPreauthorizationConfirmed",
+    ):
+        evidence.pop(field, None)
+    state.setdefault("phases", {})["entra-registration"] = {
+        "status": "done",
+        "checkpointResults": {
+            f"SN-DA-HRSD-ENTRA-{suffix}-001": Status.PASSED.value
+            for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH")
+        },
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    runner = _runner(components)
+    runner.graph = SimpleNamespace(
+        get_all=lambda *_args, **_kwargs: pytest.fail(
+            "Historical compatibility must not re-read Microsoft Graph."
+        )
+    )
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(runner)
+
+    for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH"):
+        row = _checkpoint(
+            results,
+            f"SN-DA-HRSD-ENTRA-{suffix}-001",
+        )
+        assert row.status == Status.MANUAL.value
+        assert "currentSource=historical-graph-pass" in row.result
+        assert "No current Graph authentication or read" in row.result
 
 
 def test_oidc_checkpoint_requires_capability_owned_by_oidc_phase(
@@ -1342,7 +1488,7 @@ def test_recorded_mapping_workflow_reaches_real_hr_checkpoints(
     monkeypatch.chdir(tmp_path)
     _record_new_mapping_workflow(
         tmp_path,
-        candidates=("email", "upn", "employee_id"),
+        candidates=("employee_id",),
         selected_claim="employee_id",
         user_field="employee_number",
     )
@@ -1354,7 +1500,7 @@ def test_recorded_mapping_workflow_reaches_real_hr_checkpoints(
     oidc = _checkpoint(results, "SN-DA-HRSD-OIDC-001")
 
     assert claims.status == Status.MANUAL.value
-    assert "employee_id" in claims.result
+    assert "currentSource=administrator-confirmed" in claims.result
     assert oidc.status == Status.MANUAL.value
     assert "employee_id" in oidc.result
     assert "employee_number" in oidc.result
@@ -1888,7 +2034,7 @@ def test_entra_phase_evaluation_uses_one_logical_read_set(
     assert counters == {
         "agentbuilder": 1,
         "connectivity": 1,
-        "applications": 1,
+        "applications": 0,
         "app_service_principal": 0,
         "graph_service_principal": 0,
         "permission_grants": 0,
@@ -1901,8 +2047,8 @@ def test_entra_phase_evaluation_uses_one_logical_read_set(
         ("SN-DA-HRSD-PKG-001", 1, 0, 0),
         ("SN-DA-HRSD-ADMIN-PREFLIGHT-001", 1, 0, 0),
         ("SN-DA-HRSD-PLUGIN-001", 1, 0, 0),
-        ("SN-DA-HRSD-ENTRA-*", 4, 0, 1),
-        ("SN-DA-HRSD-ENTRA-CLAIMS-001", 1, 0, 1),
+        ("SN-DA-HRSD-ENTRA-*", 4, 0, 0),
+        ("SN-DA-HRSD-ENTRA-CLAIMS-001", 1, 0, 0),
         ("SN-DA-HRSD-OIDC-001", 1, 0, 0),
         ("SN-DA-HRSD-CREDENTIAL-001", 1, 1, 0),
         ("SN-DA-HRSD-TOPICS-001", 1, 0, 0),
@@ -2040,14 +2186,18 @@ def test_connected_connection_does_not_complete_other_admin_phases(
     assert statuses["SN-DA-HRSD-OIDC-001"] == Status.NOT_CONFIGURED.value
 
 
-def test_optional_claim_absence_does_not_override_confirmed_emission(
+def test_graph_observation_does_not_override_confirmed_emission(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     components = _components()
     _write_state(tmp_path, components)
     runner = _runner(components)
-    runner.graph = _graph_client(missing_claims=True)
+    runner.graph = SimpleNamespace(
+        get_all=lambda *_args, **_kwargs: pytest.fail(
+            "ServiceNow Entra checks must not read Microsoft Graph."
+        )
+    )
     monkeypatch.chdir(tmp_path)
 
     results = run_servicenow_da_hrsd_checks(runner)
@@ -2058,15 +2208,12 @@ def test_optional_claim_absence_does_not_override_confirmed_emission(
     )
 
     assert claim_result.status == Status.MANUAL.value
-    assert "upn: not listed in optionalClaims" in claim_result.result
-    assert "administrator confirmed actual claim emission" in (
-        claim_result.result
-    )
-    assert "does not prove emitted token contents" in claim_result.result
+    assert "currentSource=administrator-confirmed" in claim_result.result
+    assert "Cloud configuration was not queried" in claim_result.result
     assert claim_result.remediation == ""
 
 
-def test_graph_unavailable_uses_manual_fallback_only_with_evidence(
+def test_manual_confirmation_is_required_without_graph_fallback(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -2083,7 +2230,7 @@ def test_graph_unavailable_uses_manual_fallback_only_with_evidence(
         if result.checkpoint_id == "SN-DA-HRSD-ENTRA-APP-001"
     )
     assert app.status == Status.MANUAL.value
-    assert "Structured admin evidence is present" in app.result
+    assert "currentSource=administrator-confirmed" in app.result
 
     state_path = (
         tmp_path

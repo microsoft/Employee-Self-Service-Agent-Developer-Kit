@@ -674,6 +674,140 @@ class TestHermeticRun:
             result.checkpoint_id for result in saved["result"].results
         ) == entra_ids
 
+    @pytest.mark.parametrize(
+        ("target", "slug", "schema_name", "ring"),
+        (
+            (
+                "SN-DA-HRSD-ENTRA-*",
+                "employee-self-service-hr",
+                "gptagent_copilotforemployeeselfservicehr",
+                "test",
+            ),
+            (
+                "SN-DA-HRSD-ENTRA-*",
+                "employee-self-service-hr",
+                "gptagent_copilotforemployeeselfservicehr",
+                "prod",
+            ),
+            (
+                "SN-DA-ITSM-ENTRA-*",
+                "employee-self-service-it",
+                "gptagent_copilotforemployeeselfserviceit",
+                "test",
+            ),
+            (
+                "SN-DA-ITSM-ENTRA-*",
+                "employee-self-service-it",
+                "gptagent_copilotforemployeeselfserviceit",
+                "prod",
+            ),
+        ),
+    )
+    def test_servicenow_entra_cli_never_initializes_graph(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+        target: str,
+        slug: str,
+        schema_name: str,
+        ring: str,
+    ) -> None:
+        environment_id = "6c606f06-ea15-e785-b31c-9158232e9502"
+        tenant_id = "935884d7-bdee-469b-a461-fcc530a3ac83"
+        agent_id = "e912a2fc-5ff3-4bc6-83a9-fdce46db2883"
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps(
+                {
+                    "tenantId": tenant_id,
+                    "environmentId": environment_id,
+                    "ring": ring,
+                    "powerPlatformApiEndpoint": (
+                        "https://6c606f06ea15e785b31c9158232e95.02."
+                        "environment.api.powerplatform.com"
+                    ),
+                    "agents": [
+                        {
+                            "slug": slug,
+                            "botId": agent_id,
+                            "schemaName": schema_name,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        actual_plan = registry.transitive_requirements(target)
+        assert actual_plan.clients == frozenset({registry.AGENTBUILDER})
+
+        class _Spec:
+            category_label = "ServiceNow Entra"
+            is_family = True
+
+        class _Plan:
+            clients = actual_plan.clients
+            requires_config = True
+            requires_dataverse_endpoint = False
+
+            def __init__(self) -> None:
+                prefix = target.removesuffix("*")
+                self.ordered_fns = [
+                    (
+                        "ServiceNow Entra",
+                        lambda _runner: [
+                            _row(
+                                f"{prefix}{suffix}-001",
+                                Status.MANUAL.value,
+                            )
+                            for suffix in (
+                                "APP",
+                                "CLAIMS",
+                                "SCOPE",
+                                "PREAUTH",
+                            )
+                        ],
+                    )
+                ]
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(
+            cli,
+            "GraphClient",
+            lambda *_args, **_kwargs: pytest.fail(
+                "ServiceNow Entra must not initialize Microsoft Graph."
+            ),
+        )
+        monkeypatch.setattr(
+            cli,
+            "authenticate_flightcheck",
+            lambda *_args, **_kwargs: ("token", tenant_id, None),
+        )
+        monkeypatch.setattr(
+            cli,
+            "AgentBuilderClient",
+            lambda *_args, **_kwargs: object(),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args(
+                    target,
+                    tmp_path,
+                    agent_slug=slug,
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 0
+
     def test_assigns_explicit_agent_slug_and_connect_config(
         self,
         tmp_path: Path,

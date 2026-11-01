@@ -2357,12 +2357,24 @@ def _entra_checkpoint_outcomes(
     }
 
 
+def _has_historical_entra_graph_pass(
+    state: dict[str, Any],
+) -> bool:
+    outcomes = _entra_checkpoint_outcomes(state)
+    return all(
+        outcomes.get(suffix) == "Passed"
+        for suffix in ENTRA_CHECKPOINT_SUFFIXES
+    )
+
+
 def _entra_handoff_mode(
     outcomes: dict[str, str],
 ) -> str:
     required = set(ENTRA_CHECKPOINT_SUFFIXES)
     missing = {
-        suffix for suffix in required if outcomes.get(suffix) != "Passed"
+        suffix
+        for suffix in required
+        if outcomes.get(suffix) not in {"Passed", "Manual"}
     }
     if not missing:
         return "complete"
@@ -2387,7 +2399,7 @@ def _entra_missing_items(
     return [
         (suffix, labels[suffix])
         for suffix in ENTRA_CHECKPOINT_SUFFIXES
-        if outcomes.get(suffix) != "Passed"
+        if outcomes.get(suffix) not in {"Passed", "Manual"}
     ]
 
 
@@ -4154,6 +4166,7 @@ def record_identity_mapping(
         result = {
             "kind": "administrator-confirmed-claim-candidates",
             "status": "entra-confirmed",
+            "currentSource": "local-handoff",
             "applicationClientId": application_client_id,
             "candidates": candidates,
             "candidateSetSha256": candidate_hash,
@@ -4488,7 +4501,7 @@ def _identity_admin_handoff_is_ready(
                     "an invalid Application client ID."
                 ) from exc
             return False
-        ready = bool(
+        fresh_confirmation = bool(
             validated_evidence.get("kind")
             == "structured-admin-attestation"
             and evidence_client_id == client_id
@@ -4497,6 +4510,33 @@ def _identity_admin_handoff_is_ready(
             and validated_evidence.get("tokenClaimEmissionConfirmed") is True
             and validated_evidence.get("candidateSetSha256")
             == candidates.get("candidateSetSha256")
+            and validated_evidence.get("mappingWorkbookSha256")
+            == candidates.get("importedWorkbookSha256")
+            and validated_evidence.get("currentSource")
+            == "administrator-confirmed"
+            and validated_evidence.get("entraAdministratorConfirmed") is True
+            and validated_evidence.get(
+                "applicationRegistrationConfirmed"
+            )
+            is True
+            and validated_evidence.get("userImpersonationScopeConfirmed")
+            is True
+            and validated_evidence.get(
+                "connectorPreauthorizationConfirmed"
+            )
+            is True
+            and len(candidates.get("candidates") or []) == 1
+            and validated_evidence.get("selectedClaimName")
+            == candidates["candidates"][0]
+        )
+        historical_graph_pass = _has_historical_entra_graph_pass(state)
+        migrated_historical_graph_pass = (
+            _historical_entra_marker_current(validated_evidence)
+        )
+        ready = (
+            fresh_confirmation
+            or historical_graph_pass
+            or migrated_historical_graph_pass
         )
     else:
         ready = bool(
@@ -4527,6 +4567,73 @@ def _identity_admin_handoff_is_ready(
         validated_evidence["recordedAt"] = _utc_now()
         handoff["evidence"] = validated_evidence
         _write_lifecycle_state(context, state)
+    return True
+
+
+def _historical_entra_marker_current(
+    evidence: dict[str, Any],
+) -> bool:
+    return bool(
+        evidence.get("currentSource") == "historical-graph-pass"
+        and evidence.get("historicalGraphPassCompatible") is True
+        and isinstance(evidence.get("historicalGraphPassMigratedAt"), str)
+        and evidence["historicalGraphPassMigratedAt"]
+    )
+
+
+def _migrate_historical_entra_confirmation(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> bool:
+    setup = _admin_setup(state)
+    handoff = _completed_handoff(setup, "entra-registration")
+    if handoff is None:
+        return False
+    evidence = handoff["evidence"]
+    if _historical_entra_marker_current(evidence):
+        return False
+    if (
+        evidence.get("currentSource") == "administrator-confirmed"
+        or not _has_historical_entra_graph_pass(state)
+    ):
+        return False
+    try:
+        candidates = _validated_claim_candidates(context, state)
+        client_id = normalize_client_id(
+            str(candidates.get("applicationClientId") or "")
+        )
+        evidence_client_id = normalize_client_id(
+            str(evidence.get("clientId") or "")
+        )
+    except ServiceNowConnectError:
+        return False
+    if (
+        evidence.get("kind") != "structured-admin-attestation"
+        or evidence_client_id != client_id
+        or evidence.get("tokenClaimCandidates")
+        != candidates.get("candidates")
+        or evidence.get("tokenClaimEmissionConfirmed") is not True
+        or evidence.get("candidateSetSha256")
+        != candidates.get("candidateSetSha256")
+        or evidence.get("mappingWorkbookSha256")
+        != candidates.get("importedWorkbookSha256")
+        or not _identity_handoff_binding_matches(
+            context,
+            state,
+            evidence,
+            application_client_id=client_id,
+        )
+    ):
+        return False
+    migrated_at = _utc_now()
+    evidence["currentSource"] = "historical-graph-pass"
+    evidence["historicalGraphPassCompatible"] = True
+    evidence["historicalGraphPassMigratedAt"] = migrated_at
+    handoff["verifiedBy"] = "historical-graph-pass-migration"
+    state.setdefault("migration", {})["entraHistoricalGraphPass"] = {
+        "source": "four-persisted-passed-checkpoints",
+        "migratedAt": migrated_at,
+    }
     return True
 
 
@@ -7490,6 +7597,7 @@ def _load_lifecycle_state(
     state.setdefault("phases", {})
     state.setdefault("evidence", {})
     _admin_setup(state)
+    _migrate_historical_entra_confirmation(context, state)
     state.setdefault("transactions", {}).setdefault("topics", {})
     state.setdefault("migration", {})
     return state
@@ -9531,13 +9639,26 @@ def record_admin_phase(
                 "The explicitly supplied Application client ID conflicts "
                 "with the Entra-confirmed workbook."
             )
+        selected_claims = list(candidates.get("candidates") or [])
+        if len(selected_claims) != 1:
+            raise ServiceNowConnectError(
+                "The current Entra administrator confirmation requires one "
+                "explicit selected user claim. Return a current one-claim "
+                "handoff; do not choose or infer a claim from older fields."
+            )
         evidence.update(
             {
+                "currentSource": "administrator-confirmed",
+                "entraAdministratorConfirmed": True,
+                "applicationRegistrationConfirmed": True,
                 "clientId": normalized_client_id,
                 "tokenClaimCandidates": copy.deepcopy(
-                    candidates["candidates"]
+                    selected_claims
                 ),
+                "selectedClaimName": selected_claims[0],
                 "tokenClaimEmissionConfirmed": True,
+                "userImpersonationScopeConfirmed": True,
+                "connectorPreauthorizationConfirmed": True,
                 "candidateSetSha256": candidates["candidateSetSha256"],
                 "mappingWorkbookSha256": candidates[
                     "importedWorkbookSha256"
@@ -9587,7 +9708,7 @@ def record_admin_phase(
         "status": status,
         "evidence": evidence,
         "verifiedBy": (
-            "read-only-checkpoint-pending"
+            "administrator-confirmed-local-validation"
             if phase == "entra-registration"
             else "structured-attestation"
         ),

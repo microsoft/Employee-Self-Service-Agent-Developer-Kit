@@ -268,11 +268,16 @@ def _write_it_state(root: Path, components: dict) -> dict:
         state["evidence"]["identityClaimCandidates"] = {
             "kind": "administrator-confirmed-claim-candidates",
             "status": "entra-confirmed",
+            "currentSource": "local-handoff",
             "applicationClientId": APP_CLIENT_ID,
             "candidates": ["email", "upn"],
             "entraAdministratorConfirmed": True,
             "tokenClaimEmissionConfirmed": True,
             "binding": binding,
+            "importedWorkbookSha256": "a" * 64,
+            "importedFileFormat": "xlsx",
+            "sheetProtected": True,
+            "recordedAt": "2026-10-01T00:00:00Z",
         }
         candidate_hash = snow._identity_candidate_set_hash(
             application_client_id=APP_CLIENT_ID,
@@ -302,7 +307,18 @@ def _write_it_state(root: Path, components: dict) -> dict:
         )
         state["adminSetup"]["phaseHandoffs"]["entra-registration"][
             "evidence"
-        ]["candidateSetSha256"] = candidate_hash
+        ].update(
+            {
+                "candidateSetSha256": candidate_hash,
+                "currentSource": "administrator-confirmed",
+                "entraAdministratorConfirmed": True,
+                "applicationRegistrationConfirmed": True,
+                "selectedClaimName": "upn",
+                "userImpersonationScopeConfirmed": True,
+                "connectorPreauthorizationConfirmed": True,
+                "mappingWorkbookSha256": "a" * 64,
+            }
+        )
         state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
             "evidence"
         ]["mappingRelationshipSha256"] = relationship_hash
@@ -487,12 +503,7 @@ def test_recorded_mapping_workflow_reaches_real_it_checkpoints(
         )
         entra_path = Path(entra["workbookPath"])
         workbook = load_workbook(entra_path)
-        sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-        for offset, claim in enumerate(("email", "upn", "employee_id")):
-            sheet.cell(
-                snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW + offset,
-                1,
-            ).value = claim
+        workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["C2"] = "employee_id"
         workbook.save(entra_path)
         workbook.close()
         snow.record_identity_mapping(
@@ -543,9 +554,7 @@ def test_recorded_mapping_workflow_reaches_real_it_checkpoints(
     oidc = _checkpoint(results, "SN-DA-ITSM-OIDC-001")
 
     assert claims.status == Status.MANUAL.value
-    assert "email" in claims.result
-    assert "upn" in claims.result
-    assert "employee_id" in claims.result
+    assert "currentSource=administrator-confirmed" in claims.result
     assert oidc.status == Status.MANUAL.value
     assert "employee_id" in oidc.result
 

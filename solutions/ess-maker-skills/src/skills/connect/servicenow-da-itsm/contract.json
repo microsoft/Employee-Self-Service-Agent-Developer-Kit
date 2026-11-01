@@ -1,5 +1,5 @@
 {
-  "contractRevision": 5,
+  "contractRevision": 6,
   "provider": "servicenow-da-itsm",
   "displayName": "ServiceNow ITSM",
   "profile": "itsm",
