@@ -30,7 +30,6 @@ from connect_servicenow_da import (
     portal_confirmation_url,
     portal_configuration_summary,
     required_servicenow_prerequisites,
-    summarize_components,
 )
 
 from ..agent_scope import validate_agent_slug
@@ -638,14 +637,24 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
             target=target,
         )
     try:
-        if not _servicenow_topic_changes(components):
+        topic_changes = _servicenow_topic_changes(components)
+        if not topic_changes:
             return _all_unavailable(
                 Status.NOT_CONFIGURED.value,
                 f"The selected HR agent '{slug}' has no ServiceNow HRSD topics.",
                 "Install the ServiceNow HRSD extension for this exact HR agent.",
                 target=target,
             )
-        summary = summarize_components(components)
+        summary = {
+            "serviceNowTopicCount": len(topic_changes),
+            "activeServiceNowTopicCount": sum(
+                1
+                for change in topic_changes
+                if isinstance(change.get("component"), dict)
+                and change["component"].get("state") == "Active"
+                and change["component"].get("status") == "Active"
+            ),
+        }
     except Exception as exc:
         return _all_unavailable(
             Status.ERROR.value,
@@ -762,6 +771,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
     draft_semantic_hash = ""
     binding_identity_sha256 = ""
     current_connection_binding_hash = None
+    identity_inspection_error: str | None = None
     if needs_draft_identity:
         try:
             draft_semantic_hash = _draft_semantic_hash(components)
@@ -801,18 +811,38 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
                     else None
                 )
         except Exception as exc:
-            return _all_unavailable(
-                Status.ERROR.value,
-                f"Unable to inspect the HR agent draft identity: "
-                f"{type(exc).__name__}: {exc}",
-                "Verify the selected HR agent component state and retry.",
-                target=target,
+            identity_inspection_error = (
+                "Unable to inspect the HR agent binding/final-configuration "
+                f"identity: {type(exc).__name__}: {exc}"
             )
+            if target is not None:
+                return _all_unavailable(
+                    Status.ERROR.value,
+                    identity_inspection_error,
+                    (
+                        "Verify the selected HR agent connection-reference "
+                        "and component state, then retry this checkpoint."
+                    ),
+                    target=target,
+                )
 
-    agent_connection_result = _agent_connection_result(
-        evidence,
-        credential_result,
-        binding_identity_sha256,
+    agent_connection_result = (
+        _result(
+            "SN-DA-HRSD-AGENT-CONNECTION-001",
+            Status.ERROR.value,
+            "ServiceNow credential connected to the selected agent",
+            identity_inspection_error,
+            (
+                "Verify the selected HR agent connection-reference and "
+                "binding metadata, then retry."
+            ),
+        )
+        if identity_inspection_error
+        else _agent_connection_result(
+            evidence,
+            credential_result,
+            binding_identity_sha256,
+        )
     )
     if target == "SN-DA-HRSD-AGENT-CONNECTION-001":
         return [agent_connection_result]
@@ -831,14 +861,27 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
                 agent_connection_result,
             )
         ]
-    test_result = _test_result(
-        evidence,
-        draft_semantic_hash,
-        current_connection_binding_hash,
-        topics_result,
-        portal_result,
-        credential_result,
-        agent_connection_result,
+    test_result = (
+        _result(
+            "SN-DA-HRSD-TEST-001",
+            Status.ERROR.value,
+            "ServiceNow HRSD Test pane result",
+            identity_inspection_error,
+            (
+                "Verify the selected HR agent connection-reference and "
+                "final component identity, then retry."
+            ),
+        )
+        if identity_inspection_error
+        else _test_result(
+            evidence,
+            draft_semantic_hash,
+            current_connection_binding_hash,
+            topics_result,
+            portal_result,
+            credential_result,
+            agent_connection_result,
+        )
     )
     return [
         _package_result(slug, summary),
@@ -854,11 +897,24 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         topics_result,
         portal_result,
         test_result,
-        _publish_result(
-            evidence,
-            component_hash,
-            draft_semantic_hash,
-            current_connection_binding_hash,
+        (
+            _result(
+                "SN-DA-HRSD-PUBLISH-001",
+                Status.ERROR.value,
+                "ServiceNow HRSD publish evidence",
+                identity_inspection_error,
+                (
+                    "Verify the selected HR agent connection-reference and "
+                    "final component identity, then retry."
+                ),
+            )
+            if identity_inspection_error
+            else _publish_result(
+                evidence,
+                component_hash,
+                draft_semantic_hash,
+                current_connection_binding_hash,
+            )
         ),
     ]
 

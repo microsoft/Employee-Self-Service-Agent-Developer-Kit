@@ -959,22 +959,49 @@ def test_hrsd_checks_preserve_manual_maker_evidence(
 def test_hrsd_package_and_topics_remain_dynamic_with_one_matching_topic() -> None:
     components = _components()
     components["botComponentChanges"] = components["botComponentChanges"][:1]
+    components["connectionReferenceChanges"] = []
 
-    package = next(
-        result
-        for result in run_servicenow_da_hrsd_checks(_runner(components))
-        if result.checkpoint_id == "SN-DA-HRSD-PKG-001"
-    )
-    topics = next(
-        result
-        for result in run_servicenow_da_hrsd_checks(_runner(components))
-        if result.checkpoint_id == "SN-DA-HRSD-TOPICS-001"
-    )
+    results = run_servicenow_da_hrsd_checks(_runner(components))
+    by_id = {result.checkpoint_id: result for result in results}
+    package = by_id["SN-DA-HRSD-PKG-001"]
+    topics = by_id["SN-DA-HRSD-TOPICS-001"]
 
     assert package.status == Status.PASSED.value
     assert package.result.endswith("contains 1 ServiceNow HRSD topic(s).")
     assert topics.status == Status.PASSED.value
     assert topics.result == "1/1 ServiceNow HRSD topics are Active."
+    for checkpoint_id in (
+        "SN-DA-HRSD-AGENT-CONNECTION-001",
+        "SN-DA-HRSD-TEST-001",
+        "SN-DA-HRSD-PUBLISH-001",
+    ):
+        assert by_id[checkpoint_id].status == Status.ERROR.value
+        assert "binding/final-configuration identity" in (
+            by_id[checkpoint_id].result
+        )
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        "SN-DA-HRSD-AGENT-CONNECTION-001",
+        "SN-DA-HRSD-TEST-001",
+    ),
+)
+def test_explicit_binding_dependent_target_reports_identity_error(
+    target: str,
+) -> None:
+    components = _components()
+    components["connectionReferenceChanges"] = []
+    runner = _runner(components)
+    runner.checkpoint_target = target
+
+    results = run_servicenow_da_hrsd_checks(runner)
+
+    assert len(results) == 1
+    assert results[0].checkpoint_id == target
+    assert results[0].status == Status.ERROR.value
+    assert "binding/final-configuration identity" in results[0].result
 
 
 @pytest.mark.parametrize(
