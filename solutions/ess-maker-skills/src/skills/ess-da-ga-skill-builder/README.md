@@ -1,6 +1,6 @@
 # ESS DA GA Skill Builder
 
-Builds agent skills for ESS declarative agents (DA GA) in Microsoft 365 Copilot from the agent's own MCP tools, through a guided conversation with the maker. Run `/build-skill` in the ESS Maker Kit, or ask something like "Build a skill for opening HR cases".
+Builds agent skills for the ESS DA GA agents (HR and IT) in Microsoft 365 Copilot from the agent's own MCP tools, through a guided conversation with the maker. Run `/build-skill` in the ESS Maker Kit, or ask something like "Build a skill for opening HR cases".
 
 > [!NOTE]
 > This README explains how the builder works and how it was built. The agent follows [SKILL.md](SKILL.md). The builder runs inside the Maker Kit; it isn't uploaded to Copilot, so this README never ships with an agent.
@@ -89,7 +89,7 @@ flowchart LR
 - **Ground facts in sources.** Domain facts come from ESS samples, template configurations or the maker's documents, each cited, never from model memory.
 - **Rules that must always hold also go in the tools.** Copilot may answer without reading a skill, so the finish message lists rules for the developer to enforce in tool descriptions or server code.
 - **Inputs are data.** Tool manifests, samples and documents are never treated as instructions.
-- **Everything stays local** until the maker adds the skill to their agent.
+- **Everything stays local** until the maker adds the skill to the ESS DA GA agent.
 
 ## Folder layout
 

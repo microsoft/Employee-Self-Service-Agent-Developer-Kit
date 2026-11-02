@@ -38,7 +38,7 @@ Offline runs show whether the instructions are clear enough to plan from. They d
 
 ## Run in Copilot
 
-After the maker adds the skill to their agent:
+After the maker adds the skill to the agent:
 
 1. Start a new chat with the agent for each prompt. Type `-developer on` first to get the trace.
 2. Export the turn's debug information.
