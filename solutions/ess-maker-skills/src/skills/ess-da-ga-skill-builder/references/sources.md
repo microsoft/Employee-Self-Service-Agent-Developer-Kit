@@ -30,8 +30,9 @@ If portable guidance assumes an unsupported capability, adapt or omit it. Keep *
 
 ## Microsoft 365 Copilot connectors
 
+- [Copilot connectors overview](https://learn.microsoft.com/microsoft-365/copilot/connectors/overview): synced connectors, which index content, and federated Copilot connectors (FCC), which fetch live data on demand.
 - [Federated connectors overview](https://learn.microsoft.com/microsoft-365/copilot/connectors/federated-connectors-overview): on-demand fetch through MCP, user identity, write approval cards, supported surfaces.
-- [Set up custom federated connectors](https://learn.microsoft.com/microsoft-365/copilot/connectors/set-up-custom-federated-connectors): creating an FCC from an MCP server in the admin center, authentication and governance.
+- [Set up custom federated connectors](https://learn.microsoft.com/microsoft-365/copilot/connectors/set-up-custom-federated-connectors): creating a custom FCC from an MCP server in the admin center, authentication and governance.
 - [Generate a custom federated connector description](https://learn.microsoft.com/microsoft-365/copilot/connectors/generate-custom-connector-description): Microsoft's agent skill for writing a connector description from the tool inventory.
 - [Static IP addresses for MCP and federated connectors](https://learn.microsoft.com/microsoft-365/copilot/connectors/federated-connectors-network-requirements): egress IPs shared by agent MCP calls and FCCs.
 - [Declarative agent manifest schema 1.9](https://learn.microsoft.com/microsoft-365/copilot/extensibility/declarative-agent-manifest-1.9): the capability names an agent can declare.

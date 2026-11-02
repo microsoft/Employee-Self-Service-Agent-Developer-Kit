@@ -81,7 +81,9 @@ With `--package`, the inventory reads the `capabilities` array from `declarative
 
 ## Tools registered as an FCC
 
-If the MCP server is registered as a custom federated connector (FCC) in the Microsoft 365 admin center, export its tool list the same way and save it as `mcp/<server-name>/tools.json`; there's no `plugin.json`. Plan with these differences, recorded in `limitations.md` (FC-01 to FC-03, UV-04 and UV-05):
+Synced connectors (formerly Graph connectors) aren't tools: they index content and reach the agent as knowledge through the `GraphConnectors` capability in `knowledge/knowledge.json`. This section covers federated Copilot connectors, which fetch live data on demand.
+
+If the MCP server is registered as a federated Copilot connector (FCC) in the Microsoft 365 admin center, export its tool list the same way and save it as `mcp/<server-name>/tools.json`; there's no `plugin.json`. Plan with these differences, recorded in `limitations.md` (FC-01 to FC-03, UV-04 and UV-05):
 
 - An FCC is tenant-wide: Copilot Chat, Researcher and other agents can use it, not just this agent.
 - Copilot shows its own approval card for each write tool (Allow once, for the conversation, or always). Account for it when choosing the confirmation style in Round 6, so users aren't asked twice.

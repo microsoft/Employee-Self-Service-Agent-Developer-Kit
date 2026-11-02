@@ -24,7 +24,7 @@ Read the full description and input schema of every tool a scenario might use (`
 
 The inventory's `kind` and `operations` are hints from names and schemas; the description decides. A tool named `update_record` may accept only some tables; a tool named `create_case_form` may look up services itself.
 
-**FCC (on-demand fetch) tools** are generic tools that read or change any record once the caller says where: a table or entity, fields, a query (for example `list_records`, `get_record`, `create_record`). The name comes from Microsoft 365 [custom federated connectors](https://learn.microsoft.com/microsoft-365/copilot/connectors/set-up-custom-federated-connectors), which fetch data on demand through MCP. These tools are an FCC once registered as a connector in the Microsoft 365 admin center; until then they're an MCP plugin in the agent. The inventory marks them `generic`.
+**FCC (on-demand fetch) tools** are generic tools that read or change any record once the caller says where: a table or entity, fields, a query (for example `list_records`, `get_record`, `create_record`). FCC stands for federated Copilot connector. Microsoft 365 [Copilot connectors](https://learn.microsoft.com/microsoft-365/copilot/connectors/overview) come in two kinds: synced connectors (formerly Graph connectors) index content into Microsoft 365, and federated connectors fetch live data on demand through MCP and can also change records. A synced connector the agent lists under `GraphConnectors` is a knowledge source, not an FCC. The agent's generic tools work like the on-demand kind: they're an FCC once registered as a federated connector, and until then they're an MCP plugin in the agent. The inventory marks them `generic`.
 
 ## Read the knowledge sources
 

@@ -82,7 +82,7 @@ flowchart LR
 ## Design principles
 
 - **The model judges; the kit's scripts check.** Deciding how tools fit a scenario takes reading and judgment, so the model does it. Anything that must be repeatable (listing tools, validating, packaging) is a script that runs in the Maker Kit. Generated skills contain no scripts.
-- **Fit is decided per step, not per agent.** One server can have a purpose-built tool for one scenario and only FCC (on-demand fetch) tools for the next: generic tools that read or change any record once told where, and an [FCC][ms-fcc] once registered as a connector. Purpose-built steps make thin skills that route; FCC steps make thick skills that carry the procedure and facts. Informational steps are covered only when the agent has a knowledge source. Partly supported scenarios are split, and unsupported ones are left out.
+- **Fit is decided per step, not per agent.** One server can have a purpose-built tool for one scenario and only FCC (on-demand fetch) tools for the next: generic tools that read or change any record once told where, and a federated Copilot connector ([FCC][ms-fcc]) once registered as one. Purpose-built steps make thin skills that route; FCC steps make thick skills that carry the procedure and facts. Informational steps are covered only when the agent has a knowledge source. Partly supported scenarios are split, and unsupported ones are left out.
 - **Promise only what the tools do.** A skill that loads and can't finish the job is worse than none. The validator's `--expect` option fails a skill that promises an operation without naming a tool that can do it.
 - **Orchestrate only when it's needed.** When people often mix knowledge questions and actions in one message, the builder recommends one orchestration skill, modeled on `hr-request-orchestration`, that routes between knowledge search and the area skills. Otherwise a short routing rule in the agent's instructions is enough.
 - **The maker decides.** The builder recommends with evidence (which steps, which tools, what's missing) and the maker chooses.
@@ -272,7 +272,7 @@ Fixtures live in [tests/fixtures/ess-da-ga-skill-builder/](../../../../../tests/
 [ms-mcp-apps]: https://learn.microsoft.com/microsoft-365/copilot/extensibility/plugin-mcp-apps
 [ms-mcp-ux]: https://learn.microsoft.com/microsoft-365/copilot/extensibility/plugin-mcp-apps-ui-guidelines
 [ms-plugin]: https://learn.microsoft.com/microsoft-365/copilot/extensibility/plugin-manifest-2.4
-[ms-fcc]: https://learn.microsoft.com/microsoft-365/copilot/connectors/set-up-custom-federated-connectors
+[ms-fcc]: https://learn.microsoft.com/microsoft-365/copilot/connectors/federated-connectors-overview
 [studio-upload]: https://learn.microsoft.com/microsoft-copilot-studio/agents-experience/skills-add-existing
 [studio-create]: https://learn.microsoft.com/microsoft-copilot-studio/agents-experience/skills-create
 [spec]: https://agentskills.io/specification

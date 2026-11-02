@@ -13,7 +13,7 @@ Last reviewed: 2026-11-02.
 - Files and scripts
 - Runtime behavior
 - Tenant and publishing
-- Federated connectors (FCC)
+- Federated Copilot connectors (FCC)
 - Agent Skills specification
 - Unverified
 - Changelog
@@ -105,13 +105,13 @@ ESS skills include no scripts, even though Copilot runs them. A script can't rea
 | TP-02 | ISVs can't publish declarative agents with skills through Partner Center yet.                                                                   | All           | Documented | [DA skills][1] | Not enforced |
 | TP-03 | Adding skills in Agent Builder needs a qualifying Microsoft 365 Copilot license or pay-as-you-go access.                                        | Agent Builder | Documented | [Builder][2]   | Not enforced |
 
-## Federated connectors (FCC)
+## Federated Copilot connectors (FCC)
 
-| ID    | Limit                                                                                                                                                                                                 | Applies to | Status     | Source                            | Enforced by      |
-| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- | --------------------------------- | ---------------- |
-| FC-01 | A custom federated connector (FCC) is a tenant-level connector created in the Microsoft 365 admin center from an MCP server URL. It fetches data on demand as the signed-in user and indexes nothing. | All        | Documented | [FCC setup][7]                    | Not enforced     |
-| FC-02 | Copilot asks the user to approve each FCC write tool (Allow once, Allow for conversation, Always allow); read tools never ask.                                                                        | All        | Documented | [FCC overview][8]                 | Builder guidance |
-| FC-03 | The declarative agent manifest (v1.9) has no FCC capability, and MCP Apps widgets are documented only for MCP plugins in an agent.                                                                    | All        | Documented | [Manifest 1.9][9], [MCP apps][10] | Builder guidance |
+| ID    | Limit                                                                                                                                                                                                                                                                                                                 | Applies to | Status     | Source                            | Enforced by      |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- | --------------------------------- | ---------------- |
+| FC-01 | A federated Copilot connector (FCC) fetches data on demand through MCP as the signed-in user and indexes nothing; synced connectors (formerly Graph connectors) index content into Microsoft 365 instead. Admins manage FCCs in the Microsoft 365 admin center, where a custom FCC is created from an MCP server URL. | All        | Documented | [Connectors][11], [FCC setup][7]  | Not enforced     |
+| FC-02 | Copilot asks the user to approve each FCC write tool (Allow once, Allow for conversation, Always allow); read tools never ask.                                                                                                                                                                                        | All        | Documented | [FCC overview][8]                 | Builder guidance |
+| FC-03 | The declarative agent manifest (v1.9) has no FCC capability, and MCP Apps widgets are documented only for MCP plugins in an agent.                                                                                                                                                                                    | All        | Documented | [Manifest 1.9][9], [MCP apps][10] | Builder guidance |
 
 ## Agent Skills specification
 
@@ -132,11 +132,11 @@ ESS skills include no scripts, even though Copilot runs them. A script can't rea
 
 ## Changelog
 
-| Date       | Change                                                                                                                                                                                                                                                                                              |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-11-02 | Added the support matrix and federated connector (FCC) entries FC-01 to FC-03, UV-04 and UV-05. ESS skills include no scripts: the validator rejects any script, and UV-01 and UV-02 (script sandbox questions) are removed. Removed PK-09, an Agents Toolkit setting; ESS doesn't use the toolkit. |
-| 2026-10-28 | Clarified source precedence and evidence labels; platform limits not re-reviewed.                                                                                                                                                                                                                   |
-| 2026-10-27 | Initial record.                                                                                                                                                                                                                                                                                     |
+| Date       | Change                                                                                                                                                                                                                                                                                                      |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-11-02 | Added the support matrix and federated Copilot connector (FCC) entries FC-01 to FC-03, UV-04 and UV-05. ESS skills include no scripts: the validator rejects any script, and UV-01 and UV-02 (script sandbox questions) are removed. Removed PK-09, an Agents Toolkit setting; ESS doesn't use the toolkit. |
+| 2026-10-28 | Clarified source precedence and evidence labels; platform limits not re-reviewed.                                                                                                                                                                                                                           |
+| 2026-10-27 | Initial record.                                                                                                                                                                                                                                                                                             |
 
 ## How to update this record
 
@@ -155,3 +155,4 @@ ESS skills include no scripts, even though Copilot runs them. A script can't rea
 [8]: https://learn.microsoft.com/microsoft-365/copilot/connectors/federated-connectors-overview
 [9]: https://learn.microsoft.com/microsoft-365/copilot/extensibility/declarative-agent-manifest-1.9
 [10]: https://learn.microsoft.com/microsoft-365/copilot/extensibility/plugin-mcp-apps
+[11]: https://learn.microsoft.com/microsoft-365/copilot/connectors/overview
