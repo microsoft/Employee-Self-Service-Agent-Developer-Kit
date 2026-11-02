@@ -125,11 +125,6 @@ def _register_maker_baseline(http):
     users["url"] = users["url"].split("?")[0]
     http.add(**users)
     http.add(**powerplatform_mock.list_billing_policies())
-    entitlement = powerplatform_mock.environment_entitlement(allocated=100)
-    entitlement["environmentId"] = ENV_ID
-    http.add(**powerplatform_mock.get_environment_entitlements(
-        environment_id=ENV_ID, entitlements=[entitlement],
-    ))
     policies = next(
         item for item in _capture("flightcheck_pp_admin.yaml")
         if "/apiPolicies" in item["request"]["uri"]
@@ -168,6 +163,7 @@ def test_real_cli_da_full_restores_readonly_coverage_without_legacy_probes(
             for request in http.calls
         )
         assert sum(call.request.method == "POST" for call in http.calls) == 1
+        assert not any("/entitlements" in call.request.url for call in http.calls)
     result = json.loads((ws.root / "report" / "results.json").read_text(encoding="utf-8"))
     assert result["diagnostic_only"] is True
     assert result["overall"] == "CHECKED_WITH_NOTES"
@@ -178,6 +174,8 @@ def test_real_cli_da_full_restores_readonly_coverage_without_legacy_probes(
     assert any(row["checkpoint_id"] == "CONFIG-012" for row in result["results"])
     assert result["coverage"]["planned"] == result["coverage"]["emitted"]
     assert result["total"] == len(result["coverage"]["planned"])
+    assert "ENV-CAPACITY-001" not in result["coverage"]["planned"]
+    assert {"PRE-004", "PRE-005", "PRE-006"} <= set(result["coverage"]["planned"])
     assert ws.auth.call_args.kwargs["allow_write"] is False
     assert (ws.root / "report" / "report.html").exists()
 

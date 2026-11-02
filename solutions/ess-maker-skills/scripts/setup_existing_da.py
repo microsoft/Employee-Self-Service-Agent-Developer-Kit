@@ -74,8 +74,8 @@ SETUP_STEP_NOTES = {
         "DA-AGENT-001."
     ),
     "SETUP-02.2": (
-        "Copilot Studio message capacity checked by ENV-CAPACITY-001. "
-        "Any known capacity risk remains visible in its evidence."
+        "Copilot Studio message capacity is no longer required during "
+        "foundation setup and was not verified."
     ),
     "SETUP-03": (
         "Confirms the environment and exact editable native agent."
@@ -98,10 +98,9 @@ SETUP_STEP_NOTES = {
 }
 SETUP_FLIGHTCHECK_STEPS = {
     "DA-AGENT-001": "SETUP-02.1",
-    "ENV-CAPACITY-001": "SETUP-02.2",
     "DA-CONTENT-001": "SETUP-06",
 }
-SETUP_PERMANENTLY_SKIPPED_STEPS = {"SETUP-04"}
+SETUP_PERMANENTLY_SKIPPED_STEPS = {"SETUP-02.2", "SETUP-04"}
 SUPPORTED_SETUP_SOURCES = {
     "existing-dev",
     "alm-import",
@@ -750,13 +749,6 @@ def _setup_steps_in_progress(
             ),
             recorded_at=now,
         )
-    for step_id in sorted(SETUP_PERMANENTLY_SKIPPED_STEPS):
-        steps[step_id] = _step_record(
-            "done",
-            mode="skipped",
-            note=SETUP_STEP_NOTES[step_id],
-            recorded_at=now,
-        )
     steps["SETUP-05"] = _setup_connection_step(
         connection_requirement,
         now,
@@ -805,6 +797,14 @@ def _build_canonical_setup_progress(
             product_recognized=product_recognized,
         )
     )
+    for step_id in sorted(SETUP_PERMANENTLY_SKIPPED_STEPS):
+        if steps[step_id]["state"] != "done":
+            steps[step_id] = _step_record(
+                "done",
+                mode="skipped",
+                note=SETUP_STEP_NOTES[step_id],
+                recorded_at=now,
+            )
     if reopen_flightchecks:
         _begin_flightcheck_maintenance(
             steps,
@@ -931,7 +931,6 @@ def maintain_setup_flightcheck(
     agent_id: str,
     checkpoint: str,
     results_path: Path,
-    administrator_attested_skip: bool = False,
 ) -> dict[str, Any]:
     """Persist one supported FlightCheck result into canonical setup state."""
     state = _load_canonical_setup_state(kit_root)
@@ -1020,35 +1019,8 @@ def maintain_setup_flightcheck(
         str(row.get("status") or "")
         for row in matching
     }
-    if administrator_attested_skip:
-        if checkpoint != "ENV-CAPACITY-001":
-            raise ExistingDASetupError(
-                "Administrator-attested skip is supported only for "
-                "ENV-CAPACITY-001."
-            )
-        if (
-            len(matching) != 1
-            or statuses not in ({"Manual"}, {"Warning"})
-            or payload.get("failed") != 0
-            or payload.get("errors") != 0
-        ):
-            raise ExistingDASetupError(
-                "Administrator-attested skip requires a current Manual or "
-                "Warning ENV-CAPACITY-001 result."
-            )
-        complete = True
-    elif requirement is not None:
+    if requirement is not None:
         complete = bool(statuses) and statuses <= {"Passed", "Warning"}
-    elif checkpoint == "ENV-CAPACITY-001":
-        run_blocked = (
-            payload.get("failed") != 0
-            or payload.get("errors") != 0
-        )
-        complete = (
-            not run_blocked
-            and bool(statuses)
-            and statuses == {"Passed"}
-        )
     else:
         run_blocked = (
             payload.get("failed") != 0
@@ -1060,14 +1032,6 @@ def maintain_setup_flightcheck(
     if complete:
         note = SETUP_STEP_NOTES[step_id]
         mode = "automated"
-        if administrator_attested_skip:
-            mode = "administrator-attested-skip"
-            note = (
-                "A Power Platform administrator was present and consented to "
-                "override the ENV-CAPACITY-001 capacity check. Setup skipped "
-                "the check and did not verify that Copilot Studio message "
-                "capacity was available for this environment."
-            )
         if requirement is not None:
             note = (
                 f"{requirement['displayName']} satisfies the "
@@ -1082,11 +1046,7 @@ def maintain_setup_flightcheck(
             requirement=requirement,
         )
     else:
-        non_blocking_statuses = (
-            {"Passed"}
-            if checkpoint == "ENV-CAPACITY-001"
-            else {"Passed", "Warning"}
-        )
+        non_blocking_statuses = {"Passed", "Warning"}
         causes = (
             [
                 str(
@@ -2697,15 +2657,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the FlightCheck results.json file.",
     )
     maintain_flightcheck.add_argument(
-        "--administrator-attested-skip",
-        action="store_true",
-        help=(
-            "Record that a Power Platform administrator was present and "
-            "consented to override a current eligible Manual or Warning "
-            "ENV-CAPACITY-001 result."
-        ),
-    )
-    maintain_flightcheck.add_argument(
         "--kit-root",
         type=Path,
         default=Path.cwd(),
@@ -2939,9 +2890,6 @@ def main(argv: list[str] | None = None) -> int:
                 agent_id=args.agent_id,
                 checkpoint=args.checkpoint,
                 results_path=results_path,
-                administrator_attested_skip=(
-                    args.administrator_attested_skip
-                ),
             )
             print(
                 "DA_SETUP_FLIGHTCHECK_JSON:"

@@ -6,6 +6,7 @@
 import base64
 import json
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
@@ -431,6 +432,8 @@ def test_full_dispositions_exclude_aliases_guards_and_deferred_alm():
     _, plan, _ = plan_da_checks()
     keys = {spec.key for spec in plan}
     assert "ENV-004" in keys
+    assert "ENV-CAPACITY-001" not in keys
+    assert {"PRE-004", "PRE-005", "PRE-006"} <= keys
     assert "ENV-004-WD" not in keys
     assert not keys.intersection({"PUB-001", "PUB-002", "ENV-004-GRS", "WD-WF-001"})
     for spec in registry.REGISTRY.values():
@@ -880,10 +883,15 @@ def test_full_optional_servicenow_accounts_for_every_child_without_legacy_flows(
 @pytest.mark.parametrize("allocated,http_status,expected", [
     (100, 200, "Passed"), (0, 200, "Manual"), (100, 403, "Manual"), (100, 503, "Error"),
 ])
-def test_capacity_uses_actual_allocation_without_turning_billing_alternatives_into_defects(
+def test_capacity_producer_retains_allocation_behavior_when_enabled(
     setup_workspace, monkeypatch, allocated, http_status, expected,
 ):
     require_validated_mock(platform_mock)
+    spec = registry.REGISTRY["ENV-CAPACITY-001"]
+    monkeypatch.setitem(
+        registry.REGISTRY, spec.key,
+        replace(spec, da=replace(spec.da, disposition="execute")),
+    )
     ws = setup_workspace
     entitlement = platform_mock.environment_entitlement(allocated=allocated)
     entitlement["environmentId"] = ws.config["environmentId"]
@@ -899,6 +907,25 @@ def test_capacity_uses_actual_allocation_without_turning_billing_alternatives_in
         assert f"{allocated}" in row["result"]
         assert "audience or usage sufficiency" in row["result"]
     assert bool(row["remediation"]) is (expected != "Passed")
+
+
+def test_capacity_explicit_da_request_is_not_applicable_without_a_service_read(
+    setup_workspace, monkeypatch,
+):
+    ws = setup_workspace
+    with responses.RequestsMock() as http:
+        payload, code = _run_cli(
+            ws, monkeypatch, http, ["--checkpoint", "ENV-CAPACITY-001"],
+        )
+        assert not http.calls
+    row = _row(payload, "ENV-CAPACITY-001")
+    assert code == 0
+    assert row["status"] == "NotConfigured"
+    assert row["evidence"]["applicability"] == "not_applicable"
+    assert row["evidence"]["disposition"] == "legacy"
+    assert "not required for foundation setup" in row["result"]
+    assert "Capacity was not verified" in row["result"]
+    assert row["remediation"] == ""
 
 
 @pytest.mark.parametrize("state,budget_status,expected", [

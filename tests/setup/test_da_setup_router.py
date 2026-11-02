@@ -180,7 +180,7 @@ def test_setup_seeds_shared_cache_once_and_reuses_flightcheck_account() -> None:
         for line in readiness.splitlines()
         if line.startswith("python scripts/flightcheck/cli.py")
     ]
-    assert len(commands) == 4
+    assert len(commands) == 3
     assert all('--preferred-username "{SETUP_ACCOUNT}"' in line for line in commands)
     assert "including retries and rechecks" in readiness
 
@@ -758,7 +758,7 @@ def test_global_gate_routes_flightcheck_through_setup_evidence() -> None:
     assert "Some setup items still require attention:" in normalized
     assert "Setup needs to prepare the local agent workspace." in normalized
     assert "Collect every non-empty `failure_causes` entry" in normalized
-    assert "**Environment capacity**" in instructions
+    assert "**Environment capacity**" not in instructions
     assert "**Connections**" in instructions
     assert "**Agent content**" in instructions
     assert "keep the canonical setup IDs internal" in normalized
@@ -2266,7 +2266,7 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     assert text.count(agent_link) == 1
     progress_line = (
         "**Runtime readiness:** Agent access {agent access progress status} · "
-        "Capacity {environment capacity progress status} · Connections "
+        "Connections "
         "{connections progress status} · Content {agent content progress status}"
     )
     assert progress_line in text
@@ -2276,10 +2276,10 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
         in text
     )
     assert "compact two-line snapshot" in text
-    assert "whenever one of its four check statuses changes" in normalized
+    assert "whenever one of its three check statuses changes" in normalized
     assert "**🔄 Checking** only for the operation that will run next" in text
     assert "**⬜ Pending** for an applicable check that has not run" in text
-    assert "**🔄 {resolved count} of 4 resolved**" in text
+    assert "**🔄 {resolved count} of 3 resolved**" in text
     assert "**⛔ Waiting for action**" in text
     assert "Do not calculate or display the final **Overall** verdict" in text
     readiness_table = "\n".join(
@@ -2287,7 +2287,6 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
             "| Check                | Status                         | Details                                 |",
             "| -------------------- | ------------------------------ | --------------------------------------- |",
             "| Agent access         | {agent access status}          | {agent access evidence summary}         |",
-            "| Environment capacity | {environment capacity status}  | {environment capacity evidence summary} |",
             "| Connections          | {connections status}           | {connections evidence summary}          |",
             "| Agent content        | {agent content status}         | {agent content evidence summary}        |",
             "| **Overall**          | **{overall readiness status}** | **{maker-facing readiness summary}**    |",
@@ -2348,9 +2347,9 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         "do not claim that the registry declares no requirement for that product"
     ) in normalized
     assert (
-        "run the three setup-readiness FlightChecks and the broad connection diagnostic"
+        "run the two setup-readiness FlightChecks and the broad connection diagnostic"
     ) in normalized
-    assert "present all four together" in normalized
+    assert "present all three together" in normalized
     assert (
         "Attempt every available check before producing the final runtime-readiness table"
         in normalized
@@ -2361,103 +2360,35 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         "**⚠️ Ready with limitation**",
         "**➖ Not required**",
         "**⛔ Action required**",
-        "**⚠️ Skipped by administrator attestation**",
         "**⚠️ Check unavailable**",
         "**⬜ Not checked**",
     ):
         assert readiness_status in text
-    assert "### Capacity follow-up" in text
+    assert "ENV-CAPACITY-001" not in text
+    assert "### Capacity follow-up" not in text
+    assert "administrator-attested-skip" not in text
+    assert "{environment capacity status}" not in text
+    for path in (_DA_MOS_STARTER, _DA_ALM_IMPORT, _DA_PROD_TO_DEV):
+        delegated = " ".join(path.read_text(encoding="utf-8").split())
+        assert "three setup-readiness FlightChecks" not in delegated
+        assert "all four FlightChecks" not in delegated
     assert "Times are shown in your local timezone" not in text
-    assert (
-        "We weren’t able to automatically verify capacity for "
-        "**{ENVIRONMENT_DISPLAY_NAME}**."
-    ) in text
     assert "canonical `environment.display_name`" in text
     assert '--environment-display-name "{ENVIRONMENT_DISPLAY_NAME}"' in text
     assert "Your agent and local authoring workspace are already available." in text
-    assert "#### Copilot Studio message capacity" in text
-    assert "In the left navigation, select **Licensing**." in text
-    assert "Under **Products**, select **Copilot Studio**." in text
-    assert "Select **Manage Copilot Credits**." in text
-    capacity_section = text.split("### Capacity follow-up", 1)[1].split(
-        "**End message.**",
-        1,
-    )[0]
-    assert agent_link not in capacity_section
-    assert (
-        "Setup requires a nonzero allocation for an automatic pass; for initial use, we recommend "
-        "allocating **500 or more Copilot Credits**."
-    ) in normalized
-    assert (
-        "After a Power Platform administrator verifies or changes the allocation, use "
-        "**Check again**"
-    ) in normalized
-    assert (
-        "| **Power Platform administrator** | Review or change capacity, or consent to overriding this capacity check | Required for administrator-attested skip |"
-        in text
-    )
-    assert "> ⚠️ **Administrator consent required**" in text
-    assert (
-        "a **Power Platform administrator is present and has consented to "
-        "override the capacity check for {ENVIRONMENT_DISPLAY_NAME}**"
-        in normalized
-    )
-    assert "The original unavailable or denied result remains the recorded evidence." in (
-        normalized
-    )
     assert "Complete this check to finish foundation readiness" not in text
     assert "using `ring_from_environment_host()`" in normalized
     assert "do not assume production" in normalized
     assert '--ring "{CONFIRMED_RING}"' in text
-    assert "--administrator-attested-skip" in text
     assert "--manual-attested" not in text
     assert "--manual-overridden" not in text
-    assert "requires an observed allocation greater than zero" in normalized
-    assert "The first eligible result can be used for administrator attestation" in normalized
-    shared_capacity = " ".join(
-        _PERMISSION_GUIDANCE.read_text(encoding="utf-8").split(
-            "## Capacity verification and administration", 1,
-        )[1].split()
-    )
-    assert "after the first successful zero-allocation result" in shared_capacity
-    assert "**Check again** is optional" in shared_capacity
-    assert "after a second successful zero-allocation result" not in shared_capacity
-    assert (
-        "`Failed` and `Error` are not eligible for administrator-attested skip"
-        in shared_capacity
-    )
-    assert "after a second zero-allocation result" not in text
-    assert "**Check again before overriding**" not in text
-    warning_choices = text.split("For `Warning`, present:", 1)[1].split(
-        "When the status is `Manual`", 1
-    )[0]
-    assert "- **Check again**" in warning_choices
-    assert "- **Continue with administrator-attested skip**" in warning_choices
-    assert "- **Not yet**" in warning_choices
-    assert "- **Help me decide**" in warning_choices
-    assert "> ⚠️ **Administrator consent required**" in warning_choices
-    assert "The original zero-allocation result remains the recorded evidence." in warning_choices
-    assert "rerender the Warning Message block above" in warning_choices
+    permission_guidance = _PERMISSION_GUIDANCE.read_text(encoding="utf-8")
+    assert "## Capacity verification and administration" not in permission_guidance
+    assert "Copilot Studio capacity" not in permission_guidance
     assert (
         "Use the following exact evidence-summary templates, substituting only "
         "their documented placeholders"
     ) in normalized
-    assert "A capacity check of {environment display name}" in text
-    assert "A recheck of {environment display name}" not in text
-    assert (
-        "Never treat the maker's statement that capacity was allocated as verification"
-        in normalized
-    )
-    assert "Continue with administrator-attested skip" in text
-    assert (
-        "A Power Platform administrator was present and consented to override this capacity check"
-        in normalized
-    )
-    assert "The final readiness table remains available" in normalized
-    assert (
-        "`Failed` and `Error` are not eligible for administrator-attested skip"
-        in normalized
-    )
     assert "Agent content is present in your local workspace." in text
     assert "When it is false after materialization" in normalized
     assert (
