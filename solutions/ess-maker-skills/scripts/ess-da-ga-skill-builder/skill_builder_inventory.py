@@ -20,7 +20,8 @@ Inputs (at least one):
 
 Tool kinds are first-pass hints from names and schemas only. How a tool fits a scenario is decided by reading
 its description against the scenario's steps.
-  generic        takes a table name, so the skill must supply the table, fields and query
+  generic        an FCC (on-demand fetch) tool: takes a table name, so the skill must supply the table, fields
+                 and query
   lookup         model-visible read bound to one entity
   widget         model-visible tool that shows records in a widget
   form           model-visible tool that opens a form the user reviews and submits
