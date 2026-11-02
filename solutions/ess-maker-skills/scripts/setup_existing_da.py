@@ -47,6 +47,7 @@ from da_product_registry import (
     DAProductRegistryError,
     resolve_product_setup,
 )
+from flightcheck.runner import FLIGHTCHECK_RESULT_SCHEMA_VERSION
 
 
 ATTACH_METADATA = ".agentbuilder/attach.json"
@@ -925,6 +926,76 @@ def _matching_flightcheck_rows(
     ]
 
 
+def _validate_setup_checkpoint_report(
+    payload: dict[str, Any],
+    *,
+    checkpoint: str,
+    environment: dict[str, Any],
+    agent: dict[str, Any],
+) -> None:
+    """Bind a current selected-DA checkpoint report to its setup target."""
+    if (
+        payload.get("schema_version") != FLIGHTCHECK_RESULT_SCHEMA_VERSION
+        or payload.get("scope") != "checkpoint"
+    ):
+        raise ExistingDASetupError(
+            "Unsupported setup FlightCheck report format: expected schema "
+            f"{FLIGHTCHECK_RESULT_SCHEMA_VERSION!r} and scope 'checkpoint'; "
+            f"received schema {payload.get('schema_version')!r} and scope "
+            f"{payload.get('scope')!r}. Rerun {checkpoint} for the same "
+            "agent and environment with the current workspace FlightCheck "
+            "CLI, then apply the fresh results.json."
+        )
+    coverage = payload.get("coverage")
+    requested = coverage.get("requested") if isinstance(coverage, dict) else None
+    if not isinstance(requested, list) or not all(
+        isinstance(value, str) for value in requested
+    ):
+        raise ExistingDASetupError(
+            "FlightCheck results have invalid coverage.requested metadata."
+        )
+    if checkpoint not in requested:
+        raise ExistingDASetupError(
+            f"FlightCheck results did not request {checkpoint}; "
+            f"coverage.requested is {requested!r}."
+        )
+    expected = {
+        "agentId": agent["id"],
+        "environmentId": environment["id"],
+        "agentSlug": agent.get("workspace_slug"),
+        "agentSchemaName": agent.get("schema_name"),
+        "tenantId": environment.get("tenant_id"),
+        "serviceRing": environment.get("ring"),
+        "realm": agent.get("realm"),
+    }
+    for name in ("validation_context", "requested_validation_context"):
+        context = payload.get(name)
+        if not isinstance(context, dict):
+            raise ExistingDASetupError(
+                f"FlightCheck results have invalid {name} metadata."
+            )
+        if name == "validation_context":
+            for field in ("agentId", "environmentId"):
+                value = context.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    raise ExistingDASetupError(
+                        f"FlightCheck {name}.{field} is required to bind "
+                        "the report to the canonical setup target."
+                    )
+        for field, expected_value in expected.items():
+            value = context.get(field)
+            if value is None or value == "" or not expected_value:
+                continue
+            if (
+                not isinstance(value, str)
+                or value.strip().casefold() != expected_value.casefold()
+            ):
+                raise ExistingDASetupError(
+                    f"FlightCheck {name}.{field} is {value!r}; expected "
+                    f"{expected_value!r} for the canonical setup target."
+                )
+
+
 def maintain_setup_flightcheck(
     kit_root: Path,
     *,
@@ -970,7 +1041,14 @@ def maintain_setup_flightcheck(
         raise ExistingDASetupError(
             "FlightCheck results have an invalid document shape."
         )
-    if payload.get("scope") != f"checkpoint:{checkpoint}":
+    if requirement is None:
+        _validate_setup_checkpoint_report(
+            payload,
+            checkpoint=checkpoint,
+            environment=state["environment"],
+            agent=agent_state["agent"],
+        )
+    elif payload.get("scope") != f"checkpoint:{checkpoint}":
         raise ExistingDASetupError(
             f"FlightCheck results do not belong to {checkpoint}."
         )

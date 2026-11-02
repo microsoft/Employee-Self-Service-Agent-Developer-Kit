@@ -373,10 +373,29 @@ def _write_flightcheck_results(
         }
         for index, status in enumerate(statuses, start=1)
     ]
+    state = _setup_state(root)
+    agent = state["agents"][agent_id]["agent"]
+    context = {
+        "agentId": agent_id,
+        "environmentId": state["environment"]["id"],
+        "agentSlug": agent["workspace_slug"],
+        "agentSchemaName": agent["schema_name"],
+        "tenantId": state["environment"]["tenant_id"],
+        "serviceRing": state["environment"]["ring"],
+        "realm": agent.get("realm"),
+    }
     path.write_text(
         json.dumps(
             {
-                "scope": f"checkpoint:{checkpoint}",
+                "schema_version": "flightcheck.result.v2",
+                "scope": "checkpoint",
+                "coverage": {"requested": [checkpoint]},
+                "validation_context": context,
+                "requested_validation_context": {
+                    **context,
+                    "tenantId": "",
+                    "realm": "",
+                },
                 "failed": sum(status == "Failed" for status in statuses),
                 "errors": sum(status == "Error" for status in statuses),
                 "results": rows,
@@ -1318,6 +1337,87 @@ def test_flightcheck_maintenance_completes_setup(tmp_path: Path) -> None:
         loaded_agent["steps"]["SETUP-06"]["checkpoint"]
         == "DA-CONTENT-001"
     )
+
+
+@pytest.mark.parametrize(
+    "fields,value,message",
+    [
+        (("schema_version",), "flightcheck.result.v1", "Unsupported setup FlightCheck report format"),
+        (("scope",), "checkpoint:DA-AGENT-001", "Unsupported setup FlightCheck report format"),
+        (("scope",), "full", "Unsupported setup FlightCheck report format"),
+        (("scope",), "profile", "Unsupported setup FlightCheck report format"),
+        (("coverage", "requested"), ["DA-CONTENT-001"], "did not request DA-AGENT-001"),
+        (("coverage", "requested"), "DA-AGENT-001", "invalid coverage.requested"),
+        (("validation_context", "agentId"), OTHER_AGENT_ID, "validation_context.agentId"),
+        (("validation_context", "environmentId"), OTHER_AGENT_ID, "validation_context.environmentId"),
+        (("validation_context", "agentId"), "", "agentId is required"),
+        (("validation_context", "serviceRing"), "prod", "validation_context.serviceRing"),
+        (("validation_context", "realm"), "prod", "validation_context.realm"),
+        (("requested_validation_context", "agentId"), OTHER_AGENT_ID, "requested_validation_context.agentId"),
+        (("requested_validation_context", "tenantId"), OTHER_AGENT_ID, "requested_validation_context.tenantId"),
+    ],
+)
+def test_flightcheck_rejects_unrelated_or_obsolete_reports_without_writes(
+    tmp_path: Path,
+    fields: tuple[str, ...],
+    value: Any,
+    message: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    path = _write_flightcheck_results(tmp_path, "DA-AGENT-001", "Passed")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    container = payload
+    for field in fields[:-1]:
+        container = container[field]
+    container[fields[-1]] = value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    before = state_path.read_bytes()
+    report_before = path.read_bytes()
+    modified_before = path.stat().st_mtime_ns
+
+    with pytest.raises(setup_existing_da.ExistingDASetupError, match=message):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            agent_id=AGENT_ID,
+            checkpoint="DA-AGENT-001",
+            results_path=path,
+        )
+
+    assert state_path.read_bytes() == before
+    assert path.read_bytes() == report_before
+    assert path.stat().st_mtime_ns == modified_before
+
+
+@pytest.mark.parametrize(
+    "status", ["Failed", "Error", "Manual", "Blocked", "Skipped", "Warning", "NotConfigured"],
+)
+def test_flightcheck_records_unresolved_results_without_verified_target(
+    tmp_path: Path,
+    status: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    path = _write_flightcheck_results(tmp_path, "DA-AGENT-001", status)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["validation_context"]["targetVerified"] = False
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    step_started = datetime.fromisoformat(
+        _agent_setup_state(tmp_path)["steps"]["SETUP-02.1"]["updated_at"]
+    ).timestamp()
+    fresh_time = max(path.stat().st_mtime, step_started + 1)
+    os.utime(path, (fresh_time, fresh_time))
+
+    result = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="DA-AGENT-001",
+        results_path=path,
+    )
+
+    assert result["state"] == "blocked"
+    assert result["evidenceStatuses"] == [status]
+    assert result["connectReady"] is False
+    assert _agent_setup_state(tmp_path)["steps"]["SETUP-02.1"]["mode"] is None
 
 
 def test_setup_rerun_requires_fresh_flightcheck_evidence(

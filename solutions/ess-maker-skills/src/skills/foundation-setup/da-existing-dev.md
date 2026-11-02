@@ -179,6 +179,10 @@ python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}"
 python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint DA-CONTENT-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001/results.json
 ```
 
+If `setup_existing_da.py maintain-flightcheck` rejects a report because its format is unsupported, rerun that checkpoint using the current workspace's FlightCheck CLI for the same selected agent, environment, and ring. Write to a new evidence folder, then apply the fresh `results.json` through `maintain-flightcheck`.
+
+Ad hoc format reconciliation is allowed to unblock setup, including report or local setup-state repairs when needed. Preserve original evidence, confirm the checkpoint, target, and freshness, record the adjustments, and keep actual check findings unchanged.
+
 Use canonical `environment.display_name` as `{ENVIRONMENT_DISPLAY_NAME}` in
 the connection guidance below. When that optional field is unavailable, replace
 the whole placeholder with `the selected Power Platform environment`; do not

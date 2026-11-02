@@ -24,6 +24,7 @@ import yaml
 from tests.conftest import require_validated_mock
 from tests.mocks import graph as graph_mock, powerplatform as powerplatform_mock
 
+import setup_existing_da
 from agentbuilder import AgentBuilderClient, ConnectivityClient, derive_environment_host
 from flightcheck import cli, maker_diagnostics as maker
 from flightcheck.checks import _connection_dependencies, maker_integrations, workday_da
@@ -109,6 +110,95 @@ def _register_native(http, workspace, *, environment_body=None):
     url = urlsplit(environment["request"]["uri"])
     url = url._replace(path=url.path.rsplit("/", 1)[0] + "/" + ENV_ID, query="").geturl()
     http.add("GET", url, json=body)
+
+
+@pytest.mark.parametrize("unverified", [False, True])
+def test_current_checkpoint_cli_reports_feed_setup_maintenance(
+    setup_workspace, monkeypatch, unverified,
+):
+    ws = setup_workspace
+    selected = ws.config["agents"][0]
+    agent_id = selected["botId"]
+    connection = {
+        "setupSource": "existing-dev",
+        "environment": {
+            "id": ENV_ID, "tenantId": TENANT_ID,
+            "powerPlatformApiEndpoint": derive_environment_host(ENV_ID, "prod"),
+            "ring": "prod", "apiVersion": setup_existing_da.DEFAULT_API_VERSION,
+        },
+        "agent": {
+            "id": agent_id, "name": ws.content["bot"]["displayName"],
+            "schemaName": selected["schemaName"], "workspaceSlug": "hr",
+        },
+    }
+    progress = setup_existing_da._build_canonical_setup_progress(
+        connection, None, reopen_flightchecks=True,
+    )
+    progress["workspace"] = {
+        "folder": str(ws.root),
+        "agent_path": str(ws.root / "workspace" / "agents" / "hr"),
+    }
+    progress["steps"]["SETUP-07"] = setup_existing_da._step_record(
+        "done", mode="automated",
+        note=setup_existing_da.SETUP_STEP_NOTES["SETUP-07"],
+        recorded_at=progress["updated_at"],
+    )
+    progress["active_step"] = setup_existing_da._next_setup_step(progress["steps"])
+    setup_existing_da._store_canonical_agent_state(ws.root, None, connection, progress)
+    (ws.root / ".local" / "config.json").write_text(json.dumps(ws.config), encoding="utf-8")
+    if unverified:
+        ws.auth.side_effect = RuntimeError("Native authentication unavailable")
+
+    def run_checkpoint(checkpoint, output):
+        monkeypatch.setattr("sys.argv", [
+            "flightcheck", "--checkpoint", checkpoint, "--output", output,
+            "--no-open", "--no-telemetry",
+        ])
+        with responses.RequestsMock(assert_all_requests_are_fired=False) as http:
+            _register_native(http, ws)
+            with pytest.raises(SystemExit) as exc:
+                cli.main()
+            assert exc.value.code == int(unverified)
+        return ws.root / output / "results.json"
+
+    for checkpoint in ("DA-AGENT-001", "DA-CONTENT-001"):
+        path = run_checkpoint(checkpoint, f"report-{checkpoint}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["scope"] == "checkpoint"
+        assert payload["coverage"]["requested"] == [checkpoint]
+        if unverified:
+            assert payload["validation_context"]["targetVerified"] is False
+        if checkpoint == "DA-CONTENT-001":
+            assert set(payload["coverage"]["emitted"]) == {"DA-AGENT-001", checkpoint}
+        if checkpoint == "DA-AGENT-001" and not unverified:
+            obsolete = deepcopy(payload)
+            obsolete["scope"] = f"checkpoint:{checkpoint}"
+            obsolete_path = ws.root / "obsolete-results.json"
+            obsolete_path.write_text(json.dumps(obsolete), encoding="utf-8")
+            original = obsolete_path.read_bytes()
+            modified = obsolete_path.stat().st_mtime_ns
+            with pytest.raises(
+                setup_existing_da.ExistingDASetupError,
+                match="current workspace FlightCheck CLI",
+            ):
+                setup_existing_da.maintain_setup_flightcheck(
+                    ws.root, agent_id=agent_id,
+                    checkpoint=checkpoint, results_path=obsolete_path,
+                )
+            path = run_checkpoint(checkpoint, f"regenerated-{checkpoint}")
+            assert obsolete_path.read_bytes() == original
+            assert obsolete_path.stat().st_mtime_ns == modified
+        before = path.read_bytes()
+        result = setup_existing_da.maintain_setup_flightcheck(
+            ws.root, agent_id=agent_id, checkpoint=checkpoint, results_path=path,
+        )
+        assert result["state"] == ("blocked" if unverified else "done")
+        assert path.read_bytes() == before
+
+    state = setup_existing_da._load_canonical_setup_state(ws.root)
+    assert state["agents"][agent_id]["connect_ready"] is not unverified
+    capacity = state["agents"][agent_id]["steps"]["SETUP-02.2"]
+    assert (capacity["state"], capacity["mode"]) == ("done", "skipped")
 
 
 def _register_maker_baseline(http):
