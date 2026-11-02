@@ -45,6 +45,19 @@ rollback gates, action-result handling, or L.5 completion.
 
 Parse the returned `servicenow.resume-handoff.v1` object:
 
+- before any lifecycle action/checkpoint, show
+  `transport.ordinaryReply.text` as an ordinary agent response. Only when
+  `transport.roleAvailability.gateRequired` is true, ask
+  `transport.roleAvailability.question`. On **Yes**, rerun the exact command
+  with `--roles-available yes`, require `roleAvailabilityAccepted: true`, and
+  continue. On **No**, rerun with `--roles-available no`, show
+  `transport.roleAvailability.unavailableReply` as an ordinary response, and
+  re-ask the exact same question. Do not advance or write lifecycle state on
+  **No**. This ServiceNow role question replaces the generic
+  **Ready to start?** prompt. A normal resume at the already accepted contract
+  revision continues without asking role availability again; all mutation
+  confirmations remain separate;
+
 - validate `progress.schemaVersion` as
   `servicenow.phase-progress.v1` and require its labels/order to match the
   selected provider contract. Render only each item's returned
@@ -58,10 +71,11 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   `progress.currentPhase.actionFinishedText` and continue to checkpoints. This
   is not phase completion;
 - for a question or delegated-admin pause, prepend
-  `progress.currentPhase.questionText` plus two newlines to the exact question
-  body. It already contains the current checklist with the active phase marked
-  waiting. Then show `progress.currentPhase.waitingText` when waiting. Do not
-  add a second question;
+  `progress.currentPhase.waitingChecklistText` as an ordinary agent response,
+  then pass only the exact compact question body to the question tool. Then
+  show `progress.currentPhase.waitingText` when waiting. Do not add a
+  `Progress` field, checklist, phase table, description, default, required
+  input, hidden input, or second question;
 - for blocked/error results, show
   `progress.currentPhase.errorChecklistText`,
   `progress.currentPhase.needsAttentionText`, and the result's short next

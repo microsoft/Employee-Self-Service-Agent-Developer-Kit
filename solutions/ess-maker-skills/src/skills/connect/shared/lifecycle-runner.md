@@ -44,17 +44,19 @@ or progress process. Each item retains its internal contract `label` for
 validation and supplies a short `customerLabel` for every visible checklist.
 Other providers retain this runner's existing output.
 
-After plan acceptance, show its short headline once and its current phase
-checklist. Re-emit the freshly returned checklist only on an actual phase
+For DA ServiceNow, render the controller's
+`transport.ordinaryReply.text` as an ordinary agent response. It contains the
+complete **Phases** list, responsible role for each phase, and current
+checklist. Re-emit the freshly returned ordinary reply only on an actual phase
 completion/next-phase transition, waiting pause, or blocked/error transition.
 A cached `done` phase displays **Rechecking** until this invocation adds its
 verified marker. Before each meaningful action or checkpoint run, show the
 exact current-phase `startText`. After `applied`/`recorded`, show
 `actionFinishedText` and continue checking; an action receipt is never phase
-completion. When an action asks a question, prepend the exact `questionText`
-to the durable question body; it contains the latest checklist with the
-current phase marked waiting. Use `waitingText` for the pause. This does not
-add a question. For a failure, show `errorChecklistText`,
+completion. When an action asks a question, show
+`waitingChecklistText` as an ordinary agent response, then pass only the
+action's compact returned question to the question tool. Use `waitingText` for
+the pause. For a failure, show `errorChecklistText`,
 `needsAttentionText`, and the exact full remediation returned by the
 checkpoint. For ServiceNow, that remediation is the branch-loaded recovery
 handoff: problem, category, owner, exact location, values, action, success
@@ -160,6 +162,51 @@ earlier invocation.
 ---
 
 ## L.1 — Show the plan and get attestation
+
+### DA ServiceNow role-availability branch
+
+DA ServiceNow uses the provider controller's
+`servicenow.lifecycle-transport.v1` result instead of the generic confirmation
+below. Show the ordinary response on every first run and resume. Ask role
+availability only when `roleAvailability.gateRequired` is true (first run or
+contract-revision reapproval):
+
+1. Show `transport.ordinaryReply.text` as an ordinary agent response. Verify
+   it contains a **Phases** heading, every contract phase exactly once in
+   order, every phase's responsible role, and the current progress checklist.
+2. Ask only `transport.roleAvailability.question`. Its supported fields are
+   `header`, `question`, `options`, and `allowFreeformInput`; its choices are
+   exactly **Yes** and **No**. Do not add a `Progress` field, description,
+   default, required input, hidden field, plan, checklist, or phase table to
+   the elicitation.
+3. Role availability means the people are available. It does not authenticate
+   them, verify permission, authorize mutation, prove evidence, or replace any
+   admin, binding, Test, or dangerous-action confirmation. Do not collect
+   names, email addresses, contacts, or messages. One person may hold multiple
+   roles.
+4. On **Yes**, rerun `resume-handoff` with `--roles-available yes`. Require
+   `roleAvailabilityAccepted: true`, then apply the existing first-run or
+   revision-reapproval attestation logic below without asking the generic
+   **Ready to start?** question.
+5. On **No**, rerun `resume-handoff` with `--roles-available no`, show the
+   exact returned `transport.roleAvailability.unavailableReply` as an ordinary
+   response, then re-ask the exact same returned question. Do not initialize
+   or update state, advance a phase, accept a contract revision, persist an
+   attestation, infer permission, or create evidence. Repeated **No** answers
+   are stable and repeat the same reply and question.
+6. On revision reapproval, `requiredRoles` contains only roles for phases that
+   are not already durably complete. Completed/reused evidence does not
+   require an irrelevant administrator to be available again. A normal resume
+   at the accepted contract revision shows progress and continues without
+   asking availability again.
+
+After **Yes**, use the existing initialization/reapproval rules below:
+first-run initialization records the accepted contract revision; revision
+reapproval updates only the attestation fields and preserves progress. Then
+continue to L.2. Skip the generic plan and **Ready to start?** question for DA
+ServiceNow.
+
+### Other providers
 
 Skip this section only when the state file has `attested: true` and
 `acceptedContractRevision` equals the current contract revision. A contract
@@ -487,16 +534,11 @@ For every interactive provider action, the question tool body is the durable
 visible handoff. Read the action document's
 `<!-- visible-handoff-question:v1 -->` JSON payload, render its placeholders,
 and use that supported `header`/`question`/`options`/`allowFreeformInput`
-shape exactly. The complete L.1 plan has already been shown in its ordinary
-reply; do not repeat it inside `{CURRENT_PROGRESS}`. Replace that placeholder
-with every checkpoint result produced in this invocation but not yet shown
-inside a prior question body. Include checkpoint status, description, result,
-and remediation when non-empty. Keep the ServiceNow current-phase checklist
-and `questionText` rules unchanged.
-
-`{CURRENT_PROGRESS}` is bounded FlightCheck/lifecycle display content only.
-Never insert tokens, raw prompts or responses, employee/case data, full config
-or component payloads, or secret-bearing tool output into a question.
+shape exactly. For DA ServiceNow, the complete phase plan and current progress
+have already been shown in an ordinary reply. ServiceNow action questions are
+question-only: never add the plan, checklist, progress, phase roles, checkpoint
+table, or a synthetic `Progress` input anywhere in the elicitation schema.
+Other providers retain their existing placeholder behavior.
 
 Do not call the question tool if the payload is missing, malformed, truncated,
 still contains placeholders, omits the action owner/instructions/completion

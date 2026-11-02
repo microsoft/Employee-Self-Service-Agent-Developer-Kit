@@ -85,13 +85,11 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "without re-showing the plan" in resume
     assert "without re-showing the\n   up-front plan" in resume
     assert "Do **not**\n   re-render the U.0 table" in resume
-    assert (
-        "complete L.1 plan has already been shown in its ordinary reply; "
-        "do not repeat it inside `{CURRENT_PROGRESS}`"
-    ) in normalized
-    assert "Keep the ServiceNow current-phase checklist and `questionText`" in (
-        normalized
-    )
+    assert "DA ServiceNow role-availability branch" in runner
+    assert "`transport.ordinaryReply.text`" in runner
+    assert "`transport.roleAvailability.question`" in runner
+    assert "question-only" in normalized
+    assert "never add the plan, checklist, progress, phase roles" in normalized
     assert "For these provider-action handoffs" in normalized
 
 
@@ -173,8 +171,8 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "Freeform is allowed only for one genuinely unknown value" in runner
     assert "**ServiceNow phase-progress extension:**" in runner
     assert "Other providers retain this runner's existing output" in runner
-    assert "show its short headline once" in runner
-    assert "Re-emit the freshly returned checklist" in runner
+    assert "`transport.ordinaryReply.text`" in runner
+    assert "Re-emit the freshly returned ordinary reply" in runner
     assert "phase checklist once" not in runner
     assert "cached `done` phase displays **Rechecking**" in runner
     assert "**Complete — admin confirmed**" in runner
@@ -292,7 +290,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert contract["provider"] == "servicenow-da-hrsd"
     assert contract["checkpointResultMode"] == "compact-stdout-v1"
     assert contract["attestedRoleScope"] == "lifecycle"
-    assert contract["contractRevision"] == 13
+    assert contract["contractRevision"] == 14
     assert contract["deploymentRealms"]["realmOrder"] == [
         "dev",
         "test",
@@ -316,6 +314,13 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "identity-mapping",
         "promoted-content",
         "unexpected",
+    ]
+    assert all(phase["responsibleRoles"] for phase in contract["phases"])
+    assert next(
+        phase for phase in contract["phases"] if phase["id"] == "portal-url"
+    )["responsibleRoles"] == [
+        "ESS Maker / Agent Developer",
+        "ServiceNow Admin (provides portal URL)",
     ]
     assert contract["planRoles"] == [
         "ESS Maker / Agent Developer",
@@ -432,7 +437,7 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
 
     assert contract["provider"] == "servicenow-da-itsm"
     assert contract["profile"] == "itsm"
-    assert contract["contractRevision"] == 8
+    assert contract["contractRevision"] == 9
     assert contract["deploymentRealms"]["realmOrder"] == [
         "dev",
         "test",
@@ -450,6 +455,7 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
         "promoted-content",
         "unexpected",
     ]
+    assert all(phase["responsibleRoles"] for phase in contract["phases"])
     assert "stateMigrationCommand" not in contract
     assert contract["stateInitializationCommand"] == (
         "python scripts/connect_servicenow_da.py "

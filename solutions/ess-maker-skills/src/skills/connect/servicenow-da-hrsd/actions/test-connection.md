@@ -28,7 +28,7 @@ Test/Production realm Not pass, the realm controller also requires one bounded
 category without response content: authentication, permission, connection,
 binding, identity-mapping, promoted-content, or unexpected.
 
-Use this exact visible handoff payload after rendering `{CURRENT_PROGRESS}` and
+Use this exact compact visible handoff payload after rendering
 `{COPILOT_STUDIO_AGENT_URL}`:
 
 <!-- visible-handoff-question:v1 -->
@@ -36,7 +36,7 @@ Use this exact visible handoff payload after rendering `{CURRENT_PROGRESS}` and
 [
   {
     "header": "Test ServiceNow HRSD",
-    "question": "{CURRENT_PROGRESS}\n\nPurpose: verify whether ServiceNow functionality works correctly for the exact saved draft and selected ServiceNow connection in the Copilot Studio authoring Test pane.\n\nOwner: ESS Maker / Agent Developer, signed in as the employee used for this test.\n\nOpen Employee Self-Service (HR): {COPILOT_STUDIO_AGENT_URL}\n\n1. Save the current authored draft; unsaved editor changes are not covered.\n2. Open the Test pane from this exact agent landing.\n3. Run exactly: **List my open HR cases**.\n4. Decide whether the ServiceNow functionality worked correctly.\n5. Do not include or return a person's name, email, employee ID, case number, case title, ticket/case content, or other personal data.\n\nWhat was the result?",
+    "question": "Purpose: verify whether ServiceNow functionality works correctly for the exact saved draft and selected ServiceNow connection in the Copilot Studio authoring Test pane.\n\nOwner: ESS Maker / Agent Developer, signed in as the employee used for this test.\n\nOpen Employee Self-Service (HR): {COPILOT_STUDIO_AGENT_URL}\n\n1. Save the current authored draft; unsaved editor changes are not covered.\n2. Open the Test pane from this exact agent landing.\n3. Run exactly: **List my open HR cases**.\n4. Decide whether the ServiceNow functionality worked correctly.\n5. Do not include or return a person's name, email, employee ID, case number, case title, ticket/case content, or other personal data.\n\nWhat was the result?",
     "options": [
       { "label": "Pass" },
       { "label": "Not pass" }

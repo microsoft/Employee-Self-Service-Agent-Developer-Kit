@@ -103,7 +103,7 @@ runtime-rendered question may add the bounded discovery error:
 [
   {
     "header": "ServiceNow instance",
-    "question": "{CURRENT_PROGRESS}\n\nFor {AGENT_DISPLAY_NAME} (`{SELECTED_AGENT_SLUG}`) in environment `{ENVIRONMENT_ID}` and {REALM} realm, enter the intended public ServiceNow HTTPS root URL.\n\nExample: `https://dev184242.service-now.com`\n\nUse only the instance root (`https://<instance>.service-now.com`). Do not enter a portal or module path such as `/sp`, `/esc`, or `/now/...`. Do not enter a username, password, credential, token, secret, or certificate. If you do not know the URL, ask your ServiceNow administrator for the public instance root.\n\n{DISCOVERY_ERROR_IF_ANY}",
+    "question": "For {AGENT_DISPLAY_NAME} (`{SELECTED_AGENT_SLUG}`) in environment `{ENVIRONMENT_ID}` and {REALM} realm, enter the intended public ServiceNow HTTPS root URL.\n\nExample: `https://dev184242.service-now.com`\n\nUse only the instance root (`https://<instance>.service-now.com`). Do not enter a portal or module path such as `/sp`, `/esc`, or `/now/...`. Do not enter a username, password, credential, token, secret, or certificate. If you do not know the URL, ask your ServiceNow administrator for the public instance root.\n\n{DISCOVERY_ERROR_IF_ANY}",
     "allowFreeformInput": true
   }
 ]

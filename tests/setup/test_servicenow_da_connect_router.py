@@ -92,7 +92,9 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "Never report connected from cached state alone" in prompt
     assert "servicenow.phase-progress.v1" in prompt
     assert "progress.currentPhase.startText" in prompt
-    assert "progress.currentPhase.questionText" in prompt
+    assert "progress.currentPhase.waitingChecklistText" in prompt
+    assert "transport.ordinaryReply.text" in prompt
+    assert "transport.roleAvailability.question" in prompt
     assert "progress.currentPhase.errorChecklistText" in prompt
     assert "Re-emit the freshly returned" in prompt
     assert "an action receipt" in prompt

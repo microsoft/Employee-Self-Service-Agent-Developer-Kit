@@ -15801,6 +15801,13 @@ def test_resume_handoff_withholds_preflight_checkpoint_for_pending_instance(
     assert pending["choiceValues"] == choices
     body = pending["question"]["question"]
     assert "Which instance should this agent use" in body
+    assert "Progress" not in body
+    assert "Connection progress" not in body
+    assert "**Phases**" not in body
+    assert "**Phases**" in result["transport"]["ordinaryReply"]["text"]
+    assert result["roleAvailabilityAccepted"] is False
+    assert result["transport"]["roleAvailability"]["gateRequired"] is False
+    assert result["transport"]["roleAvailability"]["question"] is None
     assert "**Problem**" not in body
     assert "**Category**" not in body
     assert "**Recheck and resume**" not in body
@@ -16111,14 +16118,12 @@ def test_phase_progress_reemits_updated_board_for_transition_wait_and_error(
     assert "- 🔄 Confirm Entra identity options — In progress" in (
         transitioned["checklistText"]
     )
-    assert transitioned["currentPhase"]["questionText"].startswith(
-        "**Progress**\n\nConnection progress:\n\n- ✅"
-    )
+    assert "questionText" not in transitioned["currentPhase"]
     assert "- ✅ Check existing setup — Complete — checked" in (
-        transitioned["currentPhase"]["questionText"]
+        transitioned["currentPhase"]["waitingChecklistText"]
     )
     assert "- ⏳ Confirm Entra identity options — Waiting" in (
-        transitioned["currentPhase"]["questionText"]
+        transitioned["currentPhase"]["waitingChecklistText"]
     )
     assert "- ❌ Confirm Entra identity options — Needs attention" in (
         transitioned["currentPhase"]["errorChecklistText"]
@@ -16340,8 +16345,186 @@ def test_resume_handoff_cli_returns_plan_required_without_creating_state(
         "stateInitializationRequired": True,
         "stateInitializationCommand": None,
     }
+    assert result["status"] == "role-availability-required"
+    assert result["transport"]["roleAvailability"]["question"]["options"] == [
+        {"label": "Yes"},
+        {"label": "No"},
+    ]
     assert "action" not in result
     assert not connect_root.exists()
+
+
+@pytest.mark.parametrize(
+    ("profile", "agent_id", "agent_slug"),
+    (
+        ("hrsd", AGENT_ID, "employee-self-service-hr"),
+        ("itsm", OTHER_AGENT_ID, "employee-self-service-it"),
+    ),
+)
+def test_role_availability_transport_separates_plan_from_question(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    agent_id: str,
+    agent_slug: str,
+) -> None:
+    product = snow.PRODUCT_PROFILES[profile]
+    context = _profile_context(
+        profile,
+        agent_id=agent_id,
+        agent_slug=agent_slug,
+    )
+    context["root"] = tmp_path
+    source_contract = (
+        snow.SOLUTION_ROOT
+        / "src"
+        / "skills"
+        / "connect"
+        / product.provider_key
+        / "contract.json"
+    )
+    target_contract = tmp_path / product.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_bytes(source_contract.read_bytes())
+    monkeypatch.chdir(tmp_path)
+
+    with snow.product_profile_context(profile):
+        initial = snow.resume_handoff(context, roles_available=None)
+        first_no = snow.resume_handoff(context, roles_available=False)
+        second_no = snow.resume_handoff(context, roles_available=False)
+        accepted = snow.resume_handoff(context, roles_available=True)
+
+    transport = initial["transport"]
+    ordinary = transport["ordinaryReply"]["text"]
+    question = transport["roleAvailability"]["question"]
+    assert initial["status"] == "role-availability-required"
+    assert "**Phases**" in ordinary
+    assert ordinary.count("Responsible:") == len(
+        json.loads(source_contract.read_text(encoding="utf-8"))["phases"]
+    )
+    assert "Connection progress:" in ordinary
+    assert question == {
+        "header": "Role availability",
+        "question": (
+            "Are the currently required roles available?\n\n"
+            "Required roles: "
+            + ", ".join(transport["roleAvailability"]["requiredRoles"])
+            + "."
+        ),
+        "options": [{"label": "Yes"}, {"label": "No"}],
+        "allowFreeformInput": False,
+    }
+    question_json = json.dumps(question)
+    assert "Progress" not in question_json
+    assert "Connection progress" not in question_json
+    assert "Phases" not in question_json
+    assert set(question) == {
+        "header",
+        "question",
+        "options",
+        "allowFreeformInput",
+    }
+    assert first_no["transport"]["roleAvailability"]["question"] == question
+    assert second_no["transport"]["roleAvailability"]["question"] == question
+    assert first_no["transport"]["roleAvailability"]["unavailableReply"] == (
+        second_no["transport"]["roleAvailability"]["unavailableReply"]
+    )
+    assert first_no["transport"]["roleAvailability"]["stateChanged"] is False
+    assert "accepted contract revision has advanced" in (
+        first_no["transport"]["roleAvailability"]["unavailableReply"]
+    )
+    assert accepted["roleAvailabilityAccepted"] is True
+    assert accepted["lifecycle"]["decision"] == "plan-required"
+    assert "Ready to start?" not in ordinary
+    assert not snow._lifecycle_state_path(context).exists()
+
+
+def test_resume_role_question_excludes_completed_admin_roles(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    profile = "itsm"
+    product = snow.PRODUCT_PROFILES[profile]
+    context = _profile_context(
+        profile,
+        agent_id=OTHER_AGENT_ID,
+        agent_slug="employee-self-service-it",
+    )
+    context["root"] = tmp_path
+    source_contract = (
+        snow.SOLUTION_ROOT
+        / "src"
+        / "skills"
+        / "connect"
+        / product.provider_key
+        / "contract.json"
+    )
+    target_contract = tmp_path / product.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_bytes(source_contract.read_bytes())
+    contract = json.loads(source_contract.read_text(encoding="utf-8"))
+    monkeypatch.chdir(tmp_path)
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, _itsm_components())
+        state["attested"] = True
+        state["attestedAt"] = "2026-11-02T00:00:00Z"
+        state["acceptedContractRevision"] = contract["contractRevision"] - 1
+        state["phases"] = {
+            phase["id"]: {
+                "status": (
+                    "done"
+                    if phase["id"]
+                    in {
+                        "preflight",
+                        "entra-registration",
+                        "servicenow-oidc",
+                    }
+                    else "pending"
+                ),
+                "checkpointResults": {},
+            }
+            for phase in contract["phases"]
+        }
+        path = snow._lifecycle_state_path(context)
+        snow._write_lifecycle_state(context, state)
+        before = path.read_bytes()
+        gated = snow.resume_handoff(context, roles_available=None)
+        no_response = snow.resume_handoff(context, roles_available=False)
+
+    roles = gated["transport"]["roleAvailability"]["requiredRoles"]
+    assert "Microsoft Entra Application Administrator or higher" not in roles
+    assert "ServiceNow Admin / security_admin" not in roles
+    assert "ESS Maker / Agent Developer" in roles
+    assert "ServiceNow Admin (provides portal URL)" in roles
+    assert "action" not in gated
+    assert "checkpoints" not in gated
+    assert "pendingInput" not in gated
+    assert no_response["transport"]["roleAvailability"]["question"] == (
+        gated["transport"]["roleAvailability"]["question"]
+    )
+    assert path.read_bytes() == before
+
+
+def test_target_realm_reuses_accepted_journey_role_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    with snow.product_profile_context("hrsd"):
+        result = snow.validate_realm(
+            context,
+            realm="test",
+        )
+
+    assert result["status"] == "deployment-required"
+    assert result["transport"]["ordinaryReply"]["text"].count(
+        "Responsible: ESS Maker / Agent Developer"
+    ) == 3
+    assert result["transport"]["roleAvailability"]["gateRequired"] is False
+    assert result["transport"]["roleAvailability"]["question"] is None
+    assert result["transport"]["roleAvailability"]["available"] is True
+    assert result["remoteMutationCount"] == 0
 
 
 def _write_resume_contract_and_state(root: Path) -> None:

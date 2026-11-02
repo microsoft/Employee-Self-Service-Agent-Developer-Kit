@@ -1,5 +1,5 @@
 {
-  "contractRevision": 8,
+  "contractRevision": 9,
   "provider": "servicenow-da-itsm",
   "displayName": "ServiceNow ITSM",
   "profile": "itsm",
@@ -67,6 +67,7 @@
     {
       "id": "preflight",
       "label": "Discover existing ServiceNow admin setup and identify missing or unhealthy items",
+      "responsibleRoles": ["ESS Maker / Agent Developer"],
       "checkpoints": [
         "SN-DA-ITSM-ADMIN-PREFLIGHT-001"
       ],
@@ -80,6 +81,7 @@
     {
       "id": "entra-registration",
       "label": "Guide and verify the Microsoft Entra User Login application setup",
+      "responsibleRoles": ["Microsoft Entra Application Administrator or higher"],
       "checkpoints": [
         "SN-DA-ITSM-ENTRA-*"
       ],
@@ -106,6 +108,7 @@
     {
       "id": "servicenow-oidc",
       "label": "Guide the ServiceNow OIDC provider and active-user mapping setup",
+      "responsibleRoles": ["ServiceNow Admin / security_admin"],
       "checkpoints": [
         "SN-DA-ITSM-OIDC-001"
       ],
@@ -134,6 +137,7 @@
     {
       "id": "credential",
       "label": "Create or explicitly reuse the exact ServiceNow physical connection",
+      "responsibleRoles": ["ESS Maker / Agent Developer"],
       "checkpoints": [
         "SN-DA-ITSM-CREDENTIAL-001"
       ],
@@ -148,6 +152,7 @@
     {
       "id": "agent-connection",
       "label": "Connect the selected ServiceNow credential to this agent",
+      "responsibleRoles": ["ESS Maker / Agent Developer"],
       "checkpoints": [
         "SN-DA-ITSM-AGENT-CONNECTION-001"
       ],
@@ -206,6 +211,7 @@
     {
       "id": "topics",
       "label": "Prepare the ServiceNow ITSM topics for this agent",
+      "responsibleRoles": ["ESS Maker / Agent Developer"],
       "checkpoints": [
         "SN-DA-ITSM-TOPICS-001"
       ],
@@ -241,6 +247,10 @@
     {
       "id": "portal-url",
       "label": "Configure the ServiceNow employee portal Base URI",
+      "responsibleRoles": [
+        "ESS Maker / Agent Developer",
+        "ServiceNow Admin (provides portal URL)"
+      ],
       "checkpoints": [
         "SN-DA-ITSM-PORTAL-001"
       ],
@@ -257,6 +267,7 @@
     {
       "id": "test",
       "label": "Confirm a ServiceNow ITSM request works in the Test pane",
+      "responsibleRoles": ["ESS Maker / Agent Developer"],
       "checkpoints": [
         "SN-DA-ITSM-TEST-001"
       ],

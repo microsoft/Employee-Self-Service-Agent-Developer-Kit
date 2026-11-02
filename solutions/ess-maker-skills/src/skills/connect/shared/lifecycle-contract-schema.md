@@ -58,6 +58,7 @@ reads a contract, runs the checkpoints it names, and renders results.
 |-------|------|----------|-------|
 | `id` | string | yes | Stable, internal only — never shown to the user. |
 | `label` | string | yes | Plain-language description shown in the up-front plan and the resume checklist (e.g. `"Confirm the Workday extension and its connections are healthy"`). No internal IDs, checkpoint names, or file paths. |
+| `responsibleRoles` | array of strings | no | Display-only phase ownership shown in the ServiceNow ordinary-reply phase plan. It never authenticates, authorizes, proves permission, or replaces phase evidence. ServiceNow contracts declare it for every phase; providers that omit it retain their existing plan rendering. |
 | `checkpoints` | array of strings | yes | One or more FlightCheck checkpoint IDs (or family wildcards, e.g. `"WD-FLOW-*"`) that gate this phase. The phase is `done` only when every listed checkpoint returns a status allowed by `completionStatuses`. |
 | `completionStatuses` | array of strings | no | Statuses allowed to complete this phase. Defaults to `["Passed"]`. Add `Manual`, `Warning`, `NotConfigured`, or `Skipped` only when that outcome is genuinely sufficient for this specific phase; acknowledgement alone must not turn missing evidence into a healthy result. |
 | `mutates` | boolean | no (default `false`) | `true` if completing this phase changes the live agent (edits a file, pushes a change). Drives the role gate below. |

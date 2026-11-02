@@ -37,8 +37,8 @@ verification.
 
 ## Completion signal and evidence
 
-Use `vscode_askQuestions` with this exact visible handoff payload. Render
-`{CURRENT_PROGRESS}` and `{HR_CORE_PLUGIN_URL}` first. The question body, not
+Use `vscode_askQuestions` with this exact compact visible handoff payload.
+Render `{HR_CORE_PLUGIN_URL}` first. The question body, not
 a preceding message, is the authoritative user-visible copy:
 
 <!-- visible-handoff-question:v1 -->
@@ -46,7 +46,7 @@ a preceding message, is the authoritative user-visible copy:
 [
   {
     "header": "HR Service Delivery Core",
-    "question": "{CURRENT_PROGRESS}\n\nPurpose: confirm this HRSD instance has its HR data foundation.\n\nOwner: ServiceNow Admin.\n\nOpen HR Service Delivery Core: {HR_CORE_PLUGIN_URL}\n\nConfirm the Application Manager page shows:\n- Title: `Human Resources Scoped App: Core`\n- Plugin id: `com.sn_hr_core`\n- Version Details: `Installed`\n- Message: `Your application is installed and ready for you to use on your instance`\n\nDo not select Configure, Repair, or Load demo data for this check. This requirement is HRSD-only and does not prove OIDC or overall connection readiness.\n\n    Does the page show the listed installed-and-ready evidence?",
+    "question": "Purpose: confirm this HRSD instance has its HR data foundation.\n\nOwner: ServiceNow Admin.\n\nOpen HR Service Delivery Core: {HR_CORE_PLUGIN_URL}\n\nConfirm the Application Manager page shows:\n- Title: `Human Resources Scoped App: Core`\n- Plugin id: `com.sn_hr_core`\n- Version Details: `Installed`\n- Message: `Your application is installed and ready for you to use on your instance`\n\nDo not select Configure, Repair, or Load demo data for this check. This requirement is HRSD-only and does not prove OIDC or overall connection readiness.\n\nDoes the page show the listed installed-and-ready evidence?",
     "options": [
       { "label": "Yes" },
       { "label": "No" },

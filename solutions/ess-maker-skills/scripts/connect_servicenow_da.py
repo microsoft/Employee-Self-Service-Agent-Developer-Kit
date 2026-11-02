@@ -12001,6 +12001,30 @@ def _phase_customer_label(
     return labels.get(phase_id, contract_label)
 
 
+def _phase_responsible_roles(
+    phase_id: str,
+    phase: dict[str, Any],
+) -> list[str]:
+    configured = phase.get("responsibleRoles")
+    if isinstance(configured, list) and all(
+        isinstance(role, str) and role.strip()
+        for role in configured
+    ):
+        return list(configured)
+    defaults = {
+        "plugin-prerequisites": ["ServiceNow Admin"],
+        "entra-registration": [
+            "Microsoft Entra Application Administrator or higher"
+        ],
+        "servicenow-oidc": ["ServiceNow Admin / security_admin"],
+        "portal-url": [
+            "ESS Maker / Agent Developer",
+            "ServiceNow Admin (provides portal URL)",
+        ],
+    }
+    return defaults.get(phase_id, ["ESS Maker / Agent Developer"])
+
+
 def _build_phase_progress(
     contract: dict[str, Any],
     state: dict[str, Any] | None,
@@ -12025,7 +12049,7 @@ def _build_phase_progress(
         if isinstance(current, dict) and current.get("id")
         else None
     )
-    items: list[dict[str, str]] = []
+    items: list[dict[str, Any]] = []
     for phase in phases:
         if not isinstance(phase, dict):
             raise ServiceNowConnectError(
@@ -12033,6 +12057,7 @@ def _build_phase_progress(
             )
         phase_id = phase.get("id")
         label = phase.get("label")
+        responsible_roles = _phase_responsible_roles(phase_id, phase)
         if not isinstance(phase_id, str) or not isinstance(label, str) or not label:
             raise ServiceNowConnectError(
                 "ServiceNow lifecycle progress phase identity is invalid."
@@ -12082,6 +12107,10 @@ def _build_phase_progress(
                 "id": phase_id,
                 "label": label,
                 "customerLabel": _phase_customer_label(phase_id, label),
+                "responsibleRoles": list(responsible_roles),
+                "persistedStatus": persisted_status,
+                "roleAvailabilityRequired": persisted_status
+                not in {"done", "skipped"},
                 "status": status,
                 "text": text,
             }
@@ -12158,10 +12187,6 @@ def _build_phase_progress(
         progress["currentPhase"] = {
             **current_item,
             "startText": f"{start_verb}: {label}",
-            "questionText": (
-                "**Progress**\n\n"
-                + render_checklist(current_status=("⏳", "Waiting"))
-            ),
             "waitingChecklistText": render_checklist(
                 current_status=("⏳", "Waiting")
             ),
@@ -12175,6 +12200,86 @@ def _build_phase_progress(
             "needsAttentionText": f"Needs attention — {label}.",
         }
     return progress
+
+
+def _role_availability_transport(
+    *,
+    title: str,
+    phase_items: list[dict[str, Any]],
+    checklist_text: str,
+    roles_available: bool | None,
+    gate_required: bool,
+) -> dict[str, Any]:
+    required_roles: list[str] = []
+    phase_lines = []
+    for index, item in enumerate(phase_items, start=1):
+        roles = item.get("responsibleRoles")
+        if not isinstance(roles, list) or not roles:
+            raise ServiceNowConnectError(
+                "ServiceNow ordinary-reply phase roles are invalid."
+            )
+        role_text = "; ".join(str(role) for role in roles)
+        phase_lines.append(
+            f"{index}. {item['customerLabel']} — Responsible: {role_text}"
+        )
+        if item.get("roleAvailabilityRequired") is True:
+            for role in roles:
+                role = str(role)
+                if role not in required_roles:
+                    required_roles.append(role)
+    ordinary_text = (
+        f"{title}\n\n"
+        "**Phases**\n\n"
+        + "\n".join(phase_lines)
+        + f"\n\n{checklist_text}"
+    )
+    question = (
+        {
+            "header": "Role availability",
+            "question": (
+                "Are the currently required roles available?\n\n"
+                "Required roles: "
+                + ", ".join(required_roles)
+                + "."
+            ),
+            "options": [
+                {"label": "Yes"},
+                {"label": "No"},
+            ],
+            "allowFreeformInput": False,
+        }
+        if gate_required and required_roles
+        else None
+    )
+    return {
+        "schemaVersion": "servicenow.lifecycle-transport.v1",
+        "ordinaryReply": {
+            "kind": "ordinary-agent-response",
+            "text": ordinary_text,
+            "phaseCount": len(phase_items),
+        },
+        "roleAvailability": {
+            "gateRequired": gate_required and bool(required_roles),
+            "requiredRoles": required_roles,
+            "question": copy.deepcopy(question),
+            "questionSha256": (
+                _canonical_json_hash(question)
+                if question is not None
+                else None
+            ),
+            "available": roles_available,
+            "stateChanged": False,
+            "unavailableReply": (
+                "Please loop in the currently required roles before "
+                "continuing: "
+                + ", ".join(required_roles)
+                + ".\n\nNo lifecycle phase, evidence, attestation, or "
+                "accepted contract revision has advanced."
+                if required_roles
+                else None
+            ),
+        },
+    }
 
 
 def _resume_progress(
@@ -12261,6 +12366,7 @@ def resume_handoff(
     *,
     executed_actions: frozenset[str] = frozenset(),
     verified_phases: frozenset[str] = frozenset(),
+    roles_available: bool | None = True,
 ) -> dict[str, Any]:
     state_path = _lifecycle_state_path(context)
     state = None
@@ -12274,6 +12380,19 @@ def resume_handoff(
         executed_actions=executed_actions,
         verified_phases=verified_phases,
     )
+    progress = _resume_progress(
+        context,
+        decision,
+        executed_actions=executed_actions,
+        verified_phases=verified_phases,
+    )
+    transport = _role_availability_transport(
+        title=str(progress["headline"]),
+        phase_items=progress["items"],
+        checklist_text=str(progress["checklistText"]),
+        roles_available=roles_available,
+        gate_required=decision.get("decision") == "plan-required",
+    )
     result: dict[str, Any] = {
         "schemaVersion": "servicenow.resume-handoff.v1",
         "provider": ACTIVE_PROFILE.provider_key,
@@ -12282,13 +12401,14 @@ def resume_handoff(
         "agentId": context["agent"]["id"],
         "environmentId": context["environment"]["id"],
         "lifecycle": decision,
-        "progress": _resume_progress(
-            context,
-            decision,
-            executed_actions=executed_actions,
-            verified_phases=verified_phases,
-        ),
+        "progress": progress,
+        "transport": transport,
     }
+    role_question = transport["roleAvailability"]["question"]
+    if role_question is not None and roles_available is not True:
+        result["status"] = "role-availability-required"
+        return result
+    result["roleAvailabilityAccepted"] = role_question is not None
     pending_input = _pending_preflight_input(state, decision)
     if pending_input is not None:
         result["pendingInput"] = pending_input
@@ -12427,14 +12547,45 @@ def _realm_stage_progress(
         {
             "id": stage_id,
             "label": labels[stage_id],
+            "customerLabel": labels[stage_id],
+            "responsibleRoles": ["ESS Maker / Agent Developer"],
             "status": (
                 stages.get(stage_id, {}).get("status", "pending")
                 if isinstance(stages.get(stage_id), dict)
                 else "pending"
             ),
+            "roleAvailabilityRequired": (
+                stages.get(stage_id, {}).get("status", "pending")
+                != "completed"
+                if isinstance(stages.get(stage_id), dict)
+                else True
+            ),
         }
         for stage_id in _REALM_STAGE_IDS
     ]
+
+
+def _realm_transport(
+    state: dict[str, Any],
+    *,
+    realm: str,
+) -> dict[str, Any]:
+    stages = _realm_stage_progress(state, realm)
+    checklist = "\n".join(
+        (
+            f"- {'✅' if stage['status'] == 'completed' else '⬜'} "
+            f"{stage['label']} — "
+            f"{'Complete' if stage['status'] == 'completed' else 'Pending'}"
+        )
+        for stage in stages
+    )
+    return _role_availability_transport(
+        title=f"{realm.title()} ServiceNow target.",
+        phase_items=stages,
+        checklist_text=f"Target progress:\n\n{checklist}",
+        roles_available=True,
+        gate_required=False,
+    )
 
 
 def _realm_functional_test_record(
@@ -15130,6 +15281,11 @@ def validate_realm(
             },
         }
 
+    transport = _realm_transport(
+        state,
+        realm=realm,
+    )
+
     _require_realm_sequence(context, state, realm)
     deployment_record = _realm_deployment_record(state, realm)
     if (
@@ -15140,6 +15296,7 @@ def validate_realm(
             "schemaVersion": "servicenow.realm-validation.v1",
             "status": "deployment-required",
             "selection": selection,
+            "transport": transport,
             "deploymentEvidence": copy.deepcopy(deployment_record),
             "question": _realm_deployment_question(context, realm=realm),
             "remoteMutationCount": 0,
@@ -15520,6 +15677,7 @@ def validate_realm(
             else "needs-configuration"
         ),
         "selection": selection,
+        "transport": transport,
         "target": target,
         "automatedChecks": automated_checks,
         "manualChecks": manual_checks,
@@ -17007,6 +17165,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     resume_parser.add_argument("--executed-action", action="append", default=[])
     resume_parser.add_argument("--verified-phase", action="append", default=[])
+    resume_parser.add_argument(
+        "--roles-available",
+        choices=("yes", "no"),
+        help=(
+            "Continue only after the Maker confirms the currently required "
+            "roles are available."
+        ),
+    )
     subparsers.add_parser(
         "validation-realm-handoff",
         help=(
@@ -17693,6 +17859,11 @@ def main(argv: list[str] | None = None) -> int:
                 context,
                 executed_actions=frozenset(args.executed_action),
                 verified_phases=frozenset(args.verified_phase),
+                roles_available=(
+                    args.roles_available == "yes"
+                    if args.roles_available is not None
+                    else None
+                ),
             )
         elif args.command == "validation-realm-handoff":
             result = validation_realm_handoff(context)

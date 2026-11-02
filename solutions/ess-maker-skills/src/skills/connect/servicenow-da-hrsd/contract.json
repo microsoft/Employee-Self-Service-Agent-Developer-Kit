@@ -1,5 +1,5 @@
 {
-  "contractRevision": 13,
+  "contractRevision": 14,
   "provider": "servicenow-da-hrsd",
   "displayName": "ServiceNow HRSD",
   "profile": "hrsd",
@@ -68,6 +68,7 @@
     {
       "id": "preflight",
       "label": "Discover existing ServiceNow admin setup and identify missing or unhealthy items",
+      "responsibleRoles": ["ESS Maker / Agent Developer"],
       "checkpoints": ["SN-DA-HRSD-ADMIN-PREFLIGHT-001"],
       "completionStatuses": ["Passed"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/admin-preflight.md",
@@ -77,6 +78,7 @@
     {
       "id": "plugin-prerequisites",
       "label": "Confirm HR Service Delivery Core is installed and ready",
+      "responsibleRoles": ["ServiceNow Admin"],
       "checkpoints": ["SN-DA-HRSD-PLUGIN-001"],
       "completionStatuses": ["Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/verify-plugin-prerequisites.md",
@@ -92,6 +94,7 @@
     {
       "id": "entra-registration",
       "label": "Guide and verify the Microsoft Entra User Login application setup",
+      "responsibleRoles": ["Microsoft Entra Application Administrator or higher"],
       "checkpoints": ["SN-DA-HRSD-ENTRA-*"],
       "completionStatuses": ["Passed", "Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/guide-entra-registration.md",
@@ -110,6 +113,7 @@
     {
       "id": "servicenow-oidc",
       "label": "Guide the ServiceNow OIDC provider and active-user mapping setup",
+      "responsibleRoles": ["ServiceNow Admin / security_admin"],
       "checkpoints": ["SN-DA-HRSD-OIDC-001"],
       "completionStatuses": ["Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/guide-servicenow-oidc.md",
@@ -131,6 +135,7 @@
     {
       "id": "credential",
       "label": "Create or explicitly reuse the exact ServiceNow physical connection",
+      "responsibleRoles": ["ESS Maker / Agent Developer"],
       "checkpoints": ["SN-DA-HRSD-CREDENTIAL-001"],
       "completionStatuses": ["Passed"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/prepare-credential.md",
@@ -141,6 +146,7 @@
     {
       "id": "agent-connection",
       "label": "Connect the selected ServiceNow credential to this agent",
+      "responsibleRoles": ["ESS Maker / Agent Developer"],
       "checkpoints": ["SN-DA-HRSD-AGENT-CONNECTION-001"],
       "completionStatuses": ["Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/connect-agent.md",
@@ -181,6 +187,7 @@
     {
       "id": "topics",
       "label": "Prepare the ServiceNow HRSD topics for this agent",
+      "responsibleRoles": ["ESS Maker / Agent Developer"],
       "checkpoints": ["SN-DA-HRSD-TOPICS-001"],
       "completionStatuses": ["Passed", "Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/prepare-topics.md",
@@ -209,6 +216,10 @@
     {
       "id": "portal-url",
       "label": "Configure the ServiceNow employee portal Base URI",
+      "responsibleRoles": [
+        "ESS Maker / Agent Developer",
+        "ServiceNow Admin (provides portal URL)"
+      ],
       "checkpoints": ["SN-DA-HRSD-PORTAL-001"],
       "completionStatuses": ["Passed"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/configure-portal-url.md",
@@ -221,6 +232,7 @@
     {
       "id": "test",
       "label": "Confirm a ServiceNow HRSD request works in the Test pane",
+      "responsibleRoles": ["ESS Maker / Agent Developer"],
       "checkpoints": ["SN-DA-HRSD-TEST-001"],
       "completionStatuses": ["Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/test-connection.md",

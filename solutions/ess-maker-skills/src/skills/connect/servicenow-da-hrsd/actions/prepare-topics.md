@@ -23,7 +23,7 @@ The command-generated question conforms to this visible contract:
 [
   {
     "header": "ServiceNow topics",
-    "question": "{CURRENT_PROGRESS}\n\nPurpose: prepare the ServiceNow HRSD topics for this exact HR agent.\n\nOwner: ESS Maker / Agent Developer.\n\nCurrent topic inventory: {TOPIC_INVENTORY}\n\nInactive HRSD topics:\n{INACTIVE_TOPIC_NAMES}\n\nEnable all inactive ServiceNow HRSD topics, or explicitly keep their current states? Only ServiceNow HRSD topics in this inventory are in scope; unrelated topics remain unchanged.",
+    "question": "Purpose: prepare the ServiceNow HRSD topics for this exact HR agent.\n\nOwner: ESS Maker / Agent Developer.\n\nCurrent topic inventory: {TOPIC_INVENTORY}\n\nInactive HRSD topics:\n{INACTIVE_TOPIC_NAMES}\n\nEnable all inactive ServiceNow HRSD topics, or explicitly keep their current states? Only ServiceNow HRSD topics in this inventory are in scope; unrelated topics remain unchanged.",
     "options": [
       { "label": "Enable all topics" },
       { "label": "Keep current states" },

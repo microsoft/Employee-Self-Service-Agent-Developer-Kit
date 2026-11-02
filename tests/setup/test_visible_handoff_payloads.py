@@ -106,7 +106,9 @@ def test_lifecycle_plan_confirmation_is_exact_and_separate_from_reply() -> None:
         "**End message.**", 1
     )[0]
     assert "Ready to start?" not in ordinary_reply
-    assert plan_section.count("Ready to start?") == 1
+    other_provider_section = plan_section.split("### Other providers", 1)[1]
+    assert other_provider_section.count("Ready to start?") == 1
+    assert "DA ServiceNow role-availability branch" in plan_section
 
 
 @pytest.mark.parametrize(
@@ -286,7 +288,9 @@ def test_visible_handoff_payloads_are_supported_and_complete(
             required_phrases=required_phrases,
         )
         if path.parent == _ACTIONS:
-            assert "{CURRENT_PROGRESS}" in question["question"]
+            assert "{CURRENT_PROGRESS}" not in question["question"]
+            assert "Connection progress:" not in question["question"]
+            assert "**Phases**" not in question["question"]
         assert "above" not in question["question"].casefold()
 
 
@@ -316,6 +320,9 @@ def test_servicenow_questions_use_buttons_and_bounded_freeform() -> None:
             assert question["question"].strip().splitlines()[0] != (
                 question["header"]
             )
+            assert "{CURRENT_PROGRESS}" not in question["question"]
+            assert "Connection progress:" not in question["question"]
+            assert "**Phases**" not in question["question"]
             assert not any(
                 option.get("recommended")
                 for option in question.get("options") or []
