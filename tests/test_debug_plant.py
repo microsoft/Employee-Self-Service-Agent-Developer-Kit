@@ -19,6 +19,7 @@ guaranteed-revert property the live orchestration relies on.
 from __future__ import annotations
 
 import pytest
+import yaml
 
 from debug_plant import (
     DebugPlantError,
@@ -179,6 +180,147 @@ def test_multi_plant_then_marker_strip_round_trips():
     stripped, removed = strip_debug_nodes(data, marker="DBG")
     assert len(removed) == 2
     assert stripped == _TOPIC
+
+
+# --------------------------------------------------------------------------- #
+def test_plant_rejects_duplicate_anchor_ids_across_branches():
+    duplicate = _TOPIC.replace("id: beginDialog_fetch", "id: 'setVariable_cacheHit'")
+    with pytest.raises(DebugPlantError, match="Duplicate anchor"):
+        plant_debug_node(
+            duplicate, after_action_id="setVariable_cacheHit",
+            node_id="owned_probe", activity="DBG probe",
+        )
+
+
+@pytest.mark.parametrize("node_id", ["setVariable_cacheHit", "beginDialog_fetch"])
+def test_plant_rejects_existing_action_identity(node_id):
+    with pytest.raises(DebugPlantError, match="already exists"):
+        plant_debug_node(
+            _TOPIC, after_action_id="setVariable_cacheHit",
+            node_id=node_id, activity="DBG probe",
+        )
+
+
+def test_message_literal_ids_are_not_action_identities():
+    source = """\
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  actions:
+    - id: 'real_anchor'
+      kind: SendActivity
+      activity: |
+        id: fake_anchor
+        - kind: SendActivity
+          id: owned_probe
+          activity: literal text
+"""
+    unchanged, count = plant_debug_node(
+        source, after_action_id="fake_anchor", node_id="unused", activity="DBG probe",
+    )
+    assert (unchanged, count) == (source, 0)
+    planted, count = plant_debug_node(
+        source, after_action_id="real_anchor", node_id="owned_probe", activity="DBG probe",
+    )
+    assert count == 1
+    cleaned, removed = strip_debug_nodes(planted, node_ids=["owned_probe"])
+    assert cleaned == source and removed == ["owned_probe"]
+
+
+@pytest.mark.parametrize("duplicate_kind", ["SendActivity", "SetVariable"])
+def test_explicit_cleanup_rejects_duplicate_identity_in_any_action(duplicate_kind):
+    planted, _ = plant_debug_node(
+        _TOPIC, after_action_id="setVariable_cacheHit",
+        node_id="owned_probe", activity="DBG probe",
+    )
+    duplicate = planted.replace(
+        "kind: BeginDialog\n          id: beginDialog_fetch",
+        f"kind: {duplicate_kind}\n          id: owned_probe",
+    )
+    with pytest.raises(DebugPlantError, match="Duplicate cleanup"):
+        strip_debug_nodes(duplicate, node_ids=["owned_probe"])
+
+
+def test_guarded_cleanup_preserves_intervening_fix_after_yaml_projection():
+    planted, _ = plant_debug_node(
+        _TOPIC, after_action_id="setVariable_cacheHit",
+        node_id="owned_probe", activity='"DBG value={Topic.ProbeLabel}"',
+    )
+    parsed = yaml.safe_load(planted)
+    branch = parsed["beginDialog"]["actions"][0]["conditions"][0]["actions"]
+    owned = branch[1].copy()
+    branch[0]["value"] = '="legitimate correction"'
+    branch.append({
+        "kind": "SendActivity", "id": "other_diagnostic", "activity": "DBG keep this",
+    })
+    current = yaml.safe_dump(parsed, sort_keys=False)
+    cleaned, removed = strip_debug_nodes(
+        current, node_ids=["owned_probe"], expected_nodes={"owned_probe": owned},
+    )
+    assert removed == ["owned_probe"]
+    del branch[1]
+    assert yaml.safe_load(cleaned) == parsed
+    assert '="legitimate correction"' in cleaned
+    assert "DBG keep this" in cleaned
+
+
+@pytest.mark.parametrize("change", ["activity", "extra_field", "absent"])
+def test_guarded_cleanup_rejects_changed_or_missing_owned_content(change):
+    planted, _ = plant_debug_node(
+        _TOPIC, after_action_id="setVariable_cacheHit",
+        node_id="owned_probe", activity="DBG probe",
+    )
+    parsed = yaml.safe_load(planted)
+    branch = parsed["beginDialog"]["actions"][0]["conditions"][0]["actions"]
+    owned = branch[1].copy()
+    if change == "absent":
+        del branch[1]
+    else:
+        branch[1][change] = "authoring change"
+    current = yaml.safe_dump(parsed, sort_keys=False)
+    with pytest.raises(DebugPlantError, match="absent or changed"):
+        strip_debug_nodes(
+            current, node_ids=["owned_probe"], expected_nodes={"owned_probe": owned},
+        )
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_multiline_activity_cleanup_preserves_original_line_endings(newline):
+    source = _TOPIC.replace("\n", newline)
+    planted, _ = plant_debug_node(
+        source, after_action_id="beginDialog_fetch",
+        node_id="owned_probe", activity='"DBG first\\n\\nlast"',
+    )
+    planted = planted.replace(
+        'activity: "DBG first\\n\\nlast"',
+        "activity: |-" + newline + "            DBG first"
+        + newline + newline + "            last",
+    )
+    cleaned, removed = strip_debug_nodes(planted, node_ids=["owned_probe"])
+    assert (cleaned, removed) == (source, ["owned_probe"])
+
+
+def test_parsed_action_boundaries_preserve_comments_and_literal_content():
+    source = """\
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  actions:
+    - kind: SendActivity
+      id: anchor
+# A dedented comment does not terminate the action mapping.
+      activity: Real message
+    # This comment belongs to the following authoring content.
+    - kind: EndDialog
+      id: end
+"""
+    planted, _ = plant_debug_node(
+        source, after_action_id="anchor", node_id="owned_probe", activity="DBG probe",
+    )
+    parsed = yaml.safe_load(planted)["beginDialog"]["actions"]
+    assert [action["id"] for action in parsed] == ["anchor", "owned_probe", "end"]
+    cleaned, removed = strip_debug_nodes(planted, node_ids=["owned_probe"])
+    assert (cleaned, removed) == (source, ["owned_probe"])
 
 
 # --------------------------------------------------------------------------- #
