@@ -15830,7 +15830,7 @@ def test_resume_handoff_withholds_preflight_checkpoint_for_pending_instance(
     assert "Progress" not in body
     assert "Connection progress" not in body
     assert "**Phases**" not in body
-    assert "**Collaboration groups**" in (
+    assert "**Phases**" in (
         result["transport"]["ordinaryReply"]["text"]
     )
     assert result["businessGroupAvailabilityAccepted"] is False
@@ -16390,7 +16390,7 @@ def test_resume_handoff_cli_initializes_preflight_without_role_question(
     availability = result["transport"]["businessGroupAvailability"]
     assert availability["gateRequired"] is False
     assert availability["question"] is None
-    assert "**Collaboration groups**" in (
+    assert "**Phases**" in (
         result["transport"]["ordinaryReply"]["text"]
     )
     state_path = (
@@ -16631,8 +16631,7 @@ def test_initial_plan_shows_business_groups_without_preflight_gate(
     expected_groups = 4 if profile == "hrsd" else 3
     assert initial["lifecycle"]["phase"]["id"] == "preflight"
     assert "**Automatic setup**" in ordinary
-    assert "**Collaboration groups**" in ordinary
-    assert "**Phases**" not in ordinary
+    assert "**Phases**" in ordinary
     assert ordinary.count("Responsible role:") == expected_groups
     assert ordinary.count("   - ") == (
         len(json.loads(source_contract.read_text(encoding="utf-8"))["phases"])

@@ -12447,7 +12447,7 @@ def _business_group_transport(
                 f"- {automatic['customerLabel']} — {automatic['text']}",
             ]
         )
-    lines.extend(["", "**Collaboration groups**", ""])
+    lines.extend(["", "**Phases**", ""])
     groups = _business_groups(contract)
     for index, group in enumerate(groups, start=1):
         lines.append(
