@@ -14142,6 +14142,7 @@ def test_initialize_state_exact_existing_revision_is_byte_preserving_noop(
         verified_phases=frozenset(
             {"preflight", "plugin-prerequisites"}
         ),
+        roles_available=True,
     )
     assert handoff["lifecycle"]["decision"] == "run-action"
     assert handoff["lifecycle"]["phase"]["id"] == "entra-registration"
@@ -15666,6 +15667,7 @@ def test_resume_handoff_consumes_controller_and_returns_exact_action(
         result = snow.resume_handoff(
             context,
             verified_phases=frozenset({"preflight"}),
+            roles_available=True,
         )
 
     assert result["lifecycle"]["decision"] == "run-action"
@@ -15691,6 +15693,7 @@ def test_resume_handoff_consumes_controller_and_returns_exact_action(
             context,
             executed_actions=frozenset({"topics"}),
             verified_phases=frozenset({"preflight"}),
+            roles_available=True,
         )
 
     command = checkpoint_result["checkpoints"]["commands"][0]
@@ -15788,6 +15791,7 @@ def test_resume_handoff_withholds_preflight_checkpoint_for_pending_instance(
         result = snow.resume_handoff(
             context,
             executed_actions=frozenset({"preflight"}),
+            roles_available=True,
         )
 
     assert result["lifecycle"]["decision"] == "run-checkpoints"
@@ -15869,6 +15873,7 @@ def test_resume_handoff_allows_preflight_checkpoint_after_instance_recorded(
         result = snow.resume_handoff(
             context,
             executed_actions=frozenset({"preflight"}),
+            roles_available=True,
         )
 
     assert "pendingInput" not in result
@@ -16389,7 +16394,7 @@ def test_role_availability_transport_separates_plan_from_question(
     monkeypatch.chdir(tmp_path)
 
     with snow.product_profile_context(profile):
-        initial = snow.resume_handoff(context, roles_available=None)
+        initial = snow.resume_handoff(context)
         first_no = snow.resume_handoff(context, roles_available=False)
         second_no = snow.resume_handoff(context, roles_available=False)
         accepted = snow.resume_handoff(context, roles_available=True)
@@ -16406,7 +16411,8 @@ def test_role_availability_transport_separates_plan_from_question(
     assert question == {
         "header": "Role availability",
         "question": (
-            "Are the currently required roles available?\n\n"
+            "Are the roles needed for the remaining applicable phases "
+            "available now?\n\n"
             "Required roles: "
             + ", ".join(transport["roleAvailability"]["requiredRoles"])
             + "."

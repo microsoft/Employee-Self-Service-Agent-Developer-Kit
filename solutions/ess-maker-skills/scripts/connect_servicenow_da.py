@@ -12237,7 +12237,8 @@ def _role_availability_transport(
         {
             "header": "Role availability",
             "question": (
-                "Are the currently required roles available?\n\n"
+                "Are the roles needed for the remaining applicable phases "
+                "available now?\n\n"
                 "Required roles: "
                 + ", ".join(required_roles)
                 + "."
@@ -12366,7 +12367,7 @@ def resume_handoff(
     *,
     executed_actions: frozenset[str] = frozenset(),
     verified_phases: frozenset[str] = frozenset(),
-    roles_available: bool | None = True,
+    roles_available: bool | None = None,
 ) -> dict[str, Any]:
     state_path = _lifecycle_state_path(context)
     state = None
