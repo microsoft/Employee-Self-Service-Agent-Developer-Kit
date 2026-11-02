@@ -65,7 +65,7 @@ SETUP_SCHEMA_VERSION = 4
 HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 IT_SCHEMA_NAME = "gptagent_copilotforemployeeselfserviceit"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
-LIFECYCLE_SCHEMA_VERSION = 8
+LIFECYCLE_SCHEMA_VERSION = 9
 ADMIN_SETUP_SCHEMA_VERSION = 4
 AUTH_MODE = "entraIDUserLogin"
 ENTRA_CHECKPOINT_SUFFIXES = (
@@ -7367,10 +7367,10 @@ def _migrate_lifecycle_schema(
                 retired_entra_checkpoints.append(checkpoint_id)
             entra_phase["checkpointResults"] = results
             entra_phase["checkpointAcknowledgements"] = acknowledgements
-        state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
+        state["schemaVersion"] = 8
         migration["schemaV8"] = {
             "from": 7 if version <= 7 else version,
-            "to": LIFECYCLE_SCHEMA_VERSION,
+            "to": 8,
             "sourceSha256": source_sha256,
             "migratedAt": _utc_now(),
             "retiredEntraCheckpointIds": sorted(
@@ -7382,6 +7382,34 @@ def _migrate_lifecycle_schema(
                 .get("entra-registration"),
                 dict,
             ),
+        }
+    if version < 9:
+        evidence = state.setdefault("evidence", {})
+        if not isinstance(evidence, dict):
+            raise ServiceNowConnectError(
+                "ServiceNow lifecycle evidence must be an object."
+            )
+        existing_flows = evidence.get("realmFlows")
+        if existing_flows is not None and not isinstance(
+            existing_flows,
+            dict,
+        ):
+            raise ServiceNowConnectError(
+                "ServiceNow realm flow state must be an object."
+            )
+        evidence.setdefault("realmFlows", {})
+        state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
+        migration["schemaV9"] = {
+            "from": 8 if version <= 8 else version,
+            "to": LIFECYCLE_SCHEMA_VERSION,
+            "sourceSha256": source_sha256,
+            "migratedAt": _utc_now(),
+            "preservedLegacyRealmEvidence": isinstance(
+                evidence.get("realmValidations"),
+                dict,
+            ),
+            "realmCompletionInferred": False,
+            "initializedRealmStages": [],
         }
     return state
 
@@ -11838,6 +11866,135 @@ _VALIDATION_REALMS = {
     "test": TEST_REALM,
     "prod": PROD_REALM,
 }
+_REALM_STAGE_IDS = (
+    "connections",
+    "runtime-configuration",
+    "maker-validation",
+)
+
+
+def _realm_flow_record(
+    state: dict[str, Any],
+    realm: str,
+    *,
+    create: bool = False,
+) -> dict[str, Any] | None:
+    evidence = state.setdefault("evidence", {})
+    if not isinstance(evidence, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow lifecycle evidence must be an object."
+        )
+    flows = evidence.get("realmFlows")
+    if flows is None and create:
+        flows = {}
+        evidence["realmFlows"] = flows
+    if not isinstance(flows, dict):
+        return None
+    record = flows.get(realm)
+    if record is None and create:
+        record = {
+            "realm": realm,
+            "stages": {
+                stage_id: {
+                    "status": "pending",
+                    "updatedAt": _utc_now(),
+                }
+                for stage_id in _REALM_STAGE_IDS
+            },
+        }
+        flows[realm] = record
+    return record if isinstance(record, dict) else None
+
+
+def _realm_stage_progress(
+    state: dict[str, Any],
+    realm: str,
+) -> list[dict[str, Any]]:
+    flow = _realm_flow_record(state, realm)
+    stages = flow.get("stages") if isinstance(flow, dict) else {}
+    stages = stages if isinstance(stages, dict) else {}
+    labels = {
+        "connections": "Connections",
+        "runtime-configuration": "Runtime configuration",
+        "maker-validation": "Maker validation",
+    }
+    return [
+        {
+            "id": stage_id,
+            "label": labels[stage_id],
+            "status": (
+                stages.get(stage_id, {}).get("status", "pending")
+                if isinstance(stages.get(stage_id), dict)
+                else "pending"
+            ),
+        }
+        for stage_id in _REALM_STAGE_IDS
+    ]
+
+
+def _realm_functional_test_record(
+    state: dict[str, Any],
+    realm: str,
+) -> dict[str, Any] | None:
+    evidence = state.get("evidence")
+    validations = (
+        evidence.get("realmValidations")
+        if isinstance(evidence, dict)
+        else None
+    )
+    validation = (
+        validations.get(realm)
+        if isinstance(validations, dict)
+        else None
+    )
+    record = (
+        validation.get("functionalTest")
+        if isinstance(validation, dict)
+        else None
+    )
+    return record if isinstance(record, dict) else None
+
+
+def _realm_is_complete(
+    state: dict[str, Any],
+    realm: str,
+) -> bool:
+    flow = _realm_flow_record(state, realm)
+    stages = flow.get("stages") if isinstance(flow, dict) else None
+    record = _realm_functional_test_record(state, realm)
+    if not isinstance(stages, dict) or not isinstance(record, dict):
+        return False
+    binding = record.get("binding")
+    return (
+        all(
+            isinstance(stages.get(stage_id), dict)
+            and stages[stage_id].get("status") == "completed"
+            for stage_id in _REALM_STAGE_IDS
+        )
+        and record.get("kind") == "maker-attestation"
+        and record.get("status") == "completed"
+        and record.get("result") == "pass"
+        and record.get("failureCategory") is None
+        and isinstance(binding, dict)
+        and binding.get("provider") == ACTIVE_PROFILE.provider_key
+        and binding.get("profile") == ACTIVE_PROFILE.key
+    )
+
+
+def _require_realm_sequence(
+    state: dict[str, Any],
+    realm: str,
+) -> None:
+    if realm == "prod" and not _realm_is_complete(state, "test"):
+        raise ServiceNowConnectError(
+            "Production requires the exact Test realm configuration and "
+            "Maker validation to be complete first.",
+            details={
+                "realm": realm,
+                "requiredRealm": "test",
+                "realmStages": _realm_stage_progress(state, "test"),
+            },
+        )
 
 
 def _checkpoint_targets_present(
@@ -12126,6 +12283,14 @@ def validation_realm_handoff(
             "question": None,
             "stateChanged": False,
         }
+    state = _load_lifecycle_state(context)
+    test_complete = _realm_is_complete(state, "test")
+    options = [
+        {"label": "Dev"},
+        {"label": "Test"},
+    ]
+    if test_complete:
+        options.append({"label": "Prod"})
     return {
         "schemaVersion": "servicenow.realm-validation-handoff.v1",
         "status": "choice-required",
@@ -12138,17 +12303,17 @@ def validation_realm_handoff(
             "header": "Choose validation environment",
             "question": (
                 "This exact agent has a complete current Dev Connect record. "
-                "Which environment do you want to validate? Test and Prod "
-                "validation is read-only and never promotes, imports, "
-                "configures, tests with employee data, or publishes the agent."
+                "Which deployment realm do you want to resume? Test requires "
+                "an explicit organization-promotion report and exact sibling "
+                "proof. Prod is offered only after Test configuration and "
+                "Maker validation complete. Connect never promotes, imports, "
+                "publishes, checks out a branch, or auto-advances realms."
             ),
-            "options": [
-                {"label": "Dev"},
-                {"label": "Test"},
-                {"label": "Prod"},
-            ],
+            "options": options,
             "allowFreeformInput": False,
         },
+        "testRealmComplete": test_complete,
+        "testRealmStages": _realm_stage_progress(state, "test"),
         "stateChanged": False,
     }
 
@@ -12173,31 +12338,24 @@ def _realm_deployment_question(
     realm_label = realm.title()
     source_url = maker_portal_links(context)["copilotStudioAgent"]["url"]
     return {
-        "header": f"Deploy this agent to {realm_label}",
+        "header": f"Confirm {realm_label} promotion completed",
         "question": (
-            f"**Purpose**\nCreate the missing {realm_label} target for the "
-            f"current {ACTIVE_PROFILE.agent_display_name} source agent. This "
-            "is a customer-controlled prerequisite; read-only validation will "
-            "not deploy, promote, import, publish, or change the target.\n\n"
+            f"**Purpose**\nConfirm that the organization's approved ALM "
+            f"process finished promoting the current "
+            f"{ACTIVE_PROFILE.agent_display_name} family to {realm_label}. "
+            "This confirmation is only a prerequisite; it is not target "
+            "validation.\n\n"
             "**Owner**\nCopilot Studio / Power Platform ALM owner for this "
             "agent family.\n\n"
             f"**Source agent**\n{ACTIVE_PROFILE.agent_display_name} "
             f"(`{_agent_slug(context)}`), requested realm `{realm}`.\n\n"
             f"**Open**\n{source_url}\n\n"
             "**Action**\n"
-            f"1. On the source agent management page, select **Deploy to "
-            f"{realm_label}** in the upper-right.\n"
-            "2. Select **Save** in the lower-left.\n"
-            "3. Select **Deploy**.\n"
-            "4. Wait for deployment to complete, then select **Open Agent** "
-            f"to open the {realm_label} agent.\n\n"
-            "**Already deployed**\nIf this exact target already opens from a "
-            "prior deployment, do not deploy it again; choose Completed so "
-            "the kit can perform exact read-only validation.\n\n"
-            "**If unavailable**\nIf the deployment button is unavailable or "
-            "you do not have deployment permission, stop and give these steps "
-            "to the actual ALM owner. Do not choose another button, elevate "
-            "your own permissions, or recreate the agent.\n\n"
+            f"Use the organization's normal promotion process outside this "
+            f"Connect flow. Choose Completed only after the ALM owner confirms "
+            f"the {realm_label} promotion/import finished. If it has not "
+            "finished, choose Not yet. Do not ask Connect to provision, "
+            "promote, import, publish, or repair the target.\n\n"
             "**Success**\nThe requested target agent opens in Copilot Studio. "
             "This does not prove validation passed. After you choose "
             "Completed, the kit must still prove the exact realm, family, "
@@ -12235,6 +12393,7 @@ def record_realm_deployment(
             details=dev_evidence,
         )
     state = _load_lifecycle_state(context)
+    _require_realm_sequence(state, realm)
     recorded_at = _utc_now()
     record = {
         "kind": "maker-attestation",
@@ -12251,6 +12410,25 @@ def record_realm_deployment(
         "realmDeployments",
         {},
     )[realm] = record
+    validations = state["evidence"].get("realmValidations")
+    if isinstance(validations, dict):
+        validations.pop(realm, None)
+    flow = _realm_flow_record(state, realm, create=True)
+    if isinstance(flow, dict):
+        flow.clear()
+        flow.update(
+            {
+                "realm": realm,
+                "promotion": copy.deepcopy(record),
+                "stages": {
+                    stage_id: {
+                        "status": "pending",
+                        "updatedAt": recorded_at,
+                    }
+                    for stage_id in _REALM_STAGE_IDS
+                },
+            }
+        )
     _write_lifecycle_state(context, state)
     question = (
         _realm_deployment_question(context, realm=realm)
@@ -12417,6 +12595,45 @@ def _normalize_inventory_environment_id(value: str) -> str:
     return str(uuid.UUID(candidate))
 
 
+def _inventory_dataverse_url(environment: dict[str, Any]) -> str | None:
+    properties = environment.get("properties")
+    properties = properties if isinstance(properties, dict) else {}
+    linked = properties.get("linkedEnvironmentMetadata")
+    linked = linked if isinstance(linked, dict) else {}
+    candidates = (
+        environment.get("instanceUrl"),
+        environment.get("instanceApiUrl"),
+        linked.get("instanceUrl"),
+        linked.get("instanceApiUrl"),
+    )
+    for candidate in candidates:
+        if not isinstance(candidate, str) or not candidate.strip():
+            continue
+        normalized = candidate.strip().rstrip("/")
+        parsed = urlparse(normalized)
+        if parsed.scheme == "https" and parsed.hostname:
+            return normalized
+    return None
+
+
+def _inventory_tenant_id(environment: dict[str, Any]) -> str | None:
+    properties = environment.get("properties")
+    properties = properties if isinstance(properties, dict) else {}
+    candidates = (
+        environment.get("tenantId"),
+        properties.get("tenantId"),
+        properties.get("azureTenantId"),
+    )
+    for candidate in candidates:
+        if not isinstance(candidate, str) or not candidate.strip():
+            continue
+        try:
+            return str(uuid.UUID(candidate.strip()))
+        except ValueError:
+            return None
+    return None
+
+
 def _transport_error_evidence(exc: BaseException) -> dict[str, Any]:
     chain: list[BaseException] = []
     current: BaseException | None = exc
@@ -12560,6 +12777,77 @@ def _resolve_target_realm(
                 ),
             },
         )
+    sibling_realms = realms.get("siblingRealms")
+    sibling_realms = (
+        sibling_realms if isinstance(sibling_realms, list) else []
+    )
+    realm_siblings = [
+        sibling
+        for sibling in sibling_realms
+        if isinstance(sibling, dict)
+        and _realm_matches(sibling.get("realm"), realm_value)
+    ]
+    for sibling in realm_siblings:
+        sibling_agent_id = sibling.get("botId") or sibling.get("cdsBotId")
+        if (
+            isinstance(sibling_agent_id, str)
+            and sibling_agent_id.strip()
+            and _normalize_agent_id(sibling_agent_id) != target_agent_id
+        ):
+            problem = (
+                f"Native ALM returned conflicting {realm.title()} sibling "
+                "agent identities."
+            )
+            raise ServiceNowConnectError(
+                problem,
+                details={
+                    "realm": realm,
+                    "configuredTargetAgentId": target_agent_id,
+                    "siblingTargetAgentId": sibling_agent_id,
+                    "recoveryHandoff": _target_realm_discovery_recovery(
+                        context,
+                        realm=realm,
+                        problem=problem,
+                        category="Target identity mismatch",
+                        action=(
+                            "Have the ALM owner repair the conflicting realm "
+                            "association. Do not select either target "
+                            "automatically."
+                        ),
+                    ),
+                },
+            )
+        sibling_family_id = str(
+            sibling.get("grsRepositoryId")
+            or sibling.get("repositoryId")
+            or ""
+        ).strip()
+        if sibling_family_id and sibling_family_id != family_id:
+            problem = (
+                f"Native ALM returned conflicting {realm.title()} family "
+                "identities."
+            )
+            raise ServiceNowConnectError(
+                problem,
+                details={
+                    "realm": realm,
+                    "configuredAlmFamilyId": family_id,
+                    "siblingAlmFamilyId": sibling_family_id,
+                    "targetAgentId": target_agent_id,
+                    "recoveryHandoff": _target_realm_discovery_recovery(
+                        context,
+                        realm=realm,
+                        problem=problem,
+                        category="Target identity mismatch",
+                        action=(
+                            "Have the ALM owner restore one exact agent-family "
+                            "association for the requested realm. Do not "
+                            "borrow another family's target."
+                        ),
+                        agent_id=target_agent_id,
+                    ),
+                },
+            )
     schema_name = str(configuration.get("schemaName") or "").strip()
     commit_sha = str(configuration.get("commitSha") or "").strip()
     expected_schema = str(context["agent"]["schema_name"])
@@ -12636,6 +12924,31 @@ def _resolve_target_realm(
                 "observedTargetAgentId": None,
                 "observedSchemaName": None,
                 "recoveryHandoff": recovery,
+            },
+        )
+    if not commit_sha:
+        problem = (
+            f"The {realm.title()} realm has no deployed commit identity."
+        )
+        raise ServiceNowConnectError(
+            problem,
+            details={
+                "realm": realm,
+                "targetAgentId": target_agent_id,
+                "almFamilyId": family_id,
+                "recoveryHandoff": _target_realm_discovery_recovery(
+                    context,
+                    realm=realm,
+                    problem=problem,
+                    category="Missing target configuration",
+                    action=(
+                        "Have the ALM owner complete the approved promotion "
+                        "and confirm native realm metadata returns the exact "
+                        "deployed commit. Do not infer a commit from local "
+                        "files or another realm."
+                    ),
+                    agent_id=target_agent_id,
+                ),
             },
         )
 
@@ -12729,6 +13042,11 @@ def _resolve_target_realm(
                 or agent.get("schema_name")
                 or ""
             ).strip()
+            dataverse_url = _inventory_dataverse_url(environment)
+            inventory_tenant_id = _inventory_tenant_id(environment)
+            authenticated_tenant_id = str(
+                uuid.UUID(context["environment"]["tenant_id"])
+            )
             if returned_id != target_agent_id:
                 discovery_errors.append(
                     {
@@ -12785,6 +13103,32 @@ def _resolve_target_realm(
                     }
                 )
                 continue
+            if not dataverse_url:
+                discovery_errors.append(
+                    {
+                        "environmentId": environment_id,
+                        "inventoryEnvironmentId": raw_environment_id,
+                        "error": "TargetDataverseUrlMissing",
+                        "targetAgentId": target_agent_id,
+                    }
+                )
+                continue
+            if (
+                inventory_tenant_id is not None
+                and inventory_tenant_id.casefold()
+                != authenticated_tenant_id.casefold()
+            ):
+                discovery_errors.append(
+                    {
+                        "environmentId": environment_id,
+                        "inventoryEnvironmentId": raw_environment_id,
+                        "error": "TargetTenantMismatch",
+                        "expectedTenantId": authenticated_tenant_id,
+                        "observedTenantId": inventory_tenant_id,
+                        "targetAgentId": target_agent_id,
+                    }
+                )
+                continue
             matches.append(
                 {
                     "environmentId": environment_id,
@@ -12795,6 +13139,19 @@ def _resolve_target_realm(
                     "observedSchemaName": observed_schema or None,
                     "almFamilyId": family_id,
                     "commitSha": commit_sha,
+                    "tenantId": (
+                        inventory_tenant_id or authenticated_tenant_id
+                    ),
+                    "tenantEvidenceSource": (
+                        "environment-inventory"
+                        if inventory_tenant_id
+                        else "authenticated-environment-inventory"
+                    ),
+                    "dataverseUrl": dataverse_url,
+                    "sameEnvironmentAsDev": (
+                        environment_id.casefold()
+                        == str(context["environment"]["id"]).casefold()
+                    ),
                     "client": client,
                 }
             )
@@ -12877,6 +13234,8 @@ def _resolve_target_realm(
             "TargetRealmMismatch",
             "TargetSchemaMismatch",
             "TargetSchemaUnknown",
+            "TargetDataverseUrlMissing",
+            "TargetTenantMismatch",
         }
         and row.get("statusCode") != 404
     ]
@@ -13311,6 +13670,324 @@ def _target_credential_check(
     }
 
 
+def _target_promoted_content_check(
+    context: dict[str, Any],
+    *,
+    realm: str,
+    target: dict[str, Any],
+    target_client: Any,
+    expected_instance: str,
+) -> dict[str, Any]:
+    base = {
+        "checkpoint": "SN-REALM-PROMOTED-CONTENT-001",
+        "description": (
+            "Promoted ServiceNow topic inventory, state, and portal "
+            "configuration"
+        ),
+        "roles": ["ESS Maker / Agent Developer"],
+        "automationType": "automated",
+    }
+    try:
+        components = target_client.fetch_components(target["agentId"])
+        summary = summarize_components(components)
+        portal = portal_configuration_summary(
+            components,
+            expected_instance_name=expected_instance,
+        )
+    except (AgentBuilderError, ServiceNowConnectError, ValueError) as exc:
+        problem = (
+            f"Could not prove the promoted {realm.title()} ServiceNow "
+            f"topics and Setup Configurations portal value: {exc}"
+        )
+        recovery = _recovery_handoff(
+            problem=problem,
+            category="Promoted content read or schema mismatch",
+            owner=(
+                "ESS Maker / Agent Developer and the organization ALM owner"
+            ),
+            where=_target_agent_validation_url(
+                context,
+                environment_id=str(target["environmentId"]),
+                agent_id=str(target["agentId"]),
+            ),
+            values=(
+                f"Expected profile: {ACTIVE_PROFILE.product_name}; target "
+                f"realm: {realm.title()}; expected ServiceNow instance: "
+                f"`{expected_instance}`. Treat promoted topics and the Setup "
+                "Configurations topic as read-only."
+            ),
+            action=(
+                "Return to Dev, correct the authored ServiceNow content, and "
+                "use the organization's approved deployment process to "
+                "re-promote it. Do not push local topics or call component "
+                "PUT/update APIs against Test or Production."
+            ),
+            success=(
+                "A fresh read shows the expected ServiceNow topic inventory "
+                "and states plus a valid promoted portal URL on the confirmed "
+                "ServiceNow instance."
+            ),
+            recheck=(
+                f"Rerun {realm.title()} validation after re-promotion; do not "
+                "repair promoted content in this realm."
+            ),
+        )
+        return {
+            **base,
+            "status": "Failed",
+            "result": problem,
+            "remediation": recovery["message"],
+            "recoveryHandoff": recovery,
+        }
+    topics_ready = (
+        summary["serviceNowTopicCount"] > 0
+        and summary["activeServiceNowTopicCount"]
+        == summary["serviceNowTopicCount"]
+    )
+    portal_ready = portal.get("valid") is True
+    content_sha256 = _canonical_json_hash(
+        {
+            "topics": summary["serviceNowTopics"],
+            "portal": portal,
+            "reference": summary["reference"],
+        }
+    )
+    if topics_ready and portal_ready:
+        return {
+            **base,
+            "status": "Passed",
+            "result": (
+                "The promoted target contains the expected active ServiceNow "
+                "topics and a valid read-only Setup Configurations portal "
+                "value for the confirmed instance."
+            ),
+            "remediation": "",
+            "evidence": {
+                "contentSha256": content_sha256,
+                "topicCount": summary["serviceNowTopicCount"],
+                "activeTopicCount": summary["activeServiceNowTopicCount"],
+                "portal": portal,
+            },
+        }
+    problem = (
+        "The promoted target ServiceNow content is not ready: "
+        f"{summary['activeServiceNowTopicCount']} of "
+        f"{summary['serviceNowTopicCount']} ServiceNow topics are Active; "
+        f"portal valid is {portal_ready}."
+    )
+    recovery = _recovery_handoff(
+        problem=problem,
+        category="Promoted content mismatch",
+        owner="ESS Maker / Agent Developer and the organization ALM owner",
+        where=_target_agent_validation_url(
+            context,
+            environment_id=str(target["environmentId"]),
+            agent_id=str(target["agentId"]),
+        ),
+        values=(
+            f"Expected profile: {ACTIVE_PROFILE.product_name}; target realm: "
+            f"{realm.title()}; expected ServiceNow instance: "
+            f"`{expected_instance}`. Current promoted content hash: "
+            f"`{content_sha256}`."
+        ),
+        action=(
+            "Return to Dev, fix the authored topic state or Setup "
+            "Configurations portal value, and re-promote through the "
+            "organization's ALM process. Do not enable topics, push local "
+            "topic files, or PUT components in Test or Production."
+        ),
+        success=(
+            "A fresh target read shows every expected ServiceNow topic Active "
+            "and the promoted portal value valid for the confirmed instance."
+        ),
+        recheck=(
+            f"Rerun {realm.title()} validation after re-promotion."
+        ),
+    )
+    return {
+        **base,
+        "status": "Failed",
+        "result": problem,
+        "remediation": recovery["message"],
+        "recoveryHandoff": recovery,
+        "evidence": {
+            "contentSha256": content_sha256,
+            "topicCount": summary["serviceNowTopicCount"],
+            "activeTopicCount": summary["activeServiceNowTopicCount"],
+            "portal": portal,
+        },
+    }
+
+
+def _target_foundation_reuse(
+    state: dict[str, Any],
+    *,
+    target: dict[str, Any],
+    instance_name: str,
+    application_client_id: str,
+) -> dict[str, Any]:
+    setup = state.get("adminSetup")
+    setup = setup if isinstance(setup, dict) else {}
+    handoffs = setup.get("phaseHandoffs")
+    handoffs = handoffs if isinstance(handoffs, dict) else {}
+    entra = handoffs.get("entra-registration")
+    oidc = handoffs.get("servicenow-oidc")
+    entra = entra if isinstance(entra, dict) else {}
+    oidc = oidc if isinstance(oidc, dict) else {}
+    entra_evidence = entra.get("evidence")
+    oidc_evidence = oidc.get("evidence")
+    entra_evidence = (
+        entra_evidence if isinstance(entra_evidence, dict) else {}
+    )
+    oidc_evidence = oidc_evidence if isinstance(oidc_evidence, dict) else {}
+    entra_binding = entra_evidence.get("binding")
+    oidc_binding = oidc_evidence.get("binding")
+    entra_binding = (
+        entra_binding if isinstance(entra_binding, dict) else {}
+    )
+    oidc_binding = oidc_binding if isinstance(oidc_binding, dict) else {}
+    expected = {
+        "tenantId": str(target["tenantId"]),
+        "instanceName": instance_name,
+        "applicationClientId": application_client_id,
+    }
+    compatible = (
+        entra.get("status") in {"completed", "reused"}
+        and oidc.get("status") in {"completed", "reused"}
+        and all(
+            str(entra_binding.get(key) or "").casefold()
+            == value.casefold()
+            for key, value in expected.items()
+            if key != "instanceName"
+        )
+        and all(
+            str(oidc_binding.get(key) or "").casefold()
+            == value.casefold()
+            for key, value in expected.items()
+        )
+    )
+    return {
+        "status": "reused" if compatible else "not-reused",
+        "compatible": compatible,
+        "sameEnvironmentAsDev": bool(target["sameEnvironmentAsDev"]),
+        "target": expected,
+        "reason": (
+            "Current Entra and ServiceNow OIDC administrator evidence is "
+            "target-compatible."
+            if compatible
+            else (
+                "No current administrator evidence proves the same tenant, "
+                "ServiceNow instance, and application client ID. Existing "
+                "evidence remains historical and does not complete this realm."
+            )
+        ),
+    }
+
+
+def _realm_target_identity(target: dict[str, Any], realm: str) -> dict[str, str]:
+    return {
+        "realm": realm,
+        "tenantId": str(target["tenantId"]),
+        "environmentId": str(target["environmentId"]),
+        "dataverseUrl": str(target["dataverseUrl"]),
+        "agentId": str(target["agentId"]),
+        "schemaName": str(target["schemaName"]),
+        "almFamilyId": str(target["almFamilyId"]),
+        "commitSha": str(target["commitSha"]),
+    }
+
+
+def _runtime_plan(
+    *,
+    realm: str,
+    target_identity: dict[str, str],
+    target_configuration_sha256: str,
+    content_sha256: str,
+    connection_id: str,
+) -> dict[str, Any]:
+    preview = {
+        "realm": realm,
+        "target": copy.deepcopy(target_identity),
+        "targetConfigurationSha256": target_configuration_sha256,
+        "promotedContentSha256": content_sha256,
+        "connectionId": connection_id,
+        "supportedApply": "maker-ui-agent-binding",
+        "remoteApiMutationCount": 0,
+        "operations": [
+            {
+                "stage": "connections",
+                "action": (
+                    "Bind the exact Connected ServiceNow credential to the "
+                    "exact target agent in Copilot Studio."
+                ),
+                "execution": "manual-maker-ui",
+            },
+            {
+                "stage": "runtime-configuration",
+                "action": (
+                    "Keep promoted topics and portal configuration read-only; "
+                    "verify them again after the manual binding."
+                ),
+                "execution": "read-only-reread",
+            },
+        ],
+    }
+    return {
+        **preview,
+        "planSha256": _canonical_json_hash(preview),
+    }
+
+
+def _realm_validation_record(
+    state: dict[str, Any],
+    realm: str,
+) -> dict[str, Any]:
+    evidence = state.get("evidence")
+    validations = (
+        evidence.get("realmValidations")
+        if isinstance(evidence, dict)
+        else None
+    )
+    validation = (
+        validations.get(realm)
+        if isinstance(validations, dict)
+        else None
+    )
+    if not isinstance(validation, dict):
+        raise ServiceNowConnectError(
+            f"No scoped {realm.title()} realm validation exists for this "
+            "exact agent."
+        )
+    return validation
+
+
+def _revalidate_realm_target(
+    context: dict[str, Any],
+    *,
+    realm: str,
+    validation: dict[str, Any],
+) -> tuple[dict[str, Any], Any]:
+    target = _resolve_target_realm(context, realm=realm)
+    target_client = target.pop("client")
+    identity = _realm_target_identity(target, realm)
+    current_sha256 = _canonical_json_hash(identity)
+    expected_sha256 = validation.get("targetConfigurationSha256")
+    if (
+        not isinstance(expected_sha256, str)
+        or current_sha256 != expected_sha256
+    ):
+        raise ServiceNowConnectError(
+            f"The exact {realm.title()} target changed after preview. "
+            "Generate and approve a new runtime plan.",
+            details={
+                "realm": realm,
+                "expectedTargetConfigurationSha256": expected_sha256,
+                "observedTargetConfigurationSha256": current_sha256,
+            },
+        )
+    return target, target_client
+
+
 def _target_automated_recovery(
     context: dict[str, Any],
     *,
@@ -13528,10 +14205,11 @@ def validate_realm(
             },
         }
 
+    _require_realm_sequence(state, realm)
     deployment_record = _realm_deployment_record(state, realm)
     if (
-        isinstance(deployment_record, dict)
-        and deployment_record.get("status") == "not-deployed"
+        not isinstance(deployment_record, dict)
+        or deployment_record.get("status") != "deployment-completed"
     ):
         return {
             "schemaVersion": "servicenow.realm-validation.v1",
@@ -13543,32 +14221,65 @@ def validate_realm(
             "next": {
                 "action": "maker-deploys-target",
                 "instruction": (
-                    "Show the returned deployment question exactly and wait "
-                    "for the Maker. Do not call target APIs until the Maker "
-                    "reports deployment completed."
+                    "Wait for the Maker's explicit report that the "
+                    "organization promotion completed. Do not call target "
+                    "APIs, provision, promote, import, or publish."
                 ),
             },
         }
 
-    if bool(target_instance) != bool(target_client_id):
-        raise ServiceNowConnectError(
-            "Target ServiceNow instance and application client ID must be "
-            "provided together."
+    if not target_instance or not target_client_id:
+        problem = (
+            "Target ServiceNow instance and application client ID are both "
+            "required before target validation. Do not copy Dev or another "
+            "realm's values."
         )
-    normalized_target_instance = (
-        normalize_instance_name(target_instance)
-        if target_instance
-        else None
-    )
-    normalized_target_client_id = (
-        normalize_client_id(target_client_id)
-        if target_client_id
-        else None
-    )
+        raise ServiceNowConnectError(
+            problem,
+            details={
+                "realm": realm,
+                "recoveryHandoff": _recovery_handoff(
+                    problem=problem,
+                    category="Missing target confirmation",
+                    owner=(
+                        "ServiceNow Admin and Microsoft Entra Application "
+                        "Administrator with the target Power Platform Maker"
+                    ),
+                    where=_target_agent_validation_url(
+                        context,
+                        environment_id=None,
+                        agent_id=None,
+                    ),
+                    values=(
+                        f"Requested realm: {realm.title()}. Provide the exact "
+                        "target ServiceNow instance name and App A Application "
+                        "client ID together. Do not copy Dev or another "
+                        "realm's values."
+                    ),
+                    action=(
+                        "Confirm both non-secret target values with their "
+                        "authoritative administrators, then rerun only target "
+                        "validation."
+                    ),
+                    success=(
+                        "Both target values are explicitly confirmed for the "
+                        "same requested realm."
+                    ),
+                    recheck=(
+                        f"Rerun {realm.title()} validation with both target "
+                        "flags."
+                    ),
+                ),
+            },
+        )
+    normalized_target_instance = normalize_instance_name(target_instance)
+    normalized_target_client_id = normalize_client_id(target_client_id)
     state.setdefault("evidence", {})["validationRealmSelection"] = selection
     _write_lifecycle_state(context, state)
     target = _resolve_target_realm(context, realm=realm)
     target_client = target.pop("client")
+    target_identity = _realm_target_identity(target, realm)
+    target_configuration_sha256 = _canonical_json_hash(target_identity)
     realm_value = _VALIDATION_REALMS[realm]
     runner = SimpleNamespace(
         agentbuilder=target_client,
@@ -13596,6 +14307,15 @@ def validate_realm(
             target_environment_id=target["environmentId"],
             expected_instance=normalized_target_instance,
             expected_client_id=normalized_target_client_id,
+        )
+    )
+    results.append(
+        _target_promoted_content_check(
+            context,
+            realm=realm,
+            target=target,
+            target_client=target_client,
+            expected_instance=normalized_target_instance,
         )
     )
     results = [
@@ -13668,42 +14388,174 @@ def validate_realm(
     all_passed = bool(automated_checks) and all(
         result["status"] == "Passed" for result in automated_checks
     )
+    credential_check = next(
+        (
+            row
+            for row in automated_checks
+            if row["checkpoint"] == "SN-REALM-CREDENTIAL-001"
+        ),
+        None,
+    )
+    content_check = next(
+        (
+            row
+            for row in automated_checks
+            if row["checkpoint"] == "SN-REALM-PROMOTED-CONTENT-001"
+        ),
+        None,
+    )
+    credential_evidence = (
+        credential_check.get("evidence")
+        if isinstance(credential_check, dict)
+        else None
+    )
+    content_evidence = (
+        content_check.get("evidence")
+        if isinstance(content_check, dict)
+        else None
+    )
+    runtime_plan = None
+    if (
+        not automated_blockers
+        and isinstance(credential_evidence, dict)
+        and isinstance(content_evidence, dict)
+        and isinstance(credential_evidence.get("connectionId"), str)
+        and isinstance(content_evidence.get("contentSha256"), str)
+    ):
+        runtime_plan = _runtime_plan(
+            realm=realm,
+            target_identity=target_identity,
+            target_configuration_sha256=target_configuration_sha256,
+            content_sha256=content_evidence["contentSha256"],
+            connection_id=credential_evidence["connectionId"],
+        )
+    prior_validation = None
+    existing_validations = state.get("evidence", {}).get("realmValidations")
+    if isinstance(existing_validations, dict):
+        candidate = existing_validations.get(realm)
+        if isinstance(candidate, dict):
+            prior_validation = candidate
+    prior_approval = (
+        prior_validation.get("runtimeApproval")
+        if isinstance(prior_validation, dict)
+        else None
+    )
+    prior_binding = (
+        prior_validation.get("agentBinding")
+        if isinstance(prior_validation, dict)
+        else None
+    )
+    plan_current = (
+        isinstance(runtime_plan, dict)
+        and isinstance(prior_approval, dict)
+        and prior_approval.get("decision") == "approved"
+        and prior_approval.get("planSha256")
+        == runtime_plan.get("planSha256")
+    )
+    binding_current = (
+        plan_current
+        and isinstance(prior_binding, dict)
+        and prior_binding.get("status") == "completed"
+        and prior_binding.get("planSha256") == runtime_plan.get("planSha256")
+        and prior_binding.get("targetConfigurationSha256")
+        == target_configuration_sha256
+        and prior_binding.get("connectionId")
+        == credential_evidence.get("connectionId")
+    )
     validation = {
         **selection,
+        "targetIdentity": target_identity,
         "targetAgentId": target["agentId"],
         "targetEnvironmentId": target["environmentId"],
+        "targetDataverseUrl": target["dataverseUrl"],
+        "targetTenantId": target["tenantId"],
         "almFamilyId": target["almFamilyId"],
         "targetCommitSha": target["commitSha"],
-        "targetConfigurationSha256": _canonical_json_hash(
-            {
-                "realm": realm,
-                "environmentId": target["environmentId"],
-                "agentId": target["agentId"],
-                "schemaName": target["schemaName"],
-                "almFamilyId": target["almFamilyId"],
-                "commitSha": target["commitSha"],
-            }
-        ),
+        "targetConfigurationSha256": target_configuration_sha256,
         "sourceDevTestBinding": copy.deepcopy(
             dev_evidence["testBinding"]
         ),
         "targetCredentialExpectation": {
-            "source": (
-                "explicit-target-realm-confirmation"
-                if normalized_target_instance
-                else "not-confirmed"
-            ),
+            "source": "explicit-target-realm-confirmation",
             "instanceName": normalized_target_instance,
             "applicationClientId": normalized_target_client_id,
         },
+        "foundationReuse": _target_foundation_reuse(
+            state,
+            target=target,
+            instance_name=normalized_target_instance,
+            application_client_id=normalized_target_client_id,
+        ),
         "deploymentEvidence": copy.deepcopy(deployment_record),
         "automatedChecks": automated_checks,
         "manualChecks": manual_checks,
         "results": automated_checks + manual_checks,
         "allAutomatedChecksPassed": all_passed,
         "blockingAutomatedCheckCount": len(automated_blockers),
+        "runtimePlan": runtime_plan,
     }
+    if plan_current:
+        validation["runtimeApproval"] = copy.deepcopy(prior_approval)
+    if binding_current:
+        validation["agentBinding"] = copy.deepcopy(prior_binding)
+    if isinstance(prior_validation, dict) and isinstance(
+        prior_validation.get("functionalTest"),
+        dict,
+    ):
+        prior_test = prior_validation["functionalTest"]
+        binding = prior_test.get("binding")
+        if (
+            binding_current
+            and isinstance(binding, dict)
+            and binding.get("targetConfigurationSha256")
+            == target_configuration_sha256
+            and binding.get("planSha256") == runtime_plan.get("planSha256")
+        ):
+            validation["functionalTest"] = copy.deepcopy(prior_test)
     state["evidence"].setdefault("realmValidations", {})[realm] = validation
+    flow = _realm_flow_record(state, realm, create=True)
+    assert flow is not None
+    flow["targetIdentity"] = copy.deepcopy(target_identity)
+    flow["targetConfigurationSha256"] = target_configuration_sha256
+    stages = flow.setdefault("stages", {})
+    now = _utc_now()
+    stages["connections"] = {
+        "status": (
+            "completed"
+            if binding_current
+            else "manual-action-required"
+            if runtime_plan is not None and plan_current
+            else "pending"
+            if runtime_plan is not None
+            else "blocked"
+        ),
+        "updatedAt": now,
+    }
+    stages["runtime-configuration"] = {
+        "status": (
+            "completed"
+            if binding_current
+            else "approved"
+            if plan_current
+            else "approval-required"
+            if runtime_plan is not None
+            else "blocked"
+        ),
+        "updatedAt": now,
+    }
+    functional_test = validation.get("functionalTest")
+    stages["maker-validation"] = {
+        "status": (
+            "completed"
+            if isinstance(functional_test, dict)
+            and functional_test.get("result") == "pass"
+            else "failed"
+            if isinstance(functional_test, dict)
+            and functional_test.get("result") == "fail"
+            else "pending"
+        ),
+        "updatedAt": now,
+    }
     _write_lifecycle_state(context, state)
     studio_origin = PORTAL_ORIGINS[context["environment"]["ring"]][
         "copilotStudio"
@@ -13712,12 +14564,27 @@ def validate_realm(
         f"{studio_origin}/environments/"
         f"{target['environmentId']}/bots/{target['agentId']}/overview"
     )
-    ready_for_test = not automated_blockers
+    ready_for_test = binding_current and not automated_blockers
+    approval_required = (
+        runtime_plan is not None
+        and not plan_current
+        and not automated_blockers
+    )
+    manual_binding_required = (
+        runtime_plan is not None
+        and plan_current
+        and not binding_current
+        and not automated_blockers
+    )
     return {
         "schemaVersion": "servicenow.realm-validation.v1",
         "status": (
             "ready-for-test-pane"
             if ready_for_test
+            else "runtime-approval-required"
+            if approval_required
+            else "manual-binding-required"
+            if manual_binding_required
             else "needs-configuration"
         ),
         "selection": selection,
@@ -13727,11 +14594,15 @@ def validate_realm(
         "deploymentEvidence": copy.deepcopy(deployment_record),
         "allAutomatedChecksPassed": all_passed,
         "blockingAutomatedChecks": automated_blockers,
+        "runtimePlan": copy.deepcopy(runtime_plan),
+        "realmStages": _realm_stage_progress(state, realm),
         "readinessSummary": {
             "automaticPrechecks": (
-                "Complete" if ready_for_test else "Needs attention"
+                "Complete" if not automated_blockers else "Needs attention"
             ),
-            "functionalTest": "Pending",
+            "functionalTest": (
+                "Ready" if ready_for_test else "Pending"
+            ),
             "endToEndValidation": "Not yet verified",
         },
         "question": (
@@ -13755,6 +14626,28 @@ def validate_realm(
             }
             if ready_for_test
             else {
+                "action": "approve-runtime-plan",
+                "planSha256": runtime_plan["planSha256"],
+                "instruction": (
+                    "Review the exact target-scoped preview, then explicitly "
+                    "approve or reject it. Approval does not bind the agent "
+                    "and performs no remote API mutation."
+                ),
+            }
+            if approval_required
+            else {
+                "action": "maker-binds-target-connection",
+                "url": test_pane_url,
+                "planSha256": runtime_plan["planSha256"],
+                "instruction": (
+                    "In the exact target agent UI, bind the exact connection "
+                    "from the approved plan. Then record the target-scoped "
+                    "binding so the kit can revalidate and reread promoted "
+                    "content. Do not publish."
+                ),
+            }
+            if manual_binding_required
+            else {
                 "action": "configure-and-rerun",
                 "instruction": (
                     "Have the listed owner correct each non-Passed checkpoint "
@@ -13762,6 +14655,317 @@ def validate_realm(
                 ),
             }
         ),
+    }
+
+
+def record_realm_runtime_plan(
+    context: dict[str, Any],
+    *,
+    realm: str,
+    plan_sha256: str,
+    decision: str,
+) -> dict[str, Any]:
+    if realm not in {"test", "prod"}:
+        raise ServiceNowConnectError(
+            "Runtime plan approval is supported only for Test or Prod."
+        )
+    if decision not in {"approve", "reject"}:
+        raise ServiceNowConnectError(
+            "Runtime plan decision must be approve or reject."
+        )
+    state = _load_lifecycle_state(context)
+    _require_realm_sequence(state, realm)
+    validation = _realm_validation_record(state, realm)
+    plan = validation.get("runtimePlan")
+    if (
+        not isinstance(plan, dict)
+        or not isinstance(plan.get("planSha256"), str)
+        or plan["planSha256"] != plan_sha256
+    ):
+        raise ServiceNowConnectError(
+            "The runtime plan hash is missing, stale, or does not match the "
+            "current target preview."
+        )
+    if decision == "reject":
+        validation["runtimeApproval"] = {
+            "decision": "rejected",
+            "planSha256": plan_sha256,
+            "recordedAt": _utc_now(),
+        }
+        flow = _realm_flow_record(state, realm, create=True)
+        assert flow is not None
+        flow["stages"]["runtime-configuration"] = {
+            "status": "approval-required",
+            "updatedAt": _utc_now(),
+        }
+        _write_lifecycle_state(context, state)
+        return {
+            "schemaVersion": "servicenow.realm-runtime-plan.v1",
+            "status": "rejected",
+            "realm": realm,
+            "planSha256": plan_sha256,
+            "realmStages": _realm_stage_progress(state, realm),
+            "remoteMutationCount": 0,
+            "next": {
+                "action": "revise-target-inputs-and-preview",
+                "instruction": (
+                    "Correct the target-scoped inputs, rerun validation, and "
+                    "review the new plan. No target change was applied."
+                ),
+            },
+        }
+
+    target, target_client = _revalidate_realm_target(
+        context,
+        realm=realm,
+        validation=validation,
+    )
+    expectation = validation.get("targetCredentialExpectation")
+    expectation = expectation if isinstance(expectation, dict) else {}
+    instance_name = str(expectation.get("instanceName") or "")
+    client_id = str(expectation.get("applicationClientId") or "")
+    credential = _target_credential_check(
+        context,
+        target_environment_id=target["environmentId"],
+        expected_instance=instance_name,
+        expected_client_id=client_id,
+    )
+    content = _target_promoted_content_check(
+        context,
+        realm=realm,
+        target=target,
+        target_client=target_client,
+        expected_instance=instance_name,
+    )
+    if credential.get("status") != "Passed" or content.get("status") != "Passed":
+        raise ServiceNowConnectError(
+            "The target changed or regressed before runtime plan approval. "
+            "Rerun target validation and review a new plan.",
+            details={
+                "credential": credential,
+                "promotedContent": content,
+            },
+        )
+    credential_evidence = credential.get("evidence")
+    content_evidence = content.get("evidence")
+    if not isinstance(credential_evidence, dict) or not isinstance(
+        content_evidence,
+        dict,
+    ):
+        raise ServiceNowConnectError(
+            "Target revalidation returned incomplete plan evidence."
+        )
+    current_plan = _runtime_plan(
+        realm=realm,
+        target_identity=_realm_target_identity(target, realm),
+        target_configuration_sha256=validation[
+            "targetConfigurationSha256"
+        ],
+        content_sha256=str(content_evidence["contentSha256"]),
+        connection_id=str(credential_evidence["connectionId"]),
+    )
+    if current_plan["planSha256"] != plan_sha256:
+        raise ServiceNowConnectError(
+            "The target, promoted content, connection, or plan changed before "
+            "approval. Generate and approve a new runtime plan.",
+            details={
+                "expectedPlanSha256": plan_sha256,
+                "observedPlanSha256": current_plan["planSha256"],
+            },
+        )
+    validation["runtimeApproval"] = {
+        "decision": "approved",
+        "planSha256": plan_sha256,
+        "targetConfigurationSha256": validation[
+            "targetConfigurationSha256"
+        ],
+        "promotedContentSha256": content_evidence["contentSha256"],
+        "connectionId": credential_evidence["connectionId"],
+        "recordedAt": _utc_now(),
+    }
+    validation.pop("agentBinding", None)
+    validation.pop("functionalTest", None)
+    flow = _realm_flow_record(state, realm, create=True)
+    assert flow is not None
+    now = _utc_now()
+    flow["stages"]["connections"] = {
+        "status": "manual-action-required",
+        "updatedAt": now,
+    }
+    flow["stages"]["runtime-configuration"] = {
+        "status": "approved",
+        "updatedAt": now,
+    }
+    flow["stages"]["maker-validation"] = {
+        "status": "pending",
+        "updatedAt": now,
+    }
+    _write_lifecycle_state(context, state)
+    return {
+        "schemaVersion": "servicenow.realm-runtime-plan.v1",
+        "status": "approved",
+        "realm": realm,
+        "planSha256": plan_sha256,
+        "runtimePlan": copy.deepcopy(current_plan),
+        "realmStages": _realm_stage_progress(state, realm),
+        "remoteMutationCount": 0,
+        "question": {
+            "header": f"Bind the {realm.title()} ServiceNow connection",
+            "question": (
+                "Open the exact target agent from the approved plan. In "
+                "Settings -> Connection settings, bind the exact ServiceNow "
+                "connection shown by the plan. This is a manual Maker UI "
+                "action because no supported direct binding API is proven. "
+                "Do not publish and do not change promoted topics or the "
+                "Setup Configurations portal value. After the UI shows the "
+                "connection, record the binding with this plan hash."
+            ),
+            "options": [
+                {"label": "Completed"},
+                {"label": "Not yet"},
+            ],
+            "allowFreeformInput": False,
+        },
+    }
+
+
+def record_realm_binding(
+    context: dict[str, Any],
+    *,
+    realm: str,
+    plan_sha256: str,
+    connection_id: str,
+) -> dict[str, Any]:
+    if realm not in {"test", "prod"}:
+        raise ServiceNowConnectError(
+            "Realm binding evidence is supported only for Test or Prod."
+        )
+    normalized_connection_id = uuid.UUID(connection_id).hex
+    state = _load_lifecycle_state(context)
+    _require_realm_sequence(state, realm)
+    validation = _realm_validation_record(state, realm)
+    approval = validation.get("runtimeApproval")
+    plan = validation.get("runtimePlan")
+    if (
+        not isinstance(approval, dict)
+        or approval.get("decision") != "approved"
+        or approval.get("planSha256") != plan_sha256
+        or not isinstance(plan, dict)
+        or plan.get("planSha256") != plan_sha256
+    ):
+        raise ServiceNowConnectError(
+            "The exact current runtime plan must be approved before recording "
+            "the target agent binding."
+        )
+    if str(plan.get("connectionId") or "").casefold() != (
+        normalized_connection_id.casefold()
+    ):
+        raise ServiceNowConnectError(
+            "The recorded connection does not match the approved target plan. "
+            "Do not reuse another realm or agent's binding attestation."
+        )
+    target, target_client = _revalidate_realm_target(
+        context,
+        realm=realm,
+        validation=validation,
+    )
+    expectation = validation.get("targetCredentialExpectation")
+    expectation = expectation if isinstance(expectation, dict) else {}
+    credential = _target_credential_check(
+        context,
+        target_environment_id=target["environmentId"],
+        expected_instance=str(expectation.get("instanceName") or ""),
+        expected_client_id=str(
+            expectation.get("applicationClientId") or ""
+        ),
+    )
+    content = _target_promoted_content_check(
+        context,
+        realm=realm,
+        target=target,
+        target_client=target_client,
+        expected_instance=str(expectation.get("instanceName") or ""),
+    )
+    if credential.get("status") != "Passed" or content.get("status") != "Passed":
+        raise ServiceNowConnectError(
+            "The target connection or promoted content regressed after plan "
+            "approval. Rerun validation and approve a new plan.",
+            details={
+                "credential": credential,
+                "promotedContent": content,
+            },
+        )
+    credential_evidence = credential.get("evidence")
+    content_evidence = content.get("evidence")
+    if (
+        not isinstance(credential_evidence, dict)
+        or credential_evidence.get("connectionId")
+        != normalized_connection_id
+        or not isinstance(content_evidence, dict)
+        or content_evidence.get("contentSha256")
+        != plan.get("promotedContentSha256")
+    ):
+        raise ServiceNowConnectError(
+            "Post-action reread does not match the approved connection and "
+            "promoted-content hashes."
+        )
+    binding = {
+        "kind": "maker-attestation",
+        "status": "completed",
+        "realm": realm,
+        "connectionId": normalized_connection_id,
+        "planSha256": plan_sha256,
+        "targetConfigurationSha256": validation[
+            "targetConfigurationSha256"
+        ],
+        "targetAgentId": validation["targetAgentId"],
+        "targetEnvironmentId": validation["targetEnvironmentId"],
+        "targetDataverseUrl": validation["targetDataverseUrl"],
+        "targetTenantId": validation["targetTenantId"],
+        "recordedAt": _utc_now(),
+    }
+    validation["agentBinding"] = binding
+    validation.pop("functionalTest", None)
+    flow = _realm_flow_record(state, realm, create=True)
+    assert flow is not None
+    now = _utc_now()
+    flow["stages"]["connections"] = {
+        "status": "completed",
+        "updatedAt": now,
+    }
+    flow["stages"]["runtime-configuration"] = {
+        "status": "completed",
+        "updatedAt": now,
+    }
+    flow["stages"]["maker-validation"] = {
+        "status": "pending",
+        "updatedAt": now,
+    }
+    _write_lifecycle_state(context, state)
+    test_pane_url = _target_agent_validation_url(
+        context,
+        environment_id=validation["targetEnvironmentId"],
+        agent_id=validation["targetAgentId"],
+    )
+    return {
+        "schemaVersion": "servicenow.realm-binding.v1",
+        "status": "ready-for-test-pane",
+        "realm": realm,
+        "binding": copy.deepcopy(binding),
+        "realmStages": _realm_stage_progress(state, realm),
+        "question": _realm_functional_test_question(
+            realm=realm,
+            test_pane_url=test_pane_url,
+        ),
+        "remoteMutationCount": 0,
+        "next": {
+            "action": "customer-test-pane-validation",
+            "url": test_pane_url,
+            "instruction": (
+                "Use the exact target agent Test pane and the allowlisted "
+                "low-side-effect prompt. Record only Pass or Not pass."
+            ),
+        },
     }
 
 
@@ -13799,16 +15003,17 @@ def record_realm_test(
             "A provided realm Test pane failure category is unsupported."
         )
     state = _load_lifecycle_state(context)
-    evidence = state.setdefault("evidence", {})
-    validations = evidence.get("realmValidations")
-    validation = (
-        validations.get(realm) if isinstance(validations, dict) else None
-    )
-    if not isinstance(validation, dict):
+    _require_realm_sequence(state, realm)
+    deployment = _realm_deployment_record(state, realm)
+    if (
+        not isinstance(deployment, dict)
+        or deployment.get("status") != "deployment-completed"
+    ):
         raise ServiceNowConnectError(
-            f"No scoped {realm.title()} realm validation exists for this "
-            "exact agent."
+            f"The {realm.title()} organization promotion must be explicitly "
+            "reported complete before recording Maker validation."
         )
+    validation = _realm_validation_record(state, realm)
     if validation.get("blockingAutomatedCheckCount") not in {0, None}:
         raise ServiceNowConnectError(
             "Resolve the blocking automated target-realm checks before "
@@ -13819,6 +15024,9 @@ def record_realm_test(
     target_configuration_sha = validation.get(
         "targetConfigurationSha256"
     )
+    runtime_plan = validation.get("runtimePlan")
+    runtime_approval = validation.get("runtimeApproval")
+    agent_binding = validation.get("agentBinding")
     if not all(
         isinstance(value, str) and value
         for value in (
@@ -13830,6 +15038,28 @@ def record_realm_test(
         raise ServiceNowConnectError(
             "The scoped realm validation has incomplete target identity."
         )
+    if (
+        not isinstance(runtime_plan, dict)
+        or not isinstance(runtime_approval, dict)
+        or runtime_approval.get("decision") != "approved"
+        or runtime_approval.get("planSha256")
+        != runtime_plan.get("planSha256")
+        or not isinstance(agent_binding, dict)
+        or agent_binding.get("status") != "completed"
+        or agent_binding.get("planSha256")
+        != runtime_plan.get("planSha256")
+        or agent_binding.get("targetConfigurationSha256")
+        != target_configuration_sha
+    ):
+        raise ServiceNowConnectError(
+            "Complete the current approved runtime plan and exact target "
+            "agent binding before recording Maker validation."
+        )
+    _target, _target_client = _revalidate_realm_target(
+        context,
+        realm=realm,
+        validation=validation,
+    )
     recorded_at = _utc_now()
     record = {
         "kind": "maker-attestation",
@@ -13847,10 +15077,27 @@ def record_realm_test(
             "targetAgentId": target_agent_id,
             "targetEnvironmentId": target_environment_id,
             "targetConfigurationSha256": target_configuration_sha,
+            "planSha256": runtime_plan["planSha256"],
+            "connectionId": agent_binding["connectionId"],
         },
     }
     validation["functionalTest"] = record
     validation.pop("recovery", None)
+    flow = _realm_flow_record(state, realm, create=True)
+    assert flow is not None
+    now = _utc_now()
+    flow["stages"]["connections"] = {
+        "status": "completed",
+        "updatedAt": now,
+    }
+    flow["stages"]["runtime-configuration"] = {
+        "status": "completed",
+        "updatedAt": now,
+    }
+    flow["stages"]["maker-validation"] = {
+        "status": "completed" if result == "pass" else "failed",
+        "updatedAt": now,
+    }
     _write_lifecycle_state(context, state)
     dev_agent_url = maker_portal_links(context)["copilotStudioAgent"]["url"]
     return {
@@ -13861,6 +15108,7 @@ def record_realm_test(
         "failureCategory": failure_category,
         "binding": copy.deepcopy(record["binding"]),
         "manualChecks": copy.deepcopy(validation.get("manualChecks") or []),
+        "realmStages": _realm_stage_progress(state, realm),
         "targetedManualCheckpoints": [],
         "targetedRecoveryHandoffs": [],
         "question": None,
@@ -14643,6 +15891,47 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("not-deployed", "deployment-completed"),
         required=True,
     )
+    realm_runtime_parser = subparsers.add_parser(
+        "record-realm-runtime-plan",
+        help=(
+            "Approve or reject the exact current Test/Prod runtime preview "
+            "after target/hash revalidation."
+        ),
+    )
+    realm_runtime_parser.add_argument(
+        "--realm",
+        choices=("test", "prod"),
+        required=True,
+    )
+    realm_runtime_parser.add_argument(
+        "--plan-sha256",
+        required=True,
+    )
+    realm_runtime_parser.add_argument(
+        "--decision",
+        choices=("approve", "reject"),
+        required=True,
+    )
+    realm_binding_parser = subparsers.add_parser(
+        "record-realm-binding",
+        help=(
+            "Record the Maker's exact target agent UI binding after approved "
+            "plan revalidation and post-action reread."
+        ),
+    )
+    realm_binding_parser.add_argument(
+        "--realm",
+        choices=("test", "prod"),
+        required=True,
+    )
+    realm_binding_parser.add_argument(
+        "--plan-sha256",
+        required=True,
+    )
+    realm_binding_parser.add_argument(
+        "--connection-id",
+        required=True,
+    )
     realm_test_parser = subparsers.add_parser(
         "record-realm-test",
         help=(
@@ -14827,6 +16116,8 @@ def _command_error_recovery(
             "validation-realm-handoff",
             "validate-realm",
             "record-realm-deployment",
+            "record-realm-runtime-plan",
+            "record-realm-binding",
             "record-realm-test",
         }
         else "lifecycle"
@@ -15256,6 +16547,20 @@ def main(argv: list[str] | None = None) -> int:
                 realm=args.realm,
                 status=args.status,
             )
+        elif args.command == "record-realm-runtime-plan":
+            result = record_realm_runtime_plan(
+                context,
+                realm=args.realm,
+                plan_sha256=args.plan_sha256,
+                decision=args.decision,
+            )
+        elif args.command == "record-realm-binding":
+            result = record_realm_binding(
+                context,
+                realm=args.realm,
+                plan_sha256=args.plan_sha256,
+                connection_id=args.connection_id,
+            )
         elif args.command == "record-realm-test":
             result = record_realm_test(
                 context,
@@ -15332,6 +16637,8 @@ def main(argv: list[str] | None = None) -> int:
             "validation-realm-handoff",
             "validate-realm",
             "record-realm-deployment",
+            "record-realm-runtime-plan",
+            "record-realm-binding",
             "record-realm-test",
             "set-portal-url",
             "record-test",

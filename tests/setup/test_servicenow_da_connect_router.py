@@ -22,16 +22,19 @@ def test_realm_deployment_guidance_is_conditional_and_read_only() -> None:
     assert "record-realm-deployment --realm <test|prod>" in chooser
     assert "--status not-deployed" in chooser
     assert "--status deployment-completed" in chooser
-    assert "upper-right **Deploy to" in chooser
-    assert "lower-left **Save**" in chooser
-    assert "**Deploy**, wait, then **Open Agent**" in chooser
-    assert "404, unreadable environment" in chooser
-    assert "not proof of missing deployment" in chooser
-    assert "do not pass validation" in chooser
-    assert "does not deploy, promote, import" in chooser
+    assert "organization's normal promotion process outside Connect" in chooser
+    assert "Completed only after that process finishes" in chooser
+    assert "A 404, unreadable environment" in normalized
+    assert "not proof of missing promotion" in normalized
+    assert "Maker completion does not\npass validation" in chooser
+    assert "kit does not deploy, promote, import" in normalized
     assert "Not automatically verified" in chooser
     assert "never present `Manual` alone" in chooser
-    assert "`List my open HR cases` or `List my open IT tickets`" in chooser
+    assert "record-realm-runtime-plan" in chooser
+    assert "record-realm-binding" in chooser
+    assert "no supported direct binding\nAPI" in chooser
+    assert "Promoted topics" in chooser
+    assert "`List my open HR cases` or `List my open IT tickets`" in normalized
     assert "empty list is not an automatic failure" in normalized
     assert "generic answer is not an automatic pass" in normalized
     assert "without requiring a failure category" in normalized

@@ -4,6 +4,12 @@ Ask the maker to run one privacy-safe ITSM request in the Copilot Studio Test
 pane: **List my open IT tickets**. The prompt must not contain a person's name,
 email, employee ID, case number, case title, or other personal data.
 
+For a Test or Production deployment realm, use only the exact target agent
+link returned by the realm controller after Connections and Runtime
+configuration are complete. This is target-scoped Manual evidence; never copy
+it from Dev, another realm, agent, or connection. It does not publish or
+promote the agent.
+
 Before opening Test, save the current authored draft. The Test evidence binds
 the server-saved draft semantic identity and selected ServiceNow connection;
 unsaved editor-buffer changes are not covered.

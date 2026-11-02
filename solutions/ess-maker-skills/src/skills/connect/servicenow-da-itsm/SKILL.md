@@ -99,10 +99,24 @@ ITSM phases. The IT lifecycle intentionally omits the HR-only ServiceNow
 plugin phase. Do not add a second completion message.
 
 After that exact Dev lifecycle is complete with current passing Test evidence,
-run `validation-realm-handoff`. Only then may the user choose Dev, Test, or
-Prod validation. Test/Prod uses `validate-realm --realm <test|prod>` with the
-administrator-confirmed target instance and client ID and is read-only: it
-must prove the exact target environment and agent, report every
-automated result honestly, and finish by directing the customer to that exact
-agent's Test pane. It never promotes, imports, configures, sends a real-data
-query, changes `activeAgent`, or publishes.
+run `validation-realm-handoff`. Development, Test, and Production are agent
+deployment realms, never Git branches. Test requires the Maker to report that
+the organization's promotion completed; Production is offered only after the
+exact Test realm completes all three target stages.
+
+For Test/Production, `validate-realm --realm <test|prod>` must fail closed
+unless it proves one exact target realm, tenant, environment, Dataverse URL,
+agent ID, schema, ALM family, and deployed commit. The resumable target stages
+are exactly **Connections**, **Runtime configuration**, and **Maker
+validation**. Runtime configuration requires a target-scoped preview and
+explicit plan approval. The only supported apply is the Maker's manual
+Copilot Studio connection binding; revalidate the target, plan, connection,
+and promoted-content hashes before recording it, then reread afterward.
+
+Promoted topics, topic state, and the ServiceNow Setup Configurations portal
+value are read-only in Test/Production. Never enable topics, push Dev topic
+files, PUT components, or silently change a realm-specific portal URL. Return
+incorrect promoted content to Dev and the organization's re-promotion flow.
+The target Test pane remains Manual evidence and completes only that realm.
+Connect never provisions, promotes, imports, publishes, auto-advances realms,
+or claims an API-proven Test result.

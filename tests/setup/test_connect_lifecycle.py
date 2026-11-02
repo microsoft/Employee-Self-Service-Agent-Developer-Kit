@@ -292,7 +292,20 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert contract["provider"] == "servicenow-da-hrsd"
     assert contract["checkpointResultMode"] == "compact-stdout-v1"
     assert contract["attestedRoleScope"] == "lifecycle"
-    assert contract["contractRevision"] == 11
+    assert contract["contractRevision"] == 12
+    assert contract["deploymentRealms"]["realmOrder"] == [
+        "dev",
+        "test",
+        "prod",
+    ]
+    assert contract["deploymentRealms"]["connectPromotesOrPublishes"] is False
+    assert [
+        stage["id"] for stage in contract["deploymentRealms"]["stages"]
+    ] == [
+        "connections",
+        "runtime-configuration",
+        "maker-validation",
+    ]
     assert contract["planRoles"] == [
         "ESS Maker / Agent Developer",
         "ServiceNow Admin / security_admin",
@@ -408,7 +421,13 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
 
     assert contract["provider"] == "servicenow-da-itsm"
     assert contract["profile"] == "itsm"
-    assert contract["contractRevision"] == 6
+    assert contract["contractRevision"] == 7
+    assert contract["deploymentRealms"]["realmOrder"] == [
+        "dev",
+        "test",
+        "prod",
+    ]
+    assert contract["deploymentRealms"]["connectPromotesOrPublishes"] is False
     assert "stateMigrationCommand" not in contract
     assert contract["stateInitializationCommand"] == (
         "python scripts/connect_servicenow_da.py "
