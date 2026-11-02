@@ -145,7 +145,7 @@ Move the recommendation to "Yes, often" when the maker's example requests alread
 }
 ```
 
-**Provider details** (skills with building-block steps only)
+**Provider details** (skills with FCC steps only)
 
 ```json
 {
@@ -268,5 +268,5 @@ When an answer is vague, or the analysis or a draft shows a gap, ask one free-fo
 - "What goes wrong today, or what do employees get confused about?" (gotchas)
 - "Is there anything the agent must never do here?" (prohibitions)
 - "Which of these values does HR (or IT) set, rather than the employee?" (fields to leave out)
-- "Which table or record type holds this?" (a building-block fact no source gave)
+- "Which table or record type holds this?" (an FCC fact no source gave)
 - "What should happen if nothing matches?" (fallback)

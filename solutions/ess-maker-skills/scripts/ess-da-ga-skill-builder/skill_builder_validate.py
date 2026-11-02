@@ -8,8 +8,7 @@ and the agent's tool inventory (from skill_builder_inventory.py). Used by
 src/skills/ess-da-ga-skill-builder.
 
 Checks SKILL.md front matter (name, description, compatibility), size (Copilot's 20,000-character limit), file
-types Copilot accepts, file references, directory depth, scripts (Copilot runs them with no network and no
-package installs), tool names and argument names (each must exist in the inventory), with --expect that the
+types Copilot accepts, file references, directory depth, scripts (ESS skills include none), tool names and argument names (each must exist in the inventory), with --expect that the
 skill names a tool for every operation it promises, and, with --package, the declarative agent's skill limits.
 Warnings flag likely problems that need a maker's decision. The limits mirror
 src/skills/ess-da-ga-skill-builder/references/limitations.md; change both together.
@@ -21,7 +20,6 @@ Exit codes: 0 no errors, 1 errors found (or warnings with --strict), 2 bad argum
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import os
 import re
@@ -33,13 +31,6 @@ RESOURCE_TYPES = frozenset(
     ".json .xml .yaml .yml .ini .config .utf8 .docx .doc .docm .pdf .txt .rtf .md .ppt .pptx .ppsm .xlsx .xls "
     ".xlsm .csv .tsv .html .htm .png .jpg .jpeg .gif .bmp .log".split())
 SCRIPT_TYPES = frozenset(".py .js .mjs .cjs .ts .mts .sh .bash".split())
-NETWORK_MODULES = frozenset({"socket", "ssl", "http.client", "http.server", "urllib.request", "ftplib", "smtplib",
-                             "imaplib", "poplib", "telnetlib", "xmlrpc", "requests", "httpx", "aiohttp", "urllib3",
-                             "websocket", "websockets"})
-JS_NETWORK = re.compile(r"\b(fetch|XMLHttpRequest|WebSocket)\s*\(|(require\(|from\s+)\s*['\"](node:)?(https?|net|tls|"
-                        r"dgram|axios|node-fetch|undici)['\"]")
-SHELL_NETWORK = re.compile(r"\b(curl|wget|nc|ssh|scp|ftp)\b")
-INSTALL = re.compile(r"\b(pip3?|npm|yarn|pnpm|apt(-get)?)\s+(install|add)\b")
 EXPECTABLE = ("create", "read", "update", "comment", "delete", "knowledge")
 KNOWLEDGE_USE = re.compile(r"(?i)\bknowledge (search|sources?|base)\b|\bsearch (the agent's |its )?knowledge\b")
 NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -203,40 +194,11 @@ def check_files(skill: Path, report: Report) -> list[Path]:
 
 
 def check_scripts(skill: Path, files: list[Path], report: Report) -> None:
-    """Copilot runs skill scripts in a sandbox with no network access and no package installs."""
-    scripts = [p for p in files if p.suffix.lower() in SCRIPT_TYPES]
-    if scripts:
-        report.add("info", skill / "SKILL.md", f"{len(scripts)} script(s): Copilot runs them with no network access "
-                   "and only preinstalled packages. Prefer references and the agent's tools.")
-    local = {p.stem for p in scripts}
-    for path in scripts:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        if INSTALL.search(text):
-            report.error(path, f"Installs packages ('{INSTALL.search(text).group(0)}'); Copilot's sandbox can't.")
-        if path.suffix == ".py":
-            try:
-                tree = ast.parse(text)
-            except SyntaxError as exc:
-                report.error(path, f"Python syntax error on line {exc.lineno}: {exc.msg}.")
-                continue
-            modules = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom) and node.module and not node.level:
-                    modules |= {node.module} | {f"{node.module}.{a.name}" for a in node.names}
-            network = sorted(m for m in modules if any(m == n or m.startswith(n + ".") for n in NETWORK_MODULES))
-            for module in network:
-                report.error(path, f"Imports '{module}', which makes network calls; Copilot's sandbox has no network. "
-                                   "Let the agent call its tools instead.")
-            top = {m.split(".")[0] for m in modules} - {m.split(".")[0] for m in network}
-            for module in sorted(top - set(sys.stdlib_module_names) - local):
-                report.warn(path, f"Imports '{module}', which isn't in the Python standard library and may not be "
-                                  "preinstalled; use the standard library.")
-        elif path.suffix in (".sh", ".bash"):
-            if SHELL_NETWORK.search(text):
-                report.error(path, f"Uses '{SHELL_NETWORK.search(text).group(0)}'; Copilot's sandbox has no network.")
-        elif JS_NETWORK.search(text):
-            report.error(path, f"Makes network calls ('{JS_NETWORK.search(text).group(0).strip()}'); Copilot's "
-                               "sandbox has no network.")
+    """ESS skills include no scripts; see references/authoring-rules.md, "No scripts"."""
+    for path in (p for p in files if p.suffix.lower() in SCRIPT_TYPES):
+        report.error(path, "ESS skills don't include scripts: Copilot's sandbox has no network access or package "
+                           "installs and can't call the agent's tools, and each run adds time to the turn. Put "
+                           "deterministic work in the MCP tool or a reference table.")
 
 
 def code_text(text: str) -> str:

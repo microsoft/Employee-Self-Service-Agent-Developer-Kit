@@ -1,6 +1,6 @@
 # Analyzing scenarios against the tools
 
-Read in Round 3. For each scenario, decide from the tool descriptions and the agent's knowledge sources how much the skill must carry. Don't start from a label for the whole agent: one server can have a purpose-built tool for one scenario and only building blocks for the next, so decide step by step, scenario by scenario.
+Read in Round 3. For each scenario, decide from the tool descriptions and the agent's knowledge sources how much the skill must carry. Don't start from a label for the whole agent: one server can have a purpose-built tool for one scenario and only FCC (on-demand fetch) tools for the next, so decide step by step, scenario by scenario.
 
 ## Contents
 
@@ -24,6 +24,8 @@ Read the full description and input schema of every tool a scenario might use (`
 
 The inventory's `kind` and `operations` are hints from names and schemas; the description decides. A tool named `update_record` may accept only some tables; a tool named `create_case_form` may look up services itself.
 
+**FCC (on-demand fetch) tools** are generic tools that read or change any record once the caller says where: a table or entity, fields, a query (for example `list_records`, `get_record`, `create_record`). The name comes from Microsoft 365 [custom federated connectors](https://learn.microsoft.com/microsoft-365/copilot/connectors/set-up-custom-federated-connectors), which fetch data on demand through MCP. These tools are an FCC once registered as a connector in the Microsoft 365 admin center; until then they're an MCP plugin in the agent. The inventory marks them `generic`.
+
 ## Read the knowledge sources
 
 The inventory's `knowledge` section lists the agent's `capabilities`: knowledge sources (SharePoint and OneDrive, Copilot connectors, web search and others) and how far the manifest limits each. Policy, process, how-to and eligibility questions are answered from these sources, not from tools.
@@ -34,12 +36,12 @@ You can see which sources are enabled, not what they contain, and you can't sear
 
 List the steps a person would take: find, choose, collect input, confirm, change, verify, report. For each step, judge the fit of the best tool:
 
-| Fit            | What the description shows                                                                                        | What the skill must carry for the step                                                                                       |
-| -------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Purpose-built  | The tool does the whole step for this scenario's entity or process, including its own lookups or form              | When to call it, which arguments to fill from the user's words, and its boundaries. Nothing the description already says     |
-| Building block | The tool works on any record or data, and the caller supplies the table or entity, fields, query, values or order | The domain knowledge: where the data lives, field names and codes, defaults, call order, validation, how to verify the result |
-| Partial        | A tool covers part of the step (it creates but can't set a required field; it reads but can't filter)            | What the tool covers, and what the user is told about the rest                                                               |
-| None           | No tool can do the step                                                                                           | Nothing: the step is a gap                                                                                                   |
+| Fit           | What the description shows                                                                                        | What the skill must carry for the step                                                                                        |
+| ------------- | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Purpose-built | The tool does the whole step for this scenario's entity or process, including its own lookups or form             | When to call it, which arguments to fill from the user's words, and its boundaries. Nothing the description already says      |
+| FCC           | The tool works on any record or data, and the caller supplies the table or entity, fields, query, values or order | The domain knowledge: where the data lives, field names and codes, defaults, call order, validation, how to verify the result |
+| Partial       | A tool covers part of the step (it creates but can't set a required field; it reads but can't filter)             | What the tool covers, and what the user is told about the rest                                                                |
+| None          | No tool can do the step                                                                                           | Nothing: the step is a gap                                                                                                    |
 
 An informational step (what's the policy, how does it work, am I eligible) is **Knowledge** when the agent has a knowledge source that should hold the answer, and **None** when it has none. For a Knowledge step the skill carries which questions go to knowledge search, which of the user's details to add to the search (country, role) when the answer depends on them, and what to say when nothing is found.
 
@@ -47,21 +49,21 @@ Record each step, its tool and arguments, its fit and what the skill must carry 
 
 ## Judge each scenario
 
-- **Achievable:** every required step is purpose-built, or a building block whose domain facts you can ground (Round 5).
+- **Achievable:** every required step is purpose-built, or an FCC tool whose domain facts you can ground (Round 5).
 - **Partly achievable:** some required steps are partial or missing. The skill can promise only what's covered.
 - **Not achievable:** the core step (the change itself, or the data the user needs) has no tool.
 
-A building-block scenario whose facts nobody can provide (which table, which required fields) is not achievable in practice: the model would guess. Ask the maker for the facts, or treat the step as missing.
+An FCC scenario whose facts nobody can provide (which table, which required fields) is not achievable in practice: the model would guess. Ask the maker for the facts, or treat the step as missing.
 
-The mix of fits sets the skill's weight. Mostly purpose-built steps make a thin skill: routing, argument mapping, boundaries and reply style. Mostly building blocks make a thick, focused skill that carries the procedure and the facts. Also note how many calls a routine request takes; five or more is slow for users.
+The mix of fits sets the skill's weight. Mostly purpose-built steps make a thin skill: routing, argument mapping, boundaries and reply style. Mostly FCC steps make a thick, focused skill that carries the procedure and the facts. Also note how many calls a routine request takes; five or more is slow for users.
 
 ## Plan the skills
 
 Group the scenarios into skills using the analysis:
 
 1. Scenarios whose steps are mostly purpose-built tools in one area go in **one area skill** that routes between those tools. When that routing fits in a few lines and slots are short, suggest the agent's instructions instead of a skill.
-2. Scenarios that rely on building blocks get **one skill per scenario**, or per tight group that shares data, steps and success criteria. Each carries its own facts. Mechanics several of them share (query syntax, finding a person, confirmation, error handling) go in one **shared rules skill** that the others name.
-3. A scenario with a purpose-built form but building-block lookups: the form makes the change; the skill carries only the lookups the form doesn't do.
+2. Scenarios that rely on FCC tools get **one skill per scenario**, or per tight group that shares data, steps and success criteria. Each carries its own facts. Mechanics several of them share (query syntax, finding a person, confirmation, error handling) go in one **shared rules skill** that the others name.
+3. A scenario with a purpose-built form but FCC lookups: the form makes the change; the skill carries only the lookups the form doesn't do.
 4. **Split** partly achievable scenarios: build the achievable part, and leave the rest out until a tool exists. Never put an intent the tools can't serve in a skill's description: it makes the skill load, and the skill then fails the user.
 5. Don't build not-achievable scenarios. Tell the maker which capability is missing.
 6. Merge scenarios that share triggers, inputs and success criteria. Split when one description would have to cover unrelated intents.
@@ -74,11 +76,11 @@ Name each skill by what users want (`hr-case-create`, `my-time-off`), not by ven
 
 Show the evidence (which steps, which tools, what's missing), recommend, and let the maker decide. Use the matching message, then ask **Plan** (in `interview.md`).
 
-**Broad skill asked for, but the steps use building blocks.**
+**Broad skill asked for, but the steps use FCC tools.**
 
 **Message:**
 
-The tools for {AREA} are general-purpose: they can create and read any record, so the skill itself has to say where each kind of request lives, which fields to fill and in what order. One skill for all of {AREA} would have to carry that for every scenario, which makes it long, and the agent starts guessing. I recommend one focused skill per scenario ({SCENARIOS}), plus one shared skill for the rules they have in common.
+The tools for {AREA} are general-purpose (FCC, on-demand fetch) tools: they can create and read any record, so the skill itself has to say where each kind of request lives, which fields to fill and in what order. One skill for all of {AREA} would have to carry that for every scenario, which makes it long, and the agent starts guessing. I recommend one focused skill per scenario ({SCENARIOS}), plus one shared skill for the rules they have in common.
 
 **End message.**
 
@@ -112,7 +114,7 @@ This plan needs {NEEDED} skills, and your agent has {FREE} free slots out of 8. 
 
 **HR cases with purpose-built tools.** The tools include an HR case form that looks up HR services itself, a list of the user's cases with filters, and an update tool with a `work_note` field. Every step is purpose-built, so one thin `hr-cases` skill maps intents to tools ("open a case" opens the form prefilled; "add a note" confirms the text, then updates), and states boundaries (employees can't reassign cases; closed cases can't change). It carries no tables or field codes.
 
-**HR cases with building blocks.** The tools are `list_records`, `get_record`, `create_record` and `update_record` for any table. Creating a case needs the HR service lookup, the service's table, people lookups, field names and a default priority, all from the skill. Viewing, creating and updating differ in triggers and steps, so they become three focused skills (`hr-case-create`, `hr-case-update`, `hr-cases-view`) plus a shared rules skill for query syntax and confirmation.
+**HR cases with FCC tools.** The tools are `list_records`, `get_record`, `create_record` and `update_record` for any table. Creating a case needs the HR service lookup, the service's table, people lookups, field names and a default priority, all from the skill. Viewing, creating and updating differ in triggers and steps, so they become three focused skills (`hr-case-create`, `hr-case-update`, `hr-cases-view`) plus a shared rules skill for query syntax and confirmation.
 
 **A partly achievable request.** The maker wants "an HR ticketing skill" that creates, updates and comments on cases. The tools can create and read cases but nothing can change one. Build case creation and viewing; leave updates and comments out of every description, and tell the maker an update tool is missing.
 
@@ -123,7 +125,7 @@ This plan needs {NEEDED} skills, and your agent has {FREE} free slots out of 8. 
 Check these after Round 8:
 
 - The skill repeats what a tool description already says: the steps were purpose-built; cut the skill down.
-- The model guesses table or field names: building-block steps lack facts; add them, or ask for a purpose-built tool.
+- The model guesses table or field names: FCC steps lack facts; add them, or ask for a purpose-built tool.
 - Two skills load for the same message: overlapping descriptions; merge, or sharpen both boundaries.
 - A routine request takes five or more calls: consider a purpose-built tool or a form, and note the latency in `plan.md`.
 - Compound messages drop a part, answer a policy question with a record, or open two widgets: consider an orchestration skill.

@@ -26,9 +26,9 @@ Knowledge sources: `<names and scope from the inventory, or none>`.
 
 ## Capability map
 
-| Scenario | Step  | Tool and key arguments              | Fit                                                         | What the skill must carry |
-| -------- | ----- | ----------------------------------- | ----------------------------------------------------------- | ------------------------- |
-| `<…>`    | `<…>` | `<tool(arg=…)>` or knowledge search | Purpose-built / Building block / Knowledge / Partial / None | `<…>`                     |
+| Scenario | Step  | Tool and key arguments              | Fit                                              | What the skill must carry |
+| -------- | ----- | ----------------------------------- | ------------------------------------------------ | ------------------------- |
+| `<…>`    | `<…>` | `<tool(arg=…)>` or knowledge search | Purpose-built / FCC / Knowledge / Partial / None | `<…>`                     |
 
 ## Scenario verdicts
 

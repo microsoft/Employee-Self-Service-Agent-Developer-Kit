@@ -11,6 +11,7 @@ If portable guidance assumes an unsupported capability, adapt or omit it. Keep *
 ## Contents
 
 - Microsoft 365 Copilot declarative agents
+- Microsoft 365 Copilot connectors
 - Copilot Studio
 - Agent Skills open standard
 - Anthropic
@@ -21,11 +22,19 @@ If portable guidance assumes an unsupported capability, adapt or omit it. Keep *
 
 - [Skills in declarative agents](https://learn.microsoft.com/microsoft-365/copilot/extensibility/declarative-agent-skills): support matrix, file types, script sandbox, sensitivity and storage. The main source for `limitations.md`.
 - [Add skills in Agent Builder](https://learn.microsoft.com/microsoft-365/copilot/extensibility/agent-builder-add-skills): the `.zip` package and upload steps.
-- [Add skills with Microsoft 365 Agents Toolkit](https://learn.microsoft.com/microsoft-365/copilot/extensibility/build-declarative-agents-add-custom-skills): `atk add skill`, the `TEAMSFX_AGENT_SKILLS` setting and manifest version 1.9.
+- [Add skills with Microsoft 365 Agents Toolkit](https://learn.microsoft.com/microsoft-365/copilot/extensibility/build-declarative-agents-add-custom-skills): adding a skill folder, manifest version 1.9 and the 10 MB app package limit. ESS doesn't use the toolkit; listed for its limits.
 - [Write effective instructions for declarative agents](https://learn.microsoft.com/microsoft-365/copilot/extensibility/declarative-agent-instructions): how agent instructions should refer to skills.
 - [MCP apps in Microsoft 365 Copilot](https://learn.microsoft.com/microsoft-365/copilot/extensibility/plugin-mcp-apps): widgets rendered by MCP tools.
 - [User experience guidelines for MCP apps](https://learn.microsoft.com/microsoft-365/copilot/extensibility/plugin-mcp-apps-ui-guidelines): how widget replies and forms should behave.
 - [Plugin manifest schema 2.4](https://learn.microsoft.com/microsoft-365/copilot/extensibility/plugin-manifest-2.4): MCP server runtimes, functions and confirmation settings such as `isNonConsequential`.
+
+## Microsoft 365 Copilot connectors
+
+- [Federated connectors overview](https://learn.microsoft.com/microsoft-365/copilot/connectors/federated-connectors-overview): on-demand fetch through MCP, user identity, write approval cards, supported surfaces.
+- [Set up custom federated connectors](https://learn.microsoft.com/microsoft-365/copilot/connectors/set-up-custom-federated-connectors): creating an FCC from an MCP server in the admin center, authentication and governance.
+- [Generate a custom federated connector description](https://learn.microsoft.com/microsoft-365/copilot/connectors/generate-custom-connector-description): Microsoft's agent skill for writing a connector description from the tool inventory.
+- [Static IP addresses for MCP and federated connectors](https://learn.microsoft.com/microsoft-365/copilot/connectors/federated-connectors-network-requirements): egress IPs shared by agent MCP calls and FCCs.
+- [Declarative agent manifest schema 1.9](https://learn.microsoft.com/microsoft-365/copilot/extensibility/declarative-agent-manifest-1.9): the capability names an agent can declare.
 
 ## Copilot Studio
 
@@ -42,7 +51,7 @@ These pages cover Copilot Studio agents built with the GitHub Copilot harness, w
 - [Best practices for skill creators](https://agentskills.io/skill-creation/best-practices): scoping, calibrating detail, gotchas, starting from real expertise. Read before drafting.
 - [Optimizing skill descriptions](https://agentskills.io/skill-creation/optimizing-descriptions): writing descriptions that trigger, and trigger evals with train and validation sets.
 - [Evaluating skill output quality](https://agentskills.io/skill-creation/evaluating-skills): eval-driven iteration, assertions, grading, baselines.
-- [Using scripts in skills](https://agentskills.io/skill-creation/using-scripts): when a script helps and how to design one.
+- [Using scripts in skills](https://agentskills.io/skill-creation/using-scripts): when a script helps and how to design one. Applies to the kit's own scripts; ESS skills include none.
 - [How to add skills support to your agent](https://agentskills.io/client-implementation/adding-skills-support): general host discovery, loading and activation patterns; not evidence of Copilot's implementation or why a particular skill was not read.
 
 ## Anthropic

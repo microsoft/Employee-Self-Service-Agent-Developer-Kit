@@ -79,6 +79,15 @@ The file shows which sources the agent can search, not what they contain. The bu
 
 With `--package`, the inventory reads the `capabilities` array from `declarativeAgent.json` directly, so this file isn't needed.
 
+## Tools registered as an FCC
+
+If the MCP server is registered as a custom federated connector (FCC) in the Microsoft 365 admin center, export its tool list the same way and save it as `mcp/<server-name>/tools.json`; there's no `plugin.json`. Plan with these differences, recorded in `limitations.md` (FC-01 to FC-03, UV-04 and UV-05):
+
+- An FCC is tenant-wide: Copilot Chat, Researcher and other agents can use it, not just this agent.
+- Copilot shows its own approval card for each write tool (Allow once, for the conversation, or always). Account for it when choosing the confirmation style in Round 6, so users aren't asked twice.
+- MCP Apps widgets are documented only for MCP plugins in an agent, so keep widget and form steps in the plugin.
+- Whether this agent can scope the FCC and name its tools is unverified. Confirm in a test tenant before a skill depends on FCC tool names.
+
 ## Getting the files from an agent package
 
 A declarative agent's app package already holds what's needed: each action in `declarativeAgent.json` points to a plugin file, whose runtime points to the tool file. Copy both into `mcp/<namespace>/` (the plugin as `plugin.json`, the tool file as `tools.json`), copy the `capabilities` array into `knowledge/knowledge.json`, and copy each folder listed in `agent_skills` into `skills/`.

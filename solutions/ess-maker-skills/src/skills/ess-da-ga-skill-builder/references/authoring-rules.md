@@ -11,7 +11,7 @@ Microsoft documentation governs supported capabilities, platform limits, packagi
 - Body
 - Promise only what the tools do
 - Tools, writes and widgets
-- Scripts
+- No scripts
 - Progressive disclosure
 - Style
 
@@ -35,7 +35,7 @@ Microsoft documents that Copilot initially shows the model each skill's name and
 
 ## Body
 
-- Let the Round 3 analysis set the weight, step by step: for a purpose-built step, say when to call the tool and which arguments to fill; for a building-block step, carry the facts and the order. Never restate what a tool's description already says.
+- Let the Round 3 analysis set the weight, step by step: for a purpose-built step, say when to call the tool and which arguments to fill; for an FCC step, carry the facts and the order. Never restate what a tool's description already says.
 - Add only what the model lacks: the agent's tables, field names, defaults, value codes, rules and failure modes. Don't explain what ServiceNow, Workday, HTTP or an HR case is. Every sentence must change what the agent does; cut the rest.
 - Calibrate each part separately, following the maker's Round 4 answer. Be exact (tool, arguments, order) where a mistake writes the wrong data or fails silently; give goals and reasons where several approaches are fine.
 - Give a default, not a menu: one tool or approach per step, with an escape hatch if needed.
@@ -70,14 +70,15 @@ A skill that loads and then can't finish the job is worse than no skill.
 - Anything that must hold even if the model skips the skill (a permission check, a required field, a safe default) belongs in the tool description or the server. Record it in `plan.md` under **Must hold**; the Finish message lists it for the developer.
 - Never instruct the model through tool result text; this caused Copilot's content filter to block answers in ESS testing (**Observed**, RT-05), not a guaranteed outcome for every response.
 
-## Scripts
+## No scripts
 
-Copilot runs skill scripts in a sandbox with no network access and no package installs, and scripts can't call the agent's connectors, plugins or MCP servers; only the agent can, through its tools. So:
+ESS skills include no scripts, even though Copilot runs them:
 
-- Default to no scripts. Instructions, references and the agent's tools do the work.
-- Add a script only for a deterministic, offline transformation of data the agent already has (formatting, date arithmetic, validating a value against a code list), and only when the maker agrees.
-- Python or JavaScript with the standard library only. No HTTP clients, sockets or `pip`/`npm` installs; the validator rejects them.
-- Use only the file and script types Copilot accepts (`limitations.md`, FS-01 and FS-02).
+- Copilot's sandbox has no network access or package installs, and scripts can't call the agent's connectors, plugins or MCP servers (`limitations.md`, FS-03 to FS-06). Only the agent can reach ESS data, through its tools.
+- Each script run adds time to the turn, and a script that grows can turn a quick answer into a long-running task.
+- Put deterministic work (formatting, date arithmetic, checking a value against a code list) in a reference table the model reads, or list it under **Must hold** for the developer to add to the MCP tool.
+
+The validator fails a skill that contains a script.
 
 ## Progressive disclosure
 
