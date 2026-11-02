@@ -3047,12 +3047,16 @@ def test_validate_dev_records_choice_without_changing_active_agent(
     assert saved["evidence"]["test"]["result"] == "pass"
 
 
-@pytest.mark.parametrize("realm,realm_value", (("test", 1), ("prod", 2)))
+@pytest.mark.parametrize(
+    ("realm", "realm_value", "discovery_first"),
+    (("test", 1, False), ("test", 1, True), ("prod", 2, False)),
+)
 def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     realm: str,
     realm_value: int,
+    discovery_first: bool,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     context, _state = _seed_complete_dev_state(tmp_path, profile="itsm")
@@ -3065,19 +3069,22 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     )
     target_instance = "dev123"
     target_client_id = "00000000-0000-4000-8000-000000006666"
-    with snow.product_profile_context("itsm"):
-        _seed_realm_promotion(
-            context,
-            realm=realm,
-            complete_test_first=realm == "prod",
-        )
+    if not discovery_first:
+        with snow.product_profile_context("itsm"):
+            _seed_realm_promotion(
+                context,
+                realm=realm,
+                complete_test_first=realm == "prod",
+            )
 
     class FakeClient:
         def __init__(self, target: bool) -> None:
             self.target = target
             self.mutation_count = 0
+            self.realm_read_count = 0
 
         def get_realms(self, _agent_id: str) -> dict:
+            self.realm_read_count += 1
             return {
                 "routeRealm": 0,
                 "siblingRealms": [
@@ -3200,10 +3207,15 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
             realm=realm,
             target_instance=target_instance,
             target_client_id=target_client_id,
+            already_promoted=discovery_first,
         )
 
     assert result["status"] == "runtime-approval-required"
     assert result["deploymentEvidence"]["status"] == "deployment-completed"
+    assert result["deploymentEvidence"]["kind"] == (
+        "backend-proof" if discovery_first else "maker-attestation"
+    )
+    assert dev_client.realm_read_count == 1
     assert result["readinessSummary"] == {
         "automaticPrechecks": "Complete",
         "functionalTest": "Pending",
@@ -3357,6 +3369,7 @@ def test_validate_target_realm_blocks_when_exact_environment_is_unproven(
             )
 
     assert raised.value.details["matchCount"] == 0
+    assert raised.value.details["targetAbsenceProven"] is True
     _assert_recovery_handoff(raised.value.details["recoveryHandoff"])
     recovery = raised.value.details["recoveryHandoff"]
     assert recovery["category"] == "Target agent not found"
@@ -3366,6 +3379,211 @@ def test_validate_target_realm_blocks_when_exact_environment_is_unproven(
     assert discovery_error["requestPath"].endswith(
         "/00000000-0000-4000-8000-000000007777"
     )
+
+
+def test_already_promoted_all_candidate_not_found_returns_deployment_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="itsm")
+    with snow.product_profile_context("itsm"):
+        path = snow._lifecycle_state_path(context)
+    before = path.read_bytes()
+    details = {
+        "realm": "test",
+        "targetAgentId": "00000000-0000-4000-8000-000000007777",
+        "matchCount": 0,
+        "targetAbsenceProven": True,
+        "discoveryErrors": [
+            {
+                "environmentId": "00000000-0000-4000-8000-000000008888",
+                "error": "AgentBuilderHTTPError",
+                "statusCode": 404,
+            }
+        ],
+        "recoveryHandoff": {"category": "Target agent not found"},
+    }
+    calls = 0
+
+    def missing_target(
+        _context: dict,
+        *,
+        realm: str,
+    ) -> dict:
+        nonlocal calls
+        calls += 1
+        assert realm == "test"
+        raise snow.ServiceNowConnectError(
+            "Could not prove one exact Test environment and agent target.",
+            details=details,
+        )
+
+    monkeypatch.setattr(snow, "_resolve_target_realm", missing_target)
+
+    with snow.product_profile_context("itsm"):
+        result = snow.validate_realm(
+            context,
+            realm="test",
+            target_instance="target-snow",
+            target_client_id=APP_CLIENT_ID,
+            already_promoted=True,
+        )
+
+    assert calls == 1
+    assert result["status"] == "deployment-required"
+    assert result["deploymentEvidence"] is None
+    assert result["targetDiscovery"] == {
+        "status": "not-found",
+        "source": "exact-read-only-discovery",
+        "details": details,
+    }
+    assert result["question"]["header"] == "Confirm Test promotion completed"
+    assert "organization's normal promotion process" in (
+        result["question"]["question"]
+    )
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("category", "details"),
+    (
+        (
+            "permission",
+            {
+                "realm": "test",
+                "targetAgentId": "target-id",
+                "matchCount": 0,
+                "targetAbsenceProven": False,
+                "discoveryErrors": [{"statusCode": 401}],
+            },
+        ),
+        (
+            "forbidden",
+            {
+                "realm": "test",
+                "targetAgentId": "target-id",
+                "matchCount": 0,
+                "targetAbsenceProven": False,
+                "discoveryErrors": [{"statusCode": 403}],
+            },
+        ),
+        (
+            "throttled",
+            {
+                "realm": "test",
+                "targetAgentId": "target-id",
+                "matchCount": 0,
+                "targetAbsenceProven": False,
+                "discoveryErrors": [{"statusCode": 429}],
+            },
+        ),
+        (
+            "unreadable",
+            {
+                "realm": "test",
+                "targetAgentId": "target-id",
+                "matchCount": 0,
+                "targetAbsenceProven": False,
+                "discoveryErrors": [{"error": "OSError"}],
+            },
+        ),
+        (
+            "ambiguous",
+            {
+                "realm": "test",
+                "targetAgentId": "target-id",
+                "matchCount": 2,
+                "targetAbsenceProven": False,
+                "discoveryErrors": [],
+            },
+        ),
+        (
+            "schema-mismatch",
+            {
+                "realm": "test",
+                "targetAgentId": "target-id",
+                "matchCount": 0,
+                "targetAbsenceProven": False,
+                "discoveryErrors": [
+                    {
+                        "error": "TargetSchemaMismatch",
+                        "statusCode": None,
+                    }
+                ],
+            },
+        ),
+        (
+            "family-mismatch",
+            {
+                "realm": "test",
+                "targetAgentId": "target-id",
+                "matchCount": 0,
+                "targetAbsenceProven": False,
+                "discoveryErrors": [
+                    {"error": "TargetAlmFamilyMismatch"}
+                ],
+            },
+        ),
+        (
+            "tenant-mismatch",
+            {
+                "realm": "test",
+                "targetAgentId": "target-id",
+                "matchCount": 0,
+                "targetAbsenceProven": False,
+                "discoveryErrors": [{"error": "TargetTenantMismatch"}],
+            },
+        ),
+        (
+            "commit-mismatch",
+            {
+                "realm": "test",
+                "targetAgentId": "target-id",
+                "matchCount": 0,
+                "targetAbsenceProven": False,
+                "discoveryErrors": [{"error": "TargetCommitMismatch"}],
+            },
+        ),
+    ),
+)
+def test_already_promoted_preserves_typed_discovery_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    category: str,
+    details: dict,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="itsm")
+    with snow.product_profile_context("itsm"):
+        path = snow._lifecycle_state_path(context)
+    before = path.read_bytes()
+
+    def unresolved(
+        _context: dict,
+        *,
+        realm: str,
+    ) -> dict:
+        assert realm == "test"
+        raise snow.ServiceNowConnectError(category, details=details)
+
+    monkeypatch.setattr(snow, "_resolve_target_realm", unresolved)
+
+    with snow.product_profile_context("itsm"):
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match=category,
+        ) as raised:
+            snow.validate_realm(
+                context,
+                realm="test",
+                target_instance="target-snow",
+                target_client_id=APP_CLIENT_ID,
+                already_promoted=True,
+            )
+
+    assert raised.value.details == details
+    assert path.read_bytes() == before
 
 
 def test_target_discovery_normalizes_default_ids_and_preserves_unknown_target(
@@ -16481,6 +16699,49 @@ def test_resume_handoff_cli_preserves_business_group_answer_context(
         (True, "maker-configuration", "a" * 64),
         (False, "maker-configuration", "a" * 64),
     ]
+
+
+def test_validate_realm_cli_preserves_explicit_already_promoted_intent(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: list[bool] = []
+    monkeypatch.setattr(snow, "load_context", lambda **_kwargs: _context())
+
+    def fake_validate(
+        _context: dict,
+        *,
+        realm: str,
+        target_instance: str | None,
+        target_client_id: str | None,
+        already_promoted: bool,
+    ) -> dict:
+        assert realm == "test"
+        assert target_instance == "target-snow"
+        assert target_client_id == APP_CLIENT_ID
+        captured.append(already_promoted)
+        return {"alreadyPromoted": already_promoted}
+
+    monkeypatch.setattr(snow, "validate_realm", fake_validate)
+    command = [
+        "validate-realm",
+        "--realm",
+        "test",
+        "--target-instance",
+        "target-snow",
+        "--target-client-id",
+        APP_CLIENT_ID,
+    ]
+
+    assert snow.main(command) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "alreadyPromoted": False
+    }
+    assert snow.main([*command, "--already-promoted"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "alreadyPromoted": True
+    }
+    assert captured == [False, True]
 
 
 def test_resume_handoff_cli_jit_group_no_is_byte_stable(

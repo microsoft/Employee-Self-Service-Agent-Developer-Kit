@@ -86,8 +86,11 @@ python scripts/connect_servicenow_da.py \
 ```
 
 Dev returns to the normal exact-target lifecycle and live re-verification.
-For Test or Prod, first require the Maker's explicit report that the
-organization's approved promotion completed, then run read-only validation.
+For Test or Prod, keep the realm explicit. When the user says this ServiceNow
+ESS agent was already promoted, use the existing Test/Prod picker and add
+`--already-promoted`; this authorizes one read-only exact-target discovery
+before a local deployment record exists. It does not accept the user's claim
+as evidence, infer an agent ID from a name, or route a literal Workday request.
 The exact target-realm ServiceNow instance and Entra application client ID are
 both required:
 
@@ -97,8 +100,16 @@ python scripts/connect_servicenow_da.py \
   --agent-slug "{SELECTED_AGENT_SLUG}" \
   validate-realm --realm <test|prod> \
   --target-instance "{TARGET_INSTANCE}" \
-  --target-client-id "{TARGET_CLIENT_ID}"
+  --target-client-id "{TARGET_CLIENT_ID}" \
+  --already-promoted
 ```
+
+On verified discovery, the controller records backend deployment proof from
+the exact target identity and continues this validation invocation. If every
+candidate environment proves the target absent, show the returned Copilot
+Studio deployment/approval question. Permission, throttling, network,
+unreadable, ambiguous, or identity/schema/family/tenant/commit failures remain
+their typed recovery handoffs; do not describe them as not deployed.
 
 Test/Production returns its structured target-stage ordinary reply. It does
 not create Dev collaboration-group availability prompts; target checks and
@@ -168,8 +179,9 @@ exits with `status: error` and `details.recoveryHandoff`, render its `message`
 unchanged and stop. That branch distinguishes target mismatch, permission,
 throttling, and read/network failures without changing the target.
 
-Before target reads, record whether the Maker reports the organization
-promotion incomplete or completed:
+When the user has not asked for already-promoted discovery, preserve the
+manual deployment-report path. Before target reads, record whether the Maker
+reports the organization promotion incomplete or completed:
 
 ```text
 python scripts/connect_servicenow_da.py \
@@ -180,9 +192,10 @@ python scripts/connect_servicenow_da.py \
 
 Show the returned question exactly. It directs the ALM owner to use the
 organization's normal promotion process outside Connect and asks the Maker to
-choose Completed only after that process finishes. The kit does not deploy,
-promote, import, publish, click, sign in, or change permissions. A 404,
-unreadable environment, or unknown target is not proof of missing promotion.
+choose Completed only after that process finishes. The kit does not deploy, promote, import, publish, click, sign in, or change
+permissions. Only the controller's conclusive all-candidate not-found result
+proves absence; one candidate 404, an unreadable environment, or an unknown
+target does not.
 
 When the Maker answers `Completed`, record only their report:
 

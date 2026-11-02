@@ -14534,6 +14534,8 @@ def _resolve_target_realm(
                 "targetAgentId": target_agent_id,
                 "matchCount": len(matches),
                 "discoveryErrors": discovery_errors,
+                "targetAbsenceProven": bool(discovery_errors)
+                and len(not_found_errors) == len(discovery_errors),
                 "recoveryHandoff": recovery,
             },
         )
@@ -14555,6 +14557,76 @@ def _resolve_target_realm(
         ),
     }
     return target
+
+
+def _target_absence_proven(
+    exc: ServiceNowConnectError,
+    *,
+    realm: str,
+) -> bool:
+    details = exc.details if isinstance(exc.details, dict) else {}
+    return bool(
+        details.get("realm") == realm
+        and details.get("targetAbsenceProven") is True
+        and details.get("matchCount") == 0
+        and isinstance(details.get("targetAgentId"), str)
+        and details["targetAgentId"]
+        and isinstance(details.get("discoveryErrors"), list)
+        and details["discoveryErrors"]
+        and all(
+            isinstance(row, dict) and row.get("statusCode") == 404
+            for row in details["discoveryErrors"]
+        )
+    )
+
+
+def _record_verified_realm_deployment(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    realm: str,
+    target: dict[str, Any],
+) -> dict[str, Any]:
+    target_identity = _realm_target_identity(target, realm)
+    recorded_at = _utc_now()
+    record = {
+        "kind": "backend-proof",
+        "status": "deployment-completed",
+        "source": "exact-target-discovery",
+        "realm": realm,
+        "recordedAt": recorded_at,
+        "provider": ACTIVE_PROFILE.provider_key,
+        "profile": ACTIVE_PROFILE.key,
+        "agentSlug": _agent_slug(context),
+        "sourceAgentId": context["agent"]["id"],
+        "sourceEnvironmentId": context["environment"]["id"],
+        "targetIdentity": target_identity,
+        "targetConfigurationSha256": _canonical_json_hash(target_identity),
+    }
+    evidence = state.setdefault("evidence", {})
+    evidence.setdefault("realmDeployments", {})[realm] = record
+    flow = _realm_flow_record(state, realm, create=True)
+    if isinstance(flow, dict):
+        flow.clear()
+        flow.update(
+            {
+                "realm": realm,
+                "promotion": copy.deepcopy(record),
+                "targetIdentity": copy.deepcopy(target_identity),
+                "targetConfigurationSha256": record[
+                    "targetConfigurationSha256"
+                ],
+                "stages": {
+                    stage_id: {
+                        "status": "pending",
+                        "updatedAt": recorded_at,
+                    }
+                    for stage_id in _REALM_STAGE_IDS
+                },
+            }
+        )
+    _write_lifecycle_state(context, state)
+    return copy.deepcopy(record)
 
 
 def _flightcheck_result_dict(result: Any) -> dict[str, Any]:
@@ -15615,6 +15687,7 @@ def validate_realm(
     realm: str,
     target_instance: str | None = None,
     target_client_id: str | None = None,
+    already_promoted: bool = False,
 ) -> dict[str, Any]:
     if realm not in _VALIDATION_REALMS:
         raise ServiceNowConnectError("Validation realm must be Dev, Test, or Prod.")
@@ -15669,6 +15742,11 @@ def validate_realm(
         "recordedAt": _utc_now(),
     }
     if realm == "dev":
+        if already_promoted:
+            raise ServiceNowConnectError(
+                "Already-promoted discovery is supported only for an "
+                "explicit Test or Prod realm."
+            )
         state.setdefault("evidence", {})["validationRealmSelection"] = selection
         _write_lifecycle_state(context, state)
         return {
@@ -15693,27 +15771,68 @@ def validate_realm(
 
     _require_realm_sequence(context, state, realm)
     deployment_record = _realm_deployment_record(state, realm)
+    resolved_target: dict[str, Any] | None = None
     if (
         not isinstance(deployment_record, dict)
         or deployment_record.get("status") != "deployment-completed"
     ):
-        return {
-            "schemaVersion": "servicenow.realm-validation.v1",
-            "status": "deployment-required",
-            "selection": selection,
-            "transport": transport,
-            "deploymentEvidence": copy.deepcopy(deployment_record),
-            "question": _realm_deployment_question(context, realm=realm),
-            "remoteMutationCount": 0,
-            "next": {
-                "action": "maker-deploys-target",
-                "instruction": (
-                    "Wait for the Maker's explicit report that the "
-                    "organization promotion completed. Do not call target "
-                    "APIs, provision, promote, import, or publish."
+        if not already_promoted:
+            return {
+                "schemaVersion": "servicenow.realm-validation.v1",
+                "status": "deployment-required",
+                "selection": selection,
+                "transport": transport,
+                "deploymentEvidence": copy.deepcopy(deployment_record),
+                "question": _realm_deployment_question(
+                    context,
+                    realm=realm,
                 ),
-            },
-        }
+                "remoteMutationCount": 0,
+                "next": {
+                    "action": "maker-deploys-target",
+                    "instruction": (
+                        "Wait for the Maker's explicit report that the "
+                        "organization promotion completed. Do not call target "
+                        "APIs, provision, promote, import, or publish."
+                    ),
+                },
+            }
+        try:
+            resolved_target = _resolve_target_realm(context, realm=realm)
+        except ServiceNowConnectError as exc:
+            if not _target_absence_proven(exc, realm=realm):
+                raise
+            return {
+                "schemaVersion": "servicenow.realm-validation.v1",
+                "status": "deployment-required",
+                "selection": selection,
+                "transport": transport,
+                "deploymentEvidence": None,
+                "targetDiscovery": {
+                    "status": "not-found",
+                    "source": "exact-read-only-discovery",
+                    "details": copy.deepcopy(exc.details),
+                },
+                "question": _realm_deployment_question(
+                    context,
+                    realm=realm,
+                ),
+                "remoteMutationCount": 0,
+                "next": {
+                    "action": "maker-deploys-target",
+                    "instruction": (
+                        "Exact read-only discovery proved the requested "
+                        "target is not deployed. Show the deployment question "
+                        "and wait for the ALM owner."
+                    ),
+                },
+            }
+        deployment_record = _record_verified_realm_deployment(
+            context,
+            state,
+            realm=realm,
+            target=resolved_target,
+        )
 
     if not target_instance or not target_client_id:
         problem = (
@@ -15763,7 +15882,11 @@ def validate_realm(
     normalized_target_client_id = normalize_client_id(target_client_id)
     state.setdefault("evidence", {})["validationRealmSelection"] = selection
     _write_lifecycle_state(context, state)
-    target = _resolve_target_realm(context, realm=realm)
+    target = (
+        resolved_target
+        if resolved_target is not None
+        else _resolve_target_realm(context, realm=realm)
+    )
     target_client = target.pop("client")
     target_identity = _realm_target_identity(target, realm)
     target_configuration_sha256 = _canonical_json_hash(target_identity)
@@ -17621,6 +17744,14 @@ def build_parser() -> argparse.ArgumentParser:
             "exact Test or Prod realm."
         ),
     )
+    validate_realm_parser.add_argument(
+        "--already-promoted",
+        action="store_true",
+        help=(
+            "Read-only discover an explicitly selected Test/Prod target "
+            "before a local deployment-completed record exists."
+        ),
+    )
     realm_deployment_parser = subparsers.add_parser(
         "record-realm-deployment",
         help=(
@@ -18292,6 +18423,7 @@ def main(argv: list[str] | None = None) -> int:
                 realm=args.realm,
                 target_instance=args.target_instance,
                 target_client_id=args.target_client_id,
+                already_promoted=args.already_promoted,
             )
         elif args.command == "record-realm-deployment":
             result = record_realm_deployment(

@@ -38,6 +38,13 @@ This command is mandatory on every `/connect servicenow` invocation. Do not
 reuse previously read lifecycle instructions or manually infer the next phase
 from `actionApplied`, phase status, or earlier conversation context.
 
+If the user explicitly says the selected ServiceNow ESS agent was already
+promoted to Test or Production, preserve that intent when the ServiceNow skill
+selects the explicit realm: run its documented `validate-realm
+--already-promoted` path. Keep a literal Workday request on the Workday route.
+The user report permits read-only discovery only; exact backend target proof
+decides whether validation continues or deployment guidance is shown.
+
 Immediately before consuming the result, read the current
 `src/skills/connect/shared/lifecycle-runner.md`. The executable decision routes
 the shared runner; it does not replace L.2 live re-verification, L.4a role and

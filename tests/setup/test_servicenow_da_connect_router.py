@@ -25,8 +25,10 @@ def test_realm_deployment_guidance_is_conditional_and_read_only() -> None:
     assert "--status deployment-completed" in chooser
     assert "organization's normal promotion process outside Connect" in chooser
     assert "Completed only after that process finishes" in chooser
-    assert "A 404, unreadable environment" in normalized
-    assert "not proof of missing promotion" in normalized
+    assert "Only the controller's conclusive all-candidate not-found result" in (
+        normalized
+    )
+    assert "one candidate 404, an unreadable environment" in normalized
     assert "Maker completion does not\npass validation" in chooser
     assert "kit does not deploy, promote, import" in normalized
     assert "Not automatically verified" in chooser
@@ -41,6 +43,11 @@ def test_realm_deployment_guidance_is_conditional_and_read_only() -> None:
     assert "record exactly one bounded category" in normalized
     assert "Only confirmed promoted-content defects return to Dev" in normalized
     assert "target-scoped recovery handoff" in normalized
+    assert "validate-realm --realm <test|prod>" in normalized
+    assert "--already-promoted" in chooser
+    assert "records backend deployment proof" in normalized
+    assert "does not accept the user's claim as evidence" in normalized
+    assert "literal Workday request" in normalized
 
 
 def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
@@ -73,6 +80,8 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "resume-handoff" in prompt
     assert "mandatory on every `/connect servicenow` invocation" in prompt
     assert "before any FlightCheck/checkpoint command" in prompt
+    assert "validate-realm\n--already-promoted" in prompt
+    assert "literal Workday request on the Workday route" in prompt
     assert '`planReason: "revision-reapproval"`' in prompt
     assert "stateInitializationRequired" in prompt
     assert "must never run\n    first-run initialization" in prompt
@@ -121,6 +130,8 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "Never changes `.local/config.json.activeAgent`" in router
     assert "`schema_version: 4` with an environment binding" in router
     assert "emit_capability.py connect --connector servicenow" in router
+    assert "already promoted to Test or Production" in router
+    assert "literal Workday request remains on the Workday route" in router
 
     interactive_router = (
         _SOLUTION / "src" / "skills" / "connect" / "step1.md"

@@ -24,7 +24,9 @@ Then read `src/skills/connect/servicenow-da/SKILL.md` and follow it. This
 local-ready/explicit-link chooser works even when no agent is prepared in the
 workspace, dispatches a selected prepared HR or IT agent to its own shared
 lifecycle, and must not route through the retained Preview-era ServiceNow
-steps.
+steps. Preserve an explicit user report that this ServiceNow ESS agent was
+already promoted to Test or Production; the ServiceNow skill owns the
+proof-first realm path. A literal Workday request remains on the Workday route.
 
 Otherwise read `src/skills/connect/step1.md` and follow it. That file records
 anonymous usage telemetry after routing knows which integration was chosen, so
