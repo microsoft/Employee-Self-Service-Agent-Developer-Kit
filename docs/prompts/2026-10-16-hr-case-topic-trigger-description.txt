@@ -1,0 +1,13 @@
+Use this topic ONLY when the message already states a specific HR subject (payroll, benefits, leave, etc.) AND explicitly asks to create/open/submit an HR case. A bare "create an HR case" with no subject must NOT trigger this — let a different response ask the issue first; trigger only once the subject is stated AND it can't already be answered from HR knowledge, or the user insists on a case after an answer.
+
+Do NOT trigger if:
+- IT-related (VPN, email, password, Wi-Fi).
+- General HR info/guidance question, not a case request.
+- Updating, checking, or closing an existing case.
+- No subject stated yet.
+- Answerable from HR knowledge and user hasn't insisted after that answer.
+
+Valid: "Create an HR case about my benefits enrollment"; "Please just open a case anyway" (after an answer).
+Invalid: "Create an HR case" (no subject); "How do I update my benefits?" (answerable); "How do I reset my password?"; "Close my HR case".
+
+Note: options vary by client. If unclear, ask the user to describe the issue.
