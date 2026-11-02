@@ -104,6 +104,9 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "progress.currentPhase.waitingChecklistText" in prompt
     assert "transport.ordinaryReply.text" in prompt
     assert "transport.businessGroupAvailability.question" in prompt
+    assert "one-element array containing that exact object" in prompt
+    assert "Never substitute the header for the question body" in prompt
+    assert "preserving its complete `header`, `question`, `options`" in prompt
     assert "HR's four or IT's three collaboration groups" in prompt
     assert "Preflight and instance input never ask availability" in prompt
     assert "with `--roles-available yes`" in prompt
@@ -120,6 +123,9 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "Show a phase as complete only after" in prompt
     assert "ServiceNow phase-progress strings returned" in prompt
     assert "**ServiceNow phase-progress extension:**" in runner
+    assert "one-element array containing that exact object" in runner
+    assert "never substitute the header for the body" in runner
+    assert "`choices` is not a supported native question field" in runner
     assert "Other providers retain this runner's existing output" in runner
     assert "cached `done` phase displays **Rechecking**" in runner
     assert "Do not inspect `.local/connect/steps.md` before" in prompt
@@ -199,6 +205,32 @@ def test_servicenow_dev_phase_order_and_binding_intros_are_explicit() -> None:
         assert credential.index("**Resource URI:**") < (
             credential.index("**Instance Name:**")
         )
+        visible_question = credential.split(
+            "<!-- visible-handoff-question:v1 -->",
+            1,
+        )[1]
+        display_index = visible_question.index(
+            "Display name (optional): `{CONNECTION_DISPLAY_NAME}`"
+        )
+        auth_index = visible_question.index(
+            "Authentication Type: Microsoft Entra ID User Login"
+        )
+        resource_index = visible_question.index(
+            "Resource URI: `{APP_CLIENT_ID}`"
+        )
+        instance_index = visible_question.index(
+            "Instance Name: `{INSTANCE_NAME}`"
+        )
+        assert display_index < auth_index < resource_index < instance_index
+        assert "guidance only; never a readiness gate" in visible_question
+        completion_question = visible_question.split(
+            "Does the exact ServiceNow connection now show Connected",
+            1,
+        )[1]
+        assert "Display name" not in completion_question
+        assert completion_question.index("Authentication Type") < (
+            completion_question.index("Resource URI")
+        ) < completion_question.index("Instance Name")
         assert "direct connector-form or connection-detail URL" in credential
         assert "conditional remediation, not an observed current error" in (
             normalized_credential
@@ -288,8 +320,13 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "--details" not in test
     assert "save the current authored draft" in test
     assert "selected ServiceNow connection" in test
-    assert '"label": "Pass"' in test
-    assert '"label": "Not pass"' in test
+    assert (
+        '"label": "Pass, the ServiceNow HRSD capability worked correctly"'
+        in test
+    )
+    assert (
+        '"label": "Not pass, it failed or could not be verified"' in test
+    )
     assert '"recommended": true' not in test
     assert "Do not require a non-empty case result" in test
     assert 'ACTION_RESULT = "waiting"' in test
@@ -348,9 +385,17 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "com.sn_hr_core" in plugins
     assert "Does the page show the listed installed-and-ready evidence" in plugins
-    assert '"label": "Yes"' in plugins
-    assert '"label": "No"' in plugins
-    assert '"label": "Not sure"' in plugins
+    assert (
+        '"label": "Yes, all listed installed-and-ready evidence is present"'
+        in plugins
+    )
+    assert (
+        '"label": "No, one or more required items are missing"' in plugins
+    )
+    assert (
+        '"label": "Not sure, the administrator still needs to check"'
+        in plugins
+    )
     assert "[Open HR Service Delivery Core]({HR_CORE_PLUGIN_URL})" in plugins
     assert "OIDC capability belongs to the later ServiceNow OIDC phase" in (
         plugins
@@ -422,7 +467,13 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "HTTP/SharePoint/OneDrive URL" in entra_normalized
     assert "Use the exact local path returned by the question" in entra
     assert "There is no separate client-ID question" in entra
-    assert "<!-- visible-handoff-question:" not in entra
+    assert "<!-- visible-handoff-question:v1-confirm-setup -->" in entra
+    assert '"header": "Confirm Entra setup evidence"' in entra
+    assert (
+        '"Yes, all four requirements are confirmed for this exact target"'
+        in entra
+    )
+    assert '"No, the administrator handoff is incomplete"' in entra
     assert "acceptMappedClaims" in entra
     assert "custom signing-key route" in entra
     assert "freezes the exact Entra-confirmed candidate claim names" in (
@@ -487,7 +538,16 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "keep the handoff waiting" in oidc
     assert "reconcile any older derived reused handoff" in oidc
     assert "Require\n`decision: no-action`; do not ask again" in oidc
-    assert "<!-- visible-handoff-question:" not in oidc
+    assert "<!-- visible-handoff-question:v1-confirm-setup -->" in oidc
+    assert '"header": "Confirm ServiceNow OIDC evidence"' in oidc
+    assert (
+        '"Yes, the OIDC and mapping evidence is complete for this exact '
+        'target"' in oidc
+    )
+    assert (
+        '"No, the ServiceNow administrator still needs to finish it"'
+        in oidc
+    )
     assert "{TOKEN_CLAIM_NAME}" not in oidc
     assert '"label": "Completed"' not in oidc
     assert "PR #217 S4.3/S4.4 is authoritative" in oidc
@@ -548,7 +608,14 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         credential
     )
     assert "Only when no exact candidate exists" in credential
-    assert '"label": "Completed"' in credential
+    assert (
+        '"label": "Completed, the exact ServiceNow connection is Connected"'
+        in credential
+    )
+    assert (
+        '"label": "Not yet, the ServiceNow connection is not ready"'
+        in credential
+    )
     assert '"label": "Not yet"' in credential
     assert "Do not ask the Maker for a connection display name" in (
         credential_normalized
@@ -716,8 +783,13 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
     assert "Set ServiceNow Portal Base URI" in portal
     assert "Global.ServiceNowITSMPortalBaseURI" in portal
     assert "List my open IT tickets" in test
-    assert '"label": "Pass"' in test
-    assert '"label": "Not pass"' in test
+    assert (
+        '"label": "Pass, the ServiceNow ITSM capability worked correctly"'
+        in test
+    )
+    assert (
+        '"label": "Not pass, it failed or could not be verified"' in test
+    )
     assert '"recommended": true' not in test
     assert "--failure-category" not in test
     assert "Do not require a non-empty ticket result" in test
@@ -793,6 +865,38 @@ def test_entra_guides_use_one_current_setup_checkpoint() -> None:
         assert "Application (client) ID" in guide
         assert "`user_impersonation` scope" in guide
         assert "preauthorized for that scope" in guide
+
+
+def test_hr_it_admin_guides_separate_handoff_input_from_completion() -> None:
+    for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
+        actions = _SOLUTION / "src" / "skills" / "connect" / provider / "actions"
+        entra = (actions / "guide-entra-registration.md").read_text(
+            encoding="utf-8"
+        )
+        oidc = (actions / "guide-servicenow-oidc.md").read_text(
+            encoding="utf-8"
+        )
+
+        assert "<!-- visible-handoff-question:v1-confirm-setup -->" in entra
+        assert '"header": "Confirm Entra setup evidence"' in entra
+        assert (
+            '"Yes, all four requirements are confirmed for this exact target"'
+            in entra
+        )
+        assert '"No, the administrator handoff is incomplete"' in entra
+        assert "Only after the first option is selected" in entra
+
+        assert "<!-- visible-handoff-question:v1-confirm-setup -->" in oidc
+        assert '"header": "Confirm ServiceNow OIDC evidence"' in oidc
+        assert (
+            '"Yes, the OIDC and mapping evidence is complete for this exact '
+            'target"' in oidc
+        )
+        assert (
+            '"No, the ServiceNow administrator still needs to finish it"'
+            in oidc
+        )
+        assert "Only after the first option is selected" in oidc
 
 
 def test_servicenow_oidc_guides_match_complete_stage2_workbook() -> None:

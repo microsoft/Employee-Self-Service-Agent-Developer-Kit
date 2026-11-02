@@ -1109,10 +1109,41 @@ def _validated_identity_requirement(
     return copy.deepcopy(raw)
 
 
+def _native_question(
+    *,
+    header: str,
+    question: str,
+    option_labels: list[str] | None = None,
+    allow_freeform_input: bool = False,
+) -> dict[str, Any]:
+    if not header.strip() or not question.strip():
+        raise ServiceNowConnectError(
+            "Native question header and body must both be non-empty."
+        )
+    payload: dict[str, Any] = {
+        "header": header,
+        "question": question,
+        "allowFreeformInput": allow_freeform_input,
+    }
+    if option_labels is not None:
+        if allow_freeform_input or len(option_labels) < 2 or any(
+            not isinstance(label, str) or not label.strip()
+            for label in option_labels
+        ):
+            raise ServiceNowConnectError(
+                "Native question options are invalid."
+            )
+        payload["options"] = [
+            {"label": label}
+            for label in option_labels
+        ]
+    return payload
+
+
 def _identity_requirement_question() -> dict[str, Any]:
-    return {
-        "header": "Which identifier should ServiceNow use?",
-        "question": (
+    return _native_question(
+        header="Which identifier should ServiceNow use?",
+        question=(
             "**Purpose**\n"
             "Choose the type of employee identifier ServiceNow uses to match "
             "a signed-in user. Do not provide an employee value.\n\n"
@@ -1126,12 +1157,11 @@ def _identity_requirement_question() -> dict[str, Any]:
             "A routing choice only. The Entra workbook is generated after a "
             "specific identifier type is confirmed."
         ),
-        "options": [
-            {"label": config["label"]}
+        option_labels=[
+            config["label"]
             for config in IDENTITY_REQUIREMENT_CHOICES.values()
         ],
-        "allowFreeformInput": False,
-    }
+    )
 
 
 def _identity_requirement_choices() -> list[dict[str, str]]:
@@ -12106,16 +12136,15 @@ def topic_action_handoff(
         **base,
         "decision": "question-required",
         "actionResult": None,
-        "question": {
-            "header": "ServiceNow topics",
-            "question": question,
-            "choices": [
-                "Enable all topics",
-                "Keep current states",
-                "Not now",
+        "question": _native_question(
+            header="ServiceNow topic states",
+            question=question,
+            option_labels=[
+                "Enable all listed inactive ServiceNow topics",
+                "Keep the current topic states for this configuration",
+                "Not now, leave the phase incomplete",
             ],
-            "allowFreeformInput": False,
-        },
+        ),
     }
 
 
@@ -12564,6 +12593,245 @@ def _current_business_group(
     return None
 
 
+def _business_group_availability_question(
+    group: dict[str, Any],
+) -> dict[str, Any]:
+    copy_by_group = {
+        "hr-prerequisite": {
+            "header": "ServiceNow admin availability",
+            "question": "Is the ServiceNow admin available now?",
+            "yes": "Yes, the ServiceNow admin is available now",
+            "no": "No, I need to bring the ServiceNow admin in",
+        },
+        "entra-identity": {
+            "header": "Entra administrator availability",
+            "question": "Is the Entra admin available now?",
+            "yes": "Yes, the Entra admin is available now",
+            "no": "No, I need to bring the Entra admin in",
+        },
+        "servicenow-sso": {
+            "header": "ServiceNow administrator availability",
+            "question": (
+                "Is the ServiceNow admin with security_admin available now?"
+            ),
+            "yes": (
+                "Yes, the ServiceNow admin with security_admin is available "
+                "now"
+            ),
+            "no": (
+                "No, I need to bring the ServiceNow admin with "
+                "security_admin in"
+            ),
+        },
+        "maker-configuration": {
+            "header": "Maker availability",
+            "question": "Is the Maker available now?",
+            "yes": "Yes, the Maker is available now",
+            "no": "No, I need to bring the Maker in",
+        },
+    }
+    configured = copy_by_group.get(str(group.get("id") or ""))
+    if configured is None:
+        raise ServiceNowConnectError(
+            "ServiceNow business-group availability copy is missing."
+        )
+    return _native_question(
+        header=configured["header"],
+        question=configured["question"],
+        option_labels=[configured["yes"], configured["no"]],
+    )
+
+
+def _current_task_guidance(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    phase_id: str,
+    role: str,
+) -> str:
+    setup = state.get("adminSetup")
+    setup = setup if isinstance(setup, dict) else {}
+    preflight = setup.get("preflight")
+    preflight = preflight if isinstance(preflight, dict) else {}
+    instance_name = str(preflight.get("instanceName") or "not confirmed")
+    environment_id = str(context["environment"]["id"])
+    agent_slug = _agent_slug(context)
+    target = (
+        f"- Agent: {ACTIVE_PROFILE.agent_display_name} (`{agent_slug}`)\n"
+        f"- Environment: `{environment_id}`\n"
+        "- Realm: `dev`\n"
+        f"- Confirmed ServiceNow instance: `{instance_name}`"
+    )
+    provider_root = (
+        f"src/skills/connect/{ACTIVE_PROFILE.provider_key}/actions"
+    )
+    client_id = _known_entra_client_id(state)
+    credential = state.get("evidence", {}).get("credential")
+    credential = credential if isinstance(credential, dict) else {}
+    connection_name = str(
+        credential.get("displayName")
+        or ACTIVE_PROFILE.connection_display_name
+    )
+    links = maker_portal_links(
+        context,
+        instance_name=(
+            instance_name
+            if instance_name != "not confirmed"
+            else None
+        ),
+    )
+    common = (
+        "**Current task**\n"
+        f"{target}\n"
+        f"- Responsible role: {role}\n\n"
+    )
+    if phase_id == "plugin-prerequisites":
+        plugin_url = (
+            links.get("hrCorePlugin", {}).get("url")
+            or (
+                "ServiceNow Application Manager for the confirmed instance; "
+                "the URL is unavailable until preflight instance evidence is "
+                "current"
+            )
+        )
+        return common + (
+            "**Where and how**\n"
+            "ServiceNow Application Manager → Human Resources Scoped App: "
+            "Core. Use "
+            f"`{provider_root}/verify-plugin-prerequisites.md` and "
+            f"{plugin_url}.\n\n"
+            "**Expected nonsecret evidence**\n"
+            "Plugin ID `com.sn_hr_core`, Version Details `Installed`, the "
+            "installed-and-ready message, source, timestamp, and current "
+            "target binding.\n\n"
+            "**Completion boundary**\n"
+            "A separate completion card records current Manual administrator "
+            "evidence. Availability alone never completes this check and the "
+            "result is not automatic API proof."
+        )
+    if phase_id == "entra-registration":
+        return common + (
+            "**Where and how**\n"
+            "Use the Microsoft Entra admin center and "
+            f"`{provider_root}/guide-entra-registration.md`. The Maker "
+            "transports and imports the handoff only.\n\n"
+            "**Expected nonsecret evidence**\n"
+            "One target-bound handoff confirming the application "
+            "registration, one actually emitted claim name, the enabled "
+            "`user_impersonation` scope, and Microsoft ServiceNow connector "
+            "pre-authorization. The Application client ID is collected and "
+            "validated through that handoff; no value is assumed before "
+            "import.\n\n"
+            "**Completion boundary**\n"
+            "The handoff path/input and the all-four confirmation are "
+            "separate questions. Completion remains Manual and performs no "
+            "Microsoft Graph client, token, or read."
+        )
+    if phase_id == "servicenow-oidc":
+        return common + (
+            "**Where and how**\n"
+            "Use ServiceNow Application Registry and "
+            f"`{provider_root}/guide-servicenow-oidc.md` with "
+            "`security_admin`.\n\n"
+            "**Expected nonsecret evidence**\n"
+            f"Application client ID `{client_id or 'not current'}`, one "
+            "Entra-confirmed claim name, one ServiceNow `sys_user` field, "
+            "matching Active user confirmation, target binding, timestamp, "
+            "candidate-set hash, and relationship hash.\n\n"
+            "**Completion boundary**\n"
+            "The mapping handoff input and completion confirmation are "
+            "separate questions. Manual evidence does not prove a real "
+            "employee token, request, permission, or business result."
+        )
+    if phase_id == "credential":
+        expected_values = _render_connection_expected_values(
+            display_name=ACTIVE_PROFILE.connection_display_name,
+            resource_uri=client_id,
+            instance_name=(
+                instance_name
+                if instance_name != "not confirmed"
+                else None
+            ),
+        )
+        return common + (
+            "**Where and how**\n"
+            f"Open the selected environment Connections list: "
+            f"{links['powerAutomateConnections']['url']}. Use "
+            f"`{provider_root}/prepare-credential.md`.\n\n"
+            "**Expected form values, top to bottom**\n"
+            f"{expected_values}\n\n"
+            "**Expected nonsecret evidence**\n"
+            "Fresh Connectivity inventory must prove exactly one Connected "
+            "current-maker connection matching the environment, auth mode, "
+            "Resource URI, and Instance Name. The optional display name is "
+            "guidance only and is never a readiness gate.\n\n"
+            "**Completion boundary**\n"
+            "The separate completion card triggers a fresh API reread. A "
+            "Connected physical credential does not prove agent binding or "
+            "business success."
+        )
+    if phase_id == "agent-connection":
+        return common + (
+            "**Where and how**\n"
+            f"Open {links['copilotStudioAgent']['url']} → Settings → "
+            "Connection settings → ServiceNow. Use "
+            f"`{provider_root}/connect-agent.md` and select "
+            f"`{connection_name}`.\n\n"
+            "**Expected nonsecret evidence**\n"
+            "Current Manual Maker confirmation bound to this provider, "
+            "profile, agent, environment, selected physical connection, and "
+            "semantic binding identity.\n\n"
+            "**Completion boundary**\n"
+            "The separate completion card records Manual binding evidence. "
+            "Connection inventory alone never proves UI binding."
+        )
+    if phase_id == "topics":
+        return common + (
+            "**Where and how**\n"
+            f"Use `{provider_root}/prepare-topics.md`. A fresh supported "
+            "component read lists the exact in-scope ServiceNow topics and "
+            "their current states.\n\n"
+            "**Expected nonsecret evidence**\n"
+            "Either fresh readback proves every in-scope topic Active, or the "
+            "Maker records a current component-hash-bound keep-current "
+            "decision. Unrelated topics remain unchanged.\n\n"
+            "**Completion boundary**\n"
+            "The topic choice is a separate card. Test and Production "
+            "promoted content remains read-only."
+        )
+    if phase_id == "portal-url":
+        return common + (
+            "**Where and how**\n"
+            f"Use `{provider_root}/configure-portal-url.md` for the exact "
+            f"{ACTIVE_PROFILE.product_name} Setup Configurations topic.\n\n"
+            "**Expected nonsecret evidence**\n"
+            f"One administrator-confirmed complete HTTPS portal URL on "
+            f"`{instance_name}` plus guarded readback of the exact authored "
+            "portal node. The flow never infers `/sp` or `/esc`.\n\n"
+            "**Completion boundary**\n"
+            "The URL input and any Manual fallback completion are separate "
+            "questions. No Publish occurs."
+        )
+    if phase_id == "test":
+        return common + (
+            "**Where and how**\n"
+            f"Use `{provider_root}/test-connection.md` and the Copilot Studio "
+            f"Test pane. Run exactly `{ACTIVE_PROFILE.test_prompt}` against "
+            "the final saved draft and selected connection.\n\n"
+            "**Expected nonsecret evidence**\n"
+            "Pass or Not pass plus one allowed bounded failure category. Do "
+            "not return response content, employee data, identifiers, tokens, "
+            "or secrets.\n\n"
+            "**Completion boundary**\n"
+            "A separate Test result card records current Manual Maker "
+            "evidence. This is not API-proven Test or employee production "
+            "validation."
+        )
+    raise ServiceNowConnectError(
+        "ServiceNow current-task guidance is missing."
+    )
+
+
 def _business_group_transport(
     *,
     context: dict[str, Any],
@@ -12633,22 +12901,37 @@ def _business_group_transport(
         )
     )
     gate_required = current_group is not None and not acknowledged
-    ordinary_text = (
-        ordinary_text
+    current_phase = next(
+        (
+            item
+            for item in phase_items
+            if item.get("status")
+            in {
+                "current",
+                "checking",
+                "rechecking",
+                "needs-attention",
+            }
+        ),
+        None,
     )
+    if (
+        acknowledged
+        and current_group is not None
+        and isinstance(current_phase, dict)
+        and isinstance(current_phase.get("id"), str)
+    ):
+        ordinary_text += (
+            "\n\n"
+            + _current_task_guidance(
+                context,
+                state or {},
+                phase_id=current_phase["id"],
+                role=current_group["role"],
+            )
+        )
     question = (
-        {
-            "header": current_group["label"],
-            "question": (
-                f"Is the {current_group['role']} available now for "
-                f"{current_group['label']}?"
-            ),
-            "options": [
-                {"label": "Yes"},
-                {"label": "No"},
-            ],
-            "allowFreeformInput": False,
-        }
+        _business_group_availability_question(current_group)
         if gate_required
         else None
     )
@@ -13585,11 +13868,18 @@ def validation_realm_handoff(
     state = _load_lifecycle_state(context)
     test_complete = _realm_is_complete(state, "test")
     options = [
-        {"label": "Dev"},
-        {"label": "Test"},
+        {"label": "Dev, resume the current authoring agent"},
+        {"label": "Test, validate the promoted Test target"},
     ]
     if test_complete:
-        options.append({"label": "Prod"})
+        options.append(
+            {
+                "label": (
+                    "Production, validate the promoted Production target "
+                    "after current Test completion"
+                )
+            }
+        )
     return {
         "schemaVersion": "servicenow.realm-validation-handoff.v1",
         "status": "choice-required",
@@ -13662,8 +13952,16 @@ def _realm_deployment_question(
             "the Maker must run the bounded Test pane check."
         ),
         "options": [
-            {"label": "Completed"},
-            {"label": "Not yet"},
+            {
+                "label": (
+                    f"Completed, the {realm_label} promotion/import finished"
+                )
+            },
+            {
+                "label": (
+                    f"Not yet, the {realm_label} promotion is still pending"
+                )
+            },
         ],
         "allowFreeformInput": False,
     }
@@ -15633,6 +15931,41 @@ def _runtime_plan(
     }
 
 
+def _realm_runtime_plan_question(
+    *,
+    realm: str,
+    runtime_plan: dict[str, Any],
+) -> dict[str, Any]:
+    target = runtime_plan.get("target")
+    target = target if isinstance(target, dict) else {}
+    realm_label = realm.title()
+    return _native_question(
+        header=f"Approve {realm_label} ServiceNow runtime plan",
+        question=(
+            f"Do you approve the displayed runtime plan for the exact "
+            f"{realm_label} ServiceNow target?\n\n"
+            f"- Target agent ID: `{target.get('agentId')}`\n"
+            f"- Environment ID: `{target.get('environmentId')}`\n"
+            f"- Dataverse URL: `{target.get('dataverseUrl')}`\n"
+            f"- Tenant ID: `{target.get('tenantId')}`\n"
+            f"- Schema: `{target.get('schemaName')}`\n"
+            f"- ALM family: `{target.get('almFamilyId')}`\n"
+            f"- Deployed commit: `{target.get('commitSha')}`\n"
+            f"- Connection ID: `{runtime_plan.get('connectionId')}`\n"
+            f"- Promoted content hash: "
+            f"`{runtime_plan.get('promotedContentSha256')}`\n"
+            f"- Plan hash: `{runtime_plan.get('planSha256')}`\n\n"
+            "Approval records this exact target-scoped preview only. It does "
+            "not bind the agent, publish, change permissions, update promoted "
+            "content, or perform a remote API mutation."
+        ),
+        option_labels=[
+            f"Approve this exact {realm_label} runtime plan",
+            f"Reject it and revise the {realm_label} target inputs",
+        ],
+    )
+
+
 def _realm_validation_record(
     state: dict[str, Any],
     realm: str,
@@ -15818,8 +16151,17 @@ def _realm_functional_test_question(
             "return to Dev and re-promotion."
         ),
         "options": [
-            {"label": "Pass"},
-            {"label": "Not pass"},
+            {
+                "label": (
+                    f"Pass, the {ACTIVE_PROFILE.product_name} capability "
+                    f"worked correctly for this {realm_label} target"
+                )
+            },
+            {
+                "label": (
+                    "Not pass, it failed or could not be verified"
+                )
+            },
         ],
         "allowFreeformInput": False,
     }
@@ -16373,6 +16715,11 @@ def validate_realm(
                 test_pane_url=test_pane_url,
             )
             if ready_for_test
+            else _realm_runtime_plan_question(
+                realm=realm,
+                runtime_plan=runtime_plan,
+            )
+            if approval_required and isinstance(runtime_plan, dict)
             else None
         ),
         "remoteMutationCount": 0,
@@ -16597,8 +16944,17 @@ def record_realm_runtime_plan(
                 "connection, record the binding with this plan hash."
             ),
             "options": [
-                {"label": "Completed"},
-                {"label": "Not yet"},
+                {
+                    "label": (
+                        f"Completed, the exact planned {realm.title()} "
+                        "connection is shown"
+                    )
+                },
+                {
+                    "label": (
+                        f"Not yet, {realm.title()} binding is incomplete"
+                    )
+                },
             ],
             "allowFreeformInput": False,
         },

@@ -88,7 +88,7 @@ SetVariable node, preserve all unrelated topic fields, use the fresh
 
 If the update returns `failed-unchanged` or an explicit permission/unsupported
 error and a fresh read proves the topic stayed unchanged, show the manual
-fallback above and use this visible **Completed / Not yet** confirmation:
+fallback above and use the explicit completion confirmation below:
 
 <!-- visible-handoff-question:v1-manual-fallback -->
 ```json
@@ -97,15 +97,15 @@ fallback above and use this visible **Completed / Not yet** confirmation:
     "header": "Save portal Base URI manually",
     "question": "The guarded component API did not change the topic, so complete the manual fallback now:\n1. Open Copilot Studio for the exact HR agent.\n2. Open Topics -> ServiceNow HRSD Setup Configurations.\n3. Edit the `Set ServiceNow Portal BaseURI` node.\n4. Set `To` to the exact administrator-confirmed URL `{PORTAL_URL}`.\n5. Save the topic.\n\nDo not publish as part of Connect. When the exact value is saved, choose Completed so the skill can perform a fresh read-only verification.",
     "options": [
-      { "label": "Completed" },
-      { "label": "Not yet" }
+      { "label": "Completed, the exact portal URL is saved" },
+      { "label": "Not yet, the portal URL is not saved" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
-After Completed, run:
+After **Completed, the exact portal URL is saved**, run:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} inspect-portal-url --expected-portal-url <full-url>

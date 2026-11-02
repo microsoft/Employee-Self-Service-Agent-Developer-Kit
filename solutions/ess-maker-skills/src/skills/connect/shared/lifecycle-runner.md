@@ -179,8 +179,11 @@ below.
    `transport.businessGroupAvailability.gateRequired` is false, continue the
    returned lifecycle decision without asking availability.
 3. When the gate is true, ask only
-   `transport.businessGroupAvailability.question`. Its choices are exactly
-   **Yes** and **No** and it names only the current business group and role.
+   `transport.businessGroupAvailability.question`. Call
+   `vscode_askQuestions` with a one-element array containing that exact object.
+   Preserve the complete `header`, `question`, `options`, and
+   `allowFreeformInput`; never substitute the header for the body. Its
+   explicit option labels answer only the current role-availability question.
    The elicitation contains no future roles, group plan, progress, defaults,
    hidden fields, or required schema inputs.
 4. On **Yes**, rerun `resume-handoff` with
@@ -188,7 +191,11 @@ below.
    --availability-context-sha256 {contextIdentitySha256}`. The controller
    records an acknowledgement scoped to that business group, provider,
    profile, agent, environment, contract revision, and group definition.
-   Continue only from the returned lifecycle decision.
+   Show the newly returned `transport.ordinaryReply.text` before any action.
+   It contains the current task's target, responsible role, supported
+   runbook/location, expected non-secret evidence, and completion boundary.
+   Availability is acknowledgement only. Continue only from the returned
+   lifecycle decision and its separate action completion/evidence question.
 5. On **No**, rerun with the same group ID and context hash plus
    `--roles-available no`. Show the exact returned `unavailableReply`, then
    re-ask the exact same question. The controller writes no acknowledgement
@@ -537,8 +544,10 @@ routing response.
 For every interactive provider action, the question tool body is the durable
 visible handoff. Read the action document's
 `<!-- visible-handoff-question:v1 -->` JSON payload, render its placeholders,
-and use that supported `header`/`question`/`options`/`allowFreeformInput`
-shape exactly. For DA ServiceNow, collaboration groups and current status have
+and call `vscode_askQuestions` with the resulting one-element array. Use the
+supported `header`/`question`/`options`/`allowFreeformInput` shape exactly;
+`choices` is not a supported native question field. For DA ServiceNow,
+collaboration groups and current status have
 already been shown in an ordinary reply. ServiceNow action questions are
 question-only: never add the group plan, internal-step checklist, progress,
 future roles, checkpoint table, or a synthetic `Progress` input anywhere in

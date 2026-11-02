@@ -228,6 +228,27 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
             ),
         ),
         (
+            _ACTIONS / "guide-entra-registration.md",
+            (
+                "application registration",
+                "selected emitted claim",
+                "`user_impersonation` scope",
+                "connector pre-authorization",
+                "exact target",
+                "does not perform or claim a Microsoft Graph read",
+            ),
+        ),
+        (
+            _ACTIONS / "guide-servicenow-oidc.md",
+            (
+                "OIDC provider",
+                "claim-name",
+                "user-field mapping",
+                "exact target",
+                "does not prove a real employee token",
+            ),
+        ),
+        (
             _ACTIONS / "prepare-topics.md",
             (
                 "Purpose:",
@@ -332,49 +353,39 @@ def test_servicenow_questions_use_buttons_and_bounded_freeform() -> None:
 
 
 @pytest.mark.parametrize("provider", ("servicenow-da-hrsd", "servicenow-da-itsm"))
-def test_identity_admin_guides_use_only_executable_stage_questions(
+def test_identity_admin_guides_use_input_then_completion_questions(
     provider: str,
 ) -> None:
     actions = _CONNECT / provider / "actions"
     entra = (actions / "guide-entra-registration.md").read_text(
         encoding="utf-8"
     )
-    entra_normalized = " ".join(entra.split())
     oidc = (actions / "guide-servicenow-oidc.md").read_text(
         encoding="utf-8"
     )
-    oidc_normalized = " ".join(oidc.split())
 
-    assert "<!-- visible-handoff-question:" not in entra
-    assert "<!-- visible-handoff-question:" not in oidc
+    assert "<!-- visible-handoff-question:v1-confirm-setup -->" in entra
+    assert "<!-- visible-handoff-question:v1-confirm-setup -->" in oidc
     assert "{TOKEN_CLAIM_NAME}" not in oidc
     assert '"label": "Completed"' not in oidc
     assert "question itself must contain all seven operations" not in oidc
-    assert "send the returned `question` object unchanged" in entra
+    assert "Render the returned `instructionTitle` and `instruction`" in entra
+    assert "ask this separate completion question" in entra
     assert "identity-mapping-handoff --stage entra" in entra
-    assert "instructionTitle`, `instruction`, and one short" in entra
-    assert "`allowFreeformInput: true`" in entra
-    assert (
-        "`Please enter the returned Entra admin handoff workbook URL.`"
-        in entra
-    )
-    assert "generated workbook link" in entra
-    assert "not the returned answer" in entra_normalized
-    assert "successful validation and import are still\nrequired" in entra
-    assert "missing actual claim\nnames" in entra
-    assert "There is no separate client-ID question" in entra
-    assert "Before the single visible handoff, run:" in oidc
+    assert "send the\nreturned short `question` unchanged" in entra
+    assert '"allowFreeformInput": false' in entra
+    assert "accepts the local path of either the completed XLSX or CSV" in entra
+    assert "The file alone does not complete the setup confirmation" in entra
+    assert "must explicitly confirm all four requirements" in entra
+    assert "It does not perform or claim a Microsoft Graph read" in entra
     assert "identity-mapping-handoff --stage servicenow" in oidc
-    assert "Render the exact returned `instructionTitle` and `instruction`" in (
-        oidc
-    )
-    assert "`allowFreeformInput: true`" in oidc
-    assert (
-        "`Please enter the returned ServiceNow admin handoff workbook URL.`"
-        in oidc
-    )
-    assert "they are not the returned answer" in oidc_normalized
-    assert "Import only the exact local path returned by the question" in oidc
+    assert "Render the returned `instructionTitle` and `instruction`" in oidc
+    assert "send the exact\nshort question unchanged" in oidc
+    assert '"allowFreeformInput": false' in oidc
+    assert "Accept the local path of either the completed XLSX\nor CSV" in oidc
+    assert "After import succeeds" in oidc
+    assert "ask this separate\ncompletion question" in oidc
+    assert "does not prove a real employee token" in oidc
     assert "record-identity-mapping" in entra
     assert "record-identity-mapping" in oidc
 
@@ -394,7 +405,7 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
         required_phrases=(
             "Purpose:",
             "Owner:",
-            "Expected values:",
+            "Expected form values, top to bottom:",
             "{POWER_AUTOMATE_CONNECTIONS_URL}",
             "1. If an exact candidate is unhealthy",
             "2. Only if no usable exact candidate exists",
@@ -406,7 +417,7 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
             "current maker's own Microsoft account",
             "do not impersonate that owner",
             "Never ask for or display passwords",
-            "system will freshly discover the connection",
+            "triggers one fresh supported connection inventory read",
         ),
     )
     selector = _validate_payload(
@@ -418,8 +429,8 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
         ),
     )
     assert [option["label"] for option in completion["options"]] == [
-        "Completed",
-        "Not yet",
+        "Completed, the exact ServiceNow connection is Connected",
+        "Not yet, the ServiceNow connection is not ready",
     ]
     assert not any(
         option.get("recommended") for option in completion["options"]
@@ -444,6 +455,9 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
         source_normalized
     )
     expected = completion["question"]
+    assert expected.index("Display name (optional):") < expected.index(
+        "Authentication Type:"
+    )
     assert expected.index("Authentication Type:") < expected.index(
         "Resource URI:"
     )
@@ -453,6 +467,11 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
     assert "conditional remediation rather than an observed current error" in (
         expected
     )
+    completion_condition = expected.split(
+        "Does the exact ServiceNow connection now show Connected",
+        1,
+    )[1]
+    assert "Display name" not in completion_condition
     assert source_normalized.index("choose `New connection`") < (
         source_normalized.index("search box in the upper-right")
     )
@@ -474,7 +493,7 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
         ("servicenow-da-itsm", "List my open IT tickets"),
     ),
 )
-def test_servicenow_test_question_has_only_neutral_pass_choices(
+def test_servicenow_test_question_has_explicit_result_choices(
     provider: str,
     prompt: str,
 ) -> None:
@@ -491,9 +510,10 @@ def test_servicenow_test_question_has_only_neutral_pass_choices(
         ),
     )
 
+    product = "HRSD" if provider.endswith("hrsd") else "ITSM"
     assert [option["label"] for option in payload["options"]] == [
-        "Pass",
-        "Not pass",
+        f"Pass, the ServiceNow {product} capability worked correctly",
+        "Not pass, it failed or could not be verified",
     ]
     assert not any(option.get("recommended") for option in payload["options"])
     assert payload["allowFreeformInput"] is False
@@ -528,8 +548,8 @@ def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
     )
     assert portal_input["allowFreeformInput"] is True
     assert [option["label"] for option in fallback["options"]] == [
-        "Completed",
-        "Not yet",
+        "Completed, the exact portal URL is saved",
+        "Not yet, the portal URL is not saved",
     ]
     assert fallback["allowFreeformInput"] is False
     source = (_ACTIONS / "configure-portal-url.md").read_text(

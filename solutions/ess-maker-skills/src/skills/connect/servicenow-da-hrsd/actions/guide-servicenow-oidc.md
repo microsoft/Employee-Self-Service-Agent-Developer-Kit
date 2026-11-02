@@ -93,3 +93,29 @@ candidate hashes, frozen-value tampering, or wrong tenant/environment/instance/
 provider/profile/agent binding. XLSX and CSV produce the same bounded identity
 mapping receipt. Existing issued legacy XLSX files remain importable and are
 not rewritten.
+
+After import succeeds, render the target placeholders and ask this separate
+completion question:
+
+<!-- visible-handoff-question:v1-confirm-setup -->
+```json
+[
+  {
+    "header": "Confirm ServiceNow OIDC evidence",
+    "question": "Has the ServiceNow administrator confirmed the OIDC provider and the exact Entra claim-name to ServiceNow user-field mapping for {AGENT_DISPLAY_NAME} in environment `{ENVIRONMENT_ID}` and ServiceNow instance `{INSTANCE_NAME}`?\n\nThis completes only the current target-bound Manual OIDC evidence for this exact target. It does not prove a real employee token, request, permission, or business result.",
+    "options": [
+      { "label": "Yes, the OIDC and mapping evidence is complete for this exact target" },
+      { "label": "No, the ServiceNow administrator still needs to finish it" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Only after the first option is selected, record the bundled confirmation:
+
+```text
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-admin-phase --phase servicenow-oidc --status completed
+```
+
+Return `ACTION_RESULT = "recorded"` only after this command succeeds.

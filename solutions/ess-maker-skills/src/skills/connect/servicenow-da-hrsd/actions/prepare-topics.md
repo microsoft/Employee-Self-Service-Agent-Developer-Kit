@@ -25,9 +25,9 @@ The command-generated question conforms to this visible contract:
     "header": "ServiceNow topics",
     "question": "Purpose: prepare the ServiceNow HRSD topics for this exact HR agent.\n\nOwner: ESS Maker / Agent Developer.\n\nCurrent topic inventory: {TOPIC_INVENTORY}\n\nInactive HRSD topics:\n{INACTIVE_TOPIC_NAMES}\n\nEnable all inactive ServiceNow HRSD topics, or explicitly keep their current states? Only ServiceNow HRSD topics in this inventory are in scope; unrelated topics remain unchanged.",
     "options": [
-      { "label": "Enable all topics" },
-      { "label": "Keep current states" },
-      { "label": "Not now" }
+      { "label": "Enable all listed inactive ServiceNow topics" },
+      { "label": "Keep the current topic states for this configuration" },
+      { "label": "Not now, leave the phase incomplete" }
     ],
     "allowFreeformInput": false
   }
@@ -44,10 +44,11 @@ The tool call is the wait boundary: while the
   question is pending, preserve the historical action and transaction state.
 Absence of
   an answer is not cancellation.
-- If the maker selects **Keep current states**, run
+- If the maker selects **Keep the current topic states for this
+  configuration**, run
   `python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-topic-choice --choice keep-current`
   and set `ACTION_RESULT = "applied"`.
-- If the maker selects **Enable all topics**, run
+- If the maker selects **Enable all listed inactive ServiceNow topics**, run
   `python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} enable-all-topics --yes`. Set
   `ACTION_RESULT = "applied"` only when the command reports
   `transactionStatus: "committed"` or `status: "already-active"`.
@@ -67,6 +68,7 @@ Absence of
   transaction. A later invocation that freshly observes all topics Active
   follows the no-mutation path above and must not repeat the confirmed update.
 - Set `ACTION_RESULT = "cancelled"` only if the maker explicitly selects
-  **Not now** or the host explicitly reports that the question tool is
+  **Not now, leave the phase incomplete** or the host explicitly reports that
+  the question tool is
   unavailable. Do not interpret a pending or unanswered question as
   unavailable.

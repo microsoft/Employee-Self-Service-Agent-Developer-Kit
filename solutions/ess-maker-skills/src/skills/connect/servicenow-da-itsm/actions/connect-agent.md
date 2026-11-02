@@ -21,8 +21,8 @@ selected connection display name/ID:
     "header": "Connect ServiceNow to agent",
     "question": "Purpose: bind the selected current ServiceNow credential to this exact IT agent.\n\nOwner: ESS Maker / Agent Developer in Copilot Studio.\n\nOpen Employee Self-Service (IT): {COPILOT_STUDIO_AGENT_URL}\n\nIn this exact agent:\n1. Open Settings -> Connection settings.\n2. Find the ServiceNow row.\n3. Select Connect.\n4. Choose the selected credential `{CONNECTION_DISPLAY_NAME}` (`{CONNECTION_ID}`).\n5. Save and confirm the ServiceNow row currently shows Connected.\n\nDo not substitute the UI `user-connections` endpoint, browser tokens, or a MinimalBot reference update.\n\nDoes the ServiceNow row currently show Connected with this selected credential?",
     "options": [
-      { "label": "Yes, Connected" },
-      { "label": "Not yet" }
+      { "label": "Yes, the selected credential is shown as Connected" },
+      { "label": "Not yet, the agent binding is incomplete" }
     ],
     "allowFreeformInput": false
   }

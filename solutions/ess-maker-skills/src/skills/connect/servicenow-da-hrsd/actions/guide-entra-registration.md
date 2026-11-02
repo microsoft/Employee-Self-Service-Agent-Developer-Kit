@@ -161,7 +161,25 @@ phase, the Entra administrator must explicitly confirm all four requirements
 for the exact target: the returned app/client ID is correct, the returned user
 claim is actually emitted, `api://<client-id>` exposes the enabled
 `user_impersonation` scope, and the Microsoft ServiceNow connector is
-preauthorized for that scope. Then record the bundled confirmation:
+preauthorized for that scope. After the handoff import succeeds, render the
+target placeholders and ask this separate completion question:
+
+<!-- visible-handoff-question:v1-confirm-setup -->
+```json
+[
+  {
+    "header": "Confirm Entra setup evidence",
+    "question": "Has the Entra administrator confirmed the application registration, selected emitted claim, `user_impersonation` scope, and Microsoft ServiceNow connector pre-authorization for {AGENT_DISPLAY_NAME} in environment `{ENVIRONMENT_ID}` and ServiceNow instance `{INSTANCE_NAME}`?\n\nThis confirmation completes only the current target-bound Manual Entra setup evidence for this exact target. It does not perform or claim a Microsoft Graph read.",
+    "options": [
+      { "label": "Yes, all four requirements are confirmed for this exact target" },
+      { "label": "No, the administrator handoff is incomplete" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Only after the first option is selected, record the bundled confirmation:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-admin-phase --phase entra-registration --status completed

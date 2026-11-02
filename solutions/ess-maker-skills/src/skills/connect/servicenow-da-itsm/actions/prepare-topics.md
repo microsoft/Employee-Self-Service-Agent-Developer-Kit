@@ -22,8 +22,10 @@ Use `vscode_askQuestions` for the returned question. Only ServiceNow ITSM topics
 
 The command-generated question conforms to the same supported
 `visible-handoff-question:v1` shape with the IT Agent link, current inventory,
-inactive ITSM names, and exactly these choices: **Enable all topics**,
-**Keep current states**, **Not now**.
+inactive ITSM names, and exactly these returned labels:
+**Enable all listed inactive ServiceNow topics**,
+**Keep the current topic states for this configuration**, and
+**Not now, leave the phase incomplete**.
 
 [Open Employee Self-Service (IT) in Copilot Studio]({COPILOT_STUDIO_AGENT_URL})
 
@@ -31,10 +33,11 @@ Open `Topics`; do not invent a tab-specific URL. The returned question is the
 wait boundary: while pending, do not return an `ACTION_RESULT`, emit a
 completion/remediation message, or return control to the lifecycle runner.
 Absence of an answer is not cancellation.
-- If the maker selects **Keep current states**, run
+- If the maker selects **Keep the current topic states for this
+  configuration**, run
   `python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-topic-choice --choice keep-current`
   and set `ACTION_RESULT = "applied"`.
-- If the maker selects **Enable all topics**, run
+- If the maker selects **Enable all listed inactive ServiceNow topics**, run
   `python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} enable-all-topics --yes`. Set
   `ACTION_RESULT = "applied"` only when the command reports
   `transactionStatus: "committed"` or `status: "already-active"`.
@@ -54,6 +57,7 @@ Absence of an answer is not cancellation.
   transaction. A later invocation that freshly observes all topics Active
   follows the no-mutation path above and must not repeat the confirmed update.
 - Set `ACTION_RESULT = "cancelled"` only if the maker explicitly selects
-  **Not now** or the host explicitly reports that the question tool is
+  **Not now, leave the phase incomplete** or the host explicitly reports that
+  the question tool is
   unavailable. Do not interpret a pending or unanswered question as
   unavailable.

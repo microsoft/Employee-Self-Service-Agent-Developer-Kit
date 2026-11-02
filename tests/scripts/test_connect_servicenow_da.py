@@ -2638,8 +2638,8 @@ def test_complete_dev_record_unlocks_realm_chooser_without_state_write(
     assert handoff["status"] == "choice-required"
     assert handoff["devCompletion"]["reason"] == "complete"
     assert handoff["question"]["options"] == [
-        {"label": "Dev"},
-        {"label": "Test"},
+        {"label": "Dev, resume the current authoring agent"},
+        {"label": "Test, validate the promoted Test target"},
     ]
     assert handoff["testRealmComplete"] is False
     assert [stage["status"] for stage in handoff["testRealmStages"]] == [
@@ -2680,8 +2680,11 @@ def test_realm_functional_question_uses_profile_prompt(
     assert "scoped target remediation" in question["question"]
     assert "promoted-content defects" in question["question"]
     assert [option["label"] for option in question["options"]] == [
-        "Pass",
-        "Not pass",
+        (
+            f"Pass, the {snow.PRODUCT_PROFILES[profile].product_name} "
+            f"capability worked correctly for this {realm.title()} target"
+        ),
+        "Not pass, it failed or could not be verified",
     ]
 
 
@@ -2742,8 +2745,8 @@ def test_missing_realm_deployment_handoff_is_resumable_and_ordered(
         f"Confirm {realm_label} promotion completed"
     )
     assert [option["label"] for option in question["options"]] == [
-        "Completed",
-        "Not yet",
+        f"Completed, the {realm_label} promotion/import finished",
+        f"Not yet, the {realm_label} promotion is still pending",
     ]
     assert question["allowFreeformInput"] is False
     assert "organization's normal promotion process" in body
@@ -3243,7 +3246,29 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
         "functionalTest": "Pending",
         "endToEndValidation": "Not yet verified",
     }
-    assert result["question"] is None
+    runtime_question = result["question"]
+    assert runtime_question["header"] == (
+        f"Approve {realm.title()} ServiceNow runtime plan"
+    )
+    assert target_agent_id in runtime_question["question"]
+    assert target_environment_id in runtime_question["question"]
+    assert result["runtimePlan"]["planSha256"] in (
+        runtime_question["question"]
+    )
+    assert runtime_question["options"] == [
+        {
+            "label": (
+                f"Approve this exact {realm.title()} runtime plan"
+            )
+        },
+        {
+            "label": (
+                f"Reject it and revise the {realm.title()} target inputs"
+            )
+        },
+    ]
+    assert runtime_question["allowFreeformInput"] is False
+    assert "**Phases**" not in runtime_question["question"]
     assert result["allAutomatedChecksPassed"] is True
     assert result["target"]["environmentId"] == target_environment_id
     assert result["target"]["inventoryEnvironmentId"] == (
@@ -3316,6 +3341,22 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
 
     assert approved["status"] == "approved"
     assert approved["remoteMutationCount"] == 0
+    assert approved["question"]["header"] == (
+        f"Bind the {realm.title()} ServiceNow connection"
+    )
+    assert approved["question"]["options"] == [
+        {
+            "label": (
+                f"Completed, the exact planned {realm.title()} connection "
+                "is shown"
+            )
+        },
+        {
+            "label": (
+                f"Not yet, {realm.title()} binding is incomplete"
+            )
+        },
+    ]
     assert bound["status"] == "ready-for-test-pane"
     assert bound["remoteMutationCount"] == 0
     assert [stage["status"] for stage in bound["realmStages"]] == [
@@ -3326,6 +3367,17 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     assert bound["question"]["header"] == (
         f"Validate the {realm.title()} ServiceNow target"
     )
+    assert bound["question"]["options"] == [
+        {
+            "label": (
+                f"Pass, the {snow.PRODUCT_PROFILES['itsm'].product_name} "
+                f"capability worked correctly for this {realm.title()} target"
+            )
+        },
+        {
+            "label": "Not pass, it failed or could not be verified"
+        },
+    ]
     assert target_environment_id in bound["next"]["url"]
     assert target_agent_id in bound["next"]["url"]
 
@@ -15749,11 +15801,22 @@ def test_topic_action_handoff_returns_complete_it_question(
     assert result["decision"] == "question-required"
     assert result["inventory"]["active"] == 13
     assert result["inventory"]["inactive"] == 2
-    assert result["question"]["choices"] == [
-        "Enable all topics",
-        "Keep current states",
-        "Not now",
+    assert set(result["question"]) == {
+        "header",
+        "question",
+        "options",
+        "allowFreeformInput",
+    }
+    assert result["question"]["options"] == [
+        {"label": "Enable all listed inactive ServiceNow topics"},
+        {
+            "label": (
+                "Keep the current topic states for this configuration"
+            )
+        },
+        {"label": "Not now, leave the phase incomplete"},
     ]
+    assert "choices" not in result["question"]
     question = result["question"]["question"]
     assert "ServiceNowITSMSystemReadExecution" in question
     assert "ServiceNowITSMSystemWriteExecution" in question
@@ -16853,6 +16916,15 @@ def test_resume_handoff_cli_jit_group_no_is_byte_stable(
             profile,
             instance_name="dev123",
         ))
+        state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+        state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
+            "status": "completed",
+            "evidence": {
+                "kind": "structured-admin-attestation",
+                "recordedAt": "2026-11-02T00:00:00Z",
+                "clientId": APP_CLIENT_ID,
+            },
+        }
         state["attested"] = True
         state["acceptedContractRevision"] = contract["contractRevision"]
         state["phases"] = {
@@ -16887,8 +16959,8 @@ def test_resume_handoff_cli_jit_group_no_is_byte_stable(
     assert first["status"] == "business-group-availability-required"
     assert availability["currentGroup"]["id"] == "hr-prerequisite"
     assert availability["question"]["options"] == [
-        {"label": "Yes"},
-        {"label": "No"},
+        {"label": "Yes, the ServiceNow admin is available now"},
+        {"label": "No, I need to bring the ServiceNow admin in"},
     ]
 
     command = [
@@ -17091,15 +17163,27 @@ def test_business_group_question_is_just_in_time_after_preflight(
     assert availability["gateRequired"] is True
     assert availability["currentGroup"]["id"] == expected_group
     assert availability["currentGroup"]["role"] == expected_role
-    assert availability["question"] == {
-        "header": availability["currentGroup"]["label"],
-        "question": (
-            f"Is the {expected_role} available now for "
-            f"{availability['currentGroup']['label']}?"
-        ),
-        "options": [{"label": "Yes"}, {"label": "No"}],
-        "allowFreeformInput": False,
+    expected_questions = {
+        "hr-prerequisite": {
+            "header": "ServiceNow admin availability",
+            "question": "Is the ServiceNow admin available now?",
+            "options": [
+                {"label": "Yes, the ServiceNow admin is available now"},
+                {"label": "No, I need to bring the ServiceNow admin in"},
+            ],
+            "allowFreeformInput": False,
+        },
+        "entra-identity": {
+            "header": "Entra administrator availability",
+            "question": "Is the Entra admin available now?",
+            "options": [
+                {"label": "Yes, the Entra admin is available now"},
+                {"label": "No, I need to bring the Entra admin in"},
+            ],
+            "allowFreeformInput": False,
+        },
     }
+    assert availability["question"] == expected_questions[expected_group]
     elicitation = json.dumps(
         availability["question"],
         ensure_ascii=False,
@@ -17283,8 +17367,26 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         assert plugin_yes["transport"]["businessGroupAvailability"][
             "question"
         ] is None
+        plugin_guidance = plugin_yes["transport"]["ordinaryReply"]["text"]
+        assert "**Current task**" in plugin_guidance
+        assert "Confirm HR ServiceNow prerequisite" in plugin_guidance
+        assert "ServiceNow Application Manager" in plugin_guidance
+        assert "com.sn_hr_core" in plugin_guidance
+        assert "Availability alone never completes this check" in (
+            plugin_guidance
+        )
+        after_plugin_yes = json.loads(path.read_text(encoding="utf-8"))
+        assert after_plugin_yes["phases"]["plugin-prerequisites"][
+            "status"
+        ] == "pending"
+        assert after_plugin_yes["phases"]["plugin-prerequisites"][
+            "checkpointResults"
+        ] == {}
+        assert after_plugin_yes["businessGroupAcknowledgements"][
+            "hr-prerequisite"
+        ]["status"] == "available"
 
-        state = json.loads(path.read_text(encoding="utf-8"))
+        state = after_plugin_yes
         state["phases"]["plugin-prerequisites"]["status"] = "done"
         state["phases"]["plugin-prerequisites"]["checkpointResults"] = {
             "SN-DA-HRSD-PLUGIN-001": "Manual"
@@ -17294,7 +17396,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             frozenset({"preflight", "plugin-prerequisites"})
         )
         assert entra["currentGroup"]["id"] == "entra-identity"
-        snow.resume_handoff(
+        entra_yes = snow.resume_handoff(
             context,
             verified_phases=frozenset(
                 {"preflight", "plugin-prerequisites"}
@@ -17302,6 +17404,13 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             roles_available=True,
             availability_group_id="entra-identity",
             availability_context_sha256=entra["contextIdentitySha256"],
+        )
+        entra_guidance = entra_yes["transport"]["ordinaryReply"]["text"]
+        assert "Confirm Entra identity options" in entra_guidance
+        assert "guide-entra-registration.md" in entra_guidance
+        assert "user_impersonation" in entra_guidance
+        assert "performs no Microsoft Graph client, token, or read" in (
+            entra_guidance
         )
 
         state = json.loads(path.read_text(encoding="utf-8"))
@@ -17323,8 +17432,28 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         assert sso["currentGroup"]["role"] == (
             "ServiceNow admin / security_admin"
         )
-        assert sso["question"] is not None
-        snow.resume_handoff(
+        assert sso["question"] == {
+            "header": "ServiceNow administrator availability",
+            "question": (
+                "Is the ServiceNow admin with security_admin available now?"
+            ),
+            "options": [
+                {
+                    "label": (
+                        "Yes, the ServiceNow admin with security_admin is "
+                        "available now"
+                    )
+                },
+                {
+                    "label": (
+                        "No, I need to bring the ServiceNow admin with "
+                        "security_admin in"
+                    )
+                },
+            ],
+            "allowFreeformInput": False,
+        }
+        sso_yes = snow.resume_handoff(
             context,
             verified_phases=frozenset(
                 {
@@ -17336,6 +17465,12 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             roles_available=True,
             availability_group_id="servicenow-sso",
             availability_context_sha256=sso["contextIdentitySha256"],
+        )
+        sso_guidance = sso_yes["transport"]["ordinaryReply"]["text"]
+        assert "Confirm ServiceNow user mapping" in sso_guidance
+        assert "guide-servicenow-oidc.md" in sso_guidance
+        assert "Manual evidence does not prove a real employee token" in (
+            sso_guidance
         )
 
         state = json.loads(path.read_text(encoding="utf-8"))
@@ -17354,13 +17489,30 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         )
         _, maker = gate(verified_admin)
         assert maker["currentGroup"]["id"] == "maker-configuration"
-        snow.resume_handoff(
+        assert maker["question"] == {
+            "header": "Maker availability",
+            "question": "Is the Maker available now?",
+            "options": [
+                {"label": "Yes, the Maker is available now"},
+                {"label": "No, I need to bring the Maker in"},
+            ],
+            "allowFreeformInput": False,
+        }
+        maker_yes = snow.resume_handoff(
             context,
             verified_phases=verified_admin,
             roles_available=True,
             availability_group_id="maker-configuration",
             availability_context_sha256=maker["contextIdentitySha256"],
         )
+        maker_guidance = maker_yes["transport"]["ordinaryReply"]["text"]
+        assert "Check ServiceNow connection" in maker_guidance
+        display_index = maker_guidance.index("Display name (optional)")
+        auth_index = maker_guidance.index("Authentication Type")
+        resource_index = maker_guidance.index("Resource URI")
+        instance_index = maker_guidance.index("Instance Name")
+        assert display_index < auth_index < resource_index < instance_index
+        assert "optional display name is guidance only" in maker_guidance
 
         for phase_id in (
             "credential",

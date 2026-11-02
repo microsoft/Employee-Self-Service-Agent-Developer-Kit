@@ -58,9 +58,17 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   nested internal-step statuses. When
   `transport.businessGroupAvailability.gateRequired` is false, continue
   without an availability question. When true, ask only
-  `transport.businessGroupAvailability.question`;
+  `transport.businessGroupAvailability.question`: call
+  `vscode_askQuestions` with a one-element array containing that exact object,
+  preserving its complete `header`, `question`, `options`, and
+  `allowFreeformInput`. Never substitute the header for the question body or
+  rebuild its option labels;
 - on **Yes**, rerun the exact command with `--roles-available yes` plus the
-  returned `--business-group-id` and `--availability-context-sha256`. On
+  returned `--business-group-id` and `--availability-context-sha256`. Show
+  the newly returned `transport.ordinaryReply.text` before any action; for an
+  acknowledged current group it contains the exact current task, target,
+  owner, runbook/location, expected non-secret evidence, and completion
+  boundary. Availability remains acknowledgement only. On
   **No**, rerun with the same group/context and `--roles-available no`, show
   the returned group-specific `unavailableReply`, and re-ask the identical
   question. Do not advance the current/future group, phase, or evidence on
@@ -82,8 +90,10 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   is not phase completion;
 - for a question or delegated-admin pause, prepend
   `progress.currentPhase.waitingChecklistText` as an ordinary agent response,
-  then pass only the exact compact question body to the question tool. Then
-  show `progress.currentPhase.waitingText` when waiting. Do not add a
+  then call `vscode_askQuestions` with a one-element array containing the
+  exact compact returned question object. Preserve the complete body and
+  option labels. Then show `progress.currentPhase.waitingText` when waiting.
+  Do not add a
   `Progress` field, checklist, phase table, description, default, required
   input, hidden input, or second question;
 - for blocked/error results, show
@@ -102,8 +112,10 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   rollback gates, then read the exact returned action document in this
   invocation and follow it;
 - when that action calls `topic-action-handoff` and returns
-  `question-required`, call the question tool with the exact returned question
-  and wait. After Daphne answers, continue the matching branch in the already
+  `question-required`, require the supported
+  `header`/`question`/`options`/`allowFreeformInput` shape, call
+  `vscode_askQuestions` with `[question]`, and wait. After Daphne answers,
+  continue the matching branch in the already
   loaded action document; do not call the handoff again or ask twice;
 - add `--executed-action` only after an action returns `applied` or `recorded`.
   A verified no-op still requires the phase checkpoint before completion;

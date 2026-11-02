@@ -46,11 +46,11 @@ a preceding message, is the authoritative user-visible copy:
 [
   {
     "header": "HR Service Delivery Core",
-    "question": "Purpose: confirm this HRSD instance has its HR data foundation.\n\nOwner: ServiceNow Admin.\n\nOpen HR Service Delivery Core: {HR_CORE_PLUGIN_URL}\n\nConfirm the Application Manager page shows:\n- Title: `Human Resources Scoped App: Core`\n- Plugin id: `com.sn_hr_core`\n- Version Details: `Installed`\n- Message: `Your application is installed and ready for you to use on your instance`\n\nDo not select Configure, Repair, or Load demo data for this check. This requirement is HRSD-only and does not prove OIDC or overall connection readiness.\n\nDoes the page show the listed installed-and-ready evidence?",
+    "question": "Purpose: confirm this HRSD instance has its HR data foundation.\n\nOwner: ServiceNow Admin.\n\nOpen HR Service Delivery Core: {HR_CORE_PLUGIN_URL}\n\nConfirm the Application Manager page shows:\n- Title: `Human Resources Scoped App: Core`\n- Plugin id: `com.sn_hr_core`\n- Version Details: `Installed`\n- Message: `Your application is installed and ready for you to use on your instance`\n\nDo not select Configure, Repair, or Load demo data for this check. This requirement is HRSD-only and does not prove OIDC or overall connection readiness.\n\nHas the ServiceNow administrator confirmed that HR Service Delivery Core is installed and ready to use in the selected ServiceNow instance?",
     "options": [
-      { "label": "Yes" },
-      { "label": "No" },
-      { "label": "Not sure" }
+      { "label": "Yes, all listed installed-and-ready evidence is present" },
+      { "label": "No, one or more required items are missing" },
+      { "label": "Not sure, the administrator still needs to check" }
     ],
     "allowFreeformInput": false
   }
@@ -59,10 +59,12 @@ a preceding message, is the authoritative user-visible copy:
 
 Leave the selection unset.
 
-- **Yes:** record the phase handoff with `reused` when it was already valid,
-  or `completed` when the administrator completed the installation.
-- **No / Not sure:** show the direct link and identifiers above, return
-  `ACTION_RESULT = "waiting"`, and do not record completion.
+- **Yes, all listed installed-and-ready evidence is present:** record the phase
+  handoff with `reused` when it was already valid, or `completed` when the
+  administrator completed the installation.
+- **No, one or more required items are missing** / **Not sure, the
+  administrator still needs to check:** show the direct link and identifiers
+  above, return `ACTION_RESULT = "waiting"`, and do not record completion.
 
 After **Yes**, record the single phase handoff:
 
