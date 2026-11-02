@@ -370,17 +370,12 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "application owner may collaborate" in entra_normalized
     assert "`Failed` or `Error`" in entra
     assert "cannot be overridden" in entra
-    assert "Runner-owned checkpoint\ntarget: `SN-DA-HRSD-ENTRA-*`" in entra
+    assert "`SN-DA-HRSD-ENTRA-SETUP-001`" in entra
+    assert "historical\nstate/audit keys only" in entra
     assert "python scripts/flightcheck/cli.py" not in entra
-    for suffix in (
-        "APP",
-        "CLAIMS",
-        "SCOPE",
-        "PREAUTH",
-    ):
+    for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH"):
         assert f"--checkpoint SN-DA-HRSD-ENTRA-{suffix}-001" not in entra
-    assert "one category evaluation" in entra
-    assert "Do not decide checkpoint success in this action" in entra
+    assert "all four requirements" in entra
     assert "never enter `aud`" in entra
     assert "employee-identity candidate claim per yellow" in entra
     assert "never enter `aud`" in entra
@@ -777,6 +772,27 @@ def test_entra_guides_use_one_workbook_for_client_id_and_claims() -> None:
         assert "record-identity-mapping --stage entra" in guide
         assert "--client-id <application-client-id>" not in guide
         assert "record-admin-phase --phase entra-registration" in guide
+
+
+def test_entra_guides_use_one_current_setup_checkpoint() -> None:
+    for profile in ("HRSD", "ITSM"):
+        provider = f"servicenow-da-{profile.lower()}"
+        guide = (
+            _SOLUTION
+            / "src"
+            / "skills"
+            / "connect"
+            / provider
+            / "actions"
+            / "guide-entra-registration.md"
+        ).read_text(encoding="utf-8")
+
+        assert f"`SN-DA-{profile}-ENTRA-SETUP-001`" in guide
+        assert "historical\nstate/audit keys only" in guide
+        assert "all four requirements" in guide
+        assert "Application (client) ID" in guide
+        assert "`user_impersonation` scope" in guide
+        assert "preauthorized for that scope" in guide
 
 
 def test_servicenow_oidc_guides_match_complete_stage2_workbook() -> None:

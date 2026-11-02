@@ -298,7 +298,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert contract["provider"] == "servicenow-da-hrsd"
     assert contract["checkpointResultMode"] == "compact-stdout-v1"
     assert contract["attestedRoleScope"] == "lifecycle"
-    assert contract["contractRevision"] == 15
+    assert contract["contractRevision"] == 16
     assert [
         (group["id"], group["role"], group["phaseIds"])
         for group in contract["businessGroups"]
@@ -401,12 +401,9 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert by_id["test"]["actionExecution"] == "every-invocation"
     assert by_id["test"]["mutates"] is False
     assert by_id["test"]["completionStatuses"] == ["Manual"]
-    assert by_id["entra-registration"]["completionStatuses"] == [
-        "Passed",
-        "Manual",
-    ]
+    assert by_id["entra-registration"]["completionStatuses"] == ["Manual"]
     assert by_id["entra-registration"]["checkpoints"] == [
-        "SN-DA-HRSD-ENTRA-*"
+        "SN-DA-HRSD-ENTRA-SETUP-001"
     ]
     assert by_id["entra-registration"][
         "manualAcknowledgementEvidence"
@@ -472,7 +469,7 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
 
     assert contract["provider"] == "servicenow-da-itsm"
     assert contract["profile"] == "itsm"
-    assert contract["contractRevision"] == 10
+    assert contract["contractRevision"] == 11
     assert [group["id"] for group in contract["businessGroups"]] == [
         "entra-identity",
         "servicenow-sso",
@@ -529,6 +526,10 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
         "manualAcknowledgementEvidence"
     ]["requiredValues"]["promptCategory"] == "list-my-open-it-tickets"
     by_id = {phase["id"]: phase for phase in contract["phases"]}
+    assert by_id["entra-registration"]["checkpoints"] == [
+        "SN-DA-ITSM-ENTRA-SETUP-001"
+    ]
+    assert by_id["entra-registration"]["completionStatuses"] == ["Manual"]
     assert by_id["topics"]["resumeActionWhenIncomplete"] is True
     for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
         skill = (

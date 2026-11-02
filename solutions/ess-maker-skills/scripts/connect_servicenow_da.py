@@ -65,10 +65,11 @@ SETUP_SCHEMA_VERSION = 4
 HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 IT_SCHEMA_NAME = "gptagent_copilotforemployeeselfserviceit"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
-LIFECYCLE_SCHEMA_VERSION = 11
+LIFECYCLE_SCHEMA_VERSION = 12
 ADMIN_SETUP_SCHEMA_VERSION = 4
 AUTH_MODE = "entraIDUserLogin"
-ENTRA_CHECKPOINT_SUFFIXES = (
+ENTRA_SETUP_CHECKPOINT_SUFFIX = "SETUP"
+LEGACY_ENTRA_CHECKPOINT_SUFFIXES = (
     "APP",
     "CLAIMS",
     "SCOPE",
@@ -2455,37 +2456,61 @@ def _entra_checkpoint_outcomes(
     }
 
 
+def _entra_setup_checkpoint_id() -> str:
+    profile = "HRSD" if ACTIVE_PROFILE.key == "hrsd" else "ITSM"
+    return f"SN-DA-{profile}-ENTRA-SETUP-001"
+
+
+def _legacy_entra_checkpoint_outcomes(
+    state: dict[str, Any],
+) -> dict[str, str]:
+    outcomes = {
+        suffix: status
+        for suffix, status in _entra_checkpoint_outcomes(state).items()
+        if suffix in LEGACY_ENTRA_CHECKPOINT_SUFFIXES
+    }
+    retired = state.get("retiredCheckpointResults")
+    retired = retired if isinstance(retired, dict) else {}
+    entra = retired.get("entra-registration")
+    entra = entra if isinstance(entra, dict) else {}
+    for checkpoint_id, record in entra.items():
+        if not isinstance(checkpoint_id, str):
+            continue
+        suffix = checkpoint_id.rsplit("-", 2)[-2]
+        if suffix not in LEGACY_ENTRA_CHECKPOINT_SUFFIXES:
+            continue
+        if isinstance(record, dict):
+            status = record.get("status")
+        else:
+            status = record
+        if isinstance(status, str):
+            outcomes.setdefault(suffix, status)
+    return outcomes
+
+
 def _has_historical_entra_graph_pass(
     state: dict[str, Any],
 ) -> bool:
-    outcomes = _entra_checkpoint_outcomes(state)
+    outcomes = _legacy_entra_checkpoint_outcomes(state)
     return all(
         outcomes.get(suffix) == "Passed"
-        for suffix in ENTRA_CHECKPOINT_SUFFIXES
+        for suffix in LEGACY_ENTRA_CHECKPOINT_SUFFIXES
     )
 
 
 def _entra_handoff_mode(
     outcomes: dict[str, str],
 ) -> str:
-    required = set(ENTRA_CHECKPOINT_SUFFIXES)
-    missing = {
-        suffix
-        for suffix in required
-        if outcomes.get(suffix) not in {"Passed", "Manual"}
-    }
-    if not missing:
+    if outcomes.get(ENTRA_SETUP_CHECKPOINT_SUFFIX) == "Manual":
         return "complete"
-    if missing == {"CLAIMS"}:
-        return "claim-only"
-    if missing and missing != required:
-        return "delta"
     return "full-setup"
 
 
 def _entra_missing_items(
     outcomes: dict[str, str],
 ) -> list[tuple[str, str]]:
+    if outcomes.get(ENTRA_SETUP_CHECKPOINT_SUFFIX) == "Manual":
+        return []
     labels = {
         "APP": "Entra application registration",
         "CLAIMS": (
@@ -2496,8 +2521,7 @@ def _entra_missing_items(
     }
     return [
         (suffix, labels[suffix])
-        for suffix in ENTRA_CHECKPOINT_SUFFIXES
-        if outcomes.get(suffix) not in {"Passed", "Manual"}
+        for suffix in LEGACY_ENTRA_CHECKPOINT_SUFFIXES
     ]
 
 
@@ -7640,10 +7664,10 @@ def _migrate_lifecycle_schema(
             }
         )
         phases = state["phases"]
-        state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
+        state["schemaVersion"] = 10
         migration["schemaV10"] = {
             "from": 9 if version <= 9 else version,
-            "to": LIFECYCLE_SCHEMA_VERSION,
+            "to": 10,
             "sourceSha256": source_sha256,
             "migratedAt": _utc_now(),
             "phaseOrder": [
@@ -7670,13 +7694,126 @@ def _migrate_lifecycle_schema(
                 "object."
             )
         state["businessGroupAcknowledgements"] = {}
-        state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
+        state["schemaVersion"] = 11
         migration["schemaV11"] = {
             "from": 10 if version <= 10 else version,
-            "to": LIFECYCLE_SCHEMA_VERSION,
+            "to": 11,
             "sourceSha256": source_sha256,
             "migratedAt": _utc_now(),
             "legacyRoleAvailabilityMigrated": False,
+            "completionInferred": False,
+        }
+    if version < 12:
+        historical_compatibility_migrated = (
+            _migrate_historical_entra_confirmation(context, state)
+        )
+        entra_phase = phases.setdefault(
+            "entra-registration",
+            {
+                "status": "pending",
+                "checkpointResults": {},
+                "checkpointAcknowledgements": {},
+            },
+        )
+        if not isinstance(entra_phase, dict):
+            raise ServiceNowConnectError(
+                "ServiceNow Entra phase state must be an object."
+            )
+        results = entra_phase.get("checkpointResults")
+        acknowledgements = entra_phase.get("checkpointAcknowledgements")
+        results = results if isinstance(results, dict) else {}
+        acknowledgements = (
+            acknowledgements
+            if isinstance(acknowledgements, dict)
+            else {}
+        )
+        retired_results = state.setdefault("retiredCheckpointResults", {})
+        if not isinstance(retired_results, dict):
+            raise ServiceNowConnectError(
+                "ServiceNow retired checkpoint results must be an object."
+            )
+        retired_entra = retired_results.setdefault(
+            "entra-registration",
+            {},
+        )
+        if not isinstance(retired_entra, dict):
+            raise ServiceNowConnectError(
+                "Retired Entra checkpoint results must be an object."
+            )
+        retired_ids: list[str] = []
+        legacy_checkpoint_ids = {
+            checkpoint_id
+            for checkpoint_id in {*results, *acknowledgements}
+            if isinstance(checkpoint_id, str)
+            and any(
+                checkpoint_id.endswith(f"-ENTRA-{suffix}-001")
+                for suffix in LEGACY_ENTRA_CHECKPOINT_SUFFIXES
+            )
+        }
+        for checkpoint_id in sorted(legacy_checkpoint_ids):
+            retired_entra.setdefault(
+                checkpoint_id,
+                {
+                    "status": results.get(checkpoint_id),
+                    "acknowledgement": copy.deepcopy(
+                        acknowledgements.get(checkpoint_id)
+                    ),
+                    "retiredAt": _utc_now(),
+                    "reason": (
+                        "The current Entra phase uses one target-bound "
+                        "administrator setup confirmation."
+                    ),
+                },
+            )
+            results.pop(checkpoint_id, None)
+            acknowledgements.pop(checkpoint_id, None)
+            retired_ids.append(checkpoint_id)
+        entra_phase["checkpointAcknowledgements"] = acknowledgements
+        try:
+            setup_current = _identity_admin_handoff_is_ready(
+                context,
+                state,
+                phase="entra-registration",
+            )
+        except ServiceNowConnectError:
+            setup_current = False
+        setup_status = "Manual" if setup_current else "NotConfigured"
+        entra_phase["checkpointResults"] = {
+            _entra_setup_checkpoint_id(): setup_status
+        }
+        if setup_current:
+            entra_phase["status"] = "done"
+        else:
+            entra_phase["status"] = "pending"
+            for key in ("actionApplied", "lastActionAt", "lastVerifiedAt"):
+                entra_phase.pop(key, None)
+        completed_entra_handoff = _completed_handoff(
+            _admin_setup(state),
+            "entra-registration",
+        )
+        historical_compatibility_current = bool(
+            historical_compatibility_migrated
+            or (
+                completed_entra_handoff is not None
+                and _historical_entra_marker_current(
+                    completed_entra_handoff["evidence"]
+                )
+            )
+        )
+        state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
+        migration["schemaV12"] = {
+            "from": 11 if version <= 11 else version,
+            "to": LIFECYCLE_SCHEMA_VERSION,
+            "sourceSha256": source_sha256,
+            "migratedAt": _utc_now(),
+            "currentCheckpointId": _entra_setup_checkpoint_id(),
+            "currentCheckpointStatus": setup_status,
+            "retiredLegacyCheckpointIds": sorted(retired_ids),
+            "preservedLegacyCheckpointEvidence": bool(retired_ids),
+            "historicalGraphPassCompatibilityMigrated": (
+                historical_compatibility_current
+            ),
+            "completionRecomputedFromCurrentEvidence": setup_current,
             "completionInferred": False,
         }
     return state
@@ -7975,12 +8112,7 @@ def _prepare_lifecycle_telemetry(
             for target in targets:
                 if not isinstance(target, str):
                     continue
-                if target.endswith("ENTRA-*"):
-                    allowed_remediation_ids.update(
-                        f"{target[:-1]}{suffix}-001"
-                        for suffix in ENTRA_CHECKPOINT_SUFFIXES
-                    )
-                elif "*" not in target:
+                if "*" not in target:
                     allowed_remediation_ids.add(target)
         return prepare_lifecycle_projection(
             previous,
@@ -13165,18 +13297,7 @@ def _checkpoint_targets_present(
             return False
         if target.endswith("*"):
             prefix = target[:-1]
-            expected_family = (
-                {
-                    f"{prefix}{suffix}-001"
-                    for suffix in ENTRA_CHECKPOINT_SUFFIXES
-                }
-                if phase_contract.get("id") == "entra-registration"
-                else None
-            )
-            if expected_family is not None:
-                if not expected_family.issubset(results):
-                    return False
-            elif not any(key.startswith(prefix) for key in results):
+            if not any(key.startswith(prefix) for key in results):
                 return False
         elif target not in results:
             return False

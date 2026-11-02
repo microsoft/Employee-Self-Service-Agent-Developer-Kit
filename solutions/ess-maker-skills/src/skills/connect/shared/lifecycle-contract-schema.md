@@ -113,11 +113,15 @@ they never read a file, environment variable, or external service.
 ### Evolving a phase's checkpoint list
 
 When several checkpoint rows share one registered FlightCheck family, put the
-family wildcard (for example `SN-DA-HRSD-ENTRA-*`) in `checkpoints`. The
+family wildcard (for example `WD-FLOW-*`) in `checkpoints`. The
 runner invokes the family once, consumes every matching emitted row, and
 persists each row under its actual checkpoint ID. A family that emits zero
 matching rows is blocking, never an empty success. Pin the intended member IDs
 in tests so a future prefix expansion requires an explicit contract review.
+
+Use one exact checkpoint ID when one administrator handoff is one completion
+decision. ServiceNow Entra uses `SN-DA-*-ENTRA-SETUP-001`; its retired
+APP/CLAIMS/SCOPE/PREAUTH IDs are migration evidence, not a current family.
 
 Never mark a phase `done` because a future profile is "assumed" to pass —
 only a real checkpoint run (or a real, attested manual step) advances a

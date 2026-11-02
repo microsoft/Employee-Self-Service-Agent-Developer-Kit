@@ -729,10 +729,7 @@ def test_connect_lifecycle_accepts_bounded_servicenow_remediation(
             for profile in ("HRSD", "ITSM")
             for suffix in (
                 "ADMIN-PREFLIGHT",
-                "ENTRA-APP",
-                "ENTRA-CLAIMS",
-                "ENTRA-SCOPE",
-                "ENTRA-PREAUTH",
+                "ENTRA-SETUP",
                 "OIDC",
                 "CREDENTIAL",
                 "TOPICS",

@@ -272,7 +272,7 @@ def test_compact_checkpoint_warning_preserves_manual_content() -> None:
 
 
 def test_compact_checkpoint_family_accepts_only_family_members() -> None:
-    target = "SN-DA-HRSD-ENTRA"
+    target = "WD-FLOW"
     runner = FlightCheckRunner(
         scope=f"checkpoint:{target}",
         target_matcher=lambda checkpoint_id: checkpoint_id.startswith(
@@ -284,20 +284,20 @@ def test_compact_checkpoint_family_accepts_only_family_members() -> None:
         "ServiceNow DA HRSD",
         lambda _runner: [
             CheckResult(
-                checkpoint_id=f"{target}-APP-001",
-                category="ServiceNow DA HRSD",
+                checkpoint_id=f"{target}-001",
+                category="Workday",
                 priority=Priority.HIGH.value,
                 status=Status.PASSED.value,
-                description="Entra application registration exists",
-                result="Microsoft Graph read-only verification passed.",
+                description="Workday flow exists",
+                result="The expected flow is present.",
             ),
             CheckResult(
-                checkpoint_id=f"{target}-CLAIMS-001",
-                category="ServiceNow DA HRSD",
+                checkpoint_id=f"{target}-002",
+                category="Workday",
                 priority=Priority.HIGH.value,
                 status=Status.PASSED.value,
-                description="Entra access-token optional claims",
-                result="Microsoft Graph read-only verification passed.",
+                description="Workday flow is enabled",
+                result="The expected flow is enabled.",
             ),
         ],
     )

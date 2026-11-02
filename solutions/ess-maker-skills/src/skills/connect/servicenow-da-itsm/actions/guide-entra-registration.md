@@ -19,11 +19,15 @@ phase's `completionStatuses`, rerun
 `identity-mapping-handoff --stage entra` to validate the current target-bound
 evidence and reconcile any older derived reused handoff. Require
 `decision: no-action`; do not ask again. Then return
-`ACTION_RESULT = "recorded"` and let all four Entra checkpoints validate the
-current administrator confirmation locally. A prior `Failed`/`Error` or any
-other result outside
+`ACTION_RESULT = "recorded"` and let
+`SN-DA-ITSM-ENTRA-SETUP-001` validate the complete administrator confirmation
+locally. A prior `Failed`/`Error` or any other result outside
 `completionStatuses` requires one new complete Entra handoff so the Maker can
 return corrected bundled evidence.
+
+The retired APP, CLAIMS, SCOPE, and PREAUTH checkpoint IDs are historical
+state/audit keys only. Do not invoke them. Their four required information
+items remain mandatory fields of the single setup confirmation.
 
 ## Shared Identity lookup
 
@@ -152,11 +156,11 @@ Successfully imported XLSX and CSV produce the same scoped
 legacy XLSX handoffs remain importable through the legacy parser; generation
 does not rewrite issued runtime files or lifecycle state.
 
-The file alone does not confirm APP, SCOPE, or PREAUTH. Before recording the
-phase, the Entra administrator must explicitly confirm that all four checks
-were completed for the exact target: the returned app/client ID is correct,
-the returned user claim is actually emitted, `api://<client-id>` exposes the
-enabled `user_impersonation` scope, and the Microsoft ServiceNow connector is
+The file alone does not complete the setup confirmation. Before recording the
+phase, the Entra administrator must explicitly confirm all four requirements
+for the exact target: the returned app/client ID is correct, the returned user
+claim is actually emitted, `api://<client-id>` exposes the enabled
+`user_impersonation` scope, and the Microsoft ServiceNow connector is
 preauthorized for that scope. Then record the bundled confirmation:
 
 ```text

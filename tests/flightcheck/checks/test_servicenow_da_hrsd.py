@@ -138,10 +138,7 @@ def test_all_hrsd_blocking_phase_outputs_include_actionable_recovery() -> None:
         "PKG",
         "ADMIN-PREFLIGHT",
         "PLUGIN",
-        "ENTRA-APP",
-        "ENTRA-CLAIMS",
-        "ENTRA-SCOPE",
-        "ENTRA-PREAUTH",
+        "ENTRA-SETUP",
         "OIDC",
         "TOPICS",
         "PORTAL",
@@ -854,7 +851,7 @@ def _record_new_mapping_workflow(
     state.setdefault("phases", {})["entra-registration"] = {
         "status": "in-progress",
         "checkpointResults": {
-            "SN-DA-HRSD-ENTRA-CLAIMS-001": Status.NOT_CONFIGURED.value
+            "SN-DA-HRSD-ENTRA-SETUP-001": Status.NOT_CONFIGURED.value
         },
     }
     state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
@@ -1218,17 +1215,23 @@ def test_admin_prerequisites_use_manual_confirmation_without_graph(
 
     assert statuses["SN-DA-HRSD-ADMIN-PREFLIGHT-001"] == Status.PASSED.value
     assert statuses["SN-DA-HRSD-PLUGIN-001"] == Status.MANUAL.value
-    for suffix in (
-        "APP",
-        "SCOPE",
-        "PREAUTH",
-    ):
-        assert (
-            statuses[f"SN-DA-HRSD-ENTRA-{suffix}-001"]
-            == Status.MANUAL.value
-        )
-    assert statuses["SN-DA-HRSD-ENTRA-CLAIMS-001"] == Status.MANUAL.value
+    assert statuses["SN-DA-HRSD-ENTRA-SETUP-001"] == Status.MANUAL.value
     assert statuses["SN-DA-HRSD-OIDC-001"] == Status.MANUAL.value
+    plugin = _checkpoint(results, "SN-DA-HRSD-PLUGIN-001")
+    entra = _checkpoint(results, "SN-DA-HRSD-ENTRA-SETUP-001")
+    oidc = _checkpoint(results, "SN-DA-HRSD-OIDC-001")
+    assert plugin.roles == ["ServiceNow Admin"]
+    assert "Where/how:" in plugin.remediation
+    assert "Expected evidence:" in plugin.remediation
+    assert "Completion:" in plugin.remediation
+    assert entra.roles == ["Entra Admin", "ESS Maker / Agent Developer"]
+    assert "Where/how:" in entra.remediation
+    assert "Expected evidence:" in entra.remediation
+    assert "Completion:" in entra.remediation
+    assert oidc.roles == ["ServiceNow Admin"]
+    assert "Where/how:" in oidc.remediation
+    assert "Expected evidence:" in oidc.remediation
+    assert "Completion:" in oidc.remediation
 
     state_path = _state_path(tmp_path)
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -1236,8 +1239,7 @@ def test_admin_prerequisites_use_manual_confirmation_without_graph(
         "entra-registration": {
             "status": "done",
             "checkpointResults": {
-                f"SN-DA-HRSD-ENTRA-{suffix}-001": Status.MANUAL.value
-                for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH")
+                "SN-DA-HRSD-ENTRA-SETUP-001": Status.MANUAL.value
             },
         }
     }
@@ -1266,7 +1268,7 @@ def test_admin_prerequisites_use_manual_confirmation_without_graph(
         (("employee_id",), ()),
     ],
 )
-def test_claim_checkpoint_uses_confirmed_candidate_set(
+def test_entra_setup_checkpoint_uses_confirmed_candidate_set(
     monkeypatch,
     tmp_path: Path,
     candidates: tuple[str, ...],
@@ -1289,15 +1291,26 @@ def test_claim_checkpoint_uses_confirmed_candidate_set(
 
     result = _checkpoint(
         run_servicenow_da_hrsd_checks(runner),
-        "SN-DA-HRSD-ENTRA-CLAIMS-001",
+        "SN-DA-HRSD-ENTRA-SETUP-001",
     )
 
     assert result.status == Status.MANUAL.value
     assert "currentSource=administrator-confirmed" in result.result
-    assert result.remediation == ""
+    assert "Microsoft Entra Application Administrator" in result.remediation
+    assert "user_impersonation" in result.remediation
+    assert result.roles == [
+        "Entra Admin",
+        "ESS Maker / Agent Developer",
+    ]
+    assert result.evidence["requiredConfirmations"] == [
+        "application-registration",
+        "emitted-claim-name",
+        "user-impersonation-scope",
+        "servicenow-connector-preauthorization",
+    ]
 
 
-def test_claim_checkpoint_rejects_missing_or_mismatched_confirmation(
+def test_entra_setup_checkpoint_rejects_missing_or_mismatched_confirmation(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1315,7 +1328,7 @@ def test_claim_checkpoint_rejects_missing_or_mismatched_confirmation(
 
     missing = _checkpoint(
         run_servicenow_da_hrsd_checks(runner),
-        "SN-DA-HRSD-ENTRA-CLAIMS-001",
+        "SN-DA-HRSD-ENTRA-SETUP-001",
     )
     assert missing.status == Status.NOT_CONFIGURED.value
     assert "claim candidates" in missing.result
@@ -1332,7 +1345,7 @@ def test_claim_checkpoint_rejects_missing_or_mismatched_confirmation(
 
     mismatched = _checkpoint(
         run_servicenow_da_hrsd_checks(runner),
-        "SN-DA-HRSD-ENTRA-CLAIMS-001",
+        "SN-DA-HRSD-ENTRA-SETUP-001",
     )
     assert mismatched.status == Status.NOT_CONFIGURED.value
     assert "does not match the Entra handoff" in (
@@ -1340,7 +1353,31 @@ def test_claim_checkpoint_rejects_missing_or_mismatched_confirmation(
     )
 
 
-def test_client_and_claim_without_full_admin_confirmation_block_entra_family(
+def test_entra_setup_checkpoint_rejects_invalid_client_id_as_error(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"][
+        "clientId"
+    ] = "not-a-guid"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-ENTRA-SETUP-001",
+    )
+
+    assert result.status == Status.ERROR.value
+    assert result.status != Status.PASSED.value
+    assert "Application client ID" in result.result
+
+
+def test_client_and_claim_without_full_admin_confirmation_block_entra_setup(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1365,21 +1402,18 @@ def test_client_and_claim_without_full_admin_confirmation_block_entra_family(
 
     results = run_servicenow_da_hrsd_checks(_runner(components))
 
-    for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH"):
-        row = _checkpoint(
-            results,
-            f"SN-DA-HRSD-ENTRA-{suffix}-001",
-        )
-        assert row.status == Status.NOT_CONFIGURED.value
-        assert row.status != Status.PASSED.value
-        assert "complete administrator confirmation" in row.remediation
+    row = _checkpoint(results, "SN-DA-HRSD-ENTRA-SETUP-001")
+    assert row.status == Status.NOT_CONFIGURED.value
+    assert row.status != Status.PASSED.value
+    assert "full administrator confirmation" in row.remediation
 
     state["phases"] = {
         "entra-registration": {
             "status": "done",
             "checkpointResults": {
-                f"SN-DA-HRSD-ENTRA-{suffix}-001": Status.NOT_CONFIGURED.value
-                for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH")
+                "SN-DA-HRSD-ENTRA-SETUP-001": (
+                    Status.NOT_CONFIGURED.value
+                )
             },
         }
     }
@@ -1429,14 +1463,10 @@ def test_entra_confirmation_rejects_wrong_target_binding(
 
     results = run_servicenow_da_hrsd_checks(_runner(components))
 
-    assert all(
-        _checkpoint(
-            results,
-            f"SN-DA-HRSD-ENTRA-{suffix}-001",
-        ).status
-        == Status.NOT_CONFIGURED.value
-        for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH")
-    )
+    assert _checkpoint(
+        results,
+        "SN-DA-HRSD-ENTRA-SETUP-001",
+    ).status == Status.NOT_CONFIGURED.value
 
 
 def test_historical_graph_pass_remains_compatible_without_fresh_graph_claim(
@@ -1477,14 +1507,10 @@ def test_historical_graph_pass_remains_compatible_without_fresh_graph_claim(
 
     results = run_servicenow_da_hrsd_checks(runner)
 
-    for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH"):
-        row = _checkpoint(
-            results,
-            f"SN-DA-HRSD-ENTRA-{suffix}-001",
-        )
-        assert row.status == Status.MANUAL.value
-        assert "currentSource=historical-graph-pass" in row.result
-        assert "No current Graph authentication or read" in row.result
+    row = _checkpoint(results, "SN-DA-HRSD-ENTRA-SETUP-001")
+    assert row.status == Status.MANUAL.value
+    assert "currentSource=historical-graph-pass" in row.result
+    assert "No current Graph authentication or read" in row.result
 
 
 def test_oidc_checkpoint_requires_capability_owned_by_oidc_phase(
@@ -1598,15 +1624,17 @@ def test_recorded_mapping_workflow_reaches_real_hr_checkpoints(
     runner.graph = _graph_client(optional_claim_names=())
 
     results = run_servicenow_da_hrsd_checks(runner)
-    claims = _checkpoint(results, "SN-DA-HRSD-ENTRA-CLAIMS-001")
+    entra = _checkpoint(results, "SN-DA-HRSD-ENTRA-SETUP-001")
     oidc = _checkpoint(results, "SN-DA-HRSD-OIDC-001")
 
-    assert claims.status == Status.MANUAL.value
-    assert "currentSource=administrator-confirmed" in claims.result
+    assert entra.status == Status.MANUAL.value
+    assert "currentSource=administrator-confirmed" in entra.result
     assert oidc.status == Status.MANUAL.value
     assert "employee_id" in oidc.result
     assert "employee_number" in oidc.result
-    assert oidc.remediation == ""
+    assert "ServiceNow Admin / security_admin" in oidc.remediation
+    assert "Expected evidence" in oidc.remediation
+    assert "Completion" in oidc.remediation
 
 
 @pytest.mark.parametrize(
@@ -2132,7 +2160,9 @@ def test_entra_phase_evaluation_uses_one_logical_read_set(
         if result.checkpoint_id.startswith("SN-DA-HRSD-ENTRA-")
     ]
 
-    assert len(entra_results) == 4
+    assert [row.checkpoint_id for row in entra_results] == [
+        "SN-DA-HRSD-ENTRA-SETUP-001"
+    ]
     assert counters == {
         "agentbuilder": 1,
         "connectivity": 1,
@@ -2149,8 +2179,7 @@ def test_entra_phase_evaluation_uses_one_logical_read_set(
         ("SN-DA-HRSD-PKG-001", 1, 0, 0),
         ("SN-DA-HRSD-ADMIN-PREFLIGHT-001", 1, 0, 0),
         ("SN-DA-HRSD-PLUGIN-001", 1, 0, 0),
-        ("SN-DA-HRSD-ENTRA-*", 4, 0, 0),
-        ("SN-DA-HRSD-ENTRA-CLAIMS-001", 1, 0, 0),
+        ("SN-DA-HRSD-ENTRA-SETUP-001", 1, 0, 0),
         ("SN-DA-HRSD-OIDC-001", 1, 0, 0),
         ("SN-DA-HRSD-CREDENTIAL-001", 1, 1, 0),
         ("SN-DA-HRSD-TOPICS-001", 1, 0, 0),
@@ -2207,14 +2236,7 @@ def test_target_aware_evaluation_uses_only_required_clients(
     results = run_servicenow_da_hrsd_checks(runner)
 
     assert len(results) == expected_rows
-    assert all(
-        result.checkpoint_id == target
-        or (
-            target == "SN-DA-HRSD-ENTRA-*"
-            and result.checkpoint_id.startswith("SN-DA-HRSD-ENTRA-")
-        )
-        for result in results
-    )
+    assert all(result.checkpoint_id == target for result in results)
     assert counters == {
         "agentbuilder": 1,
         "connectivity": inventory_reads,
@@ -2284,7 +2306,9 @@ def test_connected_connection_does_not_complete_other_admin_phases(
 
     assert statuses["SN-DA-HRSD-ADMIN-PREFLIGHT-001"] == Status.PASSED.value
     assert statuses["SN-DA-HRSD-PLUGIN-001"] == Status.NOT_CONFIGURED.value
-    assert statuses["SN-DA-HRSD-ENTRA-APP-001"] == Status.NOT_CONFIGURED.value
+    assert statuses["SN-DA-HRSD-ENTRA-SETUP-001"] == (
+        Status.NOT_CONFIGURED.value
+    )
     assert statuses["SN-DA-HRSD-OIDC-001"] == Status.NOT_CONFIGURED.value
 
 
@@ -2303,16 +2327,19 @@ def test_graph_observation_does_not_override_confirmed_emission(
     monkeypatch.chdir(tmp_path)
 
     results = run_servicenow_da_hrsd_checks(runner)
-    claim_result = next(
+    setup_result = next(
         result
         for result in results
-        if result.checkpoint_id == "SN-DA-HRSD-ENTRA-CLAIMS-001"
+        if result.checkpoint_id == "SN-DA-HRSD-ENTRA-SETUP-001"
     )
 
-    assert claim_result.status == Status.MANUAL.value
-    assert "currentSource=administrator-confirmed" in claim_result.result
-    assert "Cloud configuration was not queried" in claim_result.result
-    assert claim_result.remediation == ""
+    assert setup_result.status == Status.MANUAL.value
+    assert "currentSource=administrator-confirmed" in setup_result.result
+    assert "Cloud configuration was not queried" in setup_result.result
+    assert "Owner:" in setup_result.remediation
+    assert "Where/how:" in setup_result.remediation
+    assert "Expected evidence:" in setup_result.remediation
+    assert "Completion:" in setup_result.remediation
 
 
 def test_manual_confirmation_is_required_without_graph_fallback(
@@ -2326,13 +2353,13 @@ def test_manual_confirmation_is_required_without_graph_fallback(
     monkeypatch.chdir(tmp_path)
 
     results = run_servicenow_da_hrsd_checks(runner)
-    app = next(
+    setup = next(
         result
         for result in results
-        if result.checkpoint_id == "SN-DA-HRSD-ENTRA-APP-001"
+        if result.checkpoint_id == "SN-DA-HRSD-ENTRA-SETUP-001"
     )
-    assert app.status == Status.MANUAL.value
-    assert "currentSource=administrator-confirmed" in app.result
+    assert setup.status == Status.MANUAL.value
+    assert "currentSource=administrator-confirmed" in setup.result
 
     state_path = (
         tmp_path
@@ -2350,13 +2377,13 @@ def test_manual_confirmation_is_required_without_graph_fallback(
     state_path.write_text(json.dumps(state), encoding="utf-8")
 
     results = run_servicenow_da_hrsd_checks(runner)
-    app = next(
+    setup = next(
         result
         for result in results
-        if result.checkpoint_id == "SN-DA-HRSD-ENTRA-APP-001"
+        if result.checkpoint_id == "SN-DA-HRSD-ENTRA-SETUP-001"
     )
-    assert app.status == Status.NOT_CONFIGURED.value
-    assert "No Application client ID" in app.result
+    assert setup.status == Status.NOT_CONFIGURED.value
+    assert "No Application client ID" in setup.result
 
 
 def test_credential_rejects_resource_uri_mismatch(

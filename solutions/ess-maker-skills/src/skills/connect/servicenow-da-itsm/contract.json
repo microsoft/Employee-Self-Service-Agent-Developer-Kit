@@ -1,5 +1,5 @@
 {
-  "contractRevision": 10,
+  "contractRevision": 11,
   "provider": "servicenow-da-itsm",
   "displayName": "ServiceNow ITSM",
   "profile": "itsm",
@@ -109,10 +109,9 @@
       "label": "Guide and verify the Microsoft Entra User Login application setup",
       "responsibleRoles": ["Microsoft Entra Application Administrator or higher"],
       "checkpoints": [
-        "SN-DA-ITSM-ENTRA-*"
+        "SN-DA-ITSM-ENTRA-SETUP-001"
       ],
       "completionStatuses": [
-        "Passed",
         "Manual"
       ],
       "actionDoc": "src/skills/connect/servicenow-da-itsm/actions/guide-entra-registration.md",

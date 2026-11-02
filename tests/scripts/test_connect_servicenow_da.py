@@ -2865,14 +2865,14 @@ def test_failed_or_missing_current_test_does_not_unlock_realm_chooser(
     _assert_recovery_handoff(handoff["recoveryHandoff"])
 
 
-def test_missing_entra_family_member_does_not_unlock_realm_chooser(
+def test_missing_entra_setup_result_does_not_unlock_realm_chooser(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     context, state = _seed_complete_dev_state(tmp_path, profile="hrsd")
     state["phases"]["entra-registration"]["checkpointResults"].pop(
-        "SN-DA-HRSD-ENTRA-PREAUTH-001"
+        "SN-DA-HRSD-ENTRA-SETUP-001"
     )
     snow._lifecycle_state_path(context).write_text(
         json.dumps(state),
@@ -2928,7 +2928,7 @@ def test_schema_v7_retires_legacy_publish_without_resetting_test(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 11
+    assert migrated["schemaVersion"] == 12
     assert "publish" not in migrated["phases"]
     assert migrated["retiredPhases"]["publish"]["status"] == legacy_status
     assert migrated["evidence"]["publish"]["status"] == "completed"
@@ -2938,16 +2938,16 @@ def test_schema_v7_retires_legacy_publish_without_resetting_test(
     ] is True
     assert migrated["migration"]["schemaV8"][
         "retiredEntraCheckpointIds"
-    ] == [
-        "SN-DA-HRSD-ENTRA-CONSENT-001",
-        "SN-DA-HRSD-ENTRA-PERMISSIONS-001",
-    ]
+    ] == []
     assert migrated["migration"]["schemaV9"][
         "realmCompletionInferred"
     ] is False
     assert migrated["migration"]["schemaV10"][
         "bindingEvidenceMigrated"
     ] is True
+    assert migrated["migration"]["schemaV12"][
+        "currentCheckpointId"
+    ] == "SN-DA-HRSD-ENTRA-SETUP-001"
 
 
 def test_schema_v8_retires_graph_gates_without_fabricating_completion(
@@ -2970,6 +2970,10 @@ def test_schema_v8_retires_graph_gates_without_fabricating_completion(
                 "SN-DA-HRSD-ENTRA-CONSENT-001": "Failed",
             },
             "checkpointAcknowledgements": {
+                "SN-DA-HRSD-ENTRA-APP-001": {
+                    "status": "Passed",
+                    "source": "legacy",
+                },
                 "SN-DA-HRSD-ENTRA-PERMISSIONS-001": {
                     "status": "NotConfigured",
                 },
@@ -2993,12 +2997,9 @@ def test_schema_v8_retires_graph_gates_without_fabricating_completion(
     snow._write_lifecycle_state(context, migrated)
 
     phase = migrated["phases"]["entra-registration"]
-    assert phase["status"] == "in-progress"
-    assert set(phase["checkpointResults"]) == {
-        "SN-DA-HRSD-ENTRA-APP-001",
-        "SN-DA-HRSD-ENTRA-CLAIMS-001",
-        "SN-DA-HRSD-ENTRA-SCOPE-001",
-        "SN-DA-HRSD-ENTRA-PREAUTH-001",
+    assert phase["status"] == "pending"
+    assert phase["checkpointResults"] == {
+        "SN-DA-HRSD-ENTRA-SETUP-001": "NotConfigured"
     }
     assert phase["checkpointAcknowledgements"] == {}
     retired = migrated["retiredCheckpointResults"]["entra-registration"]
@@ -3009,11 +3010,32 @@ def test_schema_v8_retires_graph_gates_without_fabricating_completion(
     assert retired["SN-DA-HRSD-ENTRA-CONSENT-001"][
         "acknowledgement"
     ] == {"status": "Failed"}
+    for checkpoint_id in (
+        "SN-DA-HRSD-ENTRA-APP-001",
+        "SN-DA-HRSD-ENTRA-CLAIMS-001",
+        "SN-DA-HRSD-ENTRA-SCOPE-001",
+        "SN-DA-HRSD-ENTRA-PREAUTH-001",
+    ):
+        assert checkpoint_id in retired
+    assert retired["SN-DA-HRSD-ENTRA-APP-001"][
+        "acknowledgement"
+    ] == {
+        "status": "Passed",
+        "source": "legacy",
+    }
     assert migrated["migration"]["schemaV8"][
         "retiredEntraCheckpointIds"
     ] == [
         "SN-DA-HRSD-ENTRA-CONSENT-001",
         "SN-DA-HRSD-ENTRA-PERMISSIONS-001",
+    ]
+    assert migrated["migration"]["schemaV12"][
+        "retiredLegacyCheckpointIds"
+    ] == [
+        "SN-DA-HRSD-ENTRA-APP-001",
+        "SN-DA-HRSD-ENTRA-CLAIMS-001",
+        "SN-DA-HRSD-ENTRA-PREAUTH-001",
+        "SN-DA-HRSD-ENTRA-SCOPE-001",
     ]
     assert emitted == []
 
@@ -4564,7 +4586,7 @@ def test_schema_v8_realm_evidence_migration_never_infers_completion(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 11
+    assert migrated["schemaVersion"] == 12
     assert migrated["evidence"]["realmFlows"] == {}
     assert migrated["migration"]["schemaV9"][
         "preservedLegacyRealmEvidence"
@@ -4598,7 +4620,7 @@ def test_schema_v9_migrates_strict_binding_identity_and_final_test(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 11
+    assert migrated["schemaVersion"] == 12
     assert migrated["migration"]["schemaV10"]["bindingEvidenceMigrated"] is True
     assert migrated["migration"]["schemaV10"]["testEvidenceMigrated"] is True
     assert list(migrated["phases"]).index("agent-connection") < list(
@@ -4629,7 +4651,7 @@ def test_schema_v9_untrusted_binding_resets_later_phases_without_remote_change(
         path.write_text(json.dumps(state), encoding="utf-8")
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 11
+    assert migrated["schemaVersion"] == 12
     migration = migrated["migration"]["schemaV10"]
     assert migration["bindingEvidenceMigrated"] is False
     assert migration["testEvidenceMigrated"] is False
@@ -9195,7 +9217,7 @@ def test_identity_workbook_rejects_unsupported_windows_target_path() -> None:
 
 
 @pytest.mark.parametrize("profile", ("hrsd", "itsm"))
-def test_claim_only_workbook_question_is_short_and_missing_only(
+def test_partial_legacy_entra_rows_require_one_complete_handoff(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     profile: str,
@@ -9243,7 +9265,10 @@ def test_claim_only_workbook_question_is_short_and_missing_only(
 
     question_object = handoff["question"]
     question = handoff["instruction"]
-    assert handoff["handoffMode"] == "claim-only"
+    assert handoff["handoffMode"] == "full-setup"
+    assert {
+        item["checkpoint"] for item in handoff["missingItems"]
+    } == {"APP", "CLAIMS", "SCOPE", "PREAUTH"}
     assert handoff["instructionTitle"] == (
         "Step 1 of 2 — Entra: list employee identity options"
     )
@@ -9334,10 +9359,14 @@ def test_claim_only_workbook_question_is_short_and_missing_only(
         ),
         (
             "partial",
-            "delta",
-            {"CLAIMS", "PREAUTH"},
+            "full-setup",
+            {"APP", "CLAIMS", "SCOPE", "PREAUTH"},
         ),
-        ("claim-only", "claim-only", {"CLAIMS"}),
+        (
+            "claim-only",
+            "full-setup",
+            {"APP", "CLAIMS", "SCOPE", "PREAUTH"},
+        ),
     ),
 )
 def test_public_entra_handoff_emits_v3_workbook_for_hr_and_it(
@@ -9682,7 +9711,7 @@ def test_filled_legacy_workbook_gets_versioned_current_template_copy(
 
 @pytest.mark.parametrize("profile", ("hrsd", "itsm"))
 @pytest.mark.parametrize("needs_handoff", (True, False))
-def test_legacy_candidate_receipt_requires_type_only_for_new_handoff(
+def test_legacy_candidate_receipt_does_not_replace_setup_confirmation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     profile: str,
@@ -9774,23 +9803,11 @@ def test_legacy_candidate_receipt_requires_type_only_for_new_handoff(
         "candidateSetSha256"
     ] == receipt["candidateSetSha256"]
     assert "identityRequirement" not in saved["evidence"]
-    if needs_handoff:
-        assert handoff["handoffMode"] == "delta"
-        assert Path(handoff["workbookPath"]).is_file()
-        assert "options" not in handoff["question"]
-        assert handoff["question"]["allowFreeformInput"] is True
-        assert handoff["question"] is not None
-    else:
-        assert not snow._identity_workbook_path(
-            context,
-            stage="entra",
-        ).exists()
-        assert handoff["handoffMode"] == "complete"
-        assert handoff["decision"] == "no-action"
-        assert handoff["question"] is None
-        assert handoff["legacyRequirementBypass"] == (
-            "completed-candidate-receipt"
-        )
+    assert handoff["handoffMode"] == "full-setup"
+    assert Path(handoff["workbookPath"]).is_file()
+    assert "options" not in handoff["question"]
+    assert handoff["question"]["allowFreeformInput"] is True
+    assert handoff["question"] is not None
 
 
 @pytest.mark.parametrize("profile", ("hrsd", "itsm"))
@@ -9903,7 +9920,7 @@ def test_custom_identity_overlay_flows_through_entra_and_servicenow(
         assert sheet["B2"].value in {None, ""}
         sheet["B2"] = APP_CLIENT_ID
     else:
-        assert entra["handoffMode"] == "claim-only"
+        assert entra["handoffMode"] == "full-setup"
         assert sheet["B2"].value == APP_CLIENT_ID
     workbook.save(entra_path)
     workbook.close()
@@ -10140,7 +10157,7 @@ def test_retired_graph_rows_do_not_drive_entra_handoff(
     question_object = handoff["question"]
     instruction = handoff["instruction"]
 
-    assert handoff["handoffMode"] == "delta"
+    assert handoff["handoffMode"] == "full-setup"
     assert handoff["instructionTitle"] == (
         "Step 1 of 2 — Entra: list employee identity options"
     )
@@ -11503,7 +11520,7 @@ def test_reimport_changed_candidates_invalidates_old_oidc_selection(
     )
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
     state["phases"]["entra-registration"]["checkpointResults"] = {
-        "SN-DA-HRSD-ENTRA-CLAIMS-001": "NotConfigured"
+        "SN-DA-HRSD-ENTRA-SETUP-001": "NotConfigured"
     }
     state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] = {"status": "completed", "evidence": {"kind": "structured-admin-attestation", "recordedAt": "2026-10-01T00:00:00Z"}}
     _lifecycle_path(tmp_path).write_text(json.dumps(state), encoding="utf-8")
@@ -12002,6 +12019,7 @@ def test_historical_graph_pass_reapproval_advances_without_new_admin_handoff(
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["attested"] = True
     state["attestedAt"] = "2026-10-01T00:00:00Z"
+    state["schemaVersion"] = 11
     state["acceptedContractRevision"] = old_revision
     evidence = state["adminSetup"]["phaseHandoffs"]["entra-registration"][
         "evidence"
@@ -12017,7 +12035,7 @@ def test_historical_graph_pass_reapproval_advances_without_new_admin_handoff(
         evidence.pop(field, None)
     state["phases"]["entra-registration"]["checkpointResults"] = {
         f"{prefix}-{suffix}-001": "Passed"
-        for suffix in snow.ENTRA_CHECKPOINT_SUFFIXES
+        for suffix in snow.LEGACY_ENTRA_CHECKPOINT_SUFFIXES
     }
     state_path.write_text(json.dumps(state), encoding="utf-8")
     context = _profile_context(
@@ -12036,6 +12054,7 @@ def test_historical_graph_pass_reapproval_advances_without_new_admin_handoff(
         )
 
     migrated = json.loads(state_path.read_text(encoding="utf-8"))
+    assert migrated["schemaVersion"] == 12
     migrated_evidence = migrated["adminSetup"]["phaseHandoffs"][
         "entra-registration"
     ]["evidence"]
@@ -12045,11 +12064,31 @@ def test_historical_graph_pass_reapproval_advances_without_new_admin_handoff(
     assert migrated["adminSetup"]["phaseHandoffs"]["entra-registration"][
         "verifiedBy"
     ] == "historical-graph-pass-migration"
+    assert migrated["phases"]["entra-registration"]["checkpointResults"] == {
+        f"{prefix}-SETUP-001": "Manual"
+    }
+    assert migrated["phases"]["entra-registration"]["status"] == "done"
+    assert set(
+        migrated["retiredCheckpointResults"]["entra-registration"]
+    ).issuperset(
+        {
+            f"{prefix}-{suffix}-001"
+            for suffix in snow.LEGACY_ENTRA_CHECKPOINT_SUFFIXES
+        }
+    )
+    assert migrated["migration"]["schemaV12"][
+        "currentCheckpointStatus"
+    ] == "Manual"
+    assert migrated["migration"]["schemaV12"][
+        "historicalGraphPassCompatibilityMigrated"
+    ] is True
+    assert migrated["migration"]["schemaV12"][
+        "completionRecomputedFromCurrentEvidence"
+    ] is True
 
     migrated["acceptedContractRevision"] = old_revision + 1
     migrated["phases"]["entra-registration"]["checkpointResults"] = {
-        f"{prefix}-{suffix}-001": "Manual"
-        for suffix in snow.ENTRA_CHECKPOINT_SUFFIXES
+        f"{prefix}-SETUP-001": "Manual"
     }
     state_path.write_text(json.dumps(migrated), encoding="utf-8")
     with snow.product_profile_context(profile):
@@ -12812,7 +12851,7 @@ def test_v2_lifecycle_migrates_to_v8_without_obsolete_preflight_gates(
     state_again = snow._load_lifecycle_state(_context())
     snow._write_lifecycle_state(_context(), state_again)
 
-    assert state["schemaVersion"] == 11
+    assert state["schemaVersion"] == 12
     assert state["acceptedContractRevision"] == 1
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
     assert set(state["adminSetup"]["phaseHandoffs"]) == {
@@ -12996,7 +13035,7 @@ def test_v4_migration_removes_obsolete_gates_and_keeps_completed_discovery(
 
     state = snow._load_lifecycle_state(_context())
 
-    assert state["schemaVersion"] == 11
+    assert state["schemaVersion"] == 12
     assert state["adminSetup"]["schemaVersion"] == 4
     assert "scenario" not in state["adminSetup"]["preflight"]
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
@@ -16666,7 +16705,7 @@ def test_resume_handoff_cli_initializes_preflight_without_role_question(
     )
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["attested"] is True
-    assert state["acceptedContractRevision"] == 10
+    assert state["acceptedContractRevision"] == 11
     assert state["businessGroupAcknowledgements"] == {}
 
 
@@ -17175,10 +17214,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         state = json.loads(path.read_text(encoding="utf-8"))
         state["phases"]["entra-registration"]["status"] = "done"
         state["phases"]["entra-registration"]["checkpointResults"] = {
-            "SN-DA-HRSD-ENTRA-APP-001": "Manual",
-            "SN-DA-HRSD-ENTRA-CLAIMS-001": "Manual",
-            "SN-DA-HRSD-ENTRA-SCOPE-001": "Manual",
-            "SN-DA-HRSD-ENTRA-PREAUTH-001": "Manual",
+            "SN-DA-HRSD-ENTRA-SETUP-001": "Manual",
         }
         path.write_text(json.dumps(state), encoding="utf-8")
         _, sso = gate(
@@ -17581,10 +17617,17 @@ def test_schema_v10_does_not_migrate_global_role_acknowledgements(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 11
+    assert migrated["schemaVersion"] == 12
     assert migrated["businessGroupAcknowledgements"] == {}
     assert migrated["migration"]["schemaV11"][
         "legacyRoleAvailabilityMigrated"
+    ] is False
+    assert migrated["phases"]["entra-registration"]["checkpointResults"] == {
+        "SN-DA-HRSD-ENTRA-SETUP-001": "NotConfigured"
+    }
+    assert migrated["phases"]["entra-registration"]["status"] == "pending"
+    assert migrated["migration"]["schemaV12"][
+        "completionRecomputedFromCurrentEvidence"
     ] is False
 
 

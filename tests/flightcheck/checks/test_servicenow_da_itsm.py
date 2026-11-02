@@ -163,10 +163,7 @@ def test_all_itsm_blocking_phase_outputs_include_actionable_recovery() -> None:
     expected_suffixes = {
         "PKG",
         "ADMIN-PREFLIGHT",
-        "ENTRA-APP",
-        "ENTRA-CLAIMS",
-        "ENTRA-SCOPE",
-        "ENTRA-PREAUTH",
+        "ENTRA-SETUP",
         "OIDC",
         "TOPICS",
         "PORTAL",
@@ -505,7 +502,7 @@ def test_recorded_mapping_workflow_reaches_real_it_checkpoints(
         state.setdefault("phases", {})["entra-registration"] = {
             "status": "in-progress",
             "checkpointResults": {
-                "SN-DA-ITSM-ENTRA-CLAIMS-001": (
+                "SN-DA-ITSM-ENTRA-SETUP-001": (
                     Status.NOT_CONFIGURED.value
                 )
             },
@@ -577,11 +574,18 @@ def test_recorded_mapping_workflow_reaches_real_it_checkpoints(
     runner.graph = _graph_client(optional_claim_names=())
 
     results = run_servicenow_da_itsm_checks(runner)
-    claims = _checkpoint(results, "SN-DA-ITSM-ENTRA-CLAIMS-001")
+    entra = _checkpoint(results, "SN-DA-ITSM-ENTRA-SETUP-001")
     oidc = _checkpoint(results, "SN-DA-ITSM-OIDC-001")
 
-    assert claims.status == Status.MANUAL.value
-    assert "currentSource=administrator-confirmed" in claims.result
+    assert [
+        row.checkpoint_id
+        for row in results
+        if row.checkpoint_id.startswith("SN-DA-ITSM-ENTRA-")
+    ] == ["SN-DA-ITSM-ENTRA-SETUP-001"]
+    assert entra.status == Status.MANUAL.value
+    assert "currentSource=administrator-confirmed" in entra.result
+    assert "Owner:" in entra.remediation
+    assert entra.roles == ["Entra Admin", "ESS Maker / Agent Developer"]
     assert oidc.status == Status.MANUAL.value
     assert "employee_id" in oidc.result
 
@@ -656,7 +660,7 @@ def test_itsm_topics_compact_checkpoint_contract_accepts_actual_inventory() -> N
 
 def test_itsm_registry_has_no_hr_plugin_checkpoint() -> None:
     assert resolve("SN-DA-ITSM-PKG-001").provider == "servicenow-da-itsm"
-    assert resolve("SN-DA-ITSM-ENTRA-*").profile == "itsm"
+    assert resolve("SN-DA-ITSM-ENTRA-SETUP-001").profile == "itsm"
     assert resolve("SN-DA-ITSM-PLUGIN-001") is None
 
 

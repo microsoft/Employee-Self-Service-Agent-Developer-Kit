@@ -439,6 +439,26 @@ class TestGates:
             cli._run_single_checkpoint(_args("DEFINITELY-NOT-A-REAL-ID-ZZZ", tmp_path))
         assert exc.value.code == 2
 
+    @pytest.mark.parametrize(
+        "checkpoint_id",
+        [
+            f"SN-DA-{profile}-ENTRA-{suffix}-001"
+            for profile in ("HRSD", "ITSM")
+            for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH")
+        ],
+    )
+    def test_retired_servicenow_entra_checkpoint_exits_2(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        checkpoint_id: str,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        assert registry.resolve(checkpoint_id) is None
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args(checkpoint_id, tmp_path))
+        assert exc.value.code == 2
+
     def test_missing_config_exits_1(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -610,25 +630,19 @@ class TestHermeticRun:
             cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
         assert exc.value.code == 0
 
-    def test_family_target_evaluates_category_once_and_keeps_all_members(
+    def test_entra_setup_target_evaluates_category_once_and_keeps_exact_row(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         _silence_output: None,
     ) -> None:
-        target = "SN-DA-HRSD-ENTRA-*"
-        entra_ids = (
-            "SN-DA-HRSD-ENTRA-APP-001",
-            "SN-DA-HRSD-ENTRA-CLAIMS-001",
-            "SN-DA-HRSD-ENTRA-SCOPE-001",
-            "SN-DA-HRSD-ENTRA-PREAUTH-001",
-        )
+        target = "SN-DA-HRSD-ENTRA-SETUP-001"
         calls = 0
         saved = {}
 
         class _Spec:
             category_label = "ServiceNow DA HRSD"
-            is_family = True
+            is_family = False
 
         class _Plan:
             clients = frozenset()
@@ -645,10 +659,7 @@ class TestHermeticRun:
                 nonlocal calls
                 calls += 1
                 return [
-                    *[
-                        _row(checkpoint_id, Status.PASSED.value)
-                        for checkpoint_id in entra_ids
-                    ],
+                    _row(target, Status.MANUAL.value),
                     _row("SN-DA-HRSD-OIDC-001", Status.PASSED.value),
                 ]
 
@@ -672,31 +683,31 @@ class TestHermeticRun:
         assert calls == 1
         assert tuple(
             result.checkpoint_id for result in saved["result"].results
-        ) == entra_ids
+        ) == (target, "CHECKPOINT-CONTRACT-GUIDED")
 
     @pytest.mark.parametrize(
         ("target", "slug", "schema_name", "ring"),
         (
             (
-                "SN-DA-HRSD-ENTRA-*",
+                "SN-DA-HRSD-ENTRA-SETUP-001",
                 "employee-self-service-hr",
                 "gptagent_copilotforemployeeselfservicehr",
                 "test",
             ),
             (
-                "SN-DA-HRSD-ENTRA-*",
+                "SN-DA-HRSD-ENTRA-SETUP-001",
                 "employee-self-service-hr",
                 "gptagent_copilotforemployeeselfservicehr",
                 "prod",
             ),
             (
-                "SN-DA-ITSM-ENTRA-*",
+                "SN-DA-ITSM-ENTRA-SETUP-001",
                 "employee-self-service-it",
                 "gptagent_copilotforemployeeselfserviceit",
                 "test",
             ),
             (
-                "SN-DA-ITSM-ENTRA-*",
+                "SN-DA-ITSM-ENTRA-SETUP-001",
                 "employee-self-service-it",
                 "gptagent_copilotforemployeeselfserviceit",
                 "prod",
@@ -744,7 +755,7 @@ class TestHermeticRun:
 
         class _Spec:
             category_label = "ServiceNow Entra"
-            is_family = True
+            is_family = False
 
         class _Plan:
             clients = actual_plan.clients
@@ -752,21 +763,11 @@ class TestHermeticRun:
             requires_dataverse_endpoint = False
 
             def __init__(self) -> None:
-                prefix = target.removesuffix("*")
                 self.ordered_fns = [
                     (
                         "ServiceNow Entra",
                         lambda _runner: [
-                            _row(
-                                f"{prefix}{suffix}-001",
-                                Status.MANUAL.value,
-                            )
-                            for suffix in (
-                                "APP",
-                                "CLAIMS",
-                                "SCOPE",
-                                "PREAUTH",
-                            )
+                            _row(target, Status.MANUAL.value)
                         ],
                     )
                 ]

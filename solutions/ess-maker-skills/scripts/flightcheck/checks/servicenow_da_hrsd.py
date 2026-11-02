@@ -39,6 +39,12 @@ from ..runner import CheckResult, Priority, Role, Status
 _CATEGORY = "ServiceNow DA HRSD"
 _ROLES = [Role.ESS_MAKER.value, Role.SERVICENOW_ADMIN.value]
 _ENTRA_PREFIX = "SN-DA-HRSD-ENTRA"
+_LEGACY_ENTRA_CHECKPOINT_SUFFIXES = (
+    "APP",
+    "CLAIMS",
+    "SCOPE",
+    "PREAUTH",
+)
 _TEST_PROMPT_CATEGORY = "list-my-open-hr-cases"
 _RECOVERY_STATUSES = {
     Status.BLOCKED.value,
@@ -313,6 +319,8 @@ def _result(
     remediation: str = "",
     *,
     format_recovery: bool = True,
+    roles: list[str] | None = None,
+    evidence: dict[str, Any] | None = None,
 ) -> CheckResult:
     if format_recovery:
         remediation = _actionable_remediation(
@@ -329,7 +337,8 @@ def _result(
         description=description,
         result=result,
         remediation=remediation,
-        roles=_ROLES,
+        evidence=evidence or {},
+        roles=list(roles or _ROLES),
     )
 
 
@@ -422,8 +431,6 @@ def _servicenow_connections(
 def _target_matches(target: str | None, checkpoint_id: str) -> bool:
     if target is None:
         return True
-    if target in {_ENTRA_PREFIX, f"{_ENTRA_PREFIX}-*"}:
-        return checkpoint_id.startswith(f"{_ENTRA_PREFIX}-")
     return checkpoint_id == target
 
 
@@ -674,19 +681,8 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         return [_preflight_result(admin_setup)]
     if target == "SN-DA-HRSD-PLUGIN-001":
         return [_plugin_result(admin_setup)]
-    if target is not None and target.startswith(f"{_ENTRA_PREFIX}-"):
-        return _target_rows(
-            target,
-            _entra_results(
-                admin_setup,
-                state,
-            ),
-        )
-    if target in {_ENTRA_PREFIX, f"{_ENTRA_PREFIX}-*"}:
-        return _entra_results(
-            admin_setup,
-            state,
-        )
+    if target == f"{_ENTRA_PREFIX}-SETUP-001":
+        return [_entra_setup_result(admin_setup, state)]
     if target == "SN-DA-HRSD-OIDC-001":
         return [_oidc_result(admin_setup, state)]
     if target == "SN-DA-HRSD-PORTAL-001":
@@ -887,10 +883,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         _package_result(slug, summary),
         _preflight_result(admin_setup),
         _plugin_result(admin_setup),
-        *_entra_results(
-            admin_setup,
-            state,
-        ),
+        _entra_setup_result(admin_setup, state),
         _oidc_result(admin_setup, state),
         credential_result,
         agent_connection_result,
@@ -930,10 +923,7 @@ def _all_unavailable(
         "PKG",
         "ADMIN-PREFLIGHT",
         "PLUGIN",
-        "ENTRA-APP",
-        "ENTRA-CLAIMS",
-        "ENTRA-SCOPE",
-        "ENTRA-PREAUTH",
+        "ENTRA-SETUP",
         "OIDC",
         "CREDENTIAL",
         "AGENT-CONNECTION",
@@ -1064,8 +1054,19 @@ def _plugin_result(admin_setup: dict[str, Any]) -> CheckResult:
             "shows com.sn_hr_core, Installed, and the installed-and-ready "
             "message."
             if missing
-            else ""
+            else (
+                "Owner: ServiceNow Admin. Where/how: ServiceNow Application "
+                "Manager -> Human Resources Scoped App: Core. Expected "
+                "runbook: src/skills/connect/servicenow-da-hrsd/actions/"
+                "verify-plugin-prerequisites.md. Expected "
+                "evidence: one current non-secret admin confirmation with "
+                "plugin ID com.sn_hr_core, Version Details Installed, the "
+                "installed-and-ready message, source, and timestamp. "
+                "Completion: every value matches the current HR target; this "
+                "result remains Manual."
+            )
         ),
+        roles=[Role.SERVICENOW_ADMIN.value],
     )
 
 
@@ -1079,26 +1080,18 @@ def _entra_client_id(admin_setup: dict[str, Any]) -> str:
     return str(value or "")
 
 
-def _entra_error_results(message: str) -> list[CheckResult]:
-    rows = (
-        ("APP", "Entra application registration exists"),
-        ("CLAIMS", "Entra access-token optional claims"),
-        ("SCOPE", "Entra identifier URI and user_impersonation scope"),
-        ("PREAUTH", "ServiceNow connector pre-authorization"),
+def _entra_error_result(message: str) -> CheckResult:
+    return _result(
+        "SN-DA-HRSD-ENTRA-SETUP-001",
+        Status.ERROR.value,
+        "Entra User Login application setup",
+        message,
+        (
+            "Correct the target-bound administrator handoff and import it "
+            "again. Do not add Microsoft Graph permissions to FlightCheck."
+        ),
+        roles=[Role.ENTRA_ADMIN.value, Role.ESS_MAKER.value],
     )
-    return [
-        _result(
-            f"SN-DA-HRSD-ENTRA-{suffix}-001",
-            Status.ERROR.value,
-            description,
-            message,
-            (
-                "Correct the target-bound administrator handoff and import it "
-                "again. Do not add Microsoft Graph permissions to FlightCheck."
-            ),
-        )
-        for suffix, description in rows
-    ]
 
 
 def _identity_claim_candidates_contract(
@@ -1241,7 +1234,7 @@ def _historical_entra_graph_pass(
             and status == Status.PASSED.value
             for checkpoint_id, status in results.items()
         )
-        for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH")
+        for suffix in _LEGACY_ENTRA_CHECKPOINT_SUFFIXES
     )
 
 
@@ -1332,60 +1325,40 @@ def _entra_confirmation(
     )
 
 
-def _entra_results(
+def _entra_setup_result(
     admin_setup: dict[str, Any],
     state: dict[str, Any],
-) -> list[CheckResult]:
+) -> CheckResult:
     client_id = _entra_client_id(admin_setup)
-    rows = (
-        (
-            "SN-DA-HRSD-ENTRA-APP-001",
-            "Entra application registration exists",
-        ),
-        (
-            "SN-DA-HRSD-ENTRA-CLAIMS-001",
-            "Entra selected access-token claim",
-        ),
-        (
-            "SN-DA-HRSD-ENTRA-SCOPE-001",
-            "Entra identifier URI and user_impersonation scope",
-        ),
-        (
-            "SN-DA-HRSD-ENTRA-PREAUTH-001",
-            "ServiceNow connector pre-authorization",
-        ),
-    )
     if not client_id:
-        return [
-            _result(
-                checkpoint_id,
-                Status.NOT_CONFIGURED.value,
-                description,
-                "No Application client ID has been recorded.",
-                "Record only the non-secret Application client ID.",
-            )
-            for checkpoint_id, description in rows
-        ]
+        return _result(
+            "SN-DA-HRSD-ENTRA-SETUP-001",
+            Status.NOT_CONFIGURED.value,
+            "Entra User Login application setup",
+            "No Application client ID has been recorded.",
+            "Record only the non-secret Application client ID.",
+            roles=[Role.ENTRA_ADMIN.value, Role.ESS_MAKER.value],
+        )
     try:
         normalize_client_id(client_id)
     except Exception as exc:
-        return _entra_error_results(str(exc))
+        return _entra_error_result(str(exc))
     confirmation, error = _entra_confirmation(admin_setup, state)
     if error or confirmation is None:
-        return [
-            _result(
-                checkpoint_id,
-                Status.NOT_CONFIGURED.value,
-                description,
-                error or "The Entra administrator confirmation is missing.",
-                (
-                    "Have the Entra administrator complete APP, CLAIMS, SCOPE, "
-                    "and PREAUTH for this exact target, return the structured "
-                    "handoff, and record the full administrator confirmation."
-                ),
-            )
-            for checkpoint_id, description in rows
-        ]
+        return _result(
+            "SN-DA-HRSD-ENTRA-SETUP-001",
+            Status.NOT_CONFIGURED.value,
+            "Entra User Login application setup",
+            error or "The Entra administrator confirmation is missing.",
+            (
+                "Have the Entra administrator confirm the application, "
+                "selected emitted claim, user_impersonation scope, and "
+                "ServiceNow connector pre-authorization for this exact "
+                "target, return the structured handoff, and record the full "
+                "administrator confirmation."
+            ),
+            roles=[Role.ENTRA_ADMIN.value, Role.ESS_MAKER.value],
+        )
     source = confirmation["currentSource"]
     if source == "historical-graph-pass":
         result = (
@@ -1395,20 +1368,69 @@ def _entra_results(
         )
     else:
         result = (
-            "The Entra administrator confirmed this required setting for the "
-            "exact target, and the local handoff binding and provenance were "
-            "validated. Cloud configuration was not queried; "
+            "The Entra administrator confirmed the application registration, "
+            "selected emitted claim, user_impersonation scope, and ServiceNow "
+            "connector pre-authorization for the exact target. The local "
+            "handoff binding and provenance were validated. Cloud "
+            "configuration was not queried; "
             "currentSource=administrator-confirmed."
         )
-    return [
-        _result(
-            checkpoint_id,
-            Status.MANUAL.value,
-            description,
-            result,
-        )
-        for checkpoint_id, description in rows
-    ]
+    handoff = _phase_handoff(admin_setup, "entra-registration")
+    handoff_evidence = handoff.get("evidence")
+    handoff_evidence = (
+        handoff_evidence if isinstance(handoff_evidence, dict) else {}
+    )
+    binding = handoff_evidence.get("binding")
+    binding = binding if isinstance(binding, dict) else {}
+    runbook = (
+        f"src/skills/connect/{state.get('provider')}/actions/"
+        "guide-entra-registration.md"
+    )
+    evidence = {
+        "kind": "target-bound-entra-admin-confirmation",
+        "source": confirmation["currentSource"],
+        "recordedAt": handoff_evidence.get("recordedAt"),
+        "provider": state.get("provider"),
+        "profile": state.get("profile"),
+        "agentSlug": state.get("agentSlug"),
+        "agentId": state.get("agentId"),
+        "environmentId": state.get("environmentId"),
+        "instanceName": binding.get("instanceName"),
+        "applicationClientId": client_id,
+        "selectedClaimName": handoff_evidence.get("selectedClaimName"),
+        "candidateSetSha256": handoff_evidence.get(
+            "candidateSetSha256"
+        ),
+        "bindingSha256": _hash(binding),
+        "runbook": runbook,
+        "requiredConfirmations": [
+            "application-registration",
+            "emitted-claim-name",
+            "user-impersonation-scope",
+            "servicenow-connector-preauthorization",
+        ],
+    }
+    return _result(
+        "SN-DA-HRSD-ENTRA-SETUP-001",
+        Status.MANUAL.value,
+        "Entra User Login application setup",
+        result,
+        (
+            "Owner: Microsoft Entra Application Administrator or higher; "
+            "the Maker only transports/imports the protected handoff. "
+            f"Where/how: follow `{runbook}` in the Microsoft Entra admin "
+            "center for the exact target app. Expected "
+            "evidence: one current target-bound non-secret handoff confirming "
+            "the application registration, selected emitted claim name, "
+            "api://<client-id>/user_impersonation scope, and Microsoft "
+            "ServiceNow connector pre-authorization. Completion: all four "
+            "confirmations, binding, provenance, timestamp, and hashes are "
+            "valid for the current target; the result remains Manual and is "
+            "never cloud/API proof."
+        ),
+        roles=[Role.ENTRA_ADMIN.value, Role.ESS_MAKER.value],
+        evidence=evidence,
+    )
 
 
 def _oidc_result(
@@ -1470,8 +1492,21 @@ def _oidc_result(
             "then record the current two-name mapping handoff and bounded "
             "completion attestation."
             if status != Status.MANUAL.value
-            else ""
+            else (
+                "Owner: ServiceNow Admin / security_admin. Where/how: follow "
+                f"`src/skills/connect/{state.get('provider')}/actions/"
+                "guide-servicenow-oidc.md` in Application Registry and the "
+                "protected identity-mapping handoff. "
+                "Expected evidence: one current target-bound non-secret "
+                "confirmation of OIDC capability, runbook completion, one "
+                "Entra-confirmed claim name, one ServiceNow user field, "
+                "matching Active user, source, timestamp, binding, and "
+                "relationship hash. Completion: every value matches the "
+                "current target; no employee token, request, or claim value "
+                "is proved."
+            )
         ),
+        roles=[Role.SERVICENOW_ADMIN.value],
     )
 
 

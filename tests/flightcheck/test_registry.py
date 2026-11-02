@@ -234,33 +234,21 @@ class TestTransitiveRequirements:
             "Native Agent"
         ]
 
-    def test_servicenow_entra_family_runs_one_shared_category(self):
-        assert registry.resolve("SN-DA-HRSD-ENTRA-*").key == (
-            "SN-DA-HRSD-ENTRA"
-        )
-        assert registry.resolve("SN-DA-HRSD-ENTRA-APP-001").key == (
-            "SN-DA-HRSD-ENTRA-APP-001"
-        )
-        plan = registry.transitive_requirements("SN-DA-HRSD-ENTRA-*")
+    def test_servicenow_entra_setup_runs_one_registered_category(self):
+        setup_id = "SN-DA-HRSD-ENTRA-SETUP-001"
+        assert registry.resolve(setup_id).key == setup_id
+        plan = registry.transitive_requirements(setup_id)
         assert plan.clients == frozenset({registry.AGENTBUILDER})
         assert plan.ordered_fns == [
             ("ServiceNow DA HRSD", run_servicenow_da_hrsd_checks)
         ]
-        expected = {
+        for retired_id in (
             "SN-DA-HRSD-ENTRA-APP-001",
             "SN-DA-HRSD-ENTRA-CLAIMS-001",
             "SN-DA-HRSD-ENTRA-SCOPE-001",
             "SN-DA-HRSD-ENTRA-PREAUTH-001",
-        }
-        emitted = expected | {
-            "SN-DA-HRSD-PLUGIN-001",
-            "SN-DA-HRSD-OIDC-001",
-        }
-        assert {
-            checkpoint_id
-            for checkpoint_id in emitted
-            if registry.matches("SN-DA-HRSD-ENTRA-*", checkpoint_id)
-        } == expected
+        ):
+            assert registry.resolve(retired_id) is None
 
     def test_servicenow_hrsd_checkpoints_use_native_read_clients(self):
         package = registry.transitive_requirements("SN-DA-HRSD-PKG-001")
@@ -271,7 +259,7 @@ class TestTransitiveRequirements:
         ]
 
         entra = registry.transitive_requirements(
-            "SN-DA-HRSD-ENTRA-PREAUTH-001"
+            "SN-DA-HRSD-ENTRA-SETUP-001"
         )
         assert entra.clients == frozenset({registry.AGENTBUILDER})
         assert entra.requires_dataverse_endpoint is False
@@ -309,8 +297,10 @@ class TestTransitiveRequirements:
         assert preflight.clients == frozenset({registry.AGENTBUILDER})
 
     def test_servicenow_graph_removal_does_not_change_workday_graph(self):
-        for prefix in ("SN-DA-HRSD-ENTRA", "SN-DA-ITSM-ENTRA"):
-            plan = registry.transitive_requirements(f"{prefix}-*")
+        for profile in ("HRSD", "ITSM"):
+            plan = registry.transitive_requirements(
+                f"SN-DA-{profile}-ENTRA-SETUP-001"
+            )
             assert plan.clients == frozenset({registry.AGENTBUILDER})
             assert registry.GRAPH not in plan.clients
 
