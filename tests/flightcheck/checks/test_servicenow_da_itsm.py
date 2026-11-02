@@ -418,6 +418,50 @@ def test_itsm_credential_drift_is_repairable_not_configured(
     assert "different Instance Name or Resource URI" in credential.result
 
 
+def test_itsm_entra_invalid_client_id_has_local_input_remediation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _itsm_components()
+    state = _write_it_state(tmp_path, components)
+    state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"][
+        "clientId"
+    ] = "not-a-guid"
+    _state_path(tmp_path).write_text(json.dumps(state), encoding="utf-8")
+    graph_calls = 0
+    runner = _runner(components)
+
+    def reject_graph(*_args, **_kwargs):
+        nonlocal graph_calls
+        graph_calls += 1
+        pytest.fail("Invalid local GUID input must not call Graph.")
+
+    runner.graph = SimpleNamespace(
+        get_all=reject_graph,
+        get_service_principals=reject_graph,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = _checkpoint(
+        run_servicenow_da_itsm_checks(runner),
+        "SN-DA-ITSM-ENTRA-SETUP-001",
+    )
+
+    assert result.status == Status.ERROR.value
+    assert "**Category**\nInvalid configuration input" in result.remediation
+    assert "Entra administrator verifies and returns the correct" in (
+        result.remediation
+    )
+    assert "Maker re-imports or updates" in result.remediation
+    assert "network" not in result.remediation.casefold()
+    assert "graph" not in result.remediation.casefold()
+    assert "restore the minimum read permission" not in (
+        result.remediation.casefold()
+    )
+    assert result.roles == ["Entra Admin", "ESS Maker / Agent Developer"]
+    assert graph_calls == 0
+
+
 def test_itsm_credential_inventory_error_remains_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

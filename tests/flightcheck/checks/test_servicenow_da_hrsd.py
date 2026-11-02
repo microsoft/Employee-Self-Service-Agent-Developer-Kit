@@ -1365,16 +1365,40 @@ def test_entra_setup_checkpoint_rejects_invalid_client_id_as_error(
         "clientId"
     ] = "not-a-guid"
     state_path.write_text(json.dumps(state), encoding="utf-8")
+    graph_calls = 0
+    runner = _runner(components)
+
+    def reject_graph(*_args, **_kwargs):
+        nonlocal graph_calls
+        graph_calls += 1
+        pytest.fail("Invalid local GUID input must not call Graph.")
+
+    runner.graph = SimpleNamespace(
+        get_all=reject_graph,
+        get_service_principals=reject_graph,
+    )
     monkeypatch.chdir(tmp_path)
 
     result = _checkpoint(
-        run_servicenow_da_hrsd_checks(_runner(components)),
+        run_servicenow_da_hrsd_checks(runner),
         "SN-DA-HRSD-ENTRA-SETUP-001",
     )
 
     assert result.status == Status.ERROR.value
     assert result.status != Status.PASSED.value
     assert "Application client ID" in result.result
+    assert "**Category**\nInvalid configuration input" in result.remediation
+    assert "Entra administrator verifies and returns the correct" in (
+        result.remediation
+    )
+    assert "Maker re-imports or updates" in result.remediation
+    assert "network" not in result.remediation.casefold()
+    assert "graph" not in result.remediation.casefold()
+    assert "restore the minimum read permission" not in (
+        result.remediation.casefold()
+    )
+    assert result.roles == ["Entra Admin", "ESS Maker / Agent Developer"]
+    assert graph_calls == 0
 
 
 def test_client_and_claim_without_full_admin_confirmation_block_entra_setup(

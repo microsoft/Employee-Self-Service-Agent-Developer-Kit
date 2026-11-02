@@ -273,13 +273,15 @@ def _actionable_remediation(
     status: str,
     result: str,
     action: str,
+    *,
+    category_override: str | None = None,
 ) -> str:
     if status not in _RECOVERY_STATUSES:
         return action
     guidance = _RECOVERY_GUIDANCE.get(_recovery_key(checkpoint_id))
     if guidance is None:
         return action
-    category = _recovery_category(status, result)
+    category = category_override or _recovery_category(status, result)
     if category == "Read throttled":
         retry = (
             "Honor the service's Retry-After value when present, then rerun "
@@ -319,6 +321,7 @@ def _result(
     remediation: str = "",
     *,
     format_recovery: bool = True,
+    recovery_category: str | None = None,
     roles: list[str] | None = None,
     evidence: dict[str, Any] | None = None,
 ) -> CheckResult:
@@ -328,6 +331,7 @@ def _result(
             status,
             result,
             remediation,
+            category_override=recovery_category,
         )
     return CheckResult(
         checkpoint_id=checkpoint_id,
@@ -1087,9 +1091,12 @@ def _entra_error_result(message: str) -> CheckResult:
         "Entra User Login application setup",
         message,
         (
-            "Correct the target-bound administrator handoff and import it "
-            "again. Do not add Microsoft Graph permissions to FlightCheck."
+            "The Entra administrator verifies and returns the correct "
+            "Application (client) ID GUID for the current target. The Maker "
+            "re-imports or updates the target-bound handoff, then retries only "
+            "this Entra setup check."
         ),
+        recovery_category="Invalid configuration input",
         roles=[Role.ENTRA_ADMIN.value, Role.ESS_MAKER.value],
     )
 
