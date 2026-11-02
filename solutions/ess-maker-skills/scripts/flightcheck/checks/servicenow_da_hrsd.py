@@ -16,6 +16,7 @@ from connect_servicenow_da import (
     CONNECTOR_NAME,
     HR_SCHEMA_NAME,
     PROVIDER_KEY,
+    _agent_binding_identity_hash,
     _connection_binding_hash,
     _draft_semantic_hash,
     _identity_candidate_set_hash,
@@ -759,10 +760,24 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         None,
     }
     draft_semantic_hash = ""
+    binding_identity_sha256 = ""
     current_connection_binding_hash = None
     if needs_draft_identity:
         try:
             draft_semantic_hash = _draft_semantic_hash(components)
+            binding_identity_sha256 = _agent_binding_identity_hash(
+                {
+                    "agent": {
+                        "id": agent.get("botId"),
+                        "workspace_slug": slug,
+                    },
+                    "environment": {
+                        "id": str(getattr(runner, "env_id", None) or "")
+                    },
+                },
+                state,
+                components,
+            )
             if target in {"SN-DA-HRSD-TEST-001", None}:
                 current_connection_binding_hash = (
                     _connection_binding_hash(
@@ -797,7 +812,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
     agent_connection_result = _agent_connection_result(
         evidence,
         credential_result,
-        draft_semantic_hash,
+        binding_identity_sha256,
     )
     if target == "SN-DA-HRSD-AGENT-CONNECTION-001":
         return [agent_connection_result]
@@ -834,10 +849,10 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
             state,
         ),
         _oidc_result(admin_setup, state),
-        topics_result,
-        portal_result,
         credential_result,
         agent_connection_result,
+        topics_result,
+        portal_result,
         test_result,
         _publish_result(
             evidence,
@@ -864,10 +879,10 @@ def _all_unavailable(
         "ENTRA-SCOPE",
         "ENTRA-PREAUTH",
         "OIDC",
-        "TOPICS",
-        "PORTAL",
         "CREDENTIAL",
         "AGENT-CONNECTION",
+        "TOPICS",
+        "PORTAL",
         "TEST",
         "PUBLISH",
     )
@@ -1718,14 +1733,12 @@ def _credential_result(
 
 def _binding_evaluation(
     record: dict[str, Any],
-    draft_semantic_hash: str,
+    binding_identity_sha256: str,
     connection_id: str | None = None,
 ) -> str:
     binding = record.get("binding")
     if not isinstance(binding, dict):
         return "binding-missing"
-    if binding.get("draftSemanticHash") != draft_semantic_hash:
-        return "revision-stale"
 
     nested_connection_id = str(binding.get("connectionId") or "")
     legacy_connection_id = str(record.get("connectionId") or "")
@@ -1742,13 +1755,15 @@ def _binding_evaluation(
             return "connection-missing"
         if recorded_connection_id.casefold() != connection_id.casefold():
             return "connection-mismatch"
+    if binding.get("bindingIdentitySha256") != binding_identity_sha256:
+        return "binding-identity-stale"
     return "valid"
 
 
 def _agent_connection_result(
     evidence: dict[str, Any],
     credential_check: CheckResult,
-    draft_semantic_hash: str,
+    binding_identity_sha256: str,
 ) -> CheckResult:
     record = evidence.get("agentConnection")
     if credential_check.status not in {
@@ -1762,7 +1777,7 @@ def _agent_connection_result(
     else:
         binding_evaluation = _binding_evaluation(
             record,
-            draft_semantic_hash,
+            binding_identity_sha256,
             str((evidence.get("credential") or {}).get("connectionId") or ""),
         )
     if (
@@ -1772,10 +1787,11 @@ def _agent_connection_result(
         and binding_evaluation != "valid"
     ):
         status = Status.NOT_CONFIGURED.value
-        if binding_evaluation == "revision-stale":
+        if binding_evaluation == "binding-identity-stale":
             result = (
-                "The prior Agent Connect attestation is stale for this "
-                "saved draft."
+                "The prior Agent Connect attestation is stale because the "
+                "agent, environment, physical connection, or ServiceNow "
+                "connection-reference binding identity changed."
             )
         elif binding_evaluation == "connection-conflict":
             result = (

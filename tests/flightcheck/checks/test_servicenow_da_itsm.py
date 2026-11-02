@@ -326,16 +326,43 @@ def _write_it_state(root: Path, components: dict) -> dict:
             state["adminSetup"]["phaseHandoffs"][phase]["evidence"][
                 "binding"
             ] = copy.deepcopy(binding)
-        state["evidence"]["credential"] = {"connectionId": CONNECTION_ID}
+        state["evidence"]["credential"] = {
+            "connectionId": CONNECTION_ID,
+            "connectorId": snow.CONNECTOR_ID,
+            "environmentId": ENVIRONMENT_ID,
+            "physicalStatus": "Connected",
+            "authMode": snow.AUTH_MODE,
+            "instanceName": "dev123",
+            "resourceUri": APP_CLIENT_ID,
+        }
+        binding_identity = snow._agent_binding_identity(
+            context,
+            state,
+            components,
+        )
+        binding_identity_sha256 = snow._canonical_json_hash(
+            binding_identity
+        )
         state["evidence"]["agentConnection"] = {
             "kind": "maker-attestation",
             "status": "completed",
             "makerAttested": True,
             "physicalStatus": "Connected",
+            "authMode": snow.AUTH_MODE,
             "connectionId": CONNECTION_ID,
             "recordedAt": "2026-10-01T00:00:00Z",
-            "binding": {"draftSemanticHash": draft_hash},
+            "binding": {
+                "provider": snow.ITSM_PROFILE.provider_key,
+                "profile": "itsm",
+                "agentSlug": IT_SLUG,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "connectionId": CONNECTION_ID,
+                "bindingIdentity": binding_identity,
+                "bindingIdentitySha256": binding_identity_sha256,
+            },
         }
+        state["agentBindingIdentitySha256"] = binding_identity_sha256
         binding_hash = snow._connection_binding_hash(
             context,
             state,

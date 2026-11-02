@@ -1,5 +1,5 @@
 {
-  "contractRevision": 7,
+  "contractRevision": 8,
   "provider": "servicenow-da-itsm",
   "displayName": "ServiceNow ITSM",
   "profile": "itsm",
@@ -50,6 +50,15 @@
         "id": "maker-validation",
         "label": "Maker validation",
         "evidence": "manual-target-test-pane",
+        "failureCategories": [
+          "authentication",
+          "permission",
+          "connection",
+          "binding",
+          "identity-mapping",
+          "promoted-content",
+          "unexpected"
+        ],
         "publishesAgent": false
       }
     ]
@@ -137,6 +146,64 @@
       "mutates": false
     },
     {
+      "id": "agent-connection",
+      "label": "Connect the selected ServiceNow credential to this agent",
+      "checkpoints": [
+        "SN-DA-ITSM-AGENT-CONNECTION-001"
+      ],
+      "completionStatuses": [
+        "Manual"
+      ],
+      "actionDoc": "src/skills/connect/servicenow-da-itsm/actions/connect-agent.md",
+      "actionExecution": "every-invocation",
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.agentConnection",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": [
+          "completed"
+        ],
+        "requiredEvidenceKind": "maker-attestation",
+        "requiredValues": {
+          "makerAttested": true,
+          "physicalStatus": "Connected",
+          "authMode": "entraIDUserLogin"
+        },
+        "bindings": [
+          {
+            "evidencePath": "binding.provider",
+            "statePath": "provider"
+          },
+          {
+            "evidencePath": "binding.profile",
+            "statePath": "profile"
+          },
+          {
+            "evidencePath": "binding.agentSlug",
+            "statePath": "agentSlug"
+          },
+          {
+            "evidencePath": "binding.agentId",
+            "statePath": "agentId"
+          },
+          {
+            "evidencePath": "binding.environmentId",
+            "statePath": "environmentId"
+          },
+          {
+            "evidencePath": "binding.bindingIdentitySha256",
+            "statePath": "agentBindingIdentitySha256"
+          },
+          {
+            "evidencePath": "connectionId",
+            "statePath": "evidence.credential.connectionId"
+          }
+        ]
+      },
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    },
+    {
       "id": "topics",
       "label": "Prepare the ServiceNow ITSM topics for this agent",
       "checkpoints": [
@@ -183,64 +250,6 @@
       "actionDoc": "src/skills/connect/servicenow-da-itsm/actions/configure-portal-url.md",
       "actionExecution": "once",
       "resumeActionWhenIncomplete": true,
-      "mutates": true,
-      "requiredRole": "ESS Maker / Agent Developer",
-      "gateMode": "attested"
-    },
-    {
-      "id": "agent-connection",
-      "label": "Connect the selected ServiceNow credential to this agent",
-      "checkpoints": [
-        "SN-DA-ITSM-AGENT-CONNECTION-001"
-      ],
-      "completionStatuses": [
-        "Manual"
-      ],
-      "actionDoc": "src/skills/connect/servicenow-da-itsm/actions/connect-agent.md",
-      "actionExecution": "every-invocation",
-      "manualAcknowledgementEvidence": {
-        "path": "evidence.agentConnection",
-        "evidenceObjectPath": "",
-        "acceptedRecordStatuses": [
-          "completed"
-        ],
-        "requiredEvidenceKind": "maker-attestation",
-        "requiredValues": {
-          "makerAttested": true,
-          "physicalStatus": "Connected",
-          "authMode": "entraIDUserLogin"
-        },
-        "bindings": [
-          {
-            "evidencePath": "binding.provider",
-            "statePath": "provider"
-          },
-          {
-            "evidencePath": "binding.profile",
-            "statePath": "profile"
-          },
-          {
-            "evidencePath": "binding.agentSlug",
-            "statePath": "agentSlug"
-          },
-          {
-            "evidencePath": "binding.agentId",
-            "statePath": "agentId"
-          },
-          {
-            "evidencePath": "binding.environmentId",
-            "statePath": "environmentId"
-          },
-          {
-            "evidencePath": "binding.draftSemanticHash",
-            "statePath": "draftSemanticHash"
-          },
-          {
-            "evidencePath": "connectionId",
-            "statePath": "evidence.credential.connectionId"
-          }
-        ]
-      },
       "mutates": true,
       "requiredRole": "ESS Maker / Agent Developer",
       "gateMode": "attested"

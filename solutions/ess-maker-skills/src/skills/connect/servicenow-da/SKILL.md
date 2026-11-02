@@ -141,7 +141,11 @@ exact target link and the profile prompt (`List my open HR cases` or
 The Maker returns only Pass or Not pass. A generic answer is not an automatic
 pass and an empty list is not an automatic failure. The kit never runs the
 prompt, records returned employee/ticket/case data, publishes, or claims an
-API-proven Test result. Record Not pass without requiring a failure category.
+API-proven Test result. After Not pass, record exactly one bounded category:
+authentication, permission, connection, binding, identity-mapping,
+promoted-content, or unexpected. Do not paste the response or ask for
+personal data. Only confirmed promoted-content defects return to Dev and
+re-promotion; other categories stay scoped to the exact target.
 
 On `needs-configuration`, render each blocking row's complete `remediation`
 unchanged. It is the customer-visible recovery handoff: verified problem,
@@ -192,14 +196,10 @@ python scripts/connect_servicenow_da.py \
   record-realm-test --realm <test|prod> --result <pass|fail>
 ```
 
-A pass leaves every unobserved Manual row Manual. For Not pass, render only
-the exact returned sentence and Dev source-agent link:
-`Not pass recorded; return to the Dev agent and rerun /connect servicenow to
-recheck the connection setup step by step.` Do not ask a second
-failure-category question, automatically switch `activeAgent`, reset Dev
-phases, delete validation history, or change any Dev/Test/Prod setting.
-An older caller may still supply a supported failure category; preserve it in
-the record but do not use it to create customer-facing targeted follow-up.
+A pass leaves every unobserved Manual row Manual. For Not pass, render the
+returned target-scoped recovery handoff unchanged. Do not automatically switch
+`activeAgent`, reset Dev phases, delete validation history, publish, or change
+any Dev/Test/Prod setting.
 
 Dispatch by the canonical profile returned for `status: ready`:
 

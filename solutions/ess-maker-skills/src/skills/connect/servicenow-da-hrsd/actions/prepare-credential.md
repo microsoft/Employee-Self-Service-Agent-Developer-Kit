@@ -38,7 +38,7 @@ Application client ID:
 - If an exact candidate exists but is unhealthy, open that existing
   connection and use its `Repair`, `Fix connection`, or sign-in action to
   reauthenticate it. Refetch inventory and require `Connected` plus the exact
-  auth mode, Instance Name, and Resource URI before recording it.
+  auth mode, Resource URI, and Instance Name before recording it.
 - If the current maker cannot repair an unhealthy candidate because another
   maker owns it, say so plainly. Do not impersonate the owner or request their
   credentials; create a separate exact connection only when the current maker
@@ -46,7 +46,7 @@ Application client ID:
 - Only when no exact candidate exists, continue to the new-connection handoff
   below.
 
-A Connected row with the wrong Instance Name, Resource URI, or auth mode is
+A Connected row with the wrong auth mode, Resource URI, or Instance Name is
 not reusable. Its existence also does not prove any Entra, plugin, OIDC, or
 user-mapping phase complete.
 
@@ -59,10 +59,10 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
 Show the exact field table from the output:
 
 - **Authentication Type:** Microsoft Entra ID User Login.
-- **Instance Name:** normalized from the confirmed
-  `https://<instance>.service-now.com` URL; never the full URL.
 - **Resource URI:** the verified App A Application client ID; never
   `api://<client-id>`, the app object ID, or the connector application ID.
+- **Instance Name:** normalized from the confirmed
+  `https://<instance>.service-now.com` URL; never the full URL.
 
 Use the ring-aware link returned by `inspect-admin-setup` as the primary
 destination:
@@ -78,12 +78,14 @@ If that page is unavailable, use the one alternate root:
 Use `links.powerApps.url`; never substitute a production origin for a
 non-production ring.
 
-Then select the exact environment, open `Connections`, and choose
+The repository has no verified direct connector-form or connection-detail URL.
+The selected-environment Connections list is the safe fallback; the link does
+not create, repair, sign in, submit, or prefill values. Then choose
 `New connection`. In the connector picker, use the search box in the
 upper-right to search for `ServiceNow`, then select the **ServiceNow**
 connector published by **Microsoft** by choosing its `+` action. Choose
 `Microsoft Entra ID User Login` only after selecting that connector, then enter
-the exact Instance Name and Resource URI shown above and complete sign-in.
+the exact Resource URI and Instance Name shown above and complete sign-in.
 
 Guide the Maker/Admin through Copilot Studio connection creation and Entra
 sign-in with their own Microsoft account. Never ask for or display a password,
@@ -97,10 +99,10 @@ the same environment only after the consolidated shared-configuration
 confirmation. This step proves the current maker's physical connection; it
 does not prove another maker can use it and does not prove Entra/OIDC setup.
 
-If sign-in fails with `Invalid redirect_uri`, do not add another normal-flow
-pause. As conditional remediation, copy the popup's `redirect_uri`, URL-decode
-it, have the ServiceNow Admin update the OIDC Application Registry Redirect
-URL to that exact value, and retry sign-in.
+If sign-in reports `Invalid_redirect_uri`, treat this as conditional
+remediation, not an observed current error. Copy the popup's `redirect_uri`,
+URL-decode it, have the ServiceNow Admin update the OIDC Application Registry
+Redirect URL to that exact value, and retry sign-in.
 
 Ask one completion question for the entire physical connection step. The Maker
 selects only **Completed** or **Not yet** after the row is Connected. Do not
@@ -120,7 +122,7 @@ required field values:
 [
   {
     "header": "ServiceNow connection",
-    "question": "{CURRENT_PROGRESS}\n\nPurpose: repair or create one exact healthy Connected Microsoft Entra ID User Login ServiceNow connection when automatic reuse is not currently possible.\n\nOwner: Power Platform Maker/Admin who can repair/create the connection and complete Entra sign-in with their own Microsoft account.\n\nExpected values:\n- Authentication Type: Microsoft Entra ID User Login (`entraIDUserLogin`)\n- Instance Name: `{INSTANCE_NAME}` (name only, not the full URL)\n- Resource URI: `{APP_CLIENT_ID}` (the verified Application client ID, never an observed failed-connection value, `api://`, object ID, or connector app ID)\n\nCurrent exact candidates: {CONNECTION_CANDIDATE_SUMMARY}\n\nWhat to do:\n1. If an exact candidate is unhealthy and the current maker can repair it, open it and use Repair, Fix connection, or sign-in; require Connected plus the exact auth mode, Instance Name, and Resource URI. If another maker owns it and repair is unavailable, do not impersonate that owner or request their credentials.\n2. Only if no usable exact candidate exists and the current maker is authorized to create one, open {POWER_AUTOMATE_CONNECTIONS_URL}; fallback {POWER_APPS_URL}; select the exact environment -> Connections -> New connection -> use the search box in the upper-right to search `ServiceNow` -> select the Microsoft-published `ServiceNow` connector using its `+` action -> choose Microsoft Entra ID User Login -> enter the exact Instance Name and Resource URI -> complete Entra sign-in with the current maker's own Microsoft account.\n3. If sign-in reports `Invalid redirect_uri`, URL-decode that exact URI, update the ServiceNow OIDC Application Registry redirect URL, and retry without adding another normal-flow pause.\n\nThis connection is not shareable and proves only the current maker's physical connection. Never ask for or display passwords, client secrets, tokens, PFX files, browser/session artifacts, or connection identifiers.\n\nWhen the row shows Connected, choose Completed. The system will freshly discover the connection, verify the exact environment/auth/Instance Name/Resource URI, and record it automatically.",
+    "question": "{CURRENT_PROGRESS}\n\nPurpose: repair or create one exact healthy Connected Microsoft Entra ID User Login ServiceNow connection when automatic reuse is not currently possible.\n\nOwner: Power Platform Maker/Admin who can repair/create the connection and complete Entra sign-in with their own Microsoft account.\n\nExpected values:\n- Authentication Type: Microsoft Entra ID User Login (`entraIDUserLogin`)\n- Resource URI: `{APP_CLIENT_ID}` (the verified resource Application client ID, never an observed failed-connection value, `api://`, object ID, ADK client ID, or connector app ID)\n- Instance Name: `{INSTANCE_NAME}` (name only, not the full URL)\n\nCurrent exact candidates: {CONNECTION_CANDIDATE_SUMMARY}\n\nWhat to do:\n1. If an exact candidate is unhealthy and the current maker can repair it, use the selected-environment Connections list fallback to open that exact candidate and use Repair, Fix connection, or sign-in; require Connected plus the exact auth mode, Resource URI, and Instance Name. If another maker owns it and repair is unavailable, do not impersonate that owner or request their credentials.\n        2. Only if no usable exact candidate exists and the current maker is authorized to create one, open {POWER_AUTOMATE_CONNECTIONS_URL}; fallback {POWER_APPS_URL}; select the exact environment -> Connections -> New connection -> use the search box in the upper-right to search `ServiceNow` -> select the Microsoft-published `ServiceNow` connector using its `+` action -> choose Microsoft Entra ID User Login -> enter the exact Resource URI and Instance Name -> complete Entra sign-in with the current maker's own Microsoft account. The direct form/detail route is unverified; these links only navigate and never create, sign in, submit, or prefill.\n3. If sign-in reports `Invalid_redirect_uri`, treat it as conditional remediation rather than an observed current error: URL-decode that exact URI, update the ServiceNow OIDC Application Registry redirect URL, and retry.\n\nThis connection is not shareable and proves only the current maker's physical connection. Never ask for or display passwords, client secrets, tokens, PFX files, browser/session artifacts, or connection identifiers.\n\nWhen the row shows Connected, choose Completed. The system will freshly discover the connection, verify the exact environment/auth/Resource URI/Instance Name, and record it automatically.",
     "options": [
       { "label": "Completed" },
       { "label": "Not yet" }
@@ -164,7 +166,7 @@ never ask them to copy the key or connection ID.
 [
   {
     "header": "Choose ServiceNow connection",
-    "question": "{CURRENT_PROGRESS}\n\nFresh read-only inventory found multiple healthy exact ServiceNow connections in this environment. Each already uses Microsoft Entra ID User Login with the required Instance Name and Resource URI.\n\nChoose the connection to bind to this lifecycle. No new connection will be created.",
+    "question": "{CURRENT_PROGRESS}\n\nFresh read-only inventory found multiple healthy exact ServiceNow connections in this environment. Each already uses Microsoft Entra ID User Login with the required Resource URI and Instance Name.\n\nChoose the connection to bind to this lifecycle. No new connection will be created.",
     "options": [
       { "label": "{CANDIDATE_LABEL_1}" },
       { "label": "{CANDIDATE_LABEL_2}" }

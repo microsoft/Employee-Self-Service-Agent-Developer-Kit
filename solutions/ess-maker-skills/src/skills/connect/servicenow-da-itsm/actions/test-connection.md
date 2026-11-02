@@ -21,11 +21,12 @@ Use `links.copilotStudioAgent.url` from the provider inspection result.
 Open the `Test` pane from this exact agent landing; do not invent a
 tab-specific URL.
 
-The maker decides whether the ServiceNow functionality worked correctly. Do
-not independently classify authentication, permission, empty-result,
-connector, or other failure types. Do not require a non-empty ticket result
-and do not automatically treat a sample, empty result, or conversational
-response as pass or fail.
+The maker decides whether the ServiceNow functionality worked correctly.
+Do not require a non-empty ticket result, and do not automatically treat a
+sample, empty result, or conversational response as pass or fail. For a
+Test/Production realm Not pass, the realm controller also requires one bounded
+category without response content: authentication, permission, connection,
+binding, identity-mapping, promoted-content, or unexpected.
 
 Use this exact visible handoff payload after rendering `{CURRENT_PROGRESS}` and
 `{COPILOT_STUDIO_AGENT_URL}`:

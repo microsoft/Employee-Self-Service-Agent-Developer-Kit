@@ -65,7 +65,7 @@ SETUP_SCHEMA_VERSION = 4
 HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 IT_SCHEMA_NAME = "gptagent_copilotforemployeeselfserviceit"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
-LIFECYCLE_SCHEMA_VERSION = 9
+LIFECYCLE_SCHEMA_VERSION = 10
 ADMIN_SETUP_SCHEMA_VERSION = 4
 AUTH_MODE = "entraIDUserLogin"
 ENTRA_CHECKPOINT_SUFFIXES = (
@@ -627,6 +627,104 @@ def maker_portal_links(
                 ),
             }
     return links
+
+
+def connection_expected_values(
+    *,
+    resource_uri: str | None,
+    instance_name: str | None,
+    display_name: str | None = None,
+) -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    if display_name:
+        values.append(
+            {
+                "field": "displayName",
+                "label": "Display name (optional)",
+                "value": display_name,
+            }
+        )
+    values.extend(
+        [
+            {
+                "field": "authenticationType",
+                "label": "Authentication Type",
+                "value": "Microsoft Entra ID User Login",
+                "technicalValue": AUTH_MODE,
+            },
+            {
+                "field": "resourceUri",
+                "label": "Resource URI",
+                "value": resource_uri,
+                "description": (
+                    "Verified resource Application client ID; never an "
+                    "object ID, ADK client ID, connector app ID, or api:// URI."
+                ),
+            },
+            {
+                "field": "instanceName",
+                "label": "Instance Name",
+                "value": instance_name,
+                "description": "ServiceNow instance name only, not a URL.",
+            },
+        ]
+    )
+    return values
+
+
+def _render_connection_expected_values(
+    *,
+    resource_uri: str | None,
+    instance_name: str | None,
+    display_name: str | None = None,
+) -> str:
+    rendered = []
+    for item in connection_expected_values(
+        display_name=display_name,
+        resource_uri=resource_uri,
+        instance_name=instance_name,
+    ):
+        value = item.get("value")
+        rendered.append(
+            f"- {item['label']}: "
+            + (f"`{value}`" if value else "not yet confirmed")
+        )
+    return "\n".join(rendered)
+
+
+def physical_connection_navigation(
+    context: dict[str, Any],
+    *,
+    mode: str,
+) -> dict[str, Any]:
+    if mode not in {"create", "repair"}:
+        raise ServiceNowConnectError(
+            "Physical connection navigation mode must be create or repair."
+        )
+    links = maker_portal_links(context)
+    return {
+        "mode": mode,
+        "environmentId": context["environment"]["id"],
+        "url": links["powerAutomateConnections"]["url"],
+        "surface": "selected-environment-connections-list",
+        "directServiceNowFormRoute": "unknown",
+        "fallbackUsed": True,
+        "automaticCreate": False,
+        "automaticSignIn": False,
+        "automaticSubmit": False,
+        "instruction": (
+            "Open the selected environment's Connections list. "
+            + (
+                "Choose New connection, search for the Microsoft-published "
+                "ServiceNow connector, and open its standard form."
+                if mode == "create"
+                else "Open the exact discovered candidate and use its "
+                "available Repair, Fix connection, or sign-in action."
+            )
+            + " The direct connector form/detail route is not verified, so "
+            "the kit does not construct or claim one."
+        ),
+    }
 
 
 def required_servicenow_prerequisites(
@@ -7398,10 +7496,10 @@ def _migrate_lifecycle_schema(
                 "ServiceNow realm flow state must be an object."
             )
         evidence.setdefault("realmFlows", {})
-        state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
+        state["schemaVersion"] = 9
         migration["schemaV9"] = {
             "from": 8 if version <= 8 else version,
-            "to": LIFECYCLE_SCHEMA_VERSION,
+            "to": 9,
             "sourceSha256": source_sha256,
             "migratedAt": _utc_now(),
             "preservedLegacyRealmEvidence": isinstance(
@@ -7410,6 +7508,155 @@ def _migrate_lifecycle_schema(
             ),
             "realmCompletionInferred": False,
             "initializedRealmStages": [],
+        }
+    if version < 10:
+        evidence = state.setdefault("evidence", {})
+        if not isinstance(evidence, dict):
+            raise ServiceNowConnectError(
+                "ServiceNow lifecycle evidence must be an object."
+            )
+        old_connection_binding_hash = state.get("connectionBindingHash")
+        test_record = evidence.get("test")
+        test_binding = (
+            test_record.get("binding")
+            if isinstance(test_record, dict)
+            else None
+        )
+        old_test_current = (
+            isinstance(test_record, dict)
+            and isinstance(test_binding, dict)
+            and test_binding.get("draftSemanticHash")
+            == state.get("draftSemanticHash")
+            and isinstance(old_connection_binding_hash, str)
+            and test_binding.get("connectionBindingHash")
+            == old_connection_binding_hash
+        )
+        agent_record = evidence.get("agentConnection")
+        binding_identity = _legacy_agent_binding_identity(state)
+        migrated_binding = (
+            isinstance(agent_record, dict)
+            and binding_identity is not None
+        )
+        retired_evidence = state.setdefault("retiredEvidence", {})
+        if not isinstance(retired_evidence, dict):
+            raise ServiceNowConnectError(
+                "ServiceNow retiredEvidence state must be an object."
+            )
+        reset_phase_ids: list[str] = []
+
+        def reset_phase(phase_id: str) -> None:
+            phase = phases.get(phase_id)
+            if not isinstance(phase, dict):
+                return
+            phase["status"] = "pending"
+            phase["checkpointResults"] = {}
+            phase["checkpointAcknowledgements"] = {}
+            for key in ("actionApplied", "lastActionAt", "lastVerifiedAt"):
+                phase.pop(key, None)
+            reset_phase_ids.append(phase_id)
+
+        combined = phases.pop("agent-connection-and-test", None)
+        if combined is not None:
+            state.setdefault("retiredPhases", {})[
+                "agent-connection-and-test"
+            ] = combined
+            migrated_binding = False
+
+        if migrated_binding:
+            assert isinstance(agent_record, dict)
+            binding = agent_record.setdefault("binding", {})
+            binding_identity_sha256 = _canonical_json_hash(binding_identity)
+            binding["bindingIdentity"] = binding_identity
+            binding["bindingIdentitySha256"] = binding_identity_sha256
+            binding["migratedFromDraftSemanticHash"] = binding.pop(
+                "draftSemanticHash",
+                None,
+            )
+            state["agentBindingIdentitySha256"] = binding_identity_sha256
+            new_connection_binding_hash = (
+                _connection_binding_hash_for_identity(
+                    binding_identity,
+                    recorded_at=agent_record.get("recordedAt"),
+                )
+            )
+            state["connectionBindingHash"] = new_connection_binding_hash
+            if old_test_current and isinstance(test_binding, dict):
+                test_binding["connectionBindingHash"] = (
+                    new_connection_binding_hash
+                )
+            else:
+                if isinstance(test_record, dict):
+                    retired_evidence.setdefault(
+                        "testSchemaV9",
+                        copy.deepcopy(test_record),
+                    )
+                    evidence.pop("test", None)
+                reset_phase("test")
+        else:
+            if isinstance(agent_record, dict):
+                retired_evidence.setdefault(
+                    "agentConnectionSchemaV9",
+                    copy.deepcopy(agent_record),
+                )
+                evidence.pop("agentConnection", None)
+            if isinstance(test_record, dict):
+                retired_evidence.setdefault(
+                    "testSchemaV9",
+                    copy.deepcopy(test_record),
+                )
+                evidence.pop("test", None)
+            state.pop("agentBindingIdentitySha256", None)
+            state.pop("connectionBindingHash", None)
+            for phase_id in (
+                "agent-connection",
+                "topics",
+                "portal-url",
+                "test",
+            ):
+                reset_phase(phase_id)
+
+        ordered_ids = [
+            "preflight",
+            "plugin-prerequisites",
+            "entra-registration",
+            "servicenow-oidc",
+            "credential",
+            "agent-connection",
+            "topics",
+            "portal-url",
+            "test",
+        ]
+        state["phases"] = {
+            phase_id: phases[phase_id]
+            for phase_id in ordered_ids
+            if phase_id in phases
+        }
+        state["phases"].update(
+            {
+                phase_id: phase
+                for phase_id, phase in phases.items()
+                if phase_id not in state["phases"]
+            }
+        )
+        phases = state["phases"]
+        state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
+        migration["schemaV10"] = {
+            "from": 9 if version <= 9 else version,
+            "to": LIFECYCLE_SCHEMA_VERSION,
+            "sourceSha256": source_sha256,
+            "migratedAt": _utc_now(),
+            "phaseOrder": [
+                phase_id
+                for phase_id in ordered_ids
+                if phase_id in phases
+            ],
+            "bindingEvidenceMigrated": migrated_binding,
+            "testEvidenceMigrated": bool(
+                migrated_binding and old_test_current
+            ),
+            "retiredCombinedPhase": combined is not None,
+            "resetPhaseIds": sorted(set(reset_phase_ids)),
+            "completionInferred": False,
         }
     return state
 
@@ -7576,12 +7823,20 @@ def _load_lifecycle_state(
             and credential.get("connectionId")
             and _agent_connection_attestation_current(state, components)
         ):
+            state["agentBindingIdentitySha256"] = (
+                _agent_binding_identity_hash(
+                    context,
+                    state,
+                    components,
+                )
+            )
             state["connectionBindingHash"] = _connection_binding_hash(
                 context,
                 state,
                 components,
             )
         else:
+            state.pop("agentBindingIdentitySha256", None)
             state.pop("connectionBindingHash", None)
         publish_record = state.get("evidence", {}).get("publish")
         test_record = state.get("evidence", {}).get("test")
@@ -9758,6 +10013,7 @@ def inspect(context: dict[str, Any], *, offline: bool = False) -> dict[str, Any]
         "mode": "offline" if offline else "live",
         "agentId": context["agent"]["id"],
         "environmentId": context["environment"]["id"],
+        "componentHash": _component_hash(components),
         "components": summary,
         "links": maker_portal_links(
             context,
@@ -10059,10 +10315,10 @@ def prepare_manual_connection(
     )
     if not validated_instance or not validated_resource:
         missing_fields = []
-        if not validated_instance:
-            missing_fields.append("instanceName")
         if not validated_resource:
             missing_fields.append("resourceUri")
+        if not validated_instance:
+            missing_fields.append("instanceName")
         return {
             "status": "input-required",
             "creationMode": "manual",
@@ -10070,9 +10326,21 @@ def prepare_manual_connection(
             "environmentId": context["environment"]["id"],
             "missingFields": missing_fields,
             "knownValues": {
-                "instanceName": validated_instance,
                 "resourceUri": validated_resource,
+                "instanceName": validated_instance,
             },
+            "expectedValues": connection_expected_values(
+                resource_uri=(
+                    str(validated_resource)
+                    if validated_resource
+                    else None
+                ),
+                instance_name=(
+                    str(validated_instance)
+                    if validated_instance
+                    else None
+                ),
+            ),
             "message": (
                 "The lifecycle does not contain every validated value "
                 "required to prepare the ServiceNow connection."
@@ -10095,8 +10363,8 @@ def prepare_manual_connection(
         ),
         "status": "maker-action-required",
         "authMode": "entraIDUserLogin",
-        "instanceName": instance_name,
         "resourceUri": resource_uri,
+        "instanceName": instance_name,
         "createdBySkill": False,
     }
     state.setdefault("evidence", {})["credentialPreparation"] = preparation
@@ -10107,24 +10375,42 @@ def prepare_manual_connection(
         "agentId": context["agent"]["id"],
         "environmentId": context["environment"]["id"],
         "connection": preparation,
+        "expectedValues": connection_expected_values(
+            display_name=preparation["displayName"],
+            resource_uri=resource_uri,
+            instance_name=instance_name,
+        ),
+        "navigation": physical_connection_navigation(
+            context,
+            mode="create",
+        ),
+        "conditionalRemediations": [
+            {
+                "condition": "sign-in reports Invalid_redirect_uri",
+                "observed": False,
+                "action": (
+                    "URL-decode the exact redirect_uri reported by the "
+                    "sign-in page, update the ServiceNow OIDC Application "
+                    "Registry redirect URL, and retry."
+                ),
+            }
+        ],
         "instructions": [
-            "Open https://copilotstudio.microsoft.com and select the target environment.",
-            f"Open the {ACTIVE_PROFILE.agent_display_name} agent.",
-            "Select Settings, then Connection settings.",
-            "Find the ServiceNow connection and select its status link.",
-            "Open the connection configuration and select Create new connection.",
+            (
+                "Open the selected environment Connections list from the "
+                "returned navigation fallback."
+            ),
+            "Select New connection.",
             "Use the search box in the upper-right to search ServiceNow.",
             (
                 "Select the Microsoft-published ServiceNow connector by "
                 "choosing its + action."
             ),
             "Choose Microsoft Entra ID User Login.",
-            "Enter the Instance Name and Resource URI shown in this output.",
+            "Enter the Resource URI and Instance Name shown in this output.",
             "Select Sign in, complete authentication, then select Submit.",
             "Wait until the credential status is Connected.",
-            "Return to Connection settings and select Connect for ServiceNow.",
-            "Choose the new connection and save the agent connection.",
-            "Return to VS Code after the ServiceNow row shows Connected.",
+            "Return to VS Code after the physical connection shows Connected.",
         ],
         "afterCompletion": {
             "command": "python scripts/connect_servicenow_da.py inspect",
@@ -10263,6 +10549,47 @@ def record_agent_connection_attestation(
 
     normalized_connection_id = uuid.UUID(connection_id).hex
     state = _load_lifecycle_state(context, components)
+    evidence = state.setdefault("evidence", {})
+    selected = evidence.get("credential")
+    if (
+        isinstance(selected, dict)
+        and selected.get("connectionId")
+        and str(selected["connectionId"]).casefold()
+        != normalized_connection_id.casefold()
+    ):
+        raise ServiceNowConnectError(
+            "The attested Agent Connect credential differs from the selected "
+            "lifecycle credential. Record the intended credential first."
+        )
+    evidence.setdefault(
+        "credential",
+        {
+            "connectionId": normalized_connection_id,
+            "displayName": physical.get("displayName"),
+            "connectorId": CONNECTOR_ID,
+            "physicalStatus": physical.get("status"),
+            "authMode": physical.get("authMode"),
+            "instanceName": (
+                physical.get("parameterValues", {}).get(
+                    "token:InstanceName"
+                )
+            ),
+            "resourceUri": (
+                physical.get("parameterValues", {}).get(
+                    "token:ResourceUri"
+                )
+            ),
+            "environmentId": context["environment"]["id"],
+            "selectedAt": _utc_now(),
+            "lastVerifiedAt": _utc_now(),
+        },
+    )
+    binding_identity = _agent_binding_identity(
+        context,
+        state,
+        components,
+    )
+    binding_identity_sha256 = _canonical_json_hash(binding_identity)
     result = {
         "kind": "maker-attestation",
         "status": "completed",
@@ -10281,35 +10608,15 @@ def record_agent_connection_attestation(
             "agentSlug": _agent_slug(context),
             "provider": PROVIDER_KEY,
             "profile": PROFILE_KEY,
-            "componentHash": _component_hash(components),
-            "draftSemanticHash": _draft_semantic_hash(components),
+            "bindingIdentity": binding_identity,
+            "bindingIdentitySha256": binding_identity_sha256,
         },
     }
-    evidence = state.setdefault("evidence", {})
-    selected = evidence.get("credential")
-    if (
-        isinstance(selected, dict)
-        and selected.get("connectionId")
-        and str(selected["connectionId"]).casefold()
-        != normalized_connection_id.casefold()
-    ):
-        raise ServiceNowConnectError(
-            "The attested Agent Connect credential differs from the selected "
-            "lifecycle credential. Record the intended credential first."
-        )
     evidence["agentConnection"] = result
-    evidence.setdefault(
-        "credential",
-        {
-            "connectionId": normalized_connection_id,
-            "displayName": physical.get("displayName"),
-            "connectorId": CONNECTOR_ID,
-            "physicalStatus": physical.get("status"),
-            "authMode": physical.get("authMode"),
-            "environmentId": context["environment"]["id"],
-            "selectedAt": _utc_now(),
-            "lastVerifiedAt": _utc_now(),
-        },
+    state["agentBindingIdentitySha256"] = binding_identity_sha256
+    state["connectionBindingHash"] = _connection_binding_hash_for_identity(
+        binding_identity,
+        recorded_at=result["recordedAt"],
     )
     _write_lifecycle_state(context, state)
     return result
@@ -10328,6 +10635,8 @@ def set_topic_state(
         )
     agentbuilder = _agentbuilder_client(context)
     before = agentbuilder.fetch_components(context["agent"]["id"])
+    state = _load_lifecycle_state(context, before)
+    _require_current_agent_binding(context, state, before)
     before_topic = find_servicenow_topic(before, topic_id)
     before_state = before_topic.get("state")
     before_status = before_topic.get("status")
@@ -10426,6 +10735,180 @@ def _draft_semantic_hash(components: dict[str, Any]) -> str:
     return _canonical_json_hash(projection)
 
 
+def _agent_binding_identity(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    components: dict[str, Any],
+) -> dict[str, Any]:
+    credential = state.get("evidence", {}).get("credential")
+    if not isinstance(credential, dict) or not credential.get("connectionId"):
+        raise ServiceNowConnectError(
+            "Select and verify a ServiceNow credential before recording the "
+            "agent binding."
+        )
+    reference = find_servicenow_reference(components)
+    parameters = _shared_parameters(reference)
+    return {
+        "provider": PROVIDER_KEY,
+        "profile": PROFILE_KEY,
+        "agentSlug": _agent_slug(context),
+        "agentId": context["agent"]["id"],
+        "environmentId": context["environment"]["id"],
+        "physicalConnection": {
+            "connectionId": str(credential.get("connectionId") or "").replace(
+                "-",
+                "",
+            ),
+            "connectorId": str(
+                credential.get("connectorId") or CONNECTOR_ID
+            ),
+            "environmentId": str(
+                credential.get("environmentId")
+                or context["environment"]["id"]
+            ),
+            "physicalStatus": credential.get("physicalStatus"),
+            "authMode": credential.get("authMode"),
+            "instanceName": credential.get("instanceName"),
+            "resourceUri": credential.get("resourceUri"),
+        },
+        "connectionReference": {
+            "id": reference.get("id"),
+            "logicalName": reference.get("connectionReferenceLogicalName"),
+            "connectorId": reference.get("connectorId"),
+            "connectionId": (
+                str(reference.get("connectionId") or "").replace("-", "")
+                or None
+            ),
+            "authMode": parameters.get("name"),
+            "instanceName": _parameter_value(
+                parameters,
+                "token:InstanceName",
+            ),
+            "resourceUri": _parameter_value(
+                parameters,
+                "token:ResourceUri",
+            ),
+        },
+    }
+
+
+def _legacy_agent_binding_identity(
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    evidence = state.get("evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    credential = evidence.get("credential")
+    attestation = evidence.get("agentConnection")
+    binding = (
+        attestation.get("binding")
+        if isinstance(attestation, dict)
+        else None
+    )
+    reference = state.get("reference")
+    if (
+        not isinstance(credential, dict)
+        or not isinstance(attestation, dict)
+        or not isinstance(binding, dict)
+        or not isinstance(reference, dict)
+        or attestation.get("kind") != "maker-attestation"
+        or attestation.get("status") != "completed"
+        or attestation.get("makerAttested") is not True
+        or attestation.get("physicalStatus") != "Connected"
+        or attestation.get("authMode") != AUTH_MODE
+    ):
+        return None
+    connection_id = str(credential.get("connectionId") or "").replace("-", "")
+    if (
+        not connection_id
+        or str(attestation.get("connectionId") or "").replace("-", "")
+        != connection_id
+        or str(binding.get("connectionId") or connection_id).replace("-", "")
+        != connection_id
+    ):
+        return None
+    expected_binding = {
+        "provider": state.get("provider"),
+        "profile": state.get("profile"),
+        "agentSlug": state.get("agentSlug"),
+        "agentId": state.get("agentId"),
+        "environmentId": state.get("environmentId"),
+    }
+    if any(
+        str(binding.get(key) or "").casefold()
+        != str(value or "").casefold()
+        for key, value in expected_binding.items()
+    ):
+        return None
+    instance_name = credential.get("instanceName")
+    resource_uri = credential.get("resourceUri")
+    if (
+        credential.get("physicalStatus") != "Connected"
+        or credential.get("authMode") != AUTH_MODE
+        or not instance_name
+        or not resource_uri
+        or not reference.get("id")
+        or not reference.get("logicalName")
+        or reference.get("authMode") != AUTH_MODE
+        or reference.get("instanceName") != instance_name
+        or str(reference.get("resourceUri") or "").casefold()
+        != str(resource_uri).casefold()
+    ):
+        return None
+    return {
+        **expected_binding,
+        "physicalConnection": {
+            "connectionId": connection_id,
+            "connectorId": str(
+                credential.get("connectorId") or CONNECTOR_ID
+            ),
+            "environmentId": str(
+                credential.get("environmentId")
+                or state.get("environmentId")
+                or ""
+            ),
+            "physicalStatus": credential.get("physicalStatus"),
+            "authMode": credential.get("authMode"),
+            "instanceName": instance_name,
+            "resourceUri": resource_uri,
+        },
+        "connectionReference": {
+            "id": reference.get("id"),
+            "logicalName": reference.get("logicalName"),
+            "connectorId": CONNECTOR_ID,
+            "connectionId": (
+                str(reference.get("connectionId") or "").replace("-", "")
+                or None
+            ),
+            "authMode": reference.get("authMode"),
+            "instanceName": reference.get("instanceName"),
+            "resourceUri": reference.get("resourceUri"),
+        },
+    }
+
+
+def _connection_binding_hash_for_identity(
+    binding_identity: dict[str, Any],
+    *,
+    recorded_at: Any,
+) -> str:
+    return _canonical_json_hash(
+        {
+            "bindingIdentity": binding_identity,
+            "agentConnectionRecordedAt": recorded_at,
+        }
+    )
+
+
+def _agent_binding_identity_hash(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    components: dict[str, Any],
+) -> str:
+    return _canonical_json_hash(
+        _agent_binding_identity(context, state, components)
+    )
+
+
 def _agent_connection_attestation_current(
     state: dict[str, Any],
     components: dict[str, Any],
@@ -10440,6 +10923,21 @@ def _agent_connection_attestation_current(
     if not isinstance(credential, dict) or not credential.get("connectionId"):
         return False
     normalized_connection_id = str(credential["connectionId"]).replace("-", "")
+    try:
+        current_identity = _agent_binding_identity(
+            {
+                "agent": {
+                    "id": state.get("agentId"),
+                    "workspace_slug": state.get("agentSlug"),
+                },
+                "environment": {"id": state.get("environmentId")},
+            },
+            state,
+            components,
+        )
+    except ServiceNowConnectError:
+        return False
+    current_identity_sha256 = _canonical_json_hash(current_identity)
     return not (
         not isinstance(attestation, dict)
         or attestation.get("kind") != "maker-attestation"
@@ -10449,9 +10947,30 @@ def _agent_connection_attestation_current(
         or str(attestation.get("connectionId") or "").replace("-", "")
         != normalized_connection_id
         or not isinstance(attestation_binding, dict)
-        or attestation_binding.get("draftSemanticHash")
-        != _draft_semantic_hash(components)
+        or attestation_binding.get("bindingIdentity") != current_identity
+        or attestation_binding.get("bindingIdentitySha256")
+        != current_identity_sha256
     )
+
+
+def _require_current_agent_binding(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    components: dict[str, Any],
+) -> None:
+    if not _agent_connection_attestation_current(state, components):
+        raise ServiceNowConnectError(
+            "Confirm the exact current ServiceNow agent binding after the "
+            "physical credential phase before reviewing or changing topics "
+            "or the portal URL.",
+            details={
+                "provider": PROVIDER_KEY,
+                "profile": PROFILE_KEY,
+                "agentId": context["agent"]["id"],
+                "environmentId": context["environment"]["id"],
+                "requiredPhase": "agent-connection",
+            },
+        )
 
 
 def _connection_binding_hash(
@@ -10477,35 +10996,18 @@ def _connection_binding_hash(
             "Record a current Agent Connect observation for this saved draft "
             "and selected credential before recording Test evidence."
         )
-    summary = summarize_components(components)
-    reference = summary["reference"]
-    return _canonical_json_hash(
-        {
-            "provider": PROVIDER_KEY,
-            "profile": PROFILE_KEY,
-            "agentSlug": _agent_slug(context),
-            "agentId": context["agent"]["id"],
-            "environmentId": context["environment"]["id"],
-            "connectionId": credential["connectionId"],
-            "agentConnectionRecordedAt": (
-                attestation.get("recordedAt")
-                if isinstance(attestation, dict)
-                else None
-            ),
-            "reference": {
-                "id": reference.get("id"),
-                "logicalName": reference.get("logicalName"),
-                "authMode": reference.get("authMode"),
-                "instanceName": reference.get("instanceName"),
-                "resourceUri": reference.get("resourceUri"),
-            },
-            "serviceNowInvokeConnectorActionCount": summary[
-                "serviceNowInvokeConnectorActionCount"
-            ],
-            "serviceNowInvokeFlowActionCount": summary[
-                "serviceNowInvokeFlowActionCount"
-            ],
-        }
+    binding_identity = _agent_binding_identity(
+        context,
+        state,
+        components,
+    )
+    return _connection_binding_hash_for_identity(
+        binding_identity,
+        recorded_at=(
+            attestation.get("recordedAt")
+            if isinstance(attestation, dict)
+            else None
+        ),
     )
 
 
@@ -10701,10 +11203,11 @@ def rollback_topic_transaction(
         raise ServiceNowConnectError(
             "Topic rollback requires explicit confirmation (--yes)."
         )
+    agentbuilder = _agentbuilder_client(context)
     state = _load_lifecycle_state(context)
     return _rollback_topic_transaction(
         context,
-        _agentbuilder_client(context),
+        agentbuilder,
         state,
         operation_id,
     )
@@ -10846,15 +11349,16 @@ def set_portal_url(
         raise ServiceNowConnectError(
             "Portal URL update requires explicit confirmation (--yes)."
         )
-    state = _load_lifecycle_state(context)
+    agentbuilder = _agentbuilder_client(context)
+    before = agentbuilder.fetch_components(context["agent"]["id"])
+    state = _load_lifecycle_state(context, before)
+    _require_current_agent_binding(context, state, before)
     setup = _admin_setup(state)
     expected_instance = setup["preflight"].get("instanceName")
     if not isinstance(expected_instance, str) or not expected_instance:
         raise ServiceNowConnectError(
             "The lifecycle has no confirmed ServiceNow instance."
         )
-    agentbuilder = _agentbuilder_client(context)
-    before = agentbuilder.fetch_components(context["agent"]["id"])
     payload, preimage, expected_postimage = build_portal_url_update_payload(
         before,
         portal_url,
@@ -11040,6 +11544,7 @@ def enable_all_servicenow_topics(
         )
     agentbuilder = _agentbuilder_client(context)
     before = agentbuilder.fetch_components(context["agent"]["id"])
+    state = _load_lifecycle_state(context, before)
     before_summary = summarize_components(before)
     inactive = [
         topic
@@ -11048,8 +11553,8 @@ def enable_all_servicenow_topics(
         or topic.get("status") != "Active"
     ]
     if inactive:
+        _require_current_agent_binding(context, state, before)
         payload = build_enable_all_topics_payload(before)
-    state = _load_lifecycle_state(context, before)
     operation_id = str(uuid.uuid4())
     transaction = {
         "operationId": operation_id,
@@ -11328,6 +11833,7 @@ def record_keep_current_topic_choice(
             - summary["activeServiceNowTopicCount"]
         ),
     }
+    state = _load_lifecycle_state(context, components)
     result = {
         "kind": "maker-attestation",
         "status": "recorded",
@@ -11341,7 +11847,6 @@ def record_keep_current_topic_choice(
     result["topicStates"] = summary["serviceNowTopics"]
     result["makerAttested"] = True
     result["recordedAt"] = _utc_now()
-    state = _load_lifecycle_state(context, components)
     state.setdefault("evidence", {})["topics"] = result
     state["componentHash"] = _component_hash(components)
     _write_lifecycle_state(context, state)
@@ -11961,8 +12466,68 @@ def _realm_is_complete(
 ) -> bool:
     flow = _realm_flow_record(state, realm)
     stages = flow.get("stages") if isinstance(flow, dict) else None
-    record = _realm_functional_test_record(state, realm)
-    if not isinstance(stages, dict) or not isinstance(record, dict):
+    evidence = state.get("evidence")
+    validations = (
+        evidence.get("realmValidations")
+        if isinstance(evidence, dict)
+        else None
+    )
+    validation = (
+        validations.get(realm)
+        if isinstance(validations, dict)
+        else None
+    )
+    if not isinstance(stages, dict) or not isinstance(validation, dict):
+        return False
+    record = validation.get("functionalTest")
+    target_identity = validation.get("targetIdentity")
+    target_sha256 = validation.get("targetConfigurationSha256")
+    runtime_plan = validation.get("runtimePlan")
+    runtime_approval = validation.get("runtimeApproval")
+    agent_binding = validation.get("agentBinding")
+    binding = record.get("binding") if isinstance(record, dict) else None
+    if (
+        not isinstance(target_identity, dict)
+        or target_identity.get("realm") != realm
+        or not isinstance(target_sha256, str)
+        or _canonical_json_hash(target_identity) != target_sha256
+        or not isinstance(runtime_plan, dict)
+        or runtime_plan.get("realm") != realm
+        or runtime_plan.get("target") != target_identity
+        or runtime_plan.get("targetConfigurationSha256") != target_sha256
+        or not isinstance(runtime_plan.get("planSha256"), str)
+        or _canonical_json_hash(
+            {
+                key: value
+                for key, value in runtime_plan.items()
+                if key != "planSha256"
+            }
+        )
+        != runtime_plan["planSha256"]
+        or not isinstance(runtime_approval, dict)
+        or runtime_approval.get("decision") != "approved"
+        or runtime_approval.get("planSha256")
+        != runtime_plan["planSha256"]
+        or not isinstance(agent_binding, dict)
+        or agent_binding.get("status") != "completed"
+        or agent_binding.get("realm") != realm
+        or agent_binding.get("planSha256")
+        != runtime_plan["planSha256"]
+        or agent_binding.get("targetConfigurationSha256")
+        != target_sha256
+        or agent_binding.get("connectionId")
+        != runtime_plan.get("connectionId")
+        or agent_binding.get("targetAgentId")
+        != target_identity.get("agentId")
+        or agent_binding.get("targetEnvironmentId")
+        != target_identity.get("environmentId")
+        or agent_binding.get("targetDataverseUrl")
+        != target_identity.get("dataverseUrl")
+        or agent_binding.get("targetTenantId")
+        != target_identity.get("tenantId")
+        or not isinstance(record, dict)
+        or not isinstance(binding, dict)
+    ):
         return False
     binding = record.get("binding")
     return (
@@ -11978,14 +12543,29 @@ def _realm_is_complete(
         and isinstance(binding, dict)
         and binding.get("provider") == ACTIVE_PROFILE.provider_key
         and binding.get("profile") == ACTIVE_PROFILE.key
+        and binding.get("targetAgentId") == target_identity.get("agentId")
+        and binding.get("targetEnvironmentId")
+        == target_identity.get("environmentId")
+        and binding.get("targetDataverseUrl")
+        == target_identity.get("dataverseUrl")
+        and binding.get("targetTenantId") == target_identity.get("tenantId")
+        and binding.get("targetConfigurationSha256") == target_sha256
+        and binding.get("planSha256") == runtime_plan.get("planSha256")
+        and binding.get("connectionId") == runtime_plan.get("connectionId")
+        and isinstance(flow, dict)
+        and flow.get("targetIdentity") == target_identity
+        and flow.get("targetConfigurationSha256") == target_sha256
     )
 
 
 def _require_realm_sequence(
+    context: dict[str, Any],
     state: dict[str, Any],
     realm: str,
 ) -> None:
-    if realm == "prod" and not _realm_is_complete(state, "test"):
+    if realm != "prod":
+        return
+    if not _realm_is_complete(state, "test"):
         raise ServiceNowConnectError(
             "Production requires the exact Test realm configuration and "
             "Maker validation to be complete first.",
@@ -11995,6 +12575,25 @@ def _require_realm_sequence(
                 "realmStages": _realm_stage_progress(state, "test"),
             },
         )
+    validation = _realm_validation_record(state, "test")
+    try:
+        _target, _target_client = _revalidate_realm_target(
+            context,
+            realm="test",
+            validation=validation,
+        )
+    except ServiceNowConnectError as exc:
+        raise ServiceNowConnectError(
+            "Production is locked because the completed Test target changed "
+            "or can no longer be proved. Revalidate Test before Production.",
+            details={
+                "realm": realm,
+                "requiredRealm": "test",
+                "cause": str(exc),
+                "causeDetails": copy.deepcopy(exc.details),
+                "realmStages": _realm_stage_progress(state, "test"),
+            },
+        ) from exc
 
 
 def _checkpoint_targets_present(
@@ -12393,7 +12992,7 @@ def record_realm_deployment(
             details=dev_evidence,
         )
     state = _load_lifecycle_state(context)
-    _require_realm_sequence(state, realm)
+    _require_realm_sequence(context, state, realm)
     recorded_at = _utc_now()
     record = {
         "kind": "maker-attestation",
@@ -12993,7 +13592,7 @@ def _resolve_target_realm(
                 ),
             },
         ) from exc
-    except AgentBuilderError as exc:
+    except (AgentBuilderError, OSError) as exc:
         problem = (
             "Could not read the environment inventory needed to prove the "
             f"exact {realm.title()} target."
@@ -13425,20 +14024,9 @@ def _target_credential_check(
         f"{PORTAL_ORIGINS[context['environment']['ring']]['powerAutomate']}"
         f"/environments/{target_environment_id}/connections"
     )
-    expected_values = (
-        "Authentication Type: Microsoft Entra ID User Login "
-        "(`entraIDUserLogin`). "
-        + (
-            f"Instance Name: `{expected_instance}`. Resource URI: "
-            f"`{expected_client_id}`."
-            if expected_instance and expected_client_id
-            else (
-                "The target Instance Name and App A Application client ID are "
-                "not yet confirmed. The ServiceNow and Entra administrators "
-                "must provide both non-secret target values; do not copy Dev "
-                "or stale connection values."
-            )
-        )
+    expected_values = _render_connection_expected_values(
+        resource_uri=expected_client_id,
+        instance_name=expected_instance,
     )
     base = {
         "checkpoint": "SN-REALM-CREDENTIAL-001",
@@ -13670,9 +14258,138 @@ def _target_credential_check(
     }
 
 
+def _promotion_topic_key(schema_name: Any) -> str:
+    value = str(schema_name or "")
+    marker = ".topic."
+    index = value.casefold().find(marker)
+    return value[index + len(marker) :].casefold() if index >= 0 else ""
+
+
+def _dev_promoted_content_expectation(
+    state: dict[str, Any],
+    *,
+    expected_instance: str,
+) -> dict[str, Any]:
+    evidence = state.get("evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    inspection = evidence.get("lastInspection")
+    inspection = inspection if isinstance(inspection, dict) else {}
+    components = inspection.get("components")
+    components = components if isinstance(components, dict) else {}
+    if (
+        inspection.get("agentId") != state.get("agentId")
+        or inspection.get("environmentId") != state.get("environmentId")
+        or inspection.get("componentHash") != state.get("componentHash")
+    ):
+        raise ServiceNowConnectError(
+            "The Dev content inspection is missing, stale, or bound to "
+            "another agent/environment."
+        )
+    raw_topics = components.get("serviceNowTopics")
+    if not isinstance(raw_topics, list) or not raw_topics:
+        raise ServiceNowConnectError(
+            "The Dev content inspection has no ServiceNow topic inventory."
+        )
+    topics: dict[str, dict[str, str]] = {}
+    for raw_topic in raw_topics:
+        if not isinstance(raw_topic, dict):
+            raise ServiceNowConnectError(
+                "The Dev ServiceNow topic expectation has an invalid shape."
+            )
+        key = _promotion_topic_key(raw_topic.get("schemaName"))
+        state_value = str(raw_topic.get("state") or "")
+        status_value = str(raw_topic.get("status") or "")
+        if not key or key in topics or not state_value or not status_value:
+            raise ServiceNowConnectError(
+                "The Dev ServiceNow topic expectation is incomplete or "
+                "ambiguous."
+            )
+        topics[key] = {
+            "schemaName": str(raw_topic.get("schemaName") or ""),
+            "state": state_value,
+            "status": status_value,
+        }
+    topic_evidence = evidence.get("topics")
+    topic_evidence = (
+        topic_evidence if isinstance(topic_evidence, dict) else {}
+    )
+    keep_current = (
+        topic_evidence.get("kind") == "maker-attestation"
+        and topic_evidence.get("status") == "recorded"
+        and topic_evidence.get("customerChoice") == "keep-current"
+        and topic_evidence.get("makerAttested") is True
+        and topic_evidence.get("boundComponentHash")
+        == state.get("componentHash")
+    )
+    if not keep_current and any(
+        topic["state"] != "Active" or topic["status"] != "Active"
+        for topic in topics.values()
+    ):
+        raise ServiceNowConnectError(
+            "The current Dev topic inventory contains inactive ServiceNow "
+            "topics without a current keep-current attestation."
+        )
+
+    portal_receipt = evidence.get("portalConfirmation")
+    portal_receipt = (
+        portal_receipt if isinstance(portal_receipt, dict) else {}
+    )
+    portal_binding = portal_receipt.get("binding")
+    portal_binding = (
+        portal_binding if isinstance(portal_binding, dict) else {}
+    )
+    expected_binding = {
+        "provider": state.get("provider"),
+        "profile": state.get("profile"),
+        "agentSlug": state.get("agentSlug"),
+        "agentId": state.get("agentId"),
+        "environmentId": state.get("environmentId"),
+        "tenantId": state.get("tenantId"),
+        "instanceName": expected_instance,
+    }
+    readback = portal_receipt.get("readbackEvidence")
+    readback = readback if isinstance(readback, dict) else {}
+    if (
+        portal_receipt.get("kind") != "maker-confirmed-portal-url"
+        or portal_receipt.get("status") != "confirmed"
+        or any(
+            str(portal_binding.get(key) or "").casefold()
+            != str(value or "").casefold()
+            for key, value in expected_binding.items()
+        )
+        or not isinstance(readback.get("topicVersion"), int)
+        or not isinstance(
+            readback.get("topicContentHashExcludingVersion"),
+            str,
+        )
+        or not readback["topicContentHashExcludingVersion"]
+    ):
+        raise ServiceNowConnectError(
+            "The current Dev portal expectation lacks a current "
+            "administrator-confirmed readback bound to this agent, "
+            "environment, tenant, and ServiceNow instance."
+        )
+    portal_url = normalize_portal_url(
+        str(portal_receipt.get("portalUrl") or ""),
+        expected_instance_name=expected_instance,
+    )
+    expectation = {
+        "sourceComponentHash": state.get("componentHash"),
+        "topicPolicy": "keep-current" if keep_current else "all-active",
+        "topics": topics,
+        "portalUrl": portal_url,
+        "portalReceiptRecordedAt": portal_receipt.get("recordedAt"),
+    }
+    return {
+        **expectation,
+        "expectationSha256": _canonical_json_hash(expectation),
+    }
+
+
 def _target_promoted_content_check(
     context: dict[str, Any],
     *,
+    source_state: dict[str, Any],
     realm: str,
     target: dict[str, Any],
     target_client: Any,
@@ -13688,13 +14405,97 @@ def _target_promoted_content_check(
         "automationType": "automated",
     }
     try:
+        expectation = _dev_promoted_content_expectation(
+            source_state,
+            expected_instance=expected_instance,
+        )
+    except ServiceNowConnectError as exc:
+        problem = (
+            "The current Dev-approved authored expectation cannot be proven: "
+            f"{exc}"
+        )
+        recovery = _recovery_handoff(
+            problem=problem,
+            category="Dev promotion expectation unavailable",
+            owner="ESS Maker / Agent Developer",
+            where=maker_portal_links(context)["copilotStudioAgent"]["url"],
+            values=(
+                f"Profile: {ACTIVE_PROFILE.product_name}; source Dev agent: "
+                f"`{context['agent']['id']}`; target realm: {realm.title()}; "
+                f"confirmed ServiceNow instance: `{expected_instance}`."
+            ),
+            action=(
+                "Rerun the Dev ServiceNow Connect inspection. Re-record the "
+                "current keep-current topic decision when applicable and the "
+                "administrator-confirmed portal readback, then use the "
+                "organization's promotion process again. Do not repair "
+                "Test/Production with topic pushes or component PUTs."
+            ),
+            success=(
+                "Dev state contains one current topic-state expectation and "
+                "one exact administrator-confirmed portal URL bound to the "
+                "current Dev component state."
+            ),
+            recheck=(
+                f"Re-promote and rerun {realm.title()} validation."
+            ),
+        )
+        return {
+            **base,
+            "status": "Blocked",
+            "result": problem,
+            "remediation": recovery["message"],
+            "recoveryHandoff": recovery,
+        }
+    try:
         components = target_client.fetch_components(target["agentId"])
+    except (AgentBuilderError, OSError) as exc:
+        problem = (
+            f"Could not read the promoted {realm.title()} ServiceNow "
+            f"content: {exc}"
+        )
+        recovery = _recovery_handoff(
+            problem=problem,
+            category="Target content read unavailable",
+            owner="Power Platform Maker/Admin",
+            where=_target_agent_validation_url(
+                context,
+                environment_id=str(target["environmentId"]),
+                agent_id=str(target["agentId"]),
+            ),
+            values=(
+                f"Exact target agent `{target['agentId']}` in environment "
+                f"`{target['environmentId']}`. Expected Dev promotion hash "
+                f"`{expectation['expectationSha256']}`."
+            ),
+            action=(
+                "Restore read access or service availability for the exact "
+                "target and rerun this read. Do not return to Dev or change "
+                "promoted content based only on a transient read failure."
+            ),
+            success="The exact target component inventory can be read.",
+            recheck=(
+                f"Rerun {realm.title()} validation at promoted-content read."
+            ),
+        )
+        return {
+            **base,
+            "status": "Error",
+            "result": problem,
+            "remediation": recovery["message"],
+            "recoveryHandoff": recovery,
+        }
+    try:
         summary = summarize_components(components)
         portal = portal_configuration_summary(
             components,
             expected_instance_name=expected_instance,
         )
-    except (AgentBuilderError, ServiceNowConnectError, ValueError) as exc:
+        target_portal_url = normalize_portal_url(
+            _portal_literal_value(_portal_topic_component(components)),
+            expected_instance_name=expected_instance,
+        )
+    except (ServiceNowConnectError, ValueError) as exc:
         problem = (
             f"Could not prove the promoted {realm.title()} ServiceNow "
             f"topics and Setup Configurations portal value: {exc}"
@@ -13739,17 +14540,38 @@ def _target_promoted_content_check(
             "remediation": recovery["message"],
             "recoveryHandoff": recovery,
         }
-    topics_ready = (
-        summary["serviceNowTopicCount"] > 0
-        and summary["activeServiceNowTopicCount"]
-        == summary["serviceNowTopicCount"]
+    observed_topics: dict[str, dict[str, str]] = {}
+    duplicate_or_invalid = False
+    for topic in summary["serviceNowTopics"]:
+        key = _promotion_topic_key(topic.get("schemaName"))
+        if not key or key in observed_topics:
+            duplicate_or_invalid = True
+            continue
+        observed_topics[key] = {
+            "schemaName": str(topic.get("schemaName") or ""),
+            "state": str(topic.get("state") or ""),
+            "status": str(topic.get("status") or ""),
+        }
+    expected_topics = expectation["topics"]
+    topic_mismatches = [
+        key
+        for key in sorted(set(expected_topics) | set(observed_topics))
+        if key not in expected_topics
+        or key not in observed_topics
+        or observed_topics[key]["state"] != expected_topics[key]["state"]
+        or observed_topics[key]["status"] != expected_topics[key]["status"]
+    ]
+    topics_ready = not duplicate_or_invalid and not topic_mismatches
+    portal_ready = (
+        portal.get("valid") is True
+        and target_portal_url == expectation["portalUrl"]
     )
-    portal_ready = portal.get("valid") is True
     content_sha256 = _canonical_json_hash(
         {
             "topics": summary["serviceNowTopics"],
             "portal": portal,
             "reference": summary["reference"],
+            "expectedPromotionSha256": expectation["expectationSha256"],
         }
     )
     if topics_ready and portal_ready:
@@ -13757,9 +14579,9 @@ def _target_promoted_content_check(
             **base,
             "status": "Passed",
             "result": (
-                "The promoted target contains the expected active ServiceNow "
-                "topics and a valid read-only Setup Configurations portal "
-                "value for the confirmed instance."
+                "The promoted target topic states and exact read-only Setup "
+                "Configurations portal value match the current Dev-approved "
+                "promotion expectation."
             ),
             "remediation": "",
             "evidence": {
@@ -13767,13 +14589,15 @@ def _target_promoted_content_check(
                 "topicCount": summary["serviceNowTopicCount"],
                 "activeTopicCount": summary["activeServiceNowTopicCount"],
                 "portal": portal,
+                "expectedPromotionSha256": expectation[
+                    "expectationSha256"
+                ],
             },
         }
     problem = (
-        "The promoted target ServiceNow content is not ready: "
-        f"{summary['activeServiceNowTopicCount']} of "
-        f"{summary['serviceNowTopicCount']} ServiceNow topics are Active; "
-        f"portal valid is {portal_ready}."
+        "The promoted target does not match the current Dev-approved authored "
+        f"expectation. Topic mismatches: {topic_mismatches or ['none']}; "
+        f"portal exact match: {portal_ready}."
     )
     recovery = _recovery_handoff(
         problem=problem,
@@ -13787,8 +14611,10 @@ def _target_promoted_content_check(
         values=(
             f"Expected profile: {ACTIVE_PROFILE.product_name}; target realm: "
             f"{realm.title()}; expected ServiceNow instance: "
-            f"`{expected_instance}`. Current promoted content hash: "
-            f"`{content_sha256}`."
+            f"`{expected_instance}`; expected portal URL: "
+            f"`{expectation['portalUrl']}`; expected promotion hash: "
+            f"`{expectation['expectationSha256']}`; current promoted content "
+            f"hash: `{content_sha256}`."
         ),
         action=(
             "Return to Dev, fix the authored topic state or Setup "
@@ -13797,8 +14623,8 @@ def _target_promoted_content_check(
             "topic files, or PUT components in Test or Production."
         ),
         success=(
-            "A fresh target read shows every expected ServiceNow topic Active "
-            "and the promoted portal value valid for the confirmed instance."
+            "A fresh target read exactly matches the current Dev-approved "
+            "topic states and administrator-confirmed portal URL."
         ),
         recheck=(
             f"Rerun {realm.title()} validation after re-promotion."
@@ -13815,6 +14641,8 @@ def _target_promoted_content_check(
             "topicCount": summary["serviceNowTopicCount"],
             "activeTopicCount": summary["activeServiceNowTopicCount"],
             "portal": portal,
+            "expectedPromotionSha256": expectation["expectationSha256"],
+            "topicMismatches": topic_mismatches,
         },
     }
 
@@ -13854,6 +14682,17 @@ def _target_foundation_reuse(
     compatible = (
         entra.get("status") in {"completed", "reused"}
         and oidc.get("status") in {"completed", "reused"}
+        and entra_evidence.get("kind") == "structured-admin-attestation"
+        and isinstance(entra_evidence.get("recordedAt"), str)
+        and bool(entra_evidence.get("recordedAt"))
+        and entra_evidence.get("tokenClaimEmissionConfirmed") is True
+        and oidc_evidence.get("kind") == "structured-admin-attestation"
+        and isinstance(oidc_evidence.get("recordedAt"), str)
+        and bool(oidc_evidence.get("recordedAt"))
+        and oidc_evidence.get("oidcCapabilityConfirmed") is True
+        and oidc_evidence.get("runbookCompleted") is True
+        and oidc_evidence.get("mappingDetailsCollected") is True
+        and oidc_evidence.get("claimMappingConfirmed") is True
         and all(
             str(entra_binding.get(key) or "").casefold()
             == value.casefold()
@@ -13881,6 +14720,90 @@ def _target_foundation_reuse(
                 "evidence remains historical and does not complete this realm."
             )
         ),
+    }
+
+
+def _target_foundation_check(
+    context: dict[str, Any],
+    *,
+    state: dict[str, Any],
+    realm: str,
+    target: dict[str, Any],
+    instance_name: str,
+    application_client_id: str,
+) -> dict[str, Any]:
+    reuse = _target_foundation_reuse(
+        state,
+        target=target,
+        instance_name=instance_name,
+        application_client_id=application_client_id,
+    )
+    base = {
+        "checkpoint": "SN-REALM-FOUNDATION-001",
+        "description": (
+            "Current target-compatible Entra, ServiceNow OIDC, and instance "
+            "administrator foundation"
+        ),
+        "roles": [
+            "ServiceNow Admin / security_admin",
+            "Microsoft Entra Application Administrator or higher",
+        ],
+        "automationType": "automated",
+        "evidence": reuse,
+    }
+    if reuse["compatible"]:
+        return {
+            **base,
+            "status": "Passed",
+            "result": reuse["reason"],
+            "remediation": "",
+        }
+    problem = (
+        f"The {realm.title()} target does not have current reusable "
+        "administrator foundation evidence for the exact tenant, ServiceNow "
+        "instance, and application client ID."
+    )
+    recovery = _recovery_handoff(
+        problem=problem,
+        category="Target-incompatible administrator foundation",
+        owner=(
+            "ServiceNow Admin / security_admin and Microsoft Entra "
+            "Application Administrator or higher"
+        ),
+        where=_target_agent_validation_url(
+            context,
+            environment_id=str(target["environmentId"]),
+            agent_id=str(target["agentId"]),
+        ),
+        values=(
+            f"Target realm: {realm.title()}; tenant: "
+            f"`{target['tenantId']}`; ServiceNow instance: "
+            f"`{instance_name}`; App A Application client ID: "
+            f"`{application_client_id}`. Existing evidence may be reused only "
+            "when all values are current and exact. Microsoft Graph is not a "
+            "ServiceNow Connect completion gate."
+        ),
+        action=(
+            "Revalidate or re-record only the stale/missing Entra and "
+            "ServiceNow OIDC administrator evidence for these exact target "
+            "values. Do not repeat healthy compatible setup, copy another "
+            "realm's attestation, or add Graph permissions."
+        ),
+        success=(
+            "Current structured administrator evidence is bound to the exact "
+            "target tenant, ServiceNow instance, and application client ID."
+        ),
+        recheck=(
+            f"Rerun {realm.title()} validation; runtime-plan approval remains "
+            "blocked until this checkpoint passes."
+        ),
+    )
+    return {
+        **base,
+        "status": "Blocked",
+        "result": problem,
+        "remediation": recovery["message"],
+        "recoveryHandoff": recovery,
     }
 
 
@@ -14117,8 +15040,10 @@ def _realm_functional_test_question(
             "automatically Pass. An empty list is not automatically Not pass; "
             "it can be valid when no records exist. Use the visible "
             "authentication, connection, permission, and expected capability "
-            "behavior. If you choose Not pass, the kit records that result and "
-            "directs you back to the Dev agent to rerun `/connect servicenow`."
+            "behavior. If you choose Not pass, record one bounded failure "
+            "category without response content so the kit can return scoped "
+            "target remediation. Only confirmed promoted-content defects "
+            "return to Dev and re-promotion."
         ),
         "options": [
             {"label": "Pass"},
@@ -14205,7 +15130,7 @@ def validate_realm(
             },
         }
 
-    _require_realm_sequence(state, realm)
+    _require_realm_sequence(context, state, realm)
     deployment_record = _realm_deployment_record(state, realm)
     if (
         not isinstance(deployment_record, dict)
@@ -14309,9 +15234,19 @@ def validate_realm(
             expected_client_id=normalized_target_client_id,
         )
     )
+    foundation_check = _target_foundation_check(
+        context,
+        state=state,
+        realm=realm,
+        target=target,
+        instance_name=normalized_target_instance,
+        application_client_id=normalized_target_client_id,
+    )
+    results.append(foundation_check)
     results.append(
         _target_promoted_content_check(
             context,
+            source_state=state,
             realm=realm,
             target=target,
             target_client=target_client,
@@ -14480,11 +15415,8 @@ def validate_realm(
             "instanceName": normalized_target_instance,
             "applicationClientId": normalized_target_client_id,
         },
-        "foundationReuse": _target_foundation_reuse(
-            state,
-            target=target,
-            instance_name=normalized_target_instance,
-            application_client_id=normalized_target_client_id,
+        "foundationReuse": copy.deepcopy(
+            foundation_check.get("evidence")
         ),
         "deploymentEvidence": copy.deepcopy(deployment_record),
         "automatedChecks": automated_checks,
@@ -14674,7 +15606,7 @@ def record_realm_runtime_plan(
             "Runtime plan decision must be approve or reject."
         )
     state = _load_lifecycle_state(context)
-    _require_realm_sequence(state, realm)
+    _require_realm_sequence(context, state, realm)
     validation = _realm_validation_record(state, realm)
     plan = validation.get("runtimePlan")
     if (
@@ -14730,19 +15662,33 @@ def record_realm_runtime_plan(
         expected_instance=instance_name,
         expected_client_id=client_id,
     )
+    foundation = _target_foundation_check(
+        context,
+        state=state,
+        realm=realm,
+        target=target,
+        instance_name=instance_name,
+        application_client_id=client_id,
+    )
     content = _target_promoted_content_check(
         context,
+        source_state=state,
         realm=realm,
         target=target,
         target_client=target_client,
         expected_instance=instance_name,
     )
-    if credential.get("status") != "Passed" or content.get("status") != "Passed":
+    if (
+        credential.get("status") != "Passed"
+        or foundation.get("status") != "Passed"
+        or content.get("status") != "Passed"
+    ):
         raise ServiceNowConnectError(
             "The target changed or regressed before runtime plan approval. "
             "Rerun target validation and review a new plan.",
             details={
                 "credential": credential,
+                "foundation": foundation,
                 "promotedContent": content,
             },
         )
@@ -14842,7 +15788,7 @@ def record_realm_binding(
         )
     normalized_connection_id = uuid.UUID(connection_id).hex
     state = _load_lifecycle_state(context)
-    _require_realm_sequence(state, realm)
+    _require_realm_sequence(context, state, realm)
     validation = _realm_validation_record(state, realm)
     approval = validation.get("runtimeApproval")
     plan = validation.get("runtimePlan")
@@ -14879,19 +15825,35 @@ def record_realm_binding(
             expectation.get("applicationClientId") or ""
         ),
     )
+    foundation = _target_foundation_check(
+        context,
+        state=state,
+        realm=realm,
+        target=target,
+        instance_name=str(expectation.get("instanceName") or ""),
+        application_client_id=str(
+            expectation.get("applicationClientId") or ""
+        ),
+    )
     content = _target_promoted_content_check(
         context,
+        source_state=state,
         realm=realm,
         target=target,
         target_client=target_client,
         expected_instance=str(expectation.get("instanceName") or ""),
     )
-    if credential.get("status") != "Passed" or content.get("status") != "Passed":
+    if (
+        credential.get("status") != "Passed"
+        or foundation.get("status") != "Passed"
+        or content.get("status") != "Passed"
+    ):
         raise ServiceNowConnectError(
             "The target connection or promoted content regressed after plan "
             "approval. Rerun validation and approve a new plan.",
             details={
                 "credential": credential,
+                "foundation": foundation,
                 "promotedContent": content,
             },
         )
@@ -14969,6 +15931,183 @@ def record_realm_binding(
     }
 
 
+def _realm_test_failure_recovery(
+    context: dict[str, Any],
+    *,
+    realm: str,
+    validation: dict[str, Any],
+    failure_category: str,
+) -> tuple[list[str], list[dict[str, str]], dict[str, Any]]:
+    target_url = _target_agent_validation_url(
+        context,
+        environment_id=str(validation["targetEnvironmentId"]),
+        agent_id=str(validation["targetAgentId"]),
+    )
+    target_values = (
+        f"Realm: {realm.title()}; target tenant: "
+        f"`{validation['targetTenantId']}`; environment: "
+        f"`{validation['targetEnvironmentId']}`; Dataverse URL: "
+        f"`{validation['targetDataverseUrl']}`; agent: "
+        f"`{validation['targetAgentId']}`; target configuration hash: "
+        f"`{validation['targetConfigurationSha256']}`."
+    )
+    definitions = {
+        "authentication": {
+            "checkpoint": "SN-REALM-OIDC-MANUAL",
+            "category": "Target authentication failure",
+            "owner": "ServiceNow Admin / security_admin",
+            "where": target_url,
+            "action": (
+                "Inspect the exact target ServiceNow OIDC provider and user "
+                "login behavior using the current target-compatible "
+                "administrator evidence. Repair only the target-scoped "
+                "authentication issue; do not add Graph permissions."
+            ),
+            "success": (
+                "The exact target Test pane completes the allowlisted prompt "
+                "without an authentication challenge or token failure."
+            ),
+            "nextAction": "repair-target-authentication",
+        },
+        "permission": {
+            "checkpoint": "SN-REALM-OIDC-MANUAL",
+            "category": "Target authorization failure",
+            "owner": "ServiceNow Admin",
+            "where": target_url,
+            "action": (
+                "Confirm the signed-in test user has the intended target "
+                "ServiceNow business access and that the OIDC user mapping "
+                "resolves the correct active user. Do not broaden permissions "
+                "without administrator approval."
+            ),
+            "success": (
+                "The same target Test pane prompt succeeds for data the test "
+                "user is authorized to access."
+            ),
+            "nextAction": "repair-target-permission",
+        },
+        "connection": {
+            "checkpoint": "SN-REALM-CREDENTIAL-001",
+            "category": "Target physical connection failure",
+            "owner": "Power Platform Maker/Admin who owns the connection",
+            "where": (
+                f"{PORTAL_ORIGINS[context['environment']['ring']]['powerAutomate']}"
+                f"/environments/{validation['targetEnvironmentId']}/connections"
+            ),
+            "action": (
+                "Repair or sign in to the exact target connection from the "
+                "approved runtime plan, then rerun target validation. Do not "
+                "borrow another maker's credential or copy another realm's "
+                "connection attestation."
+            ),
+            "success": (
+                "Fresh target inventory shows the approved exact connection "
+                "Connected and the target Test pane succeeds."
+            ),
+            "nextAction": "repair-target-connection",
+        },
+        "binding": {
+            "checkpoint": "SN-REALM-AGENT-BINDING-MANUAL",
+            "category": "Target agent binding failure",
+            "owner": "ESS Maker / Agent Developer",
+            "where": target_url,
+            "action": (
+                "In the exact target agent UI, bind the connection from the "
+                "current approved plan, record a new target-scoped binding "
+                "attestation, and rerun the Test pane. Do not publish."
+            ),
+            "success": (
+                "The exact target agent shows the intended connection and "
+                "the allowlisted Test pane prompt succeeds."
+            ),
+            "nextAction": "repair-target-binding",
+        },
+        "identity-mapping": {
+            "checkpoint": "SN-REALM-OIDC-MANUAL",
+            "category": "Target identity mapping failure",
+            "owner": "ServiceNow Admin / security_admin",
+            "where": target_url,
+            "action": (
+                "Revalidate the exact target-compatible claim-name/user-field "
+                "mapping and active-user resolution using the protected "
+                "administrator handoff. Do not return an employee identifier "
+                "or token value."
+            ),
+            "success": (
+                "The same target user resolves correctly and the allowlisted "
+                "Test pane prompt succeeds."
+            ),
+            "nextAction": "repair-target-identity-mapping",
+        },
+        "promoted-content": {
+            "checkpoint": "SN-REALM-PROMOTED-CONTENT-001",
+            "category": "Confirmed promoted authored-content defect",
+            "owner": (
+                "ESS Maker / Agent Developer and the organization ALM owner"
+            ),
+            "where": maker_portal_links(context)["copilotStudioAgent"]["url"],
+            "action": (
+                "Return to Dev, correct the authored ServiceNow topic/content "
+                "or Setup Configurations portal value, validate Dev, and "
+                "re-promote through the organization process. Do not repair "
+                "Test/Production with local topic push or component PUT."
+            ),
+            "success": (
+                "A fresh target read matches the current Dev-approved "
+                "promotion expectation and the target Test pane succeeds."
+            ),
+            "nextAction": "return-to-dev-and-repromote",
+        },
+        "unexpected": {
+            "checkpoint": "SN-REALM-MAKER-VALIDATION-MANUAL",
+            "category": "Unclassified target Test failure",
+            "owner": (
+                "ESS Maker / Agent Developer with the relevant ServiceNow or "
+                "Power Platform administrator"
+            ),
+            "where": target_url,
+            "action": (
+                "Classify the failure using only the visible target behavior "
+                "and existing scoped evidence. Choose authentication, "
+                "permission, connection, binding, identity-mapping, or "
+                "promoted-content before remediation. Return to Dev only "
+                "after promoted authored content is confirmed wrong."
+            ),
+            "success": (
+                "The failure has one supported category and its scoped owner "
+                "can perform the corresponding remediation."
+            ),
+            "nextAction": "classify-target-test-failure",
+        },
+    }
+    definition = definitions[failure_category]
+    recovery = _recovery_handoff(
+        problem=(
+            f"The Maker recorded a {failure_category} failure in the exact "
+            f"{realm.title()} target Test pane."
+        ),
+        category=str(definition["category"]),
+        owner=str(definition["owner"]),
+        where=str(definition["where"]),
+        values=target_values,
+        action=str(definition["action"]),
+        success=str(definition["success"]),
+        recheck=(
+            f"Rerun the exact {realm.title()} target validation stage and "
+            "record a new Maker Test result."
+        ),
+    )
+    return (
+        [str(definition["checkpoint"])],
+        [recovery],
+        {
+            "action": str(definition["nextAction"]),
+            "url": str(definition["where"]),
+            "instruction": recovery["message"],
+        },
+    )
+
+
 def record_realm_test(
     context: dict[str, Any],
     *,
@@ -14988,6 +16127,7 @@ def record_realm_test(
         "connection",
         "binding",
         "identity-mapping",
+        "promoted-content",
         "unexpected",
     }
     if result == "pass" and failure_category is not None:
@@ -14996,14 +16136,14 @@ def record_realm_test(
         )
     if (
         result == "fail"
-        and failure_category is not None
         and failure_category not in allowed_failures
     ):
         raise ServiceNowConnectError(
-            "A provided realm Test pane failure category is unsupported."
+            "A failed realm Test pane result requires one supported failure "
+            "category."
         )
     state = _load_lifecycle_state(context)
-    _require_realm_sequence(state, realm)
+    _require_realm_sequence(context, state, realm)
     deployment = _realm_deployment_record(state, realm)
     if (
         not isinstance(deployment, dict)
@@ -15055,11 +16195,29 @@ def record_realm_test(
             "Complete the current approved runtime plan and exact target "
             "agent binding before recording Maker validation."
         )
-    _target, _target_client = _revalidate_realm_target(
+    target, _target_client = _revalidate_realm_target(
         context,
         realm=realm,
         validation=validation,
     )
+    expectation = validation.get("targetCredentialExpectation")
+    expectation = expectation if isinstance(expectation, dict) else {}
+    foundation = _target_foundation_check(
+        context,
+        state=state,
+        realm=realm,
+        target=target,
+        instance_name=str(expectation.get("instanceName") or ""),
+        application_client_id=str(
+            expectation.get("applicationClientId") or ""
+        ),
+    )
+    if foundation.get("status") != "Passed":
+        raise ServiceNowConnectError(
+            "Current target-compatible administrator foundation evidence is "
+            "required before recording Maker validation.",
+            details={"foundation": foundation},
+        )
     recorded_at = _utc_now()
     record = {
         "kind": "maker-attestation",
@@ -15076,6 +16234,8 @@ def record_realm_test(
             "sourceDevEnvironmentId": context["environment"]["id"],
             "targetAgentId": target_agent_id,
             "targetEnvironmentId": target_environment_id,
+            "targetDataverseUrl": validation["targetDataverseUrl"],
+            "targetTenantId": validation["targetTenantId"],
             "targetConfigurationSha256": target_configuration_sha,
             "planSha256": runtime_plan["planSha256"],
             "connectionId": agent_binding["connectionId"],
@@ -15099,7 +16259,21 @@ def record_realm_test(
         "updatedAt": now,
     }
     _write_lifecycle_state(context, state)
-    dev_agent_url = maker_portal_links(context)["copilotStudioAgent"]["url"]
+    targeted_checkpoints: list[str] = []
+    targeted_handoffs: list[dict[str, str]] = []
+    failure_next: dict[str, Any] | None = None
+    if result == "fail":
+        assert failure_category is not None
+        (
+            targeted_checkpoints,
+            targeted_handoffs,
+            failure_next,
+        ) = _realm_test_failure_recovery(
+            context,
+            realm=realm,
+            validation=validation,
+            failure_category=failure_category,
+        )
     return {
         "schemaVersion": "servicenow.realm-test-evidence.v1",
         "status": "recorded",
@@ -15109,8 +16283,8 @@ def record_realm_test(
         "binding": copy.deepcopy(record["binding"]),
         "manualChecks": copy.deepcopy(validation.get("manualChecks") or []),
         "realmStages": _realm_stage_progress(state, realm),
-        "targetedManualCheckpoints": [],
-        "targetedRecoveryHandoffs": [],
+        "targetedManualCheckpoints": targeted_checkpoints,
+        "targetedRecoveryHandoffs": targeted_handoffs,
         "question": None,
         "next": (
             {
@@ -15121,15 +16295,7 @@ def record_realm_test(
                 ),
             }
             if result == "pass"
-            else {
-                "action": "return-to-dev-connect",
-                "url": dev_agent_url,
-                "instruction": (
-                    "Not pass recorded; return to the Dev agent and rerun "
-                    "`/connect servicenow` to recheck the connection setup "
-                    "step by step."
-                ),
-            }
+            else failure_next
         ),
     }
 
@@ -15957,6 +17123,7 @@ def build_parser() -> argparse.ArgumentParser:
             "connection",
             "binding",
             "identity-mapping",
+            "promoted-content",
             "unexpected",
         ),
     )
@@ -16238,18 +17405,13 @@ def _command_error_recovery(
         "credential": (
             "Power Platform Maker/Admin",
             links["powerAutomateConnections"]["url"],
-            (
-                "Authentication Type: Microsoft Entra ID User Login. "
-                + (
-                    f"Instance Name: `{instance_name}`. "
-                    if instance_name
-                    else "Instance Name must come from preflight. "
-                )
-                + (
-                    f"Resource URI: `{client_id}`."
-                    if client_id
-                    else "Resource URI must come from verified App A evidence."
-                )
+            _render_connection_expected_values(
+                resource_uri=(
+                    str(client_id) if client_id else None
+                ),
+                instance_name=(
+                    str(instance_name) if instance_name else None
+                ),
             ),
             "Fresh inventory shows one exact Connected current-maker connection.",
         ),

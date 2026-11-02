@@ -31,11 +31,11 @@ def _state(*, profile: str = "hrsd") -> dict:
                 "status": "pending",
                 "checkpointResults": {},
             },
-            "topics": {
+            "agent-connection": {
                 "status": "pending",
                 "checkpointResults": {},
             },
-            "agent-connection": {
+            "topics": {
                 "status": "pending",
                 "checkpointResults": {},
             },

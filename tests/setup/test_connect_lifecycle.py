@@ -292,7 +292,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert contract["provider"] == "servicenow-da-hrsd"
     assert contract["checkpointResultMode"] == "compact-stdout-v1"
     assert contract["attestedRoleScope"] == "lifecycle"
-    assert contract["contractRevision"] == 12
+    assert contract["contractRevision"] == 13
     assert contract["deploymentRealms"]["realmOrder"] == [
         "dev",
         "test",
@@ -305,6 +305,17 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "connections",
         "runtime-configuration",
         "maker-validation",
+    ]
+    assert contract["deploymentRealms"]["stages"][2][
+        "failureCategories"
+    ] == [
+        "authentication",
+        "permission",
+        "connection",
+        "binding",
+        "identity-mapping",
+        "promoted-content",
+        "unexpected",
     ]
     assert contract["planRoles"] == [
         "ESS Maker / Agent Developer",
@@ -329,9 +340,9 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "entra-registration",
         "servicenow-oidc",
         "credential",
+        "agent-connection",
         "topics",
         "portal-url",
-        "agent-connection",
         "test",
     ]
     by_id = {phase["id"]: phase for phase in contract["phases"]}
@@ -421,13 +432,24 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
 
     assert contract["provider"] == "servicenow-da-itsm"
     assert contract["profile"] == "itsm"
-    assert contract["contractRevision"] == 7
+    assert contract["contractRevision"] == 8
     assert contract["deploymentRealms"]["realmOrder"] == [
         "dev",
         "test",
         "prod",
     ]
     assert contract["deploymentRealms"]["connectPromotesOrPublishes"] is False
+    assert contract["deploymentRealms"]["stages"][2][
+        "failureCategories"
+    ] == [
+        "authentication",
+        "permission",
+        "connection",
+        "binding",
+        "identity-mapping",
+        "promoted-content",
+        "unexpected",
+    ]
     assert "stateMigrationCommand" not in contract
     assert contract["stateInitializationCommand"] == (
         "python scripts/connect_servicenow_da.py "
@@ -447,9 +469,9 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
         "entra-registration",
         "servicenow-oidc",
         "credential",
+        "agent-connection",
         "topics",
         "portal-url",
-        "agent-connection",
         "test",
     ]
     assert all(
@@ -696,6 +718,7 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
         "environmentId": "environment-id",
         "componentHash": "component-hash",
         "draftSemanticHash": "draft-semantic-hash",
+        "agentBindingIdentitySha256": "agent-binding-identity",
         "connectionBindingHash": "connection-binding-hash",
         "evidence": {
             "credential": {"connectionId": "connection-id"},
@@ -721,7 +744,7 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
                     "agentSlug": "employee-self-service-hr",
                     "agentId": "agent-id",
                     "environmentId": "environment-id",
-                    "draftSemanticHash": "draft-semantic-hash",
+                    "bindingIdentitySha256": "agent-binding-identity",
                 },
             },
             "publish": {
@@ -755,7 +778,7 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
         },
     }
 
-    for phase_id in ("topics", "agent-connection", "test"):
+    for phase_id in ("agent-connection", "topics", "test"):
         assert _matching_action_evidence_acknowledges(
             phases[phase_id],
             "Manual",
@@ -773,7 +796,13 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
         )
     state["componentHash"] = "component-hash"
     state["draftSemanticHash"] = "later-draft"
-    for phase_id in ("agent-connection", "test"):
+    assert _matching_action_evidence_acknowledges(
+        phases["agent-connection"],
+        "Manual",
+        state,
+        action_succeeded_this_invocation=True,
+    )
+    for phase_id in ("test",):
         assert not _matching_action_evidence_acknowledges(
             phases[phase_id],
             "Manual",
@@ -781,6 +810,14 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
             action_succeeded_this_invocation=True,
         )
     state["draftSemanticHash"] = "draft-semantic-hash"
+    state["agentBindingIdentitySha256"] = "later-binding"
+    assert not _matching_action_evidence_acknowledges(
+        phases["agent-connection"],
+        "Manual",
+        state,
+        action_succeeded_this_invocation=True,
+    )
+    state["agentBindingIdentitySha256"] = "agent-binding-identity"
     state["connectionBindingHash"] = "later-connection"
     for phase_id in ("test",):
         assert not _matching_action_evidence_acknowledges(

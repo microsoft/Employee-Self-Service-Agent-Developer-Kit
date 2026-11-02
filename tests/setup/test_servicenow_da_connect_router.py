@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import json
 from pathlib import Path
 
 
@@ -37,13 +38,9 @@ def test_realm_deployment_guidance_is_conditional_and_read_only() -> None:
     assert "`List my open HR cases` or `List my open IT tickets`" in normalized
     assert "empty list is not an automatic failure" in normalized
     assert "generic answer is not an automatic pass" in normalized
-    assert "without requiring a failure category" in normalized
-    assert (
-        "Not pass recorded; return to the Dev agent and rerun /connect "
-        "servicenow to recheck the connection setup step by step."
-        in normalized
-    )
-    assert "Do not ask a second failure-category question" in normalized
+    assert "record exactly one bounded category" in normalized
+    assert "Only confirmed promoted-content defects return to Dev" in normalized
+    assert "target-scoped recovery handoff" in normalized
 
 
 def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
@@ -141,6 +138,50 @@ def test_global_gate_allows_connection_blocked_foundation() -> None:
     assert "`/connect servicenow` is available" in instructions
 
 
+def test_servicenow_dev_phase_order_and_binding_intros_are_explicit() -> None:
+    expected_order_hr = [
+        "preflight",
+        "plugin-prerequisites",
+        "entra-registration",
+        "servicenow-oidc",
+        "credential",
+        "agent-connection",
+        "topics",
+        "portal-url",
+        "test",
+    ]
+    expected_order_it = [
+        phase for phase in expected_order_hr if phase != "plugin-prerequisites"
+    ]
+    for provider, expected_order in (
+        ("servicenow-da-hrsd", expected_order_hr),
+        ("servicenow-da-itsm", expected_order_it),
+    ):
+        root = _SOLUTION / "src" / "skills" / "connect" / provider
+        contract = json.loads(
+            (root / "contract.json").read_text(encoding="utf-8")
+        )
+        skill = (root / "SKILL.md").read_text(encoding="utf-8")
+        credential = (root / "actions" / "prepare-credential.md").read_text(
+            encoding="utf-8"
+        )
+        normalized_credential = " ".join(credential.split())
+        assert [phase["id"] for phase in contract["phases"]] == expected_order
+        assert "Connect does not enable ServiceNow topics" in skill
+        assert "After binding is confirmed, Connect reads the topic" in skill
+        assert "After topic and portal configuration is complete" in skill
+        assert credential.index("**Authentication Type:**") < (
+            credential.index("**Resource URI:**")
+        )
+        assert credential.index("**Resource URI:**") < (
+            credential.index("**Instance Name:**")
+        )
+        assert "direct connector-form or connection-detail URL" in credential
+        assert "conditional remediation, not an observed current error" in (
+            normalized_credential
+        )
+
+
 def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     skill = (
         _SOLUTION
@@ -160,6 +201,18 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "it never overrides PR #217 by itself" in skill
     assert "old PR behavior, current evidence, proposed deviation" in skill
     assert "do not assume UPN or email" in skill
+    assert (
+        "Connect does not enable ServiceNow topics\nbefore binding is "
+        "confirmed."
+    ) in skill
+    assert (
+        "After binding is confirmed, Connect reads the topic\nstates for "
+        "Maker review"
+    ) in skill
+    assert (
+        "After topic and portal configuration is complete, the Maker runs"
+        in skill
+    )
     assert "protected XLSX workbook" in skill
     assert "matching `sys_user` field" in skill
     assert "`aud` is a built-in" in skill
@@ -472,7 +525,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "automatically reuse one exact healthy Connected" in (
         " ".join(credential.split())
     )
-    assert "wrong Instance Name, Resource URI, or auth mode" in credential
+    assert "wrong auth mode, Resource URI, or Instance Name" in credential
     assert "use its `Repair`, `Fix connection`, or sign-in action" in (
         credential
     )
@@ -514,6 +567,14 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         "({POWER_AUTOMATE_CONNECTIONS_URL})"
     ) in credential
     assert "[Open Power Apps]({POWER_APPS_URL})" in credential
+    expected_index = credential.index("**Authentication Type:**")
+    resource_index = credential.index("**Resource URI:**")
+    instance_index = credential.index("**Instance Name:**")
+    assert expected_index < resource_index < instance_index
+    assert "no verified direct connector-form or connection-detail URL" in (
+        credential
+    )
+    assert "does not create, repair, sign in, submit, or prefill" in credential
     assert "This action is retired" in publish
     assert "Do not invoke `publish`" in publish
     assert "historical evidence" in publish
@@ -538,7 +599,10 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "one complete high-level step" in credential
     assert "one completion question" in credential
     assert "not shareable" in credential
-    assert "Invalid redirect_uri" in credential
+    assert "Invalid_redirect_uri" in credential
+    assert "conditional remediation, not an observed current error" in (
+        credential
+    )
     for action in (preflight, plugins, entra, oidc, credential):
         assert "do not ask again" in action
         assert "completionStatuses" in action
@@ -609,6 +673,18 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
     assert "maker-confirmed compatible shared-configuration discovery" in skill
     assert "never migrates,\nmerges, or copies the HRSD lifecycle" in skill
     assert "all eight\nITSM phases" in skill
+    assert (
+        "Connect does not enable ServiceNow topics\nbefore binding is "
+        "confirmed."
+    ) in skill
+    assert (
+        "After binding is confirmed, Connect reads the topic\nstates for "
+        "Maker review"
+    ) in skill
+    assert (
+        "After topic and portal configuration is complete, the Maker runs"
+        in skill
+    )
     assert not (actions / "verify-plugin-prerequisites.md").exists()
 
     topics = (actions / "prepare-topics.md").read_text(encoding="utf-8")

@@ -394,8 +394,8 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
             "search box in the upper-right to search `ServiceNow`",
             "Microsoft-published `ServiceNow` connector using its `+` action",
             "choose Microsoft Entra ID User Login",
-            "enter the exact Instance Name and Resource URI",
-            "3. If sign-in reports `Invalid redirect_uri`",
+            "enter the exact Resource URI and Instance Name",
+            "3. If sign-in reports `Invalid_redirect_uri`",
             "current maker's own Microsoft account",
             "do not impersonate that owner",
             "Never ask for or display passwords",
@@ -435,6 +435,16 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
     ) in source_normalized
     assert "must never run for the multiple-healthy-candidate path" in (
         source_normalized
+    )
+    expected = completion["question"]
+    assert expected.index("Authentication Type:") < expected.index(
+        "Resource URI:"
+    )
+    assert expected.index("Resource URI:") < expected.index("Instance Name:")
+    assert "direct form/detail route is unverified" in expected
+    assert "never create, sign in, submit, or prefill" in expected
+    assert "conditional remediation rather than an observed current error" in (
+        expected
     )
     assert source_normalized.index("choose `New connection`") < (
         source_normalized.index("search box in the upper-right")

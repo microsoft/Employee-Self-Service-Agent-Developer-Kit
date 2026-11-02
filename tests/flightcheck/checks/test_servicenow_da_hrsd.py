@@ -643,20 +643,8 @@ def _write_state(
         }
     )
     draft_semantic_hash = snow._draft_semantic_hash(components)
-    agent_connection = {
-        "kind": "maker-attestation",
-        "status": "completed",
-        "makerAttested": True,
-        "physicalStatus": "Connected",
-        "connectionId": CONNECTION_ID,
-        "recordedAt": "2026-09-29T00:00:00Z",
-        "binding": {
-            "draftSemanticHash": draft_semantic_hash,
-            "connectionId": CONNECTION_ID,
-        },
-    }
     state = {
-        "schemaVersion": 6,
+        "schemaVersion": snow.LIFECYCLE_SCHEMA_VERSION,
         "provider": snow.PROVIDER_KEY,
         "profile": snow.PROFILE_KEY,
         "agentSlug": AGENT_SLUG,
@@ -717,8 +705,15 @@ def _write_state(
                     "agentId": AGENT_ID,
                 },
             },
-            "credential": {"connectionId": CONNECTION_ID},
-            "agentConnection": agent_connection,
+            "credential": {
+                "connectionId": CONNECTION_ID,
+                "connectorId": snow.CONNECTOR_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "physicalStatus": "Connected",
+                "authMode": snow.AUTH_MODE,
+                "instanceName": "dev123",
+                "resourceUri": APP_CLIENT_ID,
+            },
         },
     }
     candidate_hash = snow._identity_candidate_set_hash(
@@ -764,14 +759,41 @@ def _write_state(
             "agentSlug": AGENT_SLUG,
             "agentId": AGENT_ID,
         }
-    connection_binding_hash = snow._connection_binding_hash(
-        {
-            "agent": {
-                "id": AGENT_ID,
-                "workspace_slug": AGENT_SLUG,
-            },
-            "environment": {"id": ENVIRONMENT_ID},
+    binding_context = {
+        "agent": {
+            "id": AGENT_ID,
+            "workspace_slug": AGENT_SLUG,
         },
+        "environment": {"id": ENVIRONMENT_ID},
+    }
+    binding_identity = snow._agent_binding_identity(
+        binding_context,
+        state,
+        components,
+    )
+    binding_identity_sha256 = snow._canonical_json_hash(binding_identity)
+    state["evidence"]["agentConnection"] = {
+        "kind": "maker-attestation",
+        "status": "completed",
+        "makerAttested": True,
+        "physicalStatus": "Connected",
+        "authMode": snow.AUTH_MODE,
+        "connectionId": CONNECTION_ID,
+        "recordedAt": "2026-09-29T00:00:00Z",
+        "binding": {
+            "provider": snow.PROVIDER_KEY,
+            "profile": snow.PROFILE_KEY,
+            "agentSlug": AGENT_SLUG,
+            "agentId": AGENT_ID,
+            "environmentId": ENVIRONMENT_ID,
+            "connectionId": CONNECTION_ID,
+            "bindingIdentity": binding_identity,
+            "bindingIdentitySha256": binding_identity_sha256,
+        },
+    }
+    state["agentBindingIdentitySha256"] = binding_identity_sha256
+    connection_binding_hash = snow._connection_binding_hash(
+        binding_context,
         state,
         components,
     )
@@ -1060,8 +1082,8 @@ def test_test_checkpoint_blocks_noncompleted_prerequisite(
         components["botComponentChanges"][0]["component"]["status"] = "Inactive"
     else:
         state["evidence"]["agentConnection"]["binding"][
-            "draftSemanticHash"
-        ] = "stale-draft"
+            "bindingIdentitySha256"
+        ] = "stale-binding"
     state_path.write_text(json.dumps(state), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
@@ -2372,7 +2394,7 @@ def test_hrsd_checks_reopen_stale_maker_evidence(
 
     assert (
         statuses["SN-DA-HRSD-AGENT-CONNECTION-001"]
-        == Status.NOT_CONFIGURED.value
+        == Status.MANUAL.value
     )
     assert "SN-DA-HRSD-PARAMETER-SHARING-001" not in statuses
     assert statuses["SN-DA-HRSD-PUBLISH-001"] == Status.NOT_CONFIGURED.value
@@ -2485,7 +2507,7 @@ def test_agent_connection_rejects_wrong_selected_connection_id(
     assert "different selected credential" in result.result
 
 
-def test_agent_connection_reports_component_revision_stale(
+def test_agent_connection_survives_authored_topic_revision(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -2503,8 +2525,8 @@ def test_agent_connection_reports_component_revision_stale(
         if item.checkpoint_id == "SN-DA-HRSD-AGENT-CONNECTION-001"
     )
 
-    assert result.status == Status.NOT_CONFIGURED.value
-    assert "stale for this saved draft" in result.result
+    assert result.status == Status.MANUAL.value
+    assert "currently shows Connected" in result.result
 
 
 def test_hrsd_package_absence_is_not_configured(

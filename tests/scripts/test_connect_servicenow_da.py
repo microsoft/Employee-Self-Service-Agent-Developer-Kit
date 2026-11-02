@@ -122,6 +122,79 @@ def _context_at(root: Path) -> dict:
     return context
 
 
+def _add_current_agent_binding(
+    context: dict,
+    state: dict,
+    components: dict,
+) -> dict:
+    state.setdefault("evidence", {})["credential"] = {
+        "connectionId": CONNECTION_ID.replace("-", ""),
+        "connectorId": snow.CONNECTOR_ID,
+        "environmentId": context["environment"]["id"],
+        "instanceName": "dev123",
+        "resourceUri": APP_CLIENT_ID,
+        "authMode": snow.AUTH_MODE,
+        "physicalStatus": "Connected",
+    }
+    identity = snow._agent_binding_identity(
+        context,
+        state,
+        components,
+    )
+    identity_sha256 = snow._canonical_json_hash(identity)
+    state["evidence"]["agentConnection"] = {
+        "kind": "maker-attestation",
+        "status": "completed",
+        "recordedAt": "2026-10-01T00:00:00Z",
+        "makerAttested": True,
+        "physicalStatus": "Connected",
+        "authMode": snow.AUTH_MODE,
+        "connectionId": CONNECTION_ID.replace("-", ""),
+        "binding": {
+            "provider": snow.ACTIVE_PROFILE.provider_key,
+            "profile": snow.ACTIVE_PROFILE.key,
+            "agentSlug": context["agent"]["workspace_slug"],
+            "agentId": context["agent"]["id"],
+            "environmentId": context["environment"]["id"],
+            "bindingIdentity": identity,
+            "bindingIdentitySha256": identity_sha256,
+        },
+    }
+    state["agentBindingIdentitySha256"] = identity_sha256
+    state["connectionBindingHash"] = (
+        snow._connection_binding_hash_for_identity(
+            identity,
+            recorded_at="2026-10-01T00:00:00Z",
+        )
+    )
+    return state
+
+
+def _seed_current_agent_binding(
+    root: Path,
+    components: dict,
+    *,
+    profile: str = "hrsd",
+) -> dict:
+    context = _profile_context(
+        profile,
+        agent_id=AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile == "hrsd"
+            else "employee-self-service-it"
+        ),
+    )
+    context["root"] = root
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, components)
+        _add_current_agent_binding(context, state, components)
+        path = snow._lifecycle_state_path(context)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state), encoding="utf-8")
+    return state
+
+
 def _fill_entra_workbook(
     path: Path,
     candidates: tuple[str, ...],
@@ -359,18 +432,33 @@ def _seed_passing_test(
     normalized_connection_id = CONNECTION_ID.replace("-", "")
     state["evidence"]["credential"] = {
         "connectionId": normalized_connection_id,
+        "connectorId": snow.CONNECTOR_ID,
+        "environmentId": ENVIRONMENT_ID,
+        "physicalStatus": "Connected",
+        "authMode": snow.AUTH_MODE,
+        "instanceName": "dev123",
+        "resourceUri": APP_CLIENT_ID,
     }
+    identity = snow._agent_binding_identity(
+        _context(),
+        state,
+        components,
+    )
+    identity_sha256 = snow._canonical_json_hash(identity)
     state["evidence"]["agentConnection"] = {
         "kind": "maker-attestation",
         "status": "completed",
         "connectionId": normalized_connection_id,
         "physicalStatus": "Connected",
+        "authMode": snow.AUTH_MODE,
         "makerAttested": True,
         "recordedAt": "2026-10-01T00:00:00Z",
         "binding": {
-            "draftSemanticHash": snow._draft_semantic_hash(components),
+            "bindingIdentity": identity,
+            "bindingIdentitySha256": identity_sha256,
         },
     }
+    state["agentBindingIdentitySha256"] = identity_sha256
     connection_binding_hash = snow._connection_binding_hash(
         _context(),
         state,
@@ -422,7 +510,11 @@ def _seed_complete_dev_state(
         agent_slug=slug,
     )
     context["root"] = root
-    components = _components(CONNECTION_ID)
+    components = _target_profile_components(
+        profile,
+        instance_name="dev123",
+        connection_id=CONNECTION_ID,
+    )
     contract_path = (
         root
         / "src"
@@ -451,11 +543,21 @@ def _seed_complete_dev_state(
         state["acceptedContractRevision"] = contract["contractRevision"]
         state["evidence"]["credential"] = {
             "connectionId": CONNECTION_ID.replace("-", ""),
+            "connectorId": snow.CONNECTOR_ID,
+            "environmentId": ENVIRONMENT_ID,
             "instanceName": "dev123",
             "resourceUri": APP_CLIENT_ID,
             "authMode": snow.AUTH_MODE,
             "physicalStatus": "Connected",
         }
+        binding_identity = snow._agent_binding_identity(
+            context,
+            state,
+            components,
+        )
+        binding_identity_sha256 = snow._canonical_json_hash(
+            binding_identity
+        )
         state["evidence"]["agentConnection"] = {
             "kind": "maker-attestation",
             "status": "completed",
@@ -470,9 +572,11 @@ def _seed_complete_dev_state(
                 "agentSlug": slug,
                 "agentId": agent_id,
                 "environmentId": ENVIRONMENT_ID,
-                "draftSemanticHash": state["draftSemanticHash"],
+                "bindingIdentity": binding_identity,
+                "bindingIdentitySha256": binding_identity_sha256,
             },
         }
+        state["agentBindingIdentitySha256"] = binding_identity_sha256
         state["connectionBindingHash"] = snow._connection_binding_hash(
             context,
             state,
@@ -545,8 +649,51 @@ def _seed_complete_dev_state(
                 "runbookCompleted": True,
                 "mappingDetailsCollected": True,
                 "claimMappingConfirmed": True,
+                "binding": {
+                    "tenantId": TENANT_ID,
+                    "environmentId": ENVIRONMENT_ID,
+                    "instanceName": "dev123",
+                    "applicationClientId": APP_CLIENT_ID,
+                    "provider": product.provider_key,
+                    "profile": profile,
+                    "agentSlug": slug,
+                    "agentId": agent_id,
+                },
             },
         }
+        state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
+            "status": "completed",
+            "evidence": {
+                "kind": "structured-admin-attestation",
+                "recordedAt": "2026-10-23T00:00:08Z",
+                "tokenClaimEmissionConfirmed": True,
+                "binding": {
+                    "tenantId": TENANT_ID,
+                    "environmentId": ENVIRONMENT_ID,
+                    "instanceName": "dev123",
+                    "applicationClientId": APP_CLIENT_ID,
+                    "provider": product.provider_key,
+                    "profile": profile,
+                    "agentSlug": slug,
+                    "agentId": agent_id,
+                },
+            },
+        }
+        state["evidence"]["lastInspection"] = {
+            "mode": "live",
+            "agentId": agent_id,
+            "environmentId": ENVIRONMENT_ID,
+            "componentHash": state["componentHash"],
+            "components": snow.summarize_components(components),
+        }
+        portal_topic = snow._portal_topic_component(components)
+        snow._record_portal_confirmation(
+            state,
+            topic=portal_topic,
+            portal_url="https://dev123.service-now.com/employee",
+            instance_name="dev123",
+            source="test-seed",
+        )
         if legacy_publish_status is not None:
             state["phases"]["publish"] = {
                 "status": legacy_publish_status,
@@ -583,10 +730,35 @@ def _seed_realm_promotion(
         "sourceEnvironmentId": context["environment"]["id"],
     }
     if complete_test_first:
-        target_sha = "b" * 64
-        plan_sha = "c" * 64
+        target_environment_id = (
+            "00000000-0000-4000-8000-000000008888"
+        )
+        target_agent_id = "00000000-0000-4000-8000-000000007777"
+        target_identity = {
+            "realm": "test",
+            "tenantId": TENANT_ID,
+            "environmentId": target_environment_id,
+            "dataverseUrl": (
+                f"https://{target_environment_id}.crm.dynamics.com"
+            ),
+            "agentId": target_agent_id,
+            "schemaName": snow.ACTIVE_PROFILE.schema_name,
+            "almFamilyId": "family-1",
+            "commitSha": "test-commit",
+        }
+        target_sha = snow._canonical_json_hash(target_identity)
+        runtime_plan = snow._runtime_plan(
+            realm="test",
+            target_identity=target_identity,
+            target_configuration_sha256=target_sha,
+            content_sha256="d" * 64,
+            connection_id=CONNECTION_ID.replace("-", ""),
+        )
+        plan_sha = runtime_plan["planSha256"]
         evidence.setdefault("realmFlows", {})["test"] = {
             "realm": "test",
+            "targetIdentity": target_identity,
+            "targetConfigurationSha256": target_sha,
             "stages": {
                 stage_id: {
                     "status": "completed",
@@ -596,6 +768,34 @@ def _seed_realm_promotion(
             },
         }
         evidence.setdefault("realmValidations", {})["test"] = {
+            "targetIdentity": target_identity,
+            "targetAgentId": target_agent_id,
+            "targetEnvironmentId": target_environment_id,
+            "targetDataverseUrl": target_identity["dataverseUrl"],
+            "targetTenantId": TENANT_ID,
+            "almFamilyId": "family-1",
+            "targetCommitSha": "test-commit",
+            "targetConfigurationSha256": target_sha,
+            "runtimePlan": runtime_plan,
+            "runtimeApproval": {
+                "decision": "approved",
+                "planSha256": plan_sha,
+                "targetConfigurationSha256": target_sha,
+                "promotedContentSha256": "d" * 64,
+                "connectionId": CONNECTION_ID.replace("-", ""),
+            },
+            "agentBinding": {
+                "kind": "maker-attestation",
+                "status": "completed",
+                "realm": "test",
+                "connectionId": CONNECTION_ID.replace("-", ""),
+                "planSha256": plan_sha,
+                "targetConfigurationSha256": target_sha,
+                "targetAgentId": target_agent_id,
+                "targetEnvironmentId": target_environment_id,
+                "targetDataverseUrl": target_identity["dataverseUrl"],
+                "targetTenantId": TENANT_ID,
+            },
             "functionalTest": {
                 "kind": "maker-attestation",
                 "status": "completed",
@@ -604,8 +804,13 @@ def _seed_realm_promotion(
                 "binding": {
                     "provider": snow.ACTIVE_PROFILE.provider_key,
                     "profile": snow.ACTIVE_PROFILE.key,
+                    "targetAgentId": target_agent_id,
+                    "targetEnvironmentId": target_environment_id,
+                    "targetDataverseUrl": target_identity["dataverseUrl"],
+                    "targetTenantId": TENANT_ID,
                     "targetConfigurationSha256": target_sha,
                     "planSha256": plan_sha,
+                    "connectionId": CONNECTION_ID.replace("-", ""),
                 },
             }
         }
@@ -634,6 +839,7 @@ def _target_profile_components(
     profile: str,
     *,
     instance_name: str,
+    connection_id: str | None = None,
 ) -> dict:
     product = snow.PRODUCT_PROFILES[profile]
     namespace = "ServiceNowHRSD" if profile == "hrsd" else "ServiceNowITSM"
@@ -713,6 +919,11 @@ def _target_profile_components(
                     "$kind": "ConnectionReference",
                     "id": "00000000-0000-4000-8000-000000004441",
                     "version": 1,
+                    "connectionId": (
+                        connection_id.replace("-", "")
+                        if connection_id
+                        else None
+                    ),
                     "connectorId": snow.CONNECTOR_ID,
                     "connectionReferenceLogicalName": "servicenow-ref",
                     "displayName": "ServiceNow",
@@ -1213,8 +1424,16 @@ def _write_portal_value_source_state(
     return path
 
 
-def _seed_admin_credential_requirements(root: Path) -> None:
-    state = snow._state_base(_context(), _components())
+def _seed_admin_credential_requirements(
+    root: Path,
+    *,
+    include_binding: bool = False,
+) -> None:
+    state = (
+        _seed_current_agent_binding(root, _components())
+        if include_binding
+        else snow._state_base(_context(), _components())
+    )
     setup = snow._admin_setup(state)
     setup["preflight"]["instanceName"] = "dev123"
     setup["phaseHandoffs"]["entra-registration"] = {
@@ -1810,13 +2029,16 @@ def test_enable_all_topics_refetches_and_verifies(
         lambda _context: FakeAgentBuilder(),
     )
     monkeypatch.chdir(tmp_path)
+    _seed_current_agent_binding(tmp_path, components)
 
     result = snow.enable_all_servicenow_topics(
         {
             "agent": {
                 "id": AGENT_ID,
                 "schema_name": snow.HR_SCHEMA_NAME,
+                "workspace_slug": AGENT_SLUG,
             },
+            "active": {"slug": AGENT_SLUG},
             "environment": {
                 "id": ENVIRONMENT_ID,
                 "ring": "test",
@@ -1835,6 +2057,145 @@ def test_enable_all_topics_refetches_and_verifies(
 def test_enable_all_topics_requires_confirmation() -> None:
     with pytest.raises(snow.ServiceNowConnectError, match="confirmation"):
         snow.enable_all_servicenow_topics({}, confirmed=False)
+
+
+def test_topic_activation_requires_current_agent_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    topic = components["botComponentChanges"][0]["component"]
+    topic["state"] = "Inactive"
+    topic["status"] = "Inactive"
+    update_calls = 0
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return copy.deepcopy(components)
+
+        def update_components(self, *_args: object, **_kwargs: object) -> dict:
+            nonlocal update_calls
+            update_calls += 1
+            return {}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="Confirm the exact current ServiceNow agent binding",
+    ) as raised:
+        snow.enable_all_servicenow_topics(_context(), confirmed=True)
+
+    assert raised.value.details["requiredPhase"] == "agent-connection"
+    assert update_calls == 0
+
+
+def test_topic_and_portal_changes_preserve_binding_but_invalidate_final_test(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    components = _portal_components()
+    state = _seed_current_agent_binding(tmp_path, components)
+    old_binding_hash = state["connectionBindingHash"]
+    old_draft_hash = state["draftSemanticHash"]
+    state["evidence"]["test"] = {
+        "kind": "maker-attestation",
+        "status": "completed",
+        "promptCategory": "list-my-open-hr-cases",
+        "result": "pass",
+        "failureCategory": None,
+        "recordedAt": "2026-10-01T00:01:00Z",
+        "binding": {
+            "provider": snow.PROVIDER_KEY,
+            "profile": snow.PROFILE_KEY,
+            "agentSlug": AGENT_SLUG,
+            "agentId": AGENT_ID,
+            "environmentId": ENVIRONMENT_ID,
+            "connectionId": CONNECTION_ID.replace("-", ""),
+            "draftSemanticHash": old_draft_hash,
+            "connectionBindingHash": old_binding_hash,
+        },
+    }
+    _lifecycle_path(tmp_path).write_text(json.dumps(state), encoding="utf-8")
+    changed = copy.deepcopy(components)
+    changed["botComponentChanges"][0]["component"]["state"] = "Inactive"
+    changed["botComponentChanges"][0]["component"]["status"] = "Inactive"
+    portal = snow._portal_topic_component(changed)
+    snow._write_portal_value(
+        snow._portal_value_node(portal)["value"],
+        "https://dev123.service-now.com/new-path",
+    )
+
+    loaded = snow._load_lifecycle_state(_context(), changed)
+
+    assert snow._agent_connection_attestation_current(loaded, changed) is True
+    assert loaded["connectionBindingHash"] == old_binding_hash
+    assert loaded["agentBindingIdentitySha256"] == state[
+        "agentBindingIdentitySha256"
+    ]
+    assert loaded["draftSemanticHash"] != old_draft_hash
+    assert loaded["evidence"]["test"]["binding"]["draftSemanticHash"] != (
+        loaded["draftSemanticHash"]
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    ("agent", "environment", "connection", "reference-resource"),
+)
+def test_binding_identity_changes_invalidate_agent_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    change: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    components = _components()
+    state = _seed_current_agent_binding(tmp_path, components)
+    context = _context()
+    changed_components = copy.deepcopy(components)
+    changed_state = copy.deepcopy(state)
+    changed_context = copy.deepcopy(context)
+    if change == "agent":
+        changed_context["agent"]["id"] = OTHER_AGENT_ID
+    elif change == "environment":
+        changed_context["environment"]["id"] = (
+            "00000000-0000-4000-8000-000000008888"
+        )
+    elif change == "connection":
+        changed_state["evidence"]["credential"]["connectionId"] = (
+            "00000000000040008000000000003334"
+        )
+    else:
+        reference = changed_components["connectionReferenceChanges"][0][
+            "connectionReference"
+        ]
+        parameters = json.loads(reference["sharedConnectionParameters"])
+        parameters["values"]["token:ResourceUri"]["value"] = (
+            "00000000-0000-4000-8000-000000006667"
+        )
+        reference["sharedConnectionParameters"] = json.dumps(parameters)
+
+    current_hash = snow._agent_binding_identity_hash(
+        changed_context,
+        changed_state,
+        changed_components,
+    )
+
+    assert current_hash != state["agentBindingIdentitySha256"]
+    if change in {"connection", "reference-resource"}:
+        assert (
+            snow._agent_connection_attestation_current(
+                changed_state,
+                changed_components,
+            )
+            is False
+        )
 
 
 def test_enable_all_topics_is_noop_when_all_are_active(
@@ -1890,6 +2251,7 @@ def test_keep_current_topic_choice_records_without_mutation(
             raise AssertionError(f"Unexpected update: {payload}")
 
     monkeypatch.chdir(tmp_path)
+    _seed_current_agent_binding(tmp_path, components)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -1929,6 +2291,7 @@ def test_enable_all_topics_fails_when_refetch_is_still_inactive(
         "_agentbuilder_client",
         lambda _context: FakeAgentBuilder(),
     )
+    _seed_current_agent_binding(tmp_path, components)
 
     with pytest.raises(
         snow.ServiceNowConnectError,
@@ -2314,8 +2677,8 @@ def test_realm_functional_question_uses_profile_prompt(
     assert "https://target.example/test-pane" in question["question"]
     assert "Do not add an employee name" in question["question"]
     assert "Do not paste the response" in question["question"]
-    assert "directs you back to the Dev agent" in question["question"]
-    assert "failure category" not in question["question"]
+    assert "scoped target remediation" in question["question"]
+    assert "promoted-content defects" in question["question"]
     assert [option["label"] for option in question["options"]] == [
         "Pass",
         "Not pass",
@@ -2355,6 +2718,11 @@ def test_missing_realm_deployment_handoff_is_resumable_and_ordered(
                 complete_test_first=True,
             )
             state = json.loads(path.read_text(encoding="utf-8"))
+            monkeypatch.setattr(
+                snow,
+                "_revalidate_realm_target",
+                lambda *_args, **_kwargs: ({}, object()),
+            )
     phases_before = copy.deepcopy(state["phases"])
     dev_test_before = copy.deepcopy(state["evidence"]["test"])
 
@@ -2560,7 +2928,7 @@ def test_schema_v7_retires_legacy_publish_without_resetting_test(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 9
+    assert migrated["schemaVersion"] == 10
     assert "publish" not in migrated["phases"]
     assert migrated["retiredPhases"]["publish"]["status"] == legacy_status
     assert migrated["evidence"]["publish"]["status"] == "completed"
@@ -2577,6 +2945,9 @@ def test_schema_v7_retires_legacy_publish_without_resetting_test(
     assert migrated["migration"]["schemaV9"][
         "realmCompletionInferred"
     ] is False
+    assert migrated["migration"]["schemaV10"][
+        "bindingEvidenceMigrated"
+    ] is True
 
 
 def test_schema_v8_retires_graph_gates_without_fabricating_completion(
@@ -2692,7 +3063,7 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
         if realm == "test"
         else target_environment_id
     )
-    target_instance = "target-snow"
+    target_instance = "dev123"
     target_client_id = "00000000-0000-4000-8000-000000006666"
     with snow.product_profile_context("itsm"):
         _seed_realm_promotion(
@@ -2804,6 +3175,24 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
         "_connectivity_client_for_environment",
         lambda *_args, **_kwargs: FakeConnectivity(),
     )
+    if realm == "prod":
+        original_revalidate = snow._revalidate_realm_target
+
+        def revalidate(
+            target_context: dict,
+            *,
+            realm: str,
+            validation: dict,
+        ) -> tuple[dict, object]:
+            if realm == "test":
+                return {}, object()
+            return original_revalidate(
+                target_context,
+                realm=realm,
+                validation=validation,
+            )
+
+        monkeypatch.setattr(snow, "_revalidate_realm_target", revalidate)
 
     with snow.product_profile_context("itsm"):
         result = snow.validate_realm(
@@ -2835,9 +3224,13 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     )
     assert result["automatedChecks"][1]["status"] == "Passed"
     assert result["automatedChecks"][2]["checkpoint"] == (
-        "SN-REALM-PROMOTED-CONTENT-001"
+        "SN-REALM-FOUNDATION-001"
     )
     assert result["automatedChecks"][2]["status"] == "Passed"
+    assert result["automatedChecks"][3]["checkpoint"] == (
+        "SN-REALM-PROMOTED-CONTENT-001"
+    )
+    assert result["automatedChecks"][3]["status"] == "Passed"
     assert {
         row["checkpoint"] for row in result["manualChecks"]
     } == {
@@ -3428,6 +3821,11 @@ def test_prod_requires_completed_test_realm_before_promotion(
             realm="test",
             complete_test_first=True,
         )
+        monkeypatch.setattr(
+            snow,
+            "_revalidate_realm_target",
+            lambda *_args, **_kwargs: ({}, object()),
+        )
         recorded = snow.record_realm_deployment(
             context,
             realm="prod",
@@ -3437,10 +3835,91 @@ def test_prod_requires_completed_test_realm_before_promotion(
     assert recorded["status"] == "validation-required"
 
 
+def test_prod_rejects_internally_stale_test_plan_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="itsm")
+    with snow.product_profile_context("itsm"):
+        _seed_realm_promotion(
+            context,
+            realm="test",
+            complete_test_first=True,
+        )
+        path = snow._lifecycle_state_path(context)
+        state = json.loads(path.read_text(encoding="utf-8"))
+        state["evidence"]["realmValidations"]["test"]["functionalTest"][
+            "binding"
+        ]["planSha256"] = "stale-plan"
+        path.write_text(json.dumps(state), encoding="utf-8")
+        monkeypatch.setattr(
+            snow,
+            "_revalidate_realm_target",
+            lambda *_args, **_kwargs: pytest.fail(
+                "Internally stale completion must block before target reads."
+            ),
+        )
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="Production requires the exact Test realm",
+        ):
+            snow.record_realm_deployment(
+                context,
+                realm="prod",
+                status="deployment-completed",
+            )
+
+
+def test_prod_rereads_completed_test_target_and_blocks_changed_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    with snow.product_profile_context("hrsd"):
+        _seed_realm_promotion(
+            context,
+            realm="test",
+            complete_test_first=True,
+        )
+
+        def changed_target(
+            *_args: object,
+            **_kwargs: object,
+        ) -> tuple[dict, object]:
+            raise snow.ServiceNowConnectError(
+                "The exact Test target changed after preview.",
+                details={"changed": ["commitSha"]},
+            )
+
+        monkeypatch.setattr(
+            snow,
+            "_revalidate_realm_target",
+            changed_target,
+        )
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="completed Test target changed",
+        ) as raised:
+            snow.record_realm_deployment(
+                context,
+                realm="prod",
+                status="deployment-completed",
+            )
+
+    assert raised.value.details["requiredRealm"] == "test"
+    assert raised.value.details["causeDetails"] == {
+        "changed": ["commitSha"]
+    }
+
+
 def test_foundation_reuse_requires_current_target_compatible_evidence() -> None:
     target = {
         "tenantId": TENANT_ID,
         "sameEnvironmentAsDev": True,
+        "environmentId": ENVIRONMENT_ID,
+        "agentId": OTHER_AGENT_ID,
     }
     binding = {
         "tenantId": TENANT_ID,
@@ -3453,6 +3932,9 @@ def test_foundation_reuse_requires_current_target_compatible_evidence() -> None:
                 "entra-registration": {
                     "status": "completed",
                     "evidence": {
+                        "kind": "structured-admin-attestation",
+                        "recordedAt": "2026-10-24T00:00:00Z",
+                        "tokenClaimEmissionConfirmed": True,
                         "binding": {
                             "tenantId": TENANT_ID,
                             "applicationClientId": APP_CLIENT_ID,
@@ -3461,7 +3943,15 @@ def test_foundation_reuse_requires_current_target_compatible_evidence() -> None:
                 },
                 "servicenow-oidc": {
                     "status": "completed",
-                    "evidence": {"binding": binding},
+                    "evidence": {
+                        "kind": "structured-admin-attestation",
+                        "recordedAt": "2026-10-24T00:00:00Z",
+                        "oidcCapabilityConfirmed": True,
+                        "runbookCompleted": True,
+                        "mappingDetailsCollected": True,
+                        "claimMappingConfirmed": True,
+                        "binding": binding,
+                    },
                 },
             }
         }
@@ -3487,6 +3977,226 @@ def test_foundation_reuse_requires_current_target_compatible_evidence() -> None:
     assert reused["compatible"] is True
     assert stale["status"] == "not-reused"
     assert stale["compatible"] is False
+
+    blocked = snow._target_foundation_check(
+        _context(),
+        state=state,
+        realm="test",
+        target=target,
+        instance_name="target-snow",
+        application_client_id=APP_CLIENT_ID,
+    )
+    assert blocked["status"] == "Blocked"
+    _assert_recovery_handoff(blocked["recoveryHandoff"])
+    assert "Graph is not" in blocked["recoveryHandoff"]["values"]
+
+
+def test_incompatible_foundation_blocks_runtime_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    with snow.product_profile_context("hrsd"):
+        _seed_realm_promotion(context, realm="test")
+    target_environment_id = "00000000-0000-4000-8000-000000008888"
+    target_agent_id = "00000000-0000-4000-8000-000000007777"
+    monkeypatch.setattr(
+        snow,
+        "_resolve_target_realm",
+        lambda *_args, **_kwargs: {
+            "environmentId": target_environment_id,
+            "inventoryEnvironmentId": target_environment_id,
+            "environmentName": "Target",
+            "agentId": target_agent_id,
+            "schemaName": snow.HR_SCHEMA_NAME,
+            "observedSchemaName": snow.HR_SCHEMA_NAME,
+            "almFamilyId": "family-1",
+            "commitSha": "test-commit",
+            "tenantId": TENANT_ID,
+            "dataverseUrl": (
+                f"https://{target_environment_id}.crm.dynamics.com"
+            ),
+            "sameEnvironmentAsDev": False,
+            "client": object(),
+        },
+    )
+    monkeypatch.setattr(snow, "run_solution_checks", lambda _runner: [])
+    monkeypatch.setattr(
+        snow,
+        "_target_credential_check",
+        lambda *_args, **_kwargs: {
+            "checkpoint": "SN-REALM-CREDENTIAL-001",
+            "status": "Passed",
+            "automationType": "automated",
+            "description": "credential",
+            "result": "passed",
+            "remediation": "",
+            "roles": [],
+            "evidence": {"connectionId": CONNECTION_ID.replace("-", "")},
+        },
+    )
+    monkeypatch.setattr(
+        snow,
+        "_target_promoted_content_check",
+        lambda *_args, **_kwargs: {
+            "checkpoint": "SN-REALM-PROMOTED-CONTENT-001",
+            "status": "Passed",
+            "automationType": "automated",
+            "description": "content",
+            "result": "passed",
+            "remediation": "",
+            "roles": [],
+            "evidence": {"contentSha256": "d" * 64},
+        },
+    )
+
+    with snow.product_profile_context("hrsd"):
+        result = snow.validate_realm(
+            context,
+            realm="test",
+            target_instance="target-snow",
+            target_client_id=APP_CLIENT_ID,
+        )
+
+    foundation = next(
+        row
+        for row in result["blockingAutomatedChecks"]
+        if row["checkpoint"] == "SN-REALM-FOUNDATION-001"
+    )
+    assert foundation["status"] == "Blocked"
+    assert result["status"] == "needs-configuration"
+    assert result["runtimePlan"] is None
+    assert result["next"]["action"] == "configure-and-rerun"
+
+
+@pytest.mark.parametrize("target_matches", (True, False))
+def test_promoted_content_honors_current_keep_current_topic_states(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    target_matches: bool,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    source_topics = state["evidence"]["lastInspection"]["components"][
+        "serviceNowTopics"
+    ]
+    runtime_topic = next(
+        topic
+        for topic in source_topics
+        if topic["schemaName"].endswith("ServiceNowHRSDRuntime")
+    )
+    runtime_topic["state"] = "Inactive"
+    runtime_topic["status"] = "Inactive"
+    state["componentHash"] = "keep-current-component-hash"
+    state["evidence"]["lastInspection"]["componentHash"] = state[
+        "componentHash"
+    ]
+    state["evidence"]["topics"] = {
+        "kind": "maker-attestation",
+        "status": "recorded",
+        "customerChoice": "keep-current",
+        "makerAttested": True,
+        "boundComponentHash": state["componentHash"],
+    }
+    target_components = _target_profile_components(
+        "hrsd",
+        instance_name="dev123",
+    )
+    if target_matches:
+        target_components["botComponentChanges"][0]["component"][
+            "state"
+        ] = "Inactive"
+        target_components["botComponentChanges"][0]["component"][
+            "status"
+        ] = "Inactive"
+
+    result = snow._target_promoted_content_check(
+        context,
+        source_state=state,
+        realm="test",
+        target={
+            "environmentId": ENVIRONMENT_ID,
+            "agentId": OTHER_AGENT_ID,
+        },
+        target_client=SimpleNamespace(
+            fetch_components=lambda _agent_id: target_components
+        ),
+        expected_instance="dev123",
+    )
+
+    assert result["status"] == ("Passed" if target_matches else "Failed")
+    if not target_matches:
+        assert result["evidence"]["topicMismatches"] == [
+            "servicenowhrsdruntime"
+        ]
+        assert "re-promote" in result["recoveryHandoff"]["action"]
+
+
+def test_promoted_content_blocks_same_host_wrong_portal_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, state = _seed_complete_dev_state(tmp_path, profile="itsm")
+    target_components = _target_profile_components(
+        "itsm",
+        instance_name="dev123",
+    )
+    with snow.product_profile_context("itsm"):
+        portal = snow._portal_topic_component(target_components)
+        snow._write_portal_value(
+            snow._portal_value_node(portal)["value"],
+            "https://dev123.service-now.com/wrong",
+        )
+        result = snow._target_promoted_content_check(
+            context,
+            source_state=state,
+            realm="test",
+            target={
+                "environmentId": ENVIRONMENT_ID,
+                "agentId": OTHER_AGENT_ID,
+            },
+            target_client=SimpleNamespace(
+                fetch_components=lambda _agent_id: target_components
+            ),
+            expected_instance="dev123",
+        )
+
+    assert result["status"] == "Failed"
+    assert result["evidence"]["portal"]["valid"] is True
+    assert "portal exact match: False" in result["result"]
+    assert "PUT components" in result["recoveryHandoff"]["action"]
+
+
+def test_promoted_content_blocks_without_current_dev_expectation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    state["evidence"].pop("portalConfirmation")
+
+    result = snow._target_promoted_content_check(
+        context,
+        source_state=state,
+        realm="test",
+        target={
+            "environmentId": ENVIRONMENT_ID,
+            "agentId": OTHER_AGENT_ID,
+        },
+        target_client=SimpleNamespace(
+            fetch_components=lambda _agent_id: pytest.fail(
+                "Missing Dev expectation must block before target content read."
+            )
+        ),
+        expected_instance="dev123",
+    )
+
+    assert result["status"] == "Blocked"
+    assert result["recoveryHandoff"]["category"] == (
+        "Dev promotion expectation unavailable"
+    )
 
 
 def test_runtime_plan_rejects_stale_hash_before_target_reads(
@@ -3636,7 +4346,7 @@ def test_schema_v8_realm_evidence_migration_never_infers_completion(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 9
+    assert migrated["schemaVersion"] == 10
     assert migrated["evidence"]["realmFlows"] == {}
     assert migrated["migration"]["schemaV9"][
         "preservedLegacyRealmEvidence"
@@ -3644,7 +4354,79 @@ def test_schema_v8_realm_evidence_migration_never_infers_completion(
     assert migrated["migration"]["schemaV9"][
         "realmCompletionInferred"
     ] is False
+    assert migrated["migration"]["schemaV10"]["completionInferred"] is False
     assert snow._realm_is_complete(migrated, "test") is False
+
+
+def test_schema_v9_migrates_strict_binding_identity_and_final_test(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    state["schemaVersion"] = 9
+    state["evidence"]["agentConnection"]["binding"] = {
+        "provider": state["provider"],
+        "profile": state["profile"],
+        "agentSlug": state["agentSlug"],
+        "agentId": state["agentId"],
+        "environmentId": state["environmentId"],
+        "draftSemanticHash": state["draftSemanticHash"],
+    }
+    state.pop("agentBindingIdentitySha256", None)
+    path = snow._lifecycle_state_path(context)
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with snow.product_profile_context("hrsd"):
+        migrated = snow._load_lifecycle_state(context)
+
+    assert migrated["schemaVersion"] == 10
+    assert migrated["migration"]["schemaV10"]["bindingEvidenceMigrated"] is True
+    assert migrated["migration"]["schemaV10"]["testEvidenceMigrated"] is True
+    assert list(migrated["phases"]).index("agent-connection") < list(
+        migrated["phases"]
+    ).index("topics")
+    assert migrated["evidence"]["agentConnection"]["binding"][
+        "bindingIdentitySha256"
+    ] == migrated["agentBindingIdentitySha256"]
+    assert migrated["evidence"]["test"]["binding"][
+        "connectionBindingHash"
+    ] == migrated["connectionBindingHash"]
+
+
+def test_schema_v9_untrusted_binding_resets_later_phases_without_remote_change(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, state = _seed_complete_dev_state(tmp_path, profile="itsm")
+    state["schemaVersion"] = 9
+    state["evidence"]["credential"].pop("resourceUri")
+    state["phases"]["agent-connection-and-test"] = {
+        "status": "done",
+        "checkpointResults": {"legacy": "Manual"},
+    }
+    with snow.product_profile_context("itsm"):
+        path = snow._lifecycle_state_path(context)
+        path.write_text(json.dumps(state), encoding="utf-8")
+        migrated = snow._load_lifecycle_state(context)
+
+    assert migrated["schemaVersion"] == 10
+    migration = migrated["migration"]["schemaV10"]
+    assert migration["bindingEvidenceMigrated"] is False
+    assert migration["testEvidenceMigrated"] is False
+    assert migration["retiredCombinedPhase"] is True
+    assert migration["completionInferred"] is False
+    assert "agentConnection" not in migrated["evidence"]
+    assert "test" not in migrated["evidence"]
+    assert "agentConnectionSchemaV9" in migrated["retiredEvidence"]
+    assert "testSchemaV9" in migrated["retiredEvidence"]
+    assert migrated["retiredPhases"]["agent-connection-and-test"][
+        "status"
+    ] == "done"
+    for phase_id in ("agent-connection", "topics", "portal-url", "test"):
+        assert migrated["phases"][phase_id]["status"] == "pending"
+    assert migrated["componentHash"] == state["componentHash"]
 
 
 def test_realm_evidence_write_does_not_duplicate_lifecycle_events(
@@ -4359,12 +5141,51 @@ def test_unconfirmed_target_identity_is_manual_and_does_not_copy_dev_values(
 
 
 @pytest.mark.parametrize(
-    ("result", "failure_category"),
+    ("result", "failure_category", "expected_checkpoint", "expected_action"),
     (
-        ("pass", None),
-        ("fail", None),
-        ("fail", "identity-mapping"),
-        ("fail", "connection"),
+        ("pass", None, None, "realm-functional-validation-complete"),
+        (
+            "fail",
+            "authentication",
+            "SN-REALM-OIDC-MANUAL",
+            "repair-target-authentication",
+        ),
+        (
+            "fail",
+            "permission",
+            "SN-REALM-OIDC-MANUAL",
+            "repair-target-permission",
+        ),
+        (
+            "fail",
+            "connection",
+            "SN-REALM-CREDENTIAL-001",
+            "repair-target-connection",
+        ),
+        (
+            "fail",
+            "binding",
+            "SN-REALM-AGENT-BINDING-MANUAL",
+            "repair-target-binding",
+        ),
+        (
+            "fail",
+            "identity-mapping",
+            "SN-REALM-OIDC-MANUAL",
+            "repair-target-identity-mapping",
+        ),
+        (
+            "fail",
+            "promoted-content",
+            "SN-REALM-PROMOTED-CONTENT-001",
+            "return-to-dev-and-repromote",
+        ),
+        (
+            "fail",
+            "unexpected",
+            "SN-REALM-MAKER-VALIDATION-MANUAL",
+            "classify-target-test-failure",
+        ),
     ),
 )
 def test_record_realm_test_keeps_manual_rows_and_dev_evidence_isolated(
@@ -4372,6 +5193,8 @@ def test_record_realm_test_keeps_manual_rows_and_dev_evidence_isolated(
     tmp_path: Path,
     result: str,
     failure_category: str | None,
+    expected_checkpoint: str | None,
+    expected_action: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     context, state = _seed_complete_dev_state(tmp_path, profile="hrsd")
@@ -4391,7 +5214,16 @@ def test_record_realm_test_keeps_manual_rows_and_dev_evidence_isolated(
                 "00000000-0000-4000-8000-000000008888"
             ),
             "targetAgentId": "00000000-0000-4000-8000-000000007777",
+            "targetDataverseUrl": (
+                "https://00000000-0000-4000-8000-000000008888."
+                "crm.dynamics.com"
+            ),
+            "targetTenantId": TENANT_ID,
             "targetConfigurationSha256": "a" * 64,
+            "targetCredentialExpectation": {
+                "instanceName": "dev123",
+                "applicationClientId": APP_CLIENT_ID,
+            },
             "runtimePlan": {
                 "planSha256": "b" * 64,
                 "connectionId": CONNECTION_ID.replace("-", ""),
@@ -4437,7 +5269,19 @@ def test_record_realm_test_keeps_manual_rows_and_dev_evidence_isolated(
     monkeypatch.setattr(
         snow,
         "_revalidate_realm_target",
-        lambda *_args, **_kwargs: ({}, object()),
+        lambda *_args, **_kwargs: (
+            {
+                "tenantId": TENANT_ID,
+                "sameEnvironmentAsDev": False,
+                "environmentId": (
+                    "00000000-0000-4000-8000-000000008888"
+                ),
+                "agentId": (
+                    "00000000-0000-4000-8000-000000007777"
+                ),
+            },
+            object(),
+        ),
     )
 
     with snow.product_profile_context("hrsd"):
@@ -4448,8 +5292,12 @@ def test_record_realm_test_keeps_manual_rows_and_dev_evidence_isolated(
             failure_category=failure_category,
         )
 
-    assert recorded["targetedManualCheckpoints"] == []
-    assert recorded["targetedRecoveryHandoffs"] == []
+    assert recorded["targetedManualCheckpoints"] == (
+        [] if expected_checkpoint is None else [expected_checkpoint]
+    )
+    assert len(recorded["targetedRecoveryHandoffs"]) == (
+        0 if expected_checkpoint is None else 1
+    )
     assert recorded["question"] is None
     assert recorded["manualChecks"] == manual_checks
     saved = json.loads(path.read_text(encoding="utf-8"))
@@ -4466,24 +5314,33 @@ def test_record_realm_test_keeps_manual_rows_and_dev_evidence_isolated(
     assert json.loads(config_path.read_text(encoding="utf-8")) == {
         "activeAgent": "do-not-change"
     }
+    assert recorded["next"]["action"] == expected_action
     if result == "fail":
-        assert recorded["next"] == {
-            "action": "return-to-dev-connect",
-            "url": (
-                "https://copilotstudio.test.microsoft.com/environments/"
-                f"{ENVIRONMENT_ID}/copilots/{AGENT_ID}/"
-                "details?agentBackend=cosmos"
-            ),
-            "instruction": (
-                "Not pass recorded; return to the Dev agent and rerun "
-                "`/connect servicenow` to recheck the connection setup "
-                "step by step."
-            ),
-        }
-    else:
-        assert recorded["next"]["action"] == (
-            "realm-functional-validation-complete"
+        _assert_recovery_handoff(recorded["targetedRecoveryHandoffs"][0])
+        assert (
+            recorded["next"]["instruction"]
+            == recorded["targetedRecoveryHandoffs"][0]["message"]
         )
+
+
+def test_record_realm_test_requires_failure_category(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+
+    with snow.product_profile_context("hrsd"):
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="requires one supported failure category",
+        ):
+            snow.record_realm_test(
+                context,
+                realm="test",
+                result="fail",
+                failure_category=None,
+            )
 
 
 def test_reconcile_legacy_publish_receipt_requires_stable_double_read(
@@ -5201,7 +6058,7 @@ def test_set_portal_url_commits_with_fresh_readback(
             return {"changeToken": "token-2"}
 
     monkeypatch.chdir(tmp_path)
-    _seed_admin_credential_requirements(tmp_path)
+    _seed_admin_credential_requirements(tmp_path, include_binding=True)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -5245,7 +6102,7 @@ def test_set_portal_url_commits_value_expression_without_shape_change(
             return {"changeToken": "token-2"}
 
     monkeypatch.chdir(tmp_path)
-    _seed_admin_credential_requirements(tmp_path)
+    _seed_admin_credential_requirements(tmp_path, include_binding=True)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -5287,7 +6144,7 @@ def test_set_portal_url_skips_update_when_already_configured(
             raise AssertionError("already configured value must not be updated")
 
     monkeypatch.chdir(tmp_path)
-    _seed_admin_credential_requirements(tmp_path)
+    _seed_admin_credential_requirements(tmp_path, include_binding=True)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -5329,7 +6186,7 @@ def test_set_portal_url_skips_literal_value_expression_when_already_configured(
             raise AssertionError("already configured value must not be updated")
 
     monkeypatch.chdir(tmp_path)
-    _seed_admin_credential_requirements(tmp_path)
+    _seed_admin_credential_requirements(tmp_path, include_binding=True)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -5366,7 +6223,7 @@ def test_portal_confirmation_rejects_wrong_binding_or_changed_value(
             raise AssertionError("same-value confirmation must not update")
 
     monkeypatch.chdir(tmp_path)
-    _seed_admin_credential_requirements(tmp_path)
+    _seed_admin_credential_requirements(tmp_path, include_binding=True)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -5417,7 +6274,7 @@ def test_set_portal_url_reports_failed_unchanged_for_unsupported_update(
             raise PermissionError("unsupported")
 
     monkeypatch.chdir(tmp_path)
-    _seed_admin_credential_requirements(tmp_path)
+    _seed_admin_credential_requirements(tmp_path, include_binding=True)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -5464,7 +6321,7 @@ def test_set_portal_url_can_verify_and_roll_back(
             return {"changeToken": components["changeToken"]}
 
     monkeypatch.chdir(tmp_path)
-    _seed_admin_credential_requirements(tmp_path)
+    _seed_admin_credential_requirements(tmp_path, include_binding=True)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -5513,7 +6370,7 @@ def test_set_portal_expression_can_verify_and_roll_back(
             return {"changeToken": components["changeToken"]}
 
     monkeypatch.chdir(tmp_path)
-    _seed_admin_credential_requirements(tmp_path)
+    _seed_admin_credential_requirements(tmp_path, include_binding=True)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -5561,7 +6418,7 @@ def test_set_portal_url_reports_rollback_failure(
             return {"changeToken": "token-2"}
 
     monkeypatch.chdir(tmp_path)
-    _seed_admin_credential_requirements(tmp_path)
+    _seed_admin_credential_requirements(tmp_path, include_binding=True)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -5605,7 +6462,7 @@ def test_set_portal_url_preserves_concurrent_authored_edit(
             return {"changeToken": "token-2"}
 
     monkeypatch.chdir(tmp_path)
-    _seed_admin_credential_requirements(tmp_path)
+    _seed_admin_credential_requirements(tmp_path, include_binding=True)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -5657,7 +6514,7 @@ def test_set_portal_url_reports_unverifiable_readback(
             return {}
 
     monkeypatch.chdir(tmp_path)
-    _seed_admin_credential_requirements(tmp_path)
+    _seed_admin_credential_requirements(tmp_path, include_binding=True)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -7551,6 +8408,9 @@ def test_saved_portal_value_same_target_uses_fresh_readback_without_update(
         lambda _context: FakeAgentBuilder(),
     )
     with snow.product_profile_context("hrsd"):
+        target_state = json.loads(target_path.read_text(encoding="utf-8"))
+        _add_current_agent_binding(context, target_state, components)
+        target_path.write_text(json.dumps(target_state), encoding="utf-8")
         offer = snow.portal_value_reuse_handoff(context)
         accepted = snow.record_portal_value_reuse(
             context,
@@ -11688,7 +12548,7 @@ def test_v2_lifecycle_migrates_to_v8_without_obsolete_preflight_gates(
     state_again = snow._load_lifecycle_state(_context())
     snow._write_lifecycle_state(_context(), state_again)
 
-    assert state["schemaVersion"] == 9
+    assert state["schemaVersion"] == 10
     assert state["acceptedContractRevision"] == 1
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
     assert set(state["adminSetup"]["phaseHandoffs"]) == {
@@ -11725,6 +12585,7 @@ def test_v2_lifecycle_migrates_to_v8_without_obsolete_preflight_gates(
         "retiredEntraCheckpointIds"
     ] == []
     assert state["migration"]["schemaV9"]["realmCompletionInferred"] is False
+    assert state["migration"]["schemaV10"]["completionInferred"] is False
     assert first_bytes == state_path.read_bytes()
 
 
@@ -11790,7 +12651,9 @@ def test_v5_migration_retires_parameter_phase_without_fabricating_draft_test(
     assert migrated["retiredPhases"]["parameter-sharing"]["status"] == "done"
     assert "publish" not in migrated["phases"]
     assert migrated["evidence"]["parameterSharing"]["status"] == "not-exposed"
-    assert "draftSemanticHash" not in migrated["evidence"]["test"]["binding"]
+    assert "test" not in migrated["evidence"]
+    assert migrated["retiredEvidence"]["testSchemaV9"]["result"] == "pass"
+    assert migrated["migration"]["schemaV10"]["testEvidenceMigrated"] is False
     assert "testedDraftSemanticHash" not in migrated["evidence"]["publish"]
     assert first_bytes == state_path.read_bytes()
 
@@ -11869,7 +12732,7 @@ def test_v4_migration_removes_obsolete_gates_and_keeps_completed_discovery(
 
     state = snow._load_lifecycle_state(_context())
 
-    assert state["schemaVersion"] == 9
+    assert state["schemaVersion"] == 10
     assert state["adminSetup"]["schemaVersion"] == 4
     assert "scenario" not in state["adminSetup"]["preflight"]
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
@@ -11891,6 +12754,7 @@ def test_v4_migration_removes_obsolete_gates_and_keeps_completed_discovery(
         "retiredEntraCheckpointIds"
     ] == []
     assert state["migration"]["schemaV9"]["realmCompletionInferred"] is False
+    assert state["migration"]["schemaV10"]["completionInferred"] is False
     oidc_evidence = state["adminSetup"]["phaseHandoffs"][
         "servicenow-oidc"
     ]["evidence"]
@@ -12181,13 +13045,25 @@ def test_prepare_manual_connection_returns_exact_maker_guidance(
     assert result["creationMode"] == "manual"
     assert result["connection"]["instanceName"] == "dev123"
     assert result["connection"]["resourceUri"] == APP_CLIENT_ID
-    assert any(
-        "Connection settings" in instruction
-        for instruction in result["instructions"]
+    assert [item["field"] for item in result["expectedValues"]] == [
+        "displayName",
+        "authenticationType",
+        "resourceUri",
+        "instanceName",
+    ]
+    assert result["navigation"] == snow.physical_connection_navigation(
+        _context(),
+        mode="create",
     )
+    assert result["navigation"]["directServiceNowFormRoute"] == "unknown"
+    assert result["navigation"]["fallbackUsed"] is True
+    assert result["navigation"]["automaticCreate"] is False
+    assert result["navigation"]["automaticSignIn"] is False
+    assert result["navigation"]["automaticSubmit"] is False
+    assert result["conditionalRemediations"][0]["observed"] is False
     instructions = result["instructions"]
     create_index = instructions.index(
-        "Open the connection configuration and select Create new connection."
+        "Select New connection."
     )
     search_index = instructions.index(
         "Use the search box in the upper-right to search ServiceNow."
@@ -12197,7 +13073,7 @@ def test_prepare_manual_connection_returns_exact_maker_guidance(
     )
     auth_index = instructions.index("Choose Microsoft Entra ID User Login.")
     fields_index = instructions.index(
-        "Enter the Instance Name and Resource URI shown in this output."
+        "Enter the Resource URI and Instance Name shown in this output."
     )
     assert create_index < search_index < connector_index < auth_index < fields_index
 
@@ -12243,6 +13119,59 @@ def test_prepare_manual_connection_ignores_stale_reference_values(
 
     assert result["connection"]["instanceName"] == "dev123"
     assert result["connection"]["resourceUri"] == APP_CLIENT_ID
+
+
+def test_physical_connection_navigation_uses_selected_environment_fallback() -> None:
+    create = snow.physical_connection_navigation(
+        _context(),
+        mode="create",
+    )
+    repair = snow.physical_connection_navigation(
+        _context(),
+        mode="repair",
+    )
+
+    assert ENVIRONMENT_ID in create["url"]
+    assert ENVIRONMENT_ID in repair["url"]
+    assert create["url"] == repair["url"]
+    assert create["surface"] == "selected-environment-connections-list"
+    assert repair["surface"] == "selected-environment-connections-list"
+    assert create["directServiceNowFormRoute"] == "unknown"
+    assert repair["directServiceNowFormRoute"] == "unknown"
+    assert "New connection" in create["instruction"]
+    assert "exact discovered candidate" in repair["instruction"]
+    assert "does not construct or claim" in create["instruction"]
+
+
+def test_connection_expected_values_use_standard_order() -> None:
+    values = snow.connection_expected_values(
+        display_name="Optional name",
+        resource_uri=APP_CLIENT_ID,
+        instance_name="dev123",
+    )
+    rendered = snow._render_connection_expected_values(
+        display_name="Optional name",
+        resource_uri=APP_CLIENT_ID,
+        instance_name="dev123",
+    )
+
+    assert [item["field"] for item in values] == [
+        "displayName",
+        "authenticationType",
+        "resourceUri",
+        "instanceName",
+    ]
+    assert values[2]["value"] == APP_CLIENT_ID
+    assert "object ID, ADK client ID" in values[2]["description"]
+    assert values[3]["value"] == "dev123"
+    assert "name only" in values[3]["description"]
+    assert rendered.index("Display name") < rendered.index(
+        "Authentication Type"
+    )
+    assert rendered.index("Authentication Type") < rendered.index(
+        "Resource URI"
+    )
+    assert rendered.index("Resource URI") < rendered.index("Instance Name")
 
 
 def test_prepare_manual_connection_requests_missing_metadata(
@@ -12292,7 +13221,12 @@ def test_prepare_manual_connection_requests_missing_metadata(
     )
 
     assert result["status"] == "input-required"
-    assert result["missingFields"] == ["instanceName", "resourceUri"]
+    assert result["missingFields"] == ["resourceUri", "instanceName"]
+    assert [item["field"] for item in result["expectedValues"]] == [
+        "authenticationType",
+        "resourceUri",
+        "instanceName",
+    ]
     assert not (
         tmp_path
         / ".local"
@@ -12519,20 +13453,7 @@ def test_record_test_attestation_accepts_maker_fail_without_category(
         components = _itsm_components()
     with snow.product_profile_context(profile):
         state = snow._state_base(context, components)
-        state["evidence"]["credential"] = {
-            "connectionId": CONNECTION_ID.replace("-", "")
-        }
-        state["evidence"]["agentConnection"] = {
-            "kind": "maker-attestation",
-            "status": "completed",
-            "connectionId": CONNECTION_ID.replace("-", ""),
-            "physicalStatus": "Connected",
-            "makerAttested": True,
-            "recordedAt": "2026-10-01T00:00:00Z",
-            "binding": {
-                "draftSemanticHash": snow._draft_semantic_hash(components),
-            },
-        }
+        _add_current_agent_binding(context, state, components)
         state_path = snow._lifecycle_state_path(context)
         state_path.parent.mkdir(parents=True)
         state_path.write_text(json.dumps(state), encoding="utf-8")
@@ -13520,6 +14441,7 @@ def test_enable_all_topics_rolls_back_ambiguous_partial_mutation(
             return {}
 
     monkeypatch.chdir(tmp_path)
+    _seed_current_agent_binding(tmp_path, components)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -13570,6 +14492,7 @@ def test_enable_all_topics_accepts_server_managed_audit_changes(
             return {}
 
     monkeypatch.chdir(tmp_path)
+    _seed_current_agent_binding(tmp_path, components)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -13624,6 +14547,7 @@ def test_enable_all_topics_accepts_unattributed_active_postimage_difference(
             return {}
 
     monkeypatch.chdir(tmp_path)
+    _seed_current_agent_binding(tmp_path, components)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -13688,6 +14612,7 @@ def test_enable_all_topics_does_not_accept_content_difference_partial_success(
             return {}
 
     monkeypatch.chdir(tmp_path)
+    _seed_current_agent_binding(tmp_path, components)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -13737,6 +14662,7 @@ def test_enable_all_topics_does_not_commit_ambiguous_content_difference(
             raise RuntimeError("ambiguous network failure")
 
     monkeypatch.chdir(tmp_path)
+    _seed_current_agent_binding(tmp_path, components)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -13800,6 +14726,7 @@ def test_topic_rollback_does_not_overwrite_concurrent_external_edit(
 
     historical_operation_id = "00000000-0000-4000-8000-000000000001"
     initial_state = snow._state_base(_context(), components)
+    _add_current_agent_binding(_context(), initial_state, components)
     initial_state["transactions"]["topics"][historical_operation_id] = {
         "operationId": historical_operation_id,
         "status": "rollback-incomplete",
@@ -14043,6 +14970,7 @@ def test_failed_post_update_refetch_does_not_claim_rollback_ownership(
 
     client = FakeAgentBuilder()
     monkeypatch.chdir(tmp_path)
+    _seed_current_agent_binding(tmp_path, components)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -14110,6 +15038,7 @@ def test_enable_all_topics_rejects_missing_transaction_target(
             return {}
 
     monkeypatch.chdir(tmp_path)
+    _seed_current_agent_binding(tmp_path, components)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -15001,9 +15930,9 @@ def test_phase_progress_uses_provider_contract_labels_and_order(
         "Confirm Entra identity options",
         "Confirm ServiceNow user mapping",
         "Check ServiceNow connection",
+        "Connect this agent",
         "Prepare agent topics",
         "Set employee portal URL",
-        "Connect this agent",
         "Test ServiceNow",
     ]
     assert [item["customerLabel"] for item in progress["items"]] == (

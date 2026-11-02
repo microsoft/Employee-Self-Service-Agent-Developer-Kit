@@ -94,6 +94,21 @@ standalone lifecycle phase; legacy
 evidence is retained only as historical state and never treated as proof that
 the direct connector-action path was independently verified.
 
+**Agent Binding:** The Maker binds the verified ServiceNow connection to the
+selected ESS agent in Copilot Studio. FlightCheck checks the Maker’s
+confirmation as Manual evidence. Connect does not enable ServiceNow topics
+before binding is confirmed.
+
+**Topics and Portal:** After binding is confirmed, Connect reads the topic
+states for Maker review and saves only approved changes. It also saves the
+administrator-provided portal URL after Maker confirmation. FlightCheck
+verifies the resulting topic states and portal value.
+
+**Dev Test:** After topic and portal configuration is complete, the Maker runs
+the HRSD or ITSM scenario in the agent’s Test pane using authorized real data.
+FlightCheck reviews the Maker’s reported result as Manual evidence for the
+final configuration.
+
 Only report the integration connected after the runner completes all eight
 ITSM phases. The IT lifecycle intentionally omits the HR-only ServiceNow
 plugin phase. Do not add a second completion message.

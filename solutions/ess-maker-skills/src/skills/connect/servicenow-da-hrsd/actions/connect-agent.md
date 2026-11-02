@@ -39,3 +39,9 @@ Do not call the UI `user-connections` endpoint, reuse browser tokens, or use a
 MinimalBot connection-reference update as a substitute. Return
 `ACTION_RESULT = "applied"` after the attestation is recorded; if the maker is
 unavailable or declines, return `ACTION_RESULT = "cancelled"`.
+
+The recorded binding identity covers the exact provider, profile, agent,
+environment, selected physical connection, and ServiceNow connection-reference
+metadata. Later approved topic-state or same-instance portal changes do not
+require re-binding. A changed agent, environment, connection, auth/resource/
+instance metadata, or connection reference does.
