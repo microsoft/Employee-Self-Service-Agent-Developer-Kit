@@ -1230,6 +1230,33 @@ def test_admin_prerequisites_use_manual_confirmation_without_graph(
     assert statuses["SN-DA-HRSD-ENTRA-CLAIMS-001"] == Status.MANUAL.value
     assert statuses["SN-DA-HRSD-OIDC-001"] == Status.MANUAL.value
 
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["phases"] = {
+        "entra-registration": {
+            "status": "done",
+            "checkpointResults": {
+                f"SN-DA-HRSD-ENTRA-{suffix}-001": Status.MANUAL.value
+                for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH")
+            },
+        }
+    }
+    phase_contract = next(
+        phase
+        for phase in json.loads(
+            (
+                snow.SOLUTION_ROOT
+                / "src"
+                / "skills"
+                / "connect"
+                / snow.PROVIDER_KEY
+                / "contract.json"
+            ).read_text(encoding="utf-8")
+        )["phases"]
+        if phase["id"] == "entra-registration"
+    )
+    assert snow._phase_contract_complete(state, phase_contract)
+
 
 @pytest.mark.parametrize(
     ("candidates", "optional_claim_names"),
@@ -1344,7 +1371,33 @@ def test_client_and_claim_without_full_admin_confirmation_block_entra_family(
             f"SN-DA-HRSD-ENTRA-{suffix}-001",
         )
         assert row.status == Status.NOT_CONFIGURED.value
+        assert row.status != Status.PASSED.value
         assert "complete administrator confirmation" in row.remediation
+
+    state["phases"] = {
+        "entra-registration": {
+            "status": "done",
+            "checkpointResults": {
+                f"SN-DA-HRSD-ENTRA-{suffix}-001": Status.NOT_CONFIGURED.value
+                for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH")
+            },
+        }
+    }
+    phase_contract = next(
+        phase
+        for phase in json.loads(
+            (
+                snow.SOLUTION_ROOT
+                / "src"
+                / "skills"
+                / "connect"
+                / snow.PROVIDER_KEY
+                / "contract.json"
+            ).read_text(encoding="utf-8")
+        )["phases"]
+        if phase["id"] == "entra-registration"
+    )
+    assert not snow._phase_contract_complete(state, phase_contract)
 
 
 @pytest.mark.parametrize(

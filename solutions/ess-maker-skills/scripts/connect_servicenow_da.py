@@ -9694,8 +9694,9 @@ def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
                     "available."
                 )
             ),
-            "Entra application details are verified by the phase's Microsoft "
-            "Graph checkpoints after a client ID is supplied.",
+            "Entra application setup is confirmed through one target-bound "
+            "administrator handoff. The Maker does not run a Microsoft Graph "
+            "API recheck.",
         ],
     }
     setup["preflight"]["discovery"] = discovery

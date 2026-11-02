@@ -6960,6 +6960,52 @@ def test_plugin_requirements_are_scope_and_auth_dynamic() -> None:
         snow.required_servicenow_prerequisites("hrsd", "oauth2ServiceNow")
 
 
+@pytest.mark.parametrize(
+    ("profile", "agent_id", "agent_slug"),
+    (
+        ("hrsd", AGENT_ID, "employee-self-service-hr"),
+        ("itsm", OTHER_AGENT_ID, "employee-self-service-it"),
+    ),
+)
+def test_preflight_limitations_describe_admin_confirmed_entra_without_graph(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    agent_id: str,
+    agent_slug: str,
+) -> None:
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return []
+
+    profile_root = tmp_path / profile
+    profile_root.mkdir()
+    monkeypatch.chdir(profile_root)
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+    context = _profile_context(
+        profile,
+        agent_id=agent_id,
+        agent_slug=agent_slug,
+    )
+
+    with snow.product_profile_context(profile):
+        discovery = snow.inspect_admin_setup(context)
+
+    limitations = discovery["limitations"]
+    entra_limitation = limitations[1]
+    assert entra_limitation == (
+        "Entra application setup is confirmed through one target-bound "
+        "administrator handoff. The Maker does not run a Microsoft Graph "
+        "API recheck."
+    )
+    assert "Graph checkpoints" not in entra_limitation
+    assert "verified by" not in entra_limitation
+
+
 def test_preflight_requires_maker_confirmation_for_single_candidate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
