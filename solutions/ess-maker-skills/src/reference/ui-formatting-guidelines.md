@@ -86,6 +86,16 @@ control begins with its own decision prompt, explanation, and choices.
 
 ## Authoring pattern
 
+Use normal chat for open-ended requirements and revisions, not free-text-only
+structured questions. Keep structured controls for genuine choices. Present
+summaries and previews in normal chat before a separate short decision control,
+not inside a long question description.
+
+Template quote blocks contain only literal response/control copy and simple
+substitution placeholders. Keep definitions, conditions, omission/repetition
+rules and rendering instructions outside them. Resolve every displayed
+placeholder from actual context; unresolved information is not an empty section.
+
 When an owning skill supplies an exact **Message** block or fixed response
 template, render its wording and structure with documented placeholders
 resolved from runtime context.

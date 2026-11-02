@@ -209,16 +209,22 @@ before announcing a mismatch, workspace switch, or refresh.
 After canonical DA setup is complete:
 
 - topics can be created and updated through `src/skills/topics/create/SKILL.md`
-  and `src/skills/topics/update/SKILL.md`; matching instruction changes use
-  separate native read, preview, approval, and save steps, without activation
-  or publication;
+  and `src/skills/topics/update/SKILL.md`; follow
+  `src/skills/topics/experience-contract.md` for summaries, applicable scoped
+  consent, outcomes and testing. Save itself does not activate or publish;
+- for existing topic conversation results, read
+  `src/skills/topics/experience-contract.md` and use
+  `{topic_test_results}` with saved observations. Evaluation-set run history
+  has its own owner; retrieving topic results does not start new testing or
+  authorize changes;
 - local authoring, review, and scan remain available; conversation testing
   requires the installed bounded testing capability. If
   `scripts/native_topic_test.py` is absent, report conversation acceptance as
   pending;
 - general `/push` follows `.github/prompts/push.prompt.md`: inspect local
   pending changes, then compose selected topic, instruction, and evaluation
-  operations through their owners with separate approvals. There is no
+  operations through their owners with shared inventory, scoped batch or
+  component-level consent and one results report. There is no
   Dataverse deployment fallback, workflow writer, template-config CRUD, or
   deployed-topic deletion in this path;
 - `/connect workday` uses the checked-in ESS DA HR Workday extension guidance;
@@ -248,6 +254,9 @@ You ARE the kit - not a consultant discussing the kit. Your job is to help users
 
 - Follow `src/reference/ui-formatting-guidelines.md` whenever rendering portal
   navigation, setup instructions, remediation, or troubleshooting guidance.
+  Use normal chat for genuine free-text-only exchanges and summaries before
+  separate short decision controls, including when an owning example puts
+  free-text-only input in a form. Keep useful structured selection controls.
 - **Never expose internal terminology to the user.** Do not mention: skills, SKILL.md files, prompt files, agents, tools, routing, subagents, flows, checklist files, task files, snapshot files, config files, or any concept related to how you work internally. The user doesn't know or care about these — they just want help.
 - **Never narrate your internal process.** Do not tell the user what files you're reading, what tools you're calling, or what steps you're executing behind the scenes. Just do the work and show the result.
 - **Bad**: "I'm loading the cleanup skill now." / "Let me read the SKILL.md file." / "I'll route you to the workflow creation agent." / "Starting the scan flow by loading the cleanup skill so I can follow its error-fix sequence." / "I'm reading the onboarding instructions and checklist files." / "I'll locate the cloned agent folder and read its core files to build the snapshot outputs." / "I'm updating your progress in the task file."
@@ -345,7 +354,7 @@ For full schemas, reference the topic YAML and workflow JSON files in the user's
 For direct topic creation and updates, read the normal owner under
 `src/skills/topics/create/SKILL.md` or `src/skills/topics/update/SKILL.md`.
 Those skills own current native inventory, mapped identity, ordinary
-`.mcs.yml` drafts, instruction alignment, separate approvals, native save, and
+`.mcs.yml` drafts, instruction alignment, applicable scoped consent, native save, and
 readback. Do not treat the extracted `agent.mcs.yml` as authoritative current
 instructions or route through a second scenario/materializer workflow.
 
@@ -439,8 +448,12 @@ For detailed patterns, see `src/reference/ess-docs/customization/customize.md`.
 ## Agent Development Lifecycle (CRITICAL)
 
 **Native topic and instruction saves are explicit operations above the local
-draft pipeline.** Follow the normal topic owner for separate previews,
-approvals, native saves, and authoritative readback. Do not claim that a local
+draft pipeline.** Follow the normal topic owner and
+`src/skills/topics/experience-contract.md` for previews, applicable scoped
+approvals, native saves, and authoritative readback. Ordinary authoring has
+separate topic/instruction approvals; an unchanged approved Push batch or
+explicitly scoped debugging objective does not repeat those owner gates.
+Do not claim that a local
 YAML edit alone saved the native topic or instructions.
 
 The files in `workspace/agents/{slug}/` are a **local working copy** of the agent
@@ -558,8 +571,8 @@ selected owner for supported saves and disclose unsupported operations.
 ## Testing and Deployment
 
 1. **Check for errors**: After creating or modifying files, check the VS Code Problems panel for compile errors.
-2. **Save when approved**: Follow the general Push prompt or selected owner for scoped native saves, separate instruction approval, and authoritative readback.
-3. **Test when supported**: Use the bounded topic-test owner only when its runtime is installed and the saved topic is compatible and active. Otherwise report conversation acceptance as pending. Do not activate or publish to make testing runnable.
+2. **Save when approved**: Follow the general Push prompt or selected owner for scoped native saves, applicable instruction consent, and authoritative readback. A save preserves state; creation is inactive.
+3. **Test when supported**: Use the topic-test owner when its runtime is installed. Follow the shared state-aware continuation: activation requires the explicit Activate and test selection and confirmed readback before testing; never publish. Preserve test-only/no-activation intent and report real unresolved prerequisites or missing capabilities as pending, not passed.
 
 ## Code Quality Rules
 

@@ -68,7 +68,10 @@ def test_generated_quality_report_uses_exact_compact_scorecard(flow):
     assert "Post-generation quality report" in text
     assert "quality-fix-flow.md" in text
     assert "separate validation progress message or preamble" in text
-    assert "Do not add a table" in text
+    assert "render **Post-generation quality report** from" in text
+    assert "Do not append a next-steps heading or action questions to the scorecard." in text
+    assert "Leave next-step selection to this skill’s maker-action step" in text
+    assert "next-steps heading, and four closing questions" not in text
 
     contract = _contract("experience-contract")
     ordered_fragments = (
@@ -121,6 +124,35 @@ def test_validator_maps_full_rubric_names_without_expanding_scorecard():
     assert "do not append them to the compact maker-facing scorecard" in text
     assert "Never repeat those case tables" in text
     assert "Return only the compact scorecard" in text
+
+
+def test_standalone_deployment_preview_precedes_its_short_control():
+    deployment = _contract("deployment-flow")
+    preview = deployment.index("> **Evaluation deployment**")
+    control = deployment.index("> **Push this evaluation set?**")
+    assert preview < control
+    assert "> {Existing selected-set deployment preview}" in deployment[preview:control]
+    assert "> **Push evaluation set** / **Cancel**" in deployment
+    normalized = _normalized(deployment)
+    assert "actual selected-set context and fresh helper result" in normalized
+    assert "literal `reviewWarning`" in normalized
+    assert "adds no approval gate inside an unchanged approved general Push batch" in normalized
+    assert "Run and Request Review retain their existing controls and semantics" in normalized
+
+
+def test_rendering_instructions_stay_outside_evaluation_response_templates():
+    create = _skill("create")
+    quoted = "\n".join(line for line in create.splitlines() if line.startswith(">"))
+    assert quoted.count("> {Area summaries}") == 2
+    assert "Render one line per area" not in quoted
+    assert "Omit areas with 0 topics" not in quoted
+    assert "Define `{Area summaries}`" in create
+    run = _skill("run")
+    result = run.split("**Eval run complete", 1)[1].split("```", 1)[0]
+    assert "{Expected failure explanation}" in result
+    assert "{Expected failure table}" in result
+    assert "{Next corrective action question}" in result
+    assert "only when explicit expected-failure evidence exists" not in result
 
 
 @pytest.mark.parametrize("flow", ["create", "generate"])
@@ -529,8 +561,11 @@ def test_entry_prompts_preserve_explicit_push_without_general_deployment_overrid
     assert "topic_authoring.py create --draft" in general
     assert "topic_authoring.py update --draft" in general
     assert "agent_instructions.py update --draft" in general
-    assert "separate instruction approval" in general
-    assert "obtain its required approval before using its noninteractive `--yes`" in general
+    normalized_general = _normalized(general)
+    assert "Ordinary authoring has separate approvals" in normalized_general
+    assert "Carry this exact consent into the owners and their noninteractive `--yes`" in normalized_general
+    assert "Do not ask for independent owner approval again for that unchanged authorized scope" in normalized_general
+    assert "requires a revised summary and fresh approval" in normalized_general
     assert "--force-delete" not in general
     assert "never launch an interactive evaluation push" in _normalized(push).lower()
     update = _normalized(_read(".github/prompts/update.prompt.md"))
