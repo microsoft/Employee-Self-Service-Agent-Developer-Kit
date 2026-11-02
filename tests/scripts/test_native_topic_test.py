@@ -4,14 +4,17 @@
 from __future__ import annotations
 
 import argparse
+import builtins
 from copy import deepcopy
 import json
+from pathlib import Path
 
 import pytest
 
 import daga_chat_driver
 from drive_surface import Bubble, aggregate_turn
 import native_topic_test as native
+from minimalbot_evaluation import MinimalBotEvaluationClient, MinimalBotEvaluationError
 
 
 AGENT_ID = "00000000-0000-4000-8000-000000002222"
@@ -32,6 +35,11 @@ URL = (
     "https://copilotstudio.test.microsoft.com/environments/"
     f"{TARGET['environment']['id']}/copilots/{AGENT_ID}/details?agentBackend=cosmos"
 )
+
+
+@pytest.fixture(autouse=True)
+def no_capability_network(monkeypatch):
+    monkeypatch.setattr(native, "emit_capability_use", lambda *_args: None)
 
 
 @pytest.fixture
@@ -499,3 +507,698 @@ def test_later_observation_keeps_original_snapshot_and_expectation(
     with pytest.raises(ValueError, match="original response"):
         native._exercise(args, tmp_path, client, TARGET)
     assert not calls
+
+
+@pytest.fixture
+def ordinary_dialog(component):
+    # Existing expanded native Object Model fields; literal extraction cannot
+    # grade a topic that continues into another dialog.
+    component["dialog"]["beginDialog"]["actions"].insert(
+        0, {"$kind": "BeginDialog", "dialog": "another-topic"},
+    )
+    return component
+
+
+@pytest.mark.parametrize("literal", [False, True])
+def test_inspect_returns_authoritative_topic_without_requiring_exact_mode(
+    exercise, component, tmp_path, monkeypatch, capsys, literal,
+):
+    args, client, calls = exercise
+    if not literal:
+        component["dialog"]["beginDialog"]["actions"].append({"$kind": "BeginDialog"})
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    capabilities = []
+    monkeypatch.setattr(native, "emit_capability_use", capabilities.append)
+    assert native.main([
+        "inspect", "--kit-root", str(tmp_path), "--component-id", COMPONENT_ID,
+        "--output", str(args.output),
+    ]) == 0
+    result = json.loads(capsys.readouterr().out)
+    inspection = native._read(args.output / "inspection.json")
+    assert inspection["component"] == result["component"] == component
+    assert inspection["triggers"] == [PROMPT]
+    assert inspection["response"] == (ANSWER if literal else None)
+    assert inspection["exactMode"]["supported"] is literal
+    assert result["inspectionEvidence"]["componentHash"] == native._hash(component)
+    assert result["state"] == result["status"] == "Active"
+    assert capabilities == ["topic_test"]
+    assert not calls
+
+
+def test_general_inspection_preserves_trigger_configuration_without_assuming_phrases(component):
+    component["dialog"]["beginDialog"]["$kind"] = "OnConversationStart"
+    component["dialog"]["beginDialog"].pop("intent")
+    result = native._inspection(component, TARGET)
+    assert result["triggers"] is None
+    assert result["inspectionEvidence"]["triggerKind"] == "OnConversationStart"
+    assert result["exactMode"]["supported"] is False
+    assert result["component"] == component
+
+
+@pytest.fixture
+def general_exercise(completed_exercise, ordinary_dialog):
+    args, client, calls = completed_exercise
+    inspection = native._read(args.inspection)
+    inspection["component"] = deepcopy(ordinary_dialog)
+    args.inspection.write_text(json.dumps(inspection), encoding="utf-8")
+    args.operation = "capture"
+    args.prompt = "An approved paraphrase, not one of the saved triggers"
+    return args, client, calls
+
+
+@pytest.mark.parametrize("timed_out", [False, True])
+def test_capture_preserves_arbitrary_prompt_cards_and_partial_facts_without_grading(
+    general_exercise, tmp_path, monkeypatch, timed_out,
+):
+    args, client, calls = general_exercise
+
+    def card_send(_self, text, timeout_s):
+        calls.append(("send", text))
+        return [Bubble("", had_card=True), Bubble("An interim or follow-up reply")], timed_out
+
+    monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "send", card_send)
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == (1 if timed_out else 0)
+    assert result["outcome"] == ("timeout" if timed_out else "captured")
+    assert result["mode"] == "capture" and result["graded"] is False
+    assert "checks" not in result and "assessmentOutcome" not in result
+    assert result["capture"]["hadCard"] is True
+    assert result["capture"]["bubbles"] == [
+        {"text": "", "hadCard": True}, {"text": "An interim or follow-up reply", "hadCard": False},
+    ]
+    assert result["capture"]["partial"] is timed_out
+    assert result["capture"]["completionObserved"] is not timed_out
+    assert result["selectedTopicUnchanged"] is True
+    assert result["nativeReadback"]["component"]["id"] == COMPONENT_ID
+    assert calls.count(("send", args.prompt)) == 1
+    assert native._read(args.output / "execution.json")["expectation"] is None
+    assert native._read(args.output / "native-before.json")["component"]["id"] == COMPONENT_ID
+    assert any("card interactions" in limitation for limitation in result["limitations"])
+
+
+def test_capture_allows_repeated_explicit_known_completed_turns(general_exercise, tmp_path):
+    args, client, calls = general_exercise
+    first, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == 0 and first["capture"]["completionObserved"] is True
+    args.output = args.output.with_name("next-explicit-attempt")
+    second, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == 0 and second["graded"] is False
+    assert calls.count(("send", args.prompt)) == 2
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_observe_original_capture_never_sends_or_acquires_an_exact_grade(
+    general_exercise, tmp_path, monkeypatch, interrupted,
+):
+    args, client, calls = general_exercise
+
+    def uncertain_send(_self, text, timeout_s):
+        calls.append(("send", text))
+        if interrupted:
+            raise RuntimeError("Send outcome is ambiguous; observe without replay")
+        return [Bubble("Partial", had_card=True)], True
+
+    monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "send", uncertain_send)
+    original, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == (2 if interrupted else 1)
+    assert original["graded"] is False and original["submissionMayHaveOccurred"] is True
+    original_result = (args.output / "result.json").read_bytes()
+    args.operation, args.previous, args.output = "observe", args.output, None
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == 0 and result["outcome"] == "captured"
+    assert result["mode"] == "capture" and result["graded"] is False
+    assert "checks" not in result and "assessmentOutcome" not in result
+    assert result["submissionMayHaveOccurred"] is False
+    assert native._read(Path(result["evidenceDirectory"]) / "execution.json")[
+        "expectation"
+    ] is None
+    assert calls.count(("send", args.prompt)) == 1
+    observed = [call for call in calls if isinstance(call, tuple) and call[0] == "observe"]
+    assert len(observed) == 1 and observed[0][2]["expectedResponseId"] == "current-response"
+    assert (args.previous / "result.json").read_bytes() == original_result
+
+
+@pytest.mark.parametrize("failure", ["target", "dialog", "state", "parent", "empty-prompt"])
+def test_capture_gates_stale_target_content_and_active_state_before_send(
+    general_exercise, component, tmp_path, failure,
+):
+    args, client, calls = general_exercise
+    if failure == "target":
+        inspection = native._read(args.inspection)
+        inspection["target"]["environment"]["id"] = COMPONENT_ID
+        args.inspection.write_text(json.dumps(inspection), encoding="utf-8")
+    elif failure == "dialog":
+        component["dialog"]["modelDescription"] = "Changed approved behavior"
+    elif failure == "parent":
+        component["parentBotId"] = COMPONENT_ID
+    elif failure == "state":
+        component["state"] = component["status"] = "Inactive"
+        inspection = native._read(args.inspection)
+        inspection["component"] = deepcopy(component)
+        args.inspection.write_text(json.dumps(inspection), encoding="utf-8")
+    else:
+        args.prompt = " "
+    with pytest.raises(ValueError):
+        native._exercise(args, tmp_path, client, TARGET)
+    assert not calls and not args.output.exists()
+
+
+def test_capture_output_failure_does_not_replace_known_facts_with_a_grade(
+    general_exercise, tmp_path, monkeypatch,
+):
+    args, client, _calls = general_exercise
+    write = native._write
+
+    def failed_write(path, value):
+        if path.name == "result.json":
+            raise OSError("Captured evidence directory is unavailable")
+        write(path, value)
+
+    monkeypatch.setattr(native, "_write", failed_write)
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == 2 and result["outcome"] == "incomplete"
+    assert result["graded"] is False and result["capture"]["completionObserved"] is True
+    assert result["nativeReadback"]["component"]["id"] == COMPONENT_ID
+    assert "assessmentOutcome" not in result
+
+
+def test_capture_cli_emits_existing_topic_test_capability(
+    general_exercise, tmp_path, monkeypatch, capsys,
+):
+    args, client, calls = general_exercise
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    capabilities = []
+    monkeypatch.setattr(native, "emit_capability_use", capabilities.append)
+    code = native.main([
+        "capture", "--kit-root", str(tmp_path), "--inspection", str(args.inspection),
+        "--prompt", args.prompt, "--cdp", args.cdp, "--url", URL, "--output", str(args.output),
+    ])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 0 and result["graded"] is False
+    assert capabilities == ["topic_test"]
+    assert calls.count(("send", args.prompt)) == 1
+
+
+def test_basic_only_browser_testing_is_explicitly_unsupported(
+    general_exercise, tmp_path, monkeypatch, capsys,
+):
+    args, client, calls = general_exercise
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    import_module = builtins.__import__
+
+    def missing_driver(name, *import_args, **kwargs):
+        if name == "daga_chat_driver":
+            raise ModuleNotFoundError("No module named 'playwright'")
+        return import_module(name, *import_args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", missing_driver)
+    code = native.main([
+        "capture", "--kit-root", str(tmp_path), "--inspection", str(args.inspection),
+        "--prompt", args.prompt, "--cdp", args.cdp, "--url", URL, "--output", str(args.output),
+    ])
+    output = capsys.readouterr()
+    result = json.loads(output.err)
+    assert code == 2 and not output.out
+    assert result["outcome"] == "blocked"
+    assert "Basic-only installations do not support browser testing" in result["error"]["message"]
+    assert result["error"]["cause"]["message"] == "No module named 'playwright'"
+    assert not calls and not args.output.exists()
+
+
+@pytest.mark.parametrize("failure", ["changed", "readback"])
+def test_capture_native_integrity_failure_preserves_non_graded_reply(
+    general_exercise, component, tmp_path, monkeypatch, failure,
+):
+    args, client, calls = general_exercise
+    fetch = client.fetch_components
+    reads = 0
+
+    def native_read(agent_id):
+        nonlocal reads
+        reads += 1
+        if reads > 1:
+            if failure == "readback":
+                raise native.requests.ConnectionError("Native readback unavailable")
+            component["status"] = "Inactive"
+        return fetch(agent_id)
+
+    monkeypatch.setattr(client, "fetch_components", native_read)
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == (2 if failure == "readback" else 1)
+    assert result["outcome"] == "incomplete" and result["graded"] is False
+    assert result["selectedTopicUnchanged"] is (None if failure == "readback" else False)
+    assert result["capture"]["replyText"] == ANSWER
+    assert "checks" not in result and calls.count(("send", args.prompt)) == 1
+
+
+@pytest.fixture
+def activation(exercise, component, monkeypatch):
+    args, client, calls = exercise
+    component.update({
+        "state": "Inactive", "status": "Inactive",
+        "schemaName": "gptagent_test.topic.Selected",
+        "parentBotId": AGENT_ID,
+        "extensionData": {"UseProvidedBotComponentId": True},
+    })
+    args.inspection.write_text(json.dumps(native._inspection(component, TARGET)), encoding="utf-8")
+    args.operation, args.yes = "activate", False
+    # Exercise the existing native components transport contract locally. Its
+    # BotComponentUpdate, changeToken and state/status fields are sourced from
+    # MinimalBotEvaluationClient.update_dialog_components, not a guessed API.
+    runtime = MinimalBotEvaluationClient(
+        TARGET["environment"]["id"], AGENT_ID, TARGET["environment"]["tenantId"],
+        host="https://example.test", access_token="local-test-token",
+        session=native.requests.Session(),
+    )
+    writes = []
+
+    def request(method, url, *, body=None, operation="request", params=None):
+        response = native.requests.Response()
+        response.status_code = 200
+        response.headers["x-ms-request-id"] = "local-request"
+        if method == "POST":
+            return response, {**client.fetch_components(AGENT_ID), "changeToken": "local-token"}
+        assert method == "PUT" and body["changeToken"] == "local-token"
+        writes.append(deepcopy(body))
+        assert len(body["botComponentChanges"]) == 1
+        change = body["botComponentChanges"][0]
+        assert change["$kind"] == "BotComponentUpdate"
+        component.clear()
+        component.update(deepcopy(change["component"]))
+        return response, {}
+
+    monkeypatch.setattr(runtime, "_request", request)
+    monkeypatch.setattr(native, "_native_client", lambda *_args: runtime)
+    return args, client, calls, runtime, writes
+
+
+def test_activation_preview_is_readonly_and_confirmation_changes_only_selected_state(
+    activation, component, tmp_path,
+):
+    args, client, calls, _runtime, writes = activation
+    inspected = deepcopy(component)
+    preview, code = native._activate(args, tmp_path, client, TARGET)
+    assert code == 0 and preview["outcome"] == "preview"
+    assert preview["writeAttempted"] is False and preview["verified"] is False
+    assert not writes and not calls and component == inspected
+    args.output, args.yes = args.output.with_name("confirmed-activation"), True
+    result, code = native._activate(args, tmp_path, client, TARGET)
+    assert code == 0 and result["outcome"] == "activated"
+    assert result["writeAttempted"] is result["writeAccepted"] is result["verified"] is True
+    assert result["published"] is False and result["stateMatchesRequest"] is True
+    assert len(writes) == 1
+    desired = {**inspected, "state": "Active", "status": "Active"}
+    assert writes[0]["botComponentChanges"][0]["component"] == desired
+    assert result["nativeReadback"]["component"] == desired
+    assert all(value == [] for key, value in writes[0].items() if key.endswith("Changes")
+               and key != "botComponentChanges")
+
+
+@pytest.mark.parametrize("change", ["target", "dialog", "schema", "parent", "state"])
+def test_activation_rejects_stale_inspection_without_write(
+    activation, component, tmp_path, change,
+):
+    args, client, _calls, _runtime, writes = activation
+    args.yes = True
+    if change == "target":
+        inspection = native._read(args.inspection)
+        inspection["target"]["agent"]["id"] = COMPONENT_ID
+        args.inspection.write_text(json.dumps(inspection), encoding="utf-8")
+    elif change == "dialog":
+        component["dialog"]["modelDescription"] = "Fresh content requires fresh consent"
+    else:
+        component[{"schema": "schemaName", "parent": "parentBotId", "state": "state"}[change]] = "changed"
+    with pytest.raises(ValueError):
+        native._activate(args, tmp_path, client, TARGET)
+    assert not writes and not args.output.exists()
+
+
+def test_activation_guards_second_native_read_without_reconciling_new_content(
+    activation, component, tmp_path, monkeypatch,
+):
+    args, client, _calls, runtime, writes = activation
+    args.yes = True
+    request = runtime._request
+
+    def concurrent_request(method, *request_args, **kwargs):
+        if method == "POST":
+            component["dialog"]["modelDescription"] = "Concurrent edit after initial gate"
+        return request(method, *request_args, **kwargs)
+
+    monkeypatch.setattr(runtime, "_request", concurrent_request)
+    result, code = native._activate(args, tmp_path, client, TARGET)
+    assert code == 2 and result["writeAttempted"] is False
+    assert "Inspect and approve" in result["error"]["activationError"]["message"]
+    assert not writes
+
+
+def test_already_active_confirmed_topic_is_verified_without_a_write(
+    activation, component, tmp_path,
+):
+    args, client, _calls, _runtime, writes = activation
+    component["state"] = component["status"] = "Active"
+    args.inspection.write_text(json.dumps(native._inspection(component, TARGET)), encoding="utf-8")
+    args.yes = True
+    result, code = native._activate(args, tmp_path, client, TARGET)
+    assert code == 0 and result["outcome"] == "unchanged"
+    assert result["writeAttempted"] is False and result["writeAccepted"] is None
+    assert result["verified"] is True and result["stateMatchesRequest"] is True
+    assert not writes
+
+
+@pytest.mark.parametrize("failure", ["uncertain", "conflict", "readback"])
+def test_activation_retains_uncertain_or_accepted_write_evidence_and_never_retries(
+    activation, tmp_path, monkeypatch, failure,
+):
+    args, client, _calls, runtime, writes = activation
+    args.yes = True
+    request = runtime._request
+    attempts = 0
+
+    def failing_request(method, *request_args, **kwargs):
+        nonlocal attempts
+        if method == "PUT":
+            attempts += 1
+            if failure == "uncertain":
+                try:
+                    raise native.requests.ConnectionError("Connection lost after request")
+                except native.requests.ConnectionError as cause:
+                    raise MinimalBotEvaluationError("Native write transport failed") from cause
+            if failure == "conflict":
+                response = native.requests.Response()
+                response.status_code = 409
+                return response, {}
+        elif failure == "readback" and attempts:
+            raise MinimalBotEvaluationError("Native verification read unavailable")
+        return request(method, *request_args, **kwargs)
+
+    monkeypatch.setattr(runtime, "_request", failing_request)
+    result, code = native._activate(args, tmp_path, client, TARGET)
+    assert code == 2 and result["outcome"] == "incomplete"
+    assert result["writeAttempted"] is True and result["verified"] is False
+    assert result["writeAccepted"] == {
+        "uncertain": None, "conflict": False, "readback": True,
+    }[failure]
+    assert result["activationOutcome"] == "incomplete" and attempts == 1
+    facts = result["error"]["activationError"]
+    assert facts["evidence"]["writeAttempted"] is True
+    if failure == "uncertain":
+        assert facts["cause"]["cause"]["message"] == "Connection lost after request"
+    if failure == "readback":
+        assert result["stateMatchesRequest"] is True
+        assert len(writes) == 1
+
+
+@pytest.mark.parametrize("filename", ["native-after.json", "result.json"])
+def test_activation_keeps_verified_success_when_local_evidence_writing_fails(
+    activation, tmp_path, monkeypatch, filename,
+):
+    args, client, _calls, _runtime, writes = activation
+    args.yes = True
+    write = native._write
+
+    def failing_write(path, value):
+        if path.name == filename:
+            raise OSError("Local evidence unavailable")
+        write(path, value)
+
+    monkeypatch.setattr(native, "_write", failing_write)
+    result, code = native._activate(args, tmp_path, client, TARGET)
+    assert code == 2 and result["outcome"] == "incomplete"
+    assert result["activationOutcome"] == "activated"
+    assert result["writeAccepted"] is result["verified"] is True
+    assert result["nativeReadback"]["component"]["state"] == "Active"
+    assert result["evidenceWriteErrors"][0]["file"] == filename
+    assert len(writes) == 1
+
+
+def test_activation_preserves_verified_write_when_later_native_readback_fails(
+    activation, component, tmp_path, monkeypatch,
+):
+    args, client, _calls, runtime, writes = activation
+    args.yes = True
+    fetch = client.fetch_components
+
+    def failed_fetch(agent_id):
+        if writes:
+            raise native.requests.ConnectionError("Later inventory unavailable")
+        return fetch(agent_id)
+
+    # Keep adapter verification available, but fail the helper's later inventory.
+    def read_components():
+        return {
+            "botComponentChanges": [{"component": deepcopy(component)}],
+            "changeToken": "local-token",
+        }
+
+    monkeypatch.setattr(runtime, "read_components", read_components)
+    monkeypatch.setattr(client, "fetch_components", failed_fetch)
+    result, code = native._activate(args, tmp_path, client, TARGET)
+    assert code == 2 and result["activationOutcome"] == "activated"
+    assert result["verified"] is result["writeAccepted"] is True
+    assert "Later inventory unavailable" in result["error"]["nativeReadbackError"]["message"]
+    assert len(writes) == 1
+
+
+def test_activation_must_record_intent_before_any_write(activation, tmp_path, monkeypatch):
+    args, client, _calls, _runtime, writes = activation
+    args.yes = True
+    write = native._write
+
+    def failed_write(path, value):
+        if path.name == "execution.json":
+            raise OSError("Cannot persist activation intent")
+        write(path, value)
+
+    monkeypatch.setattr(native, "_write", failed_write)
+    with pytest.raises(OSError, match="activation intent"):
+        native._activate(args, tmp_path, client, TARGET)
+    assert not writes
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_activation_cli_confirmation_and_telemetry(activation, tmp_path, monkeypatch, capsys, confirmed):
+    args, client, _calls, _runtime, writes = activation
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    capabilities = []
+    monkeypatch.setattr(native, "emit_capability_use", capabilities.append)
+    code = native.main([
+        "activate", "--kit-root", str(tmp_path), "--inspection", str(args.inspection),
+        "--output", str(args.output), *(["--yes"] if confirmed else []),
+    ])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 0 and result["outcome"] == ("activated" if confirmed else "preview")
+    assert len(writes) == (1 if confirmed else 0)
+    assert capabilities == ["topic_test"]
+
+
+def test_activation_cli_keeps_known_remote_success_when_result_file_fails(
+    activation, tmp_path, monkeypatch, capsys,
+):
+    args, client, _calls, _runtime, writes = activation
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    write = native._write
+
+    def failed_write(path, value):
+        if path.name == "result.json":
+            raise OSError("Activation result file unavailable")
+        write(path, value)
+
+    monkeypatch.setattr(native, "_write", failed_write)
+    code = native.main([
+        "activate", "--kit-root", str(tmp_path), "--inspection", str(args.inspection),
+        "--output", str(args.output), "--yes",
+    ])
+    output = capsys.readouterr()
+    result = json.loads(output.out)
+    assert code == 2 and not output.err
+    assert result["outcome"] == "incomplete" and result["activationOutcome"] == "activated"
+    assert result["writeAccepted"] is result["verified"] is True
+    assert result["evidenceWriteErrors"][0]["error"]["message"] == "Activation result file unavailable"
+    assert len(writes) == 1
+
+
+@pytest.fixture
+def browser_preparation(tmp_path, monkeypatch):
+    profile = tmp_path / "owned-browser-profile"
+    profile.mkdir()
+    monkeypatch.setattr(native, "_edge_executable", lambda: Path("msedge.exe"))
+    monkeypatch.setattr(native.tempfile, "mkdtemp", lambda **_kwargs: str(profile))
+    launches = []
+
+    class Process:
+        pid = 12345
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    process = Process()
+
+    def launch(arguments, **kwargs):
+        launches.append((arguments, kwargs))
+        return process
+
+    metadata = {
+        "Browser": "Edg/test",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:23456/devtools/browser/test",
+        "additionalBrowserFact": "retained",
+    }
+    monkeypatch.setattr(native.subprocess, "Popen", launch)
+    monkeypatch.setattr(
+        native, "_wait_for_browser",
+        lambda *_args: ("http://127.0.0.1:23456", metadata),
+    )
+    args = argparse.Namespace(
+        url=URL, output=Path(".local/topic-tests/browser"), timeout=1,
+    )
+    return args, process, launches, metadata
+
+
+def test_browser_preparation_cli_returns_connection_without_human_readiness_or_send(
+    browser_preparation, tmp_path, monkeypatch, capsys,
+):
+    args, process, launches, metadata = browser_preparation
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (object(), TARGET))
+    capabilities = []
+    monkeypatch.setattr(native, "emit_capability_use", capabilities.append)
+    code = native.main([
+        "prepare-browser", "--kit-root", str(tmp_path), "--url", URL,
+        "--output", str(args.output),
+    ])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 0 and result["outcome"] == "prepared"
+    assert result["target"] == native._identity(TARGET)
+    assert result["pid"] == process.pid and result["processExitCode"] is None
+    assert result["cdp"] == "http://127.0.0.1:23456" and result["url"] == URL
+    assert result["browserMetadata"] == metadata
+    assert result["humanReadinessConfirmed"] is result["sendAttempted"] is False
+    assert result["launchAttempted"] is True
+    assert len(launches) == 1
+    arguments, options = launches[0]
+    assert "--inprivate" in arguments
+    assert "--remote-debugging-port=0" in arguments
+    assert "--remote-debugging-address=127.0.0.1" in arguments
+    assert f"--user-data-dir={result['profile']}" in arguments
+    assert arguments[-1] == URL
+    assert options["stdin"] == options["stdout"] == options["stderr"] == native.subprocess.DEVNULL
+    assert not Path(result["profile"]).is_relative_to(Path(result["output"]))
+    intent = native._read(tmp_path / args.output / "launch-intent.json")
+    assert intent["launchAttempted"] is False
+    assert native._read(tmp_path / args.output / "result.json") == result
+    assert capabilities == ["topic_test"]
+
+
+def test_browser_preparation_rejects_another_agent_before_launch(
+    browser_preparation, tmp_path,
+):
+    args, _process, launches, _metadata = browser_preparation
+    args.url = URL.replace(AGENT_ID, COMPONENT_ID)
+    with pytest.raises(ValueError, match="selected agent"):
+        native._prepare_browser(args, tmp_path, TARGET)
+    assert not launches
+    assert not (tmp_path / args.output).exists()
+
+
+@pytest.mark.parametrize("stage", [
+    "launch-intent.json", "browser-process.json", "result.json", "endpoint", "exited",
+])
+def test_browser_preparation_preserves_launch_facts_when_incomplete(
+    browser_preparation, tmp_path, monkeypatch, stage,
+):
+    args, process, launches, _metadata = browser_preparation
+    write = native._write
+
+    def failed_write(path, value):
+        if path.name == stage:
+            raise OSError("Browser evidence unavailable")
+        write(path, value)
+
+    def failed_endpoint(*_args):
+        raise TimeoutError("Browser endpoint unavailable") from ValueError("Original startup cause")
+
+    monkeypatch.setattr(native, "_write", failed_write)
+    if stage == "endpoint":
+        monkeypatch.setattr(native, "_wait_for_browser", failed_endpoint)
+    elif stage == "exited":
+        process.returncode = 9
+    result, code = native._prepare_browser(args, tmp_path, TARGET)
+    assert code == 2
+    assert result["outcome"] == ("blocked" if stage == "launch-intent.json" else "incomplete")
+    assert len(launches) == (0 if stage == "launch-intent.json" else 1)
+    assert result["sendAttempted"] is result["humanReadinessConfirmed"] is False
+    if stage == "launch-intent.json":
+        assert result["launchAttempted"] is False and "pid" not in result
+    else:
+        assert result["launchAttempted"] is True and result["pid"] == process.pid
+    if stage == "endpoint":
+        assert result["error"]["cause"]["message"] == "Original startup cause"
+    elif stage in {"browser-process.json", "result.json"}:
+        assert result["cdp"] == "http://127.0.0.1:23456"
+        assert result["evidenceWriteErrors"][0]["error"]["message"] == "Browser evidence unavailable"
+    elif stage == "exited":
+        assert result["processExitCode"] == 9
+        assert result["error"]["message"].endswith("code 9.")
+
+
+@pytest.mark.parametrize("advertised_endpoint", [
+    "ws://127.0.0.1:23456/devtools/browser/owned",
+    "ws://127.0.0.1:23456/devtools/browser/another",
+    "ws://example.test:23456/devtools/browser/owned",
+])
+def test_browser_endpoint_must_match_its_private_profile_descriptor(
+    tmp_path, monkeypatch, advertised_endpoint,
+):
+    (tmp_path / "DevToolsActivePort").write_text(
+        "23456\n/devtools/browser/owned\n", encoding="utf-8",
+    )
+    calls = []
+
+    class Process:
+        def poll(self):
+            return None
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"webSocketDebuggerUrl": advertised_endpoint, "browserFact": "retained"}
+
+    class Session:
+        trust_env = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def get(self, url, **kwargs):
+            calls.append((url, kwargs, self.trust_env))
+            return Response()
+
+    monkeypatch.setattr(native.requests, "Session", Session)
+    if advertised_endpoint.endswith("/owned") and "example.test" not in advertised_endpoint:
+        endpoint, metadata = native._wait_for_browser(Process(), tmp_path, 1)
+        assert endpoint == "http://127.0.0.1:23456"
+        assert metadata["browserFact"] == "retained"
+    else:
+        with pytest.raises(RuntimeError, match="does not match"):
+            native._wait_for_browser(Process(), tmp_path, 1)
+    assert calls == [(
+        "http://127.0.0.1:23456/json/version",
+        {"timeout": 2, "allow_redirects": False}, False,
+    )]
+
+
+def test_browser_preparation_does_not_wait_forever_for_a_debug_descriptor(
+    tmp_path, monkeypatch,
+):
+    class Process:
+        def poll(self):
+            return None
+
+    clock = iter([0, 2])
+    monkeypatch.setattr(native.time, "monotonic", lambda: next(clock))
+    with pytest.raises(TimeoutError, match="did not expose its endpoint"):
+        native._wait_for_browser(Process(), tmp_path, 1)

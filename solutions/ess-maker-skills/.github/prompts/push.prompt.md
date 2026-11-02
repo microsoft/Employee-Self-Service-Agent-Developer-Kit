@@ -13,6 +13,10 @@ matching the active workspace slug with `connect_ready: true`, show:
 
 and STOP. Otherwise proceed.
 
+Read `src/skills/topics/experience-contract.md` before presenting inventory,
+comparisons, decisions or results. Use its literal copy and scoped consent
+rules. Keep previews in normal chat and decision controls short.
+
 ## Explicit evaluation push
 
 If the request explicitly targets only evaluation test sets, route before the
@@ -58,7 +62,41 @@ python scripts/push.py --dry-run
 
 This operation only compares working files with `.baseline`. It does not authenticate, save, activate, publish, or verify remote state. The baseline records acknowledged submitted content, not a remote mirror or concurrency token.
 
-Show the changed paths and agree the exact requested scope. Preserve unrelated pending changes. Read current remote state through the selected operation's owner before proposing a save.
+Build one `{component_inventory}` in session context from the discovered
+changes. Use the evaluation owner's selected-set discovery for applicable
+changed evaluation sets not represented by the agent baseline. Preserve each
+entry's type, name, exact identity, proposed change and applicability. An
+`agent.mcs.yml` change is not necessarily an instruction change: inspect the
+instruction section and keep unrelated metadata outside the save.
+
+Read current remote state and obtain the exact non-mutating previews through
+the selected owners before asking for Push approval. Include material
+evaluation-copy/reuse, local-replacement and review-state consequences in the
+displayed scope. Inventory inspection alone is not remote validation.
+
+Use the shared inventory outcomes after appropriate observation and recovery:
+**No changes to push.** only after successful empty inspection, or **Could not
+inspect local changes.** with the cause and an offer of the next safe action
+when inspection remains unavailable. Do not equate failed inspection with no
+changes or show runnable Push choices for it.
+
+For available changes, render the shared bulleted entry inventory and offer
+**Summarize each change**, **Push all listed changes**, **Choose what to push**
+or **Cancel**. Reuse this same inventory throughout; do not rediscover a
+different implicit scope after approval.
+
+Choose what to push selects component types, initially none. Each type includes
+all its displayed changes. Follow selection with **Summarize selected
+changes**, **Push selected changes** or **Cancel**. Empty selection never means
+all changes.
+
+Summarize each change and Summarize selected changes review one component-level
+operation at a time: one topic, one agent instruction-section update, or one
+evaluation test-set deployment. Use the relevant owner summary, or the shared
+`{compact_change_comparison}` for a previously deferred edit, in normal chat.
+Current comes from the fresh saved state. Do not add a draft-link line to that
+comparison. Then offer **Push this change**, **Keep pending** or **Cancel
+remaining push**. Preserve completed pushes when remaining work is cancelled.
 
 ## Compose the supported operations
 
@@ -69,22 +107,61 @@ Use these existing owners:
 | New topic draft | `src/skills/topics/create/SKILL.md`, using `topic_authoring.py create --draft` |
 | Existing mapped topic | `src/skills/topics/update/SKILL.md`, using its fresh read and `topic_authoring.py update --draft` |
 | Instructions in `agent.mcs.yml` | `agent_instructions.py read`, then `agent_instructions.py update --draft` against that read snapshot |
-| Evaluation sets | The selected-set evaluation deployment flow above, retaining its review state and separate consent |
+| Evaluation sets | The selected-set evaluation deployment flow above, retaining its review state and applicable scoped consent |
 
 For mixed scope, apply that evaluation flow to the selected evaluation portion and continue the other approved operations. Run its analytics reminder only after verified evaluation deployment.
 
 Topic creation uses ordinary YAML and separate creation metadata. Existing topics use their mapped identities. Follow the normal topic owner's overlap and instruction-alignment assessment without repeating still-current warnings.
 
-For instructions, read current native instructions and preview only the instruction-section change. Preserve unrelated draft fields. Obtain separate instruction approval even when a topic save is also requested.
+For instructions, read current native instructions and preview only the
+instruction-section change. Preserve unrelated draft fields. Ordinary
+authoring has separate approvals; the shared Push consent below covers an
+unchanged displayed batch without another owner approval.
 
-Show each selected operation's exact preview and obtain its required approval before using its noninteractive `--yes`. A general push request or "push anyway" does not combine topic, instruction, and evaluation approvals. It may override disclosed advisory review/alignment concerns, not unsupported scope or failed/uncertain operations.
+**Push all listed changes** approves every displayed applicable change for the
+identified agent; **Push selected changes** approves only the displayed
+selection. **Push this change** approves the current component-level item.
+Carry this exact consent into the owners and their noninteractive `--yes`
+operations, including evaluation deployment. Do not ask for independent owner
+approval again for that unchanged authorized scope. A general request to push,
+before these scoped choices, is not itself batch consent.
 
-Workflows, template configurations, deployed deletions, and non-instruction agent metadata are outside this general save path. Explain the boundary and leave those local changes pending. Direct Power Automate authoring, deployment, registration, and repair outside ADK. Preserve separately authorized product-extension setup and explicit activation operations; do not invoke them to make a topic save or test runnable.
+A material change to the authorized scope, intent or consequences requires a
+revised summary and fresh approval. Keep native concurrency checks,
+confirmation tokens, method admission and destructive/replacement approvals;
+scoped batch consent is not a bypass for these safeguards. Do not treat an
+advisory override as permission for unsupported operations or blind replay.
 
-## Report each outcome
+Explain actual discovered exclusions specifically and leave them pending.
+Do not advertise retired workflow/template-config deployment or deployed
+deletion as choices. Preserve separately authorized product-extension setup
+and explicit testing activation, without invoking them as save side effects.
 
-Report topic, instruction, and evaluation results separately, including known remote outcomes and any subsequent local output or bookkeeping failure. Each owner acknowledges only its captured submitted content. Later disk edits and unsupported changes remain pending.
+## Recover, compose results and continue
 
-If a request failed or its outcome is uncertain, preserve the causal evidence and let the session select the next read or recovery action. Do not replay a create/save merely to repair output, refresh setup automatically, or reset the whole baseline.
+Observe each outcome and attempt appropriate in-scope recovery. Continue
+independently safe approved changes; pause dependent work when an unresolved
+result affects its correctness or safety. Independence follows the requested
+outcome, not merely different types or files. Cancellation stops remaining
+work and preserves completed saves.
 
-Offer supported conversation testing for a plain save request; run it when already requested and available, carrying the selected topic. If `scripts/native_topic_test.py` is absent, report conversation acceptance as pending. Saving does not activate or publish. Preserve local review/catalog evidence; a save alone does not refresh review coverage or resolve findings.
+Use one `{composed_push_report}` with **Push results**, the Component / Outcome /
+Details table and any actual **Not included** entries, all drawn from
+`{component_inventory}`. Use the shared Pushed / Kept pending / Cancelled /
+Failed / Unconfirmed / Pushed with local issue labels. A known prerequisite
+failure uses Failed with its cause and states that no write was attempted;
+there is no separate Blocked Push status.
+
+Preserve known remote results, uncertainty, subsequent local output/bookkeeping
+failures, actual evaluation-copy/review facts and required links/reminders.
+Each owner acknowledges only captured submitted content. Later disk edits
+remain pending. Do not concatenate owner reports or menus, blindly replay an
+uncertain write, refresh setup automatically or reset the whole baseline.
+
+Follow the shared contextual continuation: honor already-requested next steps,
+or offer relevant topic testing once with the carried topic and state-aware
+choices. If `scripts/native_topic_test.py` is absent, report conversation
+acceptance as pending. Saving does not activate or publish; activation requires
+the separate explicit testing choice. A save does not refresh review coverage,
+resolve findings or authorize evaluation execution. Finish without a generic
+What next form when no follow-up applies.

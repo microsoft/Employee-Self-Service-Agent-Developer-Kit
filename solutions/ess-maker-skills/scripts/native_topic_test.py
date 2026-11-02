@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Inspect and browser-test a saved native fixed-response topic without mutations."""
+"""Inspect topics, prepare a test browser, capture a turn, or activate one topic."""
 
 from __future__ import annotations
 
@@ -9,17 +9,25 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
+import tempfile
+import time
 from typing import Any
 import uuid
 
 import requests
 
+from adk_telemetry import emit_capability_use
 from agentbuilder import AgentBuilderClient, AgentBuilderError, canonical_json
 from drive_surface import DriveResult, DriveSurface
+from minimalbot_evaluation import ComponentEditError, MinimalBotEvaluationError
 from reply_signal import ReplySignal, classify_reply_signal, looks_like_error
 from setup_existing_da import _expanded_literal_activity, connect_selected_dev_workspace
+from topic_authoring import _native_client
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -40,6 +48,9 @@ def _hash(value: dict[str, Any]) -> str:
 
 def _error_facts(error: BaseException) -> dict[str, Any]:
     result: dict[str, Any] = {"type": type(error).__name__, "message": str(error)}
+    evidence = getattr(error, "evidence", None)
+    if isinstance(evidence, dict):
+        result["evidence"] = evidence
     cause = error.__cause__ or (
         error.__context__ if not error.__suppress_context__ else None
     )
@@ -76,6 +87,141 @@ def _identity(target: dict[str, Any]) -> dict[str, Any]:
             for key in ("id", "schemaName", "realm")
         },
     }
+
+
+def _edge_executable() -> Path:
+    if sys.platform == "win32":
+        candidates = [
+            Path(root) / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+            for name in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA")
+            if (root := os.environ.get(name))
+        ]
+    elif sys.platform == "darwin":
+        candidates = [
+            Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")
+        ]
+    else:
+        executable = shutil.which("microsoft-edge") or shutil.which("microsoft-edge-stable")
+        candidates = [Path(executable)] if executable else []
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise FileNotFoundError("Microsoft Edge is required to prepare a dedicated test browser.")
+
+
+def _wait_for_browser(
+    process: subprocess.Popen, profile: Path, timeout: int,
+) -> tuple[str, dict[str, Any]]:
+    descriptor = profile / "DevToolsActivePort"
+    deadline = time.monotonic() + timeout
+    last_error = None
+    with requests.Session() as session:
+        session.trust_env = False
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise RuntimeError(
+                    f"The dedicated test browser exited with code {process.returncode}."
+                )
+            if descriptor.is_file():
+                lines = descriptor.read_text(encoding="utf-8").splitlines()
+                if len(lines) >= 2:
+                    port = int(lines[0])
+                    if not 1 <= port <= 65535 or not lines[1].startswith("/devtools/browser/"):
+                        raise ValueError("The dedicated browser wrote an invalid debug descriptor.")
+                    cdp = f"http://127.0.0.1:{port}"
+                    try:
+                        response = session.get(
+                            cdp + "/json/version", timeout=2, allow_redirects=False,
+                        )
+                    except requests.ConnectionError as error:
+                        last_error = error
+                    else:
+                        if response.status_code != 200:
+                            raise RuntimeError(
+                                f"Browser metadata returned HTTP {response.status_code}."
+                            )
+                        metadata = response.json()
+                        if (
+                            not isinstance(metadata, dict)
+                            or metadata.get("webSocketDebuggerUrl")
+                            != f"ws://127.0.0.1:{port}{lines[1]}"
+                        ):
+                            raise RuntimeError(
+                                "Browser metadata does not match the dedicated debug descriptor."
+                            )
+                        return cdp, metadata
+            time.sleep(0.1)
+    raise TimeoutError("The dedicated test browser did not expose its endpoint in time.") from last_error
+
+
+def _prepare_browser(
+    args: argparse.Namespace, root: Path, target: dict[str, Any],
+) -> tuple[dict[str, Any], int]:
+    from daga_chat_driver import validate_studio_url
+
+    url = validate_studio_url(args.url, target)
+    output = _new_output(root, args.output, "prepare-browser")
+    result: dict[str, Any] = {
+        "operation": "prepare-browser", "target": _identity(target),
+        "outcome": "blocked", "url": url, "output": str(output),
+        "humanReadinessConfirmed": False, "sendAttempted": False,
+        "launchAttempted": False,
+    }
+    evidence_errors = []
+    process = None
+
+    def record(name: str) -> None:
+        try:
+            _write(output / name, result)
+        except OSError as error:
+            evidence_errors.append({"file": name, "error": _error_facts(error)})
+
+    try:
+        executable = _edge_executable()
+        profile = Path(tempfile.mkdtemp(prefix="ess-topic-browser-"))
+        result["profile"] = str(profile)
+        arguments = [
+            str(executable), "--inprivate", f"--user-data-dir={profile}",
+            "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1",
+            "--no-first-run", "--no-default-browser-check", url,
+        ]
+        result["launchArguments"] = arguments
+        _write(output / "launch-intent.json", result)
+        result["launchAttempted"] = True
+        result["outcome"] = "incomplete"
+        process = subprocess.Popen(
+            arguments, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=(
+                subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+                if sys.platform == "win32" else 0
+            ),
+            start_new_session=sys.platform != "win32",
+        )
+        result["pid"] = process.pid
+        result["outcome"] = "incomplete"
+        record("browser-process.json")
+        cdp, metadata = _wait_for_browser(process, profile, args.timeout)
+        result["cdp"] = cdp
+        result["browserMetadata"] = metadata
+        result["outcome"] = "prepared"
+    except (OSError, ValueError, RuntimeError, requests.RequestException) as error:
+        result["error"] = _error_facts(error)
+    if process is not None:
+        result["processExitCode"] = process.poll()
+        if result["processExitCode"] is not None and "error" not in result:
+            result["outcome"] = "incomplete"
+            result["error"] = _error_facts(RuntimeError(
+                f"The dedicated test browser exited with code {result['processExitCode']}."
+            ))
+    if evidence_errors:
+        result["evidenceWriteErrors"] = evidence_errors
+        result["outcome"] = "incomplete" if result["launchAttempted"] else "blocked"
+    record("result.json")
+    if evidence_errors:
+        result["evidenceWriteErrors"] = evidence_errors
+        result["outcome"] = "incomplete" if result["launchAttempted"] else "blocked"
+    return result, 0 if result["outcome"] == "prepared" else 2
 
 
 def _components(client: AgentBuilderClient, target: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -139,6 +285,54 @@ def literal_response(component: dict[str, Any]) -> tuple[str, list[str]]:
     return response, triggers
 
 
+def _inspection(component: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
+    dialog = component.get("dialog")
+    if component.get("$kind") != "DialogComponent" or not isinstance(dialog, dict):
+        raise ValueError("The selected component is not a saved native dialog topic.")
+    begin = dialog.get("beginDialog")
+    intent = begin.get("intent") if isinstance(begin, dict) else None
+    triggers = intent.get("triggerQueries") if isinstance(intent, dict) else None
+    response = None
+    try:
+        response, _ = literal_response(component)
+        exact_mode = {"supported": True}
+    except ValueError as exc:
+        exact_mode = {"supported": False, "reason": str(exc)}
+    return {
+        "schemaVersion": 1, "operation": "inspect",
+        "target": _identity(target), "component": component,
+        "response": response, "triggers": triggers,
+        "exactMode": exact_mode,
+        "inspectionEvidence": {
+            "source": "native-components", "componentHash": _hash(component),
+            "triggerKind": begin.get("$kind") if isinstance(begin, dict) else None,
+        },
+    }
+
+
+def _load_inspection(root: Path, path: Path) -> dict[str, Any]:
+    inspection = _read(_evidence_path(root, path))
+    if inspection.get("schemaVersion") != 1 or inspection.get("operation") != "inspect":
+        raise ValueError("Use an inspection produced by this native-topic test tool.")
+    if not isinstance(inspection.get("component"), dict):
+        raise ValueError("The inspection contains no native topic component.")
+    return inspection
+
+
+def _selected(
+    inspection: dict[str, Any], target: dict[str, Any], components: dict[str, dict[str, Any]],
+) -> tuple[str, dict[str, Any]]:
+    if inspection.get("target") != _identity(target):
+        raise ValueError("The inspection or original run belongs to another native target.")
+    component_id = str(uuid.UUID(inspection["component"]["id"]))
+    component = components.get(component_id)
+    if component is None or _topic_state(component) != _topic_state(inspection["component"]):
+        raise ValueError("The selected native topic changed. Inspect it and approve its content again.")
+    if component.get("$kind") != "DialogComponent" or not isinstance(component.get("dialog"), dict):
+        raise ValueError("The selected component is not a saved native dialog topic.")
+    return component_id, component
+
+
 def _snapshot(components: dict[str, dict[str, Any]], component_id: str) -> dict[str, Any]:
     return {
         "component": components.get(component_id),
@@ -151,7 +345,7 @@ def _topic_state(component: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     return {
         key: component.get(key)
-        for key in ("$kind", "id", "schemaName", "dialog", "state", "status")
+        for key in ("$kind", "id", "schemaName", "parentBotId", "dialog", "state", "status")
     }
 
 
@@ -211,45 +405,48 @@ def _exercise(
     client: AgentBuilderClient,
     target: dict[str, Any],
 ) -> tuple[dict[str, Any], int]:
-    from daga_chat_driver import DagaChatDriver, PlaywrightError, validate_studio_url
+    try:
+        from daga_chat_driver import DagaChatDriver, PlaywrightError, validate_studio_url
+    except ImportError as exc:
+        raise RuntimeError(
+            "Browser topic testing requires the optional Playwright runtime. "
+            "Basic-only installations do not support browser testing."
+        ) from exc
 
-    if args.operation == "run":
-        inspection = _read(_evidence_path(root, args.inspection))
-        if inspection.get("schemaVersion") != 1 or inspection.get("operation") != "inspect":
-            raise ValueError("Use an inspection produced by this native-topic test tool.")
-        component_id = str(uuid.UUID(inspection["component"]["id"]))
+    if args.operation in {"run", "capture"}:
+        inspection = _load_inspection(root, args.inspection)
+        exact_mode = args.operation == "run"
         prompt = args.prompt
-        expected_target = inspection["target"]
-        expected_component = inspection["component"]
         cdp, url = args.cdp, args.url
         original = None
         original_baseline = None
     else:
         original = _evidence_path(root, args.previous)
         execution = _read(original / "execution.json")
-        if execution.get("schemaVersion") != 1 or execution.get("operation") != "run":
-            raise ValueError("Observe the original run, not a replacement send or observation.")
-        inspection = _read(original / "inspection.json")
-        component_id = str(uuid.UUID(inspection["component"]["id"]))
+        if execution.get("schemaVersion") != 1 or execution.get("operation") not in {"run", "capture"}:
+            raise ValueError("Observe the original run or capture, not a replacement send or observation.")
+        exact_mode = execution["operation"] == "run"
+        inspection = _load_inspection(root, original / "inspection.json")
         prompt = execution["prompt"]
-        expected_target = execution["target"]
-        expected_component = inspection["component"]
+        if execution["target"] != inspection["target"]:
+            raise ValueError("The original execution and inspection target differ.")
         cdp, url = execution["cdp"], execution["url"]
         original_baseline = _read(original / "native-before.json")
-    if expected_target != _identity(target):
-        raise ValueError("The inspection or original run belongs to another native target.")
     before = _components(client, target)
-    component = before.get(component_id)
-    if component is None or _topic_state(component) != _topic_state(expected_component):
-        raise ValueError("The selected native topic changed. Inspect it and approve its content again.")
-    expected, triggers = literal_response(component)
+    component_id, component = _selected(inspection, target, before)
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError("Supply one non-empty approved message.")
+    expectation = None
+    if exact_mode:
+        expected, triggers = literal_response(component)
+        expectation = {"operator": "exact", "text": expected}
+        if prompt not in triggers:
+            raise ValueError("This bounded exact test accepts only an explicitly saved trigger phrase.")
     if original is not None and (
-        execution["expectation"] != {"operator": "exact", "text": expected}
+        execution.get("expectation") != expectation
         or _topic_state(original_baseline["component"]) != _topic_state(component)
     ):
         raise ValueError("The original response or selected-topic boundary no longer matches.")
-    if prompt not in triggers:
-        raise ValueError("This bounded test accepts only an explicitly saved trigger phrase.")
     if component.get("state") != "Active" or component.get("status") != "Active":
         raise ValueError("The selected topic is inactive; testing does not activate or publish it.")
     url = validate_studio_url(url, target)
@@ -269,6 +466,9 @@ def _exercise(
             "id": "selected-topic-unchanged",
             "description": "The selected topic's identity, dialog and active state remain unchanged.",
         }],
+    } if exact_mode else {
+        "mode": "capture", "prompt": prompt,
+        "description": "Capture one approved turn; the session owns interpretation and grading.",
     })
     capture = None
     capture_facts = None
@@ -286,12 +486,12 @@ def _exercise(
     surface = DriveSurface(driver)
     try:
         surface.start()
-        if args.operation == "run":
+        if original is None:
             boundary = driver.prepare()
             _write(output / "execution.json", {
-                "schemaVersion": 1, "operation": "run",
+                "schemaVersion": 1, "operation": args.operation,
                 "target": _identity(target), "prompt": prompt,
-                "expectation": {"operator": "exact", "text": expected},
+                "expectation": expectation,
                 "cdp": cdp, "url": url, "boundary": boundary,
                 "submissionMayHaveOccurred": True,
                 "isolation": "Existing conversation; no reset or reload.",
@@ -311,12 +511,14 @@ def _exercise(
                 "schemaVersion": 1, "operation": "observe",
                 "originalRun": str(original), "target": _identity(target),
                 "prompt": prompt, "cdp": cdp, "url": url,
-                "expectation": {"operator": "exact", "text": expected},
+                "expectation": expectation,
                 "boundary": boundary, "submissionMayHaveOccurred": False,
             })
             capture = driver.observe(prompt, boundary, args.timeout)
         capture_facts = {
             "replyText": capture.reply_text, "timedOut": capture.timed_out,
+            "partial": capture.timed_out and bool(capture.bubbles),
+            "completionObserved": not capture.timed_out,
             "hadCard": capture.had_card, "bubbleCount": capture.bubble_count,
             "bubbles": [{"text": bubble.text, "hadCard": bubble.had_card} for bubble in capture.bubbles],
             "observation": driver.observation(),
@@ -348,8 +550,20 @@ def _exercise(
         record("native-after.json", after)
     except (AgentBuilderError, requests.RequestException, ValueError) as exc:
         errors["nativeReadbackError"] = _error_facts(exc)
+    assessment = assess(capture, expected, selected_unchanged, drift) if exact_mode else {
+        "graded": False,
+        "selectedTopicUnchanged": selected_unchanged,
+        "componentDrift": drift,
+        "outcome": (
+            "blocked" if capture is None
+            else "incomplete" if selected_unchanged is not True
+            else "timeout" if capture.timed_out
+            else "captured"
+        ),
+    }
     result = {
         "schemaVersion": 1, "operation": args.operation,
+        "mode": "exact" if exact_mode else "capture",
         "target": _identity(target), "componentId": component_id,
         "prompt": prompt, "evidenceDirectory": str(output),
         "observation": driver.observation(),
@@ -357,14 +571,19 @@ def _exercise(
         "capture": capture_facts,
         "nativeReadback": after,
         **({"originalRun": str(original)} if original is not None else {}),
-        **assess(capture, expected, selected_unchanged, drift),
+        **assessment,
         "limitations": [
-            "Reply equality is not an exact-topic invocation trace.",
+            "Current-turn correlation is not an exact-topic invocation trace.",
+            "Completion is a quiet, non-generating DOM observation, not backend completion proof.",
             "The existing conversation was not reset; this is not independent discovery evidence.",
-            "Cards, workflow diagnostics, backend faults and automatic publication are unsupported.",
-        ],
+            "Cards are captured as rendered text/presence, not structured card payloads; "
+            "card interactions, backend fault injection and workflow diagnostics are unsupported.",
+            "No activation, publication, routing change or retry is performed by capture or observe.",
+            "An uncertain send must be observed without replay; a timeout is not proof of failure.",
+        ] + (["Reply equality is only the optional exact saved-response assertion."] if exact_mode else []),
     }
-    result["assessmentOutcome"] = result["outcome"]
+    if exact_mode:
+        result["assessmentOutcome"] = result["outcome"]
     if diagnostics:
         result["diagnostics"] = diagnostics
     if errors:
@@ -377,12 +596,106 @@ def _exercise(
     if evidence_errors:
         result["evidenceWriteErrors"] = evidence_errors
         result["outcome"] = "incomplete" if capture is not None else "blocked"
-    return result, 0 if result["outcome"] == "passed" else 2 if errors or evidence_errors else 1
+    return result, 2 if errors or evidence_errors else 0 if result["outcome"] in {"passed", "captured"} else 1
+
+
+def _activate(
+    args: argparse.Namespace,
+    root: Path,
+    client: AgentBuilderClient,
+    target: dict[str, Any],
+) -> tuple[dict[str, Any], int]:
+    inspection = _load_inspection(root, args.inspection)
+    before = _components(client, target)
+    component_id, component = _selected(inspection, target, before)
+    if not isinstance(component.get("schemaName"), str) or not component["schemaName"].strip():
+        raise ValueError("Native activation requires the inspected topic's schema name.")
+    output = _new_output(root, args.output, "activate")
+    baseline = _snapshot(before, component_id)
+    _write(output / "inspection.json", inspection)
+    _write(output / "native-before.json", baseline)
+    result: dict[str, Any] = {
+        "schemaVersion": 1, "operation": "activate",
+        "target": _identity(target), "componentId": component_id,
+        "evidenceDirectory": str(output), "before": baseline,
+        "requestedState": {"state": "Active", "status": "Active"},
+        "writeAttempted": False, "writeAccepted": None, "verified": False,
+        "nativeReadback": None, "stateMatchesRequest": None, "componentDrift": None,
+        "published": False, "outcome": "preview",
+    }
+    errors = {}
+    evidence_errors = []
+
+    def record(name: str, value: dict[str, Any]) -> None:
+        try:
+            _write(output / name, value)
+        except OSError as exc:
+            evidence_errors.append({"file": name, "error": _error_facts(exc)})
+
+    if args.yes:
+        # Record intent before the single native operation. A missing result is
+        # never permission to repeat a potentially committed write.
+        _write(output / "execution.json", {
+            "schemaVersion": 1, "operation": "activate",
+            "target": _identity(target), "componentId": component_id,
+            "requestedState": result["requestedState"], "writeMayHaveOccurred": True,
+        })
+        try:
+            saved = _native_client(client, target).update_dialog_components([{
+                "componentId": component["id"], "schemaName": component["schemaName"],
+                "expectedComponent": component,
+                "state": "Active", "status": "Active",
+            }], _retry_on_conflict=False)
+            result.update({
+                "nativeResult": saved, "writeAttempted": saved["writeAttempted"],
+                "writeAccepted": True if saved["writeAttempted"] else None,
+                "verified": saved["verified"],
+                "outcome": "activated" if saved["writeAttempted"] else "unchanged",
+            })
+        except ComponentEditError as exc:
+            result.update({
+                "writeAttempted": exc.evidence.get("writeAttempted", True),
+                "writeAccepted": exc.evidence.get("writeAccepted"),
+                "outcome": "incomplete",
+            })
+            errors["activationError"] = _error_facts(exc)
+        except (MinimalBotEvaluationError, requests.RequestException, ValueError, OSError) as exc:
+            # The native adapter wraps every attempted PUT in ComponentEditError;
+            # these failures precede that boundary.
+            result["outcome"] = "blocked"
+            errors["activationError"] = _error_facts(exc)
+        try:
+            after = _snapshot(_components(client, target), component_id)
+            desired = {**_topic_state(component), "state": "Active", "status": "Active"}
+            result.update({
+                "nativeReadback": after,
+                "stateMatchesRequest": _topic_state(after["component"]) == desired,
+                "componentDrift": _drift(baseline["componentHashes"], after["componentHashes"]),
+            })
+            record("native-after.json", after)
+            if not result["stateMatchesRequest"]:
+                raise ValueError("Native readback differs from the inspected topic with Active state.")
+        except (AgentBuilderError, requests.RequestException, ValueError) as exc:
+            errors["nativeReadbackError"] = _error_facts(exc)
+    result["activationOutcome"] = result["outcome"]
+    if errors:
+        result["error"] = errors
+        result["outcome"] = "incomplete" if result["writeAttempted"] else "blocked"
+    if evidence_errors:
+        result["evidenceWriteErrors"] = evidence_errors
+        result["outcome"] = "incomplete" if result["verified"] or result["writeAttempted"] else "blocked"
+    record("result.json", result)
+    if evidence_errors:
+        result["evidenceWriteErrors"] = evidence_errors
+        result["outcome"] = "incomplete" if result["verified"] or result["writeAttempted"] else "blocked"
+    return result, 2 if errors or evidence_errors else 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("list", "inspect", "run", "observe"))
+    parser.add_argument("operation", choices=(
+        "list", "inspect", "prepare-browser", "run", "capture", "observe", "activate",
+    ))
     parser.add_argument("--kit-root", type=Path, default=Path.cwd())
     parser.add_argument("--account")
     parser.add_argument("--component-id")
@@ -393,22 +706,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--url")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--timeout", type=int, default=90)
+    parser.add_argument("--yes", action="store_true", help="Apply separately authorized topic activation.")
     args = parser.parse_args(argv)
     if not 1 <= args.timeout <= 300:
         parser.error("--timeout must be between 1 and 300 seconds.")
     required = {
         "inspect": ("component_id",),
+        "prepare-browser": ("url",),
         "run": ("inspection", "prompt", "cdp", "url", "output"),
+        "capture": ("inspection", "prompt", "cdp", "url", "output"),
         "observe": ("previous",),
+        "activate": ("inspection",),
     }
     for field in required.get(args.operation, ()):
         if getattr(args, field) is None:
             parser.error(f"--{field.replace('_', '-')} is required.")
+    if args.yes and args.operation != "activate":
+        parser.error("--yes is valid only for separately authorized activation.")
     try:
+        emit_capability_use("topic_test")
         root = args.kit_root.resolve()
         client, target = connect_selected_dev_workspace(root, args.account)
-        if args.operation in {"run", "observe"}:
+        if args.operation == "prepare-browser":
+            result, code = _prepare_browser(args, root, target)
+        elif args.operation in {"run", "capture", "observe"}:
             result, code = _exercise(args, root, client, target)
+        elif args.operation == "activate":
+            result, code = _activate(args, root, client, target)
         else:
             components = _components(client, target)
             if args.operation == "list":
@@ -426,19 +750,17 @@ def main(argv: list[str] | None = None) -> int:
                 component = components.get(str(uuid.UUID(args.component_id)))
                 if component is None:
                     raise ValueError("The selected native topic was not found.")
-                response, triggers = literal_response(component)
+                inspection = _inspection(component, target)
                 output = _new_output(root, args.output, "inspect")
-                inspection = {
-                    "schemaVersion": 1, "operation": "inspect",
-                    "target": _identity(target), "component": component,
-                    "response": response, "triggers": triggers,
-                }
                 _write(output / "inspection.json", inspection)
                 result = {
                     "operation": "inspect", "target": _identity(target),
                     "componentId": component["id"], "displayName": component.get("displayName"),
                     "state": component.get("state"), "status": component.get("status"),
-                    "response": response, "triggers": triggers,
+                    "response": inspection["response"], "triggers": inspection["triggers"],
+                    "component": component,
+                    "exactMode": inspection["exactMode"],
+                    "inspectionEvidence": inspection["inspectionEvidence"],
                     "inspection": str(output / "inspection.json"),
                 }
             code = 0

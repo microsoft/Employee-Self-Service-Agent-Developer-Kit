@@ -17,7 +17,7 @@ require setup.
 
 For any explicit or implicit topic creation request, read `src/skills/topics/create/SKILL.md` and follow it completely. This includes requests based on evaluation files or intended scenarios. Carry supplied intent, cases, wording, and thresholds as context; do not start a separate scenario/materializer lifecycle.
 
-The topic owner handles the ordinary `.mcs.yml` draft, current native inventory, instruction alignment, separate approvals, native save, readback, optional testing handoff, and end-of-iteration evaluation impact.
+The topic owner handles the ordinary `.mcs.yml` draft, current native inventory, instruction alignment, applicable scoped approvals, native save, readback, testing handoff, and end-of-iteration evaluation impact. Read `src/skills/topics/experience-contract.md` and use its summary, short choices, outcome heads and state-aware testing continuation. Carry valid Push/debugging authorization to the owner rather than imposing another unchanged-scope approval or duplicate testing offer.
 
 ## Evaluation
 

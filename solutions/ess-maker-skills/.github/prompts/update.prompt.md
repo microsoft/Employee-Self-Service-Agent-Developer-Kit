@@ -17,7 +17,7 @@ not require setup.
 
 For any explicit or implicit topic change, read `src/skills/topics/update/SKILL.md` and follow it completely. Carry the exact selected topic and any supplied evaluation cases or findings. Do not use a separate eval-driven save/materialization workflow.
 
-The topic owner handles fresh native readback, mapped identity, ordinary `.mcs.yml` drafting, instruction alignment, separate approvals, scoped native save, optional testing handoff, and end-of-iteration evaluation impact.
+The topic owner handles fresh native readback, mapped identity, ordinary `.mcs.yml` drafting, instruction alignment, applicable scoped approvals, native save, testing handoff, and end-of-iteration evaluation impact. Read `src/skills/topics/experience-contract.md` and use its change-focused summary, short choices, outcome heads and state-aware testing continuation. Infer or carry an unambiguous topic; use discovered choices plus free text only when selection is needed. Carry valid Push/debugging authorization rather than imposing another unchanged-scope approval or duplicate testing offer.
 
 ## Evaluation
 

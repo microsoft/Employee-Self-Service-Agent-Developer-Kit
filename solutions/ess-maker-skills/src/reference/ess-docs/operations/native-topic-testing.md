@@ -1,60 +1,154 @@
 # Native topic browser testing
 
-Test one saved native fixed-response topic in the selected Dev agent. The supported dialog is a literal text `SendActivity` followed by `EndDialog`. Dynamic expressions, cards, additional branches, workflows and backend-fault diagnostics are not supported by this procedure.
+Use the bounded operations below from the topic-testing skill. The session owns intended behavior, test selection, interpretation, fixes and retests. Read `src/skills/topics/experience-contract.md` for the scoped runtime correctness goal, state-aware offers, normal-chat readiness/outcome and pause/stop copy. A one-turn capture does not limit the whole test to one message or one literal response.
 
-## Resolve the topic and expected response
+## Resolve and inspect
 
 Use the canonical ready workspace and its selected Maker identity. Never borrow another workspace's authentication cache or change global profiles. If authentication needs a human action, tell the maker and pause for it. Do not silently select the first account.
 
-1. Resolve an explicitly requested component ID. If only a name or description is known, run `python scripts/native_topic_test.py list` and identify one exact native topic with the maker. Do not require a local topic file.
-2. Run `python scripts/native_topic_test.py inspect --component-id "<id>"`. This fresh read returns the saved response, trigger phrases, active state and an inspection file under `.local/topic-tests/`.
-3. Confirm that the selected topic and saved response are what the maker intends to test. Reuse an existing approval when the fresh content matches it. If the content changed, obtain approval again rather than silently changing the expected answer.
-4. Select one saved trigger phrase. Do not invent failure probes or additional messages for this response-only path. The run command rejects content changes to the selected topic's identity, dialog or active state since inspection and refuses an inactive topic. Unrelated metadata changes do not require a new content approval.
+Carry the selected topic and intended behavior from authoring or the request. When identity is unknown, use `python scripts/native_topic_test.py list` and disambiguate only as needed. A missing local YAML file does not establish remote absence.
 
-Run commands from the Maker Kit folder. `--kit-root` can explicitly identify that same configured workspace when invoking a script from another directory. An unsupported topic is a coverage boundary, not a successful test.
+```powershell
+python scripts/native_topic_test.py inspect --component-id "<selected id>"
+```
+
+Inspection returns the authoritative component, triggers/state and a workspace-local inspection file. Ordinary dialogs can be inspected; `exactMode.supported` only describes compatibility with the optional fixed-response `run` assertion. Plan testing against intended behavior, not whatever reply happens to be saved. If current content materially differs from the authorized target or intent, resolve that difference rather than silently substituting an expectation.
+
+Run commands from the Maker Kit folder. `--kit-root` can explicitly identify that same configured workspace when invoking from another directory.
+
+## Explicit activation
+
+Saving a topic does not activate or publish it. For an inactive selected topic, preview the separate activation operation:
+
+```powershell
+python scripts/native_topic_test.py activate --inspection "<inspection file>"
+```
+
+Show the effect and use the shared Activate and test choice when activation permission is missing. For already-requested testing, use Activate {Topic title} for testing? to obtain only the missing activation permission and retain test-only or test-and-fix scope. Honor no-activation requests. Only after explicit authorization for this selected topic:
+
+```powershell
+python scripts/native_topic_test.py activate --inspection "<inspection file>" --yes
+```
+
+The operation checks target/content again, changes only the selected topic's state/status, and reads back its state without publishing or changing competitors. Continue only after authoritative Active state is confirmed. Reinspect after activation to obtain the current capture boundary. Preserve known write acceptance and `activationOutcome`, `writeAccepted` and `verified` facts when later readback or local output fails; inspect actual state before any retry, never blindly activate again.
+
+## Prepare the test browser
+
+Reuse a valid dedicated browser and its connection facts when available. Otherwise, prepare a new Microsoft Edge InPrivate window for the selected agent:
+
+```powershell
+python scripts\native_topic_test.py prepare-browser `
+  --url "<trusted selected-agent Studio URL>"
+```
+
+Resolve the full URL internally from the selected setup context and the exact supported host/path contract in `daga_chat_driver.validate_studio_url`. Bind it to the selected environment and agent, retaining `agentBackend=cosmos` when present. The operation validates it against the authenticated native target before launch. Browser connection facts are operation inputs/outputs; the maker's part is sign-in and Test-pane readiness.
+
+Preparation creates a fresh temporary profile, opens the selected URL, requests an ephemeral numeric-loopback debug port and verifies that browser metadata matches its dedicated debug descriptor. It returns `pid`, `profile`, `cdp`, `url`, the target and browser metadata, with workspace-local launch/result evidence. `prepared` means browser/connection preparation, not sign-in, Test-pane readiness or a passing test. No conversation Send, activation or publication is performed.
+
+Feed the returned `cdp` and `url` to capture after readiness is confirmed. Preserve a live browser and all known process/endpoint facts when preparation or local evidence recording is incomplete; inspect that attempt before deciding whether another browser is needed. The temporary profile contains browser state, not test evidence: keep its contents out of logs, reports and galleries. When the browser is no longer needed, close only that owned browser and clean up its exact temporary profile after it has exited. A paused test retains the browser for resumption.
 
 ## Confirm browser readiness
 
-The maker supplies the exact numeric-loopback CDP endpoint, such as `http://127.0.0.1:9222`, and the full trusted Studio details URL for the selected environment and agent, including `agentBackend=cosmos` when present. `localhost`, non-loopback endpoints, guessed hosts, substring page matches and duplicate matching tabs are not accepted.
+Render the shared full Test browser readiness message in normal chat, followed by its separate readiness-only control. The maker signs in with a test account if necessary, opens the Test chat pane and leaves its message box empty and idle. Omit an unnecessary sign-in paragraph and reuse valid readiness across completed turns. SDK authentication does not establish browser identity.
 
-Confirm that the environment, account and data are approved for testing and that the maker has signed into that browser with the intended test identity, opened the Test pane and left an empty, idle composer. Reuse current valid confirmation; native SDK authentication does not establish browser identity. Do not inspect browser credentials, cookies, identity storage or unrelated tabs. Conversational routing can reach other tools even when the intended topic itself is response-only, so stay within the approved test resources.
+Not ready, keep paused and Stop without sending take effect immediately with the shared exact acknowledgements. Report completed work separately using `{topic_test_results}`. Resume with existing valid context and permissions, resolving only missing or changed prerequisites. Ask the maker only for a genuine human action, missing permission or scope decision.
 
-This tool attaches only. If no suitable browser is ready, ask the maker to provide one and pause. It does not launch a browser, authenticate, navigate, reset or reload. Only the supported embedded M365 composer and current-turn boundaries are accepted. Other surfaces require separate support.
+Confirm the selected test resources, browser identity, correct Test pane and empty, idle composer. Do not inspect credentials, cookies, identity storage or unrelated tabs. Conversational routing can reach other tools, so stay within authorized test resources. The attach-only capture operation accepts an exact numeric-loopback endpoint and a unique page at the full trusted selected-agent URL; `localhost`, non-loopback endpoints, substring matches and duplicate matching tabs are unsupported.
 
-Activation, agent-wide routing and publication are separate operations requiring explicit approval. Do not perform them to make `/test` pass.
+Preparation is separate from capture and is not recovery from an uncertain Send. Capture does not launch, authenticate, navigate, reset or reload.
 
-## Run once and retain evidence
+## Capture an approved turn
 
-Choose one fresh output directory and keep that exact path for the attempt:
+Choose a unique output directory for each authorized turn:
 
 ```powershell
-python scripts/native_topic_test.py run `
-  --inspection "<inspection file>" `
-  --prompt "<one saved trigger phrase>" `
+python scripts/native_topic_test.py capture `
+  --inspection "<current inspection file>" `
+  --prompt "<approved test message>" `
   --cdp "<confirmed numeric-loopback endpoint>" `
   --url "<confirmed full Studio URL>" `
   --output ".local/topic-tests/<unique attempt>"
 ```
 
-The tool writes the prospective case and native snapshot before driving. It records the browser page and turn boundary before one Send action, captures only the correlated current reply, classifies it with the shared reply classifier, and checks case-sensitive exact rendered-text equality. Classifier hints are advisory: a complete correlated non-card exact response can pass even when its approved wording contains consent-text markers. A nonmatching error reply is not a correct answer. Cards, including text-empty cards, empty captures and timeouts cannot pass the response check. Rendering can change Markdown or whitespace; do not substitute substring matching to hide such a mismatch.
+Capture accepts an approved prompt rather than requiring a saved trigger. It records native state and the page/turn boundary before one Send, then returns correlated reply/card, partial/timeout, screenshot and native-readback facts. `graded: false` and `outcome: captured` mean capture completed, not correctness or backend-completion proof. The session evaluates the observed behavior and relevant effects against the intended scenario.
 
-The tool independently rereads native components and reports all component drift. Its required integrity check compares only the selected topic's identity, dialog and active state. Changes to other components or unrelated metadata are evidence, not automatic failures. Changed selected-topic behavior/state or unavailable required readback prevents a clean pass. Evidence includes the inspection, case, execution boundary, capture, native snapshots, result and a current-turn screenshot for a completed capture. Screenshot failure is diagnostic and retains its cause; otherwise proven core checks remain valid. A later evidence-write error is reported separately from known capture/readback facts in the returned result, with an incomplete overall outcome. Do not replay a send because local output failed. All evidence is workspace-local and ignored by git. Never overwrite an existing attempt, edit its expected response or discard a failed result.
+Use further completed turns to exercise authorized paraphrases or conversation branches. A card is observed evidence, not automatically a failure. The current driver does not submit interactive-card actions, inject backend faults, reset conversations or provide exact-topic invocation traces. Report a specific unperformed interaction or collaborate with the maker when needed; do not claim those capabilities or reject all ordinary dialogs because optional exact-mode is incompatible.
 
-## Timeouts and ambiguous submissions
+## Optional exact-response assertion
 
-The default observation is bounded to 90 seconds. A timeout is incomplete reply evidence, not proof of a product failure. Do not run the send command again, choose a new attempt path to replay it, or silently increase every timeout. If a shell command is still running, wait for it to finish.
+Use `run` instead of `capture` only when the intended assertion is a saved trigger returning the approved literal response from a `SendActivity` followed by `EndDialog`. It takes the same inspection/browser/output arguments, with `--prompt` set to a saved trigger. The exact check and selected-topic readback are evidence for that assertion only, not a universal topic-testing policy. Do not weaken a different expectation to fit this path.
 
-To observe the same pending attempt without sending another message:
+## Observe uncertainty without sending again
+
+The default observation is bounded to 90 seconds. A timeout is incomplete evidence, not proof of product failure. Do not replay the message by choosing another output path or silently increase every timeout. Wait for a still-running command to finish.
 
 ```powershell
 python scripts/native_topic_test.py observe `
   --previous ".local/topic-tests/<original attempt>"
 ```
 
-The observation uses the original target, browser page, prompt and turn boundary, writes a separate evidence directory, and preserves the original timeout or submission error. It verifies the original chat document and response identity, and refuses a different document or an advanced conversation. A page refresh requires a separately approved new attempt, not observation of the previous conversation. If the original execution boundary was never recorded, no Send action was entered by this tool; restore readiness with the maker before an explicitly approved new attempt.
+Observation follows the original capture or exact run without another Send, retains its graded/non-graded mode, and writes separate evidence. It preserves the original target, page, prompt and turn boundary, rejects a different document or advanced conversation, and does not erase the original error. If no boundary was recorded, no Send action was entered by the tool; establish readiness before a separately authorized new attempt.
 
-## Report the bounded outcome
+Keep evidence directories and returned facts. Screenshot/output failures retain their causes and do not authorize replay. Known capture, remote write or readback facts survive a subsequent local recording failure. Report unavailable correlation or required readback explicitly.
 
-State the actual prompt, reply classification, exact-answer result, selected-topic integrity result, component drift and evidence path. Distinguish the original bounded result from a later completion. Report unsupported or unavailable evidence plainly. Exit `0` means the response and integrity checks passed; `1` means a captured check did not pass; `2` means execution or required evidence is blocked or incomplete. `assessmentOutcome` preserves the known check result when a later local output or cleanup failure prevents a clean overall outcome.
+## Observe topic values temporarily
 
-Exact reply text is not an exact-topic invocation trace. An existing conversation is not an independent discovery trial. Do not claim general GA compatibility, arbitrary-topic coverage, card support, backend execution or automatic topic discoverability from this bounded result.
+Use a temporary `SendActivity` when the captured reply or rendered card is insufficient to explain topic state. The session chooses the values, placement and next investigation; this is not a mandatory step for every mismatch. Observe only non-sensitive synthetic or explicitly authorized values. Do not print credentials, tokens, employee records or entire backend responses.
+
+Instrumentation is a saved-topic edit, not a read-only test. Use the existing authorized debugging objective and editable scope; obtain missing permission for a test-only request. Do not publish, change activation state or alter competing topics.
+
+### Prepare an owned diagnostic
+
+Read the mapped topic through the ordinary authoring owner, keeping its current component and YAML projection:
+
+```powershell
+python scripts\topic_authoring.py read --topic "<mapped topic path>" --output "<fresh read.json>" --yaml-output "<current projection.mcs.yml>"
+```
+
+The read result supplies `target`, `path` and `component` for update's `--expected` input. It is not a capture inspection file. Compare the working draft with saved content and preserve any pending authoring edits; do not overwrite it with a remote projection.
+
+Choose an actual action ID after the value is assigned and before the suspected consumer. For a nested branch, choose the action in that branch; anchoring a container places the diagnostic after the entire container. Use a fresh unique diagnostic action ID and a unique marker. Quote the activity as a YAML string, for example by applying `json.dumps` to the message:
+
+```text
+DBG <unique marker> total={Topic.Total}
+```
+
+Use `plant_debug_node` from `scripts/debug_plant.py` to prepare the local delta. Require exactly one insertion at the intended sibling boundary, an unambiguous anchor and an unused diagnostic ID. Preserve valid text interpolation rather than turning a variable reference into literal text. Convert/preview the proposed YAML through ordinary topic authoring and inspect the resulting action and diagnostics. Conversion alone does not establish runtime reachability or value visibility.
+
+Before any possible save, retain a small workspace-local cleanup record under the attempt's `.local/topic-tests/` evidence directory: selected target and mapped topic identity, action anchor, exact diagnostic ID/marker, intended owned node content and the original read/proposed-save evidence paths. Keep the record if save acceptance or readback is uncertain. This records ownership, not a second debugging workflow.
+
+### Save and observe
+
+Use the ordinary topic update preview/save with the fresh read as `--expected`, retaining its concurrency checks and authoritative readback. The existing scoped debugging authorization covers this in-scope temporary edit without an independent per-node approval. Inspect the saved diagnostic content and retain its canonical identity/content for precise cleanup.
+
+Obtain a fresh `native_topic_test.py inspect` result after the save, then use an ordinary bounded `capture` with the authorized scenario and current browser readiness. Read the actual correlated diagnostic bubble alongside the normal reply and cards. A native expression, accepted save or absent bubble does not establish the variable's runtime value. Card DOM text can omit information such as dropdown options; a deliberately chosen count or safe projected field can provide evidence that the rendering alone lacks.
+
+If a value is unavailable, inspect the capture and diagnostics before drawing conclusions. A failure before the diagnostic boundary can prevent observation. When useful, move the owned message one boundary earlier and repeat a deliberate probe within scope. Do not assume exact-topic invocation or reset/reload the conversation to conceal an uncertain Send; use independent `observe` against that attempt first.
+
+### Remove only owned instrumentation
+
+Always attempt safe cleanup before completing the debugging work, including after an inconclusive diagnosis or a pause/stop. Honor a stop instruction that forbids further writes and explicitly report any diagnostic left in place.
+
+Read the latest native topic and preserve legitimate intervening fixes and newer content. Use `strip_debug_nodes` with exact IDs and `expected_nodes` from the cleanup record, not marker-wide matching:
+
+```python
+cleaned_yaml, removed_ids = strip_debug_nodes(
+    fresh_projected_yaml,
+    node_ids=[owned_id],
+    expected_nodes={owned_id: owned_yaml_action},
+)
+```
+
+`owned_yaml_action` is the complete parsed YAML action mapping, not a native `$kind` object or a raw YAML string. The guard checks unique identity and unchanged owned content before returning a cleanup delta. If identity or owned content differs, inspect and reconcile it rather than deleting an ambiguous node. Never restore the whole pre-debug snapshot over legitimate changes.
+
+Preview/save the cleanup delta through the ordinary update operation using the current read as `--expected`. Verify authoritative native readback, absence of the owned diagnostic IDs, preservation of intended corrections and consistency of the local working draft/baseline. Retest the affected normal behavior without instrumentation when useful. Treat byte differences from native YAML projection separately from semantic content preservation.
+
+Retain the cleanup record and original errors until removal is verified. For interrupted or uncertain writes, inspect current native content before choosing the next action; do not blindly plant, save or resend. Report cleanup failure or uncertainty separately from the original diagnosis and known fix. Link actual value/capture and cleanup evidence after the shared outcome report rather than adding a debugging-mechanics ledger.
+
+## Fix and retest
+
+Return observed issues to the ordinary topic/instruction owner with the selected target, intended behavior, issue evidence and existing debugging objective/editable scope. Necessary fixes, pushes and retests reuse that scoped authorization, subject to native concurrency safeguards. Ask again for expanded scope, changed intended behavior or additional consequential actions. A test-only request does not authorize edits; supplied evaluation cases remain read-only unless separately selected for evaluation work.
+
+After a verified fix, reinspect and retest affected behavior with a new capture, making a lightweight, best-effort check against matching eval intent. This is a deliberate retest after known change, not replay of an uncertain attempt. Continue useful in-scope debugging toward the latest authoring goal; a fixable mismatch is not by itself a reason to hand work back. If conflicting goals or constraints prevent progress, recommend a concrete reconciliation. If tools, access or evidence prevent further safe progress, explain the limitation and offer practical assistance, including manual testing guidance where appropriate.
+
+Report the goal and observed runtime outcome using `{topic_test_results}`, adding a recommendation only when a change or assistance is needed. Keep actual evidence links after the complete outcome block. This is not a graded eval run or mandatory regression-coverage report. The informational report needs no routine acknowledgement; ask separately only for genuine human dependencies or a new scope decision. Exact text, successful persistence or DOM completion alone does not establish general runtime correctness.

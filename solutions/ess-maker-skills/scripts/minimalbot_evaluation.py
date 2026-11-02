@@ -1368,6 +1368,20 @@ class MinimalBotEvaluationClient:
                     "The selected MinimalBot dialog identity changed after "
                     "local extraction."
                 )
+            expected_component = update.get("expectedComponent")
+            if expected_component is not None:
+                # State-only consent must not activate content edited after inspection,
+                # including between the caller's read and this changeToken-bound read.
+                if not isinstance(expected_component, dict) or any(
+                    component.get(key) != expected_component.get(key)
+                    for key in (
+                        "$kind", "id", "schemaName", "parentBotId", "dialog", "state", "status",
+                    )
+                ):
+                    raise MinimalBotEvaluationError(
+                        "The inspected MinimalBot topic changed. Inspect and approve it "
+                        "again. No write was sent."
+                    )
             has_dialog_update = "dialog" in update
             desired_dialog = update.get("dialog")
             expected_dialog = update.get("expectedDialog")
@@ -1420,6 +1434,8 @@ class MinimalBotEvaluationClient:
             effective_update = dict(update)
             if has_dialog_update:
                 effective_update["dialog"] = effective_dialog
+            elif expected_component is not None:
+                effective_update["dialog"] = copy.deepcopy(component.get("dialog"))
             verification_updates.append(effective_update)
             dialog_is_desired = (
                 not has_dialog_update

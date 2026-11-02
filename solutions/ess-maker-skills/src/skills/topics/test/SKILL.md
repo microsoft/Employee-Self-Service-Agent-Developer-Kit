@@ -1,6 +1,8 @@
-# Test Topic Skill
+# Debug and fix a topic
 
-Test one saved, active native topic in the selected Dev agent through an approved browser. Read [native-topic-testing.md](../../../reference/ess-docs/operations/native-topic-testing.md) before running any operation and follow its inspection, browser confirmation, single-send and later-observation procedure.
+Debug and fix the selected topic toward the latest authoring request within the authorized scope, checking observed runtime behavior after changes.
+
+Read [experience-contract.md](../experience-contract.md) for the scoped runtime correctness goal, testing offers, complete readiness message/control, `{topic_test_results}` outcome copy and pause/stop/resume instructions. Read [native-topic-testing.md](../../../reference/ess-docs/operations/native-topic-testing.md) before invoking the bounded inspection, browser preparation, activation, capture or observation operations. The session owns test selection, interpretation, fixes, recovery and completion; a one-turn capture is not a one-message testing policy.
 
 ## Readiness and selection
 
@@ -8,31 +10,33 @@ Require canonical setup schema version `4`, with the entry matching `.local/conf
 
 Carry forward the selected topic from the current authoring or testing request. Do not ask the maker to select it again. Resolve any unknown component identity through the native list operation, then inspect the selected component freshly. A missing local YAML file does not establish remote absence. Confirm genuinely ambiguous identity or changed saved content with the maker.
 
-The supported dialog has a saved trigger phrase, one literal text `SendActivity` and `EndDialog`. Unsaved drafts, inactive topics, dynamic responses, branches, cards, backend calls and debug-oracle instrumentation are outside this test boundary. Report the uncovered scope rather than changing the topic to fit the test. Do not activate, publish or change routing to make testing runnable.
+Establish intended behavior from the latest authoring request and context, with matching eval intent as a read-only guardrail. Use the fresh native topic as current implementation evidence. General inspection supports ordinary saved dialogs; optional exact-response compatibility is not admission to all testing. Do not change intended behavior, narrow the topic or weaken expectations merely to obtain a passing check.
 
-Record anonymous usage telemetry best-effort without a maker-facing message: `python scripts/emit_capability.py topic_test`.
+Carry the explicit test/fix objective and editable scope. An explicit test-only request remains test-only. When testing is already requested and only activation permission is missing, use the shared Activate {Topic title} for testing? question. For an inactive topic, use the reference's separate activation preview and authorized activation operation. Confirm authoritative Active state before sending; honor no-activation requests and report any unresolved prerequisite using `{topic_test_results}`. Creation itself stays inactive and updates preserve state. Never publish or change unrelated routing.
 
-## Preserve regression intent
+## Check matching eval intent
 
-Read relevant supplied evaluation cases as read-only intent. Preserve their inputs, expected behavior, thresholds and case references. A compatible saved trigger may be used for this bounded test; other cases remain untested here. Do not weaken expectations, replace them with a passing substring check or flatten multi-turn/backend cases.
+Find and read matching existing evaluation cases as read-only intent. Make a lightweight, best-effort check that observed behavior and proposed fixes preserve that intent, using simple checks or semantic judgment over captures as useful. Preserve their inputs, expected behavior, thresholds and case references. Exercise useful prompts, paraphrases and conversational branches according to intended behavior and available interactions; do not require a full eval run or case-by-case coverage report. Do not flatten multi-turn/backend cases, replace expectations with an easier substring check, or silently edit cases.
 
 This procedure is not a graded evaluation-set execution. Route separately requested case creation or editing through the existing evaluation skill, with its own scope and approvals.
 
 ## Prepare the browser separately
 
-Reuse an already approved ready browser when available. Otherwise, collaborate with the maker to prepare a dedicated test browser and human sign-in separately from the attach-only test operation. Establish the exact numeric-loopback CDP endpoint, trusted selected-agent Studio URL, browser test account and approved environment. SDK sign-in does not establish browser identity.
+Prepare or reuse the test browser and open the selected agent. Resolve the trusted selected-agent Studio URL and numeric-loopback connection internally from the selected context and preparation result. Use the reference's bounded browser preparation operation when a new browser is needed. Browser preparation ends before human sign-in, Test-pane preparation or any conversation Send. SDK sign-in does not establish browser identity.
 
-Pause until the maker confirms the correct Test pane is open with an empty, idle composer. Do not inspect credentials, unrelated tabs or shared authentication stores. Browser preparation is not recovery from an uncertain Send: do not automatically launch, navigate, reset, reload or resend.
+Present the full shared readiness message in normal chat, followed by its separate readiness-only control. The maker signs in with a test account if necessary and opens the Test chat pane with an empty, idle composer. Omit the sign-in paragraph when already signed in with a test account; reuse valid readiness. Keep the existing test-only or test-and-fix scope.
 
-## Execute and interpret one attempt
+Apply Not ready, keep paused or Stop without sending immediately using the shared exact acknowledgement, reporting any completed work separately using `{topic_test_results}`. Resume within the existing objective and permissions, resolving only changed or missing prerequisites. Pause until the maker confirms the correct Test pane is open with an empty, idle composer. Do not inspect credentials, unrelated tabs or shared authentication stores. Browser preparation is not recovery from an uncertain Send: do not automatically launch, navigate, reset, reload or resend.
 
-Use the fresh inspection's approved saved response and one saved trigger phrase. Reuse an existing approval when its content and target remain valid. Follow the reference's `native_topic_test.py run` command, choosing a unique evidence directory before sending.
+## Execute and interpret tests
 
-The operation records the case, native snapshot and page/turn boundary before Send. It captures the correlated current turn, compares case-sensitive exact rendered text and independently rereads the selected topic's relevant identity, dialog and active state. A changed selected topic or unavailable required readback prevents a clean pass. Other-component changes remain reported evidence, not an automatic failure.
+Use the reference's general `capture` operation for approved test messages, choosing a unique evidence directory for each turn. The operation records native state and the page/turn boundary before Send and returns correlated reply/card, completion and readback facts. `graded: false` and `outcome: captured` mean observed capture, not correctness or backend success. Interpret actual observations against intended behavior and retain evidence.
 
-Treat consent-text and error-shaped classifiers as advisory evidence. Complete, correlated non-card text that exactly matches the approved saved response can pass despite a consent-text hint. Cards, including text-empty cards, are unsupported; partial, empty or uncorrelated captures cannot establish success. Screenshot failure is diagnostic, with its cause retained. Missing execution recording, correlation or authoritative readback remains substantive.
+After a known completed turn, continue the authorized scenarios or conversation with further bounded captures as needed. Cards are evidence, not automatic test failure; when a required interaction cannot be performed by the available surface, report that specific remaining gap or collaborate with the maker. Do not claim an unsupported interactive-card submission, backend fault injection or exact-topic invocation trace.
 
-If a send times out or has an uncertain outcome, retain the original prompt, expectation, boundary and evidence. Use the reference's independent `observe` operation against that original run without sending again. Keep each later observation in a separate directory and distinguish it from the original bounded result. Do not replay a failed or uncertain send by choosing a new directory.
+Use the optional `run` exact-response check only when its saved-trigger/literal-response contract matches the intended assertion. It does not replace broader testing or authorize weakening a different expectation. Classifier hints are advisory; partial, uncorrelated or unavailable evidence cannot establish a passing behavior. Independently verify relevant effects when the tested behavior depends on them.
+
+If a send times out or has an uncertain outcome, retain the original prompt, intended expectation, boundary and evidence. Use the independent `observe` operation against that original capture/run without sending again. Keep later observations separate and distinguish them from the original result. Do not replay a failed or uncertain send by choosing a new directory. A planned retest after a verified fix is distinct from blindly replaying an uncertain attempt.
 
 If local evidence output fails after capture or readback, retain the returned known facts and report the output failure separately. Do not treat it as permission to resend.
 
@@ -40,6 +44,12 @@ If local evidence output fails after capture or readback, retain the returned kn
 
 Inspect useful service-returned component diagnostics when explaining an authoring failure. Persistence is not proof of diagnostic-free authoring or runtime correctness, and component diagnostics do not establish universal checker coverage.
 
-Report the selected topic, prompt, captured reply, classifier hints, exact-answer check, selected-topic integrity, other-component drift, limitations and evidence path. Disclose missing screenshots or failed output files without discarding known checks. Exact response matching does not prove exact-topic invocation, independent discovery or arbitrary-topic compatibility.
+When a reply or card does not reveal the state needed to explain a branch, calculation or binding, use [temporary value observation](../../../reference/ess-docs/operations/native-topic-testing.md#observe-topic-values-temporarily). Choose the relevant non-sensitive values and action boundary, observe them through the ordinary capture path, then remove only the owned diagnostic message. An absent diagnostic is not proof of a blank value or an unreached topic. Preserve legitimate corrections, concurrency checks and cleanup uncertainty. Test-only scope does not authorize instrumentation.
 
-If a fix is needed, hand it to the normal topic or instruction owner for its own preview, approval, save and readback. Keep evaluation mismatches visible. A new approved test after a verified change is separate from observation or replay of an uncertain attempt.
+When an observed issue needs a fix, delegate to the normal topic or instruction owner with the selected target, intended behavior, issue evidence, debugging objective and approved editable scope. Necessary in-scope fixes, pushes and retests reuse that authorization; do not insert independent per-fix approval gates. Preserve concurrency safeguards. New scope, changed intended behavior or additional consequential actions require approval. Test-only requests report issues without editing.
+
+Resume after the owner returns its actual save/readback outcome. Reinspect changed saved content, confirm its state and retest affected behavior; make the best-effort matching-eval intent check. Continue useful authorized investigation and corrections rather than handing back an ordinary fixable mismatch. Stop blindly repeating a failing approach: inspect new evidence and resolve the actual cause within scope.
+
+When conflicting authoring goals, edit constraints or eval intent prevent progress, explain the conflict and recommend a concrete reconciliation. When tools, access or available evidence prevent further safe progress, explain the limitation and offer practical assistance, including manual testing guidance where appropriate. Preserve completed work and uncertainty; do not imply that unavailable testing passed.
+
+Report in normal chat using the shared `{topic_test_results}` goal/outcome copy, with a recommendation only when a change or assistance is needed. Describe observed behavior and its limits, not the mechanics of the debugging loop. Link actual evidence after the outcome. Ask separately only for genuine human dependencies or a new scope decision; the report itself requires no routine acknowledgement. Disclose material evidence failures or drift without discarding known facts. Do not report a universal pass from response equality, a save/readback or a completed DOM capture.

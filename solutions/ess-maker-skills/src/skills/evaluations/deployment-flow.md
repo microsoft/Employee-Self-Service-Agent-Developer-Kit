@@ -92,6 +92,37 @@ Keep the returned `confirmationToken` associated with that exact preview.
 After a collision, `--replace` may be used to preview replacement only when the
 user chooses that intent; show and approve the actual replacement diff.
 
+For an explicit standalone Push, render the existing selected-set preview once
+in normal chat, before a separate short decision control:
+
+> **Evaluation deployment**
+>
+> {Existing selected-set deployment preview}
+
+`{Existing selected-set deployment preview}` is the context-rendered preview
+defined above, using the actual selected-set context and fresh helper result.
+Preserve the required backend/environment/agent identities, source and
+destination folders, push requirement, all selected changes, local promotion
+and replacement effects, actual native copy/reuse behavior and literal
+`reviewWarning`. Retain material preservation facts and caveats, including
+authored thresholds, review status and known expectation mismatches when
+relevant. Do not infer deployment, shared review availability or execution
+from a preview.
+
+Follow with:
+
+> **Push this evaluation set?**
+>
+> **Push evaluation set** / **Cancel**
+
+Keep deployment consequences and warnings in the chat preview, not in the
+action label or a long question description. Preserve existing cancellation
+and outcome guidance. This standalone control adds no approval gate inside an
+unchanged approved general Push batch: carry that batch's exact authorized
+scope and consequences through this owner. Materially changed scope or
+consequences still require a revised summary and approval. Run and Request
+Review retain their existing controls and semantics.
+
 For Request Review, deploy immediately with the preview token and `--yes`; the
 maker's selected Request Review action is the authorization:
 
@@ -99,8 +130,9 @@ maker's selected Request Review action is the authorization:
 python scripts/evaluation_deployment.py deploy --set-folder "{set-folder}" --action "request-review" --confirmation-token "{confirmationToken}" --yes
 ```
 
-For explicit push, obtain scope/side-effect confirmation before running the same
-command with action=`push`. Keep `--replace` consistent with approved local
+For explicit push, obtain scope/side-effect confirmation through the control
+above, or reuse valid unchanged general-Push batch consent, before running the
+same command with action=`push`. Keep `--replace` consistent with approved local
 replacement. A stale-token error
 means preview and confirm again, not bypassing the check. `blocked`, `cancelled`,
 and `failed` are not successful deployment statuses.
