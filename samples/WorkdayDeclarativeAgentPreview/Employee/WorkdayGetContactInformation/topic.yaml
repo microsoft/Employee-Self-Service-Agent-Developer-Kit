@@ -53,6 +53,19 @@ beginDialog:
           isSuccess: Topic.isSuccess
           workdayResponse: Topic.workdayResponse
 
+    - kind: ConditionGroup
+      id: checkWorkContactSuccess
+      conditions:
+        - id: workContactFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendWorkContactError
+              activity: I encountered an error retrieving your work contact information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endOnWorkContactError
+
     - kind: ParseValue
       id: b90ZAp
       displayName: Parse Work Contact data
@@ -190,6 +203,19 @@ beginDialog:
           errorResponse: Topic.errorResponse
           isSuccess: Topic.isSuccess
           workdayResponse: Topic.workdayResponse
+
+    - kind: ConditionGroup
+      id: checkHomeContactSuccess
+      conditions:
+        - id: homeContactFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendHomeContactError
+              activity: I encountered an error retrieving your home contact information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endOnHomeContactError
 
     - kind: ParseValue
       id: D15SKZ
@@ -335,6 +361,19 @@ beginDialog:
           errorResponse: Topic.errorResponse
           isSuccess: Topic.isSuccess
           workdayResponse: Topic.workdayResponse
+
+    - kind: ConditionGroup
+      id: checkWorkAddressSuccess
+      conditions:
+        - id: workAddressFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendWorkAddressError
+              activity: I encountered an error retrieving your work address. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endOnWorkAddressError
 
     - kind: ParseValue
       id: 3IdZeI

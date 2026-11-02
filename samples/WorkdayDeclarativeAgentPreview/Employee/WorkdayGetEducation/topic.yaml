@@ -42,6 +42,19 @@ beginDialog:
           isSuccess: Topic.isSuccess
           workdayResponse: Topic.workdayResponse
 
+    - kind: ConditionGroup
+      id: checkWorkdaySuccess
+      conditions:
+        - id: workdayFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendWorkdayError
+              activity: I encountered an error retrieving your education information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endOnWorkdayError
+
     - kind: ParseValue
       id: yJ0sSR
       displayName: Parse Workday response

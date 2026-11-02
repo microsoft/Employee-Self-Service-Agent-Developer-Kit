@@ -40,6 +40,19 @@ beginDialog:
           isSuccess: Topic.isSuccess
           workdayResponse: Topic.workdayResponse
 
+    - kind: ConditionGroup
+      id: checkWorkdaySuccess
+      conditions:
+        - id: workdayFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendWorkdayError
+              activity: I encountered an error retrieving your government ID information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endOnWorkdayError
+
     - kind: ParseValue
       id: v0OBu2
       displayName: Parse workdayResponse into table

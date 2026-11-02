@@ -59,6 +59,19 @@ beginDialog:
           isSuccess: Topic.isSuccess
           workdayResponse: Topic.workdayResponse
 
+    - kind: ConditionGroup
+      id: checkWorkdaySuccess
+      conditions:
+        - id: workdayFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendWorkdayError
+              activity: I encountered an error retrieving your team's cost center information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endOnWorkdayError
+
     - kind: ParseValue
       id: aXVFNu
       displayName: Parse value to a record
