@@ -15667,7 +15667,6 @@ def test_resume_handoff_consumes_controller_and_returns_exact_action(
         result = snow.resume_handoff(
             context,
             verified_phases=frozenset({"preflight"}),
-            roles_available=True,
         )
 
     assert result["lifecycle"]["decision"] == "run-action"
@@ -15687,6 +15686,8 @@ def test_resume_handoff_consumes_controller_and_returns_exact_action(
     )
     assert result["progress"]["completedCount"] == 1
     assert result["progress"]["finalText"] is None
+    assert result["transport"]["roleAvailability"]["gateRequired"] is False
+    assert result["transport"]["roleAvailability"]["question"] is None
 
     with snow.product_profile_context("itsm"):
         checkpoint_result = snow.resume_handoff(
@@ -16355,8 +16356,46 @@ def test_resume_handoff_cli_returns_plan_required_without_creating_state(
         {"label": "Yes"},
         {"label": "No"},
     ]
+    assert result["transport"]["roleAvailability"]["questionSha256"] == (
+        snow._canonical_json_hash(
+            result["transport"]["roleAvailability"]["question"]
+        )
+    )
     assert "action" not in result
     assert not connect_root.exists()
+
+
+def test_resume_handoff_cli_preserves_omitted_and_explicit_role_values(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: list[bool | None] = []
+    monkeypatch.setattr(snow, "load_context", lambda **_kwargs: _context())
+
+    def fake_resume(
+        _context: dict,
+        *,
+        executed_actions: frozenset[str],
+        verified_phases: frozenset[str],
+        roles_available: bool | None,
+    ) -> dict:
+        del executed_actions, verified_phases
+        captured.append(roles_available)
+        return {"rolesAvailable": roles_available}
+
+    monkeypatch.setattr(snow, "resume_handoff", fake_resume)
+
+    assert snow.main(["resume-handoff"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"rolesAvailable": None}
+    assert snow.main(
+        ["resume-handoff", "--roles-available", "yes"]
+    ) == 0
+    assert json.loads(capsys.readouterr().out) == {"rolesAvailable": True}
+    assert snow.main(
+        ["resume-handoff", "--roles-available", "no"]
+    ) == 0
+    assert json.loads(capsys.readouterr().out) == {"rolesAvailable": False}
+    assert captured == [None, True, False]
 
 
 @pytest.mark.parametrize(

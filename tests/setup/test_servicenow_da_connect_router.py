@@ -95,6 +95,12 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "progress.currentPhase.waitingChecklistText" in prompt
     assert "transport.ordinaryReply.text" in prompt
     assert "transport.roleAvailability.question" in prompt
+    assert "with `--roles-available yes`" in prompt
+    initial_boundary = prompt.split(
+        "Parse the returned `servicenow.resume-handoff.v1` object:",
+        1,
+    )[0]
+    assert "--roles-available" not in initial_boundary
     assert "progress.currentPhase.errorChecklistText" in prompt
     assert "Re-emit the freshly returned" in prompt
     assert "an action receipt" in prompt
