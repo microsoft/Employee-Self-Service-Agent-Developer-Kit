@@ -12180,6 +12180,25 @@ def _phase_responsible_roles(
     return defaults.get(phase_id, ["ESS Maker / Agent Developer"])
 
 
+def _phase_status_icon(status: str) -> str:
+    icons = {
+        "complete-checked": "✅",
+        "complete-manual": "✅",
+        "complete-reused": "✅",
+        "rechecking": "🔄",
+        "checking": "🔄",
+        "current": "🔄",
+        "pending": "⬜",
+        "needs-attention": "❌",
+    }
+    try:
+        return icons[status]
+    except KeyError as exc:
+        raise ServiceNowConnectError(
+            "ServiceNow lifecycle progress status is invalid."
+        ) from exc
+
+
 def _build_phase_progress(
     contract: dict[str, Any],
     state: dict[str, Any] | None,
@@ -12282,24 +12301,13 @@ def _build_phase_progress(
         item["status"] not in {"pending", "current"} for item in items
     )
     display_name = str(contract.get("displayName") or "ServiceNow")
-    icon_by_status = {
-        "complete-checked": "✅",
-        "complete-manual": "✅",
-        "complete-reused": "✅",
-        "rechecking": "🔄",
-        "checking": "🔄",
-        "current": "🔄",
-        "pending": "⬜",
-        "needs-attention": "❌",
-    }
-
     def render_checklist(
         *,
         current_status: tuple[str, str] | None = None,
     ) -> str:
         lines = []
         for item in items:
-            icon = icon_by_status[item["status"]]
+            icon = _phase_status_icon(item["status"])
             text = item["text"]
             if current_status is not None and item["id"] == current_id:
                 icon, text = current_status
@@ -12577,7 +12585,8 @@ def _business_group_transport(
                 "",
                 "**Automatic setup**",
                 "",
-                f"- {automatic['customerLabel']} — {automatic['text']}",
+                f"- {_phase_status_icon(automatic['status'])} "
+                f"{automatic['customerLabel']} — {automatic['text']}",
             ]
         )
     lines.extend(["", "**Phases**", ""])
@@ -12589,7 +12598,20 @@ def _business_group_transport(
         )
         for phase_id in group["phaseIds"]:
             item = items_by_id[phase_id]
-            lines.append(f"   - {item['customerLabel']} — {item['text']}")
+            lines.append(
+                f"   - {_phase_status_icon(item['status'])} "
+                f"{item['customerLabel']} — {item['text']}"
+            )
+    lines.extend(
+        [
+            "",
+            (
+                "✅ Complete — admin confirmed or reused means current "
+                "compatible evidence was accepted; it is not automatic API "
+                "verification."
+            ),
+        ]
+    )
     ordinary_text = "\n".join(lines)
     group_context = (
         _business_group_context(context, contract, current_group)

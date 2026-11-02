@@ -16983,6 +16983,15 @@ def test_initial_plan_shows_business_groups_without_preflight_gate(
         len(json.loads(source_contract.read_text(encoding="utf-8"))["phases"])
         - 1
     )
+    assert "- 🔄 Check existing setup — In progress" in ordinary
+    assert ordinary.count("   - ⬜ ") == (
+        len(json.loads(source_contract.read_text(encoding="utf-8"))["phases"])
+        - 1
+    )
+    assert (
+        "✅ Complete — admin confirmed or reused means current compatible "
+        "evidence was accepted; it is not automatic API verification."
+    ) in ordinary
     assert availability["gateRequired"] is False
     assert availability["currentGroup"] is None
     assert availability["question"] is None
@@ -17091,6 +17100,12 @@ def test_business_group_question_is_just_in_time_after_preflight(
         "options": [{"label": "Yes"}, {"label": "No"}],
         "allowFreeformInput": False,
     }
+    elicitation = json.dumps(
+        availability["question"],
+        ensure_ascii=False,
+    )
+    assert "**Phases**" not in elicitation
+    assert all(icon not in elicitation for icon in ("✅", "🔄", "⬜", "❌"))
     assert "Maker" not in availability["question"]["question"]
     assert "action" not in gated
     assert "checkpoints" not in gated
@@ -17112,6 +17127,84 @@ def test_business_group_question_is_just_in_time_after_preflight(
         "unavailableReply"
     ]
     assert path.read_bytes() == before
+
+
+def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
+    tmp_path: Path,
+) -> None:
+    contract = json.loads(
+        (
+            snow.SOLUTION_ROOT
+            / snow.HRSD_PROFILE.contract_path
+        ).read_text(encoding="utf-8")
+    )
+    status_by_phase = {
+        "preflight": ("complete-checked", "Complete — checked"),
+        "plugin-prerequisites": ("complete-reused", "Reused — checked"),
+        "entra-registration": ("current", "In progress"),
+        "servicenow-oidc": ("rechecking", "Rechecking"),
+        "credential": ("checking", "Checking"),
+        "agent-connection": ("pending", "Pending"),
+        "topics": ("needs-attention", "Needs attention"),
+        "portal-url": ("pending", "Pending"),
+        "test": ("complete-manual", "Complete — admin confirmed"),
+    }
+    phase_items = [
+        {
+            "id": phase["id"],
+            "customerLabel": snow._phase_customer_label(
+                phase["id"],
+                phase["label"],
+            ),
+            "status": status_by_phase[phase["id"]][0],
+            "text": status_by_phase[phase["id"]][1],
+        }
+        for phase in contract["phases"]
+    ]
+    state = {
+        "sentinel": {"unchanged": True},
+        "businessGroupAcknowledgements": {},
+    }
+    state_before = copy.deepcopy(state)
+    context = _profile_context(
+        "hrsd",
+        agent_id=AGENT_ID,
+        agent_slug="employee-self-service-hr",
+    )
+    context["root"] = tmp_path
+
+    with snow.product_profile_context("hrsd"):
+        transport = snow._business_group_transport(
+            context=context,
+            contract=contract,
+            state=state,
+            title="Resuming ServiceNow HRSD connection.",
+            phase_items=phase_items,
+            current_group=None,
+            roles_available=None,
+            availability_group_id=None,
+            availability_context_sha256=None,
+        )
+
+    ordinary = transport["ordinaryReply"]["text"]
+    assert "- ✅ Check existing setup — Complete — checked" in ordinary
+    assert "   - ✅ Confirm HR ServiceNow prerequisite — Reused — checked" in (
+        ordinary
+    )
+    assert "   - 🔄 Confirm Entra identity options — In progress" in ordinary
+    assert "   - 🔄 Confirm ServiceNow user mapping — Rechecking" in ordinary
+    assert "   - 🔄 Check ServiceNow connection — Checking" in ordinary
+    assert "   - ⬜ Connect this agent — Pending" in ordinary
+    assert "   - ❌ Prepare agent topics — Needs attention" in ordinary
+    assert "   - ⬜ Set employee portal URL — Pending" in ordinary
+    assert "   - ✅ Test ServiceNow — Complete — admin confirmed" in ordinary
+    assert ordinary.count("Responsible role:") == 4
+    assert (
+        "✅ Complete — admin confirmed or reused means current compatible "
+        "evidence was accepted; it is not automatic API verification."
+    ) in ordinary
+    assert transport["businessGroupAvailability"]["question"] is None
+    assert state == state_before
 
 
 def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
