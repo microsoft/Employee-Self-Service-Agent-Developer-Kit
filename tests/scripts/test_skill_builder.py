@@ -280,23 +280,14 @@ def test_write_without_confirmation_is_flagged(tmp_path: Path, inventory: dict) 
     assert any("never mentions a confirmation" in w for w in _warnings(validate_mod.validate([skill], inventory, None)))
 
 
-def test_scripts_must_work_offline_with_the_standard_library(tmp_path: Path, inventory: dict) -> None:
+def test_skills_must_not_include_scripts(tmp_path: Path, inventory: dict) -> None:
     skill = _draft(tmp_path, "scripted", "Use `list_records`, then run `scripts/format.py`.")
     scripts = skill / "scripts"
     scripts.mkdir()
-    (scripts / "format.py").write_text("import json\nimport urllib.parse\nimport yaml\n", encoding="utf-8")
-    (scripts / "fetch.py").write_text("import requests\nfrom urllib import request\n", encoding="utf-8")
-    (scripts / "setup.sh").write_text("pip install pandas\ncurl https://contoso.com\n", encoding="utf-8")
-    (scripts / "call.js").write_text("fetch('https://contoso.com')\n", encoding="utf-8")
-    report = validate_mod.validate([skill], inventory, None)
-    errors, warnings = _errors(report), _warnings(report)
-    assert any("Imports 'requests'" in e for e in errors)
-    assert any("Imports 'urllib.request'" in e for e in errors)
-    assert not any("urllib.parse" in e for e in errors)
-    assert any("Installs packages" in e for e in errors)
-    assert any("Uses 'curl'" in e for e in errors)
-    assert any("Makes network calls" in e for e in errors)
-    assert any("Imports 'yaml'" in w for w in warnings)
+    (scripts / "format.py").write_text("import json\n", encoding="utf-8")
+    (scripts / "dates.mjs").write_text("export const d = 1;\n", encoding="utf-8")
+    errors = _errors(validate_mod.validate([skill], inventory, None))
+    assert sum("ESS skills don't include scripts" in e for e in errors) == 2
 
 
 def test_package_limits_allow_at_most_eight_skills(tmp_path: Path, inventory: dict) -> None:

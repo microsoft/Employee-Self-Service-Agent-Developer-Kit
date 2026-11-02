@@ -10,6 +10,7 @@ Grounded in Microsoft 365 Copilot documentation, the Agent Skills specification 
 ## Contents
 
 - [Quick start](#quick-start)
+- [Platform support](#platform-support)
 - [What it produces](#what-it-produces)
 - [How a run works](#how-a-run-works)
 - [Design principles](#design-principles)
@@ -26,9 +27,23 @@ Grounded in Microsoft 365 Copilot documentation, the Agent Skills specification 
 1. Put each MCP server's tool list in `workspace/ess-da-ga-skill-builder-capabilities/mcp/<server-name>/tools.json`, optionally with the agent's plugin file as `plugin.json`; the `capabilities` array from `declarativeAgent.json` in `knowledge/knowledge.json`; and the agent's existing skills in `skills/`. [references/capabilities-folder.md](references/capabilities-folder.md) describes the accepted formats. You can also point the builder at your agent's app package and it copies what it needs.
 2. Run `/build-skill` and describe, in your own words, what employees should be able to do.
 3. Answer a few questions per round, then review the draft until it looks right.
-4. Add the result to your agent: upload `workspace/skills/<skill-name>.zip` in Copilot Studio or Agent Builder, or add the folder with the Microsoft 365 Agents Toolkit.
+4. Add the result to your agent: upload `workspace/skills/<skill-name>.zip` in Copilot Studio or Agent Builder.
 
 You need Python 3.11 or later; the scripts use only the standard library. No setup is required, nothing leaves your machine, and your agent doesn't change until you add the skill.
+
+## Platform support
+
+Skills must fit what Copilot supports in declarative agents ([Skills in declarative agents][ms-skills]). The [support matrix](references/limitations.md#support-matrix) in the limits record has every limit with its source and status.
+
+| Item | Copilot supports | ESS skills |
+| --- | --- | --- |
+| Skills per agent | 8 | Plan within 8, counting existing skills |
+| `SKILL.md` | Under 20,000 characters | Detail goes in `references/` |
+| Package | `.zip` up to 50 MB with `SKILL.md` at its root; 25 MB per file | The packager writes it |
+| Files and depth | 350 files across all skills; depth 3 | The validator checks both |
+| Scripts | A sandbox with no network access, no package installs and no access to the agent's tools | **None.** The validator fails a skill that contains one |
+
+A script can't reach ESS data, because only the agent can call its tools, and each run adds time to the turn, so a script that grows can turn a quick answer into a long-running task.
 
 ## What it produces
 
@@ -56,7 +71,7 @@ flowchart LR
 | --- | --- | --- |
 | 1. Tools and knowledge | Finds the tool lists and knowledge sources, runs the inventory, and describes in plain language what the agent can show, create, change, comment on or search | [capabilities-folder.md](references/capabilities-folder.md) |
 | 2. Scenarios | Captures job stories, example requests and acceptance criteria | [interview.md](references/interview.md) |
-| 3. Analysis and plan | For each step of each scenario, judges from the tool descriptions whether a tool is purpose-built, a building block, partial or missing, and whether informational steps have a knowledge source; gives each scenario a verdict; recommends how to split or merge skills within the 8-skill limit, including an orchestration skill for mixed requests; flags conflicts with what the maker asked for | [limitations.md](references/limitations.md), [scenario-analysis.md](references/scenario-analysis.md) |
+| 3. Analysis and plan | For each step of each scenario, judges from the tool descriptions whether a tool is purpose-built, an FCC (on-demand fetch) tool, partial or missing, and whether informational steps have a knowledge source; gives each scenario a verdict; recommends how to split or merge skills within the 8-skill limit, including an orchestration skill for mixed requests; flags conflicts with what the maker asked for | [limitations.md](references/limitations.md), [scenario-analysis.md](references/scenario-analysis.md) |
 | 4. Explicitness | Exact steps for changes and flexible lookups, exact everywhere, or goals only; where system details live | [interview.md](references/interview.md) |
 | 5. Sources | Grounds tables, fields, defaults and codes in ESS samples, template configurations or the maker's documents, citing each fact | `src/examples/ess-samples/`, `src/reference/ess-docs/` |
 | 6. Rules | Confirmation style, acting on behalf of others, defaults | [interview.md](references/interview.md) |
@@ -66,8 +81,8 @@ flowchart LR
 
 ## Design principles
 
-- **The model judges; scripts check.** Deciding how tools fit a scenario takes reading and judgment, so the model does it. Anything that must be repeatable (listing tools, validating, packaging) is a script.
-- **Fit is decided per step, not per agent.** One server can have a purpose-built tool for one scenario and only building blocks for the next. Purpose-built steps make thin skills that route; building-block steps make thick skills that carry the procedure and facts. Informational steps are covered only when the agent has a knowledge source. Partly supported scenarios are split, and unsupported ones are left out.
+- **The model judges; the kit's scripts check.** Deciding how tools fit a scenario takes reading and judgment, so the model does it. Anything that must be repeatable (listing tools, validating, packaging) is a script that runs in the Maker Kit. Generated skills contain no scripts.
+- **Fit is decided per step, not per agent.** One server can have a purpose-built tool for one scenario and only FCC (on-demand fetch) tools for the next: generic tools that read or change any record once told where, and an [FCC][ms-fcc] once registered as a connector. Purpose-built steps make thin skills that route; FCC steps make thick skills that carry the procedure and facts. Informational steps are covered only when the agent has a knowledge source. Partly supported scenarios are split, and unsupported ones are left out.
 - **Promise only what the tools do.** A skill that loads and can't finish the job is worse than none. The validator's `--expect` option fails a skill that promises an operation without naming a tool that can do it.
 - **Orchestrate only when it's needed.** When people often mix knowledge questions and actions in one message, the builder recommends one orchestration skill, modeled on `hr-request-orchestration`, that routes between knowledge search and the area skills. Otherwise a short routing rule in the agent's instructions is enough.
 - **The maker decides.** The builder recommends with evidence (which steps, which tools, what's missing) and the maker chooses.
@@ -84,7 +99,7 @@ flowchart LR
 | [references/scenario-analysis.md](references/scenario-analysis.md) | Per-step fit, scenario verdicts, planning skills, conflict messages, worked examples |
 | [references/limitations.md](references/limitations.md) | Living record of what declarative agents support for skills |
 | [references/authoring-rules.md](references/authoring-rules.md) | Rules for front matter, descriptions, bodies, tools, scripts and progressive disclosure |
-| [references/examples.md](references/examples.md) | A thin skill over purpose-built tools, a thick skill over building blocks, and an orchestration skill across knowledge and actions |
+| [references/examples.md](references/examples.md) | A thin skill over purpose-built tools, a thick skill over FCC tools, and an orchestration skill across knowledge and actions |
 | [references/interview.md](references/interview.md) | Every question the builder asks, as `vscode_askQuestions` JSON |
 | [references/evals.md](references/evals.md) | Writing, running and grading trigger and behavior evals |
 | [references/capabilities-folder.md](references/capabilities-folder.md) | The `workspace/ess-da-ga-skill-builder-capabilities/` layout, accepted tool list formats and `knowledge.json` |
@@ -111,7 +126,7 @@ python scripts/ess-da-ga-skill-builder/skill_builder_package.py workspace/skills
 
 1. **Research.** Microsoft 365 Copilot documentation sets the target-platform requirements. The Agent Skills specification and best-practice guides supply the format and portable conventions; Anthropic's and OpenAI's authoring guides and `skill-creator` skills supply techniques adapted to Copilot. [Practices from external guides](#practices-from-external-guides) maps each practice to where it's applied.
 2. **Documented behavior and separate ESS testing findings.** Microsoft documents that the model initially sees only each skill's name and description (RT-01). Separately, ESS tests found that the model often answered without reading the rest, "Read this skill before …" did not increase loading, and instructions in tool results caused content-filter refusals. Those testing findings are **Observed**, not platform guarantees (RT-02, RT-04 and RT-05 in [limitations.md](references/limitations.md)). They motivate enforcing must-hold rules in tool descriptions or server code as well.
-3. **Trial.** A first version of the builder ran against an ESS agent with generic ServiceNow record tools. An agent with a clean context rebuilt an existing HR case creation skill without seeing the original, and its six points of feedback went into the builder. In a blind A/B comparison of offline planning runs, both skills passed all 16 checks, and the grader preferred the generated one: it used the case form and planned 10 tool calls instead of 19.
+3. **Trial.** A first version of the builder ran against an ESS agent with FCC (on-demand fetch) ServiceNow record tools. An agent with a clean context rebuilt an existing HR case creation skill without seeing the original, and its six points of feedback went into the builder. In a blind A/B comparison of offline planning runs, both skills passed all 16 checks, and the grader preferred the generated one: it used the case form and planned 10 tool calls instead of 19.
 4. **Port into the Maker Kit.** The builder became interactive: at most three questions per round, each with a recommended option, with every decision recorded in `plan.md`. Tools now come from a capabilities folder. Fit is decided per step instead of labeling the whole agent. Promised operations are checked, scripts are checked against the sandbox rules, and the output is packaged for upload.
 5. **Living references.** [limitations.md](references/limitations.md) records the platform's limits with their status and source, and [sources.md](references/sources.md) lists every external guide. A test fails if the limits in the record and the scripts disagree.
 6. **Verification.** Tests cover the inventory, the validator, the packager, the limitations record, the source list, the question bank and the command routing. Existing ESS agent skills validate with no errors.
@@ -127,8 +142,8 @@ Sources: [Skills in declarative agents][ms-skills], [Add skills in Agent Builder
 | Practice | Where we applied it |
 | --- | --- |
 | 8 skills per agent, `SKILL.md` under 20,000 characters, directory depth 3, 350 files, 50 MB packages and 25 MB files, a 10 MB app package for the Agents Toolkit, supported file types | [limitations.md](references/limitations.md), the validator and the packager, kept in sync by a test |
-| Scripts run with no network access, can't install packages and can't call MCP servers | The validator rejects network imports and commands and package installs; generated skills have no scripts by default |
-| Upload a `.zip` with `SKILL.md` at its root; enable `TEAMSFX_AGENT_SKILLS` and use manifest version 1.9 for the Agents Toolkit | The packager and the finish message |
+| Scripts run with no network access, can't install packages and can't call MCP servers | Generated skills include no scripts; the validator fails any skill that has one |
+| Upload a `.zip` with `SKILL.md` at its root | The packager and the finish message |
 | `SKILL.md` is UTF-8 without a byte-order mark, with valid YAML front matter | Validator |
 | Functions marked `isNonConsequential` run without asking the user | The validator notes that the skill's confirmation or form is then the only safeguard |
 | A widget is the answer and a form collects its own input | Gotchas in [SKILL.md](SKILL.md) and [authoring-rules.md](references/authoring-rules.md) |
@@ -183,7 +198,7 @@ Source: [Using scripts in skills][scripts].
 | Practice | Where we applied it |
 | --- | --- |
 | Scripts are non-interactive, document themselves with `--help`, print clear errors and structured output, and use distinct exit codes | All three `skill_builder_*.py` scripts |
-| Use scripts for repeatable, deterministic work | Inventory, validation and packaging are scripts; judgment stays with the model. Generated skills have no scripts by default |
+| Use scripts for repeatable, deterministic work | The kit's inventory, validation and packaging are scripts; judgment stays with the model. Generated skills include no scripts |
 
 ### Anthropic skill authoring best practices
 
@@ -232,6 +247,7 @@ Sources: [Tools][mcp-tools], [MCP Apps][mcp-apps].
 
 - **Skill names describe the user's intent** (`hr-case-create`) rather than following Anthropic's suggested gerund form.
 - **No `compatibility` or `allowed-tools` fields**, because Copilot doesn't use them.
+- **Generated skills include no scripts**, although Copilot runs them and the guides recommend them for deterministic work. A script can't reach ESS data, because only the agent can call its tools, and each run adds time to the turn, so a script that grows can turn a quick answer into a long-running task. Deterministic work goes in the MCP tool or a reference table.
 - **Trigger checks are offline subagent runs**, not an automated description-optimization loop.
 - **Additional safeguards come from ESS testing**, such as avoiding instructions in tool results. They supplement documented Microsoft requirements, are recorded as **Observed** in [limitations.md](references/limitations.md), and are not platform guarantees.
 
@@ -256,6 +272,7 @@ Fixtures live in [tests/fixtures/ess-da-ga-skill-builder/](../../../../../tests/
 [ms-mcp-apps]: https://learn.microsoft.com/microsoft-365/copilot/extensibility/plugin-mcp-apps
 [ms-mcp-ux]: https://learn.microsoft.com/microsoft-365/copilot/extensibility/plugin-mcp-apps-ui-guidelines
 [ms-plugin]: https://learn.microsoft.com/microsoft-365/copilot/extensibility/plugin-manifest-2.4
+[ms-fcc]: https://learn.microsoft.com/microsoft-365/copilot/connectors/set-up-custom-federated-connectors
 [studio-upload]: https://learn.microsoft.com/microsoft-copilot-studio/agents-experience/skills-add-existing
 [studio-create]: https://learn.microsoft.com/microsoft-copilot-studio/agents-experience/skills-create
 [spec]: https://agentskills.io/specification

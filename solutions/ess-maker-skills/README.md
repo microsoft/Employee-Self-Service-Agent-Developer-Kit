@@ -31,9 +31,9 @@ Turn HR and IT scenarios into agent skills that work with your agent's own MCP t
 
 - **Platform-first guidance:** Microsoft 365 Copilot documentation first, then the Agent Skills specification and best practices, followed by applicable Anthropic and OpenAI authoring guidance. [Source precedence](src/skills/ess-da-ga-skill-builder/references/sources.md) keeps documented requirements separate from testing observations.
 - **Grounded in your tools and knowledge:** reads every tool description and knowledge source, and checks, step by step, whether your agent can do each scenario.
-- **Right-sized skills:** recommends thin skills where purpose-built tools do the work, focused skills where general-purpose tools need the skill to carry the steps, and splitting scenarios your tools can only partly support.
+- **Right-sized skills:** recommends thin skills where purpose-built tools do the work, focused skills where FCC (on-demand fetch) tools need the skill to carry the steps, and splitting scenarios your tools can only partly support.
 - **Built with you:** asks a few questions at a time about scope, how explicit to be, sources such as existing topics, and confirmation rules, and refines the draft until you're happy.
-- **Ready to upload:** validates each skill against Copilot's limits and packages it as a `.zip` for Copilot Studio or Agent Builder, or a folder for the Microsoft 365 Agents Toolkit.
+- **Ready to upload:** validates each skill against Copilot's limits and packages it as a `.zip` for Copilot Studio or Agent Builder.
 
 Everything stays in `workspace/` on your machine; your agent doesn't change until you add the skill.
 

@@ -2,68 +2,84 @@
 
 A live record of what declarative agents (DA GA) in Microsoft 365 Copilot support for agent skills, and what testing has shown about how Copilot uses them. Kit maintainers add, change and remove entries as the platform changes.
 
-Last reviewed: 2026-10-27.
+Last reviewed: 2026-11-02.
 
 ## Contents
 
+- Support matrix
 - How to use this record
 - Status values
 - Packaging and size
 - Files and scripts
 - Runtime behavior
 - Tenant and publishing
+- Federated connectors (FCC)
 - Agent Skills specification
 - Unverified
 - Changelog
 - How to update this record
 
+## Support matrix
+
+What Copilot supports for skills in a declarative agent, and the rule ESS skills follow. The sections below give each limit's source and status.
+
+| Item                | Copilot supports                                                                                                                                                                                            | ESS skills                                                   |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Skills per agent    | 8 (PK-01)                                                                                                                                                                                                   | Plan within 8, counting the agent's existing skills          |
+| Skill size          | `SKILL.md` under 20,000 characters (PK-02)                                                                                                                                                                  | Detail goes in `references/`                                 |
+| Package             | A `.zip` up to 50 MB with `SKILL.md` at its root; 25 MB per file (PK-05, PK-06)                                                                                                                             | The packager writes the `.zip`                               |
+| Files and depth     | 350 files across all skills; directory depth 3 (PK-03, PK-04)                                                                                                                                               | The validator checks both                                    |
+| Reuse across agents | Not supported (PK-10)                                                                                                                                                                                       | Add a copy to each agent                                     |
+| Scripts             | Python, JavaScript, TypeScript and shell scripts, in a sandbox with no network access, no package installs, no authenticated calls and no access to connectors, API plugins or MCP servers (FS-02 to FS-06) | **None.** The validator fails a skill that contains a script |
+
+ESS skills include no scripts, even though Copilot runs them. A script can't reach ESS data, because only the agent can call its tools, and each run adds time to the turn, so a script that grows can turn a quick answer into a long-running task. Deterministic work (formatting, date arithmetic, code lists) belongs in the MCP tool or a reference table.
+
 ## How to use this record
 
 - Start with Microsoft documentation for the target host's capabilities, limits, packaging and documented behavior. Apply Agent Skills format and portable conventions within those constraints; use Anthropic and OpenAI guides only for applicable authoring techniques. `sources.md` records the source order and host scope.
-- **Plan** within these limits in Round 3 (skill count, what a skill can do without network access), and **draft** within them in Round 7.
+- **Plan** within these limits in Round 3 (skill count; skills carry no scripts), and **draft** within them in Round 7.
 - **Answer** the maker's questions from this file. Give the limit, where it applies and its status. **All** means declarative agents, whether built in Agent Builder or with the Agents Toolkit; **Copilot Studio** means Copilot Studio agents built with the GitHub Copilot harness. The validator applies the Copilot Studio load checks to every skill, since they cost nothing elsewhere. For a **Documented** entry, link its source. For an **Observed** entry, say it comes from testing and can change without notice.
 - When the question isn't covered here, say so, don't guess, and point the maker to the closest source. Record the question in `plan.md` under **Decisions** so maintainers can add it.
 - Don't edit this file while building a skill; it's maintained in the kit.
 
 ## Status values
 
-| Status     | Meaning                                                                                         |
-| ---------- | ----------------------------------------------------------------------------------------------- |
-| Documented | Microsoft documentation states it.                                                              |
+| Status     | Meaning                                                                                                |
+| ---------- | ------------------------------------------------------------------------------------------------------ |
+| Documented | Microsoft documentation states it.                                                                     |
 | Spec       | Agent Skills format and portable conventions, applied within the target host's documented constraints. |
-| Observed   | Seen in ESS testing with Microsoft 365 Copilot; not a documented platform guarantee, and can change. |
-| Unverified | An open question; tell the maker it's unknown.                                                  |
+| Observed   | Seen in ESS testing with Microsoft 365 Copilot; not a documented platform guarantee, and can change.   |
+| Unverified | An open question; tell the maker it's unknown.                                                         |
 
 ## Packaging and size
 
-| ID    | Limit                                                                                                                                               | Applies to     | Status     | Source         | Enforced by                     |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ---------- | -------------- | ------------------------------- |
-| PK-01 | Up to 8 skills per agent.                                                                                                                           | All            | Documented | [DA skills][1] | Validator with `--package`      |
-| PK-02 | `SKILL.md` instructions must be under 20,000 characters.                                                                                            | All            | Documented | [DA skills][1] | Validator                       |
-| PK-03 | Maximum directory depth 3: `skills/<name>/<folder>/file`. A skill's own folders can't contain subfolders.                                           | All            | Documented | [DA skills][1] | Validator                       |
-| PK-04 | Up to 350 files across all of an agent's skills.                                                                                                    | All            | Documented | [DA skills][1] | Validator with `--package`      |
-| PK-05 | Upload the complete skill as a `.zip` of up to 50 MB, with `SKILL.md` at its root. `SKILL.md` alone isn't accepted.                                 | Agent Builder  | Documented | [Builder][2]   | Packager                        |
-| PK-06 | Each file in the package can be up to 25 MB.                                                                                                        | Agent Builder  | Documented | [DA skills][1] | Packager                        |
-| PK-07 | Add a skill as a folder (a `.zip` isn't supported); the whole app package is limited to 10 MB.                                                      | Agents Toolkit | Documented | [Toolkit][3]   | Not enforced                    |
-| PK-08 | Skills need declarative agent manifest version 1.9.                                                                                                 | Agents Toolkit | Documented | [Toolkit][3]   | Not enforced                    |
-| PK-09 | `atk add skill` works only when the `TEAMSFX_AGENT_SKILLS` environment variable is `true`; otherwise the CLI reports `skill` as an unknown command. | Agents Toolkit | Documented | [Toolkit][3]   | Not enforced                    |
-| PK-10 | A skill can't be shared between agents; add a copy to each agent.                                                                                   | All            | Documented | [DA skills][1] | Not enforced                    |
-| PK-11 | Upload either a `SKILL.md` file or a `.zip` that contains one. A skill that fails a load check is skipped while the rest of the agent loads.        | Copilot Studio | Documented | [Studio][4]    | Validator                       |
-| PK-12 | Skill names must be unique within an agent.                                                                                                         | Copilot Studio | Documented | [Studio][4]    | Validator (name matches folder) |
+| ID    | Limit                                                                                                                                        | Applies to     | Status     | Source         | Enforced by                     |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ---------- | -------------- | ------------------------------- |
+| PK-01 | Up to 8 skills per agent.                                                                                                                    | All            | Documented | [DA skills][1] | Validator with `--package`      |
+| PK-02 | `SKILL.md` instructions must be under 20,000 characters.                                                                                     | All            | Documented | [DA skills][1] | Validator                       |
+| PK-03 | Maximum directory depth 3: `skills/<name>/<folder>/file`. A skill's own folders can't contain subfolders.                                    | All            | Documented | [DA skills][1] | Validator                       |
+| PK-04 | Up to 350 files across all of an agent's skills.                                                                                             | All            | Documented | [DA skills][1] | Validator with `--package`      |
+| PK-05 | Upload the complete skill as a `.zip` of up to 50 MB, with `SKILL.md` at its root. `SKILL.md` alone isn't accepted.                          | Agent Builder  | Documented | [Builder][2]   | Packager                        |
+| PK-06 | Each file in the package can be up to 25 MB.                                                                                                 | Agent Builder  | Documented | [DA skills][1] | Packager                        |
+| PK-07 | Add a skill as a folder (a `.zip` isn't supported); the whole app package is limited to 10 MB.                                               | Agents Toolkit | Documented | [Toolkit][3]   | Not enforced                    |
+| PK-08 | Skills need declarative agent manifest version 1.9.                                                                                          | Agents Toolkit | Documented | [Toolkit][3]   | Not enforced                    |
+| PK-10 | A skill can't be shared between agents; add a copy to each agent.                                                                            | All            | Documented | [DA skills][1] | Not enforced                    |
+| PK-11 | Upload either a `SKILL.md` file or a `.zip` that contains one. A skill that fails a load check is skipped while the rest of the agent loads. | Copilot Studio | Documented | [Studio][4]    | Validator                       |
+| PK-12 | Skill names must be unique within an agent.                                                                                                  | Copilot Studio | Documented | [Studio][4]    | Validator (name matches folder) |
 
 ## Files and scripts
 
-| ID    | Limit                                                                                                                                                                                                                                                                                | Applies to     | Status     | Source         | Enforced by                                     |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------- | ---------- | -------------- | ----------------------------------------------- |
-| FS-01 | Resource files can be `.json`, `.xml`, `.yaml`, `.yml`, `.ini`, `.config`, `.utf8`, `.docx`, `.doc`, `.docm`, `.pdf`, `.txt`, `.rtf`, `.md`, `.ppt`, `.pptx`, `.ppsm`, `.xlsx`, `.xls`, `.xlsm`, `.csv`, `.tsv`, `.html`, `.htm`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp` or `.log`. | All            | Documented | [DA skills][1] | Validator                                       |
-| FS-02 | Scripts can be `.py`, `.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.sh` or `.bash`.                                                                                                                                                                                                        | All            | Documented | [DA skills][1] | Validator                                       |
-| FS-03 | Scripts run in a sandbox with no internet or network access.                                                                                                                                                                                                                         | All            | Documented | [DA skills][1] | Validator (network imports and commands)        |
-| FS-04 | Scripts can't install packages. They may use packages already in the sandbox, but shouldn't depend on one whose availability isn't confirmed; in practice, use the standard library only.                                                                                            | All            | Documented | [DA skills][1] | Validator (installs; non-standard imports warn) |
-| FS-05 | Scripts can't make authenticated network calls.                                                                                                                                                                                                                                      | All            | Documented | [DA skills][1] | Validator                                       |
-| FS-06 | Scripts can't call connectors, API plugins or MCP servers. Only the agent can use them, through the orchestrator.                                                                                                                                                                    | All            | Documented | [DA skills][1] | Builder guidance                                |
-| FS-07 | `SKILL.md` must be UTF-8 without a byte-order mark, and its front matter must be valid YAML: quote a value that contains a colon followed by a space.                                                                                                                                | Copilot Studio | Documented | [Studio][4]    | Validator                                       |
-| FS-08 | Sensitivity labels on skill files are kept and honored; user-defined permissions and Double Key Encryption aren't supported.                                                                                                                                                         | All            | Documented | [DA skills][1] | Not enforced                                    |
-| FS-09 | Uploaded skill files are stored in tenant-scoped SharePoint Embedded containers.                                                                                                                                                                                                     | All            | Documented | [DA skills][1] | Not enforced                                    |
+| ID    | Limit                                                                                                                                                                                                                                                                                | Applies to     | Status     | Source         | Enforced by                    |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------- | ---------- | -------------- | ------------------------------ |
+| FS-01 | Resource files can be `.json`, `.xml`, `.yaml`, `.yml`, `.ini`, `.config`, `.utf8`, `.docx`, `.doc`, `.docm`, `.pdf`, `.txt`, `.rtf`, `.md`, `.ppt`, `.pptx`, `.ppsm`, `.xlsx`, `.xls`, `.xlsm`, `.csv`, `.tsv`, `.html`, `.htm`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp` or `.log`. | All            | Documented | [DA skills][1] | Validator                      |
+| FS-02 | Scripts can be `.py`, `.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.sh` or `.bash`.                                                                                                                                                                                                        | All            | Documented | [DA skills][1] | Validator (rejects any script) |
+| FS-03 | Scripts run in a sandbox with no internet or network access.                                                                                                                                                                                                                         | All            | Documented | [DA skills][1] | Validator (rejects any script) |
+| FS-04 | Scripts can't install packages. They may use packages already in the sandbox, but shouldn't depend on one whose availability isn't confirmed; in practice, use the standard library only.                                                                                            | All            | Documented | [DA skills][1] | Validator (rejects any script) |
+| FS-05 | Scripts can't make authenticated network calls.                                                                                                                                                                                                                                      | All            | Documented | [DA skills][1] | Validator (rejects any script) |
+| FS-06 | Scripts can't call connectors, API plugins or MCP servers. Only the agent can use them, through the orchestrator.                                                                                                                                                                    | All            | Documented | [DA skills][1] | Validator (rejects any script) |
+| FS-07 | `SKILL.md` must be UTF-8 without a byte-order mark, and its front matter must be valid YAML: quote a value that contains a colon followed by a space.                                                                                                                                | Copilot Studio | Documented | [Studio][4]    | Validator                      |
+| FS-08 | Sensitivity labels on skill files are kept and honored; user-defined permissions and Double Key Encryption aren't supported.                                                                                                                                                         | All            | Documented | [DA skills][1] | Not enforced                   |
+| FS-09 | Uploaded skill files are stored in tenant-scoped SharePoint Embedded containers.                                                                                                                                                                                                     | All            | Documented | [DA skills][1] | Not enforced                   |
 
 ## Runtime behavior
 
@@ -89,6 +105,14 @@ Last reviewed: 2026-10-27.
 | TP-02 | ISVs can't publish declarative agents with skills through Partner Center yet.                                                                   | All           | Documented | [DA skills][1] | Not enforced |
 | TP-03 | Adding skills in Agent Builder needs a qualifying Microsoft 365 Copilot license or pay-as-you-go access.                                        | Agent Builder | Documented | [Builder][2]   | Not enforced |
 
+## Federated connectors (FCC)
+
+| ID    | Limit                                                                                                                                                                                                 | Applies to | Status     | Source                            | Enforced by      |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- | --------------------------------- | ---------------- |
+| FC-01 | A custom federated connector (FCC) is a tenant-level connector created in the Microsoft 365 admin center from an MCP server URL. It fetches data on demand as the signed-in user and indexes nothing. | All        | Documented | [FCC setup][7]                    | Not enforced     |
+| FC-02 | Copilot asks the user to approve each FCC write tool (Allow once, Allow for conversation, Always allow); read tools never ask.                                                                        | All        | Documented | [FCC overview][8]                 | Builder guidance |
+| FC-03 | The declarative agent manifest (v1.9) has no FCC capability, and MCP Apps widgets are documented only for MCP plugins in an agent.                                                                    | All        | Documented | [Manifest 1.9][9], [MCP apps][10] | Builder guidance |
+
 ## Agent Skills specification
 
 | ID    | Limit                                                                                       | Applies to | Status | Source    | Enforced by       |
@@ -100,18 +124,19 @@ Last reviewed: 2026-10-27.
 
 ## Unverified
 
-| ID    | Question                                                                                         | Status     |
-| ----- | ------------------------------------------------------------------------------------------------ | ---------- |
-| UV-01 | Which packages are preinstalled in the script sandbox.                                           | Unverified |
-| UV-02 | Whether skill scripts run in an agent that doesn't have the Code Interpreter capability enabled. | Unverified |
-| UV-03 | The description length Copilot's catalog accepts, beyond the specification's 1,024 characters.   | Unverified |
+| ID    | Question                                                                                                                                                           | Status     |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- |
+| UV-03 | The description length Copilot's catalog accepts, beyond the specification's 1,024 characters.                                                                     | Unverified |
+| UV-04 | Whether an agent can scope an FCC by listing its connection ID in `GraphConnectors.connections`, and whether its tool names are stable enough for a skill to name. | Unverified |
+| UV-05 | Whether FCC tools render MCP Apps widgets.                                                                                                                         | Unverified |
 
 ## Changelog
 
-| Date       | Change          |
-| ---------- | --------------- |
-| 2026-10-28 | Clarified source precedence and evidence labels; platform limits not re-reviewed. |
-| 2026-10-27 | Initial record. |
+| Date       | Change                                                                                                                                                                                                                                                                                              |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-11-02 | Added the support matrix and federated connector (FCC) entries FC-01 to FC-03, UV-04 and UV-05. ESS skills include no scripts: the validator rejects any script, and UV-01 and UV-02 (script sandbox questions) are removed. Removed PK-09, an Agents Toolkit setting; ESS doesn't use the toolkit. |
+| 2026-10-28 | Clarified source precedence and evidence labels; platform limits not re-reviewed.                                                                                                                                                                                                                   |
+| 2026-10-27 | Initial record.                                                                                                                                                                                                                                                                                     |
 
 ## How to update this record
 
@@ -126,3 +151,7 @@ Last reviewed: 2026-10-27.
 [4]: https://learn.microsoft.com/microsoft-copilot-studio/agents-experience/skills-add-existing
 [5]: https://learn.microsoft.com/microsoft-365/copilot/extensibility/plugin-manifest-2.4
 [6]: https://agentskills.io/specification
+[7]: https://learn.microsoft.com/microsoft-365/copilot/connectors/set-up-custom-federated-connectors
+[8]: https://learn.microsoft.com/microsoft-365/copilot/connectors/federated-connectors-overview
+[9]: https://learn.microsoft.com/microsoft-365/copilot/extensibility/declarative-agent-manifest-1.9
+[10]: https://learn.microsoft.com/microsoft-365/copilot/extensibility/plugin-mcp-apps

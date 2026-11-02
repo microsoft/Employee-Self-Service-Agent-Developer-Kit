@@ -5,7 +5,7 @@ Read in Round 7 before drafting, to calibrate how much a skill should say. The e
 ## Contents
 
 - A thin skill over purpose-built tools
-- A thick skill over building blocks
+- A thick skill over FCC (on-demand fetch) tools
 - An orchestration skill across knowledge and actions
 - What to notice
 
@@ -37,7 +37,7 @@ To prefill the HR service, call `sn__get_hr_services(name=...)` with the issue's
 - The widget is the answer: reply in one short sentence and don't restate its records.
 ```
 
-## A thick skill over building blocks
+## A thick skill over FCC (on-demand fetch) tools
 
 The tools are `sn__list_records`, `sn__get_record`, `sn__create_record` and `sn__update_record` for any table, plus `sn__get_current_user_info`. The skill carries the procedure and the facts the old process had.
 

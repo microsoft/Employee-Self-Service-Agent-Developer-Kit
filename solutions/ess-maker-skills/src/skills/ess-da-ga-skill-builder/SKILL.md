@@ -21,6 +21,10 @@ Use Microsoft documentation first for the target platform's supported capabiliti
 
 Keep documented requirements separate from **Observed** findings from ESS testing. Those findings inform safeguards, not platform guarantees; preserve their evidence status from [references/limitations.md](references/limitations.md) when explaining them.
 
+## Platform limits first
+
+Plan every skill inside the support matrix at the top of [references/limitations.md](references/limitations.md): 8 skills per agent, `SKILL.md` under 20,000 characters, directory depth 3 and 350 files across all skills. Never add scripts, even when the maker asks; this is a kit rule, not a trade-off. A script can't reach ESS data, because only the agent can call its tools, and each run adds time to the turn, so a script that grows can turn a quick answer into a long-running task. Put deterministic work (formatting, date arithmetic, code lists) in a reference table, or list it for the developer to add to the MCP tool.
+
 ## How to run the conversation
 
 - Ask with `vscode_askQuestions`, at most three questions per round. Give options with a recommended one, and allow free-form input whenever the answer could be something else. The exact questions are in [references/interview.md](references/interview.md).
@@ -63,7 +67,7 @@ python scripts/ess-da-ga-skill-builder/skill_builder_inventory.py --capabilities
 
 `--package <folder>`, `--plugin <file>` and `--tools <file>` read other sources (`--help` has examples). Report any problem the script prints, and say that folders it lists as not used yet aren't part of the plan. If knowledge isn't provided and the maker's scenarios include policy or how-to questions, ask for `knowledge/knowledge.json`.
 
-Read the full description and parameters of every tool. Then tell the maker, in a few plain sentences per server, what their agent can do: what it can show, create, change or comment on, which parts open forms or widgets, and which tools are general-purpose (they work on any record if told where) rather than built for one process. Also say which knowledge sources the agent can search (SharePoint sites, Copilot connectors and so on). This is a description, not a verdict yet.
+Read the full description and parameters of every tool. Then tell the maker, in a few plain sentences per server, what their agent can do: what it can show, create, change or comment on, which parts open forms or widgets, and which are FCC (on-demand fetch) tools, which read or change any record once told where, rather than built for one process. Also say which knowledge sources the agent can search (SharePoint sites, Copilot connectors and so on). This is a description, not a verdict yet.
 
 ## Round 2: The scenarios
 
@@ -81,7 +85,7 @@ If the maker's first request already described scenarios, restate them instead a
 
 This round decides whether the skills will work. Read [references/limitations.md](references/limitations.md), then follow [references/scenario-analysis.md](references/scenario-analysis.md):
 
-1. Break each scenario into steps, and for each step judge from the tool descriptions whether a tool is **purpose-built** for it, a **building block** the skill must direct with tables, fields and order, **partial**, or missing. Informational steps (policy, how-to, eligibility) are **knowledge** steps, covered only when the agent has a knowledge source. Decide per step and per scenario; never label the whole agent up front.
+1. Break each scenario into steps, and for each step judge from the tool descriptions whether a tool is **purpose-built** for it, an **FCC** (on-demand fetch) tool the skill must direct with tables, fields and order, **partial**, or missing. Informational steps (policy, how-to, eligibility) are **knowledge** steps, covered only when the agent has a knowledge source. Decide per step and per scenario; never label the whole agent up front.
 2. Give each scenario a verdict (achievable, partly achievable, not achievable) and a weight (a thin skill that routes, or a thick one that carries the procedure and facts).
 3. Plan the skills: merge, split, use shared rules, add an orchestration skill for mixed requests, or suggest the agent's instructions, within the 8 skill slots.
 4. Compare the plan with what the maker asked for. When they conflict, use the matching message in the analysis reference.
@@ -92,11 +96,11 @@ Record the capability map, verdicts and skill plan in `plan.md`. Then take each 
 
 ## Round 4: Generic or explicit
 
-Ask **Tool binding**. Recommend "Exact for changes, flexible for lookups" unless the maker said the skill must work with more than one system. Thin skills already name their tools; ask this mainly for skills with building-block steps, and ask **Provider details** only for those.
+Ask **Tool binding**. Recommend "Exact for changes, flexible for lookups" unless the maker said the skill must work with more than one system. Thin skills already name their tools; ask this mainly for skills with FCC steps, and ask **Provider details** only for those.
 
 ## Round 5: What to learn from
 
-Building-block steps need facts the model can't know; purpose-built steps rarely do. Skip this round when the skill has no building-block steps.
+FCC steps need facts the model can't know; purpose-built steps rarely do. Skip this round when the skill has no FCC steps.
 
 Ask **Grounding**. Look first in what the kit has: `src/examples/ess-samples/` (Copilot Studio topics with their template configurations) and `src/reference/ess-docs/`. Then read what the maker points to.
 
@@ -108,7 +112,7 @@ Ask **Confirmation**, **On behalf of others** and **Defaults**, skipping any the
 
 ## Round 7: Draft, show, refine
 
-Read [references/authoring-rules.md](references/authoring-rules.md) and [references/examples.md](references/examples.md). Draft the skill from [assets/skill-template.md](assets/skill-template.md), giving each step the weight the analysis set: route to purpose-built tools in a line, and spell out building-block steps. Default to no scripts. Then validate, listing in `--expect` every operation the description promises:
+Read [references/authoring-rules.md](references/authoring-rules.md) and [references/examples.md](references/examples.md). Draft the skill from [assets/skill-template.md](assets/skill-template.md), giving each step the weight the analysis set: route to purpose-built tools in a line, and spell out FCC steps. Never add scripts. Then validate, listing in `--expect` every operation the description promises:
 
 ```powershell
 python scripts/ess-da-ga-skill-builder/skill_builder_validate.py workspace/ess-da-ga-skill-builder/<plan-name>/iteration-<n>/<skill-name> --inventory workspace/ess-da-ga-skill-builder/<plan-name>/iteration-1/inventory.json --expect create,update,comment
@@ -138,10 +142,7 @@ The script validates again and writes `workspace/skills/<skill-name>.zip` with `
 
 Your skill **{SKILL_NAME}** is ready: `workspace/skills/{SKILL_NAME}.zip` (folder: `workspace/skills/{SKILL_NAME}/`).
 
-To add it to your agent:
-
-- **Copilot Studio or Agent Builder:** open your agent, go to **Skills**, select **Add**, and upload the `.zip`.
-- **Microsoft 365 Agents Toolkit:** set the `TEAMSFX_AGENT_SKILLS` environment variable to `true` (the toolkit doesn't offer skills without it) and make sure your declarative agent manifest is version 1.9. Then run `atk add skill --from <folder>`, or copy the folder into your app package's `skills/` folder and list it in `agent_skills` in `declarativeAgent.json` (and in `agentSkills` in `manifest.json` if your manifest has that list), and provision.
+To add it to your agent, open it in Copilot Studio or Agent Builder, go to **Skills**, select **Add**, and upload the `.zip`.
 
 An agent can have up to 8 skills.
 
@@ -158,5 +159,4 @@ Replace `{MUST_HOLD_RULES}` with the rules from `plan.md` that must hold even if
 - Don't start a description with "Read this skill before …". It did not increase skill loading in ESS testing (**Observed**, RT-04), and it breaks the third-person rule.
 - A widget is the answer: one widget per turn, and a form collects its own input, so never ask for a form's field values in chat. App-only tools are called by widgets, never by the model.
 - Every change needs a form the user submits or an explicit confirmation in chat. Users act only on their own records unless a tool enforces otherwise.
-- Skill scripts run with no network access and no package installs, and can't call the agent's tools. A skill that needs data gets it through the agent's tools.
-- Limits change. Plan, draft and answer from [references/limitations.md](references/limitations.md), the kit's current record; never quote a limit from memory. The ones that shape most plans: 8 skills per agent, `SKILL.md` under 20,000 characters, and scripts with no network access or extra packages.
+- Limits change. Plan, draft and answer from [references/limitations.md](references/limitations.md), the kit's current record; never quote a limit from memory.
