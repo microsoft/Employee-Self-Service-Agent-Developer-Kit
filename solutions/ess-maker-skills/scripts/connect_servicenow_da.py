@@ -65,7 +65,7 @@ SETUP_SCHEMA_VERSION = 4
 HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 IT_SCHEMA_NAME = "gptagent_copilotforemployeeselfserviceit"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
-LIFECYCLE_SCHEMA_VERSION = 10
+LIFECYCLE_SCHEMA_VERSION = 11
 ADMIN_SETUP_SCHEMA_VERSION = 4
 AUTH_MODE = "entraIDUserLogin"
 ENTRA_CHECKPOINT_SUFFIXES = (
@@ -6999,6 +6999,7 @@ def _state_base(
         "evidence": {},
         "adminSetup": _empty_admin_setup(),
         "transactions": {"topics": {}},
+        "businessGroupAcknowledgements": {},
         "migration": {},
         "updatedAt": _utc_now(),
     }
@@ -7658,6 +7659,26 @@ def _migrate_lifecycle_schema(
             "resetPhaseIds": sorted(set(reset_phase_ids)),
             "completionInferred": False,
         }
+    if version < 11:
+        acknowledgements = state.get("businessGroupAcknowledgements")
+        if acknowledgements is not None and not isinstance(
+            acknowledgements,
+            dict,
+        ):
+            raise ServiceNowConnectError(
+                "ServiceNow business-group acknowledgements must be an "
+                "object."
+            )
+        state["businessGroupAcknowledgements"] = {}
+        state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
+        migration["schemaV11"] = {
+            "from": 10 if version <= 10 else version,
+            "to": LIFECYCLE_SCHEMA_VERSION,
+            "sourceSha256": source_sha256,
+            "migratedAt": _utc_now(),
+            "legacyRoleAvailabilityMigrated": False,
+            "completionInferred": False,
+        }
     return state
 
 
@@ -7795,6 +7816,7 @@ def _load_lifecycle_state(
             "evidence": {},
             "adminSetup": _empty_admin_setup(),
             "transactions": {"topics": {}},
+            "businessGroupAcknowledgements": {},
             "migration": {},
         }
     if ACTIVE_PROFILE.key == "hrsd":
@@ -12202,46 +12224,269 @@ def _build_phase_progress(
     return progress
 
 
-def _role_availability_transport(
+def _business_groups(
+    contract: dict[str, Any],
+) -> list[dict[str, Any]]:
+    phases = contract.get("phases")
+    groups = contract.get("businessGroups")
+    if not isinstance(phases, list):
+        raise ServiceNowConnectError(
+            "ServiceNow lifecycle contract has no business groups."
+        )
+    if not isinstance(groups, list):
+        phase_ids = {
+            str(phase.get("id"))
+            for phase in phases
+            if isinstance(phase, dict) and isinstance(phase.get("id"), str)
+        }
+        groups = [
+            *(
+                [
+                    {
+                        "id": "hr-prerequisite",
+                        "label": "HR prerequisite",
+                        "role": "ServiceNow admin",
+                        "phaseIds": ["plugin-prerequisites"],
+                    }
+                ]
+                if "plugin-prerequisites" in phase_ids
+                else []
+            ),
+            *(
+                [
+                    {
+                        "id": "entra-identity",
+                        "label": "Entra identity",
+                        "role": "Entra admin",
+                        "phaseIds": ["entra-registration"],
+                    }
+                ]
+                if "entra-registration" in phase_ids
+                else []
+            ),
+            *(
+                [
+                    {
+                        "id": "servicenow-sso",
+                        "label": "ServiceNow SSO and user mapping",
+                        "role": "ServiceNow admin / security_admin",
+                        "phaseIds": ["servicenow-oidc"],
+                    }
+                ]
+                if "servicenow-oidc" in phase_ids
+                else []
+            ),
+            {
+                "id": "maker-configuration",
+                "label": "Maker configuration and validation",
+                "role": "Maker",
+                "phaseIds": [
+                    phase_id
+                    for phase_id in (
+                        "credential",
+                        "agent-connection",
+                        "topics",
+                        "portal-url",
+                        "test",
+                    )
+                    if phase_id in phase_ids
+                ],
+            },
+        ]
+        groups = [
+            group for group in groups if group["phaseIds"]
+        ]
+    phase_ids = {
+        str(phase.get("id"))
+        for phase in phases
+        if isinstance(phase, dict) and isinstance(phase.get("id"), str)
+    }
+    seen_groups: set[str] = set()
+    seen_phases: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            raise ServiceNowConnectError(
+                "ServiceNow business-group contract is invalid."
+            )
+        group_id = group.get("id")
+        label = group.get("label")
+        role = group.get("role")
+        group_phase_ids = group.get("phaseIds")
+        if (
+            not isinstance(group_id, str)
+            or not group_id
+            or group_id in seen_groups
+            or not isinstance(label, str)
+            or not label
+            or not isinstance(role, str)
+            or not role
+            or not isinstance(group_phase_ids, list)
+            or not group_phase_ids
+            or not all(
+                isinstance(phase_id, str)
+                and phase_id in phase_ids
+                and phase_id != "preflight"
+                and phase_id not in seen_phases
+                for phase_id in group_phase_ids
+            )
+        ):
+            raise ServiceNowConnectError(
+                "ServiceNow business-group identity or phase mapping is "
+                "invalid."
+            )
+        seen_groups.add(group_id)
+        seen_phases.update(group_phase_ids)
+        normalized.append(
+            {
+                "id": group_id,
+                "label": label,
+                "role": role,
+                "phaseIds": list(group_phase_ids),
+            }
+        )
+    expected_grouped = phase_ids - {"preflight"}
+    if seen_phases != expected_grouped:
+        raise ServiceNowConnectError(
+            "ServiceNow business groups do not cover every collaboration "
+            "phase exactly once."
+        )
+    return normalized
+
+
+def _business_group_context(
+    context: dict[str, Any],
+    contract: dict[str, Any],
+    group: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": "servicenow.business-group-context.v1",
+        "provider": ACTIVE_PROFILE.provider_key,
+        "profile": ACTIVE_PROFILE.key,
+        "agentSlug": _agent_slug(context),
+        "agentId": context["agent"]["id"],
+        "environmentId": context["environment"]["id"],
+        "contractRevision": contract["contractRevision"],
+        "businessGroupId": group["id"],
+        "label": group["label"],
+        "role": group["role"],
+        "phaseIds": list(group["phaseIds"]),
+    }
+
+
+def _business_group_acknowledgement_current(
+    state: dict[str, Any] | None,
     *,
+    group: dict[str, Any],
+    context_sha256: str,
+) -> bool:
+    if not isinstance(state, dict):
+        return False
+    records = state.get("businessGroupAcknowledgements")
+    record = (
+        records.get(group["id"])
+        if isinstance(records, dict)
+        else None
+    )
+    recorded_context = (
+        record.get("contextIdentity")
+        if isinstance(record, dict)
+        else None
+    )
+    return bool(
+        isinstance(record, dict)
+        and record.get("kind") == "maker-attestation"
+        and record.get("status") == "available"
+        and record.get("businessGroupId") == group["id"]
+        and record.get("contextIdentitySha256") == context_sha256
+        and isinstance(recorded_context, dict)
+        and _canonical_json_hash(recorded_context) == context_sha256
+        and isinstance(record.get("recordedAt"), str)
+        and record["recordedAt"]
+    )
+
+
+def _current_business_group(
+    contract: dict[str, Any],
+    progress: dict[str, Any],
+) -> dict[str, Any] | None:
+    groups = _business_groups(contract)
+    current = progress.get("currentPhase")
+    current_phase_id = (
+        current.get("id") if isinstance(current, dict) else None
+    )
+    if not isinstance(current_phase_id, str) or current_phase_id == "preflight":
+        return None
+    for group in groups:
+        if current_phase_id in group["phaseIds"]:
+            return group
+    return None
+
+
+def _business_group_transport(
+    *,
+    context: dict[str, Any],
+    contract: dict[str, Any],
+    state: dict[str, Any] | None,
     title: str,
     phase_items: list[dict[str, Any]],
-    checklist_text: str,
+    current_group: dict[str, Any] | None,
     roles_available: bool | None,
-    gate_required: bool,
+    availability_group_id: str | None,
+    availability_context_sha256: str | None,
 ) -> dict[str, Any]:
-    required_roles: list[str] = []
-    phase_lines = []
-    for index, item in enumerate(phase_items, start=1):
-        roles = item.get("responsibleRoles")
-        if not isinstance(roles, list) or not roles:
-            raise ServiceNowConnectError(
-                "ServiceNow ordinary-reply phase roles are invalid."
-            )
-        role_text = "; ".join(str(role) for role in roles)
-        phase_lines.append(
-            f"{index}. {item['customerLabel']} — Responsible: {role_text}"
+    items_by_id = {str(item["id"]): item for item in phase_items}
+    automatic = items_by_id.get("preflight")
+    lines = [title]
+    if isinstance(automatic, dict):
+        lines.extend(
+            [
+                "",
+                "**Automatic setup**",
+                "",
+                f"- {automatic['customerLabel']} — {automatic['text']}",
+            ]
         )
-        if item.get("roleAvailabilityRequired") is True:
-            for role in roles:
-                role = str(role)
-                if role not in required_roles:
-                    required_roles.append(role)
+    lines.extend(["", "**Collaboration groups**", ""])
+    groups = _business_groups(contract)
+    for index, group in enumerate(groups, start=1):
+        lines.append(
+            f"{index}. **{group['label']}** — Responsible role: "
+            f"{group['role']}"
+        )
+        for phase_id in group["phaseIds"]:
+            item = items_by_id[phase_id]
+            lines.append(f"   - {item['customerLabel']} — {item['text']}")
+    ordinary_text = "\n".join(lines)
+    group_context = (
+        _business_group_context(context, contract, current_group)
+        if current_group is not None
+        else None
+    )
+    context_sha256 = (
+        _canonical_json_hash(group_context)
+        if group_context is not None
+        else None
+    )
+    acknowledged = bool(
+        current_group is not None
+        and context_sha256 is not None
+        and _business_group_acknowledgement_current(
+            state,
+            group=current_group,
+            context_sha256=context_sha256,
+        )
+    )
+    gate_required = current_group is not None and not acknowledged
     ordinary_text = (
-        f"{title}\n\n"
-        "**Phases**\n\n"
-        + "\n".join(phase_lines)
-        + f"\n\n{checklist_text}"
+        ordinary_text
     )
     question = (
         {
-            "header": "Role availability",
+            "header": current_group["label"],
             "question": (
-                "Are the roles needed for the remaining applicable phases "
-                "available now?\n\n"
-                "Required roles: "
-                + ", ".join(required_roles)
-                + "."
+                f"Is the {current_group['role']} available now for "
+                f"{current_group['label']}?"
             ),
             "options": [
                 {"label": "Yes"},
@@ -12249,19 +12494,35 @@ def _role_availability_transport(
             ],
             "allowFreeformInput": False,
         }
-        if gate_required and required_roles
+        if gate_required
         else None
     )
+    if roles_available is not None:
+        if question is None:
+            raise ServiceNowConnectError(
+                "No current business-group availability question accepts an "
+                "answer."
+            )
+        if (
+            availability_group_id != current_group["id"]
+            or availability_context_sha256 != context_sha256
+        ):
+            raise ServiceNowConnectError(
+                "The business-group availability answer is stale or belongs "
+                "to another group, target, or contract revision."
+            )
     return {
-        "schemaVersion": "servicenow.lifecycle-transport.v1",
+        "schemaVersion": "servicenow.lifecycle-transport.v2",
         "ordinaryReply": {
             "kind": "ordinary-agent-response",
             "text": ordinary_text,
-            "phaseCount": len(phase_items),
+            "businessGroupCount": len(groups),
         },
-        "roleAvailability": {
-            "gateRequired": gate_required and bool(required_roles),
-            "requiredRoles": required_roles,
+        "businessGroupAvailability": {
+            "gateRequired": gate_required,
+            "currentGroup": copy.deepcopy(current_group),
+            "contextIdentity": group_context,
+            "contextIdentitySha256": context_sha256,
             "question": copy.deepcopy(question),
             "questionSha256": (
                 _canonical_json_hash(question)
@@ -12271,12 +12532,11 @@ def _role_availability_transport(
             "available": roles_available,
             "stateChanged": False,
             "unavailableReply": (
-                "Please loop in the currently required roles before "
-                "continuing: "
-                + ", ".join(required_roles)
-                + ".\n\nNo lifecycle phase, evidence, attestation, or "
-                "accepted contract revision has advanced."
-                if required_roles
+                f"Please loop in the {current_group['role']} for "
+                f"{current_group['label']}, then answer the same question "
+                "again.\n\nNo business group, lifecycle phase, evidence, "
+                "attestation, or accepted contract revision has advanced."
+                if current_group is not None
                 else None
             ),
         },
@@ -12362,37 +12622,142 @@ def _pending_preflight_input(
     }
 
 
+def _accept_connect_contract(
+    context: dict[str, Any],
+    contract: dict[str, Any],
+    decision: dict[str, Any],
+) -> dict[str, Any]:
+    if decision.get("decision") != "plan-required":
+        return _load_lifecycle_state(context)
+    revision = contract.get("contractRevision")
+    if not isinstance(revision, int) or isinstance(revision, bool):
+        raise ServiceNowConnectError(
+            "ServiceNow contract revision is invalid."
+        )
+    if decision.get("stateExists") is False:
+        initialize_lifecycle_state(
+            context,
+            contract_revision=revision,
+        )
+        state = _load_lifecycle_state(context)
+        state["attestationSource"] = "explicit-connect-invocation"
+        _write_lifecycle_state(context, state)
+        return state
+    state = _load_lifecycle_state(context)
+    phases = contract.get("phases")
+    if not isinstance(phases, list):
+        raise ServiceNowConnectError(
+            "ServiceNow contract phases are invalid."
+        )
+    state_phases = state.setdefault("phases", {})
+    if not isinstance(state_phases, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow lifecycle phases are invalid."
+        )
+    for phase in phases:
+        phase_id = phase.get("id") if isinstance(phase, dict) else None
+        if not isinstance(phase_id, str) or not phase_id:
+            raise ServiceNowConnectError(
+                "ServiceNow contract phase identity is invalid."
+            )
+        state_phases.setdefault(
+            phase_id,
+            {
+                "status": "pending",
+                "checkpointResults": {},
+                "checkpointAcknowledgements": {},
+            },
+        )
+    state["attested"] = True
+    state["attestedAt"] = _utc_now()
+    state["attestationSource"] = "explicit-connect-invocation"
+    state["acceptedContractRevision"] = revision
+    _write_lifecycle_state(context, state)
+    return state
+
+
+def _record_business_group_acknowledgement(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    contract: dict[str, Any],
+    group: dict[str, Any],
+    *,
+    context_sha256: str,
+) -> dict[str, Any]:
+    group_context = _business_group_context(context, contract, group)
+    if _canonical_json_hash(group_context) != context_sha256:
+        raise ServiceNowConnectError(
+            "The business-group availability context changed before it was "
+            "recorded."
+        )
+    record = {
+        "kind": "maker-attestation",
+        "status": "available",
+        "businessGroupId": group["id"],
+        "role": group["role"],
+        "contextIdentity": group_context,
+        "contextIdentitySha256": context_sha256,
+        "recordedAt": _utc_now(),
+    }
+    records = state.setdefault("businessGroupAcknowledgements", {})
+    if not isinstance(records, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow business-group acknowledgements are invalid."
+        )
+    records[group["id"]] = record
+    _write_lifecycle_state(context, state)
+    return copy.deepcopy(record)
+
+
 def resume_handoff(
     context: dict[str, Any],
     *,
     executed_actions: frozenset[str] = frozenset(),
     verified_phases: frozenset[str] = frozenset(),
     roles_available: bool | None = None,
+    availability_group_id: str | None = None,
+    availability_context_sha256: str | None = None,
 ) -> dict[str, Any]:
+    root = Path(context["root"])
+    contract = _load_json(root / CONTRACT_PATH)
     state_path = _lifecycle_state_path(context)
     state = None
     if state_path.exists():
         state = _load_lifecycle_state(context)
         _write_lifecycle_state(context, state)
     decision = decide_next_step(
-        Path(context["root"]),
+        root,
         provider=ACTIVE_PROFILE.provider_key,
         agent_slug=_agent_slug(context),
         executed_actions=executed_actions,
         verified_phases=verified_phases,
     )
+    if decision.get("decision") == "plan-required":
+        state = _accept_connect_contract(context, contract, decision)
+        decision = decide_next_step(
+            root,
+            provider=ACTIVE_PROFILE.provider_key,
+            agent_slug=_agent_slug(context),
+            executed_actions=executed_actions,
+            verified_phases=verified_phases,
+        )
     progress = _resume_progress(
         context,
         decision,
         executed_actions=executed_actions,
         verified_phases=verified_phases,
     )
-    transport = _role_availability_transport(
+    current_group = _current_business_group(contract, progress)
+    transport = _business_group_transport(
+        context=context,
+        contract=contract,
+        state=state,
         title=str(progress["headline"]),
         phase_items=progress["items"],
-        checklist_text=str(progress["checklistText"]),
+        current_group=current_group,
         roles_available=roles_available,
-        gate_required=decision.get("decision") == "plan-required",
+        availability_group_id=availability_group_id,
+        availability_context_sha256=availability_context_sha256,
     )
     result: dict[str, Any] = {
         "schemaVersion": "servicenow.resume-handoff.v1",
@@ -12405,11 +12770,27 @@ def resume_handoff(
         "progress": progress,
         "transport": transport,
     }
-    role_question = transport["roleAvailability"]["question"]
-    if role_question is not None and roles_available is not True:
-        result["status"] = "role-availability-required"
+    availability = transport["businessGroupAvailability"]
+    group_question = availability["question"]
+    if group_question is not None and roles_available is not True:
+        result["status"] = "business-group-availability-required"
         return result
-    result["roleAvailabilityAccepted"] = role_question is not None
+    if group_question is not None:
+        assert current_group is not None
+        assert availability["contextIdentitySha256"] is not None
+        _record_business_group_acknowledgement(
+            context,
+            state or _load_lifecycle_state(context),
+            contract,
+            current_group,
+            context_sha256=availability["contextIdentitySha256"],
+        )
+        return resume_handoff(
+            context,
+            executed_actions=executed_actions,
+            verified_phases=verified_phases,
+        )
+    result["businessGroupAvailabilityAccepted"] = False
     pending_input = _pending_preflight_input(state, decision)
     if pending_input is not None:
         result["pendingInput"] = pending_input
@@ -12580,13 +12961,36 @@ def _realm_transport(
         )
         for stage in stages
     )
-    return _role_availability_transport(
-        title=f"{realm.title()} ServiceNow target.",
-        phase_items=stages,
-        checklist_text=f"Target progress:\n\n{checklist}",
-        roles_available=True,
-        gate_required=False,
+    ordinary = (
+        f"{realm.title()} ServiceNow target.\n\n"
+        "**Target stages**\n\n"
+        + "\n".join(
+            (
+                f"{index}. {stage['label']} — Responsible role: Maker"
+            )
+            for index, stage in enumerate(stages, start=1)
+        )
+        + f"\n\nTarget progress:\n\n{checklist}"
     )
+    return {
+        "schemaVersion": "servicenow.lifecycle-transport.v2",
+        "ordinaryReply": {
+            "kind": "ordinary-agent-response",
+            "text": ordinary,
+            "businessGroupCount": 0,
+        },
+        "businessGroupAvailability": {
+            "gateRequired": False,
+            "currentGroup": None,
+            "contextIdentity": None,
+            "contextIdentitySha256": None,
+            "question": None,
+            "questionSha256": None,
+            "available": True,
+            "stateChanged": False,
+            "unavailableReply": None,
+        },
+    }
 
 
 def _realm_functional_test_record(
@@ -17174,6 +17578,16 @@ def build_parser() -> argparse.ArgumentParser:
             "roles are available."
         ),
     )
+    resume_parser.add_argument(
+        "--business-group-id",
+        help="Stable current business-group ID returned by resume-handoff.",
+    )
+    resume_parser.add_argument(
+        "--availability-context-sha256",
+        help=(
+            "Current business-group context hash returned by resume-handoff."
+        ),
+    )
     subparsers.add_parser(
         "validation-realm-handoff",
         help=(
@@ -17864,6 +18278,10 @@ def main(argv: list[str] | None = None) -> int:
                     args.roles_available == "yes"
                     if args.roles_available is not None
                     else None
+                ),
+                availability_group_id=args.business_group_id,
+                availability_context_sha256=(
+                    args.availability_context_sha256
                 ),
             )
         elif args.command == "validation-realm-handoff":

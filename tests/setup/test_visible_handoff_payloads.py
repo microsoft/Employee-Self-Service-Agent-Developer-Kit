@@ -108,7 +108,7 @@ def test_lifecycle_plan_confirmation_is_exact_and_separate_from_reply() -> None:
     assert "Ready to start?" not in ordinary_reply
     other_provider_section = plan_section.split("### Other providers", 1)[1]
     assert other_provider_section.count("Ready to start?") == 1
-    assert "DA ServiceNow role-availability branch" in plan_section
+    assert "DA ServiceNow business-group availability" in plan_section
 
 
 @pytest.mark.parametrize(

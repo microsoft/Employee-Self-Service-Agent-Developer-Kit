@@ -30,6 +30,7 @@ reads a contract, runs the checkpoints it names, and renders results.
 | `stateInitializationCommand` | string | no | Exact checked-in first-run command executed only after the user accepts the plan. `{contractRevision}` and `{agentSlug}` are replaced with the current values. The provider command must create its complete canonical state atomically, including provider/profile/agent/environment identity and provider schema fields. It may return a typed byte-preserving compatible-state no-op only when an existing state exactly matches current identity, is attested, and already accepted the requested revision; every other existing, malformed, mismatched, or stale-revision state blocks. Revision reapproval never runs first-run initialization. The shared runner never falls back to a generic state file. Providers without this field keep the generic initialization behavior. |
 | `attestedRoleScope` | string | no (default `"phase"`) | Controls reuse of successful `gateMode: "attested"` role gates. `"phase"` preserves the historical behavior: each mutating phase asks separately. `"lifecycle"` persists one attestation per required role for this exact provider + agent lifecycle and reuses it across later mutating phases and resumes. Programmatic gates are never reused through this field. |
 | `planRoles` | array of strings | no | Additional human/admin roles shown in the up-front plan for guided non-mutating phases. Display-only: it does not create a role gate or authorize an action. Providers without this field retain the historical mutating-role-only plan. |
+| `businessGroups` | array of objects | no | ServiceNow collaboration groups. Each object has stable `id`, customer `label`, one availability `role`, and ordered `phaseIds`. Preflight is intentionally outside these groups. Availability acknowledges only that group's collaborator is available; it never completes a phase or proves permission/evidence. |
 | `phases` | array | yes | Ordered list of phase objects — see "Phase fields" below. Executed strictly in array order; a phase never starts until every phase before it is `done` (or `skipped`, see below). |
 
 ### Detect block
@@ -154,6 +155,7 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
   "attestedAt": "2026-09-15T14:02:00Z",
   "acceptedContractRevision": 1,
   "roleAttestations": {},
+  "businessGroupAcknowledgements": {},
   "currentPhase": "agent-wiring",
   "phases": {
     "discovery": {
@@ -174,7 +176,10 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
 
 - `attested` — `true` once the user has seen the up-front plan (phase labels +
   required roles) and agreed to proceed. Set once; never reset by a resume.
-  This plan attestation is not itself a role attestation.
+  This plan attestation is not itself a role attestation. DA ServiceNow uses
+  the explicit `/connect` invocation as start intent, records the validated
+  contract revision, and proceeds through automatic preflight before asking
+  any collaboration-group availability question.
 - `acceptedContractRevision` — the provider contract revision whose complete
   plan the Maker accepted. A mismatch re-shows the plan and updates this value
   after acceptance while preserving existing progress and provider evidence.
@@ -184,6 +189,11 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
   reusable only when `provider`, `agentSlug`, and `requiredRole` still match
   the current lifecycle. A different provider or agent uses a different state
   path and cannot inherit it.
+- `businessGroupAcknowledgements.{businessGroupId}` — ServiceNow-only
+  availability acknowledgement. It binds one group to provider, profile,
+  agent, environment, contract revision, group definition and context hash.
+  It does not derive from `roleAttestations` and never proves phase evidence,
+  authentication, authorization, permission or mutation consent.
 - `phases.{id}.status` ∈ `pending` \| `in-progress` \| `done` \| `blocked`.
 - `phases.{id}.lastVerifiedAt` — timestamp of the most recent **live**
   checkpoint run that produced the current `status`. The runner never trusts

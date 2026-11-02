@@ -2928,7 +2928,7 @@ def test_schema_v7_retires_legacy_publish_without_resetting_test(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 10
+    assert migrated["schemaVersion"] == 11
     assert "publish" not in migrated["phases"]
     assert migrated["retiredPhases"]["publish"]["status"] == legacy_status
     assert migrated["evidence"]["publish"]["status"] == "completed"
@@ -4346,7 +4346,7 @@ def test_schema_v8_realm_evidence_migration_never_infers_completion(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 10
+    assert migrated["schemaVersion"] == 11
     assert migrated["evidence"]["realmFlows"] == {}
     assert migrated["migration"]["schemaV9"][
         "preservedLegacyRealmEvidence"
@@ -4380,7 +4380,7 @@ def test_schema_v9_migrates_strict_binding_identity_and_final_test(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 10
+    assert migrated["schemaVersion"] == 11
     assert migrated["migration"]["schemaV10"]["bindingEvidenceMigrated"] is True
     assert migrated["migration"]["schemaV10"]["testEvidenceMigrated"] is True
     assert list(migrated["phases"]).index("agent-connection") < list(
@@ -4411,7 +4411,7 @@ def test_schema_v9_untrusted_binding_resets_later_phases_without_remote_change(
         path.write_text(json.dumps(state), encoding="utf-8")
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 10
+    assert migrated["schemaVersion"] == 11
     migration = migrated["migration"]["schemaV10"]
     assert migration["bindingEvidenceMigrated"] is False
     assert migration["testEvidenceMigrated"] is False
@@ -12548,7 +12548,7 @@ def test_v2_lifecycle_migrates_to_v8_without_obsolete_preflight_gates(
     state_again = snow._load_lifecycle_state(_context())
     snow._write_lifecycle_state(_context(), state_again)
 
-    assert state["schemaVersion"] == 10
+    assert state["schemaVersion"] == 11
     assert state["acceptedContractRevision"] == 1
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
     assert set(state["adminSetup"]["phaseHandoffs"]) == {
@@ -12732,7 +12732,7 @@ def test_v4_migration_removes_obsolete_gates_and_keeps_completed_discovery(
 
     state = snow._load_lifecycle_state(_context())
 
-    assert state["schemaVersion"] == 10
+    assert state["schemaVersion"] == 11
     assert state["adminSetup"]["schemaVersion"] == 4
     assert "scenario" not in state["adminSetup"]["preflight"]
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
@@ -14137,12 +14137,23 @@ def test_initialize_state_exact_existing_revision_is_byte_preserving_noop(
     assert result["preservedExistingState"] is True
     assert state_path.read_bytes() == before
 
+    gated = snow.resume_handoff(
+        _context_at(tmp_path),
+        verified_phases=frozenset(
+            {"preflight", "plugin-prerequisites"}
+        ),
+    )
+    availability = gated["transport"]["businessGroupAvailability"]
     handoff = snow.resume_handoff(
         _context_at(tmp_path),
         verified_phases=frozenset(
             {"preflight", "plugin-prerequisites"}
         ),
         roles_available=True,
+        availability_group_id=availability["currentGroup"]["id"],
+        availability_context_sha256=availability[
+            "contextIdentitySha256"
+        ],
     )
     assert handoff["lifecycle"]["decision"] == "run-action"
     assert handoff["lifecycle"]["phase"]["id"] == "entra-registration"
@@ -15664,9 +15675,19 @@ def test_resume_handoff_consumes_controller_and_returns_exact_action(
     )
 
     with snow.product_profile_context("itsm"):
+        gated = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+        )
+        availability = gated["transport"]["businessGroupAvailability"]
         result = snow.resume_handoff(
             context,
             verified_phases=frozenset({"preflight"}),
+            roles_available=True,
+            availability_group_id=availability["currentGroup"]["id"],
+            availability_context_sha256=availability[
+                "contextIdentitySha256"
+            ],
         )
 
     assert result["lifecycle"]["decision"] == "run-action"
@@ -15686,15 +15707,16 @@ def test_resume_handoff_consumes_controller_and_returns_exact_action(
     )
     assert result["progress"]["completedCount"] == 1
     assert result["progress"]["finalText"] is None
-    assert result["transport"]["roleAvailability"]["gateRequired"] is False
-    assert result["transport"]["roleAvailability"]["question"] is None
+    assert result["transport"]["businessGroupAvailability"][
+        "gateRequired"
+    ] is False
+    assert result["transport"]["businessGroupAvailability"]["question"] is None
 
     with snow.product_profile_context("itsm"):
         checkpoint_result = snow.resume_handoff(
             context,
             executed_actions=frozenset({"topics"}),
             verified_phases=frozenset({"preflight"}),
-            roles_available=True,
         )
 
     command = checkpoint_result["checkpoints"]["commands"][0]
@@ -15792,7 +15814,6 @@ def test_resume_handoff_withholds_preflight_checkpoint_for_pending_instance(
         result = snow.resume_handoff(
             context,
             executed_actions=frozenset({"preflight"}),
-            roles_available=True,
         )
 
     assert result["lifecycle"]["decision"] == "run-checkpoints"
@@ -15809,10 +15830,14 @@ def test_resume_handoff_withholds_preflight_checkpoint_for_pending_instance(
     assert "Progress" not in body
     assert "Connection progress" not in body
     assert "**Phases**" not in body
-    assert "**Phases**" in result["transport"]["ordinaryReply"]["text"]
-    assert result["roleAvailabilityAccepted"] is False
-    assert result["transport"]["roleAvailability"]["gateRequired"] is False
-    assert result["transport"]["roleAvailability"]["question"] is None
+    assert "**Collaboration groups**" in (
+        result["transport"]["ordinaryReply"]["text"]
+    )
+    assert result["businessGroupAvailabilityAccepted"] is False
+    assert result["transport"]["businessGroupAvailability"][
+        "gateRequired"
+    ] is False
+    assert result["transport"]["businessGroupAvailability"]["question"] is None
     assert "**Problem**" not in body
     assert "**Category**" not in body
     assert "**Recheck and resume**" not in body
@@ -15874,7 +15899,6 @@ def test_resume_handoff_allows_preflight_checkpoint_after_instance_recorded(
         result = snow.resume_handoff(
             context,
             executed_actions=frozenset({"preflight"}),
-            roles_available=True,
         )
 
     assert "pendingInput" not in result
@@ -16319,13 +16343,34 @@ def _write_resume_contract(root: Path) -> None:
     )
 
 
-def test_resume_handoff_cli_returns_plan_required_without_creating_state(
+def test_resume_handoff_cli_initializes_preflight_without_role_question(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     _seed_it_setup(tmp_path, enrolled=False)
-    _write_resume_contract(tmp_path)
+    product = snow.ITSM_PROFILE
+    source_contract = (
+        snow.SOLUTION_ROOT
+        / "src"
+        / "skills"
+        / "connect"
+        / product.provider_key
+        / "contract.json"
+    )
+    target_contract = tmp_path / product.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_bytes(source_contract.read_bytes())
+    snapshot = tmp_path / "components.json"
+    snapshot.write_text(json.dumps(_itsm_components()), encoding="utf-8")
+    context = _profile_context(
+        "itsm",
+        agent_id=OTHER_AGENT_ID,
+        agent_slug="employee-self-service-it",
+    )
+    context["root"] = tmp_path
+    context["snapshotPath"] = snapshot
+    monkeypatch.setattr(snow, "load_context", lambda **_kwargs: context)
     connect_root = tmp_path / ".local" / "connect"
     monkeypatch.chdir(tmp_path)
 
@@ -16340,36 +16385,32 @@ def test_resume_handoff_cli_returns_plan_required_without_creating_state(
     ) == 0
 
     result = json.loads(capsys.readouterr().out)
-    assert result["lifecycle"] == {
-        "schemaVersion": "connect.lifecycle-next.v1",
-        "decision": "plan-required",
-        "provider": "servicenow-da-itsm",
-        "agentSlug": "employee-self-service-it",
-        "contractRevision": 1,
-        "stateExists": False,
-        "planReason": "first-run",
-        "stateInitializationRequired": True,
-        "stateInitializationCommand": None,
-    }
-    assert result["status"] == "role-availability-required"
-    assert result["transport"]["roleAvailability"]["question"]["options"] == [
-        {"label": "Yes"},
-        {"label": "No"},
-    ]
-    assert result["transport"]["roleAvailability"]["questionSha256"] == (
-        snow._canonical_json_hash(
-            result["transport"]["roleAvailability"]["question"]
-        )
+    assert result["lifecycle"]["decision"] == "run-action"
+    assert result["lifecycle"]["phase"]["id"] == "preflight"
+    availability = result["transport"]["businessGroupAvailability"]
+    assert availability["gateRequired"] is False
+    assert availability["question"] is None
+    assert "**Collaboration groups**" in (
+        result["transport"]["ordinaryReply"]["text"]
     )
-    assert "action" not in result
-    assert not connect_root.exists()
+    state_path = (
+        connect_root
+        / "servicenow-da-itsm"
+        / "agents"
+        / "employee-self-service-it"
+        / "lifecycle.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["attested"] is True
+    assert state["acceptedContractRevision"] == 10
+    assert state["businessGroupAcknowledgements"] == {}
 
 
-def test_resume_handoff_cli_preserves_omitted_and_explicit_role_values(
+def test_resume_handoff_cli_preserves_business_group_answer_context(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    captured: list[bool | None] = []
+    captured: list[tuple[bool | None, str | None, str | None]] = []
     monkeypatch.setattr(snow, "load_context", lambda **_kwargs: _context())
 
     def fake_resume(
@@ -16378,24 +16419,164 @@ def test_resume_handoff_cli_preserves_omitted_and_explicit_role_values(
         executed_actions: frozenset[str],
         verified_phases: frozenset[str],
         roles_available: bool | None,
+        availability_group_id: str | None,
+        availability_context_sha256: str | None,
     ) -> dict:
         del executed_actions, verified_phases
-        captured.append(roles_available)
-        return {"rolesAvailable": roles_available}
+        captured.append(
+            (
+                roles_available,
+                availability_group_id,
+                availability_context_sha256,
+            )
+        )
+        return {
+            "rolesAvailable": roles_available,
+            "group": availability_group_id,
+            "context": availability_context_sha256,
+        }
 
     monkeypatch.setattr(snow, "resume_handoff", fake_resume)
 
     assert snow.main(["resume-handoff"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"rolesAvailable": None}
+    assert json.loads(capsys.readouterr().out) == {
+        "rolesAvailable": None,
+        "group": None,
+        "context": None,
+    }
     assert snow.main(
-        ["resume-handoff", "--roles-available", "yes"]
+        [
+            "resume-handoff",
+            "--roles-available",
+            "yes",
+            "--business-group-id",
+            "maker-configuration",
+            "--availability-context-sha256",
+            "a" * 64,
+        ]
     ) == 0
-    assert json.loads(capsys.readouterr().out) == {"rolesAvailable": True}
+    assert json.loads(capsys.readouterr().out) == {
+        "rolesAvailable": True,
+        "group": "maker-configuration",
+        "context": "a" * 64,
+    }
     assert snow.main(
-        ["resume-handoff", "--roles-available", "no"]
+        [
+            "resume-handoff",
+            "--roles-available",
+            "no",
+            "--business-group-id",
+            "maker-configuration",
+            "--availability-context-sha256",
+            "a" * 64,
+        ]
     ) == 0
-    assert json.loads(capsys.readouterr().out) == {"rolesAvailable": False}
-    assert captured == [None, True, False]
+    assert json.loads(capsys.readouterr().out) == {
+        "rolesAvailable": False,
+        "group": "maker-configuration",
+        "context": "a" * 64,
+    }
+    assert captured == [
+        (None, None, None),
+        (True, "maker-configuration", "a" * 64),
+        (False, "maker-configuration", "a" * 64),
+    ]
+
+
+def test_resume_handoff_cli_jit_group_no_is_byte_stable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    profile = "hrsd"
+    product = snow.HRSD_PROFILE
+    context = _profile_context(
+        profile,
+        agent_id=AGENT_ID,
+        agent_slug="employee-self-service-hr",
+    )
+    context["root"] = tmp_path
+    source_contract = snow.SOLUTION_ROOT / product.contract_path
+    contract = json.loads(source_contract.read_text(encoding="utf-8"))
+    target_contract = tmp_path / product.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_text(json.dumps(contract), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, _target_profile_components(
+            profile,
+            instance_name="dev123",
+        ))
+        state["attested"] = True
+        state["acceptedContractRevision"] = contract["contractRevision"]
+        state["phases"] = {
+            phase["id"]: {
+                "status": "done" if phase["id"] == "preflight" else "pending",
+                "checkpointResults": (
+                    {phase["checkpoints"][0]: "Passed"}
+                    if phase["id"] == "preflight"
+                    else {}
+                ),
+            }
+            for phase in contract["phases"]
+        }
+        state_path = snow._lifecycle_state_path(context)
+        snow._write_lifecycle_state(context, state)
+    monkeypatch.setattr(snow, "load_context", lambda **_kwargs: context)
+    before = state_path.read_bytes()
+
+    assert snow.main(
+        [
+            "--provider",
+            product.provider_key,
+            "--agent-slug",
+            context["agent"]["workspace_slug"],
+            "resume-handoff",
+            "--verified-phase",
+            "preflight",
+        ]
+    ) == 0
+    first = json.loads(capsys.readouterr().out)
+    availability = first["transport"]["businessGroupAvailability"]
+    assert first["status"] == "business-group-availability-required"
+    assert availability["currentGroup"]["id"] == "hr-prerequisite"
+    assert availability["question"]["options"] == [
+        {"label": "Yes"},
+        {"label": "No"},
+    ]
+
+    command = [
+        "--provider",
+        product.provider_key,
+        "--agent-slug",
+        context["agent"]["workspace_slug"],
+        "resume-handoff",
+        "--verified-phase",
+        "preflight",
+        "--roles-available",
+        "no",
+        "--business-group-id",
+        availability["currentGroup"]["id"],
+        "--availability-context-sha256",
+        availability["contextIdentitySha256"],
+    ]
+    assert snow.main(command) == 0
+    first_no = json.loads(capsys.readouterr().out)
+    assert snow.main(command) == 0
+    repeated_no = json.loads(capsys.readouterr().out)
+
+    assert first_no["transport"]["businessGroupAvailability"][
+        "questionSha256"
+    ] == availability["questionSha256"]
+    assert repeated_no["transport"]["businessGroupAvailability"][
+        "questionSha256"
+    ] == availability["questionSha256"]
+    assert first_no["transport"]["businessGroupAvailability"][
+        "unavailableReply"
+    ] == repeated_no["transport"]["businessGroupAvailability"][
+        "unavailableReply"
+    ]
+    assert state_path.read_bytes() == before
 
 
 @pytest.mark.parametrize(
@@ -16405,7 +16586,7 @@ def test_resume_handoff_cli_preserves_omitted_and_explicit_role_values(
         ("itsm", OTHER_AGENT_ID, "employee-self-service-it"),
     ),
 )
-def test_role_availability_transport_separates_plan_from_question(
+def test_initial_plan_shows_business_groups_without_preflight_gate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     profile: str,
@@ -16430,70 +16611,69 @@ def test_role_availability_transport_separates_plan_from_question(
     target_contract = tmp_path / product.contract_path
     target_contract.parent.mkdir(parents=True, exist_ok=True)
     target_contract.write_bytes(source_contract.read_bytes())
+    snapshot = tmp_path / "components.json"
+    snapshot.write_text(
+        json.dumps(
+            _target_profile_components(profile, instance_name="dev123")
+        ),
+        encoding="utf-8",
+    )
+    context["snapshotPath"] = snapshot
     monkeypatch.chdir(tmp_path)
 
     with snow.product_profile_context(profile):
         initial = snow.resume_handoff(context)
-        first_no = snow.resume_handoff(context, roles_available=False)
-        second_no = snow.resume_handoff(context, roles_available=False)
-        accepted = snow.resume_handoff(context, roles_available=True)
+        lifecycle_path = snow._lifecycle_state_path(context)
 
     transport = initial["transport"]
     ordinary = transport["ordinaryReply"]["text"]
-    question = transport["roleAvailability"]["question"]
-    assert initial["status"] == "role-availability-required"
-    assert "**Phases**" in ordinary
-    assert ordinary.count("Responsible:") == len(
-        json.loads(source_contract.read_text(encoding="utf-8"))["phases"]
+    availability = transport["businessGroupAvailability"]
+    expected_groups = 4 if profile == "hrsd" else 3
+    assert initial["lifecycle"]["phase"]["id"] == "preflight"
+    assert "**Automatic setup**" in ordinary
+    assert "**Collaboration groups**" in ordinary
+    assert "**Phases**" not in ordinary
+    assert ordinary.count("Responsible role:") == expected_groups
+    assert ordinary.count("   - ") == (
+        len(json.loads(source_contract.read_text(encoding="utf-8"))["phases"])
+        - 1
     )
-    assert "Connection progress:" in ordinary
-    assert question == {
-        "header": "Role availability",
-        "question": (
-            "Are the roles needed for the remaining applicable phases "
-            "available now?\n\n"
-            "Required roles: "
-            + ", ".join(transport["roleAvailability"]["requiredRoles"])
-            + "."
-        ),
-        "options": [{"label": "Yes"}, {"label": "No"}],
-        "allowFreeformInput": False,
-    }
-    question_json = json.dumps(question)
-    assert "Progress" not in question_json
-    assert "Connection progress" not in question_json
-    assert "Phases" not in question_json
-    assert set(question) == {
-        "header",
-        "question",
-        "options",
-        "allowFreeformInput",
-    }
-    assert first_no["transport"]["roleAvailability"]["question"] == question
-    assert second_no["transport"]["roleAvailability"]["question"] == question
-    assert first_no["transport"]["roleAvailability"]["unavailableReply"] == (
-        second_no["transport"]["roleAvailability"]["unavailableReply"]
-    )
-    assert first_no["transport"]["roleAvailability"]["stateChanged"] is False
-    assert "accepted contract revision has advanced" in (
-        first_no["transport"]["roleAvailability"]["unavailableReply"]
-    )
-    assert accepted["roleAvailabilityAccepted"] is True
-    assert accepted["lifecycle"]["decision"] == "plan-required"
+    assert availability["gateRequired"] is False
+    assert availability["currentGroup"] is None
+    assert availability["question"] is None
     assert "Ready to start?" not in ordinary
-    assert not snow._lifecycle_state_path(context).exists()
+    assert lifecycle_path.exists()
 
 
-def test_resume_role_question_excludes_completed_admin_roles(
+@pytest.mark.parametrize(
+    ("profile", "completed_phase", "expected_group", "expected_role"),
+    (
+        (
+            "hrsd",
+            "preflight",
+            "hr-prerequisite",
+            "ServiceNow admin",
+        ),
+        ("itsm", "preflight", "entra-identity", "Entra admin"),
+    ),
+)
+def test_business_group_question_is_just_in_time_after_preflight(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    profile: str,
+    completed_phase: str,
+    expected_group: str,
+    expected_role: str,
 ) -> None:
-    profile = "itsm"
     product = snow.PRODUCT_PROFILES[profile]
     context = _profile_context(
         profile,
-        agent_id=OTHER_AGENT_ID,
-        agent_slug="employee-self-service-it",
+        agent_id=AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile == "hrsd"
+            else "employee-self-service-it"
+        ),
     )
     context["root"] = tmp_path
     source_contract = (
@@ -16513,44 +16693,596 @@ def test_resume_role_question_excludes_completed_admin_roles(
         state = snow._state_base(context, _itsm_components())
         state["attested"] = True
         state["attestedAt"] = "2026-11-02T00:00:00Z"
-        state["acceptedContractRevision"] = contract["contractRevision"] - 1
+        state["acceptedContractRevision"] = contract["contractRevision"]
         state["phases"] = {
             phase["id"]: {
                 "status": (
                     "done"
-                    if phase["id"]
-                    in {
-                        "preflight",
-                        "entra-registration",
-                        "servicenow-oidc",
-                    }
+                    if phase["id"] == completed_phase
                     else "pending"
                 ),
-                "checkpointResults": {},
+                "checkpointResults": (
+                    {phase["checkpoints"][0]: "Passed"}
+                    if phase["id"] == completed_phase
+                    else {}
+                ),
             }
             for phase in contract["phases"]
         }
         path = snow._lifecycle_state_path(context)
         snow._write_lifecycle_state(context, state)
         before = path.read_bytes()
-        gated = snow.resume_handoff(context, roles_available=None)
-        no_response = snow.resume_handoff(context, roles_available=False)
+        gated = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+        )
+        availability = gated["transport"]["businessGroupAvailability"]
+        group_id = availability["currentGroup"]["id"]
+        context_sha = availability["contextIdentitySha256"]
+        first_no = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+            roles_available=False,
+            availability_group_id=group_id,
+            availability_context_sha256=context_sha,
+        )
+        second_no = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+            roles_available=False,
+            availability_group_id=group_id,
+            availability_context_sha256=context_sha,
+        )
 
-    roles = gated["transport"]["roleAvailability"]["requiredRoles"]
-    assert "Microsoft Entra Application Administrator or higher" not in roles
-    assert "ServiceNow Admin / security_admin" not in roles
-    assert "ESS Maker / Agent Developer" in roles
-    assert "ServiceNow Admin (provides portal URL)" in roles
+    assert availability["gateRequired"] is True
+    assert availability["currentGroup"]["id"] == expected_group
+    assert availability["currentGroup"]["role"] == expected_role
+    assert availability["question"] == {
+        "header": availability["currentGroup"]["label"],
+        "question": (
+            f"Is the {expected_role} available now for "
+            f"{availability['currentGroup']['label']}?"
+        ),
+        "options": [{"label": "Yes"}, {"label": "No"}],
+        "allowFreeformInput": False,
+    }
+    assert "Maker" not in availability["question"]["question"]
     assert "action" not in gated
     assert "checkpoints" not in gated
     assert "pendingInput" not in gated
-    assert no_response["transport"]["roleAvailability"]["question"] == (
-        gated["transport"]["roleAvailability"]["question"]
+    assert first_no["transport"]["businessGroupAvailability"]["question"] == (
+        availability["question"]
     )
+    assert second_no["transport"]["businessGroupAvailability"][
+        "question"
+    ] == availability["question"]
+    assert first_no["transport"]["businessGroupAvailability"][
+        "questionSha256"
+    ] == second_no["transport"]["businessGroupAvailability"][
+        "questionSha256"
+    ]
+    assert first_no["transport"]["businessGroupAvailability"][
+        "unavailableReply"
+    ] == second_no["transport"]["businessGroupAvailability"][
+        "unavailableReply"
+    ]
     assert path.read_bytes() == before
 
 
-def test_target_realm_reuses_accepted_journey_role_gate(
+def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    profile = "hrsd"
+    product = snow.HRSD_PROFILE
+    context = _profile_context(
+        profile,
+        agent_id=AGENT_ID,
+        agent_slug="employee-self-service-hr",
+    )
+    context["root"] = tmp_path
+    source_contract = (
+        snow.SOLUTION_ROOT
+        / "src"
+        / "skills"
+        / "connect"
+        / product.provider_key
+        / "contract.json"
+    )
+    contract = json.loads(source_contract.read_text(encoding="utf-8"))
+    target_contract = tmp_path / product.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_bytes(source_contract.read_bytes())
+    monkeypatch.chdir(tmp_path)
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, _target_profile_components(
+            profile,
+            instance_name="dev123",
+        ))
+        state["attested"] = True
+        state["attestedAt"] = "2026-11-02T00:00:00Z"
+        state["acceptedContractRevision"] = contract["contractRevision"]
+        state["phases"] = {
+            phase["id"]: {
+                "status": (
+                    "done" if phase["id"] == "preflight" else "pending"
+                ),
+                "checkpointResults": (
+                    {phase["checkpoints"][0]: "Passed"}
+                    if phase["id"] == "preflight"
+                    else {}
+                ),
+            }
+            for phase in contract["phases"]
+        }
+        path = snow._lifecycle_state_path(context)
+        snow._write_lifecycle_state(context, state)
+
+        def gate(
+            verified: frozenset[str],
+        ) -> tuple[dict, dict]:
+            handoff = snow.resume_handoff(
+                context,
+                verified_phases=verified,
+            )
+            availability = handoff["transport"][
+                "businessGroupAvailability"
+            ]
+            return handoff, availability
+
+        plugin_handoff, plugin = gate(frozenset({"preflight"}))
+        assert plugin["currentGroup"]["id"] == "hr-prerequisite"
+        plugin_yes = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+            roles_available=True,
+            availability_group_id="hr-prerequisite",
+            availability_context_sha256=plugin["contextIdentitySha256"],
+        )
+        assert plugin_yes["lifecycle"]["phase"]["id"] == (
+            "plugin-prerequisites"
+        )
+        assert plugin_yes["transport"]["businessGroupAvailability"][
+            "question"
+        ] is None
+
+        state = json.loads(path.read_text(encoding="utf-8"))
+        state["phases"]["plugin-prerequisites"]["status"] = "done"
+        state["phases"]["plugin-prerequisites"]["checkpointResults"] = {
+            "SN-DA-HRSD-PLUGIN-001": "Manual"
+        }
+        path.write_text(json.dumps(state), encoding="utf-8")
+        _, entra = gate(
+            frozenset({"preflight", "plugin-prerequisites"})
+        )
+        assert entra["currentGroup"]["id"] == "entra-identity"
+        snow.resume_handoff(
+            context,
+            verified_phases=frozenset(
+                {"preflight", "plugin-prerequisites"}
+            ),
+            roles_available=True,
+            availability_group_id="entra-identity",
+            availability_context_sha256=entra["contextIdentitySha256"],
+        )
+
+        state = json.loads(path.read_text(encoding="utf-8"))
+        state["phases"]["entra-registration"]["status"] = "done"
+        state["phases"]["entra-registration"]["checkpointResults"] = {
+            "SN-DA-HRSD-ENTRA-APP-001": "Manual",
+            "SN-DA-HRSD-ENTRA-CLAIMS-001": "Manual",
+            "SN-DA-HRSD-ENTRA-SCOPE-001": "Manual",
+            "SN-DA-HRSD-ENTRA-PREAUTH-001": "Manual",
+        }
+        path.write_text(json.dumps(state), encoding="utf-8")
+        _, sso = gate(
+            frozenset(
+                {
+                    "preflight",
+                    "plugin-prerequisites",
+                    "entra-registration",
+                }
+            )
+        )
+        assert sso["currentGroup"]["id"] == "servicenow-sso"
+        assert sso["currentGroup"]["role"] == (
+            "ServiceNow admin / security_admin"
+        )
+        assert sso["question"] is not None
+        snow.resume_handoff(
+            context,
+            verified_phases=frozenset(
+                {
+                    "preflight",
+                    "plugin-prerequisites",
+                    "entra-registration",
+                }
+            ),
+            roles_available=True,
+            availability_group_id="servicenow-sso",
+            availability_context_sha256=sso["contextIdentitySha256"],
+        )
+
+        state = json.loads(path.read_text(encoding="utf-8"))
+        state["phases"]["servicenow-oidc"]["status"] = "done"
+        state["phases"]["servicenow-oidc"]["checkpointResults"] = {
+            "SN-DA-HRSD-OIDC-001": "Manual"
+        }
+        path.write_text(json.dumps(state), encoding="utf-8")
+        verified_admin = frozenset(
+            {
+                "preflight",
+                "plugin-prerequisites",
+                "entra-registration",
+                "servicenow-oidc",
+            }
+        )
+        _, maker = gate(verified_admin)
+        assert maker["currentGroup"]["id"] == "maker-configuration"
+        snow.resume_handoff(
+            context,
+            verified_phases=verified_admin,
+            roles_available=True,
+            availability_group_id="maker-configuration",
+            availability_context_sha256=maker["contextIdentitySha256"],
+        )
+
+        for phase_id in (
+            "credential",
+            "agent-connection",
+            "topics",
+            "portal-url",
+        ):
+            state = json.loads(path.read_text(encoding="utf-8"))
+            state["phases"][phase_id]["status"] = "done"
+            state["phases"][phase_id]["checkpointResults"] = {
+                contract["phases"][
+                    next(
+                        index
+                        for index, phase in enumerate(contract["phases"])
+                        if phase["id"] == phase_id
+                    )
+                ]["checkpoints"][0]: "Passed"
+            }
+            path.write_text(json.dumps(state), encoding="utf-8")
+            verified_admin = verified_admin | {phase_id}
+            resumed, availability = gate(verified_admin)
+            assert availability["currentGroup"]["id"] == (
+                "maker-configuration"
+            )
+            assert availability["question"] is None
+            assert resumed["lifecycle"]["phase"]["id"] in {
+                "agent-connection",
+                "topics",
+                "portal-url",
+                "test",
+            }
+
+    acknowledgements = json.loads(path.read_text(encoding="utf-8"))[
+        "businessGroupAcknowledgements"
+    ]
+    assert set(acknowledgements) == {
+        "hr-prerequisite",
+        "entra-identity",
+        "servicenow-sso",
+        "maker-configuration",
+    }
+
+
+def test_rechecking_done_phase_requires_group_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    contract = json.loads(
+        (snow.SOLUTION_ROOT / snow.HRSD_PROFILE.contract_path).read_text(
+            encoding="utf-8"
+        )
+    )
+    target = tmp_path / snow.HRSD_PROFILE.contract_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(contract), encoding="utf-8")
+    state["acceptedContractRevision"] = contract["contractRevision"]
+    state["businessGroupAcknowledgements"] = {}
+    path = snow._lifecycle_state_path(context)
+    monkeypatch.chdir(tmp_path)
+    with snow.product_profile_context("hrsd"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state), encoding="utf-8")
+        result = snow.resume_handoff(context)
+
+    assert result["lifecycle"]["phase"]["mode"] == "reverify-done"
+    assert result["lifecycle"]["phase"]["id"] == "preflight"
+    assert result["transport"]["businessGroupAvailability"]["question"] is None
+    with snow.product_profile_context("hrsd"):
+        plugin = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+        )
+    availability = plugin["transport"]["businessGroupAvailability"]
+    assert plugin["lifecycle"]["phase"]["mode"] == "reverify-done"
+    assert availability["currentGroup"]["id"] == "hr-prerequisite"
+    assert availability["gateRequired"] is True
+
+
+def test_current_reused_foundation_groups_are_skipped_for_maker_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    profile = "itsm"
+    product = snow.ITSM_PROFILE
+    context = _profile_context(
+        profile,
+        agent_id=OTHER_AGENT_ID,
+        agent_slug="employee-self-service-it",
+    )
+    context["root"] = tmp_path
+    source_contract = snow.SOLUTION_ROOT / product.contract_path
+    contract = json.loads(source_contract.read_text(encoding="utf-8"))
+    target_contract = tmp_path / product.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_text(json.dumps(contract), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    verified = {
+        "preflight",
+        "entra-registration",
+        "servicenow-oidc",
+    }
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, _itsm_components())
+        state["attested"] = True
+        state["acceptedContractRevision"] = contract["contractRevision"]
+        state["phases"] = {
+            phase["id"]: {
+                "status": "done" if phase["id"] in verified else "pending",
+                "checkpointResults": (
+                    {phase["checkpoints"][0]: "Manual"}
+                    if phase["id"] in verified
+                    else {}
+                ),
+            }
+            for phase in contract["phases"]
+        }
+        state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
+            "status": "reused"
+        }
+        state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] = {
+            "status": "reused"
+        }
+        snow._write_lifecycle_state(context, state)
+        result = snow.resume_handoff(
+            context,
+            verified_phases=frozenset(verified),
+        )
+
+    availability = result["transport"]["businessGroupAvailability"]
+    assert result["lifecycle"]["phase"]["id"] == "credential"
+    assert availability["currentGroup"]["id"] == "maker-configuration"
+    assert availability["currentGroup"]["role"] == "Maker"
+    assert "Entra admin" not in availability["question"]["question"]
+    assert "ServiceNow admin / security_admin" not in (
+        availability["question"]["question"]
+    )
+
+
+def test_business_group_acknowledgement_does_not_duplicate_phase_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    profile = "itsm"
+    product = snow.ITSM_PROFILE
+    context = _profile_context(
+        profile,
+        agent_id=OTHER_AGENT_ID,
+        agent_slug="employee-self-service-it",
+    )
+    context["root"] = tmp_path
+    source_contract = snow.SOLUTION_ROOT / product.contract_path
+    contract = json.loads(source_contract.read_text(encoding="utf-8"))
+    target_contract = tmp_path / product.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_text(json.dumps(contract), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    emitted: list[dict] = []
+    monkeypatch.setattr(
+        snow,
+        "emit_servicenow_lifecycle_event",
+        lambda _state, event: emitted.append(copy.deepcopy(event)),
+    )
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, _itsm_components())
+        state["attested"] = True
+        state["acceptedContractRevision"] = contract["contractRevision"]
+        state["phases"] = {
+            phase["id"]: {
+                "status": "done" if phase["id"] == "preflight" else "pending",
+                "checkpointResults": (
+                    {phase["checkpoints"][0]: "Passed"}
+                    if phase["id"] == "preflight"
+                    else {}
+                ),
+            }
+            for phase in contract["phases"]
+        }
+        snow._write_lifecycle_state(context, state)
+        emitted.clear()
+        availability = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+        )["transport"]["businessGroupAvailability"]
+        snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+            roles_available=True,
+            availability_group_id=availability["currentGroup"]["id"],
+            availability_context_sha256=availability[
+                "contextIdentitySha256"
+            ],
+        )
+
+    assert emitted == []
+
+
+def test_stale_business_group_answer_is_rejected_without_ack(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    profile = "itsm"
+    product = snow.ITSM_PROFILE
+    context = _profile_context(
+        profile,
+        agent_id=OTHER_AGENT_ID,
+        agent_slug="employee-self-service-it",
+    )
+    context["root"] = tmp_path
+    source_contract = snow.SOLUTION_ROOT / product.contract_path
+    target_contract = tmp_path / product.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_bytes(source_contract.read_bytes())
+    contract = json.loads(source_contract.read_text(encoding="utf-8"))
+    monkeypatch.chdir(tmp_path)
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, _itsm_components())
+        state["attested"] = True
+        state["acceptedContractRevision"] = contract["contractRevision"]
+        state["phases"] = {
+            phase["id"]: {
+                "status": "done" if phase["id"] == "preflight" else "pending",
+                "checkpointResults": (
+                    {phase["checkpoints"][0]: "Passed"}
+                    if phase["id"] == "preflight"
+                    else {}
+                ),
+            }
+            for phase in contract["phases"]
+        }
+        path = snow._lifecycle_state_path(context)
+        snow._write_lifecycle_state(context, state)
+        question = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+        )["transport"]["businessGroupAvailability"]
+        before = path.read_bytes()
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="stale or belongs to another group",
+        ):
+            snow.resume_handoff(
+                context,
+                verified_phases=frozenset({"preflight"}),
+                roles_available=True,
+                availability_group_id="servicenow-sso",
+                availability_context_sha256=question[
+                    "contextIdentitySha256"
+                ],
+            )
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="stale or belongs to another group",
+        ):
+            snow.resume_handoff(
+                context,
+                verified_phases=frozenset({"preflight"}),
+                roles_available=True,
+                availability_group_id="entra-identity",
+                availability_context_sha256="0" * 64,
+            )
+
+    assert path.read_bytes() == before
+    assert json.loads(path.read_text(encoding="utf-8"))[
+        "businessGroupAcknowledgements"
+    ] == {}
+
+
+def test_contract_revision_change_rejects_stale_group_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    profile = "itsm"
+    product = snow.ITSM_PROFILE
+    context = _profile_context(
+        profile,
+        agent_id=OTHER_AGENT_ID,
+        agent_slug="employee-self-service-it",
+    )
+    context["root"] = tmp_path
+    source_contract = snow.SOLUTION_ROOT / product.contract_path
+    contract = json.loads(source_contract.read_text(encoding="utf-8"))
+    target_contract = tmp_path / product.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_text(json.dumps(contract), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, _itsm_components())
+        state["attested"] = True
+        state["acceptedContractRevision"] = contract["contractRevision"]
+        state["phases"] = {
+            phase["id"]: {
+                "status": "done" if phase["id"] == "preflight" else "pending",
+                "checkpointResults": (
+                    {phase["checkpoints"][0]: "Passed"}
+                    if phase["id"] == "preflight"
+                    else {}
+                ),
+            }
+            for phase in contract["phases"]
+        }
+        snow._write_lifecycle_state(context, state)
+        question = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+        )["transport"]["businessGroupAvailability"]
+        contract["contractRevision"] += 1
+        target_contract.write_text(json.dumps(contract), encoding="utf-8")
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="stale or belongs to another group",
+        ):
+            snow.resume_handoff(
+                context,
+                verified_phases=frozenset({"preflight"}),
+                roles_available=True,
+                availability_group_id=question["currentGroup"]["id"],
+                availability_context_sha256=question[
+                    "contextIdentitySha256"
+                ],
+            )
+        migrated = json.loads(
+            snow._lifecycle_state_path(context).read_text(encoding="utf-8")
+        )
+
+    assert migrated["acceptedContractRevision"] == contract["contractRevision"]
+    assert migrated["businessGroupAcknowledgements"] == {}
+
+
+def test_schema_v10_does_not_migrate_global_role_acknowledgements(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    state["schemaVersion"] = 10
+    state["roleAttestations"] = {
+        "ServiceNow Admin": {
+            "status": "confirmed",
+            "verifiedBy": "attested",
+        }
+    }
+    state.pop("businessGroupAcknowledgements", None)
+    path = snow._lifecycle_state_path(context)
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with snow.product_profile_context("hrsd"):
+        migrated = snow._load_lifecycle_state(context)
+
+    assert migrated["schemaVersion"] == 11
+    assert migrated["businessGroupAcknowledgements"] == {}
+    assert migrated["migration"]["schemaV11"][
+        "legacyRoleAvailabilityMigrated"
+    ] is False
+
+
+def test_target_realm_remains_outside_dev_business_group_gates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -16564,11 +17296,13 @@ def test_target_realm_reuses_accepted_journey_role_gate(
 
     assert result["status"] == "deployment-required"
     assert result["transport"]["ordinaryReply"]["text"].count(
-        "Responsible: ESS Maker / Agent Developer"
+        "Responsible role: Maker"
     ) == 3
-    assert result["transport"]["roleAvailability"]["gateRequired"] is False
-    assert result["transport"]["roleAvailability"]["question"] is None
-    assert result["transport"]["roleAvailability"]["available"] is True
+    assert result["transport"]["businessGroupAvailability"][
+        "gateRequired"
+    ] is False
+    assert result["transport"]["businessGroupAvailability"]["question"] is None
+    assert result["transport"]["businessGroupAvailability"]["available"] is True
     assert result["remoteMutationCount"] == 0
 
 

@@ -1,5 +1,5 @@
 {
-  "contractRevision": 14,
+  "contractRevision": 15,
   "provider": "servicenow-da-hrsd",
   "displayName": "ServiceNow HRSD",
   "profile": "hrsd",
@@ -64,6 +64,38 @@
       }
     ]
   },
+  "businessGroups": [
+    {
+      "id": "hr-prerequisite",
+      "label": "HR prerequisite",
+      "role": "ServiceNow admin",
+      "phaseIds": ["plugin-prerequisites"]
+    },
+    {
+      "id": "entra-identity",
+      "label": "Entra identity",
+      "role": "Entra admin",
+      "phaseIds": ["entra-registration"]
+    },
+    {
+      "id": "servicenow-sso",
+      "label": "ServiceNow SSO and user mapping",
+      "role": "ServiceNow admin / security_admin",
+      "phaseIds": ["servicenow-oidc"]
+    },
+    {
+      "id": "maker-configuration",
+      "label": "Maker configuration and validation",
+      "role": "Maker",
+      "phaseIds": [
+        "credential",
+        "agent-connection",
+        "topics",
+        "portal-url",
+        "test"
+      ]
+    }
+  ],
   "phases": [
     {
       "id": "preflight",

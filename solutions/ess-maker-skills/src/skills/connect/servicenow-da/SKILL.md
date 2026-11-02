@@ -65,12 +65,13 @@ python scripts/connect_servicenow_da.py \
   validation-realm-handoff
 ```
 
-For every Dev or Test/Production lifecycle entry, render the returned
-`transport.ordinaryReply.text` as an ordinary response. Ask
-`transport.roleAvailability.question` only when its `gateRequired` field is
-true. Continue only after **Yes**. On **No**, show the returned loop-in reply
-and re-ask the exact same compact question; do not advance state or infer
-permission/evidence. A normal accepted-revision resume does not ask again.
+For every Dev lifecycle entry, render `transport.ordinaryReply.text`. It shows
+the applicable collaboration groups and nested internal-step statuses.
+Preflight/instance input proceeds without availability. Ask
+`transport.businessGroupAvailability.question` only when its `gateRequired`
+field is true, and pass the returned group ID/context hash back with the
+answer. On **No**, show the group-specific loop-in reply and re-ask the exact
+same question; do not advance state or infer permission/evidence.
 
 For `status: dev-connect-required`, continue the normal provider lifecycle
 below without asking an environment question. For `status: choice-required`,
@@ -99,9 +100,9 @@ python scripts/connect_servicenow_da.py \
   --target-client-id "{TARGET_CLIENT_ID}"
 ```
 
-Test/Production returns the same structured ordinary phase reply. It reuses
-the accepted Dev journey role-availability gate and does not create a second
-availability prompt; target checks and mutation confirmations remain separate.
+Test/Production returns its structured target-stage ordinary reply. It does
+not create Dev collaboration-group availability prompts; target checks and
+mutation confirmations remain separate.
 
 If either target value is unknown, stop with the returned recoverable handoff.
 Do not copy Dev, another realm, agent, or connection values. Validation must

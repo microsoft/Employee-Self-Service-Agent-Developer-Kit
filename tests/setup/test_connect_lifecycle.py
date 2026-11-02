@@ -85,11 +85,19 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "without re-showing the plan" in resume
     assert "without re-showing the\n   up-front plan" in resume
     assert "Do **not**\n   re-render the U.0 table" in resume
-    assert "DA ServiceNow role-availability branch" in runner
+    assert "DA ServiceNow business-group availability" in runner
+    assert "exactly four HR or three IT" in runner
+    assert "Preflight, chooser, and instance confirmation" in runner
     assert "`transport.ordinaryReply.text`" in runner
-    assert "`transport.roleAvailability.question`" in runner
+    assert "`transport.businessGroupAvailability.question`" in runner
+    assert "exactly four HR or three IT" in runner
+    assert "Preflight, chooser, and instance confirmation" in runner
+    assert "One acknowledgement unlocks every internal phase" in runner
     assert "question-only" in normalized
-    assert "never add the plan, checklist, progress, phase roles" in normalized
+    assert (
+        "never add the group plan, internal-step checklist, progress, future "
+        "roles"
+    ) in normalized
     assert "For these provider-action handoffs" in normalized
 
 
@@ -172,7 +180,7 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "**ServiceNow phase-progress extension:**" in runner
     assert "Other providers retain this runner's existing output" in runner
     assert "`transport.ordinaryReply.text`" in runner
-    assert "Re-emit the freshly returned ordinary reply" in runner
+    assert "Re-emit the freshly returned ordinary reply" in runner_normalized
     assert "phase checklist once" not in runner
     assert "cached `done` phase displays **Rechecking**" in runner
     assert "**Complete — admin confirmed**" in runner
@@ -290,7 +298,34 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert contract["provider"] == "servicenow-da-hrsd"
     assert contract["checkpointResultMode"] == "compact-stdout-v1"
     assert contract["attestedRoleScope"] == "lifecycle"
-    assert contract["contractRevision"] == 14
+    assert contract["contractRevision"] == 15
+    assert [
+        (group["id"], group["role"], group["phaseIds"])
+        for group in contract["businessGroups"]
+    ] == [
+        (
+            "hr-prerequisite",
+            "ServiceNow admin",
+            ["plugin-prerequisites"],
+        ),
+        ("entra-identity", "Entra admin", ["entra-registration"]),
+        (
+            "servicenow-sso",
+            "ServiceNow admin / security_admin",
+            ["servicenow-oidc"],
+        ),
+        (
+            "maker-configuration",
+            "Maker",
+            [
+                "credential",
+                "agent-connection",
+                "topics",
+                "portal-url",
+                "test",
+            ],
+        ),
+    ]
     assert contract["deploymentRealms"]["realmOrder"] == [
         "dev",
         "test",
@@ -437,7 +472,12 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
 
     assert contract["provider"] == "servicenow-da-itsm"
     assert contract["profile"] == "itsm"
-    assert contract["contractRevision"] == 9
+    assert contract["contractRevision"] == 10
+    assert [group["id"] for group in contract["businessGroups"]] == [
+        "entra-identity",
+        "servicenow-sso",
+        "maker-configuration",
+    ]
     assert contract["deploymentRealms"]["realmOrder"] == [
         "dev",
         "test",

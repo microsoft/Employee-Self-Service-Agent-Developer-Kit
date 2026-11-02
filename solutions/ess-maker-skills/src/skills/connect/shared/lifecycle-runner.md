@@ -46,8 +46,9 @@ Other providers retain this runner's existing output.
 
 For DA ServiceNow, render the controller's
 `transport.ordinaryReply.text` as an ordinary agent response. It contains the
-complete **Phases** list, responsible role for each phase, and current
-checklist. Re-emit the freshly returned ordinary reply only on an actual phase
+automatic preflight plus the complete HR or IT collaboration groups, one
+responsible role per group, and nested internal-step statuses. Re-emit the
+freshly returned ordinary reply only on an actual phase
 completion/next-phase transition, waiting pause, or blocked/error transition.
 A cached `done` phase displays **Rechecking** until this invocation adds its
 verified marker. Before each meaningful action or checkpoint run, show the
@@ -163,48 +164,51 @@ earlier invocation.
 
 ## L.1 — Show the plan and get attestation
 
-### DA ServiceNow role-availability branch
+### DA ServiceNow business-group availability
 
 DA ServiceNow uses the provider controller's
-`servicenow.lifecycle-transport.v1` result instead of the generic confirmation
-below. Show the ordinary response on every first run and resume. Ask role
-availability only when `roleAvailability.gateRequired` is true (first run or
-contract-revision reapproval):
+`servicenow.lifecycle-transport.v2` result instead of the generic confirmation
+below.
 
-1. Show `transport.ordinaryReply.text` as an ordinary agent response. Verify
-   it contains a **Phases** heading, every contract phase exactly once in
-   order, every phase's responsible role, and the current progress checklist.
-2. Ask only `transport.roleAvailability.question`. Its supported fields are
-   `header`, `question`, `options`, and `allowFreeformInput`; its choices are
-   exactly **Yes** and **No**. Do not add a `Progress` field, description,
-   default, required input, hidden field, plan, checklist, or phase table to
-   the elicitation.
-3. Role availability means the people are available. It does not authenticate
-   them, verify permission, authorize mutation, prove evidence, or replace any
-   admin, binding, Test, or dangerous-action confirmation. Do not collect
-   names, email addresses, contacts, or messages. One person may hold multiple
-   roles.
-4. On **Yes**, rerun `resume-handoff` with `--roles-available yes`. Require
-   `roleAvailabilityAccepted: true`, then apply the existing first-run or
-   revision-reapproval attestation logic below without asking the generic
-   **Ready to start?** question.
-5. On **No**, rerun `resume-handoff` with `--roles-available no`, show the
-   exact returned `transport.roleAvailability.unavailableReply` as an ordinary
-   response, then re-ask the exact same returned question. Do not initialize
-   or update state, advance a phase, accept a contract revision, persist an
-   attestation, infer permission, or create evidence. Repeated **No** answers
-   are stable and repeat the same reply and question.
-6. On revision reapproval, `requiredRoles` contains only roles for phases that
-   are not already durably complete. Completed/reused evidence does not
-   require an irrelevant administrator to be available again. A normal resume
-   at the accepted contract revision shows progress and continues without
-   asking availability again.
+1. Show `transport.ordinaryReply.text` as an ordinary agent response. It has
+   one automatic preflight line, then exactly four HR or three IT
+   **Collaboration groups**. Each group has one responsible role and its
+   internal phase statuses.
+2. Preflight, chooser, and instance confirmation run before collaboration
+   groups. When
+   `transport.businessGroupAvailability.gateRequired` is false, continue the
+   returned lifecycle decision without asking availability.
+3. When the gate is true, ask only
+   `transport.businessGroupAvailability.question`. Its choices are exactly
+   **Yes** and **No** and it names only the current business group and role.
+   The elicitation contains no future roles, group plan, progress, defaults,
+   hidden fields, or required schema inputs.
+4. On **Yes**, rerun `resume-handoff` with
+   `--roles-available yes --business-group-id {currentGroup.id}
+   --availability-context-sha256 {contextIdentitySha256}`. The controller
+   records an acknowledgement scoped to that business group, provider,
+   profile, agent, environment, contract revision, and group definition.
+   Continue only from the returned lifecycle decision.
+5. On **No**, rerun with the same group ID and context hash plus
+   `--roles-available no`. Show the exact returned `unavailableReply`, then
+   re-ask the exact same question. The controller writes no acknowledgement
+   and advances no phase or evidence; repeated **No** answers are stable.
+6. One acknowledgement unlocks every internal phase in that group. Entering
+   the next group asks its own role even when its role label resembles an
+   earlier group. A raw `done` phase in **Rechecking** still enters its group
+   until current verification completes. Valid current completed/reused
+   groups are skipped through the existing verified-phase path.
 
-After **Yes**, use the existing initialization/reapproval rules below:
-first-run initialization records the accepted contract revision; revision
-reapproval updates only the attestation fields and preserves progress. Then
-continue to L.2. Skip the generic plan and **Ready to start?** question for DA
-ServiceNow.
+Availability means the collaborator is available. It does not authenticate,
+authorize, verify permission, prove admin evidence, grant mutation consent,
+confirm agent binding, or prove Test success. Do not collect names, email
+addresses, contacts, or messages. One person may hold multiple roles.
+
+The explicit `/connect` invocation initializes or reapproves the validated
+contract revision before automatic preflight; it does not display the generic
+**Ready to start?** question. Existing phase status and evidence are
+preserved on reapproval. Old global role attestations never satisfy a
+business-group acknowledgement.
 
 ### Other providers
 
@@ -534,10 +538,11 @@ For every interactive provider action, the question tool body is the durable
 visible handoff. Read the action document's
 `<!-- visible-handoff-question:v1 -->` JSON payload, render its placeholders,
 and use that supported `header`/`question`/`options`/`allowFreeformInput`
-shape exactly. For DA ServiceNow, the complete phase plan and current progress
-have already been shown in an ordinary reply. ServiceNow action questions are
-question-only: never add the plan, checklist, progress, phase roles, checkpoint
-table, or a synthetic `Progress` input anywhere in the elicitation schema.
+shape exactly. For DA ServiceNow, collaboration groups and current status have
+already been shown in an ordinary reply. ServiceNow action questions are
+question-only: never add the group plan, internal-step checklist, progress,
+future roles, checkpoint table, or a synthetic `Progress` input anywhere in
+the elicitation schema.
 Other providers retain their existing placeholder behavior.
 
 Do not call the question tool if the payload is missing, malformed, truncated,

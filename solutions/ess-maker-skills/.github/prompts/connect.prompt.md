@@ -46,17 +46,20 @@ rollback gates, action-result handling, or L.5 completion.
 Parse the returned `servicenow.resume-handoff.v1` object:
 
 - before any lifecycle action/checkpoint, show
-  `transport.ordinaryReply.text` as an ordinary agent response. Only when
-  `transport.roleAvailability.gateRequired` is true, ask
-  `transport.roleAvailability.question`. On **Yes**, rerun the exact command
-  with `--roles-available yes`, require `roleAvailabilityAccepted: true`, and
-  continue. On **No**, rerun with `--roles-available no`, show
-  `transport.roleAvailability.unavailableReply` as an ordinary response, and
-  re-ask the exact same question. Do not advance or write lifecycle state on
-  **No**. This ServiceNow role question replaces the generic
-  **Ready to start?** prompt. A normal resume at the already accepted contract
-  revision continues without asking role availability again; all mutation
-  confirmations remain separate;
+  `transport.ordinaryReply.text` as an ordinary agent response. It renders
+  HR's four or IT's three collaboration groups with one responsible role and
+  nested internal-step statuses. When
+  `transport.businessGroupAvailability.gateRequired` is false, continue
+  without an availability question. When true, ask only
+  `transport.businessGroupAvailability.question`;
+- on **Yes**, rerun the exact command with `--roles-available yes` plus the
+  returned `--business-group-id` and `--availability-context-sha256`. On
+  **No**, rerun with the same group/context and `--roles-available no`, show
+  the returned group-specific `unavailableReply`, and re-ask the identical
+  question. Do not advance the current/future group, phase, or evidence on
+  **No**. Preflight and instance input never ask availability. This replaces
+  the generic **Ready to start?** prompt; all mutation confirmations and admin
+  evidence gates remain separate;
 
 - validate `progress.schemaVersion` as
   `servicenow.phase-progress.v1` and require its labels/order to match the

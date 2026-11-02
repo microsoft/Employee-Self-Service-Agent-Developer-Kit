@@ -84,14 +84,15 @@ Render the ServiceNow `resume-handoff.progress` checklist and current-step
 updates exactly as the shared runner specifies; do not suppress them under
 the ordinary Message-block silence rule.
 
-On every first run and resume, show the controller's complete **Phases** and
-role-labelled progress as an ordinary agent response. Ask the compact **Role
-availability** Yes/No question only on first run or contract-revision
-reapproval. A normal accepted-revision resume continues without asking it
-again. A No answer loops in the currently required roles and repeats the same
-question without advancing state. Role availability never proves
-authentication, authorization, permission, admin evidence, binding, mutation
-consent, or Test completion.
+On every first run and resume, show the controller's IT collaboration groups
+and nested internal-step statuses as an ordinary response. Preflight and
+instance input run without an availability question. When the controller
+enters Entra identity, ServiceNow SSO/user mapping, or Maker configuration,
+ask only that group's returned Yes/No question. A No answer loops in that role
+and repeats the same question without advancing state. A Yes acknowledgement
+applies only to that group. Availability never proves authentication,
+authorization, permission, admin evidence, binding, mutation consent, or Test
+completion.
 
 The runner loads
 `src/skills/connect/servicenow-da-itsm/contract.json`, persists state at
