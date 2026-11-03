@@ -34,15 +34,26 @@ valid Application (client) ID and exactly one selected User Claim name. Missing,
 multiple-unselected, stale, or wrong-bound evidence must return waiting; never
 choose the first claim or apply a default.
 
-For direct capture, return the authoritative workbook instructions with the
-confirmed Client ID and User Claim already locked:
+For direct capture, first use the current `resume-handoff` business-group
+availability gate. Do not run this command or render administrator instructions
+until the ServiceNow `security_admin` availability acknowledgement is current.
+A No answer pauses with the returned bring-admin reply and changes no state; a
+Yes answer is recorded only by `resume-handoff --roles-available yes` with its
+exact group ID and context hash.
+
+After that acknowledgement, return the authoritative workbook instructions
+with the confirmed Client ID and User Claim already locked:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage servicenow
 ```
 
-Record only the administrator-confirmed internal `sys_user` field; the command
-does not accept Client ID or User Claim overrides:
+Require `decision: instructions-required`. Render `ordinaryReply.text`
+verbatim, then pass the returned data/completion `askUserArguments` objects
+verbatim. The question list intentionally excludes availability because
+`resume-handoff` owns and deduplicates that gate. Record only the
+administrator-confirmed internal `sys_user` field; the command does not accept
+Client ID or User Claim overrides:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage servicenow --user-field "<internal-sys_user-field>" --yes

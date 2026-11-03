@@ -329,6 +329,30 @@ def _complete_servicenow_admin(
     )
 
 
+def _ack_identity_availability(
+    context: dict,
+    *,
+    stage: str,
+) -> dict:
+    state = snow._load_lifecycle_state(context)
+    contract, group = snow._identity_direct_group(
+        context,
+        stage=stage,
+    )
+    group_context = snow._business_group_context(
+        context,
+        contract,
+        group,
+    )
+    return snow._record_business_group_acknowledgement(
+        context,
+        state,
+        contract,
+        group,
+        context_sha256=snow._canonical_json_hash(group_context),
+    )
+
+
 def _author_universal_entra_template(path: Path) -> Path:
     template = (
         Path(__file__).resolve().parents[2]
@@ -12854,13 +12878,39 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         )
         state["adminSetup"]["preflight"]["instanceName"] = "dev123"
         snow._write_json_atomic(snow._lifecycle_state_path(context), state)
+        gated = snow.identity_direct_handoff(context, stage="entra")
+        _ack_identity_availability(context, stage="entra")
         entra = snow.identity_direct_handoff(context, stage="entra")
 
+    assert gated["decision"] == "availability-required"
+    assert gated["ordinaryReply"] is None
+    assert gated["questions"] == []
+    assert gated["availability"]["question"]["question"] == (
+        "Is the Entra admin available now?"
+    )
+    gated_arguments = gated["availability"]["askUserArguments"]
+    gated_field = gated_arguments["requestedSchema"]["properties"]["response"]
+    assert gated_arguments["message"] == "Entra identity"
+    assert gated_field["title"] == "Selection"
+    assert gated_field["description"] == "Is the Entra admin available now?"
+    assert [option["title"] for option in gated_field["oneOf"]] == [
+        "Yes, the Entra admin is available now",
+        "No, I need to bring the Entra admin in",
+    ]
+    assert gated_arguments["requestedSchema"]["required"] == ["response"]
+    assert entra["decision"] == "instructions-required"
+    assert entra["availability"]["acknowledged"] is True
     assert entra["sourceWorkbookSha256"] == (
         "FF43BFC69E1112D9C73275E4AFCAC1A003AE8AA190CA24ACBAA5F39C9803BAD0"
     )
-    assert snow._entra_admin_instruction() in entra["ordinaryReply"]["text"]
-    assert len(entra["questions"]) == 4
+    ordinary = entra["ordinaryReply"]["text"]
+    source_text = ordinary.split("\n\n", 1)[1].split(
+        "\n\nCurrent contract boundary\n",
+        1,
+    )[0]
+    assert source_text == snow._entra_admin_instruction()
+    assert "The Entra administrator should:" not in ordinary
+    assert len(entra["questions"]) == 3
     for item in entra["questions"]:
         canonical = item["canonicalQuestion"]
         arguments = item["askUserArguments"]
@@ -12901,11 +12951,25 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
             completed_state,
             phase="entra-registration",
         ) is True
+        completed_entra = snow.identity_direct_handoff(
+            context,
+            stage="entra",
+        )
+        gated_service_now = snow.identity_direct_handoff(
+            context,
+            stage="servicenow",
+        )
+        _ack_identity_availability(context, stage="servicenow")
         service_now = snow.identity_direct_handoff(
             context,
             stage="servicenow",
         )
 
+    assert completed_entra["decision"] == "no-action"
+    assert completed_entra["ordinaryReply"] is None
+    assert completed_entra["questions"] == []
+    assert gated_service_now["decision"] == "availability-required"
+    assert gated_service_now["ordinaryReply"] is None
     assert captured["currentSource"] == "direct-capture"
     assert captured["tokenClaimEmissionConfirmed"] is False
     assert captured["importedFileFormat"] == "direct"
@@ -12921,12 +12985,194 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert "employee_id" in ordinary
     assert TENANT_ID in ordinary
     assert "CONFIRMED_" not in ordinary
-    assert len(service_now["questions"]) == 3
-    input_card = service_now["questions"][1]
+    source_text = ordinary.split("\n\n", 1)[1].split(
+        "\n\nCurrent contract boundary\n",
+        1,
+    )[0]
+    expected_steps = snow._checked_in_servicenow_workbook_steps(
+        {
+            "application_client_id": APP_CLIENT_ID,
+            "confirmed_user_claim_name": "employee_id",
+            "tenant_id": TENANT_ID,
+        }
+    )
+    assert source_text == "\n\n".join(
+        action if label == "1" else f"{label}\n{action}"
+        for label, action in expected_steps
+    )
+    assert len(service_now["questions"]) == 2
+    input_card = service_now["questions"][0]
     assert input_card["canonicalQuestion"]["allowFreeformInput"] is True
     assert input_card["askUserArguments"]["requestedSchema"]["properties"][
         "response"
     ]["description"] == input_card["canonicalQuestion"]["question"]
+
+
+@pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))
+def test_direct_identity_handoff_pauses_before_instructions_until_ack(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile_key: str,
+) -> None:
+    root = tmp_path / profile_key
+    root.mkdir()
+    monkeypatch.chdir(root)
+    context = _profile_context(
+        profile_key,
+        agent_id=(
+            AGENT_ID if profile_key == "hrsd" else OTHER_AGENT_ID
+        ),
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile_key == "hrsd"
+            else "employee-self-service-it"
+        ),
+    )
+    context["root"] = root
+    with snow.product_profile_context(profile_key):
+        state = snow._state_base(
+            context,
+            _components() if profile_key == "hrsd" else _itsm_components(),
+        )
+        state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+        path = snow._lifecycle_state_path(context)
+        snow._write_json_atomic(path, state)
+        before = path.read_bytes()
+        first_no = snow.identity_direct_handoff(
+            context,
+            stage="entra",
+        )
+        repeated_no = snow.identity_direct_handoff(
+            context,
+            stage="entra",
+        )
+
+    assert first_no["decision"] == "availability-required"
+    assert repeated_no["decision"] == "availability-required"
+    assert first_no["ordinaryReply"] is None
+    assert repeated_no["ordinaryReply"] is None
+    assert first_no["questions"] == repeated_no["questions"] == []
+    assert first_no["availability"]["questionSha256"] == repeated_no[
+        "availability"
+    ]["questionSha256"]
+    assert first_no["availability"]["unavailableReply"] == repeated_no[
+        "availability"
+    ]["unavailableReply"]
+    assert path.read_bytes() == before
+
+    with snow.product_profile_context(profile_key):
+        acknowledgement = _ack_identity_availability(
+            context,
+            stage="entra",
+        )
+        after_yes = snow.identity_direct_handoff(
+            context,
+            stage="entra",
+        )
+        same_group_resume = snow.identity_direct_handoff(
+            context,
+            stage="entra",
+        )
+
+    assert acknowledgement["businessGroupId"] == "entra-identity"
+    assert after_yes["decision"] == "instructions-required"
+    assert after_yes["ordinaryReply"]["text"]
+    assert after_yes["questions"][0]["canonicalQuestion"]["header"] == (
+        "Application client ID"
+    )
+    assert all(
+        item["canonicalQuestion"]["header"]
+        != "Entra administrator availability"
+        for item in after_yes["questions"]
+    )
+    assert same_group_resume["availability"]["acknowledged"] is True
+    assert same_group_resume["questions"] == after_yes["questions"]
+
+
+def test_identity_availability_ack_isolated_by_group_role_target_and_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context = _context_at(tmp_path)
+    state = snow._state_base(context, _components())
+    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+    path = _lifecycle_path(tmp_path)
+    snow._write_json_atomic(path, state)
+    contract = json.loads(
+        (snow.SOLUTION_ROOT / snow.HRSD_PROFILE.contract_path).read_text(
+            encoding="utf-8"
+        )
+    )
+    groups = {
+        group["id"]: group
+        for group in snow._business_groups(contract)
+    }
+
+    def acknowledge(group_id: str) -> dict:
+        current = snow._load_lifecycle_state(context)
+        group = groups[group_id]
+        group_context = snow._business_group_context(
+            context,
+            contract,
+            group,
+        )
+        return snow._record_business_group_acknowledgement(
+            context,
+            current,
+            contract,
+            group,
+            context_sha256=snow._canonical_json_hash(group_context),
+        )
+
+    acknowledge("hr-prerequisite")
+    assert snow.identity_direct_handoff(
+        context,
+        stage="entra",
+    )["decision"] == "availability-required"
+    acknowledge("maker-configuration")
+    assert snow.identity_direct_handoff(
+        context,
+        stage="entra",
+    )["decision"] == "availability-required"
+    entra_ack = acknowledge("entra-identity")
+    assert snow.identity_direct_handoff(
+        context,
+        stage="entra",
+    )["decision"] == "instructions-required"
+    assert snow.identity_direct_handoff(
+        context,
+        stage="servicenow",
+    )["decision"] == "availability-required"
+
+    saved = snow._load_lifecycle_state(context)
+    entra_group = groups["entra-identity"]
+    exact_context = snow._business_group_context(
+        context,
+        contract,
+        entra_group,
+    )
+    exact_hash = snow._canonical_json_hash(exact_context)
+    assert entra_ack["contextIdentity"] == exact_context
+    assert snow._business_group_acknowledgement_current(
+        saved,
+        group=entra_group,
+        context_sha256=exact_hash,
+    )
+    for changed_field, changed_value in (
+        ("agentId", OTHER_AGENT_ID),
+        ("environmentId", "00000000-0000-4000-8000-000000008888"),
+        ("contractRevision", contract["contractRevision"] + 1),
+        ("businessGroupId", "servicenow-sso"),
+        ("role", "ServiceNow admin / security_admin"),
+    ):
+        changed = copy.deepcopy(exact_context)
+        changed[changed_field] = changed_value
+        assert not snow._business_group_acknowledgement_current(
+            saved,
+            group=entra_group,
+            context_sha256=snow._canonical_json_hash(changed),
+        )
 
 
 @pytest.mark.parametrize(
@@ -13032,6 +13278,10 @@ def test_direct_servicenow_capture_locks_entra_values_and_requires_completion(
         complete_state,
         phase="servicenow-oidc",
     ) is True
+    no_action = snow.identity_direct_handoff(
+        context,
+        stage="servicenow",
+    )
 
     assert mapping["applicationClientId"] == APP_CLIENT_ID
     assert mapping["tokenClaimName"] == "email"
@@ -13041,6 +13291,9 @@ def test_direct_servicenow_capture_locks_entra_values_and_requires_completion(
     assert completed["evidence"][
         "connectorPreauthorizationConfirmed"
     ] is True
+    assert no_action["decision"] == "no-action"
+    assert no_action["ordinaryReply"] is None
+    assert no_action["questions"] == []
 
 
 def test_direct_and_workbook_paths_produce_equivalent_bound_identity(
@@ -13202,8 +13455,13 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
     snow._write_json_atomic(_lifecycle_path(tmp_path), state)
 
     assert snow.main(["identity-direct-handoff", "--stage", "entra"]) == 0
+    entra_gate = json.loads(capsys.readouterr().out)
+    assert entra_gate["decision"] == "availability-required"
+    assert entra_gate["ordinaryReply"] is None
+    _ack_identity_availability(context, stage="entra")
+    assert snow.main(["identity-direct-handoff", "--stage", "entra"]) == 0
     entra_handoff = json.loads(capsys.readouterr().out)
-    assert entra_handoff["questions"][1]["askUserArguments"][
+    assert entra_handoff["questions"][0]["askUserArguments"][
         "message"
     ] == "Application client ID"
     assert snow.main(
@@ -13233,6 +13491,13 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
         ]
     ) == 0
     capsys.readouterr()
+    assert snow.main(
+        ["identity-direct-handoff", "--stage", "servicenow"]
+    ) == 0
+    service_now_gate = json.loads(capsys.readouterr().out)
+    assert service_now_gate["decision"] == "availability-required"
+    assert service_now_gate["ordinaryReply"] is None
+    _ack_identity_availability(context, stage="servicenow")
     assert snow.main(
         ["identity-direct-handoff", "--stage", "servicenow"]
     ) == 0

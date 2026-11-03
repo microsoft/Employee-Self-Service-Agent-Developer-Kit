@@ -81,6 +81,14 @@ completion. When an action asks a question, show
 `waitingChecklistText` as an ordinary agent response, then pass only the
 action's compact returned canonical question through the active ServiceNow
 question adapter and call `ask_user` with the generated arguments verbatim.
+For Entra and ServiceNow identity actions, the `resume-handoff` business-group
+availability gate is the only availability question. Do not invoke
+`identity-direct-handoff`, render its ordinary instructions, or ask its data
+questions until that acknowledgement is current. Once current, require
+`decision: instructions-required`, render its `ordinaryReply.text` verbatim,
+and ask only its returned data/completion questions. `decision: no-action`
+means current completed/reused evidence skips both availability and
+instructions.
 Use `waitingText` for the pause. For a failure, show `errorChecklistText`,
 `needsAttentionText`, and the exact full remediation returned by the
 checkpoint. For ServiceNow, that remediation is the branch-loaded recovery

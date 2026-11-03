@@ -86,16 +86,26 @@ Never infer physical-connection readiness from Shared Identity.
 
 ## Complete admin instructions
 
-For direct capture, return the authoritative workbook instructions and native
-questions without writing state:
+For direct capture, first use the current `resume-handoff` business-group
+availability gate. Do not run this command or render administrator instructions
+until the Entra availability acknowledgement is current. A No answer pauses
+with the returned bring-admin reply and changes no state; a Yes answer is
+recorded only by `resume-handoff --roles-available yes` with its exact group ID
+and context hash.
+
+After that acknowledgement, return the authoritative workbook instructions and
+native data/completion questions without writing state:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage entra
 ```
 
-Pass every returned `askUserArguments` object verbatim through the active
-`ask_user` tool. Record the non-secret values only after the administrator
-answers the separate Client ID and User Claim prompts:
+Require `decision: instructions-required`. Render `ordinaryReply.text`
+verbatim, then pass every returned `askUserArguments` object verbatim through
+the active `ask_user` tool. The returned question list intentionally excludes
+availability because `resume-handoff` owns and deduplicates that gate. Record
+the non-secret values only after the administrator answers the separate Client
+ID and User Claim prompts:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage entra --client-id "<application-client-id-guid>" --claim-name "<selected-claim-name>" --yes

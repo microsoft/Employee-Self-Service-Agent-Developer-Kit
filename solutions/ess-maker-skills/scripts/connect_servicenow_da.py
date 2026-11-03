@@ -1297,14 +1297,6 @@ def _identity_direct_questions(stage: str) -> list[dict[str, Any]]:
     if stage == "entra":
         canonical = [
             _native_question(
-                header="Entra administrator availability",
-                question=(
-                    "Is a Microsoft Entra administrator available now for "
-                    "this exact target?"
-                ),
-                option_labels=["Yes", "No"],
-            ),
-            _native_question(
                 header="Application client ID",
                 question=(
                     "Enter the Application (client) ID GUID confirmed from "
@@ -1337,14 +1329,6 @@ def _identity_direct_questions(stage: str) -> list[dict[str, Any]]:
         ]
     elif stage == "servicenow":
         canonical = [
-            _native_question(
-                header="ServiceNow administrator availability",
-                question=(
-                    "Is a ServiceNow administrator who can elevate to "
-                    "`security_admin` available now for this exact target?"
-                ),
-                option_labels=["Yes", "No"],
-            ),
             _native_question(
                 header="ServiceNow internal user field",
                 question=(
@@ -1384,6 +1368,30 @@ def _identity_direct_questions(stage: str) -> list[dict[str, Any]]:
     ]
 
 
+def _identity_direct_group(
+    context: dict[str, Any],
+    *,
+    stage: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    phase_id = (
+        "entra-registration" if stage == "entra" else "servicenow-oidc"
+    )
+    contract = _load_json(SOLUTION_ROOT / CONTRACT_PATH)
+    group = next(
+        (
+            candidate
+            for candidate in _business_groups(contract)
+            if phase_id in candidate["phaseIds"]
+        ),
+        None,
+    )
+    if not isinstance(group, dict):
+        raise ServiceNowConnectError(
+            "The identity administrator business group is missing."
+        )
+    return contract, group
+
+
 def identity_direct_handoff(
     context: dict[str, Any],
     *,
@@ -1394,6 +1402,73 @@ def identity_direct_handoff(
             "Identity direct handoff stage is invalid."
         )
     state = _load_lifecycle_state(context)
+    phase = (
+        "entra-registration" if stage == "entra" else "servicenow-oidc"
+    )
+    if _identity_admin_handoff_is_ready(
+        context,
+        state,
+        phase=phase,
+    ):
+        return {
+            "schemaVersion": "servicenow.identity-direct-handoff.v1",
+            "stage": stage,
+            "provider": PROVIDER_KEY,
+            "profile": PROFILE_KEY,
+            "decision": "no-action",
+            "ordinaryReply": None,
+            "availability": {
+                "required": False,
+                "acknowledged": False,
+                "reason": "current-completed-or-reused-evidence",
+                "question": None,
+                "askUserArguments": None,
+            },
+            "questions": [],
+            "secretsAccepted": False,
+            "employeeValuesAccepted": False,
+            "remoteMutationCount": 0,
+        }
+    contract, group = _identity_direct_group(context, stage=stage)
+    group_context = _business_group_context(context, contract, group)
+    context_sha256 = _canonical_json_hash(group_context)
+    availability_current = _business_group_acknowledgement_current(
+        state,
+        group=group,
+        context_sha256=context_sha256,
+    )
+    if not availability_current:
+        question = _business_group_availability_question(group)
+        return {
+            "schemaVersion": "servicenow.identity-direct-handoff.v1",
+            "stage": stage,
+            "provider": PROVIDER_KEY,
+            "profile": PROFILE_KEY,
+            "decision": "availability-required",
+            "ordinaryReply": None,
+            "availability": {
+                "required": True,
+                "acknowledged": False,
+                "businessGroupId": group["id"],
+                "contextIdentity": group_context,
+                "contextIdentitySha256": context_sha256,
+                "question": question,
+                "questionSha256": _canonical_json_hash(question),
+                "askUserArguments": adapt_question_to_ask_user(question)[
+                    "askUserArguments"
+                ],
+                "unavailableReply": (
+                    f"Please loop in the {group['role']} for "
+                    f"{group['label']}, then answer the same question again."
+                    "\n\nNo business group, lifecycle phase, evidence, "
+                    "attestation, or accepted contract revision has advanced."
+                ),
+            },
+            "questions": [],
+            "secretsAccepted": False,
+            "employeeValuesAccepted": False,
+            "remoteMutationCount": 0,
+        }
     expected_identity = _required_context_identity(context, state)
     source_sha256 = _identity_workbook_template_sha256(stage)
     candidate_receipt = None
@@ -1459,6 +1534,7 @@ def identity_direct_handoff(
         "stage": stage,
         "provider": PROVIDER_KEY,
         "profile": PROFILE_KEY,
+        "decision": "instructions-required",
         "sourceWorkbookSha256": source_sha256,
         "sourceSheets": (
             ["Entra Handoff!A2", "_metadata!A1:B17"]
@@ -1475,6 +1551,15 @@ def identity_direct_handoff(
                 f"{target_text}\n\n{source_text}\n\n"
                 f"Current contract boundary\n{contract_boundary}"
             ),
+        },
+        "availability": {
+            "required": False,
+            "acknowledged": True,
+            "businessGroupId": group["id"],
+            "contextIdentity": group_context,
+            "contextIdentitySha256": context_sha256,
+            "question": None,
+            "askUserArguments": None,
         },
         "lockedValues": locked_values,
         "questions": _identity_direct_questions(stage),
