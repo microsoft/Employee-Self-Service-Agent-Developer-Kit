@@ -142,6 +142,7 @@ def exercise(tmp_path, component, monkeypatch):
         operation="run", inspection=inspection, prompt=PROMPT,
         cdp="http://127.0.0.1:9222", url=URL,
         output=evidence / "attempt", timeout=1,
+        require_empty_conversation=False,
     )
     calls = []
 
@@ -604,6 +605,118 @@ def test_capture_allows_repeated_explicit_known_completed_turns(general_exercise
     second, code = native._exercise(args, tmp_path, client, TARGET)
     assert code == 0 and second["graded"] is False
     assert calls.count(("send", args.prompt)) == 2
+
+
+@pytest.mark.parametrize(
+    ("text", "timed_out", "signal", "error_shaped"),
+    [
+        ("A completed answer", False, "ok", False),
+        ("Error code: 400", False, "ok", True),
+        ("Connect to continue", False, "consent_gate", False),
+        ("", False, "empty", False),
+        ("A partial answer", True, "timeout", False),
+    ],
+)
+def test_capture_classifies_replies_without_grading_or_replaying(
+    general_exercise, tmp_path, monkeypatch, text, timed_out, signal, error_shaped,
+):
+    args, client, calls = general_exercise
+
+    def send(_self, prompt, timeout_s):
+        calls.append(("send", prompt))
+        return [Bubble(text)] if text else [], timed_out
+
+    monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "send", send)
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert result["signal"] == signal and result["errorShaped"] is error_shaped
+    assert result["graded"] is False
+    assert result["outcome"] == ("timeout" if timed_out else "captured")
+    assert code == (1 if timed_out else 0)
+    assert calls.count(("send", args.prompt)) == 1
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        {},
+        {"renderedTurnsBefore": 1, "expectedTurnIndex": 1},
+        {"renderedTurnsBefore": False, "expectedTurnIndex": 0},
+        {"renderedTurnsBefore": 0, "expectedTurnIndex": 1},
+        {"renderedTurnsBefore": 0, "expectedTurnIndex": 0, "beforeTurnIndex": 0},
+        {"renderedTurnsBefore": 0, "expectedTurnIndex": 0, "beforeTurnElementId": "old-turn"},
+    ],
+)
+def test_required_empty_conversation_blocks_nonempty_or_unknown_boundaries(
+    general_exercise, tmp_path, monkeypatch, boundary,
+):
+    args, client, calls = general_exercise
+    args.require_empty_conversation = True
+    monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "prepare", lambda _self: boundary)
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == 2 and result["outcome"] == "blocked"
+    assert result["submissionMayHaveOccurred"] is False and result["capture"] is None
+    assert result["diagnostics"]["conversationBoundary"] == boundary
+    assert "No message was sent" in result["error"]["captureError"]["message"]
+    assert not (args.output / "execution.json").exists()
+    assert not any(isinstance(call, tuple) for call in calls)
+    assert calls == ["start", "close"]
+
+
+def test_empty_conversation_gate_preserves_timeout_for_observation_without_reset(
+    general_exercise, tmp_path, monkeypatch,
+):
+    args, client, calls = general_exercise
+    args.require_empty_conversation = True
+    boundary = {
+        "pageTargetId": "owned-page", "chatDocumentTimeOrigin": 1000,
+        "renderedTurnsBefore": 0, "beforeTurnIndex": None, "beforeTurnElementId": None,
+        "expectedTurnIndex": 0,
+    }
+    monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "prepare", lambda _self: boundary)
+
+    def send(_self, prompt, timeout_s):
+        calls.append(("send", prompt))
+        return [Bubble("Partial answer")], True
+
+    monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "send", send)
+    original, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == 1 and original["signal"] == "timeout"
+    execution_path = args.output / "execution.json"
+    original_execution = execution_path.read_bytes()
+    execution = native._read(execution_path)
+    assert execution["requireEmptyConversation"] is True
+    assert execution["boundary"] == boundary
+    assert "not established by DOM alone" in execution["isolation"]
+    args.operation, args.previous, args.output = "observe", args.output, None
+    result, code = native._exercise(args, tmp_path, client, TARGET)
+    assert code == 0 and result["requireEmptyConversation"] is True
+    assert result["submissionMayHaveOccurred"] is False
+    assert calls.count(("send", args.prompt)) == 1
+    assert len([call for call in calls if isinstance(call, tuple) and call[0] == "observe"]) == 1
+    assert execution_path.read_bytes() == original_execution
+
+
+def test_empty_conversation_cli_gate_runs_before_send(
+    general_exercise, tmp_path, monkeypatch, capsys,
+):
+    args, client, calls = general_exercise
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "prepare", lambda _self: {
+        "renderedTurnsBefore": 2, "expectedTurnIndex": 2,
+    })
+    code = native.main([
+        "capture", "--kit-root", str(tmp_path), "--inspection", str(args.inspection),
+        "--prompt", args.prompt, "--cdp", args.cdp, "--url", URL, "--output", str(args.output),
+        "--require-empty-conversation",
+    ])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 2 and result["requireEmptyConversation"] is True
+    assert result["submissionMayHaveOccurred"] is False
+    assert calls == ["start", "close"]
+    with pytest.raises(SystemExit) as exc:
+        native.main(["observe", "--previous", str(args.output), "--require-empty-conversation"])
+    assert exc.value.code == 2
+    assert calls == ["start", "close"]
 
 
 @pytest.mark.parametrize("interrupted", [False, True])

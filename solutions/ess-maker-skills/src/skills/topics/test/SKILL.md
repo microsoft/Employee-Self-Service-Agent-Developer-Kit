@@ -4,6 +4,8 @@ Debug and fix the selected topic toward the latest authoring request within the 
 
 Read [experience-contract.md](../experience-contract.md) for the scoped runtime correctness goal, testing offers, complete readiness message/control, `{topic_test_results}` outcome copy and pause/stop/resume instructions. Read [native-topic-testing.md](../../../reference/ess-docs/operations/native-topic-testing.md) before invoking the bounded inspection, browser preparation, activation, capture or observation operations. The session owns test selection, interpretation, fixes, recovery and completion; a one-turn capture is not a one-message testing policy.
 
+Read [native-topic-debugging.md](../../../reference/ess-docs/operations/native-topic-debugging.md) for the complete debugging procedure: choose applicable failure-first probes, confirm actual reply evidence, check intent, localize through backend run evidence, authoring diagnostics or temporary values, correct the authorized source and retest. Use its post-save conversation-freshness procedure before interpreting changed behavior. Keep the loop in the session, not a generated batch driver.
+
 ## Readiness and selection
 
 Require canonical setup schema version `4`, with the entry matching `.local/config.json`'s `activeAgent` workspace slug marked `connect_ready: true`. If setup or the selected Dev identity is unavailable, report the prerequisite and pause. Do not borrow another workspace's authentication or change global profiles.
@@ -20,9 +22,13 @@ Find and read matching existing evaluation cases as read-only intent. Make a lig
 
 This procedure is not a graded evaluation-set execution. Route separately requested case creation or editing through the existing evaluation skill, with its own scope and approvals.
 
+Build a useful probe set from intended behavior, actual inputs/backend contracts and matching eval intent, including safe applicable negative cases as well as a happy path. Explain the scope so the maker can adjust it, without inserting another routine approval gate. Exercise informative failure cases first when safe and within the approved resources. Do not invent a mandatory case matrix or force real outages, permission changes or malformed writes.
+
 ## Prepare the browser separately
 
 Prepare or reuse the test browser and open the selected agent. Resolve the trusted selected-agent Studio URL and numeric-loopback connection internally from the selected context and preparation result. Use the reference's bounded browser preparation operation when a new browser is needed. Browser preparation ends before human sign-in, Test-pane preparation or any conversation Send. SDK sign-in does not establish browser identity.
+
+Keep the browser and its profile available for follow-ups, including after a completed check or pause/stop. Leave normal closure to the maker, not routine test cleanup. Prepare a fresh window when the existing one is unavailable or unusable; reconcile an uncertain Send before replacement and retain the prior browser identities and evidence. Follow the reference for requested closure and exact-profile cleanup.
 
 Present the full shared readiness message in normal chat, followed by its separate readiness-only control. The maker signs in with a test account if necessary and opens the Test chat pane with an empty, idle composer. Omit the sign-in paragraph when already signed in with a test account; reuse valid readiness. Keep the existing test-only or test-and-fix scope.
 
@@ -31,6 +37,8 @@ Apply Not ready, keep paused or Stop without sending immediately using the share
 ## Execute and interpret tests
 
 Use the reference's general `capture` operation for approved test messages, choosing a unique evidence directory for each turn. The operation records native state and the page/turn boundary before Send and returns correlated reply/card, completion and readback facts. `graded: false` and `outcome: captured` mean observed capture, not correctness or backend success. Interpret actual observations against intended behavior and retain evidence.
+
+Use the returned `signal` and `errorShaped` as advisory capture facts. An `ok` signal can describe a real error reply; consent, empty or partial captures cannot establish that the intended backend or topic logic ran. Check all captured bubbles against intent, using existing literal checks or semantic reasoning as appropriate. Do not treat a classifier or a vacuous absence check as a correctness verdict.
 
 After a known completed turn, continue the authorized scenarios or conversation with further bounded captures as needed. Cards are evidence, not automatic test failure; when a required interaction cannot be performed by the available surface, report that specific remaining gap or collaborate with the maker. Do not claim an unsupported interactive-card submission, backend fault injection or exact-topic invocation trace.
 
@@ -45,6 +53,8 @@ If local evidence output fails after capture or readback, retain the returned kn
 Inspect useful service-returned component diagnostics when explaining an authoring failure. Persistence is not proof of diagnostic-free authoring or runtime correctness, and component diagnostics do not establish universal checker coverage.
 
 When a reply or card does not reveal the state needed to explain a branch, calculation or binding, use [temporary value observation](../../../reference/ess-docs/operations/native-topic-testing.md#observe-topic-values-temporarily). Choose the relevant non-sensitive values and action boundary, observe them through the ordinary capture path, then remove only the owned diagnostic message. An absent diagnostic is not proof of a blank value or an unreached topic. Preserve legitimate corrections, concurrency checks and cleanup uncertainty. Test-only scope does not authorize instrumentation.
+
+Localize a backend-backed mismatch through a correlated run only when its separate target, access and read-only inspection scope are established. Reuse the workflow inspection owner; flow, connection and template-configuration changes remain outside ADK. For an unexplained authoring error, follow native authoring validation in the debugging reference using retained service responses and fresh component diagnostics. Preserve unavailable validation evidence as a gap, not a clean result.
 
 When an observed issue needs a fix, delegate to the normal topic or instruction owner with the selected target, intended behavior, issue evidence, debugging objective and approved editable scope. Necessary in-scope fixes, pushes and retests reuse that authorization; do not insert independent per-fix approval gates. Preserve concurrency safeguards. New scope, changed intended behavior or additional consequential actions require approval. Test-only requests report issues without editing.
 

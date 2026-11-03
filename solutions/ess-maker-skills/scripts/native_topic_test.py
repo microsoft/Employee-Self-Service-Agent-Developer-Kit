@@ -420,6 +420,7 @@ def _exercise(
         cdp, url = args.cdp, args.url
         original = None
         original_baseline = None
+        require_empty_conversation = args.require_empty_conversation
     else:
         original = _evidence_path(root, args.previous)
         execution = _read(original / "execution.json")
@@ -432,6 +433,7 @@ def _exercise(
             raise ValueError("The original execution and inspection target differ.")
         cdp, url = execution["cdp"], execution["url"]
         original_baseline = _read(original / "native-before.json")
+        require_empty_conversation = execution.get("requireEmptyConversation", False)
     before = _components(client, target)
     component_id, component = _selected(inspection, target, before)
     if not isinstance(prompt, str) or not prompt.strip():
@@ -488,13 +490,33 @@ def _exercise(
         surface.start()
         if original is None:
             boundary = driver.prepare()
+            if require_empty_conversation:
+                diagnostics["conversationBoundary"] = boundary
+                if (
+                    type(boundary.get("renderedTurnsBefore")) is not int
+                    or boundary["renderedTurnsBefore"] != 0
+                    or boundary.get("beforeTurnIndex") is not None
+                    or boundary.get("beforeTurnElementId") is not None
+                    or type(boundary.get("expectedTurnIndex")) is not int
+                    or boundary["expectedTurnIndex"] != 0
+                ):
+                    raise RuntimeError(
+                        "An empty conversation is required, but the boundary is "
+                        "nonempty or unverified. No message was sent; no reset was attempted."
+                    )
             _write(output / "execution.json", {
                 "schemaVersion": 1, "operation": args.operation,
                 "target": _identity(target), "prompt": prompt,
                 "expectation": expectation,
                 "cdp": cdp, "url": url, "boundary": boundary,
                 "submissionMayHaveOccurred": True,
-                "isolation": "Existing conversation; no reset or reload.",
+                "requireEmptyConversation": require_empty_conversation,
+                "isolation": (
+                    "Empty transcript verified before Send; runtime freshness is not "
+                    "established by DOM alone."
+                    if require_empty_conversation
+                    else "Existing conversation; no reset or reload."
+                ),
             })
             submission_may_have_occurred = True
             capture = surface.drive(prompt, timeout_s=args.timeout)
@@ -513,6 +535,7 @@ def _exercise(
                 "prompt": prompt, "cdp": cdp, "url": url,
                 "expectation": expectation,
                 "boundary": boundary, "submissionMayHaveOccurred": False,
+                "requireEmptyConversation": require_empty_conversation,
             })
             capture = driver.observe(prompt, boundary, args.timeout)
         capture_facts = {
@@ -552,6 +575,11 @@ def _exercise(
         errors["nativeReadbackError"] = _error_facts(exc)
     assessment = assess(capture, expected, selected_unchanged, drift) if exact_mode else {
         "graded": False,
+        "signal": (
+            classify_reply_signal(capture.reply_text, timed_out=capture.timed_out).value
+            if capture is not None else None
+        ),
+        "errorShaped": looks_like_error(capture.reply_text) if capture is not None else None,
         "selectedTopicUnchanged": selected_unchanged,
         "componentDrift": drift,
         "outcome": (
@@ -568,6 +596,7 @@ def _exercise(
         "prompt": prompt, "evidenceDirectory": str(output),
         "observation": driver.observation(),
         "submissionMayHaveOccurred": submission_may_have_occurred,
+        "requireEmptyConversation": require_empty_conversation,
         "capture": capture_facts,
         "nativeReadback": after,
         **({"originalRun": str(original)} if original is not None else {}),
@@ -576,6 +605,7 @@ def _exercise(
             "Current-turn correlation is not an exact-topic invocation trace.",
             "Completion is a quiet, non-generating DOM observation, not backend completion proof.",
             "The existing conversation was not reset; this is not independent discovery evidence.",
+            "An empty transcript does not prove a new runtime conversation or saved-version execution.",
             "Cards are captured as rendered text/presence, not structured card payloads; "
             "card interactions, backend fault injection and workflow diagnostics are unsupported.",
             "No activation, publication, routing change or retry is performed by capture or observe.",
@@ -706,6 +736,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--url")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--timeout", type=int, default=90)
+    parser.add_argument(
+        "--require-empty-conversation", action="store_true",
+        help="Require a verified empty turn boundary before Send; never reset the conversation.",
+    )
     parser.add_argument("--yes", action="store_true", help="Apply separately authorized topic activation.")
     args = parser.parse_args(argv)
     if not 1 <= args.timeout <= 300:
@@ -723,6 +757,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"--{field.replace('_', '-')} is required.")
     if args.yes and args.operation != "activate":
         parser.error("--yes is valid only for separately authorized activation.")
+    if args.require_empty_conversation and args.operation not in {"run", "capture"}:
+        parser.error("--require-empty-conversation is valid only for run or capture.")
     try:
         emit_capability_use("topic_test")
         root = args.kit_root.resolve()

@@ -19,7 +19,7 @@ Read `src/skills/topics/experience-contract.md` for the scoped runtime correctne
 
 Check `scripts/native_topic_test.py` directly. If it is absent, explain that this installation does not include conversation testing, report conversation acceptance as pending using `{topic_test_results}`, offer manual testing guidance, and stop.
 
-When installed, read `src/skills/topics/test/SKILL.md` and follow its native inspection, explicit activation, browser-preparation, scoped authorization and evidence requirements. Carry the intended behavior and any valid test/fix authorization. Do not repeat an already-requested testing offer; missing activation permission still requires an explicit choice. Saving/readback is separate from conversation acceptance. Honor no-activation and test-only requests; never publish.
+When installed, read `src/skills/topics/test/SKILL.md` and its `src/reference/ess-docs/operations/native-topic-debugging.md` procedure. Follow native inspection, explicit activation, browser preparation, applicable failure-first probes, reply classification, scoped localization/fix/retest and post-save conversation-freshness requirements. Carry the intended behavior and any valid test/fix authorization. Do not repeat an already-requested testing offer; missing activation permission still requires an explicit choice. Saving/readback is separate from conversation acceptance. Honor no-activation and test-only requests; never publish.
 
 ## Workflow requests
 

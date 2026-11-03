@@ -34,7 +34,24 @@ The operation checks target/content again, changes only the selected topic's sta
 
 ## Prepare the test browser
 
-Reuse a valid dedicated browser and its connection facts when available. Otherwise, prepare a new Microsoft Edge InPrivate window for the selected agent:
+Reuse a valid dedicated browser and its connection facts when available.
+
+Check the recorded browser PID and CDP endpoint separately. Emit JSON, not mixed formatted tables. These are read-only detection checks, not Test-pane readiness checks.
+
+```powershell
+$b = Get-Content '<recorded prepare-browser result.json>' -Raw -ErrorAction Stop |
+    ConvertFrom-Json
+
+Get-Process -Id $b.pid -ErrorAction Stop |
+    Select-Object Id, Responding | ConvertTo-Json
+
+Invoke-RestMethod "$($b.cdp.TrimEnd('/'))/json/version" -TimeoutSec 5 -ErrorAction Stop |
+    ConvertTo-Json
+```
+
+Preserve and inspect any error before declaring the browser unavailable.
+
+Otherwise, prepare a new Microsoft Edge InPrivate window for the selected agent:
 
 ```powershell
 python scripts\native_topic_test.py prepare-browser `
@@ -45,7 +62,24 @@ Resolve the full URL internally from the selected setup context and the exact su
 
 Preparation creates a fresh temporary profile, opens the selected URL, requests an ephemeral numeric-loopback debug port and verifies that browser metadata matches its dedicated debug descriptor. It returns `pid`, `profile`, `cdp`, `url`, the target and browser metadata, with workspace-local launch/result evidence. `prepared` means browser/connection preparation, not sign-in, Test-pane readiness or a passing test. No conversation Send, activation or publication is performed.
 
-Feed the returned `cdp` and `url` to capture after readiness is confirmed. Preserve a live browser and all known process/endpoint facts when preparation or local evidence recording is incomplete; inspect that attempt before deciding whether another browser is needed. The temporary profile contains browser state, not test evidence: keep its contents out of logs, reports and galleries. When the browser is no longer needed, close only that owned browser and clean up its exact temporary profile after it has exited. A paused test retains the browser for resumption.
+Feed the returned `cdp` and `url` to capture after readiness is confirmed. Preserve a live browser and all known process/endpoint facts when preparation or local evidence recording is incomplete; inspect that attempt before deciding whether another browser is needed. The temporary profile contains browser state, not test evidence: keep its contents out of logs, reports and galleries.
+
+Keep the browser and its profile available for follow-up checks, reporting and resumption, including after a completed test or a pause/stop. Leave normal browser closure to the maker; do not close it or delete its profile as routine test cleanup. If the maker asks to close it, act only on the recorded owned PID and clean up its exact temporary profile after it has exited.
+
+Prepare a fresh window when the existing one is unavailable or unusable, after inspecting its state and reconciling any uncertain Send. Retain the prior browser identities and evidence; completing one check is not a reason to replace the browser. A replacement can require the maker to sign in again.
+
+### Browser refresh signals
+
+Consider refreshing when:
+
+- Replies still reflect older content after a verified save and new conversation.
+- A saved, active topic is reported unavailable.
+- The Test pane fails to load or Retry does not recover it.
+- Send remains unresponsive or leaves a draft without a confirmed new turn.
+
+Treat these as indicators, not proof. Missing diagnostic output alone is insufficient.
+
+Make a best-effort refresh of the same signed-in window, preserving evidence and reconciling any uncertain Send first. Reopen Test and establish a new conversation before retesting. Use a fresh window only when the existing one remains unusable; leave normal closure to the maker.
 
 ## Confirm browser readiness
 
@@ -71,6 +105,10 @@ python scripts/native_topic_test.py capture `
 ```
 
 Capture accepts an approved prompt rather than requiring a saved trigger. It records native state and the page/turn boundary before one Send, then returns correlated reply/card, partial/timeout, screenshot and native-readback facts. `graded: false` and `outcome: captured` mean capture completed, not correctness or backend-completion proof. The session evaluates the observed behavior and relevant effects against the intended scenario.
+
+The result includes the existing reply classifier's `signal` (`ok`, `consent_gate`, `timeout` or `empty`) and `errorShaped` advisory. These do not grade the topic or prove a backend ran. Read every captured bubble, not just the first message.
+
+After a saved change or when an independent conversation is required, follow [post-save conversation freshness](native-topic-debugging.md#establish-post-save-conversation-freshness). `capture` and `run` accept `--require-empty-conversation` to reject a nonempty or unverified prepared turn boundary before Send. The flag never resets the conversation and never falls back to an old one. It verifies an empty transcript, not a new server-side conversation or execution of the saved version; retain the actual preparation and observed-version evidence separately. `observe` preserves the original gate facts without applying a new empty-conversation requirement.
 
 Use further completed turns to exercise authorized paraphrases or conversation branches. A card is observed evidence, not automatically a failure. The current driver does not submit interactive-card actions, inject backend faults, reset conversations or provide exact-topic invocation traces. Report a specific unperformed interaction or collaborate with the maker when needed; do not claim those capabilities or reject all ordinary dialogs because optional exact-mode is incompatible.
 
@@ -107,23 +145,25 @@ python scripts\topic_authoring.py read --topic "<mapped topic path>" --output "<
 
 The read result supplies `target`, `path` and `component` for update's `--expected` input. It is not a capture inspection file. Compare the working draft with saved content and preserve any pending authoring edits; do not overwrite it with a remote projection.
 
-Choose an actual action ID after the value is assigned and before the suspected consumer. For a nested branch, choose the action in that branch; anchoring a container places the diagnostic after the entire container. Use a fresh unique diagnostic action ID and a unique marker. Quote the activity as a YAML string, for example by applying `json.dumps` to the message:
+Choose an actual action ID after the value is assigned and before the suspected consumer. For a nested branch, choose the action in that branch; anchoring a container places the diagnostic after the entire container. Use a fresh unique diagnostic action ID.
+
+Allow for LLM synthesis of topic output; do not assume a `SendActivity` is displayed verbatim. Use ordinary, topic-relevant wording with clearly labeled interpolated values. Avoid debugging/testing labels such as `DBG`, `DEBUG`, "diagnostic" or "test output". A prefix such as `Ready for review:` may be used, but is not required for capture or cleanup. Keep unique ownership identities in action IDs and cleanup records. Quote the activity as a YAML string, for example by applying `json.dumps` to the message:
 
 ```text
-DBG <unique marker> total={Topic.Total}
+Ready for review: total={Topic.Total}
 ```
 
 Use `plant_debug_node` from `scripts/debug_plant.py` to prepare the local delta. Require exactly one insertion at the intended sibling boundary, an unambiguous anchor and an unused diagnostic ID. Preserve valid text interpolation rather than turning a variable reference into literal text. Convert/preview the proposed YAML through ordinary topic authoring and inspect the resulting action and diagnostics. Conversion alone does not establish runtime reachability or value visibility.
 
-Before any possible save, retain a small workspace-local cleanup record under the attempt's `.local/topic-tests/` evidence directory: selected target and mapped topic identity, action anchor, exact diagnostic ID/marker, intended owned node content and the original read/proposed-save evidence paths. Keep the record if save acceptance or readback is uncertain. This records ownership, not a second debugging workflow.
+Before any possible save, retain a small workspace-local cleanup record under the attempt's `.local/topic-tests/` evidence directory: selected target and mapped topic identity, action anchor, exact diagnostic action ID, intended owned node content and the original read/proposed-save evidence paths. Keep the record if save acceptance or readback is uncertain. This records ownership, not a second debugging workflow.
 
 ### Save and observe
 
 Use the ordinary topic update preview/save with the fresh read as `--expected`, retaining its concurrency checks and authoritative readback. The existing scoped debugging authorization covers this in-scope temporary edit without an independent per-node approval. Inspect the saved diagnostic content and retain its canonical identity/content for precise cleanup.
 
-Obtain a fresh `native_topic_test.py inspect` result after the save, then use an ordinary bounded `capture` with the authorized scenario and current browser readiness. Read the actual correlated diagnostic bubble alongside the normal reply and cards. A native expression, accepted save or absent bubble does not establish the variable's runtime value. Card DOM text can omit information such as dropdown options; a deliberately chosen count or safe projected field can provide evidence that the rendering alone lacks.
+Obtain a fresh `native_topic_test.py inspect` result after the save, establish [post-save conversation freshness](native-topic-debugging.md#establish-post-save-conversation-freshness), then use a bounded `capture --require-empty-conversation` with the authorized scenario and current browser readiness. Fresh native readback and a page reload alone do not establish updated-content execution. Read values actually present in the correlated reply alongside the normal reply and cards. A native expression, accepted save or absent bubble does not establish the variable's runtime value. Card DOM text can omit information such as dropdown options; a deliberately chosen count or safe projected field can provide evidence that the rendering alone lacks.
 
-If a value is unavailable, inspect the capture and diagnostics before drawing conclusions. A failure before the diagnostic boundary can prevent observation. When useful, move the owned message one boundary earlier and repeat a deliberate probe within scope. Do not assume exact-topic invocation or reset/reload the conversation to conceal an uncertain Send; use independent `observe` against that attempt first.
+If a value is unavailable, inspect the capture, message wording, conversation freshness and diagnostics before drawing conclusions. A failure before the diagnostic boundary can prevent observation. When useful, move the owned message one boundary earlier, before the suspected `Split`, `First`, parse, card or other consumer, and repeat a deliberate probe within scope. Reconcile and remove the previous owned message before moving it; keep the ownership record current before another possible save. Compare observed values and message content across boundaries without assuming that an absent message alone proves reachability or the cause. Do not move it later as a substitute for earlier-boundary localization. Do not assume exact-topic invocation or reset/reload the conversation to conceal an uncertain Send; use independent `observe` against that attempt first.
 
 ### Remove only owned instrumentation
 
