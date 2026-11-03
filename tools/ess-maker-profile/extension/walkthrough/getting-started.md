@@ -5,7 +5,10 @@ Copilot Chat what you want to do and it will guide you the rest of the way.
 
 For example, here are a few prompts to try:
 
-- **Set up ESS** — ask *"Help me set up ESS"* to sign in and connect your agent.
+- **Set up ESS** — ask *"Help me set up ESS"* to connect your agent. If a browser
+  opens, use the Microsoft work account that can access the target Power
+  Platform environment and agent; this is separate from your GitHub Copilot
+  sign-in.
 - **Customize the landing page** — ask *"Help me customize the landing page"* to
   configure what your audience sees first.
 - **Run a flightcheck** — ask *"Help me run a flightcheck"* to run readiness

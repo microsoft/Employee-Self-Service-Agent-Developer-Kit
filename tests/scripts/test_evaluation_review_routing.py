@@ -241,6 +241,38 @@ def test_evaluation_validator_uses_exact_set_folder():
     assert "Automated scoring failed ({reason})" in validator
 
 
+def test_evaluation_validator_recovers_auth_before_manual_fallback():
+    validator = _read("src/skills/evaluations/validate/SKILL.md")
+    normalized = " ".join(validator.split())
+    script = _read("scripts/evaluate_evals.py")
+
+    assert "status=authentication_required" in validator
+    assert "Do not perform manual scoring yet" in normalized
+    assert "Sign in or switch GitHub account and retry automated scoring" in validator
+    assert "Continue with manual scoring" in validator
+    assert "gh auth status --hostname github.com" in validator
+    assert "gh auth switch --hostname github.com --user" in validator
+    assert "gh auth login --hostname github.com --web" in validator
+    assert "gh auth refresh --hostname github.com" in validator
+    assert "gh api --hostname github.com user --jq .login" in validator
+    assert "`authenticationRetry=true`" in validator
+    assert "`manualFallbackAuthorized=true`" in validator
+    assert '`fallbackReason="{reason}"`' in validator
+    assert "Skip Step 1 and begin at Step 2" in normalized
+    assert "explicitly selected manual scoring or declined authentication" in normalized
+    assert "Incomplete login, installation, restart, or identity verification never" in normalized
+    assert "Do not launch either interactive browser command" in normalized
+    assert "restart VS Code and resume the same selected set" in normalized
+    assert "Do not retry in the current agent process" in normalized
+    assert "Never enter an authentication loop" in validator
+    assert "environment variable takes precedence" in validator
+    assert "never unset or replace it without the user's action" in normalized
+    assert "stdout is one JSON object" in normalized
+    assert "Exit code `2` remains argparse usage failure" in normalized
+    assert "AUTHENTICATION_REQUIRED_EXIT = 3" in script
+    assert '"status": "authentication_required"' in script
+
+
 def test_catalogue_generation_mandatorily_invokes_validation_subagent():
     generate_skill = _read("src/skills/evaluations/generate/SKILL.md")
     experience = _normalized("src/skills/evaluations/experience-contract.md")

@@ -205,7 +205,7 @@ def test_inspect_requires_recognized_copilot_studio_agent_url(
 
     assert result == 1
     assert client.calls == []
-    assert "recognized Copilot Studio agent URL" in capsys.readouterr().err
+    assert "recognized Microsoft Copilot Studio URL" in capsys.readouterr().err
 
 
 def test_export_uses_os_temp_outside_kit_and_returns_handoff(

@@ -11,8 +11,10 @@ from essmig.projection import (
     ProjectionError,
     _normalize_copilot_yaml,
     as_new_component,
+    block_scalar,
     connected_agent_link,
     connected_agent_message,
+    dump,
     parse_ca_data,
     project,
     rewrite_prefixes,
@@ -269,3 +271,32 @@ def test_a_variable_component_carries_no_display_name() -> None:
         ca_component("component.MyVar", data, component_type=12), "hr"
     )
     assert "displayName" not in entry
+
+
+def test_block_scalar_renders_multiline_text_as_a_literal_block() -> None:
+    # A plain multi-line str dumps as an escaped double-quoted scalar, which makes an
+    # instructions edit unreadable in customizationsMade.md. It must round-trip as |-.
+    rendered = dump({"instructions": block_scalar("#Identity\nBe helpful.\n\n#Rules\nBe concise.")})
+    assert "instructions: |-" in rendered
+    assert "\\n" not in rendered
+
+
+def test_block_scalar_keeps_a_line_with_trailing_whitespace_as_a_block() -> None:
+    # ruamel preserves trailing whitespace inside a literal block, so a stray trailing
+    # space must NOT force the escaped double-quoted form.
+    rendered = dump({"instructions": block_scalar("#Identity \nBe helpful.")})
+    assert "instructions: |-" in rendered
+    assert "\\n" not in rendered
+
+
+def test_block_scalar_normalizes_crlf_before_wrapping() -> None:
+    # CRLF text wrapped verbatim keeps embedded carriage returns; normalize to LF so
+    # the block is clean and matches the LF-only agent.yml.
+    rendered = dump({"instructions": block_scalar("#Identity\r\nBe helpful.\r\nBe concise.")})
+    assert "instructions: |-" in rendered
+    assert "\r" not in rendered
+    assert "\\r" not in rendered
+
+
+def test_block_scalar_leaves_single_line_text_untouched() -> None:
+    assert block_scalar("just one line") == "just one line"

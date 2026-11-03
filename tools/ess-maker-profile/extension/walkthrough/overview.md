@@ -10,7 +10,9 @@ Describe what you want in plain English and GitHub Copilot does the heavy
 lifting. It turns your intent into the right set-up steps, topics, and
 configuration, then helps you validate and publish:
 
-- **Set up** — sign in to your Power Platform environment and connect your agent.
+- **Set up** — use your Microsoft work account to access the target Power
+  Platform environment and connect your agent. This is separate from the GitHub
+  Copilot sign-in that activates Copilot Chat.
 - **Customize** — create and update topics, tailor the landing page, and scan
   for issues.
 - **Validate** — run a flightcheck and generate tests before you deploy.

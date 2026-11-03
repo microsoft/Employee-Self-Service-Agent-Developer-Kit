@@ -100,7 +100,6 @@ _REVIEWED_WORKDAY_TOPIC_SUFFIXES = {
             "WorkdayGetVisas",
             "WorkdayManagerCheck",
             "WorkdayOnError",
-            "WorkdaySystemAccessCheck",
             "WorkdaySystemGetCommonExecution",
             "WorkdaySystemGetRESTExecution",
             "WorkdaySystemGetUserContextV2",
@@ -113,10 +112,19 @@ _REVIEWED_WORKDAY_TOPIC_SUFFIXES = {
 }
 
 
-def reviewed_workday_topic_schemas(agent_schema: str) -> frozenset[str]:
+def reviewed_workday_topic_schemas(
+    agent_schema: str, *, realm: str = "",
+) -> frozenset[str]:
     """Return the reviewed OOB Workday topic schemas for one agent."""
     schema = str(agent_schema or "").strip()
     suffixes = _REVIEWED_WORKDAY_TOPIC_SUFFIXES.get(schema.casefold())
+    normalized_realm = str(realm).strip().casefold()
+    if suffixes is None and normalized_realm in {"test", "prod"}:
+        suffix = f"_{normalized_realm}"
+        if schema.casefold().endswith(suffix):
+            suffixes = _REVIEWED_WORKDAY_TOPIC_SUFFIXES.get(
+                schema[:-len(suffix)].casefold()
+            )
     if suffixes is None:
         return frozenset()
     return frozenset(
@@ -717,7 +725,7 @@ def resolve_workday_dialogs(
                 )
             raise MinimalBotEvaluationError(
                 "The active ESS HR component map does not match the reviewed "
-                "23-topic Workday inventory ("
+                f"{len(reviewed_schemas)}-topic Workday inventory ("
                 + "; ".join(details)
                 + "). Refresh the workspace before activation."
             )
@@ -746,11 +754,6 @@ def _folder_matches_globs(folder: Path, root: Path, only_globs: list[str]) -> bo
         if any(fnmatch.fnmatch(rel, glob) for glob in only_globs):
             return True
     return False
-
-
-def _safe_name(value: str, fallback: str) -> str:
-    name = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
-    return name or fallback
 
 
 def _schema_name(stem: str, component_id: str) -> str:

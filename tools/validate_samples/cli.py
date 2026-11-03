@@ -18,7 +18,15 @@ from pathlib import Path
 
 import yaml
 
-from .checks import ChangedFile, Result, Status, run_all_checks
+from .checks import (
+    RETIRED_WORKDAY_AREAS,
+    WORKDAY_LEGACY,
+    WORKDAY_PREVIEW,
+    ChangedFile,
+    Result,
+    Status,
+    run_all_checks,
+)
 
 _HERE = Path(__file__).resolve().parent
 _DEFAULT_WHITELIST = _HERE / "whitelist.yml"
@@ -65,6 +73,66 @@ def _parse_paths_file(path: Path) -> list[ChangedFile]:
     return changed
 
 
+def _preserved_workday_migration(repo_root: Path, base: str) -> frozenset[str]:
+    """Recognize a complete move with identical Git-normalized file contents."""
+    merge_base = subprocess.check_output(
+        ["git", "-C", str(repo_root), "merge-base", base, "HEAD"], text=True,
+    ).strip()
+    entries = subprocess.check_output(
+        ["git", "-C", str(repo_root), "ls-tree", "-r",
+         merge_base, "--", WORKDAY_LEGACY],
+        text=True,
+    ).splitlines()
+    original = {
+        path: metadata.split()[2]
+        for entry in entries
+        for metadata, path in [entry.split("\t", 1)]
+    }
+    if not original or not any(path.endswith("/topic.yaml") for path in original):
+        return frozenset()
+    legacy_root = repo_root / WORKDAY_LEGACY
+    if legacy_root.exists() and any(path.is_file() for path in legacy_root.rglob("*")):
+        return frozenset()
+    expected = {
+        path.replace(WORKDAY_LEGACY + "/", WORKDAY_PREVIEW + "/", 1)
+        for path in original
+    }
+    preview_root = repo_root / WORKDAY_PREVIEW
+    actual = {
+        path.relative_to(repo_root).as_posix()
+        for path in preview_root.rglob("*") if path.is_file()
+    }
+    if actual != expected:
+        return frozenset()
+    for old_path in original:
+        new_path = old_path.replace(WORKDAY_LEGACY + "/", WORKDAY_PREVIEW + "/", 1)
+        current_blob = subprocess.check_output(
+            ["git", "-C", str(repo_root), "hash-object", "--path", new_path, new_path],
+            text=True,
+        ).strip()
+        if current_blob != original[old_path]:
+            return frozenset()
+    return frozenset(expected)
+
+
+def _retired_workday_areas(repo_root: Path, base: str) -> frozenset[str]:
+    """Recognize complete removals of known obsolete sample areas, not edits."""
+    merge_base = subprocess.check_output(
+        ["git", "-C", str(repo_root), "merge-base", base, "HEAD"], text=True,
+    ).strip()
+    retired = set()
+    for area in RETIRED_WORKDAY_AREAS:
+        original = subprocess.check_output(
+            ["git", "-C", str(repo_root), "ls-tree", "-r", "--name-only",
+             merge_base, "--", area],
+            text=True,
+        ).splitlines()
+        root = repo_root / area
+        if original and not any(path.is_file() for path in root.rglob("*")):
+            retired.add(area)
+    return frozenset(retired)
+
+
 def render_summary(results: list[Result]) -> str:
     lines = ["Validation"]
     label_map = {
@@ -105,10 +173,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.diff_base:
         changed = _git_changed(repo_root, args.diff_base)
+        preserved_workday_paths = _preserved_workday_migration(repo_root, args.diff_base)
+        retired_workday_areas = _retired_workday_areas(repo_root, args.diff_base)
     else:
         changed = _parse_paths_file(Path(args.paths_file))
+        preserved_workday_paths = frozenset()
+        retired_workday_areas = frozenset()
 
-    results = run_all_checks(repo_root, changed, whitelist)
+    results = run_all_checks(
+        repo_root, changed, whitelist,
+        preserved_workday_paths=preserved_workday_paths,
+        retired_workday_areas=retired_workday_areas,
+    )
 
     if args.json:
         print(results_to_json(results))

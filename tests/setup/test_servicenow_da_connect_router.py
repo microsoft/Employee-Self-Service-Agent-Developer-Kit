@@ -47,12 +47,15 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
 
     assert "src/skills/connect/SKILL.md" in prompt
     assert "Extension setup is not yet available" not in prompt
+    normalized_prompt = " ".join(prompt.split())
     assert "`authoring_ready: true`" in prompt
-    assert "Ignore" in prompt
-    assert "`connect_ready`" in prompt
-    assert "`activeAgent` slug" in prompt
-    assert "`botId`" in prompt
-    assert "Skip completed steps" in prompt
+    assert "ignores `connect_ready`" in normalized_prompt
+    assert (
+        "do not gate ServiceNow on `.local/config.json.activeAgent`"
+        in normalized_prompt
+    )
+    assert "sync-authoring-readiness" in prompt
+    assert "agent-chooser" in prompt
     assert "Waiting for maker input" in prompt
     assert "never require the maker to invoke" in prompt
     assert "Fresh ServiceNow execution boundary" in prompt
@@ -113,28 +116,49 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "cached `done` phase displays **Rechecking**" in runner
     assert "Do not inspect `.local/connect/steps.md` before" in prompt
     assert "a DA ServiceNow route starts\nwith its provider lifecycle" in prompt
-    assert "src/skills/connect/servicenow-da/SKILL.md" in router
-    assert "servicenow-da-hrsd/agents/<agent-slug>/lifecycle.json" in router
-    assert "servicenow-da-itsm/agents/<agent-slug>/lifecycle.json" in router
-    assert "Never changes `.local/config.json.activeAgent`" in router
-    assert "`schema_version: 4` with an environment binding" in router
-    assert "emit_capability.py connect --connector servicenow" in router
-    assert "literal Workday request remains on the Workday route" in router
+    chooser = (
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow-da" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    entry = (
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow" / "entry.md"
+    ).read_text(encoding="utf-8")
+    registration = json.loads(
+        (
+            _SOLUTION
+            / "src"
+            / "skills"
+            / "connect"
+            / "servicenow"
+            / "integration.json"
+        ).read_text(encoding="utf-8")
+    )
 
+    assert registration["availability"] == "available"
+    assert registration["entryDoc"] == "entry.md"
+    assert "unavailableMessage" not in registration
+    assert "snow" in registration["aliases"]
+    assert "src/skills/connect/servicenow-da/SKILL.md" in entry
+    normalized_entry = " ".join(entry.split())
+    assert "does not depend on `.local/config.json.activeAgent`" in (
+        normalized_entry
+    )
+    assert "sync-authoring-readiness" in entry
+    assert "do not emit it again here" in normalized_entry
+    assert "emit_capability.py" not in entry
+    assert "src/skills/connect/servicenow-da-hrsd/SKILL.md" in chooser
+    assert "src/skills/connect/servicenow-da-itsm/SKILL.md" in chooser
+    assert "Never persist the choice to `.local/config.json`" in chooser
+
+    router = (
+        _SOLUTION / "src" / "skills" / "connect" / "SKILL.md"
+    ).read_text(encoding="utf-8")
     interactive_router = (
         _SOLUTION / "src" / "skills" / "connect" / "step1.md"
     ).read_text(encoding="utf-8")
-    dispatch = interactive_router.index(
-        "src/skills/connect/servicenow-da/SKILL.md"
-    )
-    legacy_read = interactive_router.index(
-        "Check if `.local/connect/servicenow/steps.md` exists."
-    )
-    assert dispatch < legacy_read
-    assert 'releaseLine: "da"' in interactive_router
-    assert "do not inspect or create `.local/connect/servicenow/` state" in (
-        interactive_router
-    )
+    for neutral in (router, interactive_router):
+        assert "servicenow" not in neutral.casefold()
+    assert "entryDoc" in interactive_router
+    assert "{INTEGRATION_ID}" in interactive_router
 
 
 def test_global_gate_allows_connection_blocked_foundation() -> None:
@@ -142,11 +166,9 @@ def test_global_gate_allows_connection_blocked_foundation() -> None:
         _SOLUTION / ".github" / "copilot-instructions.md"
     ).read_text(encoding="utf-8")
 
-    assert "`authoring_ready` equal to `true`" in instructions
-    assert "This is the only readiness marker" in instructions
-    assert "Ignore `connect_ready`" in instructions
-    assert "let the invoked command resolve" in instructions
-    assert "`/connect servicenow` is available" in instructions
+    normalized = " ".join(instructions.split())
+    assert "`/connect servicenow` is available" in normalized
+    assert "`connect_ready` equal to `true`" in normalized
 
 
 def test_servicenow_dev_phase_order_and_binding_intros_are_explicit() -> None:

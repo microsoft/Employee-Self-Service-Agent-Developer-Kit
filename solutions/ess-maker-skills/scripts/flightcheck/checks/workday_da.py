@@ -4,13 +4,12 @@
 """Independent Workday readiness checks for the selected ESS HR DA.
 
 Shared Workday checks remain reusable diagnostics. This module owns the
-DA-specific package, runtime-flow, delegated-authorization, topic, wiring, and
-employee-test evidence contracts used by the Workday DA profiles.
+DA-specific package, runtime-flow, delegated-authorization, topic, and wiring
+contracts used by the Workday DA profiles.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 import json
 from pathlib import Path
 from typing import Any
@@ -37,15 +36,12 @@ from workday_connect_model import (
 
 from ..agent_scope import active_agent, validate_agent_slug
 from ..runner import CheckResult, Priority, Role, Status
-from .workday import _WD_SUCCESS_RESPONSE_ACTION, _classify_run
 
 
 _DA_IT_PARENT_SCHEMA = "msdyn_copilotforemployeeselfservicedait"
 _WORKDAY_CATALOG_PATH = (
     Path(__file__).resolve().parents[2] / "workday_connect_catalog.json"
 )
-_RUNTIME_EVIDENCE_CLOCK_SKEW_SECONDS = 120
-_RUNTIME_EVIDENCE_MAX_WINDOW_SECONDS = 15 * 60
 _DA_IT_AGENT_SCHEMAS = {
     _DA_IT_PARENT_SCHEMA,
     "gptagent_copilotforemployeeselfserviceit",
@@ -55,9 +51,20 @@ _SOLN_SELECT = "solutionid,uniquename,friendlyname,ismanaged,version"
 
 _DOC_LINK = (
     "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
-    "employee-self-service/install"
+    "employee-self-service/declarative-agent-workday"
 )
 _DESCRIPTION = "Workday extension package installed for the DA ESS HR agent"
+
+# Portal display names differ from these existing reviewed schema suffixes.
+# https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service/declarative-agent-workday-reference#system-topics
+_REQUIRED_SYSTEM_TOPIC_SUFFIXES = frozenset({
+    "WorkdaySystemSetRuntimeTemplateConfigurations",
+    "WorkdaySystemGetUserContextV2",
+    "WorkdaySystemGetCommonExecution",
+    "WorkdaySystemGetRESTExecution",
+    "WorkdayManagerCheck",
+    "WorkdayOnError",
+})
 
 
 def _safe_error_summary(exc: Exception) -> str:
@@ -75,7 +82,7 @@ def _safe_error_summary(exc: Exception) -> str:
     return f"{type(exc).__name__}{status_hint}"
 
 
-def run_workday_da_checks(runner) -> list[CheckResult]:
+def run_workday_da_checks(runner, *, include_manual: bool = True) -> list[CheckResult]:
     """Emit every independent DA-specific Workday validation row."""
     checks = (
         ("WD-DA-PKG-001", _check_workday_da_package_installed),
@@ -84,11 +91,12 @@ def run_workday_da_checks(runner) -> list[CheckResult]:
         ("WD-DA-TOPIC-001", _check_reviewed_workday_topics),
         ("WD-DA-WIRING-001", _check_runtime_template_wiring),
         ("WD-DA-ATTACH-001", _check_agent_flow_attachment),
-        ("WD-DA-RUN-001", _check_correlated_runtime_evidence),
     )
     results: list[CheckResult] = []
     should_execute = getattr(runner, "should_execute", lambda _id: True)
     for checkpoint_id, check in checks:
+        if not include_manual and checkpoint_id == "WD-DA-ATTACH-001":
+            continue
         if should_execute(checkpoint_id):
             results.extend(check(runner))
     return results
@@ -97,6 +105,15 @@ def run_workday_da_checks(runner) -> list[CheckResult]:
 def run_workday_da_package_check(runner) -> list[CheckResult]:
     """Preserve the legacy package-only ``workdayda`` scope contract."""
     return _check_workday_da_package_installed(runner)
+
+
+def _validation_realm(runner) -> str:
+    context = getattr(runner, "validation_context", None)
+    return str(
+        (context.get("realm") if isinstance(context, dict) else None)
+        or (getattr(runner, "config", {}) or {}).get("realm")
+        or ""
+    ).strip().casefold()
 
 
 def _check_workday_da_package_installed(runner) -> list[CheckResult]:
@@ -156,6 +173,13 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
         supported_agents if isinstance(supported_agents, dict) else {}
     )
     agent_contract = supported_agents.get(selected_schema)
+    realm = _validation_realm(runner)
+    if agent_contract is None and realm in {"test", "prod"}:
+        suffix = f"_{realm}"
+        if selected_schema.endswith(suffix):
+            agent_contract = supported_agents.get(
+                selected_schema[:-len(suffix)]
+            )
     if not isinstance(agent_contract, dict):
         return [_result(
             Status.FAILED.value,
@@ -765,7 +789,16 @@ def _fetch_selected_components(
         runner._workday_da_component_cache = cache
     components = cache.get(bot_id)
     if components is None:
-        payload = client.fetch_components(bot_id)
+        snapshot = getattr(runner, "_da_native_snapshot", None)
+        if (
+            getattr(runner, "maker_diagnostics", False) is True
+            and isinstance(snapshot, dict)
+            and snapshot.get("agentId") == bot_id
+            and snapshot.get("environmentId") == getattr(runner, "env_id", None)
+        ):
+            payload = snapshot["changeset"]
+        else:
+            payload = client.fetch_components(bot_id)
         components = _dialog_components(payload)
         cache[bot_id] = components
     return slug, schema, bot_id, components
@@ -785,7 +818,9 @@ def _check_reviewed_workday_topics(runner) -> list[CheckResult]:
         )]
     try:
         slug, schema, _bot_id, components = _fetch_selected_components(runner)
-        expected = reviewed_workday_topic_schemas(schema)
+        expected = reviewed_workday_topic_schemas(
+            schema, realm=_validation_realm(runner),
+        )
         if not expected:
             raise ValueError(
                 f"No reviewed Workday topic inventory exists for {schema!r}."
@@ -811,6 +846,63 @@ def _check_reviewed_workday_topics(runner) -> list[CheckResult]:
     duplicates: list[str] = []
     inactive: list[str] = []
     diagnostics: list[str] = []
+    if getattr(runner, "maker_diagnostics", False) is True:
+        present = {
+            name: components[name.casefold()]
+            for name in expected if components.get(name.casefold())
+        }
+        required = {f"{schema}.topic.{suffix}" for suffix in _REQUIRED_SYSTEM_TOPIC_SUFFIXES}
+        missing = sorted(required - present.keys())
+        inactive = sorted(
+            name for name in required & present.keys()
+            if any(item.get("status") == "Inactive" for item in present[name])
+        )
+        duplicates = sorted(name for name, matches in present.items() if len(matches) != 1)
+        unknown = sorted(
+            name for name, matches in present.items()
+            if any(item.get("status") not in {"Active", "Inactive"} for item in matches)
+        )
+        active = sum(item.get("status") == "Active" for matches in present.values() for item in matches)
+        inactive_count = sum(item.get("status") == "Inactive" for matches in present.values() for item in matches)
+        if missing or inactive or duplicates:
+            status = Status.FAILED.value
+        elif unknown:
+            status = Status.BLOCKED.value
+        else:
+            status = Status.PASSED.value
+        findings = [
+            f"{label}: {', '.join(values)}"
+            for label, values in (
+                ("missing required system topics", missing),
+                ("inactive required system topics", inactive),
+                ("duplicate schemas", duplicates),
+                ("unknown activation", unknown),
+            )
+            if values
+        ]
+        return [_da_result(
+            checkpoint_id, status, "Required Workday system topics and optional conversation inventory",
+            f"Inspected {len(present)} present reviewed conversation(s): {active} active, "
+            f"{inactive_count} inactive, {len(unknown)} with unknown activation. "
+            f"Verified {len(required) - len(missing)} of {len(required)} required system topics present. "
+            + ("; ".join(findings) + ". " if findings else "")
+            + "Unused optional conversations are not required; required system topics must remain active.",
+            remediation=(
+                "In Copilot Studio > the selected HR agent > Topics > All or System, "
+                "restore missing Microsoft-provided system topics through /connect workday, "
+                "turn on required system topics, resolve duplicate schemas and verify unknown activation. "
+                "Do not edit or disable system topics; enable only the intended optional scenarios. "
+                "Refresh the snapshot and rerun."
+                if status != Status.PASSED.value else ""
+            ),
+            evidence={
+                "present": len(present), "active": active, "inactive": inactive_count,
+                "requiredSystemTopics": sorted(required),
+                "missingSystemTopics": missing, "inactiveSystemTopics": inactive,
+                "duplicates": duplicates, "unknownActivation": unknown,
+                "unselectedCatalogEntries": len(expected) - len(present),
+            },
+        )]
     for expected_schema in sorted(expected):
         matches = components.get(expected_schema.casefold()) or []
         if not matches:
@@ -1050,341 +1142,45 @@ def _check_agent_flow_attachment(runner) -> list[CheckResult]:
         return [_da_result(
             "WD-DA-ATTACH-001",
             Status.ERROR.value,
-            "Reviewed Workday flows exposed to the selected agent",
+            "Workday agent connection references and parameter sharing",
             str(exc),
             remediation="Restore the reviewed Workday runtime catalog.",
         )]
     flow_names = list(runtime["agentConnectionFlowNames"])
+    steps = [
+        "In classic Copilot Studio, open the selected HR agent > Settings > Connection Settings.",
+        "For both connection references, select the intended Workday connection: "
+        + ", ".join(flow_names) + ".",
+        "Open Manage for each reference and confirm 'Allow permission to share parameters' is enabled on both.",
+        "Refresh Copilot Studio and reopen the settings to confirm both bindings and sharing settings were retained.",
+    ]
+    missing_action = (
+        "If a required reference is absent, use /connect workday to install or repair "
+        "the required Workday components. If a reference is Not connected, select the intended "
+        "Workday connection in these settings. If the sharing "
+        "setting is off, enable it. If you cannot see or change these settings, ask the "
+        "Environment Maker user or environment administrator to inspect them. "
+        "Do not remove unrelated flows or connections."
+    )
     return [_da_result(
         "WD-DA-ATTACH-001",
         Status.MANUAL.value,
-        "Reviewed Workday flows exposed to the selected agent",
-        "The reviewed agent-facing flow contract contains exactly: "
+        "Workday agent connection references and parameter sharing",
+        "The required agent connection references are: "
         + ", ".join(flow_names)
         + ". FlightCheck has no validated read-only API that proves the "
-        "maker UI attachment and parameter-sharing toggle.",
+        "selected connection and parameter-sharing toggle for both references. "
+        "A person must inspect them; this is not a confirmed configuration defect. "
+        "Flow authorization is verified separately.",
         remediation=(
-            "In Copilot Studio, open the selected ESS HR agent's Workday "
-            "connection settings. Confirm exactly the listed flows are "
-            "attached and 'Allow permission to share parameters' is enabled "
-            "for every exposed connection."
+            "\n".join(f"{index}. {step}" for index, step in enumerate(steps, 1))
+            + "\nIf missing or incorrect: " + missing_action
         ),
         priority=Priority.HIGH.value,
         automation_type="manual",
-        evidence={"expectedFlowNames": flow_names},
-    )]
-
-
-def _parse_utc(value: str, label: str) -> datetime:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"{label} must be UTC ISO-8601.") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError(f"{label} must include a timezone.")
-    return parsed
-
-
-def _run_start_time(run: dict[str, Any]) -> datetime:
-    properties = run.get("properties")
-    if not isinstance(properties, dict):
-        raise ValueError("Flow run properties must be an object.")
-    value = str(properties.get("startTime") or "")
-    if not value:
-        raise ValueError("Flow run startTime is required.")
-    return _parse_utc(value, "Flow run startTime")
-
-
-def _classify_employee_runtime_run(run: dict[str, Any]) -> str:
-    """Require the reviewed Copilot success action for employee evidence."""
-    properties = run.get("properties")
-    if not isinstance(properties, dict):
-        raise ValueError("Flow run properties must be an object.")
-    if properties.get("status") == "Succeeded":
-        response = properties.get("response")
-        if (
-            not isinstance(response, dict)
-            or response.get("name") != _WD_SUCCESS_RESPONSE_ACTION
-        ):
-            return "caught_failure"
-        return "success"
-    return _classify_run(run)
-
-
-def _check_correlated_runtime_evidence(runner) -> list[CheckResult]:
-    checkpoint_id = "WD-DA-RUN-001"
-    description = "Bounded employee Test pane runtime evidence"
-    pp_admin = getattr(runner, "pp_admin", None)
-    env_id = str(getattr(runner, "env_id", "") or "")
-    attempt_id = str(
-        getattr(runner, "runtime_evidence_attempt_id", "") or ""
-    ).strip()
-    start_value = str(
-        getattr(runner, "runtime_evidence_start", "") or ""
-    ).strip()
-    end_value = str(
-        getattr(runner, "runtime_evidence_end", "") or ""
-    ).strip()
-    expected_flow_ids = {
-        str(value).casefold()
-        for value in (
-            getattr(runner, "runtime_evidence_flow_ids", ()) or ()
-        )
-        if str(value).strip()
-    }
-    if not all((attempt_id, start_value, end_value, expected_flow_ids)):
-        return [_da_result(
-            checkpoint_id,
-            Status.NOT_CONFIGURED.value,
-            description,
-            "No complete employee Test pane evidence window was supplied. "
-            "Generic recent Workday run health is not accepted as employee "
-            "scenario proof.",
-            remediation=(
-                "Run the required signed-in employee scenario, record its "
-                "opaque evidence label, UTC start/end, and reviewed expected "
-                "flow IDs, then rerun this profile."
-            ),
-            automation_type="passive",
-        )]
-    if pp_admin is None or not env_id:
-        return [_da_result(
-            checkpoint_id,
-            Status.SKIPPED.value,
-            description,
-            "Power Automate run history is unavailable for the employee "
-            "evidence window.",
-            remediation=(
-                "Authenticate with Power Platform access and rerun."
-            ),
-            roles=[Role.POWER_PLATFORM_ADMIN.value],
-            automation_type="passive",
-        )]
-    try:
-        start = _parse_utc(start_value, "Runtime evidence start")
-        end = _parse_utc(end_value, "Runtime evidence end")
-        if end < start:
-            raise ValueError(
-                "Runtime evidence end must not precede its start."
-            )
-        if (
-            end - start
-        ).total_seconds() > _RUNTIME_EVIDENCE_MAX_WINDOW_SECONDS:
-            raise ValueError(
-                "Runtime evidence window must not exceed "
-                f"{_RUNTIME_EVIDENCE_MAX_WINDOW_SECONDS // 60} minutes."
-            )
-        lower = start - timedelta(
-            seconds=_RUNTIME_EVIDENCE_CLOCK_SKEW_SECONDS
-        )
-        upper = end + timedelta(
-            seconds=_RUNTIME_EVIDENCE_CLOCK_SKEW_SECONDS
-        )
-        runtime, by_name = _runtime_flow_inventory(runner)
-        reviewed_ids: set[str] = set()
-        for name in runtime["flowNames"]:
-            for flow in by_name.get(name.casefold()) or []:
-                flow_id = _flow_id(flow)
-                if not flow_id:
-                    continue
-                try:
-                    reviewed_ids.add(str(uuid.UUID(flow_id)))
-                except ValueError as exc:
-                    raise ValueError(
-                        f"Reviewed runtime flow {name!r} has an invalid ID."
-                    ) from exc
-        canonical_expected_flow_ids: set[str] = set()
-        for flow_id in expected_flow_ids:
-            try:
-                canonical_expected_flow_ids.add(str(uuid.UUID(flow_id)))
-            except ValueError as exc:
-                raise ValueError(
-                    f"Runtime evidence flow ID {flow_id!r} is invalid."
-                ) from exc
-        expected_flow_ids = canonical_expected_flow_ids
-        unexpected = expected_flow_ids - reviewed_ids
-        if unexpected:
-            raise ValueError(
-                "Runtime evidence names flow IDs outside the reviewed "
-                "Workday runtime catalog: "
-                + ", ".join(sorted(unexpected))
-            )
-    except ValueError as exc:
-        return [_da_result(
-            checkpoint_id,
-            Status.FAILED.value,
-            description,
-            str(exc),
-            remediation=(
-                "Record the employee scenario against the reviewed runtime "
-                "flows with a valid UTC evidence window."
-            ),
-            automation_type="passive",
-        )]
-
-    flow_outcomes: dict[str, list[str]] = {}
-    flow_run_ids: dict[str, list[str]] = {}
-    try:
-        for flow_id in sorted(expected_flow_ids):
-            get_runs_since = getattr(
-                pp_admin,
-                "get_flow_runs_since",
-                None,
-            )
-            runs = (
-                get_runs_since(env_id, flow_id, lower)
-                if callable(get_runs_since)
-                else pp_admin.get_flow_runs(env_id, flow_id)
-            )
-            if isinstance(runs, dict) and "_error" in runs:
-                raise RuntimeError(
-                    "Power Automate run history access failed."
-                )
-            if not isinstance(runs, list):
-                raise ValueError(
-                    f"Run history for {flow_id} returned an invalid shape."
-                )
-            candidates = []
-            for run in runs:
-                if not isinstance(run, dict):
-                    raise ValueError(
-                        f"Run history for {flow_id} contains a non-object row."
-                    )
-                run_start = _run_start_time(run)
-                if lower <= run_start <= upper:
-                    candidates.append(run)
-            flow_outcomes[flow_id] = [
-                _classify_employee_runtime_run(run) for run in candidates
-            ]
-            flow_run_ids[flow_id] = [
-                str(run.get("name") or "") for run in candidates
-            ]
-    except (
-        requests.RequestException,
-        OSError,
-        RuntimeError,
-        ValueError,
-    ) as exc:
-        return [_da_result(
-            checkpoint_id,
-            Status.ERROR.value,
-            description,
-            "Employee runtime evidence could not be read: "
-            f"{_safe_error_summary(exc)}",
-            remediation=(
-                "Restore Power Automate run-history access and rerun."
-            ),
-            automation_type="passive",
-        )]
-
-    missing = [
-        flow_id for flow_id, outcomes in flow_outcomes.items()
-        if not outcomes
-    ]
-    ambiguous = [
-        flow_id for flow_id, outcomes in flow_outcomes.items()
-        if len(outcomes) > 1
-    ]
-    pending = [
-        flow_id for flow_id, outcomes in flow_outcomes.items()
-        if outcomes == ["pending"]
-    ]
-    failed = [
-        flow_id for flow_id, outcomes in flow_outcomes.items()
-        if outcomes
-        and "success" not in outcomes
-    ]
-    evidence = {
-        "operatorEvidenceLabel": attempt_id,
-        "windowStart": start.isoformat(),
-        "windowEnd": end.isoformat(),
-        "clockSkewSeconds": _RUNTIME_EVIDENCE_CLOCK_SKEW_SECONDS,
-        "maximumWindowSeconds": _RUNTIME_EVIDENCE_MAX_WINDOW_SECONDS,
-        "correlationMode": "unique-run-in-bounded-window-by-reviewed-flow-id",
-        "migrationBaseline": bool(
-            getattr(
-                runner,
-                "runtime_evidence_migration_baseline",
-                False,
-            )
-        ),
-        "flowOutcomes": flow_outcomes,
-        "flowRunIds": flow_run_ids,
-    }
-    if ambiguous:
-        return [_da_result(
-            checkpoint_id,
-            Status.BLOCKED.value,
-            description,
-            "The employee Test pane evidence window contains multiple "
-            "candidate "
-            "runs for: "
-            + ", ".join(ambiguous)
-            + ".",
-            remediation=(
-                "Repeat the employee scenario in a clean, bounded window and "
-                "record only its reviewed expected flows."
-            ),
-            automation_type="passive",
-            evidence=evidence,
-        )]
-    if pending:
-        return [_da_result(
-            checkpoint_id,
-            Status.BLOCKED.value,
-            description,
-            "The employee Test pane evidence window contains a non-terminal or "
-            "inconclusive run for: "
-            + ", ".join(pending)
-            + ".",
-            remediation=(
-                "Wait for the employee scenario run to reach a terminal "
-                "state, then rerun this profile with the same evidence "
-                "window."
-            ),
-            automation_type="passive",
-            evidence=evidence,
-        )]
-    if missing:
-        return [_da_result(
-            checkpoint_id,
-            Status.FAILED.value,
-            description,
-            "No terminal run was found in the bounded employee evidence "
-            "window for: "
-            + ", ".join(missing)
-            + ".",
-            remediation=(
-                "Confirm the Test pane scenario invoked the reviewed flows, "
-                "then repeat the scenario and capture a fresh evidence window."
-            ),
-            automation_type="passive",
-            evidence=evidence,
-        )]
-    if failed:
-        return [_da_result(
-            checkpoint_id,
-            Status.FAILED.value,
-            description,
-            "The unique candidate run failed for: "
-            + ", ".join(failed)
-            + ".",
-            remediation=(
-                "Open the candidate Power Automate runs, fix the reported "
-                "Workday or template failure, and repeat the employee scenario."
-            ),
-            roles=[Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value],
-            automation_type="passive",
-            evidence=evidence,
-        )]
-    return [_da_result(
-        checkpoint_id,
-        Status.PASSED.value,
-        description,
-        f"Evidence label '{attempt_id}' identified one successful terminal "
-        f"run in the bounded window for each of the "
-        f"{len(expected_flow_ids)} reviewed expected flows. The label is an "
-        "operator reference, not a Power Automate correlation key.",
-        automation_type="passive",
-        evidence=evidence,
+        evidence={
+            "expectedFlowNames": flow_names, "expectedConnectionReferences": flow_names,
+            "manualVerificationSteps": steps, "ifMissingOrIncorrect": missing_action,
+            "verificationBoundary": "portal_settings_not_automatically_verified",
+        },
     )]

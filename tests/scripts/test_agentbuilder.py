@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import requests
 import responses
 
 import agentbuilder
@@ -333,7 +334,10 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, responses: list[FakeResponse]) -> None:
+    def __init__(
+        self,
+        responses: list[FakeResponse | requests.RequestException],
+    ) -> None:
         self.responses = responses
         self.calls: list[dict[str, Any]] = []
         self.mounts: dict[str, Any] = {}
@@ -343,7 +347,10 @@ class FakeSession:
 
     def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
         self.calls.append({"method": method, "url": url, **kwargs})
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, requests.RequestException):
+            raise response
+        return response
 
 
 def _non_auth_headers(call: dict[str, Any]) -> dict[str, str]:
@@ -404,6 +411,7 @@ def test_explicit_host_rejects_cross_ring_and_paths() -> None:
 def test_client_uses_only_configured_environment_host() -> None:
     session = FakeSession(
         [
+            FakeResponse([]),
             FakeResponse({"Entities": [], "ContinuationToken": ""}),
             FakeResponse({"botId": AGENT_ID}),
             FakeResponse({"routeRealm": 0}),
@@ -431,7 +439,8 @@ def test_client_uses_only_configured_environment_host() -> None:
         session=session,
     )
 
-    client.list_agents()
+    client.list_minimal_bots()
+    client.list_agent_pages()
     client.get_agent(AGENT_ID)
     client.get_realms(AGENT_ID)
     client.get_dev_configuration(AGENT_ID)
@@ -439,14 +448,19 @@ def test_client_uses_only_configured_environment_host() -> None:
 
     assert all(call["url"].startswith(HOST) for call in session.calls)
     assert all("crm.dynamics.com" not in call["url"] for call in session.calls)
-    assert session.calls[2]["url"].endswith(f"/alm/{AGENT_ID}/realms")
-    assert session.calls[3]["params"]["realm"] == 0
-    assert session.calls[4]["method"] == "POST"
-    assert session.calls[4]["json"] == {}
-    assert session.calls[4]["params"] == {
+    assert session.calls[0]["url"].endswith("/copilotstudio/minimalBots/api")
+    assert session.calls[0]["params"] == {
+        "api-version": agentbuilder.NATIVE_ALM_API_VERSION,
+        "creationSource": ["CopilotStudio", "AgentBuilder"],
+    }
+    assert session.calls[3]["url"].endswith(f"/alm/{AGENT_ID}/realms")
+    assert session.calls[4]["params"]["realm"] == 0
+    assert session.calls[5]["method"] == "POST"
+    assert session.calls[5]["json"] == {}
+    assert session.calls[5]["params"] == {
         "api-version": agentbuilder.NATIVE_ALM_API_VERSION
     }
-    assert _non_auth_headers(session.calls[4]) == {
+    assert _non_auth_headers(session.calls[5]) == {
         "Accept": "application/json",
         "Content-Type": "application/json",
         "x-ms-client-name": "CopilotStudio",
@@ -521,13 +535,40 @@ def test_agent_listing_pages_live_and_documented_response_shapes() -> None:
         session=session,
     )
 
-    assert client.list_agents() == [first_agent, second_agent]
+    assert client.list_agent_pages() == [
+        {
+            "Entities": [first_agent],
+            "ContinuationToken": "next-page",
+        },
+        {
+            "Entities": [second_agent],
+            "ContinuationToken": "",
+        },
+    ]
     assert session.calls[0]["url"] == f"{HOST}/copilotstudio/agents"
     assert session.calls[0]["params"] == {"api-version": "2024-10-01"}
     assert session.calls[1]["params"] == {
         "api-version": "2024-10-01",
         "continuationToken": "next-page",
     }
+
+
+    flattened_session = FakeSession(
+        [
+            FakeResponse(
+                {"Entities": [first_agent], "ContinuationToken": "next-page"}
+            ),
+            FakeResponse({"Entities": [second_agent], "ContinuationToken": ""}),
+        ]
+    )
+    flattened_client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=flattened_session,
+    )
+    assert flattened_client.list_agents() == [first_agent, second_agent]
 
 
 @pytest.mark.parametrize(
@@ -552,7 +593,7 @@ def test_agent_listing_rejects_invalid_collection_shape(body: Any) -> None:
     )
 
     with pytest.raises(agentbuilder.AgentBuilderError, match="Agent listing"):
-        client.list_agents()
+        client.list_agent_pages()
 
 
 def test_agent_listing_rejects_repeated_continuation() -> None:
@@ -583,7 +624,193 @@ def test_agent_listing_rejects_repeated_continuation() -> None:
         agentbuilder.AgentBuilderError,
         match="repeated a continuation token",
     ):
-        client.list_agents()
+        client.list_agent_pages()
+
+
+def test_minimal_bot_listing_preserves_service_cards() -> None:
+    cards = [
+        {
+            "botId": AGENT_ID,
+            "shortBotName": "Employee Self-Service",
+            "realm": "dev",
+        }
+    ]
+    session = FakeSession([FakeResponse(cards)])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    assert client.list_minimal_bots() == cards
+    assert session.calls[0]["url"] == (
+        f"{HOST}/copilotstudio/minimalBots/api"
+    )
+    assert session.calls[0]["params"] == {
+        "api-version": agentbuilder.NATIVE_ALM_API_VERSION,
+        "creationSource": ["CopilotStudio", "AgentBuilder"],
+    }
+
+
+@pytest.mark.parametrize("body", ({}, {"value": []}, ["not-an-object"]))
+def test_minimal_bot_listing_rejects_invalid_shape(body: Any) -> None:
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession([FakeResponse(body)]),
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="MinimalBot listing",
+    ):
+        client.list_minimal_bots()
+
+
+def test_agent_inventory_preserves_each_endpoint_response() -> None:
+    cards = [{"botId": AGENT_ID, "shortBotName": "ESS"}]
+    maker_page = {
+        "Entities": [
+            {
+                "cdsBotId": AGENT_ID,
+                "displayName": "ESS",
+                "schemaName": "gptagent_ess",
+            }
+        ],
+        "ContinuationToken": "",
+    }
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession(
+            [FakeResponse(cards), FakeResponse(maker_page)]
+        ),
+    )
+
+    assert client.list_agent_inventory() == {
+        "minimalBots": {"response": cards, "error": None},
+        "copilotStudioAgents": {
+            "response": [maker_page],
+            "error": None,
+        },
+    }
+
+
+def test_agent_inventory_attempts_maker_operations_after_minimal_bot_failure() -> None:
+    maker_page = {"Entities": [], "ContinuationToken": ""}
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession(
+            [
+                FakeResponse(
+                    {"error": {"code": "AccessDenied"}},
+                    status_code=403,
+                    headers={"request-id": "minimal-request"},
+                ),
+                FakeResponse(maker_page),
+            ]
+        ),
+    )
+
+    assert client.list_agent_inventory() == {
+        "minimalBots": {
+            "response": None,
+            "error": {
+                "type": "AgentBuilderHTTPError",
+                "message": (
+                    "MinimalBot listing failed with HTTP 403 "
+                    "(AccessDenied); the signed-in account is not "
+                    "authorized [request minimal-request]"
+                ),
+                "httpStatus": 403,
+                "errorCode": "AccessDenied",
+                "requestId": "minimal-request",
+            },
+        },
+        "copilotStudioAgents": {
+            "response": [maker_page],
+            "error": None,
+        },
+    }
+
+
+def test_agent_inventory_keeps_other_source_after_network_failure() -> None:
+    maker_page = {"Entities": [], "ContinuationToken": ""}
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession(
+            [
+                requests.ConnectionError("MinimalBot connection failed."),
+                FakeResponse(maker_page),
+            ]
+        ),
+    )
+
+    assert client.list_agent_inventory() == {
+        "minimalBots": {
+            "response": None,
+            "error": {
+                "type": "ConnectionError",
+                "message": "MinimalBot connection failed.",
+            },
+        },
+        "copilotStudioAgents": {
+            "response": [maker_page],
+            "error": None,
+        },
+    }
+
+
+def test_agent_inventory_attempts_minimal_bots_when_maker_operations_fails() -> None:
+    cards = [{"botId": AGENT_ID, "shortBotName": "ESS"}]
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession(
+            [
+                FakeResponse(cards),
+                FakeResponse(
+                    {"error": {"code": "Unavailable"}},
+                    status_code=503,
+                    headers={"request-id": "agents-request"},
+                ),
+            ]
+        ),
+    )
+
+    result = client.list_agent_inventory()
+
+    assert result["minimalBots"] == {
+        "response": cards,
+        "error": None,
+    }
+    assert result["copilotStudioAgents"] == {
+        "response": None,
+        "error": {
+            "type": "AgentBuilderHTTPError",
+            "message": (
+                "Agent listing failed with HTTP 503 (Unavailable) "
+                "[request agents-request]"
+            ),
+            "httpStatus": 503,
+            "errorCode": "Unavailable",
+            "requestId": "agents-request",
+        },
+    }
 
 
 def test_realm_configuration_rejects_unknown_realm() -> None:
@@ -1344,7 +1571,7 @@ def test_http_403_is_explicit_without_echoing_response_body() -> None:
         agentbuilder.AgentBuilderHTTPError,
         match="not authorized",
     ) as error:
-        client.list_agents()
+        client.list_agent_pages()
 
     assert "sensitive platform detail" not in str(error.value)
     assert error.value.response is not None
@@ -1372,7 +1599,7 @@ def test_http_error_carries_raw_response_without_leaking_it_into_str() -> None:
     )
 
     with pytest.raises(agentbuilder.AgentBuilderHTTPError) as error:
-        client.list_agents()
+        client.list_agent_pages()
 
     assert error.value.response is raw_response
     assert "sensitive platform detail" not in str(error.value)
@@ -1419,6 +1646,54 @@ def test_agentbuilder_reads_tenant_id_from_authenticated_access_token() -> None:
 def test_agentbuilder_rejects_unreadable_token_tenant() -> None:
     with pytest.raises(agentbuilder.AgentBuilderError, match="tenant identity"):
         agentbuilder.tenant_id_from_access_token("opaque-token")
+
+
+@pytest.mark.parametrize("account,other_tenant", [
+    ("maker@example.com", False),
+    ("other@example.com", False),
+    (None, False),
+    ("maker@example.com", True),
+])
+def test_dependency_auth_is_pinned_to_selected_account_and_tenant(
+    monkeypatch, tmp_path, account, other_tenant,
+):
+    from unittest.mock import Mock
+
+    tenant = "00000000-0000-0000-0000-000000001111"
+    token_tenant = ENVIRONMENT_ID if other_tenant else tenant
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": token_tenant}).encode()
+    ).decode().rstrip("=")
+    token = f"header.{payload}.signature"
+    acquire = Mock(return_value=(token, account))
+    monkeypatch.setattr(agentbuilder, "_acquire_token", acquire)
+    kwargs = {
+        "tenant_id": tenant, "ring": "prod", "account_hint": "maker@example.com",
+        "cache_path": tmp_path / "original-cache.bin",
+    }
+
+    if account != "maker@example.com" or other_tenant:
+        with pytest.raises(agentbuilder.AgentBuilderError, match="different"):
+            agentbuilder.authenticate_flightcheck_dependency("read-scope", **kwargs)
+    else:
+        assert agentbuilder.authenticate_flightcheck_dependency("read-scope", **kwargs) == token
+    assert acquire.call_args.kwargs["authority"].endswith(tenant)
+    assert acquire.call_args.kwargs["cache_path"] == kwargs["cache_path"]
+    assert acquire.call_args.kwargs["scopes"] == ("read-scope",)
+
+
+def test_dependency_auth_requires_known_account_before_login(monkeypatch):
+    from unittest.mock import Mock
+
+    acquire = Mock()
+    monkeypatch.setattr(agentbuilder, "_acquire_token", acquire)
+
+    with pytest.raises(ValueError, match="verified account"):
+        agentbuilder.authenticate_flightcheck_dependency(
+            "read-scope", tenant_id=ENVIRONMENT_ID, ring="prod", account_hint="",
+        )
+
+    acquire.assert_not_called()
 
 
 def test_first_run_authentication_returns_selected_token_tenant(
@@ -1597,6 +1872,237 @@ def test_cached_account_names_are_distinct_and_sorted(
     ]
 
 
+def _seed_cache_source(tmp_path: Path) -> tuple[Path, Path]:
+    source = tmp_path / ".agentbuilder_token_cache.bin"
+    destination = tmp_path / ".token_cache.bin"
+    cache = agentbuilder.msal.SerializableTokenCache()
+    account = {
+        "home_account_id": "local-account",
+        "environment": "login.microsoftonline.com",
+        "realm": "test-tenant",
+        "username": "maker@example.test",
+    }
+    cache.modify(
+        agentbuilder.msal.TokenCache.CredentialType.ACCOUNT,
+        account,
+        account,
+    )
+    content = json.loads(cache.serialize())
+    content["RefreshToken"] = {"synthetic": {"secret": "synthetic-test-token"}}
+    content["UnknownMetadata"] = {"preserve": True}
+    source.write_text(json.dumps(content), encoding="utf-8")
+    return source, destination
+
+
+def test_seed_shared_token_cache_copies_complete_cache_without_authenticating(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, destination = _seed_cache_source(tmp_path)
+
+    def reject_auth(*args, **kwargs):
+        pytest.fail("Local cache seeding must not instantiate an auth client.")
+
+    monkeypatch.setattr(agentbuilder.msal, "PublicClientApplication", reject_auth)
+
+    result = agentbuilder.seed_shared_token_cache(
+        "MAKER@example.test",
+        cache_path=source,
+        shared_cache_path=destination,
+    )
+
+    assert result == {
+        "outcome": "copied",
+        "account": "maker@example.test",
+        "sourceCache": str(source),
+        "sharedCache": str(destination),
+    }
+    assert destination.read_bytes() == source.read_bytes()
+    assert agentbuilder.cached_account_names(destination) == ["maker@example.test"]
+    snapshot = destination.read_bytes()
+    source.write_bytes(snapshot + b"\n")
+    assert destination.read_bytes() == snapshot
+    destination.write_text("independent shared cache", encoding="utf-8")
+    assert json.loads(source.read_text())["UnknownMetadata"] == {"preserve": True}
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        ".agentbuilder_token_cache.bin",
+        ".token_cache.bin",
+    ]
+
+
+def test_seed_shared_token_cache_preserves_existing_destination_without_source(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "missing-cache.bin"
+    destination = tmp_path / ".token_cache.bin"
+    destination.write_bytes(b"existing cache must not be read or overwritten")
+
+    result = agentbuilder.seed_shared_token_cache(
+        "maker@example.test",
+        cache_path=source,
+        shared_cache_path=destination,
+    )
+
+    assert result == {
+        "outcome": "already-exists",
+        "sharedCache": str(destination),
+    }
+    assert destination.read_bytes() == b"existing cache must not be read or overwritten"
+
+
+@pytest.mark.parametrize("account", ["", "   ", "other@example.test"])
+def test_seed_shared_token_cache_requires_selected_cached_account(
+    tmp_path: Path,
+    account: str,
+) -> None:
+    source, destination = _seed_cache_source(tmp_path)
+
+    with pytest.raises(ValueError, match="[Aa]ccount"):
+        agentbuilder.seed_shared_token_cache(
+            account,
+            cache_path=source,
+            shared_cache_path=destination,
+        )
+
+    assert not destination.exists()
+    assert list(tmp_path.iterdir()) == [source]
+
+
+@pytest.mark.parametrize("content", [None, b"not-json"])
+def test_seed_shared_token_cache_reports_missing_or_unreadable_source(
+    tmp_path: Path,
+    content: bytes | None,
+) -> None:
+    source = tmp_path / "source.bin"
+    destination = tmp_path / "destination.bin"
+    if content is not None:
+        source.write_bytes(content)
+
+    with pytest.raises((OSError, ValueError)):
+        agentbuilder.seed_shared_token_cache(
+            "maker@example.test",
+            cache_path=source,
+            shared_cache_path=destination,
+        )
+
+    assert not destination.exists()
+
+
+def test_seed_shared_token_cache_never_overwrites_concurrently_created_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, destination = _seed_cache_source(tmp_path)
+    real_link = agentbuilder.os.link
+
+    def competing_link(temporary: Path, target: Path) -> None:
+        assert temporary.read_bytes() == source.read_bytes()
+        assert not target.exists()
+        target.write_bytes(b"concurrent cache")
+        real_link(temporary, target)
+
+    monkeypatch.setattr(agentbuilder.os, "link", competing_link)
+
+    result = agentbuilder.seed_shared_token_cache(
+        "maker@example.test",
+        cache_path=source,
+        shared_cache_path=destination,
+    )
+
+    assert result["outcome"] == "already-exists"
+    assert destination.read_bytes() == b"concurrent cache"
+    assert len(list(tmp_path.iterdir())) == 2
+
+
+def test_seed_shared_token_cache_preserves_publication_failure_and_cleans_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, destination = _seed_cache_source(tmp_path)
+    failure = PermissionError("cache publication denied")
+
+    def reject_link(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(agentbuilder.os, "link", reject_link)
+
+    with pytest.raises(PermissionError) as caught:
+        agentbuilder.seed_shared_token_cache(
+            "maker@example.test",
+            cache_path=source,
+            shared_cache_path=destination,
+        )
+
+    assert caught.value is failure
+    assert list(tmp_path.iterdir()) == [source]
+
+
+def test_seed_shared_token_cache_never_publishes_incomplete_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, destination = _seed_cache_source(tmp_path)
+    failure = OSError("cache flush failed")
+
+    def reject_flush(*args):
+        assert not destination.exists()
+        raise failure
+
+    monkeypatch.setattr(agentbuilder.os, "fsync", reject_flush)
+
+    with pytest.raises(OSError) as caught:
+        agentbuilder.seed_shared_token_cache(
+            "maker@example.test",
+            cache_path=source,
+            shared_cache_path=destination,
+        )
+
+    assert caught.value is failure
+    assert list(tmp_path.iterdir()) == [source]
+
+
+@pytest.mark.parametrize("publication_fails", [True, False])
+def test_seed_shared_token_cache_keeps_cleanup_failure_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    publication_fails: bool,
+) -> None:
+    source, destination = _seed_cache_source(tmp_path)
+    real_unlink = Path.unlink
+    primary = PermissionError("cache publication denied")
+
+    def reject_link(*args, **kwargs):
+        raise primary
+
+    def reject_cleanup(path: Path, *args, **kwargs):
+        if path.suffix == ".tmp":
+            raise PermissionError("temporary cache cleanup denied")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", reject_cleanup)
+    if publication_fails:
+        monkeypatch.setattr(agentbuilder.os, "link", reject_link)
+
+    with pytest.raises(PermissionError) as caught:
+        agentbuilder.seed_shared_token_cache(
+            "maker@example.test",
+            cache_path=source,
+            shared_cache_path=destination,
+        )
+
+    if publication_fails:
+        assert caught.value is primary
+        assert "temporary cache cleanup denied" in caught.value.__notes__[0]
+        assert not destination.exists()
+    else:
+        assert "temporary cache cleanup denied" in str(caught.value)
+        assert "Shared cache was copied" in caught.value.__notes__[0]
+        assert destination.read_bytes() == source.read_bytes()
+    for path in tmp_path.iterdir():
+        if path.suffix == ".tmp":
+            real_unlink(path)
+
+
 def test_selected_tenant_authentication_prompts_for_multiple_cached_accounts(
     tmp_path,
     monkeypatch,
@@ -1641,9 +2147,11 @@ def test_selected_tenant_authentication_prompts_for_multiple_cached_accounts(
     assert observed["interactive"]["prompt"] == "select_account"
 
 
+@pytest.mark.parametrize("read_connectivity", [False, True])
 def test_account_hint_selects_matching_cached_test_tenant_user(
     tmp_path,
     monkeypatch,
+    read_connectivity,
 ) -> None:
     selected = {
         "username": "test.user@example.test",
@@ -1679,10 +2187,22 @@ def test_account_hint_selects_matching_cached_test_tenant_user(
         "prod",
         cache_path=tmp_path / "token-cache.bin",
         account_hint="test.user@example.test",
+        scopes=(
+            agentbuilder.connectivity_read_scopes("prod")
+            if read_connectivity
+            else None
+        ),
     )
 
     assert result == "test-token"
     assert observed["account"] is selected
+    assert observed["scopes"] == [
+        (
+            "https://api.powerplatform.com/Connectivity.Connections.Read"
+            if read_connectivity
+            else "https://api.powerplatform.com/CopilotStudio.MinimalBot.ReadWrite"
+        )
+    ]
 
 
 def test_account_hint_prepopulates_interactive_selection(

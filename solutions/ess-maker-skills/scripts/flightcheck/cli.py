@@ -33,7 +33,6 @@ import argparse
 from contextlib import redirect_stdout
 import json
 import os
-import re
 import sys
 import traceback
 import uuid
@@ -58,8 +57,13 @@ from flightcheck.runner import (
     BUCKET_PASSED,
     compact_checkpoint_error_to_dict,
     compact_checkpoint_result_to_dict,
+    BLOCK_REASON_ADMIN_API_AUTHORIZATION,
+    BLOCK_REASON_ADMIN_API_UNAVAILABLE,
+    BLOCK_REASON_CHECKPOINT_CONTRACT,
+    BLOCK_REASON_PROFILE_CARDINALITY,
+    maker_diagnostic_outcome,
 )
-from flightcheck.agent_scope import active_agent, validate_agent_slug
+from flightcheck.agent_scope import active_agent, configured_agents, is_declarative_agent, validate_agent_slug
 from flightcheck.graph_client import GraphClient
 from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
 from flightcheck.pva_client import PVAClient
@@ -94,18 +98,13 @@ from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
 from flightcheck.checks.servicenow import run_servicenow_checks
-from flightcheck.checks.local_files import run_local_file_checks
+from flightcheck.checks.local_files import run_da_local_file_checks, run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.licensing import run_licensing_checks
 from flightcheck.checks.cloud_policy import run_cloud_policy_checks
 from flightcheck.checks.infrastructure import run_infrastructure_checks
 from flightcheck.checks.native_agent import run_native_agent_checks
 from flightcheck import consent
-
-
-_RUNTIME_EVIDENCE_LABEL_RE = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-)
 
 
 SCOPE_MAP = {
@@ -225,40 +224,19 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
     # getattr keeps this robust for callers that build args without the flag.
     flag = getattr(args, "runtime_reachability", None)
 
-    # The egress probe lives in the Infrastructure category (INFRA-003) and in
-    # the Workday category (WD-RUN-001 active connector probe). Consent must
-    # be surfaced whenever EITHER mutating probe is in scope, so a Workday-only
-    # readiness check asks first and falls back to the passive run-history path
-    # on NO, instead of silently requiring the --runtime-reachability flag.
+    # The egress probe lives in the Infrastructure category (INFRA-003). Consent
+    # must be surfaced whenever that mutating probe is in scope. WD-RUN-001 is
+    # passive-only — it grades real Copilot → Workday run history and never
+    # triggers a mutation — so the Workday category does not gate consent here.
     infra_in_scope = any(fn is run_infrastructure_checks for _, fn in checks)
-    workday_in_scope = any(fn is run_workday_checks for _, fn in checks)
-    active_probe_in_scope = infra_in_scope or workday_in_scope
+    active_probe_in_scope = infra_in_scope
     if not active_probe_in_scope:
         runner.runtime_reachability = flag is True
         return
 
-    # The manual IP-allowlist fallback (build_manual_fallback) is an INFRA-003
-    # remedy: confirm the environment's egress IP ranges are whitelisted on the
-    # external endpoint. When ONLY the Workday active probe is in scope,
-    # WD-RUN-001 auto-falls-back to the passive run-history signal on a decline,
-    # so no manual step is required (see SKILL.md). Printing the IP-allowlist
-    # block there is misdirected, so suppress it for the Workday-only case.
-    workday_only = workday_in_scope and not infra_in_scope
-
     systems = _endpoint_systems_for_offer(runner)
     # Name EVERY discovered system, not just the first: the probe tests all of
     # them, so consent must cover all of them (PR #197 review).
-    #
-    # WD-RUN-001's active probe reaches Workday through the managed connector it
-    # selects from the BAP connection list (pp.get_connections), a source that is
-    # independent of the .local/config.json ``connections`` map that
-    # _endpoint_systems_for_offer reads. A Workday BAP connection that was never
-    # recorded in that config (e.g. connected outside the kit's /connect skill)
-    # would otherwise be probed without Workday appearing in the consent prompt.
-    # Name Workday explicitly whenever the Workday active probe is in scope so
-    # the consent copy can never omit a system the probe will contact.
-    if workday_in_scope:
-        systems = [*systems, "Workday"]
     label = consent.systems_label(systems)
 
     # --- Explicit flag wins; the flag is the consent, but never silent. -------
@@ -272,8 +250,7 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
         # Explicit opt-out: surface the skip + manual-verification guidance.
         runner.runtime_reachability_declined = True
         print(consent.build_skip_message(label))
-        if not workday_only:
-            print(consent.build_manual_fallback(label))
+        print(consent.build_manual_fallback(label))
         return
 
     # --- No flag: consent must be surfaced (flag is None). --------------------
@@ -305,8 +282,7 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
         # No TTY (CI / piped): we cannot ask a human. Stay read-only, but explain
         # what did not run and how to opt in (the flag doubles as consent).
         print(consent.build_cannot_prompt_message(label))
-        if not workday_only:
-            print(consent.build_manual_fallback(label))
+        print(consent.build_manual_fallback(label))
         return
 
     # Interactive terminal: ALWAYS ask before touching the tenant.
@@ -321,8 +297,7 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
 
     if decision.declined:
         print(consent.build_skip_message(label))
-        if not workday_only:
-            print(consent.build_manual_fallback(label))
+        print(consent.build_manual_fallback(label))
 
 
 def open_report_in_browser(output_dir):
@@ -916,9 +891,9 @@ def _resolve_environment_ring(
     }
     if not candidates:
         raise ValueError(
-            "The Power Platform environment ring is unavailable. Confirm "
-            "whether the environment uses prod, preprod, or test, then rerun "
-            "FlightCheck with --ring."
+            "FlightCheck could not determine the Power Platform environment "
+            "ring from --ring, configured ring, or powerPlatformApiEndpoint. "
+            "Confirm prod, preprod, or test, then rerun with --ring."
         )
     if not candidates <= {"prod", "preprod", "test"}:
         raise ValueError(
@@ -927,10 +902,44 @@ def _resolve_environment_ring(
         )
     if len(candidates) != 1:
         raise ValueError(
-            "The supplied ring, configured ring, and Power Platform endpoint "
-            "do not identify the same environment ring."
+            "Available ring evidence from --ring, configured ring, and "
+            "powerPlatformApiEndpoint identifies different rings. Align the "
+            "configuration or rerun with a matching --ring."
         )
     return candidates.pop()
+
+
+_POWER_PLATFORM_ADMIN_ORIGINS = {
+    "https://admin.powerplatform.microsoft.com",
+    "https://admin.preprod.powerplatform.microsoft.com",
+    "https://admin.test.powerplatform.microsoft.com",
+    "https://admin.preview.powerplatform.microsoft.com",
+}
+
+
+def _resolve_power_platform_admin_origin(
+    config: dict,
+    *,
+    explicit_origin: str | None = None,
+) -> str | None:
+    """Resolve a retained, canonical Power Platform admin portal origin."""
+    configured_origins = config.get("portalOrigins")
+    configured_origin = (
+        configured_origins.get("powerPlatformAdmin")
+        if isinstance(configured_origins, dict)
+        else None
+    )
+    origin = str(explicit_origin or configured_origin or "").strip().rstrip("/")
+    if not origin:
+        return None
+    if origin.casefold() not in {
+        candidate.casefold() for candidate in _POWER_PLATFORM_ADMIN_ORIGINS
+    }:
+        raise ValueError(
+            "The Power Platform admin origin must be a recognized Microsoft "
+            "Power Platform admin portal origin."
+        )
+    return origin
 
 
 _PROVIDER_CONNECT_CONFIG_KEYS = frozenset({
@@ -1025,53 +1034,75 @@ def _run_exit_code(result) -> int:
     blocked essential capability can never exit 0 and read as success to a
     CI/Connect caller keying on the exit code.
     """
+    if getattr(result, "diagnostic_only", False) and not result.profile:
+        return 1 if result.overall in {"ISSUES_FOUND", "SOME_CHECKS_UNVERIFIED"} else 0
     return 1 if result.failed > 0 or result.blocked > 0 or result.errors > 0 else 0
 
 
-def _runtime_evidence_values(args) -> dict[str, object]:
-    """Validate and normalize the standalone runtime-evidence arguments."""
-    label = str(
-        getattr(args, "runtime_evidence_attempt_id", "") or ""
-    ).strip()
-    if label and not _RUNTIME_EVIDENCE_LABEL_RE.fullmatch(label):
-        raise ValueError(
-            "--runtime-evidence-attempt-id must be an opaque label of 1-128 "
-            "letters, numbers, dots, colons, hyphens, or underscores."
-        )
-    return {
-        "runtime_evidence_attempt_id": label,
-        "runtime_evidence_start": str(
-            getattr(args, "runtime_evidence_start", "") or ""
-        ).strip(),
-        "runtime_evidence_end": str(
-            getattr(args, "runtime_evidence_end", "") or ""
-        ).strip(),
-        "runtime_evidence_flow_ids": tuple(
-            str(value).strip()
-            for value in (
-                getattr(args, "runtime_evidence_flow_id", None) or ()
+def _run_da_selection_if_applicable(args, config):
+    from types import SimpleNamespace
+
+    selected = _active_agent_config(config, args.agent_slug)
+    slug = args.agent_slug or config.get("activeAgent") or selected.get("slug")
+    if not is_declarative_agent(SimpleNamespace(config=config, agent_slug=slug)):
+        return
+    if not selected.get("botId"):
+        # Pre-agent foundation/setup consumers retain their environment-only
+        # contract; there is no native agent subject for selected-DA execution.
+        return
+    if args.profile and args.profile.startswith("workday-legacy:"):
+        return
+    if args.profile:
+        try:
+            _validation_context_from_args(
+                args, config, args.environment_url or config.get("dataverseEndpoint", ""),
+                args.environment_id or config.get("environmentId"),
             )
-            if str(value).strip()
-        ),
-        "runtime_evidence_migration_baseline": bool(
-            getattr(args, "runtime_evidence_migration_baseline", False)
-        ),
-    }
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
+    if args.runtime_reachability or args.alm_import_probe:
+        print("ERROR: DA diagnostics are read-only; runtime and import probes are not allowed.")
+        sys.exit(2)
+    from flightcheck.maker_diagnostics import run_maker_diagnostics
+
+    try:
+        result = run_maker_diagnostics(args, config)
+    except ValueError as exc:
+        print(f"ERROR: Unable to plan the selected DA checks: {exc}")
+        sys.exit(2)
+    _print_prioritized_summary(result)
+    save_results(result, args.output)
+    _emit_run_telemetry(
+        result, args, config, graph=None, tenant_id="",
+        scope=f"profile:{args.profile}" if args.profile else f"checkpoint:{args.checkpoint}",
+    )
+    if not getattr(args, "no_open", False):
+        open_report_in_browser(args.output)
+    sys.exit(_run_exit_code(result))
 
 
-def _apply_runtime_evidence_args(runner, args) -> None:
-    for name, value in _runtime_evidence_values(args).items():
-        setattr(runner, name, value)
+def _adk_flightcheck_result(overall: str) -> str:
+    """Map standard and diagnostic FlightCheck outcomes to ADK telemetry."""
+    return {
+        "READY": "pass",
+        "READY_WITH_WARNINGS": "partial",
+        "NOT_READY": "fail",
+        "SETUP_CHECKS_PASSED": "pass",
+        "CHECKED_WITH_NOTES": "partial",
+        "SOME_CHECKS_UNVERIFIED": "partial",
+        "ISSUES_FOUND": "fail",
+    }.get(overall, "fail")
 
 
 def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
     """Emit anonymous outcome telemetry for a completed run (best-effort).
 
-    Shared by the --checkpoint and --profile paths so both single-purpose
-    "connect" runs surface on the Aria dashboards the same way a --scope run
-    does. Never raises: telemetry must not change the run's exit code. The
-    caller passes the run ``scope`` (e.g. ``checkpoint:<id>`` or
-    ``profile:<name>``); everything else is derived from the shared run state.
+    Shared by DA diagnostics, --checkpoint, and --profile paths so runs that
+    return before the normal scope telemetry block still surface on the Aria
+    dashboards. Never raises: telemetry must not change the run's exit code.
+    The caller passes the run ``scope`` (e.g. ``local``, ``checkpoint:<id>``,
+    or ``profile:<name>``); everything else is derived from shared run state.
     """
     if getattr(args, "no_telemetry", False):
         return
@@ -1081,18 +1112,14 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
     _tele_debug = os.environ.get(
         "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
     ).strip().lower() in ("1", "on", "true", "yes")
-    # Resolve the active agent from config (may be empty for Entra-only
-    # checkpoints run before /setup writes a full config).
-    _agents = config.get("agents", [])
-    if not _agents:
-        _agent_entry = config.get("agent", {})
-        if _agent_entry:
-            _agents = [_agent_entry]
-    _active = config.get("activeAgent", config.get("agent", {}).get("slug", ""))
-    _active_agent = next(
-        (a for a in _agents if a.get("slug") == _active),
-        _agents[0] if _agents else {},
-    )
+    _agents = configured_agents(config)
+    _active_agent = _active_agent_config(config, getattr(args, "agent_slug", None))
+    _context = getattr(result, "validation_context", {}) or {}
+    _agent_id = _context.get("agentId") or _active_agent.get("botId", "")
+    tenant_id = str(
+        _context.get("tenantId") or tenant_id
+        or config.get("tenantId") or _active_agent.get("tenantId") or ""
+    ).strip()
     # Best-effort tenant display name (OII; privacy-approved). Reuses the
     # already-authenticated Graph client when one was needed; never re-auths.
     # Falls back to the persisted ``.local/.tenant_name`` cache when the
@@ -1119,7 +1146,7 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
             result,
             tenant_id=tenant_id or "",
             tenant_name=tenant_name,
-            agent_id=_active_agent.get("botId", ""),
+            agent_id=_agent_id,
             scope=scope,
             agent_count=len(_agents),
             invocation_source=_inv_source,
@@ -1138,36 +1165,31 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
     # --scope emit so these runs also count toward the adk.* cubes.
     try:
         import adk_telemetry as _adk
-        from flightcheck.telemetry import derive_connector_from_category
+        from flightcheck.telemetry import (
+            derive_connector_from_category, derive_connector_from_scope,
+        )
 
-        _agent_id = _active_agent.get("botId", "")
         if tenant_id or tenant_name:
             _adk.set_identity(tenant_id=tenant_id or "", tenant_name=tenant_name)
         _ridx = _adk.next_run_index(_agent_id)
-        # The first result row's category is the run's connector (or "" for
-        # cross-cutting checkpoints like Environment / Authentication).
-        # Derived here rather than passed by the caller so the CLI runtime
-        # path matches the same connector attribution as the legacy
-        # ESSMakerKit.FlightCheck.* events (ADO 7943641 review).
-        _connector = ""
-        if result.results:
+        _connector = derive_connector_from_scope(scope)
+        # Preserve category attribution for targeted checks without a
+        # connector-prefixed ID; scope runs must not inherit a prerequisite.
+        if not _connector and scope.startswith(("checkpoint:", "profile:")) and result.results:
             _connector = derive_connector_from_category(
                 getattr(result.results[0], "category", "") or ""
             )
         _adk.emit_flightcheck_run(
-            agent_id=_agent_id, run_index=_ridx, connector=_connector
+            agent_id=_agent_id, run_index=_ridx, connector=_connector,
+            invocation_source=_inv_source,
         )
-        _result_map = {
-            "READY": "pass",
-            "READY_WITH_WARNINGS": "partial",
-            "NOT_READY": "fail",
-        }
         _adk.emit_flightcheck_result(
             agent_id=_agent_id,
             run_index=_ridx,
-            result=_result_map.get(result.overall, "fail"),
+            result=_adk_flightcheck_result(result.overall),
             duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
             connector=_connector,
+            invocation_source=_inv_source,
         )
         _adk.flush(timeout=3)
     except Exception:  # noqa: BLE001 — adk telemetry must never break the run
@@ -1244,7 +1266,6 @@ def _run_single_checkpoint(args, *, compact_stream=None):
                 )
         config = _merge_connect_config(config, getattr(args, "connect_config", None))
         _profile_target_matches_config(args, config)
-        _runtime_evidence_values(args)
         if service_now_profile is not None and explicit_agent_slug:
             from connect_servicenow_da import product_profile_for_schema
 
@@ -1277,17 +1298,27 @@ def _run_single_checkpoint(args, *, compact_stream=None):
         print(f"ERROR: Unable to resolve the profile target: {e}")
         sys.exit(1)
 
+    _run_da_selection_if_applicable(args, config)
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
     if plan.requires_dataverse_endpoint and not env_url:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
 
     resolved_ring = None
+    power_platform_admin_origin = None
     if target == "ENV-CAPACITY-001":
         try:
             resolved_ring = _resolve_environment_ring(
                 config,
                 explicit_ring=getattr(args, "ring", None),
+            )
+            power_platform_admin_origin = _resolve_power_platform_admin_origin(
+                config,
+                explicit_origin=getattr(
+                    args,
+                    "power_platform_admin_origin",
+                    None,
+                ),
             )
         except ValueError as exc:
             print(f"ERROR: {exc}")
@@ -1352,6 +1383,7 @@ def _run_single_checkpoint(args, *, compact_stream=None):
         state = client_availability[client_name]
         state["available"] = False
         state["reason"] = _safe_client_error_reason(error)
+        state["block_reason"] = _classify_client_block(error)
 
     def verify_authenticated_account(
         client_name: str,
@@ -1656,7 +1688,10 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     if registry.POWERPLATFORM in needed:
         if not quiet_auth:
             print("Authenticating to Power Platform API (capacity allocation)...")
-        powerplatform = PowerPlatformClient(tenant_id)
+        powerplatform = PowerPlatformClient(
+            tenant_id,
+            ring=resolved_ring,
+        )
         try:
             if canonical_username:
                 powerplatform.authenticate(
@@ -1690,6 +1725,7 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     runner.config = config
     if resolved_ring is not None:
         runner.ring = resolved_ring
+    runner.power_platform_admin_origin = power_platform_admin_origin
     runner.agent_slug = (
         explicit_agent_slug
         or config.get("activeAgent")
@@ -1708,7 +1744,6 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     runner.alm_import_target = alm_import_target
     runner.connectivity = connectivity
     runner.alm_import_probe = bool(getattr(args, "alm_import_probe", False))
-    _apply_runtime_evidence_args(runner, args)
     runner.results.extend(
         _client_blockers(client_availability, "CHECKPOINT")
     )
@@ -1876,6 +1911,7 @@ def _single_checkpoint_contract_check(
                     "Restore checkpoint dispatch and rerun the checkpoint."
                 ),
                 roles=[Role.ESS_MAKER.value],
+                block_reason=BLOCK_REASON_CHECKPOINT_CONTRACT,
             ))
             return rows
 
@@ -1901,6 +1937,7 @@ def _single_checkpoint_contract_check(
                     "rerun the checkpoint."
                 ),
                 roles=[Role.ESS_MAKER.value],
+                block_reason=BLOCK_REASON_CHECKPOINT_CONTRACT,
             ))
 
         if any(
@@ -1957,6 +1994,10 @@ def _client_blockers(
                 "available": False,
             },
             roles=[Role.ESS_MAKER.value],
+            block_reason=(
+                state.get("block_reason")
+                or BLOCK_REASON_ADMIN_API_UNAVAILABLE
+            ),
         ))
     return blockers
 
@@ -1980,6 +2021,29 @@ def _safe_client_error_reason(error: BaseException | str) -> str:
         f" (HTTP {status_code})" if status_code is not None else ""
     )
     return f"{type(error).__name__}{status_hint}"
+
+
+def _classify_client_block(error: BaseException | str) -> str:
+    """Classify a required-client block as an admin-API auth denial vs. a
+    reach/availability failure.
+
+    Returns BLOCK_REASON_ADMIN_API_AUTHORIZATION only when an admin API
+    positively rejected us for identity reasons — HTTP 401/403 or an AADSTS*
+    error. Everything else (connect error, timeout, 404 wrong-env, 5xx, or an
+    unclassifiable failure) returns BLOCK_REASON_ADMIN_API_UNAVAILABLE. Auth
+    must be positively identified so the known test-ring 404-wrong-host bug
+    never inflates the auth metric.
+    """
+    status_code = getattr(
+        getattr(error, "response", None),
+        "status_code",
+        None,
+    )
+    if status_code in (401, 403):
+        return BLOCK_REASON_ADMIN_API_AUTHORIZATION
+    if "AADSTS" in str(error).upper():
+        return BLOCK_REASON_ADMIN_API_AUTHORIZATION
+    return BLOCK_REASON_ADMIN_API_UNAVAILABLE
 
 
 def _profile_family_cardinality_check(
@@ -2024,6 +2088,7 @@ def _profile_family_cardinality_check(
                     "emitted": emitted,
                 },
                 roles=[Role.ESS_MAKER.value],
+                block_reason=BLOCK_REASON_PROFILE_CARDINALITY,
             ))
         return rows
 
@@ -2088,6 +2153,7 @@ def _profile_checkpoint_contract_check(
                     "Restore checkpoint dispatch and rerun the profile."
                 ),
                 roles=[Role.ESS_MAKER.value],
+                block_reason=BLOCK_REASON_CHECKPOINT_CONTRACT,
             ))
         if unresolved:
             rows.append(CheckResult(
@@ -2107,6 +2173,7 @@ def _profile_checkpoint_contract_check(
                     "rerun the profile."
                 ),
                 roles=[Role.ESS_MAKER.value],
+                block_reason=BLOCK_REASON_CHECKPOINT_CONTRACT,
             ))
         if guided:
             rows.append(CheckResult(
@@ -2159,9 +2226,13 @@ def _run_profile(args):
         )
         sys.exit(2)
 
-    config_path = os.path.join(".local", "config.json")
-    if not os.path.exists(config_path) and plan.requires_config:
-        print("ERROR: .local/config.json not found. Run /setup first.")
+    explicit_config = getattr(args, "profile_config", None)
+    config_path = explicit_config or os.path.join(".local", "config.json")
+    if not os.path.exists(config_path) and (explicit_config or plan.requires_config):
+        if explicit_config:
+            print(f"ERROR: Profile configuration not found: {config_path}.")
+        else:
+            print("ERROR: .local/config.json not found. Run /setup first.")
         sys.exit(1)
 
     try:
@@ -2175,11 +2246,17 @@ def _run_profile(args):
                 )
         config = _merge_connect_config(config, getattr(args, "connect_config", None))
         _profile_target_matches_config(args, config)
-        _runtime_evidence_values(args)
+        if explicit_config:
+            requested_realm = getattr(args, "validation_realm", None)
+            if requested_realm and requested_realm != config.get("realm"):
+                raise ValueError(
+                    "--validation-realm does not match --profile-config."
+                )
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"ERROR: Unable to resolve the profile target: {e}")
         sys.exit(1)
 
+    _run_da_selection_if_applicable(args, config)
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
     if plan.requires_dataverse_endpoint and not env_url:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
@@ -2259,6 +2336,7 @@ def _run_profile(args):
         state["available"] = False
         state["authenticatedAccountVerified"] = False
         state["reason"] = _safe_client_error_reason(error)
+        state["block_reason"] = _classify_client_block(error)
 
     def verified_account(
         client_name: str,
@@ -2646,7 +2724,13 @@ def _run_profile(args):
     runner.execution_targets = profile.checkpoint_ids
     runner.workday_da_profile = profile_name.startswith("workday-da:")
     runner.config = config
-    runner.agent_slug = validation_context.agent_slug
+    # ValidationContext may use the legacy first-record fallback, not a selection.
+    runner.agent_slug = (
+        str(getattr(args, "agent_slug", "") or "").strip()
+        or config.get("activeAgent")
+        or (config.get("agent") or {}).get("slug")
+        or ""
+    )
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id
@@ -2662,7 +2746,6 @@ def _run_profile(args):
     runner.runtime_reachability = False
     runner.runtime_reachability_declined = False
     runner.preserve_workday_manual_rows = True
-    _apply_runtime_evidence_args(runner, args)
     runner.results.extend(_profile_client_blockers(client_availability))
 
     for label, fn in plan.ordered_fns:
@@ -2721,8 +2804,8 @@ def main():
         help="Validation scope (default: full). Mutually exclusive with --checkpoint/--profile.",
     )
     parser.add_argument(
-        "--output", default="workspace/flightcheck",
-        help="Output directory (default: workspace/flightcheck)",
+        "--output", default=None,
+        help="Output directory (default: workspace/flightcheck; WD-RUN-001 uses its workday-litmus subdirectory)",
     )
     parser.add_argument(
         "--environment-url",
@@ -2746,6 +2829,13 @@ def main():
         help=(
             "Confirm the Power Platform service ring when it cannot be "
             "resolved from local setup state."
+        ),
+    )
+    parser.add_argument(
+        "--power-platform-admin-origin",
+        help=(
+            "Retain the resolved Power Platform admin portal origin for "
+            "ring-correct remediation links."
         ),
     )
     parser.add_argument(
@@ -2795,36 +2885,13 @@ def main():
         help="Agent schema name for a --profile validation context.",
     )
     parser.add_argument(
-        "--runtime-evidence-attempt-id",
+        "--profile-config",
+        default=None,
         help=(
-            "Opaque operator evidence label for workday-da:post-runtime, "
-            "workday-da:final, or WD-DA-RUN-001. This is not a Power Automate "
-            "or Copilot Studio correlation identifier."
-        ),
-    )
-    parser.add_argument(
-        "--runtime-evidence-start",
-        help="UTC ISO-8601 start of the employee Test pane evidence window.",
-    )
-    parser.add_argument(
-        "--runtime-evidence-end",
-        help="UTC ISO-8601 end of the employee Test pane evidence window.",
-    )
-    parser.add_argument(
-        "--runtime-evidence-flow-id",
-        action="append",
-        default=[],
-        help=(
-            "Reviewed Workday runtime flow ID expected to run during the "
-            "recorded Test pane attempt. Repeat for each expected flow."
-        ),
-    )
-    parser.add_argument(
-        "--runtime-evidence-migration-baseline",
-        action="store_true",
-        help=(
-            "Mark the supplied runtime evidence window as migration-derived "
-            "from previously captured ready state."
+            "Use this complete target configuration JSON instead of "
+            ".local/config.json for a read-only --profile run. Connect uses "
+            "a temporary verified realm snapshot; the workspace is not changed. "
+            "Unlike --connect-config, this explicitly selects the full target."
         ),
     )
     parser.add_argument(
@@ -2938,6 +3005,13 @@ def main():
              "JSON, then exit without running any checks.",
     )
     args = parser.parse_args()
+    if args.profile_config and not args.profile:
+        parser.error("--profile-config requires --profile.")
+    if args.output is None:
+        args.output = (
+            os.path.join("workspace", "flightcheck", "workday-litmus")
+            if args.checkpoint == "WD-RUN-001" else "workspace/flightcheck"
+        )
     if args.alm_import_probe and not args.alm_import_target_environment_id:
         parser.error(
             "--alm-import-target-environment-id is required with "
@@ -3010,6 +3084,48 @@ def main():
         print(f"ERROR: Unable to load --connect-config: {e}")
         sys.exit(1)
 
+    from types import SimpleNamespace
+
+    selected = _active_agent_config(config, args.agent_slug)
+    if args.agent_slug and not selected:
+        print("ERROR: --agent-slug does not identify exactly one configured agent.")
+        sys.exit(1)
+    selected_slug = args.agent_slug or config.get("activeAgent") or (config.get("agent") or {}).get("slug")
+    da_context = str(config.get("releaseLine") or "").strip().casefold() == "da" or any(
+        str(agent.get("releaseLine") or "").strip().casefold() == "da"
+        for agent in configured_agents(config)
+    )
+    da_diagnostic_scopes = {"full", "local", "workday", "servicenow"}
+    if da_context and args.scope in da_diagnostic_scopes and (
+        ((config.get("agents") or config.get("agent")) and not selected)
+        or (not selected_slug and len(config.get("agents") or []) > 1)
+    ):
+        print("ERROR: Select exactly one configured agent with --agent-slug before running these checks.")
+        sys.exit(1)
+    da_selected = is_declarative_agent(SimpleNamespace(
+        config=config, agent_slug=selected_slug or selected.get("slug"),
+    ))
+    if args.scope in da_diagnostic_scopes and da_selected:
+        if args.runtime_reachability or args.alm_import_probe:
+            print("ERROR: DA maker diagnostics are read-only; runtime and import probes are not allowed.")
+            sys.exit(2)
+        from flightcheck.maker_diagnostics import run_maker_diagnostics
+
+        result = run_maker_diagnostics(args, config)
+        _print_prioritized_summary(result)
+        save_results(result, args.output)
+        _emit_run_telemetry(
+            result,
+            args,
+            config,
+            graph=None,
+            tenant_id="",
+            scope=args.scope,
+        )
+        if not args.no_open:
+            open_report_in_browser(args.output)
+        sys.exit(_run_exit_code(result))
+
     infra_only_scope = args.scope == "infrastructure"
     da_local_scope = args.scope == "local"
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
@@ -3019,12 +3135,20 @@ def main():
         and args.scope in NATIVE_NO_DATAVERSE_SCOPE_MAP
     )
     resolved_ring = None
-    if args.scope in {"full", "environment"}:
+    power_platform_admin_origin = None
+    if args.scope in {"full", "environment", "prerequisites"}:
         try:
             resolved_ring = _resolve_environment_ring(
                 config,
                 explicit_ring=args.ring,
             )
+            if args.scope in {"full", "environment"}:
+                power_platform_admin_origin = (
+                    _resolve_power_platform_admin_origin(
+                        config,
+                        explicit_origin=args.power_platform_admin_origin,
+                    )
+                )
         except ValueError as exc:
             print(f"ERROR: {exc}")
             sys.exit(1)
@@ -3212,7 +3336,10 @@ def main():
 
         if args.scope in {"full", "environment"}:
             print("Authenticating to Power Platform API (capacity)...")
-            powerplatform = PowerPlatformClient(tenant_id)
+            powerplatform = PowerPlatformClient(
+                tenant_id,
+                ring=resolved_ring,
+            )
             try:
                 powerplatform.authenticate()
                 print("  Power Platform API: OK")
@@ -3352,7 +3479,10 @@ def main():
         and args.scope in ("full", "prerequisites")
     ):
         print("Authenticating to Power Platform API (billing policies)...")
-        powerplatform = PowerPlatformClient(tenant_id)
+        powerplatform = PowerPlatformClient(
+            tenant_id,
+            ring=resolved_ring,
+        )
         try:
             powerplatform.authenticate()
             print("  Power Platform API: OK")
@@ -3376,11 +3506,12 @@ def main():
     runner.config = config
     if resolved_ring is not None:
         runner.ring = resolved_ring
+    runner.power_platform_admin_origin = power_platform_admin_origin
     runner.agent_slug = (
         getattr(args, "agent_slug", None)
         or config.get("activeAgent")
         or (config.get("agent") or {}).get("slug")
-        or ""
+        or (selected.get("slug", "") if da_selected else "")
     )
     runner.env_url = env_url
     runner.dv_token = dv_token
@@ -3410,6 +3541,9 @@ def main():
     # Register checks based on scope
     if native_remote_scope:
         checks = NATIVE_NO_DATAVERSE_SCOPE_MAP[args.scope]
+    elif da_selected and args.scope == "local":
+        runner.maker_diagnostics = True
+        checks = [("Local Files", run_da_local_file_checks)]
     elif args.scope == "full":
         checks = FULL_SCOPE
     else:
@@ -3426,6 +3560,10 @@ def main():
     # --- Execute ---
     print("\nRunning checks...\n")
     result = runner.run()
+    if da_selected and args.scope == "local":
+        result.diagnostic_only = True
+        result.overall = maker_diagnostic_outcome(result)
+        result.validation_context = {"agentSlug": runner.agent_slug}
 
     # --- Print summary ---
     _print_prioritized_summary(result)
@@ -3434,7 +3572,7 @@ def main():
     save_results(result, args.output)
 
     # Emit anonymous outcome telemetry (best-effort; never affects exit code).
-    if not args.no_telemetry:
+    if not args.no_telemetry and not getattr(result, "diagnostic_only", False):
         # Telemetry status is internal detail makers shouldn't normally see;
         # only surface it when explicitly debugging telemetry.
         _tele_debug = os.environ.get(
@@ -3442,10 +3580,7 @@ def main():
         ).strip().lower() in ("1", "on", "true", "yes")
         # Resolve the active agent once, up front, so both the legacy and the
         # adk.* telemetry blocks can use it even if the first block raises early.
-        active_agent = next(
-            (a for a in agents if a.get("slug") == active),
-            agents[0] if agents else {},
-        )
+        active_agent = _active_agent_config(config, args.agent_slug)
         # Best-effort tenant display name (OII; privacy-approved). Reuses the
         # already-authenticated Graph client's /organization record — no extra
         # auth. Falls back to the persisted ``.local/.tenant_name`` cache when
@@ -3502,19 +3637,16 @@ def main():
             # per-check attribution lives on the check events, not run events.
             _connector = derive_connector_from_scope(args.scope)
             _adk.emit_flightcheck_run(
-                agent_id=_agent_id, run_index=_ridx, connector=_connector
+                agent_id=_agent_id, run_index=_ridx, connector=_connector,
+                invocation_source=args.invocation_source,
             )
-            _result_map = {
-                "READY": "pass",
-                "READY_WITH_WARNINGS": "partial",
-                "NOT_READY": "fail",
-            }
             _adk.emit_flightcheck_result(
                 agent_id=_agent_id,
                 run_index=_ridx,
-                result=_result_map.get(result.overall, "fail"),
+                result=_adk_flightcheck_result(result.overall),
                 duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
                 connector=_connector,
+                invocation_source=args.invocation_source,
             )
             _adk.flush(timeout=3)
         except Exception:  # noqa: BLE001 — adk telemetry must never break the run
@@ -3523,7 +3655,10 @@ def main():
         if os.environ.get(
             "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
         ).strip().lower() in ("1", "on", "true", "yes"):
-            print("[telemetry] disabled via --no-telemetry")
+            if args.no_telemetry:
+                print("[telemetry] suppressed: --no-telemetry")
+            elif getattr(result, "diagnostic_only", False):
+                print("[telemetry] suppressed: diagnostic-only FlightCheck run")
 
     # Open the HTML report only when the run includes a MANUAL check — those
     # need the browser's rich remediation view. Runs with no manual items are
@@ -3538,21 +3673,20 @@ def main():
 
 
 def _print_prioritized_summary(result, *, verbose_manual=False):
-    """Print a triage-first summary that mirrors the HTML layout.
-
-    Three sections, biggest signal first:
-      1. Verdict banner (one line).
-      2. Counts strip.
-      3. ACTION REQUIRED — full per-row detail (Failed / Error).
-      4. NEEDS MANUAL VERIFICATION — one line per row (Warning /
-         Manual / NotConfigured).
-      5. SKIPPED — count only, when present.
-      6. PASSED — count only; point to report.html for the list.
-
-    The goal is for an operator scanning the terminal to see, in
-    order: am I OK? what must I fix? what must I verify? — without
-    having to read every passing row.
-    """
+    """Print the appropriate maker diagnostic or legacy triage summary."""
+    if getattr(result, "diagnostic_only", False):
+        print(f"\nMAKER SETUP DIAGNOSTIC: {result.overall.replace('_', ' ').title()}")
+        print(
+            f"{result.total} results; {result.passed} passed; {result.failed} confirmed issues; "
+            f"{result.manual} need manual verification."
+        )
+        print("Configuration inspection only; not release approval or proof of employee execution.")
+        for row in result.results:
+            if row.status != Status.PASSED.value:
+                print(f"\n  {row.checkpoint_id}: {row.description} [{row.status}]\n  {row.result}")
+                if row.remediation:
+                    print(f"  Next step: {row.remediation}")
+        return
     buckets = bucket_results(result.results)
     action = buckets[BUCKET_ACTION]
     manual = buckets[BUCKET_MANUAL]

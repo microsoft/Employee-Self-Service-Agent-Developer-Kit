@@ -65,6 +65,48 @@ def test_agent_bot_ids_single_only():
     assert reader.agent_bot_ids({"agent": {"botId": "SOLO"}}) == ["SOLO"]
 
 
+@pytest.mark.parametrize("canonical_id", ["Current-ID", None, ""])
+def test_agent_bot_ids_does_not_substitute_stale_same_slug(canonical_id):
+    config = {
+        "agents": [
+            {"slug": "hr", "botId": canonical_id},
+            {"slug": "it", "botId": "Other-ID"},
+        ],
+        "agent": {"slug": "hr", "botId": "Stale-ID"},
+    }
+    expected = ["Current-ID", "Other-ID"] if canonical_id else ["Other-ID"]
+    assert reader.agent_bot_ids(config) == expected
+
+
+@pytest.mark.parametrize("alias_bot_id", [
+    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+])
+def test_duplicate_canonical_bot_id_reserves_stale_compatibility_slug(alias_bot_id):
+    canonical_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    config = {
+        "agents": [
+            {"slug": "hr", "botId": canonical_id},
+            {"slug": "hr-old", "botId": alias_bot_id},
+        ],
+        "agent": {
+            "slug": "hr-old",
+            "botId": "00000000-0000-0000-0000-000000009999",
+            "expectedGrsCommitSha": "stale",
+        },
+    }
+
+    assert reader.agent_bot_ids(config) == [canonical_id]
+
+
+def test_agent_bot_ids_retains_distinct_compatibility_subject():
+    config = {
+        "agents": [{"slug": "hr", "botId": "Current-ID"}],
+        "agent": {"slug": "it", "botId": "Other-ID"},
+    }
+    assert reader.agent_bot_ids(config) == ["Current-ID", "Other-ID"]
+
+
 def test_agent_bot_ids_ignores_blank_and_non_string():
     config = {"agents": [{"botId": ""}, {"botId": None}, {"botId": "  X  "}]}
     assert reader.agent_bot_ids(config) == ["X"]

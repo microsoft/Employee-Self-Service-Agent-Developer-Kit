@@ -1,90 +1,32 @@
-# Connect Script
+# Connect integrations
+
+This is a provider-neutral router, not an integration setup procedure.
+Provider names, availability, aliases, entry points, state rules, prerequisites,
+and lifecycle instructions belong in each provider's own directory.
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
-Do not rephrase, add commentary, or tell the user what tools you are calling
-or what files you are reading.
-
----
+Do not narrate tools, files, or internal routing.
 
 ## Start
 
-If the user specified an integration as an argument (e.g., the user said
-"servicenow" or "workday", or the prompt was invoked as `/connect servicenow`),
-pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
-"which system" question and go directly to routing for that integration.
+If the user or calling prompt already selected an integration, pass that
+selection to `step1.md` as `PRE_SELECTED_INTEGRATION`. An unambiguous selection
+from the current conversation also counts; do not ask the same question again.
+Preserve the original request and target intent through routing and any
+required foundation setup. Provider-specific follow-ups belong to that
+provider's entry point.
 
-Read `.local/config.json` and `.local/setup/config.json`.
+Read `src/skills/connect/step1.md` and follow it.
 
-If the selected integration is ServiceNow and canonical setup has
-`schema_version: 4` with an environment binding,
-record anonymous usage telemetry attributed to ServiceNow (best-effort,
-non-blocking, and with no user-facing message):
-`python scripts/emit_capability.py connect --connector servicenow`.
-Then read `src/skills/connect/servicenow-da/SKILL.md` and follow it. This
-local-ready/explicit-link chooser works even when no agent is prepared in the
-workspace, dispatches a selected prepared HR or IT agent to its own shared
-lifecycle, and must not route through the retained Preview-era ServiceNow
-steps. A literal Workday request remains on the Workday route.
+## Boundaries
 
-Otherwise read `src/skills/connect/step1.md` and follow it. That file records
-anonymous usage telemetry after routing knows which integration was chosen, so
-the Connect capability event carries the correct `connector` attribution
-(workday vs servicenow) rather than being a generic "connect" wedge.
-
-(Step 1 asks which integration, detects existing state, and dispatches —
-ServiceNow to its own step files; Workday first by agent architecture, then
-DA to its package/Entra/tenant checklist or CEA to either the lightweight
-already-installed lifecycle or the existing unsupported-install boundary.)
-
----
-
-## Routing
-
-Each integration routes differently — ServiceNow has its own step files;
-Workday routes by architecture before package detection:
-
-- **ServiceNow DA-GA chooser**:
-  `src/skills/connect/servicenow-da/SKILL.md`
-  - HR state:
-    `.local/connect/servicenow-da-hrsd/agents/<agent-slug>/lifecycle.json`
-  - IT state:
-    `.local/connect/servicenow-da-itsm/agents/<agent-slug>/lifecycle.json`
-  - Uses MinimalBot Components and Power Platform Connectivity APIs.
-  - Never changes `.local/config.json.activeAgent`.
-  - Does not use Dataverse connection-reference or workflow operations.
-
-- **ServiceNow retained Preview path**: `src/skills/connect/servicenow/`
-  - Steps template: `src/skills/connect/servicenow/steps.md`
-  - State file: `.local/connect/servicenow/steps.md`
-  - Config file: `.local/connect/servicenow/config.json`
-  - Step 1: `step1.md` — instance info, MCP setup, connectivity check
-  - Step 2 (Entra): `step2-entra.md` — create Entra app registration for user login
-  - Step 2 (Certificate): `step2-certificate.md` — create two Entra apps + OIDC + system user
-  - Step 2 (OAuth2): `step2-oauth2.md` — create OAuth app via MCP
-  - Step 3 (Entra): `step3-entra.md` — install extension pack (Entra fields)
-  - Step 3 (Certificate): `step3-certificate.md` — install extension pack (Certificate fields)
-  - Step 3 (OAuth2): `step3-oauth2.md` — install extension pack (OAuth2 fields)
-  - Step 3 (Basic): `step3-basic.md` — install extension pack (Basic fields)
-  - Step 4: `step4.md` — verify connection
-
-- **Workday**:
-  - **CEA simplified extension already installed** — use
-    `src/skills/connect/workday/SKILL.md`, driven by the generic
-    `src/skills/connect/shared/lifecycle-runner.md` and
-    `src/skills/connect/workday/contract.json`.
-  - **CEA full/legacy package or no package** — stop at the current unsupported
-    installation boundary without changing state.
-  - **Native DA HR agent** — use `src/skills/setup/workday-da/SKILL.md` for the
-    resumable six-phase controller lifecycle.
-  - **Classic DA HR, DA IT, or another DA agent** — unsupported for this
-    Workday lifecycle; stop before creating state.
-
-  CEA per-agent lifecycle state is stored at
-  `.local/connect/workday/agents/{agent-slug}/lifecycle.json`. DA Workday state
-  is stored only in `.local/connect/workday-da/config.json`.
-
-Each integration retains only the state artifacts listed above. ServiceNow
-uses its `steps.md` and `config.json`; CEA Workday uses per-agent
-`lifecycle.json`; native DA Workday uses only its `config.json`. Running
-`/connect` again lets the user add a different integration without losing
-existing ones.
+- Discover providers from their `integration.json` registrations, not from a
+  hard-coded provider list or the existence of retained step files.
+- Apply the selected provider's availability before provider state,
+  credentials, telemetry, MCP, or lifecycle actions. This applies equally to
+  preselection, repair requests, follow-ups, and saved-state resume.
+- Do not inspect, reset, copy, or migrate provider state here. Let the selected
+  provider own readiness and resume decisions.
+- There is no shared connection checklist or generic Fresh Start operation.
+- New integrations belong in their own child directories with their own
+  registrations and entry points.

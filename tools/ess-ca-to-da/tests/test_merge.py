@@ -17,6 +17,7 @@ from essmig.merge import (
     merge,
     merge_node,
 )
+from essmig.projection import dump
 
 SIMPLE = """kind: AdaptiveDialog
 beginDialog:
@@ -553,6 +554,65 @@ def test_a_knowledge_source_is_carried_into_the_agent_as_a_component() -> None:
     assert gpt["metadata"]["knowledgeSources"] == {"kind": "SearchAllKnowledgeSources"}
 
 
+def test_a_renamed_knowledge_source_repoints_references_from_topics() -> None:
+    # A net-new ServiceNow knowledge source is stored in CA under a topic.* schema
+    # but must be renamed to the DA-valid knowledge.<Name>. A topic that searches it
+    # still carries the old schema name, so the merge must repoint that reference or
+    # the topic's SearchSpecificKnowledgeSources action dangles.
+    reference = reference_set(
+        [
+            {
+                "kind": "GptComponent",
+                "schemaName": f"{DA_PREFIX}.gpt.default",
+                "metadata": {"instructions": "be helpful"},
+            }
+        ]
+    )
+    knowledge_source = ca_component(
+        "topic.ServiceNowDEV_5Dg",
+        "kind: KnowledgeSourceConfiguration\n"
+        "source:\n"
+        "  kind: GraphConnectorSearchSource\n"
+        "  connectionId:\n"
+        "    schemaName: msdyn_copilotforemployeeselfservicehr.envVar.rSdk_abc\n"
+        "  connectionName: ServiceNowKB1\n",
+        component_type=16,
+        name="ServiceNow-DEV",
+    )
+    topic = ca_component(
+        "topic.AskServiceNow",
+        "kind: AdaptiveDialog\n"
+        "beginDialog:\n"
+        "  kind: OnRecognizedIntent\n"
+        "  actions:\n"
+        "    - kind: SearchKnowledgeSources\n"
+        "      knowledgeSources:\n"
+        "        kind: SearchSpecificKnowledgeSources\n"
+        "        knowledgeSources:\n"
+        "          - msdyn_copilotforemployeeselfservicehr.topic.ServiceNowDEV_5Dg\n",
+        component_type=9,
+        name="Ask ServiceNow",
+    )
+
+    result = merge(
+        reference,
+        {knowledge_source.component_id: knowledge_source, topic.component_id: topic},
+        "hr",
+    )
+
+    ks_entry = next(
+        entry
+        for entry in result.agent["components"]
+        if isinstance(entry, dict) and entry.get("kind") == "KnowledgeSourceComponent"
+    )
+    assert ks_entry["schemaName"] == f"{DA_PREFIX}.knowledge.ServiceNowDEV"
+    text = dump(result.agent)
+    # The old topic.* schema name is gone — both as the component's own identity and
+    # as the reference in the searching topic — replaced by the new knowledge.* name.
+    assert f"{DA_PREFIX}.topic.ServiceNowDEV_5Dg" not in text
+    assert f"{DA_PREFIX}.knowledge.ServiceNowDEV" in text
+
+
 def test_an_unrecognised_component_type_admits_the_tool_might_be_wrong() -> None:
     reference = reference_set([])
     component = ca_component("mystery.X", "kind: X\n", component_type=17)
@@ -640,6 +700,35 @@ def test_edited_instructions_are_reconciled_onto_the_da_wording_by_the_model() -
     assert gpt["metadata"]["instructions"] == "DA text plus my rule"
     assert result.results[0].outcome is Outcome.MERGED
     assert "re-applied to the DA's wording" in result.results[0].detail
+
+
+def test_multiline_reconciled_instructions_serialize_as_a_block_scalar() -> None:
+    # A plain multi-line str dumps as a double-quoted scalar with \n escapes, which
+    # makes customizationsMade.md read as one giant replaced line and ships an ugly
+    # agent.yml. The reconciled instructions must round-trip as a literal block (|-).
+    from essmig.projection import dump
+
+    reference = _gpt_reference("shipped DA text")
+    component = _gpt_component("shipped CA text plus my rule")
+
+    def fake_merge(base: str, ours: str, theirs: str) -> str:
+        return "#Identity \nYou are helpful.\n\n#Rules\nBe concise."
+
+    result = merge(
+        reference,
+        {component.component_id: component},
+        "hr",
+        merge_instructions=fake_merge,
+    )
+
+    gpt = next(
+        entry
+        for entry in result.agent["components"]
+        if isinstance(entry, dict) and entry.get("kind") == "GptComponent"
+    )
+    rendered = dump(gpt)
+    assert "instructions: |-" in rendered
+    assert "\\n" not in rendered
 
 
 def test_unedited_instructions_do_not_call_the_model() -> None:
@@ -881,17 +970,34 @@ def test_an_unchanged_agent_produces_no_result() -> None:
     assert not any(r.suffix == _AGENT_SUFFIX for r in merged.results)
 
 
-def test_a_missing_baseline_that_differs_from_the_template_needs_review() -> None:
+def test_a_missing_baseline_name_is_carried_with_a_note() -> None:
     reference = reference_set([], config=_config_with_name("ESS HR (Preview)"))
     reference.agent["entity"]["description"] = "Shipped description."
     metadata = AgentMetadata(name="Contoso People Helper", description="Shipped description.")
     merged = merge(reference, {}, "hr", agent_metadata=metadata)
 
-    # Baseline unknown -> do not silently overwrite the template's name.
-    assert reference.config["values"]["botName"] == "ESS HR (Preview)"
+    # Baseline unknown, but the customer's name is their data: carry it onto the
+    # template rather than defaulting to the template name, and note the caveat.
+    assert reference.config["values"]["botName"] == "Contoso People Helper"
+    assert reference.config["values"]["gptDisplayName"] == "Contoso People Helper"
+    result = next(r for r in merged.results if r.suffix == _AGENT_SUFFIX)
+    assert result.outcome is Outcome.MERGED
+    assert "display name" in result.detail
+    assert "baseline name could not be read" in result.detail
+
+
+def test_a_missing_baseline_description_still_needs_review() -> None:
+    reference = reference_set([], config=_config_with_name("ESS HR (Preview)"))
+    reference.agent["entity"]["description"] = "Shipped description."
+    # Name matches the template (nothing to carry); only the description differs
+    # with no baseline to confirm it — that still degrades to a review.
+    metadata = AgentMetadata(name="ESS HR (Preview)", description="Our tailored description.")
+    merged = merge(reference, {}, "hr", agent_metadata=metadata)
+
+    assert reference.agent["entity"]["description"] == "Shipped description."
     result = next(r for r in merged.results if r.suffix == _AGENT_SUFFIX)
     assert result.outcome is Outcome.CONFLICTED
-    assert "Confirm which name" in result.detail
+    assert "Confirm which" in result.detail
 
 
 def test_no_agent_metadata_produces_no_agent_result() -> None:

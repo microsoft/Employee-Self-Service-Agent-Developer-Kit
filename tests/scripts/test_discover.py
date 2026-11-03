@@ -498,6 +498,8 @@ class TestDiscoverListEnvironmentsMode:
                 "discover.py",
                 "--resolve-environment-url",
                 "https://org001.crm.dynamics.com/",
+                "--ring",
+                "test",
             ],
         )
 
@@ -515,6 +517,7 @@ class TestDiscoverListEnvironmentsMode:
         payload = json.loads(json_line.split("SELECTED_ENV_JSON:", 1)[1])
         assert payload["id"] == "env-001"
         assert payload["displayName"] == "Test Environment 1"
+        mock_cls.assert_called_once_with("tenant-id", ring="test")
 
     @patch("list_environments.PowerPlatformClient")
     def test_resolve_environment_url_rejects_unknown_url(

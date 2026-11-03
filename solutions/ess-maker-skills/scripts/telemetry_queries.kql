@@ -35,6 +35,19 @@
 //  Time column on every table: EventInfo_Time (UTC).
 // =============================================================================
 
+// CUSTOMER-ONLY QUERY GUARD
+// `tenantClass` / `tenant_class` is assigned by the emitting clone. Historical
+// rows and older clones can therefore label these known test/demo tenants as
+// customers. Include this declaration with customer-only queries and exclude
+// the IDs even when filtering on the derived class.
+let knownNonCustomerTenantIds = dynamic([
+    "142b48c2-943c-4d07-ad6b-b0eb5cd0e5f2",
+    "440d6412-bc8e-49a0-9913-9f8be786b89e",
+    "4636dd08-fdd9-4610-a443-762fb320fb4e",
+    "6936469c-696e-4fe2-a0c8-dd16f54b1b45",
+    "4345eb96-df8a-464a-9eb8-72253571a621",
+    "2d5577b0-a83c-436c-9582-1c3bcd2ab0d3"
+]);
 
 // -----------------------------------------------------------------------------
 // 1) USAGE — total runs, DAU/WAU/MAU, active tenants (last 30 days)
@@ -57,7 +70,7 @@ essmakerkit_flightcheck_run
 // -----------------------------------------------------------------------------
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(30d)
-| summarize Runs = count() by overall            // READY / READY_WITH_WARNINGS / NOT_READY
+| summarize Runs = count() by overall            // Readiness and diagnostic outcomes remain distinct.
 | extend Pct = round(100.0 * Runs / toscalar(
       essmakerkit_flightcheck_run | where EventInfo_Time > ago(30d) | count), 1)
 | order by Runs desc
@@ -95,6 +108,47 @@ essmakerkit_flightcheck_check
 
 
 // -----------------------------------------------------------------------------
+// 3b) BLOCKED, SPLIT BY CAUSE  (blockReason — schema 1.5)
+//     The verdict donut shows a single Blocked wedge. blockReason splits it by
+//     cause so admin-API authorization denials (HTTP 401/403, AADSTS*) are
+//     countable on their own, separate from "admin API unreachable"
+//     (adminApiUnavailable: 404 wrong-env, 5xx, timeout) and non-auth blocks.
+//     Enum: adminApiAuthorization | adminApiUnavailable | checkpointContract |
+//           profileCardinality | evidenceAmbiguous | other.
+//     Empty blockReason on a blocked row = pre-1.5 data (not classified).
+//
+// Customers (tenants) and runs blocked by admin-API AUTHORIZATION, by week.
+// Counts real customers only: tenantClass must be "customer" and tenantId
+// must be non-empty (excludes internal, unknown, and empty/synthetic tenants).
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(90d)
+| where tenantClass == "customer" and isnotempty(tenantId)
+| where tenantId !in (knownNonCustomerTenantIds)
+| where blockReason == "adminApiAuthorization"
+| summarize BlockedRuns = count(), BlockedCustomers = dcount(tenantId)
+          by bin(EventInfo_Time, 7d)
+| order by EventInfo_Time asc
+
+// Full breakdown: runs + distinct customers per block cause (last 30d).
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(30d)
+| where tenantClass == "customer" and isnotempty(tenantId)
+| where tenantId !in (knownNonCustomerTenantIds)
+| where isnotempty(blockReason)
+| summarize Runs = count(), Customers = dcount(tenantId) by blockReason
+| order by Runs desc
+
+// Which checks drive the admin-API auth blocks (check-level drill-down).
+essmakerkit_flightcheck_check
+| where EventInfo_Time > ago(30d)
+| where tenantClass == "customer" and isnotempty(tenantId)
+| where tenantId !in (knownNonCustomerTenantIds)
+| where blockReason == "adminApiAuthorization"
+| summarize Checks = count(), Customers = dcount(tenantId) by checkpointId, category
+| order by Checks desc
+
+
+// -----------------------------------------------------------------------------
 // 4) RUNS-TO-FIX  (ADO 7590586)
 //    On which sequential run does a previously-FAILING check first PASS,
 //    per (environment, agent, user)? Buckets: 2nd / 3rd / 4th / 5+ runs.
@@ -129,9 +183,12 @@ chk
 // 5) TIME-TO-GREEN, EXCLUDING WEEKENDS  (ADO 7590588)
 //    Median (and p90) hours from a series' first NOT_READY run to its first
 //    subsequent READY run, subtracting whole weekend days (Sat/Sun).
+//    Excludes diagnostic overalls: even SETUP_CHECKS_PASSED is inspection,
+//    not release readiness, and must neither start nor finish this clock.
 // -----------------------------------------------------------------------------
 let runs = essmakerkit_flightcheck_run
     | where EventInfo_Time > ago(90d)
+    | where overall in ("READY", "READY_WITH_WARNINGS", "NOT_READY")
     | extend grp = strcat(env, "|", agentId, "|", instanceId)
     | extend ready = overall in ("READY", "READY_WITH_WARNINGS")
     | project grp, t = EventInfo_Time, ready;
@@ -153,16 +210,18 @@ pairs
 
 
 // -----------------------------------------------------------------------------
-// 6) PER-TENANT breakdown (ADO 7590589)
+// 6) PER-TENANT READINESS breakdown (ADO 7590589)
 //    tenantName is now emitted on run + check events (privacy-reviewed org
 //    display name). Falls back to "(unknown)" for events emitted before the
 //    tenant_name change shipped — those carry tenantId (GUID) only.
+//    Runs and ReadyRate include readiness verdicts only, not diagnostics.
 // -----------------------------------------------------------------------------
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(30d)
+| where overall in ("READY", "READY_WITH_WARNINGS", "NOT_READY")
 | extend Tenant = iff(isempty(tenantName), "(unknown)", tenantName)
 | summarize Runs = count(), Users = dcount(instanceId),
-            ReadyRate = round(100.0 * countif(overall != "NOT_READY") / count(), 1)
+            ReadyRate = round(100.0 * countif(overall in ("READY", "READY_WITH_WARNINGS")) / count(), 1)
     by Tenant
 | order by Runs desc
 

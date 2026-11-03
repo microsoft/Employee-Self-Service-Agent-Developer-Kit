@@ -746,7 +746,7 @@ also add `--agent-slug "{AGENT_SLUG}"`. Use the same target and arguments when
 re-verifying completed phases in L.2.
 
 After each run, render the result using the exact U.0 and U.0a routines from
-`src/skills/setup/shared/checklist-updater.md` (read that file's U.0/U.0a
+`checklist-updater.md` (read that file's U.0/U.0a
 sections and apply them verbatim against the validated compact rows, or against
 `workspace/flightcheck/results.json` for a provider using the legacy transport
 — do not re-implement or paraphrase that rendering logic here).

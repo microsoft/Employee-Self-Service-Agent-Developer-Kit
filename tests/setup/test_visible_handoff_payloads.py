@@ -130,7 +130,6 @@ def test_lifecycle_plan_confirmation_is_exact_and_separate_from_reply() -> None:
                 "Power Platform Maker / Admin",
             ],
         ),
-        ("workday", 3, ["Environment Maker"]),
     ],
 )
 def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
@@ -252,7 +251,7 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
             ),
         ),
         (
-            _SOLUTION / "src" / "skills" / "setup" / "shared" / "permission-gate.md",
+            _SOLUTION / "src" / "skills" / "connect" / "shared" / "permission-gate.md",
             (
                 "requires the **{REQUIRED_ROLE}** role",
                 "can't verify that automatically",
@@ -260,7 +259,7 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
             ),
         ),
         (
-            _SOLUTION / "src" / "skills" / "setup" / "shared" / "checklist-updater.md",
+            _SOLUTION / "src" / "skills" / "connect" / "shared" / "checklist-updater.md",
             (
                 "Status: {CHECKPOINT_RESULT}",
                 "Result: {checkpoint result}",

@@ -43,6 +43,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
+from .da_checks import DAValidation, attach_inventory, validate_da_definitions
+
 from flightcheck.runner import Priority, Role
 from flightcheck.checks.entra_app import run_entra_app_checks
 from flightcheck.checks.environment import (
@@ -60,7 +62,7 @@ from flightcheck.checks.servicenow_da_itsm import (
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
-from flightcheck.checks.workday import run_workday_checks
+from flightcheck.checks.workday import WORKDAY_LITMUS_TAG, run_workday_checks
 from flightcheck.checks.workday_da import run_workday_da_checks
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
@@ -155,13 +157,15 @@ class CheckpointSpec:
     inherit_prereq_clients: bool = True
     provider: str = ""
     profile: str = ""
-    family_key: str = ""
     # listable=False registers a checkpoint so it can satisfy another
     # checkpoint's prerequisite resolution, while hiding it from
     # --list-checkpoints (it belongs to another scope's surface — e.g.
     # WD-001 is an External-Systems checkpoint we only register because the
     # below-early-return Workday checks need it to hydrate _workday_flows).
     listable: bool = True
+    da: DAValidation | None = None
+    legacy_family: str = ""
+    custom_tags: tuple[str, ...] = ()
 
 
 @dataclass
@@ -470,7 +474,7 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.CRITICAL.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # ---- Workday DA: WD-DA-PKG-001 (setup/workday-da skill, step DA1.1) ----
+    # ---- Workday DA: WD-DA-PKG-001 (connect/workday lifecycle) ----
     # WD-DA-PKG-001: the Workday extension package for the Declarative Agent
     # (DA) flavor of ESS is installed in the target env. Queries the
     # Dataverse `solutions` table for the DA parent (HR/IT) plus its Workday
@@ -540,18 +544,6 @@ _SPECS: list[CheckpointSpec] = [
         roles=(Role.ESS_MAKER.value,),
     ),
     CheckpointSpec(
-        key="WD-DA-RUN-001",
-        category_fn=run_workday_da_checks,
-        category_label="Workday DA",
-        clients=frozenset({PP_ADMIN}),
-        requires_config=True,
-        requires_dataverse_endpoint=False,
-        prereqs=("WD-DA-FLOW-001",),
-        pp_admin_flow_required=True,
-        priority=Priority.CRITICAL.value,
-        roles=(Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value),
-    ),
-    CheckpointSpec(
         key="WD-SEC-003",
         category_fn=run_workday_checks,
         category_label="Workday",
@@ -612,15 +604,17 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value),
     ),
-    # ---- Workday: active connector runtime health (WD-RUN-001) ----
+    # ---- Workday: end-to-end runtime health (WD-RUN-001) ----
     # Emitted by run_workday_checks (_check_workday_run_health ->
-    # _check_workday_active_run_health). The active, consent-gated probe reads
-    # BAP connections + creates a transient Dataverse probe flow, and the
-    # passive run-history fallback reads flow runs via pp_admin over the flows
-    # WD-001 hydrates onto runner._workday_flows — so the plan needs both
-    # PP_ADMIN and DATAVERSE and pulls WD-001 as a prereq. Fixed ID (not a
-    # family): registering it makes `--checkpoint WD-RUN-001` resolve instead
-    # of raising RegistryError.
+    # _check_workday_run_health_passive). Passive-only, user-assisted: it reads
+    # recent Workday flow runs via pp_admin over the flows WD-001 hydrates onto
+    # runner._workday_flows and grades the freshest terminal run (started within
+    # the last 60 min), so the plan needs both PP_ADMIN and DATAVERSE and pulls
+    # WD-001 as a prereq. Direct/headless invocation was ruled out (invoker-
+    # scoped connector carries no user token; only tests Flow->Workday). No
+    # fresh run -> NOT_CONFIGURED with guided sign-in remediation (SKILL.md 3d).
+    # Fixed ID (not a family): registering it makes `--checkpoint WD-RUN-001`
+    # resolve instead of raising RegistryError.
     CheckpointSpec(
         key="WD-RUN-001",
         category_fn=run_workday_checks,
@@ -631,6 +625,7 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("WD-001",),
         priority=Priority.HIGH.value,
         roles=(Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value),
+        custom_tags=(WORKDAY_LITMUS_TAG,),
     ),
     # ---- Workday: connection-reference binding completeness ----
     # Reads cached refs from WD-PKG-001 and needs _workday_flows (WD-001).
@@ -961,10 +956,6 @@ def _itsm_specs_from_hrsd() -> list[CheckpointSpec]:
                 prereqs=prereqs,
                 provider="servicenow-da-itsm",
                 profile="itsm",
-                family_key=spec.family_key.replace(
-                    "SN-DA-HRSD",
-                    "SN-DA-ITSM",
-                ),
             )
         )
     return specs
@@ -972,6 +963,7 @@ def _itsm_specs_from_hrsd() -> list[CheckpointSpec]:
 
 _SPECS.extend(_itsm_specs_from_hrsd())
 
+_SPECS = attach_inventory(_SPECS, CheckpointSpec)
 REGISTRY: dict[str, CheckpointSpec] = {spec.key: spec for spec in _SPECS}
 
 
@@ -1015,15 +1007,13 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             # "WD-CONN-102",
             "WD-API-CLIENT-001",
             "WD-TENANT-001",
-            "WD-NET-001",
         ),
     ),
     ProfileSpec(
         name="workday-da:post-runtime",
-        description="Post-runtime Workday read-path validation.",
+        description="Post-runtime Workday flow validation.",
         checkpoint_ids=(
             "WD-DA-FLOW-001",
-            "WD-DA-RUN-001",
         ),
     ),
     ProfileSpec(
@@ -1072,11 +1062,9 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             "DV-CONN-001",
             "WD-REST-001",
             "WD-REST-002",
-            "WD-NET-001",
             "WD-DA-TOPIC-001",
             "WD-DA-WIRING-001",
             "WD-DA-ATTACH-001",
-            "WD-DA-RUN-001",
         ),
     ),
     ProfileSpec(
@@ -1400,7 +1388,7 @@ def matches(target: str, emitted_id: str) -> bool:
             emitted_spec is not None
             and not emitted_spec.is_family
             and emitted_spec.key != fam_key
-            and emitted_spec.family_key != fam_key
+            and emitted_spec.legacy_family != fam_key
         ):
             return False
         return emitted_id == fam_key or emitted_id.startswith(fam_key + "-")
@@ -1441,6 +1429,10 @@ def validate_registry() -> None:
     # deliberately stubbed/narrowed REGISTRY in a unit test doesn't trip on
     # profiles referencing checkpoints it left out.
     if _SHIPPED_REGISTRY_KEYS <= frozenset(REGISTRY):
+        try:
+            validate_da_definitions(REGISTRY)
+        except ValueError as exc:
+            raise RegistryError(str(exc)) from exc
         for profile in PROFILES.values():
             for checkpoint_id in profile.checkpoint_ids:
                 if resolve(checkpoint_id) is None:

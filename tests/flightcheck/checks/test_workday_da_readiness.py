@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
 import responses
 import requests
+import pytest
 
 from flightcheck.checks import workday_da
 from minimalbot_evaluation import reviewed_workday_topic_schemas
@@ -242,6 +243,40 @@ def _runner(**overrides: Any) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
+@pytest.mark.parametrize("realm", ["test", "prod"])
+def test_native_promoted_inventory_uses_actual_realm_schema(realm) -> None:
+    schema = f"{SCHEMA}_{realm}"
+    config = _config()
+    config["realm"] = realm
+    config["agents"][0]["schemaName"] = schema
+    payload = json.loads(json.dumps(_component_payload()).replace(SCHEMA, schema))
+    runner = _runner(
+        config=config, maker_diagnostics=True,
+        agentbuilder=_AgentBuilder(payload),
+    )
+
+    row = workday_da._check_reviewed_workday_topics(runner)[0]
+
+    assert row.status == "Passed"
+    assert "required system topics present" in row.result
+    assert all(
+        name.startswith(schema + ".topic.")
+        for name in row.evidence["requiredSystemTopics"]
+    )
+    assert row.remediation == ""
+
+
+@pytest.mark.parametrize(("schema", "realm"), [
+    (f"{SCHEMA}_test", "dev"),
+    (f"{SCHEMA}_test", "prod"),
+    (f"{SCHEMA}_prod", "test"),
+    (f"{SCHEMA}_test", ""),
+    (f"{SCHEMA}_custom_test", "test"),
+])
+def test_reviewed_inventory_rejects_wrong_realm_and_arbitrary_suffix(schema, realm):
+    assert not reviewed_workday_topic_schemas(schema, realm=realm)
+
+
 def test_runtime_flow_catalog_passes_exact_active_inventory(monkeypatch) -> None:
     monkeypatch.setattr(workday_da, "query_all", lambda *_a, **_k: _flows())
     row = workday_da._check_runtime_flow_catalog(_runner())[0]
@@ -304,6 +339,97 @@ def test_reviewed_topics_pass_complete_active_inventory() -> None:
     )
     assert runner.agentbuilder.requested_bot_id == BOT_ID
     assert row.remediation == ""
+
+
+@pytest.mark.parametrize("maker_diagnostics", [False, True])
+def test_reviewed_topics_accept_inventory_without_retired_access_check(
+    maker_diagnostics,
+):
+    retired_schema = f"{SCHEMA}.topic.WorkdaySystemAccessCheck"
+    payload = _component_payload(missing=retired_schema)
+    runner = _runner(
+        maker_diagnostics=maker_diagnostics,
+        agentbuilder=_AgentBuilder(payload),
+    )
+
+    row = workday_da._check_reviewed_workday_topics(runner)[0]
+
+    assert row.status == "Passed"
+    assert retired_schema not in reviewed_workday_topic_schemas(SCHEMA)
+    assert "WorkdaySystemAccessCheck" not in workday_da._REQUIRED_SYSTEM_TOPIC_SUFFIXES
+    assert row.remediation == ""
+
+
+@pytest.mark.parametrize("suffix", [
+    "WorkdaySystemSetRuntimeTemplateConfigurations",
+    "WorkdaySystemGetUserContextV2",
+    "WorkdaySystemGetCommonExecution",
+    "WorkdaySystemGetRESTExecution",
+    "WorkdayManagerCheck",
+    "WorkdayOnError",
+])
+@pytest.mark.parametrize("state", ["missing", "Inactive", "unknown", "duplicate"])
+def test_maker_requires_each_workday_system_topic(suffix, state):
+    schema = f"{SCHEMA}.topic.{suffix}"
+    payload = _component_payload(
+        missing=schema if state == "missing" else "",
+        inactive=schema if state == "Inactive" else "",
+    )
+    changes = payload["botComponentChanges"]
+    if state == "missing":
+        changes[:] = [
+            change for change in changes if change["component"]["schemaName"] != schema
+        ]
+    if state in {"unknown", "duplicate"}:
+        target = next(change for change in changes if change["component"]["schemaName"] == schema)
+        if state == "unknown":
+            target["component"].pop("status")
+        else:
+            changes.append(deepcopy(target))
+    row = workday_da._check_reviewed_workday_topics(_runner(
+        maker_diagnostics=True, agentbuilder=_AgentBuilder(payload),
+    ))[0]
+    assert row.status == ("Blocked" if state == "unknown" else "Failed")
+    assert schema in row.result
+    assert {
+        "missing": "missing required system topics",
+        "Inactive": "inactive required system topics",
+        "unknown": "unknown activation",
+        "duplicate": "duplicate schemas",
+    }[state] in row.result
+    assert "Copilot Studio" in row.remediation
+    assert "Do not edit or disable system topics" in row.remediation
+    assert "rerun" in row.remediation
+
+
+def test_maker_required_systems_work_without_optional_scenarios():
+    payload = _component_payload()
+    payload["botComponentChanges"] = [
+        change for change in payload["botComponentChanges"]
+        if change["component"]["schemaName"].rsplit(".", 1)[-1]
+        in workday_da._REQUIRED_SYSTEM_TOPIC_SUFFIXES
+    ]
+    row = workday_da._check_reviewed_workday_topics(_runner(
+        maker_diagnostics=True, agentbuilder=_AgentBuilder(payload),
+    ))[0]
+    assert row.status == "Passed"
+    assert "6 of 6 required system topics present" in row.result
+    assert "Unused optional conversations are not required" in row.result
+    assert row.evidence["unselectedCatalogEntries"] == 16
+    assert row.remediation == ""
+
+
+def test_maker_confirmed_system_defect_is_not_hidden_by_unknown_activation():
+    required = f"{SCHEMA}.topic.WorkdayManagerCheck"
+    payload = _component_payload(missing=required)
+    payload["botComponentChanges"][0]["component"]["status"] = "unknown"
+    row = workday_da._check_reviewed_workday_topics(_runner(
+        maker_diagnostics=True, agentbuilder=_AgentBuilder(payload),
+    ))[0]
+    assert row.status == "Failed"
+    assert required in row.result
+    assert row.evidence["unknownActivation"]
+    assert "restore missing Microsoft-provided system topics" in row.remediation
 
 
 def test_reviewed_topics_fail_missing_and_inactive_components() -> None:
@@ -400,6 +526,66 @@ def test_runtime_template_wiring_passes_reviewed_chain() -> None:
     assert row.status == "Passed"
     assert "immediately before User Context Validate" in row.result
     assert row.remediation == ""
+
+
+@pytest.mark.parametrize("defect", [
+    "missing_setup", "duplicate_setup", "missing_target", "foreign_setup",
+    "inactive_setup", "wrong_trigger", "malformed_dialog",
+])
+def test_promoted_redirect_reports_missing_ambiguous_or_invalid_native_content(defect):
+    from flightcheck.da_execution import DAExecutor
+    from flightcheck.registry import REGISTRY
+
+    schema = f"{SCHEMA}_test"
+    target_schema = f"{schema}.topic.WorkdaySystemGetUserContextV2"
+    payload = json.loads(json.dumps(_component_payload()).replace(SCHEMA, schema))
+    setup = _component(
+        f"{schema}.topic.Setusercontext",
+        dialog={
+            "$kind": "AdaptiveDialog",
+            "beginDialog": {
+                "$kind": "OnRedirect",
+                "actions": [{
+                    "$kind": "BeginDialog",
+                    "dialog": {"$kind": "DialogExpression", "literalValue": target_schema},
+                }],
+            },
+        },
+    )
+    setup["component"]["displayName"] = "[Admin] - User Context - Setup"
+    if defect == "foreign_setup":
+        setup["component"]["schemaName"] = f"{SCHEMA}.topic.Setusercontext"
+    elif defect == "inactive_setup":
+        setup["component"]["status"] = "Inactive"
+    elif defect == "wrong_trigger":
+        setup["component"]["dialog"]["beginDialog"]["$kind"] = "OnConversationStart"
+    elif defect == "malformed_dialog":
+        setup["component"]["dialog"] = "not-an-object"
+    if defect != "missing_setup":
+        payload["botComponentChanges"].append(setup)
+    if defect == "duplicate_setup":
+        payload["botComponentChanges"].append(deepcopy(setup))
+    elif defect == "missing_target":
+        payload["botComponentChanges"] = [
+            change for change in payload["botComponentChanges"]
+            if change["component"]["schemaName"] != target_schema
+        ]
+    config = _config()
+    config["realm"] = "test"
+    config["agents"][0]["schemaName"] = schema
+    runner = _runner(
+        config=config, da_explicit_selection=True,
+        agentbuilder=_AgentBuilder(payload),
+    )
+    spec = REGISTRY["WD-REST-002"]
+    row = DAExecutor(runner, SimpleNamespace(), (spec.key,), (spec,), {}).run(runner)[0]
+
+    assert row.status == ("Error" if defect == "malformed_dialog" else "Failed")
+    if row.status == "Failed":
+        assert row.evidence["agentId"] == BOT_ID
+        assert row.evidence["targetTopic"] == target_schema
+        assert "promote the corrected agent" in row.remediation
+    assert runner.agentbuilder.requested_bot_id == BOT_ID
 
 
 def test_runtime_template_wiring_fails_wrong_conversation_start_position() -> None:
@@ -651,286 +837,3 @@ def test_delegated_authorization_errors_on_malformed_principal(
 
     assert row.status == "Error"
     assert "invalid principal record" in row.result
-
-
-def _run(
-    *,
-    run_id: str,
-    flow_id: str,
-    start_time: str,
-    status: str = "Succeeded",
-    response_name: str = "Respond_to_Copilot_with_Success",
-) -> dict[str, Any]:
-    value = pp.flow_run(
-        run_id=run_id,
-        flow_id=flow_id,
-        status=status,
-        response_name=response_name,
-    )
-    value["properties"]["startTime"] = start_time
-    return value
-
-
-class _RunHistory:
-    def __init__(self, runs: dict[str, list[dict[str, Any]]]) -> None:
-        self.runs = runs
-
-    def get_flow_runs(
-        self,
-        _env_id: str,
-        flow_id: str,
-    ) -> list[dict[str, Any]]:
-        return deepcopy(self.runs.get(flow_id, []))
-
-    def get_flow_runs_since(
-        self,
-        _env_id: str,
-        flow_id: str,
-        _since,
-    ) -> list[dict[str, Any]]:
-        return deepcopy(self.runs.get(flow_id, []))
-
-
-def _runtime_runner(
-    runs: dict[str, list[dict[str, Any]]],
-    **overrides: Any,
-) -> SimpleNamespace:
-    values = {
-        "pp_admin": _RunHistory(runs),
-        "runtime_evidence_attempt_id": "attempt-42",
-        "runtime_evidence_start": "2026-06-01T00:00:00Z",
-        "runtime_evidence_end": "2026-06-01T00:01:00Z",
-        "runtime_evidence_flow_ids": tuple(runs),
-        "runtime_evidence_migration_baseline": False,
-        "_workday_runtime_flows": _flows(),
-    }
-    values.update(overrides)
-    return _runner(**values)
-
-
-def test_correlated_runtime_evidence_passes_recorded_attempt() -> None:
-    flow_ids = list(FLOW_IDS.values())[:2]
-    runs = {
-        flow_id: [_run(
-            run_id=f"run-{index}",
-            flow_id=flow_id,
-            start_time="2026-06-01T00:00:30Z",
-        )]
-        for index, flow_id in enumerate(flow_ids)
-    }
-
-    row = workday_da._check_correlated_runtime_evidence(
-        _runtime_runner(runs)
-    )[0]
-
-    assert row.status == "Passed"
-    assert "attempt-42" in row.result
-    assert row.evidence["operatorEvidenceLabel"] == "attempt-42"
-    assert "attemptId" not in row.evidence
-    assert row.evidence["clockSkewSeconds"] == 120
-    assert row.remediation == ""
-
-
-@pytest.mark.parametrize("response_value", [None, [], {}, {"name": ""}])
-def test_correlated_runtime_evidence_rejects_missing_or_malformed_success_action(
-    response_value,
-) -> None:
-    flow_id = next(iter(FLOW_IDS.values()))
-    run = _run(
-        run_id="run-1",
-        flow_id=flow_id,
-        start_time="2026-06-01T00:00:30Z",
-    )
-    if response_value is None:
-        run["properties"].pop("response")
-    else:
-        run["properties"]["response"] = response_value
-
-    row = workday_da._check_correlated_runtime_evidence(
-        _runtime_runner({flow_id: [run]})
-    )[0]
-
-    assert row.status == "Failed"
-    assert flow_id in row.result
-    assert "Open the candidate Power Automate runs" in row.remediation
-
-
-def test_correlated_runtime_evidence_requires_complete_attempt_context() -> None:
-    row = workday_da._check_correlated_runtime_evidence(
-        _runtime_runner({}, runtime_evidence_attempt_id="")
-    )[0]
-
-    assert row.status == "NotConfigured"
-    assert "Generic recent Workday run health is not accepted" in row.result
-    assert "signed-in employee scenario" in row.remediation
-
-
-def test_correlated_runtime_evidence_rejects_window_over_15_minutes() -> None:
-    flow_id = next(iter(FLOW_IDS.values()))
-    runner = _runtime_runner(
-        {flow_id: []},
-        runtime_evidence_end="2026-06-01T00:15:01Z",
-    )
-
-    row = workday_da._check_correlated_runtime_evidence(runner)[0]
-
-    assert row.status == "Failed"
-    assert "must not exceed 15 minutes" in row.result
-
-
-def test_correlated_runtime_evidence_rejects_invalid_flow_guid() -> None:
-    runner = _runtime_runner(
-        {"not-a-guid": []},
-        runtime_evidence_flow_ids=("not-a-guid",),
-    )
-
-    row = workday_da._check_correlated_runtime_evidence(runner)[0]
-
-    assert row.status == "Failed"
-    assert "flow ID 'not-a-guid' is invalid" in row.result
-
-
-def test_correlated_runtime_evidence_errors_on_malformed_run_properties() -> None:
-    flow_id = next(iter(FLOW_IDS.values()))
-    malformed = _run(
-        run_id="run-1",
-        flow_id=flow_id,
-        start_time="2026-06-01T00:00:30Z",
-    )
-    malformed["properties"] = []
-
-    row = workday_da._check_correlated_runtime_evidence(
-        _runtime_runner({flow_id: [malformed]})
-    )[0]
-
-    assert row.status == "Error"
-    assert "Flow run properties must be an object" in row.result
-
-
-def test_correlated_runtime_evidence_errors_on_malformed_start_time() -> None:
-    flow_id = next(iter(FLOW_IDS.values()))
-    malformed = _run(
-        run_id="run-1",
-        flow_id=flow_id,
-        start_time="not-a-time",
-    )
-
-    row = workday_da._check_correlated_runtime_evidence(
-        _runtime_runner({flow_id: [malformed]})
-    )[0]
-
-    assert row.status == "Error"
-    assert "Flow run startTime must be UTC ISO-8601" in row.result
-
-
-def test_correlated_runtime_evidence_blocks_ambiguous_window() -> None:
-    flow_id = next(iter(FLOW_IDS.values()))
-    runs = {
-        flow_id: [
-            _run(
-                run_id="success",
-                flow_id=flow_id,
-                start_time="2026-06-01T00:00:20Z",
-            ),
-            _run(
-                run_id="failure",
-                flow_id=flow_id,
-                start_time="2026-06-01T00:00:25Z",
-                response_name=(
-                    "Respond_to_Copilot_with_failure_errorMessage"
-                ),
-            ),
-        ]
-    }
-
-    row = workday_da._check_correlated_runtime_evidence(
-        _runtime_runner(runs)
-    )[0]
-
-    assert row.status == "Blocked"
-    assert "multiple candidate runs" in row.result
-    assert "clean, bounded window" in row.remediation
-
-
-def test_correlated_runtime_evidence_blocks_multiple_successes() -> None:
-    flow_id = next(iter(FLOW_IDS.values()))
-    runs = {
-        flow_id: [
-            _run(
-                run_id="success-1",
-                flow_id=flow_id,
-                start_time="2026-06-01T00:00:20Z",
-            ),
-            _run(
-                run_id="success-2",
-                flow_id=flow_id,
-                start_time="2026-06-01T00:00:25Z",
-            ),
-        ]
-    }
-
-    row = workday_da._check_correlated_runtime_evidence(
-        _runtime_runner(runs)
-    )[0]
-
-    assert row.status == "Blocked"
-    assert "multiple candidate runs" in row.result
-
-
-def test_correlated_runtime_evidence_blocks_success_plus_pending() -> None:
-    flow_id = next(iter(FLOW_IDS.values()))
-    pending = _run(
-        run_id="pending",
-        flow_id=flow_id,
-        start_time="2026-06-01T00:00:25Z",
-        status="Running",
-    )
-    runs = {
-        flow_id: [
-            _run(
-                run_id="success",
-                flow_id=flow_id,
-                start_time="2026-06-01T00:00:20Z",
-            ),
-            pending,
-        ]
-    }
-
-    row = workday_da._check_correlated_runtime_evidence(
-        _runtime_runner(runs)
-    )[0]
-
-    assert row.status == "Blocked"
-    assert "multiple candidate runs" in row.result
-
-
-def test_correlated_runtime_evidence_blocks_single_pending_run() -> None:
-    flow_id = next(iter(FLOW_IDS.values()))
-    pending = _run(
-        run_id="pending",
-        flow_id=flow_id,
-        start_time="2026-06-01T00:00:25Z",
-        status="Running",
-    )
-
-    row = workday_da._check_correlated_runtime_evidence(
-        _runtime_runner({flow_id: [pending]})
-    )[0]
-
-    assert row.status == "Blocked"
-    assert "non-terminal or inconclusive" in row.result
-
-
-def test_correlated_runtime_evidence_fails_missing_candidate_run() -> None:
-    flow_id = next(iter(FLOW_IDS.values()))
-    runner = _runtime_runner(
-        {flow_id: []},
-        runtime_evidence_migration_baseline=True,
-    )
-
-    row = workday_da._check_correlated_runtime_evidence(runner)[0]
-
-    assert row.status == "Failed"
-    assert "No terminal run was found" in row.result
-    assert row.evidence["migrationBaseline"] is True
-    assert "capture a fresh evidence window" in row.remediation

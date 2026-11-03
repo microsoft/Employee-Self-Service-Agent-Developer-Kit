@@ -27,6 +27,7 @@ CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 DEFAULT_API_VERSION = "2024-10-01"
 NATIVE_ALM_API_VERSION = "2022-03-01-preview"
 COPILOT_STUDIO_CLIENT_NAME = "CopilotStudio"
+AGENT_LIST_CREATION_SOURCES = ("CopilotStudio", "AgentBuilder")
 DEFAULT_TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 DEV_REALM = 0
 TEST_REALM = 1
@@ -450,13 +451,94 @@ def cached_account_names(
     cache_path: Path = DEFAULT_TOKEN_CACHE,
 ) -> list[str]:
     """Return distinct cached sign-in names without acquiring a token."""
-    cache = _load_token_cache(cache_path)
+    return _cached_account_names(_load_token_cache(cache_path))
+
+
+def _cached_account_names(cache: msal.SerializableTokenCache) -> list[str]:
     names: dict[str, str] = {}
     for account in cache.find(msal.TokenCache.CredentialType.ACCOUNT):
         username = str(account.get("username") or "").strip()
         if username:
             names.setdefault(username.casefold(), username)
     return sorted(names.values(), key=str.casefold)
+
+
+def seed_shared_token_cache(
+    account_hint: str,
+    *,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    shared_cache_path: Path = Path(".local/.token_cache.bin"),
+) -> dict[str, Any]:
+    """Copy a selected account's cache once, without auth or replacement."""
+    wanted = str(account_hint or "").strip()
+    if not wanted:
+        raise ValueError("Account sign-in name is required.")
+    existing = {
+        "outcome": "already-exists",
+        "sharedCache": str(shared_cache_path),
+    }
+    if os.path.lexists(shared_cache_path):
+        return existing
+
+    content = cache_path.read_bytes()
+    cache = msal.SerializableTokenCache()
+    cache.deserialize(content.decode("utf-8"))
+    account = next(
+        (
+            name
+            for name in _cached_account_names(cache)
+            if name.casefold() == wanted.casefold()
+        ),
+        None,
+    )
+    if account is None:
+        raise ValueError("Selected account is absent from the AgentBuilder cache.")
+
+    shared_cache_path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(
+        prefix=f"{shared_cache_path.name}.",
+        suffix=".tmp",
+        dir=shared_cache_path.parent,
+    )
+    temporary_path = Path(temporary)
+    failure: BaseException | None = None
+    copied = False
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            # Publish complete bytes without replacing a competing cache.
+            os.link(temporary_path, shared_cache_path)
+        except FileExistsError:
+            return existing
+        copied = True
+        return {
+            "outcome": "copied",
+            "account": account,
+            "sourceCache": str(cache_path),
+            "sharedCache": str(shared_cache_path),
+        }
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        try:
+            temporary_path.unlink()
+        except OSError as cleanup_error:
+            if failure is not None:
+                failure.add_note(
+                    f"Temporary cache cleanup failed: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            else:
+                if copied:
+                    cleanup_error.add_note(
+                        f"Shared cache was copied to {shared_cache_path} "
+                        "before temporary cache cleanup failed."
+                    )
+                raise
 
 
 def _interactive_token(
@@ -633,6 +715,40 @@ def authenticate_selected_tenant(
         return token, tenant_id_from_access_token(token), account_name
     token = acquired
     return token, tenant_id_from_access_token(token)
+
+
+def authenticate_flightcheck_dependency(
+    scope: str,
+    *,
+    tenant_id: str,
+    ring: str,
+    account_hint: str,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+) -> str:
+    """Acquire one dependency-read audience for the already selected operator.
+
+    ENV-004 requests Flow or Dataverse access only after discovering an active
+    flow dependency. A different or unverifiable account must not satisfy that
+    dependency on behalf of the selected agent.
+    """
+    if not account_hint:
+        raise ValueError("Dependency reads require a verified account identity.")
+    tenant_id = str(uuid.UUID(tenant_id))
+    token, account = _acquire_token(
+        authority=f"https://login.microsoftonline.com/{tenant_id}",
+        ring=ring,
+        cache_path=cache_path,
+        force_account_selection=False,
+        account_hint=account_hint,
+        scopes=(scope,),
+        emit_account_identity=False,
+        return_account_identity=True,
+    )
+    if not account or account.casefold() != account_hint.casefold():
+        raise AgentBuilderError("Dependency authentication selected a different or unverifiable account.")
+    if tenant_id_from_access_token(token).casefold() != tenant_id.casefold():
+        raise AgentBuilderError("Dependency authentication selected a different tenant.")
+    return token
 
 
 def authenticate_agent_inventory(
@@ -984,15 +1100,15 @@ class AgentBuilderClient:
                 f"{operation} returned a non-JSON response."
             ) from exc
 
-    def list_agents(
+    def list_agent_pages(
         self,
         *,
         max_pages: int = 20,
     ) -> list[dict[str, Any]]:
-        """List environment agents through the MakerOperations collection."""
+        """Return untouched MakerOperations agent-list response pages."""
         if max_pages <= 0:
             raise ValueError("Max pages must be a positive integer.")
-        agents: list[dict[str, Any]] = []
+        pages: list[dict[str, Any]] = []
         continuation: str | None = None
         seen_continuations: set[str] = set()
         for _page in range(max_pages):
@@ -1011,6 +1127,7 @@ class AgentBuilderClient:
                 raise AgentBuilderError(
                     "Agent listing returned an invalid shape."
                 )
+            pages.append(body)
             if "Entities" not in body:
                 raise AgentBuilderError(
                     "Agent listing omitted the Entities collection."
@@ -1022,14 +1139,13 @@ class AgentBuilderClient:
                 raise AgentBuilderError(
                     "Agent listing returned an invalid shape."
                 )
-            agents.extend(listed)
             if "ContinuationToken" not in body:
                 raise AgentBuilderError(
                     "Agent listing omitted the ContinuationToken."
                 )
             next_continuation = body["ContinuationToken"]
             if next_continuation == "":
-                return agents
+                return pages
             if not isinstance(next_continuation, str):
                 raise AgentBuilderError(
                     "Agent listing returned an invalid continuation token."
@@ -1043,6 +1159,81 @@ class AgentBuilderClient:
         raise AgentBuilderError(
             f"Agent listing exceeded {max_pages} pages."
         )
+
+    def list_agents(
+        self,
+        *,
+        max_pages: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return the agent entities from every listing page."""
+        return [
+            agent
+            for page in self.list_agent_pages(max_pages=max_pages)
+            for agent in page["Entities"]
+        ]
+
+    def list_minimal_bots(
+        self,
+        *,
+        creation_sources: tuple[str, ...] = AGENT_LIST_CREATION_SOURCES,
+    ) -> list[dict[str, Any]]:
+        """Return the untouched MinimalBot cards for explicit creation sources."""
+        if not creation_sources:
+            raise ValueError("At least one creation source is required.")
+        body = self._json(
+            "GET",
+            "/copilotstudio/minimalBots/api",
+            "MinimalBot listing",
+            params={
+                "api-version": NATIVE_ALM_API_VERSION,
+                "creationSource": list(creation_sources),
+            },
+        )
+        if not isinstance(body, list) or not all(
+            isinstance(item, dict) for item in body
+        ):
+            raise AgentBuilderError(
+                "MinimalBot listing returned an invalid shape."
+            )
+        return body
+
+    def list_agent_inventory(
+        self,
+        *,
+        max_maker_operations_pages: int = 20,
+        creation_sources: tuple[str, ...] = AGENT_LIST_CREATION_SOURCES,
+    ) -> dict[str, Any]:
+        """Return both collection responses without merging or interpretation."""
+        def read_source(
+            operation: Callable[[], Any],
+        ) -> dict[str, Any]:
+            try:
+                return {"response": operation(), "error": None}
+            except (AgentBuilderError, requests.RequestException) as exc:
+                error: dict[str, Any] = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+                if isinstance(exc, AgentBuilderHTTPError):
+                    error["httpStatus"] = exc.status_code
+                    if exc.error_code is not None:
+                        error["errorCode"] = exc.error_code
+                    if exc.request_id is not None:
+                        error["requestId"] = exc.request_id
+                return {"response": None, "error": error}
+
+        return {
+            "minimalBots": read_source(
+                lambda: self.list_minimal_bots(
+                    creation_sources=creation_sources
+                )
+            ),
+            "copilotStudioAgents": read_source(
+                lambda: self.list_agent_pages(
+                    max_pages=max_maker_operations_pages
+                )
+            ),
+        }
 
     def list_starter_packages(
         self,

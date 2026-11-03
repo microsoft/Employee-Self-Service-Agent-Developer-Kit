@@ -24,7 +24,7 @@ already included in the IT agent and that customer-facing Employee
 Self-Service uses delegated Microsoft Entra ID User Login. The HR-only Core
 gate has separate historical design evidence: Draft PR #217 commit
 `e9550ddd` adds the gate in
-`src/skills/setup/servicenow/capture-servicenow-config.md` with the explicit
+the retired ServiceNow setup capture guide with the explicit
 condition `scope.hrsd == true`; the older reference update `f3bdf293` records
 that `com.sn_hr_core` supplies `sn_hr_core_case` and other HRSD tables.
 Together these support omitting that HRSD data prerequisite from this

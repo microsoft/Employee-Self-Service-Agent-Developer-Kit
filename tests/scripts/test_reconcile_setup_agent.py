@@ -872,8 +872,9 @@ def test_environment_resolution_uses_user_scoped_api_and_selected_account(
     observed: dict[str, object] = {}
 
     class FakeClient:
-        def __init__(self, tenant: str) -> None:
+        def __init__(self, tenant: str, *, ring: str) -> None:
             observed["tenant"] = tenant
+            observed["ring"] = ring
 
         def authenticate(self, preferred_username=None):
             observed["account"] = preferred_username
@@ -892,11 +893,13 @@ def test_environment_resolution_uses_user_scoped_api_and_selected_account(
     result = reconcile._resolve_dataverse_url(
         ENVIRONMENT_ID,
         "maker@example.com",
+        "test",
     )
 
     assert result == DATAVERSE_URL
     assert observed == {
         "tenant": "organizations",
+        "ring": "test",
         "account": "maker@example.com",
     }
 
@@ -911,7 +914,8 @@ def test_environment_resolution_preserves_permission_failure(
     outcome: str,
 ) -> None:
     class FakeClient:
-        def __init__(self, _tenant: str) -> None:
+        def __init__(self, _tenant: str, *, ring: str) -> None:
+            assert ring == "prod"
             pass
 
         def authenticate(self, preferred_username=None):

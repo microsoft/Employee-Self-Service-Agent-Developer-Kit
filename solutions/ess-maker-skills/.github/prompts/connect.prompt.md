@@ -5,15 +5,35 @@ description: "Connect Workday or another supported integration"
 
 # Connect
 
-**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
+**Entry routing comes first.** Missing setup does not stop integration selection.
+Read `src/skills/connect/SKILL.md`, retain any selected integration and target,
+and apply provider availability before following that provider's entry point.
+The provider owns prerequisite preparation and any automatic Setup handoff;
+do not ask the maker to type `/setup` or repeat their Connect request.
+Read that router before probing `.local` metadata. The ordinary global setup
+gate does not apply to this command. A missing file or `Path does not exist`
+result must not trigger the setup-required welcome message or end Connect.
+
+For Workday, entry requires canonical state with `schema_version: 4`, complete
+workspace evidence, and `steps.SETUP-07.state: "done"` for the agent whose
+`agent.workspace_slug` matches `.local/config.json` `activeAgent`. Do not require
+`connect_ready: true`; this command configures the product-extension
+connections that may currently block runtime readiness. Missing preparation
+automatically invokes Setup at entry and resumes the original request after
+materialization succeeds, as defined by the Workday entry point. Do not invoke
+Setup between Connect phases or after Connect completes.
+
+**ServiceNow admission.** Only after the router dispatches to ServiceNow, read
+`.local/setup/config.json` and `.local/config.json`.
 If schema-v4 canonical state is present but the selected agent entry is
 missing `authoring_ready`, run
 `python scripts/setup_existing_da.py sync-authoring-readiness --kit-root .`
 and reread `.local/setup/config.json` before deciding admission.
 For a pre-selected ServiceNow integration, require canonical schema-v4
 environment evidence, then proceed to the router. The DA ServiceNow chooser
-applies the workspace and `authoring_ready` gate to the agent selected for
-this invocation; do not gate ServiceNow on `.local/config.json.activeAgent`.
+applies the workspace and `authoring_ready: true` gate to the agent selected
+for this invocation and ignores `connect_ready`; do not gate ServiceNow on
+`.local/config.json.activeAgent`.
 Before selecting an agent, run only
 `python scripts/connect_servicenow_da.py agent-chooser`. Do not call
 `list-agents` or scan the environment. Continue to the mandatory
@@ -141,47 +161,48 @@ Parse the returned `servicenow.resume-handoff.v1` object:
 - any command failure, malformed result or identity mismatch blocks the
   invocation. Never fall back to a validate-only sequence.
 
-For other integrations, resolve `.local/config.json`'s `activeAgent` slug to
-the matching object in its `agents` array, then use that object's `botId` to
-select the entry in
-`.local/setup/config.json`'s `agents` object. Continue when canonical state has
-`schema_version: 4`, that agent has `authoring_ready: true`, complete workspace evidence,
-and `steps.SETUP-07.state: "done"`. Do not require
-`connect_ready: true`; Ignore `connect_ready`, `active_step`, blocked capacity,
-and blocked connection steps for this admission check because this command
-configures the product-extension connections that may currently block runtime
-readiness. If local workspace materialization is incomplete, show:
-
-> Welcome to the ESS Maker Kit. Before running `/connect`, type `/setup` to set up your environment.
-
-and STOP. Otherwise proceed.
-
-You are a script executor. Read `src/skills/connect/SKILL.md` (a short
+Read `src/skills/connect/SKILL.md` (a short
 router file) and follow it. It will tell you which step file to read next.
-Each step file contains pre-written messages between **Message:** and
-**End message.** markers.
+Provider guides contain Message blocks, numbered maker walkthroughs, value
+cards, and controller-backed status or recovery guidance. All of these are
+valid maker-facing instructions; a Message block is not required.
 
 Rules:
 1. Show Message block text to the user EXACTLY as written. Do not rephrase.
 2. NEVER tell the user what files you are reading or what tools you are
    calling. The user must never see "Read SKILL.md" or "Calling tool" or
    file names or line numbers. If they see any of that, you have failed.
-3. The user sees Message blocks, tool output tables, and the exact
-   ServiceNow phase-progress strings returned by `resume-handoff`. Do not show
-   internal IDs, hashes, or file operations.
-4. Do not compose your own messages. The only exception is combining an exact
-   returned ServiceNow progress string with the result's existing
-   plain-language remediation/next action as specified above. Otherwise, if
-   there is no Message block, stay silent and proceed to the next action.
-5. For resumable product-specific connect flows, inspect current live and
-   durable status before every step. For DA ServiceNow, the mandatory
-   `resume-handoff` result exclusively decides action versus checkpoint; this
-   rule must not skip an incomplete action. Skip completed steps in other
-   flows with the skill's defined skip message only when current completion is
-   API-verifiable or proven by a successful kit operation. Always ask the
-   maker to confirm steps whose current state cannot be verified through an
-   available API.
-6. Waiting for maker input or a portal update is not task completion. Keep the
+3. Render the applicable maker walkthrough in full before its confirmation,
+   completion, or **Check again** question. Include the target-specific link,
+   required click path, and supplied non-secret values. A question is not a
+   substitute for instructions. Do not stay silent because a guide has no
+   Message block. For administrator workbook handoffs, the concise handoff and
+   downloadable detailed workbook satisfy this rule. Do not repeat the
+   workbook's administrator tasks in chat or render `packet.actions` or
+   `packet.captureInstructions` as another task list or table. Show only the
+   relevant help if requested or needed to correct rejected workbook cells.
+   Connection, sharing, and Test pane walkthroughs still render in full.
+4. If the maker asks how to do a step, answer with that step's walkthrough
+   before showing another question. On a retry, show the relevant repair
+   guidance before **Check again**, not only a completion reminder. Keep
+   sequential provider gates; do not display a later step prematurely.
+5. Consume controller success and error JSON directly. Show the safe blocker
+   and supported next action on failure; do not filter output to success
+   fields or invent a successful result. Preserve saved progress and required
+   approvals.
+6. For ServiceNow, the user sees Message blocks, tool output tables, and the
+   exact ServiceNow phase-progress strings returned by `resume-handoff`. Do not
+   show internal IDs, hashes, or file operations. Do not compose your own
+   messages; the only exception is combining an exact returned ServiceNow
+   progress string with the result's existing plain-language remediation/next
+   action as specified above.
+7. For DA ServiceNow, inspect current live and durable status before every
+   step: the mandatory `resume-handoff` result exclusively decides action
+   versus checkpoint and must not skip an incomplete action. Skip completed
+   steps only when current completion is API-verifiable or proven by a
+   successful kit operation, and always ask the maker to confirm steps whose
+   current state cannot be verified through an available API.
+8. Waiting for maker input or a portal update is not task completion. Keep the
    current question as the resume point, never treat an unavailable-user
    auto-response as an answer, and never require the maker to invoke
    `/connect` again merely to continue that question.
@@ -189,5 +210,5 @@ Rules:
 After reading `SKILL.md`, follow its integration-specific state and routing
 instructions. Do not assume a shared `.local/connect/steps.md` file or a
 generic Fresh Start section. Do not inspect `.local/connect/steps.md` before
-the router selects the retained Preview path; a DA ServiceNow route starts
+the provider entry point runs; a DA ServiceNow route starts
 with its provider lifecycle instead.

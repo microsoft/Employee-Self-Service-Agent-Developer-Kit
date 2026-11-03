@@ -738,14 +738,10 @@ Test 'bash filter pattern behaviorally drops all four discover.py marker lines a
 }
 
 # ---------------------------------------------------------------------------
-# FC-only installer must pass --ring on every FlightCheck invocation.
-# Without --ring, flightcheck/cli.py --scope full aborts with
-# "The Power Platform environment ring is unavailable" because the config
-# authored by the FC-only installer only has dataverseEndpoint (no
-# powerPlatformApiEndpoint from which the ring could be inferred). The
-# FC-only installer uses BAP prod (api.bap.microsoft.com) for env discovery,
-# so prod is the default ring; PMs can override to preprod/test via -Ring
-# / --ring.
+# FC-only installers persist the selected ring for later /flightcheck runs and
+# pass --ring explicitly on the initial FlightCheck invocation. The installer
+# uses BAP prod (api.bap.microsoft.com) for environment discovery, so prod is
+# the default ring; PMs can override to preprod/test via -Ring / --ring.
 # ---------------------------------------------------------------------------
 
 Test 'Install-EssAdk.ps1 accepts a -Ring parameter (prod|preprod|test) defaulting to prod' {
@@ -763,6 +759,15 @@ Test 'Install-EssAdk.ps1 forwards $Ring on every FC-only FlightCheck invocation'
         if ($m.Value -notmatch '--ring\s+\$Ring') {
             throw "FlightCheck invocation must forward `$Ring, not a hardcoded ring literal: $($m.Value)"
         }
+    }
+}
+
+Test 'Install-EssAdk.ps1 persists $Ring in the FC-only config' {
+    if ($src -notmatch '(?s)\$config\s*=\s*@\{.*?ring\s*=\s*\$Ring') {
+        throw "Install-EssAdk.ps1 must persist the selected ring in .local/config.json for later FlightCheck runs"
+    }
+    if ($src -notmatch '\$configState\s*\|\s*Add-Member\s+-NotePropertyName\s+ring\s+-NotePropertyValue\s+\$Ring\s+-Force') {
+        throw "Install-EssAdk.ps1 must migrate retained FlightCheck-only configs with the effective ring"
     }
 }
 
@@ -798,6 +803,18 @@ Test 'install-ess-adk.sh only validates RING in FlightCheck-only mode (does not 
 Test 'install-ess-adk.sh forwards $RING on the FC-only FlightCheck invocation' {
     if ($macInstaller -notmatch 'scripts/flightcheck/cli\.py[^\r\n]*--ring\s+"\$RING"') {
         throw '"scripts/flightcheck/cli.py" call in install-ess-adk.sh must forward $RING, not a hardcoded ring literal'
+    }
+}
+
+Test 'install-ess-adk.sh persists $RING in the FC-only config' {
+    if ($macInstaller -notmatch "'ring':\s*sys\.argv\[6\]") {
+        throw "install-ess-adk.sh must persist the selected ring in .local/config.json for later FlightCheck runs"
+    }
+    if ($macInstaller -notmatch '"\$IS_MANAGED"\s+"\$RING"\s+"\$CONFIG_PATH"') {
+        throw "install-ess-adk.sh must pass RING to the config writer"
+    }
+    if ($macInstaller -notmatch "config\['ring'\]\s*=\s*ring") {
+        throw "install-ess-adk.sh must migrate retained FlightCheck-only configs with the effective ring"
     }
 }
 

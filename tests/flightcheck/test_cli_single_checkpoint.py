@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,7 @@ def _args(
     ring: str | None = None,
     compact_result: bool = False,
     invocation_id: str | None = None,
+    power_platform_admin_origin: str | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         checkpoint=checkpoint,
@@ -64,6 +66,7 @@ def _args(
         ring=ring,
         compact_result=compact_result,
         invocation_id=invocation_id,
+        power_platform_admin_origin=power_platform_admin_origin,
     )
 
 
@@ -76,6 +79,31 @@ def _row(checkpoint_id: str, status: str) -> CheckResult:
         description="fake",
         result="fake",
     )
+
+
+@pytest.mark.parametrize(
+    "option",
+    (
+        "--runtime-evidence-attempt-id",
+        "--runtime-evidence-start",
+        "--runtime-evidence-end",
+        "--runtime-evidence-flow-id",
+        "--runtime-evidence-migration-baseline",
+    ),
+)
+def test_retired_runtime_evidence_options_are_rejected(
+    option: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    argv = ["flightcheck", option]
+    if option != "--runtime-evidence-migration-baseline":
+        argv.append("value")
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
 
 
 class _FakeRunResult:
@@ -107,21 +135,6 @@ def test_run_exit_code_treats_blocked_as_not_ready(
     # previously omitted result.blocked.
     result = _FakeRunResult(failed=failed, blocked=blocked, errors=errors)
     assert cli._run_exit_code(result) == expected
-
-
-@pytest.mark.parametrize(
-    "label",
-    ["employee@example.com", "attempt label", "../attempt", "x" * 129],
-)
-def test_runtime_evidence_label_rejects_free_form_or_sensitive_text(
-    tmp_path: Path,
-    label: str,
-) -> None:
-    args = _args("WD-DA-RUN-001", tmp_path)
-    args.runtime_evidence_attempt_id = label
-
-    with pytest.raises(ValueError, match="opaque label"):
-        cli._runtime_evidence_values(args)
 
 
 @pytest.mark.parametrize(
@@ -158,7 +171,7 @@ def test_resolve_environment_ring(
 @pytest.mark.parametrize(
     ("config", "explicit_ring", "message"),
     [
-        ({}, None, "ring is unavailable"),
+        ({}, None, "could not determine the Power Platform environment ring"),
         (
             {
                 "ring": "prod",
@@ -168,7 +181,7 @@ def test_resolve_environment_ring(
                 ),
             },
             None,
-            "do not identify the same",
+            "identifies different rings",
         ),
     ],
 )
@@ -182,6 +195,31 @@ def test_resolve_environment_ring_rejects_inconclusive_state(
             config,
             explicit_ring=explicit_ring,
         )
+
+
+def test_resolve_power_platform_admin_origin_from_config() -> None:
+    preview_origin = "https://admin.preview.powerplatform.microsoft.com"
+
+    assert (
+        cli._resolve_power_platform_admin_origin(
+            {
+                "portalOrigins": {
+                    "powerPlatformAdmin": f" {preview_origin}/ ",
+                }
+            }
+        )
+        == preview_origin
+    )
+
+
+def test_ring_admin_origins_are_validated() -> None:
+    from flightcheck.checks.environment import (
+        _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING,
+    )
+
+    assert set(_POWER_PLATFORM_ADMIN_ORIGIN_BY_RING.values()) <= (
+        cli._POWER_PLATFORM_ADMIN_ORIGINS
+    )
 
 
 @pytest.fixture
@@ -481,18 +519,29 @@ class TestGates:
         monkeypatch.chdir(tmp_path)
 
         class _PowerPlatform:
-            def __init__(self, tenant_id: str) -> None:
+            def __init__(self, tenant_id: str, *, ring: str) -> None:
                 assert tenant_id == "organizations"
+                assert ring == "prod"
 
             def authenticate(self) -> str:
                 return "token"
 
-            def get_currency_allocations(self, environment_id: str):
+            def get_environment_entitlements(self, environment_id: str):
                 assert (
                     environment_id
                     == "00000000-0000-4000-8000-000000001111"
                 )
-                return [{"currencyType": "MCSMessages", "allocated": 100}]
+                return {
+                    "items": [{
+                        "entitlementId": "MCSMessages",
+                        "entitlement": {
+                            "capacity": {
+                                "allocated": {"value": 100},
+                            },
+                        },
+                    }],
+                    "_status": 200,
+                }
 
         monkeypatch.setattr(cli, "PowerPlatformClient", _PowerPlatform)
 
@@ -537,18 +586,29 @@ class TestGates:
         monkeypatch.chdir(tmp_path)
 
         class _PowerPlatform:
-            def __init__(self, tenant_id: str) -> None:
+            def __init__(self, tenant_id: str, *, ring: str) -> None:
                 assert tenant_id == "organizations"
+                assert ring == "test"
 
             def authenticate(self) -> str:
                 return "token"
 
-            def get_currency_allocations(self, environment_id: str):
+            def get_environment_entitlements(self, environment_id: str):
                 assert (
                     environment_id
                     == "00000000-0000-4000-8000-000000001111"
                 )
-                return [{"currencyType": "MCSMessages", "allocated": 100}]
+                return {
+                    "items": [{
+                        "entitlementId": "MCSMessages",
+                        "entitlement": {
+                            "capacity": {
+                                "allocated": {"value": 100},
+                            },
+                        },
+                    }],
+                    "_status": 200,
+                }
 
         monkeypatch.setattr(cli, "PowerPlatformClient", _PowerPlatform)
 
@@ -558,6 +618,68 @@ class TestGates:
             )
 
         assert exc.value.code == 0
+
+    def test_capacity_retains_preview_admin_origin(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        saved_results = []
+        monkeypatch.setattr(
+            cli,
+            "save_results",
+            lambda result, *_args, **_kwargs: saved_results.append(result),
+        )
+
+        class _PowerPlatform:
+            def __init__(self, tenant_id: str, *, ring: str) -> None:
+                assert tenant_id == "organizations"
+                assert ring == "prod"
+
+            def authenticate(self) -> str:
+                return "token"
+
+            def get_environment_entitlements(self, environment_id: str):
+                assert environment_id == (
+                    "00000000-0000-4000-8000-000000001111"
+                )
+                return {
+                    "items": [{
+                        "entitlementId": "MCSMessages",
+                        "entitlement": {
+                            "capacity": {
+                                "allocated": {"value": 0},
+                            },
+                        },
+                    }],
+                    "_status": 200,
+                }
+
+        monkeypatch.setattr(cli, "PowerPlatformClient", _PowerPlatform)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args(
+                    "ENV-CAPACITY-001",
+                    tmp_path,
+                    environment_id=(
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                    ring="prod",
+                    power_platform_admin_origin=(
+                        "https://admin.preview.powerplatform.microsoft.com"
+                    ),
+                )
+            )
+
+        assert exc.value.code == 0
+        remediation = saved_results[0].results[0].remediation
+        assert (
+            "https://admin.preview.powerplatform.microsoft.com/"
+            "billing/licenses/copilotStudio/overview"
+        ) in remediation
 
     def test_capacity_requires_ring_when_setup_state_is_inconclusive(
         self,
@@ -586,7 +708,9 @@ class TestGates:
             )
 
         assert exc.value.code == 1
-        assert "Confirm whether the environment uses" in capsys.readouterr().out
+        output = capsys.readouterr().out
+        assert "Confirm prod, preprod, or test" in output
+        assert "rerun with --ring" in output
 
 
 class TestHermeticRun:
@@ -1091,56 +1215,6 @@ class TestHermeticRun:
             cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
 
         assert exc.value.code == 1
-
-    def test_runtime_evidence_arguments_reach_single_checkpoint_runner(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        _silence_output: None,
-    ) -> None:
-        captured = {}
-
-        def _check(runner):
-            captured["label"] = runner.runtime_evidence_attempt_id
-            captured["start"] = runner.runtime_evidence_start
-            captured["end"] = runner.runtime_evidence_end
-            captured["flow_ids"] = runner.runtime_evidence_flow_ids
-            return [_row("WD-DA-RUN-001", Status.PASSED.value)]
-
-        class _Spec:
-            category_label = "Fake"
-            is_family = False
-
-        class _Plan:
-            clients = frozenset()
-            requires_config = False
-            requires_dataverse_endpoint = False
-
-            ordered_fns = [("Fake", _check)]
-
-        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
-        monkeypatch.setattr(
-            registry,
-            "transitive_requirements",
-            lambda _target: _Plan(),
-        )
-        monkeypatch.chdir(tmp_path)
-        args = _args("WD-DA-RUN-001", tmp_path)
-        args.runtime_evidence_attempt_id = "attempt-001"
-        args.runtime_evidence_start = "2026-01-01T00:00:00Z"
-        args.runtime_evidence_end = "2026-01-01T00:05:00Z"
-        args.runtime_evidence_flow_id = ["flow-1", "flow-2"]
-
-        with pytest.raises(SystemExit) as exc:
-            cli._run_single_checkpoint(args)
-
-        assert exc.value.code == 0
-        assert captured == {
-            "label": "attempt-001",
-            "start": "2026-01-01T00:00:00Z",
-            "end": "2026-01-01T00:05:00Z",
-            "flow_ids": ("flow-1", "flow-2"),
-        }
 
     def test_failed_row_exits_1(
         self,

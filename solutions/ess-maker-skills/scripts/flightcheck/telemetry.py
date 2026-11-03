@@ -104,7 +104,10 @@ EVENT_CHECK = "ESSMakerKit.FlightCheck.Check"
 #      ADO 7943641.
 # 1.4: added ``agentType`` to check events plus profile/realm/blocking,
 #      severity, and automation dimensions — ADO 7955324.
-TELEMETRY_SCHEMA_VERSION = "1.4"
+# 1.5: added ``blockReason`` to check + run events — splits the single
+#      Blocked verdict wedge by cause so admin-API authorization denials
+#      (HTTP 401/403, AADSTS*) are countable separately from other blocks.
+TELEMETRY_SCHEMA_VERSION = "1.5"
 
 # Short, fail-open timeout (connect, read) seconds. Telemetry runs at the
 # very end of a FlightCheck; we never want it to hang the CLI.
@@ -112,18 +115,22 @@ _POST_TIMEOUT = (3.05, 5)
 
 
 # --- Tenant classification (ADO 7558661) ----------------------------------
-# Report internal Microsoft dogfood/testing traffic separately from real
-# external customer usage. ``tenant_class`` is DERIVED from ``tenant_id`` — a
-# coarse, non-identifying bucket (strictly lower sensitivity than the raw
-# tenant GUID it is computed from). It is classified at EMIT time, not in the
-# Aria cube, because 1DS RTA cubes map an event property straight to a
-# dimension and cannot derive one dimension's value from another.
+# Report known non-customer traffic separately from external customer usage.
+# ``internal`` is the historical telemetry bucket name; it includes Microsoft
+# corporate/dogfood tenancy plus explicitly verified partner, self-service, and
+# demo test tenants. It does not assert that every listed tenant is
+# Microsoft-owned. ``tenant_class`` is DERIVED from ``tenant_id`` — a coarse,
+# non-identifying bucket (strictly lower sensitivity than the raw tenant GUID
+# it is computed from). It is classified at EMIT time, not in the Aria cube,
+# because 1DS RTA cubes map an event property straight to a dimension and
+# cannot derive one dimension's value from another.
 #
-# Seeded with the Microsoft corporate Entra tenant plus known internal
-# dogfood/demo tenants that we own. Additional internal / dogfood tenants
-# can be added WITHOUT a code change via the ``ESS_ADK_INTERNAL_TENANTS``
-# env var (comma-separated GUIDs) — preferred for one-off / short-lived
-# additions; the hard-coded list is for well-known, long-lived tenancies.
+# Seeded with the Microsoft corporate Entra tenant plus known non-customer
+# dogfood/test/demo tenants. Additional non-customer tenants can be added
+# WITHOUT a code change via the ``ESS_ADK_INTERNAL_TENANTS`` env var
+# (comma-separated GUIDs) — preferred for one-off / short-lived additions; the
+# hard-coded list is for well-known, long-lived tenancies with recorded
+# provenance.
 MICROSOFT_CORP_TENANT_ID = "72f988bf-86f1-41af-91ab-2d7cd011db47"
 # EmployeeHub dogfood tenant (team-owned; see PR #242 / customer-attribution
 # analysis).
@@ -137,8 +144,29 @@ CRONTOSO_INTERNAL_TENANT_ID = "99f9fd00-6145-4c3e-b3ba-d4c7e59470d8"
 # ``devtestcocreate0630.onmicrosoft.com``); internal dev/test only.
 COCREATE_TEST_TENANT_ID = "8d36aacf-bbb3-4388-ac14-8844210f377b"
 
-# Well-known internal Microsoft tenancies. Kept as a module-level constant
-# so tests and analytics tooling can enumerate the same set.
+# These six tenants were identified in production external-usage investigations
+# by resolving their Entra display names through Microsoft Graph, then
+# explicitly designated by the telemetry owner as non-customer test/demo
+# traffic and excluded from the external dashboards. PR #458 is the durable
+# change record. Match exact IDs only; display-name patterns are not evidence.
+COPILOT_PARTNER_TEST_TENANT_ID = "142b48c2-943c-4d07-ad6b-b0eb5cd0e5f2"
+M365E5_PARTNER_TEST_TENANT_ID = "440d6412-bc8e-49a0-9913-9f8be786b89e"
+OFFICE365E5_SELF_SERVICE_TEST_TENANT_ID = "4636dd08-fdd9-4610-a443-762fb320fb4e"
+CONTOSOTPM_TEST_TENANT_ID = "6936469c-696e-4fe2-a0c8-dd16f54b1b45"
+CONTOSO_DEMO_TENANT_ID = "4345eb96-df8a-464a-9eb8-72253571a621"
+CONTOSO_DEMO_2_TENANT_ID = "2d5577b0-a83c-436c-9582-1c3bcd2ab0d3"
+
+KNOWN_NON_CUSTOMER_TEST_TENANT_IDS: tuple[str, ...] = (
+    COPILOT_PARTNER_TEST_TENANT_ID,
+    M365E5_PARTNER_TEST_TENANT_ID,
+    OFFICE365E5_SELF_SERVICE_TEST_TENANT_ID,
+    CONTOSOTPM_TEST_TENANT_ID,
+    CONTOSO_DEMO_TENANT_ID,
+    CONTOSO_DEMO_2_TENANT_ID,
+)
+
+# Well-known non-customer tenancies. Kept as a module-level constant so tests
+# and analytics tooling can enumerate the same set.
 _HARDCODED_INTERNAL_TENANT_IDS: frozenset[str] = frozenset(
     {
         MICROSOFT_CORP_TENANT_ID,
@@ -146,6 +174,7 @@ _HARDCODED_INTERNAL_TENANT_IDS: frozenset[str] = frozenset(
         CONTOSO_INTERNAL_TENANT_ID,
         CRONTOSO_INTERNAL_TENANT_ID,
         COCREATE_TEST_TENANT_ID,
+        *KNOWN_NON_CUSTOMER_TEST_TENANT_IDS,
     }
 )
 
@@ -166,7 +195,7 @@ _GUID_RE = re.compile(
 
 
 def _internal_tenant_ids() -> frozenset[str]:
-    """Allow-list of tenant GUIDs treated as internal Microsoft tenancy.
+    """Allow-list of tenant GUIDs treated as known non-customer tenancy.
 
     The env var is still consulted on every call (a cheap dict lookup), so a
     changed ``ESS_ADK_INTERNAL_TENANTS`` is honored without a restart, but the
@@ -767,6 +796,19 @@ def classify_agent_type(git_branch: str) -> str:
     return AGENT_TYPE_UNKNOWN
 
 
+def classify_flightcheck_agent_type(
+    git_branch: str,
+    invocation_source: str,
+) -> str:
+    """Classify ADK-invoked FlightCheck runs as DA unless shipped from CA."""
+    normalized_branch = str(git_branch or "").strip().lower()
+    if normalized_branch == "main-ca":
+        return AGENT_TYPE_CUSTOM
+    if str(invocation_source or "").strip().lower() == "adk":
+        return AGENT_TYPE_DECLARATIVE
+    return classify_agent_type(normalized_branch)
+
+
 def _build_event(name: str, ikey_envelope: str, data: dict[str, Any]) -> dict[str, Any]:
     """Build a minimal Common Schema 4.0 envelope.
 
@@ -836,16 +878,27 @@ RUN_OUTCOME_ERRORED = "Blocked (check errored)"
 # NOT_READY with exit code 1 (ADO 7943641 carry-over).
 RUN_OUTCOME_BLOCKED = "Blocked (gate)"
 
+_DIAGNOSTIC_RUN_OUTCOMES = {
+    "SETUP_CHECKS_PASSED": "Setup checks passed",
+    "CHECKED_WITH_NOTES": "Checked with notes",
+    "SOME_CHECKS_UNVERIFIED": "Some checks could not run",
+    "ISSUES_FOUND": "Setup issues found",
+}
+
 
 def derive_run_outcome(run_result: Any) -> str:
     """Bucket a run into a single verdict slice.
 
-    Precedence: errored > failed > blocked > warnings > ready. ``errored`` and
+    Diagnostic overalls describe inspection, not release readiness.
+    For readiness runs: errored > failed > blocked > warnings > ready. ``errored`` and
     ``failed`` rank above ``blocked`` only to keep the pre-existing slice
     ordering stable; all three are NOT_READY. ``blocked`` stays above
     ``warnings`` because a blocked essential capability is a release gate while
     warnings are advisory.
     """
+    diagnostic_outcome = _DIAGNOSTIC_RUN_OUTCOMES.get(getattr(run_result, "overall", ""))
+    if diagnostic_outcome is not None:
+        return diagnostic_outcome
     errors = getattr(run_result, "errors", 0) or 0
     failed = getattr(run_result, "failed", 0) or 0
     blocked = getattr(run_result, "blocked", 0) or 0
@@ -859,6 +912,91 @@ def derive_run_outcome(run_result: Any) -> str:
     if warnings > 0:
         return RUN_OUTCOME_WARNINGS
     return RUN_OUTCOME_READY
+
+
+# --- Block-reason attribution (ADO: split the Blocked wedge by cause) -------
+# A blocked CheckResult carries a bounded ``block_reason`` enum set by the
+# runner/checks at the block site. We re-validate it here against a
+# self-contained allow-list (telemetry.py never imports runner) and collapse
+# anything unknown to ``other`` so no free-form string ever reaches Aria,
+# mirroring the _ALLOWED_BRANCHES / _classify_branch privacy pattern above.
+#
+# Primary goal: make admin-API authorization denials (HTTP 401/403 or
+# AADSTS*) countable on their own, separate from "admin API unreachable"
+# (404 wrong-env, 5xx, timeout) and the non-auth block causes.
+BLOCK_REASON_ADMIN_API_AUTHORIZATION = "adminApiAuthorization"
+BLOCK_REASON_ADMIN_API_UNAVAILABLE = "adminApiUnavailable"
+BLOCK_REASON_CHECKPOINT_CONTRACT = "checkpointContract"
+BLOCK_REASON_PROFILE_CARDINALITY = "profileCardinality"
+BLOCK_REASON_EVIDENCE_AMBIGUOUS = "evidenceAmbiguous"
+BLOCK_REASON_OTHER = "other"
+
+# The CheckResult.status value for a blocked check (runner Status.BLOCKED.value).
+# Defined locally so telemetry.py stays decoupled from runner; kept distinct
+# from the RUN_OUTCOME_* donut labels, which are run-level verdicts.
+_CHECK_STATUS_BLOCKED = "Blocked"
+
+_ALLOWED_BLOCK_REASONS = frozenset({
+    BLOCK_REASON_ADMIN_API_AUTHORIZATION,
+    BLOCK_REASON_ADMIN_API_UNAVAILABLE,
+    BLOCK_REASON_CHECKPOINT_CONTRACT,
+    BLOCK_REASON_PROFILE_CARDINALITY,
+    BLOCK_REASON_EVIDENCE_AMBIGUOUS,
+    BLOCK_REASON_OTHER,
+})
+
+# Run-level roll-up precedence (highest first). A run can have several
+# blocked checks with different causes; we surface the most actionable one.
+# Authorization ranks first because it is the signal this split exists to
+# count; "other" is last so a known cause always wins over the fallback.
+_BLOCK_REASON_PRECEDENCE = (
+    BLOCK_REASON_ADMIN_API_AUTHORIZATION,
+    BLOCK_REASON_ADMIN_API_UNAVAILABLE,
+    BLOCK_REASON_CHECKPOINT_CONTRACT,
+    BLOCK_REASON_PROFILE_CARDINALITY,
+    BLOCK_REASON_EVIDENCE_AMBIGUOUS,
+    BLOCK_REASON_OTHER,
+)
+
+
+def derive_check_block_reason(check: Any) -> str:
+    """Bounded block-reason for a single check event.
+
+    Returns "" for any non-blocked check (``block_reason`` is only
+    meaningful when the status is Blocked). For a blocked check, returns the
+    check's ``block_reason`` if it is an allowed enum value, otherwise
+    ``other`` so no free-form string is ever emitted. A blocked check with an
+    empty ``block_reason`` (pre-change data) also collapses to ``other``.
+    """
+    status = getattr(check, "status", "")
+    if status != _CHECK_STATUS_BLOCKED:
+        return ""
+    reason = getattr(check, "block_reason", "") or ""
+    if reason in _ALLOWED_BLOCK_REASONS:
+        return reason
+    return BLOCK_REASON_OTHER
+
+
+def derive_run_block_reason(run_result: Any) -> str:
+    """Roll block reasons of all blocked checks up to one run-level value.
+
+    Returns "" when the run has no blocked checks. Otherwise returns the
+    highest-precedence block reason present across the blocked checks, so a
+    run that is auth-blocked anywhere is countable as such regardless of its
+    final verdict donut slice (a run can be Blocked-count>0 but overall
+    Failed/Errored).
+    """
+    present: set[str] = set()
+    for check in getattr(run_result, "results", []) or []:
+        reason = derive_check_block_reason(check)
+        if reason:
+            present.add(reason)
+    if not present:
+        return ""
+    for reason in _BLOCK_REASON_PRECEDENCE:
+        if reason in present:
+            return reason
+    return BLOCK_REASON_OTHER
 
 
 # --- Connector attribution (ADO 7943641) ----------------------------------
@@ -989,6 +1127,7 @@ def _run_data(
         "connector": derive_connector_from_scope(scope),  # derived: workday|servicenow|""
         "overall": getattr(run_result, "overall", ""),
         "runOutcome": derive_run_outcome(run_result),  # verdict donut split (errored|failed|warnings|ready)
+        "blockReason": derive_run_block_reason(run_result),  # bounded: splits the Blocked wedge by cause ("" when no blocked checks)
         "durationSecs": getattr(run_result, "duration_secs", 0),
         "total": getattr(run_result, "total", 0),
         "passed": getattr(run_result, "passed", 0),
@@ -1030,6 +1169,7 @@ def _check_data(
         "connector": derive_connector_from_category(_category),  # derived
         "priority": getattr(check, "priority", ""),
         "status": getattr(check, "status", ""),
+        "blockReason": derive_check_block_reason(check),  # bounded: cause when Blocked, "" otherwise
         "severity": getattr(check, "severity", ""),
         "automationType": getattr(check, "automation_type", ""),
         "roles": ", ".join(getattr(check, "roles", []) or []),
@@ -1052,7 +1192,10 @@ def build_events(
 ) -> list[dict[str, Any]]:
     """Build the run envelope + one envelope per check (testable, no IO)."""
     run_id = run_id or str(uuid.uuid4())
-    agent_type = classify_agent_type(get_toolkit_git_branch())
+    agent_type = classify_flightcheck_agent_type(
+        get_toolkit_git_branch(),
+        invocation_source,
+    )
     events = [
         _build_event(
             EVENT_RUN,

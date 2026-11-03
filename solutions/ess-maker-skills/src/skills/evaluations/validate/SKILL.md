@@ -37,12 +37,98 @@ Where:
   category label, prior conversation, or agent slug.
 - This supports both workspace-level sets and configured-agent sets.
 
-The script calls the Copilot API and returns dimension scores and flagged cases.
+The script calls the GitHub Copilot API and returns dimension scores and flagged
+cases. Automated scoring requires an effective `github.com` credential whose
+account has GitHub Copilot access. GitHub authentication for source control and
+Copilot Studio authentication do not establish that entitlement.
 
-If the script fails, report its actual error reason before falling back to Step
-2. Do not label every failure as "script unavailable": distinguish an invalid
-folder, authentication failure, missing dependency, and API failure. Otherwise
-skip Step 2 and go straight to Step 3.
+The parent may re-invoke this validator with one of these explicit continuation
+inputs in addition to the same exact set folder:
+
+- `authenticationRetry=true` means the user completed or selected authentication.
+  Run Step 1 exactly once. If it still returns `authentication_required`, do not
+  return another recovery request; continue directly to Step 2.
+- `manualFallbackAuthorized=true` plus `fallbackReason="{reason}"` means the user
+  explicitly selected manual scoring or declined authentication. Skip Step 1
+  and begin at Step 2 using that reason as operational evidence. Incomplete
+  login, installation, restart, or identity verification never authorizes this
+  flag; preserve the selected folder and resume authentication recovery instead.
+
+These inputs prevent a fresh subagent from losing recovery state. Never infer
+either input from prior conversation or local files.
+
+If the command exits with code `3` and returns JSON with
+`status=authentication_required`, follow **Authentication recovery** below. Do
+not perform manual scoring yet unless `authenticationRetry=true`; in that case
+the one allowed retry has failed, so continue to Step 2. For other failures,
+report the actual error reason before falling back to Step 2. Do not label every
+failure as "script unavailable": distinguish an invalid folder, missing
+dependency, rate limit, network failure, and API failure. Otherwise skip Step 2
+and go straight to Step 3.
+
+For this exit code, stdout is one JSON object with no normal report preamble;
+parse that object. Exit code `2` remains argparse usage failure and is not an
+authentication signal.
+
+The stable authentication reasons are `gh_cli_missing`,
+`gh_not_authenticated`, `github_auth_timeout`, and `copilot_unauthorized`.
+`environmentOverride`, when present, is credential-source evidence rather than
+a separate reason.
+
+### Authentication recovery
+
+Return the complete `authentication_required` result to the parent without
+manually scoring. The parent owns user interaction because this validator runs
+as a subagent. The parent must retain the exact selected set folder and:
+
+1. Explain that automated **test-set quality scoring** sends the selected
+   prompts and expected responses to the GitHub Copilot API and requires the
+   effective `github.com` account to have GitHub Copilot access. This is not the
+   Compare Meaning scoring performed by a published Copilot Studio run.
+2. Show the returned `account` when present. If `environmentOverride` is
+   present, explain that the named environment variable takes precedence over
+   stored GitHub CLI accounts. Never display or request its token value, and
+   never unset or replace it without the user's action.
+3. Invoke the structured question control:
+
+   > Automated quality scoring cannot use the current GitHub credential. What
+   > would you like to do?
+
+   Offer exactly:
+
+   - **Sign in or switch GitHub account and retry automated scoring**
+   - **Continue with manual scoring**
+
+4. If manual scoring is selected or the question is declined, re-invoke this
+   validator with the same folder, `manualFallbackAuthorized=true`, and the
+   returned reason as `fallbackReason`. Do not describe manual scoring as
+   automated or as Copilot Studio run scoring.
+5. If authentication is selected:
+   - For `gh_cli_missing`, explain that GitHub CLI must be installed and stop;
+     do not claim authentication succeeded or consume the one retry. The user
+     can resume the same selected set after installing it.
+   - For an environment override, ask the user to update or remove the named
+     variable in the terminal that launched VS Code, then restart VS Code and
+     resume the same selected set. Account switching does not bypass that
+     override. Do not retry in the current agent process or consume the one
+     retry because its inherited environment cannot change.
+   - Otherwise run `gh auth status --hostname github.com`. If the desired
+     licensed account is already stored, use the structured question control to
+     select it and run
+     `gh auth switch --hostname github.com --user "{selected account}"`.
+     If it is not stored, instruct the user to run
+     `gh auth login --hostname github.com --web` in the integrated terminal and
+     wait for confirmation. For stale credentials, instruct the user to run
+     `gh auth refresh --hostname github.com` there and wait for confirmation.
+     Do not launch either interactive browser command in a captured subprocess.
+6. Verify the effective identity with
+   `gh api --hostname github.com user --jq .login`. Then re-invoke this validator
+   for the same folder with `authenticationRetry=true`. Do not rediscover or
+   choose another set.
+7. That new validator invocation owns the single retry. If it succeeds, it
+   continues to Step 3. If it returns another authentication-required result,
+   it reports the effective account and reason and continues to Step 2. It must
+   not return another recovery request. Never enter an authentication loop.
 
 **If re-invoked after fixes** (the parent passes a list of edited files):
 - Script path: re-run the script on the full category — fast enough to rescore all.
@@ -54,10 +140,12 @@ skip Step 2 and go straight to Step 3.
 
 Keep whether the script or fallback path was used in the returned internal
 evidence. Do not add a scoring-method banner to the maker-facing scorecard.
-When automated scoring fails, report the actual failure to the parent as
-operational evidence before returning a manually scored result. Record that
-internal status as `⚠️ Automated scoring failed ({reason}) — scored manually`;
-do not render it as a scorecard banner.
+When non-authentication automated scoring fails, or authentication was declined
+or still fails after the one allowed retry, report the actual failure to the
+parent as operational evidence before returning a manually scored result.
+Record that internal status as
+`⚠️ Automated scoring failed ({reason}) — scored manually`; do not render it as
+a scorecard banner.
 
 The script automatically skips `MultiTurnEvaluationCase` files — no action
 needed.
@@ -66,7 +154,8 @@ needed.
 
 ## Step 2 — Manual scoring (fallback only)
 
-**Only run this step if the script in Step 1 failed.**
+**Only run this step for a non-authentication script failure, after the user
+declines authentication, or after the single authenticated retry fails.**
 
 Read each YAML file at the provided paths. For EvaluationData files, extract:
 - `input` — the user utterance being tested
