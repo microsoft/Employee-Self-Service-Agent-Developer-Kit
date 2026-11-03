@@ -13862,8 +13862,7 @@ def _current_task_guidance(
             "Maker records a current component-hash-bound keep-current "
             "decision. Unrelated topics remain unchanged.\n\n"
             "**Completion boundary**\n"
-            "The topic choice is a separate card. Test and Production "
-            "promoted content remains read-only."
+            "The topic choice is a separate card."
         )
     if phase_id == "portal-url":
         return common + (
@@ -13896,9 +13895,9 @@ def _current_task_guidance(
             "not return response content, employee data, identifiers, tokens, "
             "or secrets.\n\n"
             "**Completion boundary**\n"
-            "A separate Test result card records current Manual Maker "
-            "evidence. This is not API-proven Test or employee production "
-            "validation."
+            "A separate Test result card records the Maker-reported Test pane "
+            "result as current human-verified evidence. It is not a Connect "
+            "API check and does not claim business success."
         )
     raise ServiceNowConnectError(
         "ServiceNow current-task guidance is missing."
@@ -15778,15 +15777,6 @@ def _command_error_recovery(
                 "result/failure category; never return employee or ticket data."
             ),
             "A passing bounded result is current for the saved draft and binding.",
-        ),
-        "realm-validation": (
-            "Power Platform Maker/Admin",
-            links["copilotStudioAgent"]["url"],
-            (
-                "Use only native ALM target identity and target-confirmed "
-                "values. Do not copy Dev values or mutate Test/Prod here."
-            ),
-            "The exact target is proved and read-only validation can continue.",
         ),
         "lifecycle": (
             "ESS Maker / Agent Developer",

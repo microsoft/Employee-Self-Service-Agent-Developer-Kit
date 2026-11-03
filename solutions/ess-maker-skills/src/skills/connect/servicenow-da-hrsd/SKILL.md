@@ -97,7 +97,11 @@ verifies the resulting topic states and portal value.
 **Dev Test:** After topic and portal configuration is complete, the Maker runs
 the HRSD or ITSM scenario in the agent’s Test pane using authorized real data.
 FlightCheck reviews the Maker’s reported result as Manual evidence for the
-final configuration.
+final configuration. In the final report word it as "Maker-reported Test pane
+result"; administrator-supplied items as "Confirmed by the administrator" and
+Maker-supplied items as "Confirmed by the Maker". Manual means human-verified,
+never Passed, and never proof of business success; Passed means verified by
+Connect checks.
 
 Only report the integration connected after the runner completes all nine
 phases, including explicit remote reuse approval and the four admin

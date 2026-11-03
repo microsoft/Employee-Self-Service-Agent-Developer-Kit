@@ -314,8 +314,9 @@ the OAuthUser and Dataverse references, shared connection parameters,
 stale-connection recovery, flow enablement, bot-to-flow authorization, V2
 employee context, topic selection, firewall readiness, and a signed-in
 end-to-end Workday scenario. Settings without a reliable DA-scoped API require
-explicit maker or administrator confirmation rather than being reported as
-automatically verified.
+explicit maker or administrator confirmation. These items are reported as
+human-verified ("Confirmed by the administrator", "Confirmed by the Maker")
+rather than as passing Connect checks.
 
 At the beginning of the experience, the skill presents the complete setup plan
 and identifies when an Entra administrator, Workday administrator, Power

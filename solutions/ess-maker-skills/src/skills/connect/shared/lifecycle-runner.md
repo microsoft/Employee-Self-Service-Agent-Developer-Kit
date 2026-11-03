@@ -855,8 +855,17 @@ Once every phase is `done`:
 the provider plan completed.
 
 Validation results: {checkpoint IDs and their actual current status values,
-grouped by phase; preserve Manual, Warning, Skipped, and NotConfigured rather
-than describing them as Passed}.
+grouped by phase}. Word each result by who verified it:
+
+- `Passed` — "Verified by Connect checks".
+- `Manual` — human-verified: "Confirmed by the administrator", "Confirmed by
+  the Maker", or "Maker-reported Test pane result". Never describe Manual
+  evidence as Passed, as machine-checked, or as proof of business success.
+- `Warning`, `Skipped`, and `NotConfigured` — preserve the actual status and
+  its reason.
+
+Describe only the current lifecycle's results. Do not add statements about
+other environment stages or deployment steps.
 
 **End message.**
 

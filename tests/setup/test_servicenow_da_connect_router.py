@@ -119,7 +119,6 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "Never changes `.local/config.json.activeAgent`" in router
     assert "`schema_version: 4` with an environment binding" in router
     assert "emit_capability.py connect --connector servicenow" in router
-    assert "already promoted to Test or Production" in router
     assert "literal Workday request remains on the Workday route" in router
 
     interactive_router = (
@@ -902,3 +901,42 @@ def test_servicenow_oidc_guides_match_complete_stage2_workbook() -> None:
         assert "atomically persists the mapping receipt and owning Manual" in (
             normalized
         )
+
+
+def test_connect_completion_uses_human_verified_wording_without_realm_text() -> None:
+    import re
+
+    skills = _SOLUTION / "src" / "skills" / "connect"
+    docs = {
+        "router": skills / "SKILL.md",
+        "runner": skills / "shared" / "lifecycle-runner.md",
+        "chooser": skills / "servicenow-da" / "SKILL.md",
+        "hrsd": skills / "servicenow-da-hrsd" / "SKILL.md",
+        "itsm": skills / "servicenow-da-itsm" / "SKILL.md",
+        "controller": _SOLUTION / "scripts" / "connect_servicenow_da.py",
+    }
+    forbidden = re.compile(
+        r"automatically verified|already promoted|promoted (?:to|content)|"
+        r"Test (?:or|and|/) ?Prod|realm-validation|realm path|"
+        r"Production (?:validation|verification)",
+        re.IGNORECASE,
+    )
+    text = {name: path.read_text(encoding="utf-8") for name, path in docs.items()}
+    for name, content in text.items():
+        assert forbidden.search(content) is None, name
+
+    readme = (_SOLUTION / "README.md").read_text(encoding="utf-8")
+    assert "automatically verified" not in readme.lower()
+
+    completion = " ".join(text["runner"].split("## L.5 — Completion", 1)[1].split())
+    for phrase in (
+        "Verified by Connect checks",
+        "Confirmed by the administrator",
+        "Confirmed by the Maker",
+        "Maker-reported Test pane result",
+    ):
+        assert phrase in completion
+    for name in ("hrsd", "itsm"):
+        flat = " ".join(text[name].split())
+        assert "Maker-reported Test pane result" in flat
+        assert "human-verified" in flat
