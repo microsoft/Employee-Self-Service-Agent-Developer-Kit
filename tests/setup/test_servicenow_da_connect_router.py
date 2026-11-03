@@ -107,6 +107,7 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "one-element array containing that exact object" in prompt
     assert "Never substitute the header for the question body" in prompt
     assert "preserving its complete `header`, `question`, `options`" in prompt
+    assert "rebuild its option labels" in prompt
     assert "HR's four or IT's three collaboration groups" in prompt
     assert "Preflight and instance input never ask availability" in prompt
     assert "with `--roles-available yes`" in prompt
@@ -125,6 +126,10 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "**ServiceNow phase-progress extension:**" in runner
     assert "one-element array containing that exact object" in runner
     assert "never substitute the header for the body" in runner
+    assert (
+        "explicit option labels answer only the current role-availability "
+        "question"
+    ) in runner
     assert "`choices` is not a supported native question field" in runner
     assert "Other providers retain this runner's existing output" in runner
     assert "cached `done` phase displays **Rechecking**" in runner

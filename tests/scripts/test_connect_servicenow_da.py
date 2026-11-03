@@ -2641,6 +2641,12 @@ def test_complete_dev_record_unlocks_realm_chooser_without_state_write(
         {"label": "Dev, resume the current authoring agent"},
         {"label": "Test, validate the promoted Test target"},
     ]
+    assert handoff["question"]["header"] == "Choose validation environment"
+    assert handoff["question"]["header"] != handoff["question"]["question"]
+    assert all(
+        option["label"].casefold() not in {"yes", "no"}
+        for option in handoff["question"]["options"]
+    )
     assert handoff["testRealmComplete"] is False
     assert [stage["status"] for stage in handoff["testRealmStages"]] == [
         "pending",
@@ -2648,6 +2654,103 @@ def test_complete_dev_record_unlocks_realm_chooser_without_state_write(
         "pending",
     ]
     assert path.read_bytes() == before
+
+
+def test_generated_question_families_have_distinct_headers_and_bodies() -> None:
+    context = _context()
+    runtime_plan = snow._runtime_plan(
+        realm="test",
+        target_identity={
+            "realm": "test",
+            "tenantId": TENANT_ID,
+            "environmentId": ENVIRONMENT_ID,
+            "dataverseUrl": "https://target.crm.dynamics.com",
+            "agentId": OTHER_AGENT_ID,
+            "schemaName": f"{snow.HR_SCHEMA_NAME}_test",
+            "almFamilyId": "alm-family-test",
+            "commitSha": "a" * 40,
+        },
+        target_configuration_sha256="b" * 64,
+        content_sha256="c" * 64,
+        connection_id=CONNECTION_ID,
+    )
+    instance_question, _choices, manual_instance_question = (
+        snow._preflight_instance_question(
+            context=context,
+            candidates=["dev111"],
+            discovery_error=None,
+        )
+    )
+    groups = (
+        {
+            "id": "hr-prerequisite",
+            "label": "HR prerequisite",
+        },
+        {
+            "id": "entra-identity",
+            "label": "Entra identity",
+        },
+        {
+            "id": "servicenow-sso",
+            "label": "ServiceNow SSO and user mapping",
+        },
+        {
+            "id": "maker-configuration",
+            "label": "Maker configuration and validation",
+        },
+    )
+    with snow.product_profile_context("hrsd"):
+        questions = {
+            "agent-link": snow._agent_link_question(),
+            "instance-choice": instance_question,
+            "instance-freeform": manual_instance_question,
+            "entra-handoff": snow._identity_handoff_question("entra"),
+            "oidc-handoff": snow._identity_handoff_question("servicenow"),
+            "promotion": snow._realm_deployment_question(
+                context,
+                realm="test",
+            ),
+            "runtime-plan": snow._realm_runtime_plan_question(
+                realm="test",
+                runtime_plan=runtime_plan,
+            ),
+            "target-binding": snow._realm_binding_question(
+                realm="test",
+                runtime_plan=runtime_plan,
+            ),
+            "target-test": snow._realm_functional_test_question(
+                realm="test",
+                test_pane_url="https://target.example/test-pane",
+            ),
+            **{
+                f"availability-{group['id']}": (
+                    snow._business_group_availability_question(group)
+                )
+                for group in groups
+            },
+        }
+
+    for family, question in questions.items():
+        assert question["header"].strip(), family
+        assert question["question"].strip(), family
+        assert question["header"] != question["question"], family
+        assert question["question"].strip().splitlines()[0] != (
+            question["header"]
+        ), family
+        assert "**Phases**" not in question["question"], family
+        assert not any(
+            glyph in question["question"]
+            for glyph in ("✅", "🔄", "⬜", "❌")
+        ), family
+        options = question.get("options")
+        if options:
+            assert all(
+                option["label"].strip()
+                and option["label"].casefold() not in {"yes", "no"}
+                for option in options
+            ), family
+        else:
+            assert question["allowFreeformInput"] is True, family
 
 
 @pytest.mark.parametrize(
@@ -2673,12 +2776,16 @@ def test_realm_functional_question_uses_profile_prompt(
     assert question["header"] == (
         f"Validate the {realm.title()} ServiceNow target"
     )
+    assert question["header"] != question["question"]
     assert f"`{prompt}`" in question["question"]
     assert "https://target.example/test-pane" in question["question"]
-    assert "Do not add an employee name" in question["question"]
-    assert "Do not paste the response" in question["question"]
-    assert "scoped target remediation" in question["question"]
-    assert "promoted-content defects" in question["question"]
+    assert "Do not include response content" in question["question"]
+    assert "one bounded failure category outside this card" in (
+        question["question"]
+    )
+    assert "promoted-content defect" in question["question"]
+    assert "**Action**" not in question["question"]
+    assert "1. Open" not in question["question"]
     assert [option["label"] for option in question["options"]] == [
         (
             f"Pass, the {snow.PRODUCT_PROFILES[profile].product_name} "
@@ -2749,13 +2856,17 @@ def test_missing_realm_deployment_handoff_is_resumable_and_ordered(
         f"Not yet, the {realm_label} promotion is still pending",
     ]
     assert question["allowFreeformInput"] is False
-    assert "organization's normal promotion process" in body
-    assert "Choose Completed only after" in body
-    assert "provision, promote, import, publish" in body
-    assert "does not prove validation passed" in body
-    assert "ALM owner" in body
+    assert question["header"] != body
+    assert "organization's approved" in body
+    assert "Has the Copilot Studio / Power Platform ALM owner confirmed" in body
+    assert "Connect does not provision, promote, import, publish" in body
+    assert "This confirmation is only a prerequisite" in body
     assert "employee-self-service-it" in body
     assert context["environment"]["id"] in body
+    assert "**Purpose**" not in body
+    assert "**Owner**" not in body
+    assert "**Open**" not in body
+    assert "**Action**" not in body
 
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["phases"] == phases_before
@@ -3323,6 +3434,7 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     assert result["remoteMutationCount"] == 0
     assert target_client.mutation_count == 0
     assert result["next"]["action"] == "approve-runtime-plan"
+    assert "ordinary current-task reply" in result["next"]["instruction"]
     plan_sha256 = result["runtimePlan"]["planSha256"]
 
     with snow.product_profile_context("itsm"):
@@ -3344,6 +3456,15 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     assert approved["question"]["header"] == (
         f"Bind the {realm.title()} ServiceNow connection"
     )
+    binding_body = approved["question"]["question"]
+    assert approved["question"]["header"] != binding_body
+    assert target_agent_id in binding_body
+    assert target_environment_id in binding_body
+    assert approved["runtimePlan"]["connectionId"] in binding_body
+    assert plan_sha256 in binding_body
+    assert "Manual UI binding evidence only" in binding_body
+    assert "Open the exact target agent" not in binding_body
+    assert "Settings -> Connection settings" not in binding_body
     assert approved["question"]["options"] == [
         {
             "label": (
@@ -3357,6 +3478,11 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
             )
         },
     ]
+    assert approved["next"]["action"] == "maker-binds-target-connection"
+    assert target_environment_id in approved["next"]["url"]
+    assert target_agent_id in approved["next"]["url"]
+    assert "ordinary current-task reply" in approved["next"]["instruction"]
+    assert "Settings -> Connection settings" in approved["next"]["instruction"]
     assert bound["status"] == "ready-for-test-pane"
     assert bound["remoteMutationCount"] == 0
     assert [stage["status"] for stage in bound["realmStages"]] == [
@@ -3380,6 +3506,8 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     ]
     assert target_environment_id in bound["next"]["url"]
     assert target_agent_id in bound["next"]["url"]
+    assert "Test pane" in bound["next"]["instruction"]
+    assert "Open the exact target agent" not in bound["question"]["question"]
 
 
 def test_validate_target_realm_blocks_when_exact_environment_is_unproven(
@@ -3513,9 +3641,10 @@ def test_already_promoted_all_candidate_not_found_returns_deployment_guidance(
         "details": details,
     }
     assert result["question"]["header"] == "Confirm Test promotion completed"
-    assert "organization's normal promotion process" in (
+    assert "organization's approved Test promotion/import" in (
         result["question"]["question"]
     )
+    assert "ordinary current-task reply" in result["next"]["instruction"]
     assert path.read_bytes() == before
 
 
@@ -9325,14 +9454,13 @@ def test_partial_legacy_entra_rows_require_one_complete_handoff(
         "Step 1 of 2 — Entra: list employee identity options"
     )
     assert question_object == {
-        "header": (
-            "Please enter the returned Entra admin handoff workbook URL."
-        ),
+        "header": "Entra admin handoff file",
         "question": (
             "Please enter the returned Entra admin handoff workbook URL."
         ),
         "allowFreeformInput": True,
     }
+    assert question_object["header"] != question_object["question"]
     assert question.startswith("**Purpose**\n")
     assert "Step 1 of 2" not in question
     assert "Complete the Entra application and identity-claim handoff." in question
@@ -9521,14 +9649,13 @@ def test_public_entra_handoff_emits_v3_workbook_for_hr_and_it(
         "Step 1 of 2 — Entra: list employee identity options"
     )
     assert handoff["question"] == {
-        "header": (
-            "Please enter the returned Entra admin handoff workbook URL."
-        ),
+        "header": "Entra admin handoff file",
         "question": (
             "Please enter the returned Entra admin handoff workbook URL."
         ),
         "allowFreeformInput": True,
     }
+    assert handoff["question"]["header"] != handoff["question"]["question"]
     instruction = handoff["instruction"]
     assert "No separate readiness item is included" not in instruction
     assert "Separate readiness checks still report" not in instruction
@@ -10214,14 +10341,13 @@ def test_retired_graph_rows_do_not_drive_entra_handoff(
         "Step 1 of 2 — Entra: list employee identity options"
     )
     assert question_object == {
-        "header": (
-            "Please enter the returned Entra admin handoff workbook URL."
-        ),
+        "header": "Entra admin handoff file",
         "question": (
             "Please enter the returned Entra admin handoff workbook URL."
         ),
         "allowFreeformInput": True,
     }
+    assert question_object["header"] != question_object["question"]
     assert instruction.startswith("**Purpose**\n")
     assert str(Path(handoff["workbookPath"])) in instruction
     headings = ("**Purpose**", "**Owner**", "**Known target**", "**Action**")
@@ -17252,7 +17378,7 @@ def test_business_group_question_is_just_in_time_after_preflight(
     assert availability["currentGroup"]["role"] == expected_role
     expected_questions = {
         "hr-prerequisite": {
-            "header": "ServiceNow admin availability",
+            "header": "HR prerequisite",
             "question": "Is the ServiceNow admin available now?",
             "options": [
                 {"label": "Yes, the ServiceNow admin is available now"},
@@ -17261,7 +17387,7 @@ def test_business_group_question_is_just_in_time_after_preflight(
             "allowFreeformInput": False,
         },
         "entra-identity": {
-            "header": "Entra administrator availability",
+            "header": "Entra identity",
             "question": "Is the Entra admin available now?",
             "options": [
                 {"label": "Yes, the Entra admin is available now"},
@@ -17271,6 +17397,9 @@ def test_business_group_question_is_just_in_time_after_preflight(
         },
     }
     assert availability["question"] == expected_questions[expected_group]
+    assert availability["question"]["header"] == availability[
+        "currentGroup"
+    ]["label"]
     elicitation = json.dumps(
         availability["question"],
         ensure_ascii=False,
@@ -17520,7 +17649,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             "ServiceNow admin / security_admin"
         )
         assert sso["question"] == {
-            "header": "ServiceNow administrator availability",
+            "header": "ServiceNow SSO and user mapping",
             "question": (
                 "Is the ServiceNow admin with security_admin available now?"
             ),
@@ -17577,7 +17706,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         _, maker = gate(verified_admin)
         assert maker["currentGroup"]["id"] == "maker-configuration"
         assert maker["question"] == {
-            "header": "Maker availability",
+            "header": "Maker configuration and validation",
             "question": "Is the Maker available now?",
             "options": [
                 {"label": "Yes, the Maker is available now"},
@@ -18091,6 +18220,7 @@ def test_agent_chooser_lists_prepared_agents_without_remote_discovery(
     assert result["agents"][0]["status"] == "prepared"
     assert "prepared in this workspace" in result["question"]["question"]
     assert result["question"]["allowFreeformInput"] is False
+    assert result["question"]["header"] != result["question"]["question"]
     assert result["question"]["options"][-1] == {
         "label": "Use another agent (paste link)",
         "selectionKey": "another-agent",
@@ -18148,6 +18278,10 @@ def test_agent_chooser_offers_link_when_no_agent_is_prepared(
         "options": [],
         "allowFreeformInput": True,
     }
+    assert (
+        link_question["question"]["header"]
+        != link_question["question"]["question"]
+    )
 
 
 def test_agent_chooser_returns_typed_setup_handoff_for_new_workspace_link(

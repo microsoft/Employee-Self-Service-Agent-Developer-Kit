@@ -1164,6 +1164,29 @@ def _identity_requirement_question() -> dict[str, Any]:
     )
 
 
+def _identity_handoff_question(stage: str) -> dict[str, Any]:
+    if stage == "entra":
+        return _native_question(
+            header="Entra admin handoff file",
+            question=(
+                "Please enter the returned Entra admin handoff workbook URL."
+            ),
+            allow_freeform_input=True,
+        )
+    if stage == "servicenow":
+        return _native_question(
+            header="ServiceNow admin handoff file",
+            question=(
+                "Please enter the returned ServiceNow admin handoff workbook "
+                "URL."
+            ),
+            allow_freeform_input=True,
+        )
+    raise ServiceNowConnectError(
+        "Identity handoff question stage must be entra or servicenow."
+    )
+
+
 def _identity_requirement_choices() -> list[dict[str, str]]:
     return [
         {
@@ -5132,9 +5155,6 @@ def identity_mapping_handoff(
             "`_metadata` sheets intact. Save and return exactly one completed "
             "XLSX or CSV file."
         )
-        maker_question = (
-            "Please enter the returned Entra admin handoff workbook URL."
-        )
     else:
         instruction_title = (
             "Step 2 of 2 — ServiceNow: choose the matching user field"
@@ -5171,9 +5191,6 @@ def identity_mapping_handoff(
             "one matching Active user, without returning employee values.\n"
             "5. Preserve the locked claim rows, `Steps`, `Worksheet`, hidden "
             "`_metadata`, and workbook protection. Save the completed workbook."
-        )
-        maker_question = (
-            "Please enter the returned ServiceNow admin handoff workbook URL."
         )
     return {
         "schemaVersion": "servicenow.identity-mapping-handoff.v1",
@@ -5249,11 +5266,7 @@ def identity_mapping_handoff(
         "question": (
             None
             if handoff_mode == "complete"
-            else {
-                "header": maker_question,
-                "question": maker_question,
-                "allowFreeformInput": True,
-            }
+            else _identity_handoff_question(stage)
         ),
         "clientIdQuestion": None,
     }
@@ -12597,19 +12610,16 @@ def _business_group_availability_question(
 ) -> dict[str, Any]:
     copy_by_group = {
         "hr-prerequisite": {
-            "header": "ServiceNow admin availability",
             "question": "Is the ServiceNow admin available now?",
             "yes": "Yes, the ServiceNow admin is available now",
             "no": "No, I need to bring the ServiceNow admin in",
         },
         "entra-identity": {
-            "header": "Entra administrator availability",
             "question": "Is the Entra admin available now?",
             "yes": "Yes, the Entra admin is available now",
             "no": "No, I need to bring the Entra admin in",
         },
         "servicenow-sso": {
-            "header": "ServiceNow administrator availability",
             "question": (
                 "Is the ServiceNow admin with security_admin available now?"
             ),
@@ -12623,7 +12633,6 @@ def _business_group_availability_question(
             ),
         },
         "maker-configuration": {
-            "header": "Maker availability",
             "question": "Is the Maker available now?",
             "yes": "Yes, the Maker is available now",
             "no": "No, I need to bring the Maker in",
@@ -12635,7 +12644,7 @@ def _business_group_availability_question(
             "ServiceNow business-group availability copy is missing."
         )
     return _native_question(
-        header=configured["header"],
+        header=str(group.get("label") or ""),
         question=configured["question"],
         option_labels=[configured["yes"], configured["no"]],
     )
@@ -13945,46 +13954,27 @@ def _realm_deployment_question(
     realm: str,
 ) -> dict[str, Any]:
     realm_label = realm.title()
-    source_url = maker_portal_links(context)["copilotStudioAgent"]["url"]
-    return {
-        "header": f"Confirm {realm_label} promotion completed",
-        "question": (
-            f"**Purpose**\nConfirm that the organization's approved ALM "
-            f"process finished promoting the current "
-            f"{ACTIVE_PROFILE.agent_display_name} family to {realm_label}. "
-            "This confirmation is only a prerequisite; it is not target "
-            "validation.\n\n"
-            "**Owner**\nCopilot Studio / Power Platform ALM owner for this "
-            "agent family.\n\n"
-            f"**Source agent**\n{ACTIVE_PROFILE.agent_display_name} "
-            f"(`{_agent_slug(context)}`), requested realm `{realm}`.\n\n"
-            f"**Open**\n{source_url}\n\n"
-            "**Action**\n"
-            f"Use the organization's normal promotion process outside this "
-            f"Connect flow. Choose Completed only after the ALM owner confirms "
-            f"the {realm_label} promotion/import finished. If it has not "
-            "finished, choose Not yet. Do not ask Connect to provision, "
-            "promote, import, publish, or repair the target.\n\n"
-            "**Success**\nThe requested target agent opens in Copilot Studio. "
-            "This does not prove validation passed. After you choose "
-            "Completed, the kit must still prove the exact realm, family, "
-            "environment, agent ID, and schema through read-only APIs, then "
-            "the Maker must run the bounded Test pane check."
+    return _native_question(
+        header=f"Confirm {realm_label} promotion completed",
+        question=(
+            f"Source agent family: {ACTIVE_PROFILE.agent_display_name} "
+            f"(`{_agent_slug(context)}`)\n"
+            f"Source environment: `{context['environment']['id']}`\n"
+            f"Requested realm: `{realm}`\n\n"
+            f"Has the Copilot Studio / Power Platform ALM owner confirmed "
+            f"that the organization's approved {realm_label} promotion/import "
+            "finished for this agent family?\n\n"
+            "This confirmation is only a prerequisite. Connect does not "
+            "provision, promote, import, publish, or repair the target. After "
+            "completion, exact realm, family, environment, agent, schema, and "
+            "commit proof must still pass through read-only discovery before "
+            "the bounded target Test."
         ),
-        "options": [
-            {
-                "label": (
-                    f"Completed, the {realm_label} promotion/import finished"
-                )
-            },
-            {
-                "label": (
-                    f"Not yet, the {realm_label} promotion is still pending"
-                )
-            },
+        option_labels=[
+            f"Completed, the {realm_label} promotion/import finished",
+            f"Not yet, the {realm_label} promotion is still pending",
         ],
-        "allowFreeformInput": False,
-    }
+    )
 
 
 def record_realm_deployment(
@@ -14067,8 +14057,13 @@ def record_realm_deployment(
             {
                 "action": "maker-deploys-target",
                 "instruction": (
-                    "Show the returned deployment question exactly and wait "
-                    "for the Maker."
+                    "As an ordinary current-task reply, direct the Copilot "
+                    "Studio / Power Platform ALM owner to use the "
+                    "organization's approved promotion process for the "
+                    "current source agent family. Connect does not provision, "
+                    "promote, import, publish, or repair the target. Then show "
+                    "the returned compact deployment question exactly and "
+                    "wait."
                 ),
             }
             if status == "not-deployed"
@@ -15986,6 +15981,37 @@ def _realm_runtime_plan_question(
     )
 
 
+def _realm_binding_question(
+    *,
+    realm: str,
+    runtime_plan: dict[str, Any],
+) -> dict[str, Any]:
+    target = runtime_plan.get("target")
+    target = target if isinstance(target, dict) else {}
+    realm_label = realm.title()
+    return _native_question(
+        header=f"Bind the {realm_label} ServiceNow connection",
+        question=(
+            f"Target agent ID: `{target.get('agentId')}`\n"
+            f"Environment ID: `{target.get('environmentId')}`\n"
+            f"Connection ID: `{runtime_plan.get('connectionId')}`\n"
+            f"Approved plan hash: `{runtime_plan.get('planSha256')}`\n\n"
+            f"Does the exact {realm_label} target now show the planned "
+            "ServiceNow connection in Connection settings?\n\n"
+            "This records current target-bound Manual UI binding evidence "
+            "only. It does not publish, change promoted topics or portal "
+            "configuration, or prove functional Test success."
+        ),
+        option_labels=[
+            (
+                f"Completed, the exact planned {realm_label} connection "
+                "is shown"
+            ),
+            f"Not yet, {realm_label} binding is incomplete",
+        ],
+    )
+
+
 def _realm_validation_record(
     state: dict[str, Any],
     realm: str,
@@ -16144,47 +16170,30 @@ def _realm_functional_test_question(
     test_pane_url: str,
 ) -> dict[str, Any]:
     realm_label = realm.title()
-    return {
-        "header": f"Validate the {realm_label} ServiceNow target",
-        "question": (
-            "**Current status**\nAutomatic target prechecks are complete. "
-            "Functional and end-to-end ServiceNow validation are still "
-            "pending.\n\n"
-            f"**Open target**\n{test_pane_url}\n\n"
-            f"**Example prompt**\n`{ACTIVE_PROFILE.test_prompt}`\n\n"
-            "**Action**\n"
-            "1. Open the exact target agent link and use its Test pane.\n"
-            "2. Enter the example prompt exactly as shown. Do not add an "
-            "employee name, ticket/case ID, secret, token, or other personal "
-            "value.\n"
-            "3. Judge whether the expected ServiceNow capability completes "
-            "correctly for data you are authorized to access.\n"
-            "4. Return only Pass or Not pass. Do not paste the response, "
-            "ticket/case content, or employee data.\n\n"
-            "**How to judge**\nA generic conversational answer is not "
-            "automatically Pass. An empty list is not automatically Not pass; "
-            "it can be valid when no records exist. Use the visible "
-            "authentication, connection, permission, and expected capability "
-            "behavior. If you choose Not pass, record one bounded failure "
-            "category without response content so the kit can return scoped "
-            "target remediation. Only confirmed promoted-content defects "
-            "return to Dev and re-promotion."
+    return _native_question(
+        header=f"Validate the {realm_label} ServiceNow target",
+        question=(
+            f"Exact target Test pane: {test_pane_url}\n"
+            f"Required prompt: `{ACTIVE_PROFILE.test_prompt}`\n\n"
+            f"Did the {ACTIVE_PROFILE.product_name} capability work correctly "
+            f"for this exact {realm_label} target, current binding, and saved "
+            "promoted content?\n\n"
+            "Return only Pass or Not pass. A generic conversational answer is "
+            "not automatically Pass, and an empty list is not automatically "
+            "Not pass. Do not include response content, employee data, "
+            "ticket/case identifiers, tokens, or secrets. A Not pass result "
+            "requires one bounded failure category outside this card; only a "
+            "confirmed promoted-content defect returns to Dev and "
+            "re-promotion."
         ),
-        "options": [
-            {
-                "label": (
-                    f"Pass, the {ACTIVE_PROFILE.product_name} capability "
-                    f"worked correctly for this {realm_label} target"
-                )
-            },
-            {
-                "label": (
-                    "Not pass, it failed or could not be verified"
-                )
-            },
+        option_labels=[
+            (
+                f"Pass, the {ACTIVE_PROFILE.product_name} capability "
+                f"worked correctly for this {realm_label} target"
+            ),
+            "Not pass, it failed or could not be verified",
         ],
-        "allowFreeformInput": False,
-    }
+    )
 
 
 def validate_realm(
@@ -16297,9 +16306,11 @@ def validate_realm(
                 "next": {
                     "action": "maker-deploys-target",
                     "instruction": (
-                        "Wait for the Maker's explicit report that the "
-                        "organization promotion completed. Do not call target "
-                        "APIs, provision, promote, import, or publish."
+                        "As an ordinary current-task reply, direct the ALM "
+                        "owner to use the organization's approved promotion "
+                        "process for this source agent family. Wait for the "
+                        "explicit completion report. Do not call target APIs, "
+                        "provision, promote, import, or publish."
                     ),
                 },
             }
@@ -16328,8 +16339,10 @@ def validate_realm(
                     "action": "maker-deploys-target",
                     "instruction": (
                         "Exact read-only discovery proved the requested "
-                        "target is not deployed. Show the deployment question "
-                        "and wait for the ALM owner."
+                        "target is not deployed. As an ordinary current-task "
+                        "reply, return the ALM owner to the organization's "
+                        "approved promotion process, then show the compact "
+                        "deployment question and wait."
                     ),
                 },
             }
@@ -16758,9 +16771,10 @@ def validate_realm(
                 "action": "approve-runtime-plan",
                 "planSha256": runtime_plan["planSha256"],
                 "instruction": (
-                    "Review the exact target-scoped preview, then explicitly "
-                    "approve or reject it. Approval does not bind the agent "
-                    "and performs no remote API mutation."
+                    "As an ordinary current-task reply, review the exact "
+                    "target-scoped preview, then explicitly approve or reject "
+                    "it. Approval does not bind the agent and performs no "
+                    "remote API mutation."
                 ),
             }
             if approval_required
@@ -16944,6 +16958,15 @@ def record_realm_runtime_plan(
         "updatedAt": now,
     }
     _write_lifecycle_state(context, state)
+    target_identity = current_plan.get("target")
+    target_identity = (
+        target_identity if isinstance(target_identity, dict) else {}
+    )
+    target_url = _target_agent_validation_url(
+        context,
+        environment_id=str(target_identity.get("environmentId") or ""),
+        agent_id=str(target_identity.get("agentId") or ""),
+    )
     return {
         "schemaVersion": "servicenow.realm-runtime-plan.v1",
         "status": "approved",
@@ -16952,31 +16975,21 @@ def record_realm_runtime_plan(
         "runtimePlan": copy.deepcopy(current_plan),
         "realmStages": _realm_stage_progress(state, realm),
         "remoteMutationCount": 0,
-        "question": {
-            "header": f"Bind the {realm.title()} ServiceNow connection",
-            "question": (
-                "Open the exact target agent from the approved plan. In "
-                "Settings -> Connection settings, bind the exact ServiceNow "
-                "connection shown by the plan. This is a manual Maker UI "
-                "action because no supported direct binding API is proven. "
-                "Do not publish and do not change promoted topics or the "
-                "Setup Configurations portal value. After the UI shows the "
-                "connection, record the binding with this plan hash."
+        "question": _realm_binding_question(
+            realm=realm,
+            runtime_plan=current_plan,
+        ),
+        "next": {
+            "action": "maker-binds-target-connection",
+            "url": target_url,
+            "instruction": (
+                "As an ordinary current-task reply, open the exact target "
+                "agent and use Settings -> Connection settings to bind the "
+                "exact planned ServiceNow connection. Save and confirm the "
+                "row shows Connected. Do not publish or change promoted "
+                "topics or portal configuration; then ask the returned "
+                "compact binding question."
             ),
-            "options": [
-                {
-                    "label": (
-                        f"Completed, the exact planned {realm.title()} "
-                        "connection is shown"
-                    )
-                },
-                {
-                    "label": (
-                        f"Not yet, {realm.title()} binding is incomplete"
-                    )
-                },
-            ],
-            "allowFreeformInput": False,
         },
     }
 

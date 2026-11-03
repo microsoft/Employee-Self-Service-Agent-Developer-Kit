@@ -384,8 +384,30 @@ def test_servicenow_questions_use_buttons_and_bounded_freeform() -> None:
                 option.get("recommended")
                 for option in question.get("options") or []
             )
+            assert all(
+                option["label"].strip()
+                and option["label"].casefold() not in {"yes", "no"}
+                for option in question.get("options") or []
+            )
             if question.get("allowFreeformInput") is True:
                 assert path.name in allowed_freeform
+
+
+def test_hr_plugin_completion_header_and_question_are_distinct() -> None:
+    payload = _validate_payload(
+        _payloads(_ACTIONS / "verify-plugin-prerequisites.md")[0],
+        required_phrases=(
+            "Required evidence for the selected ServiceNow instance:",
+            "Has the ServiceNow administrator confirmed",
+        ),
+    )
+    assert payload["header"] == "HR Service Delivery Core"
+    assert payload["header"] != payload["question"]
+    assert [option["label"] for option in payload["options"]] == [
+        "Yes, all listed installed-and-ready evidence is present",
+        "No, one or more required items are missing",
+        "Not sure, the administrator still needs to check",
+    ]
 
 
 @pytest.mark.parametrize("provider", ("servicenow-da-hrsd", "servicenow-da-itsm"))
