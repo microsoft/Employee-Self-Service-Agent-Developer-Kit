@@ -886,6 +886,7 @@ def parse_compact_checkpoint_result(
         "remediation",
         "docLink",
         "docLabel",
+        "customTags",
         "roles",
         "evidence",
     }
@@ -920,6 +921,10 @@ def parse_compact_checkpoint_result(
                 raise ValueError(
                     f"Compact checkpoint row {field_name} must be a string."
                 )
+        if not isinstance(result.get("customTags"), list) or not all(
+            isinstance(tag, str) for tag in result["customTags"]
+        ):
+            raise ValueError("Compact checkpoint row customTags are invalid.")
         if not isinstance(result.get("roles"), list) or not all(
             isinstance(role, str) for role in result["roles"]
         ):

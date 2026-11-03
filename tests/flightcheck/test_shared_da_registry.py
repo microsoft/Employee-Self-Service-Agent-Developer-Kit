@@ -434,6 +434,10 @@ def test_full_dispositions_exclude_aliases_guards_and_deferred_alm():
     assert "ENV-004-WD" not in keys
     assert not keys.intersection({"PUB-001", "PUB-002", "ENV-004-GRS", "WD-WF-001"})
     for spec in registry.REGISTRY.values():
+        if spec.provider.startswith("servicenow-da-"):
+            # ServiceNow DA profile checkpoints are not DA inventory rows.
+            assert spec.da is None
+            continue
         assert spec.da is not None
         if spec.da.executable:
             assert spec.key in keys
