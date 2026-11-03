@@ -13597,7 +13597,15 @@ def test_direct_servicenow_capture_locks_entra_values_and_requires_completion(
     assert pending["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] == {
         "status": "pending"
     }
-    completed = _complete_servicenow_admin(context)
+    completed_mapping = snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="user_name",
+        confirmed=True,
+        saved_mapping_confirmed=True,
+    )
     complete_state = snow._load_lifecycle_state(context)
     assert snow._identity_admin_handoff_is_ready(
         context,
@@ -13613,14 +13621,17 @@ def test_direct_servicenow_capture_locks_entra_values_and_requires_completion(
     assert mapping["tokenClaimName"] == "email"
     assert mapping["serviceNowUserField"] == "user_name"
     assert mapping["importedFileFormat"] == "direct"
+    assert mapping["savedMappingConfirmed"] is False
+    assert completed_mapping["savedMappingConfirmed"] is True
+    completed = complete_state["adminSetup"]["phaseHandoffs"][
+        "servicenow-oidc"
+    ]
     assert completed["evidence"]["configurationSavedConfirmed"] is True
     assert completed["evidence"]["claimMappingConfirmed"] is True
     assert "activeUserMatchConfirmed" not in completed["evidence"]
+    assert "connectorPreauthorizationConfirmed" not in completed["evidence"]
     assert "tokenValidated" not in completed["evidence"]
     assert "businessResult" not in completed["evidence"]
-    assert completed["evidence"][
-        "connectorPreauthorizationConfirmed"
-    ] is True
     assert no_action["decision"] == "no-action"
     assert no_action["ordinaryReply"] is None
     assert no_action["questions"] == []
@@ -13945,7 +13956,14 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
             "--yes",
         ]
     ) == 0
-    capsys.readouterr()
+    field_receipt = json.loads(capsys.readouterr().out)
+    assert field_receipt["savedMappingConfirmed"] is False
+    pending = json.loads(
+        _lifecycle_path(tmp_path).read_text(encoding="utf-8")
+    )
+    assert pending["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] == {
+        "status": "pending"
+    }
     assert snow.main(
         [
             "identity-direct-handoff",
@@ -13967,19 +13985,352 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
     ]
     assert snow.main(
         [
-            "record-admin-phase",
-            "--phase",
-            "servicenow-oidc",
-            "--status",
-            "completed",
-            "--confirm-configuration-saved",
-            "--confirm-claim-mapping",
+            "record-identity-direct",
+            "--stage",
+            "servicenow",
+            "--user-field",
+            "user_name",
+            "--yes",
+            "--confirm-saved-mapping",
         ]
     ) == 0
-    completed = json.loads(capsys.readouterr().out)
+    completed_mapping = json.loads(capsys.readouterr().out)
+    completed_state = json.loads(
+        _lifecycle_path(tmp_path).read_text(encoding="utf-8")
+    )
+    completed = completed_state["adminSetup"]["phaseHandoffs"][
+        "servicenow-oidc"
+    ]
 
+    assert completed_mapping["savedMappingConfirmed"] is True
     assert completed["evidence"]["tokenClaimName"] == "email"
     assert completed["evidence"]["serviceNowUserField"] == "user_name"
+    assert completed["evidence"]["configurationSavedConfirmed"] is True
+    assert completed["evidence"]["claimMappingConfirmed"] is True
+    assert "activeUserMatchConfirmed" not in completed["evidence"]
+    assert "connectorPreauthorizationConfirmed" not in completed["evidence"]
+
+
+def test_servicenow_saved_mapping_yes_atomically_reaches_manual_and_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from flightcheck.checks.servicenow_da_hrsd import _oidc_result
+
+    monkeypatch.chdir(tmp_path)
+    context = _context_at(tmp_path)
+    contract = json.loads(
+        (snow.SOLUTION_ROOT / snow.HRSD_PROFILE.contract_path).read_text(
+            encoding="utf-8"
+        )
+    )
+    target_contract = tmp_path / snow.HRSD_PROFILE.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_text(json.dumps(contract), encoding="utf-8")
+    state = snow._state_base(context, _components())
+    state["attested"] = True
+    state["acceptedContractRevision"] = contract["contractRevision"]
+    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+    state["phases"] = {
+        phase["id"]: {
+            "status": (
+                "done"
+                if phase["id"]
+                in {
+                    "preflight",
+                    "plugin-prerequisites",
+                    "entra-registration",
+                }
+                else "in-progress"
+                if phase["id"] == "servicenow-oidc"
+                else "pending"
+            ),
+            "checkpointResults": (
+                {phase["checkpoints"][0]: "Passed"}
+                if phase["id"] == "preflight"
+                else {phase["checkpoints"][0]: "Manual"}
+                if phase["id"]
+                in {"plugin-prerequisites", "entra-registration"}
+                else {}
+            ),
+            "checkpointAcknowledgements": {},
+        }
+        for phase in contract["phases"]
+    }
+    path = _lifecycle_path(tmp_path)
+    snow._write_json_atomic(path, state)
+    snow.record_identity_direct(
+        context,
+        stage="entra",
+        client_id=APP_CLIENT_ID,
+        claim_name="email",
+        user_field=None,
+        confirmed=True,
+    )
+    field_receipt = snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="email",
+        confirmed=True,
+    )
+    assert field_receipt["savedMappingConfirmed"] is False
+    pending = snow._load_lifecycle_state(context)
+    assert pending["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] == {
+        "status": "pending"
+    }
+    before_invalid = path.read_bytes()
+    with pytest.raises(snow.ServiceNowConnectError, match="safe ServiceNow"):
+        snow.record_identity_direct(
+            context,
+            stage="servicenow",
+            client_id=None,
+            claim_name=None,
+            user_field="User ID",
+            confirmed=True,
+            saved_mapping_confirmed=True,
+        )
+    assert path.read_bytes() == before_invalid
+
+    events: list[dict] = []
+    monkeypatch.setattr(
+        snow,
+        "emit_servicenow_lifecycle_event",
+        lambda _state, event: events.append(copy.deepcopy(event)),
+    )
+    completed_mapping = snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="email",
+        confirmed=True,
+        saved_mapping_confirmed=True,
+    )
+    completed = snow._load_lifecycle_state(context)
+    handoff = completed["adminSetup"]["phaseHandoffs"][
+        "servicenow-oidc"
+    ]
+    assert completed_mapping["savedMappingConfirmed"] is True
+    assert handoff["status"] == "completed"
+    assert handoff["evidence"]["configurationSavedConfirmed"] is True
+    assert handoff["evidence"]["claimMappingConfirmed"] is True
+    assert handoff["evidence"]["tokenClaimName"] == "email"
+    assert handoff["evidence"]["serviceNowUserField"] == "email"
+    assert "activeUserMatchConfirmed" not in handoff["evidence"]
+    assert "connectorPreauthorizationConfirmed" not in handoff["evidence"]
+    owning = _oidc_result(completed["adminSetup"], completed)
+    assert owning.status == "Manual"
+
+    completed["phases"]["servicenow-oidc"].update(
+        {
+            "status": "done",
+            "checkpointResults": {
+                "SN-DA-HRSD-OIDC-001": owning.status,
+            },
+            "lastVerifiedAt": "2026-11-03T08:30:00Z",
+        }
+    )
+    completed["phases"]["entra-registration"].update(
+        {
+            "status": "done",
+            "checkpointResults": {
+                "SN-DA-HRSD-ENTRA-SETUP-001": "Manual",
+            },
+            "lastVerifiedAt": "2026-11-03T08:29:00Z",
+        }
+    )
+    completed["phases"]["plugin-prerequisites"].update(
+        {
+            "status": "done",
+            "checkpointResults": {
+                "SN-DA-HRSD-PLUGIN-001": "Manual",
+            },
+            "lastVerifiedAt": "2026-11-03T08:28:00Z",
+        }
+    )
+    completed["phases"]["preflight"].update(
+        {
+            "status": "done",
+            "checkpointResults": {
+                "SN-DA-HRSD-PREFLIGHT-001": "Passed",
+            },
+            "lastVerifiedAt": "2026-11-03T08:27:00Z",
+        }
+    )
+    snow._write_lifecycle_state(context, completed)
+    advanced = snow.resume_handoff(
+        context,
+        verified_phases=frozenset(
+            {
+                "preflight",
+                "plugin-prerequisites",
+                "entra-registration",
+                "servicenow-oidc",
+            }
+        ),
+    )
+    assert advanced["lifecycle"]["phase"]["id"] == "credential"
+
+    before_repeat = path.read_bytes()
+    event_count = len(events)
+    snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="email",
+        confirmed=True,
+        saved_mapping_confirmed=True,
+    )
+    assert path.read_bytes() == before_repeat
+    assert len(events) == event_count
+
+
+@pytest.mark.parametrize("file_format", ("direct", "xlsx", "csv"))
+def test_pending_servicenow_phase_reconciles_only_explicit_saved_mapping_yes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    file_format: str,
+) -> None:
+    from flightcheck.checks.servicenow_da_hrsd import _oidc_result
+
+    monkeypatch.chdir(tmp_path)
+    context = _context_at(tmp_path)
+    state = snow._state_base(context, _components())
+    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+    path = _lifecycle_path(tmp_path)
+    snow._write_json_atomic(path, state)
+    snow.record_identity_direct(
+        context,
+        stage="entra",
+        client_id=APP_CLIENT_ID,
+        claim_name="email",
+        user_field=None,
+        confirmed=True,
+    )
+    snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="email",
+        confirmed=True,
+        saved_mapping_confirmed=True,
+    )
+    exported = json.loads(path.read_text(encoding="utf-8"))
+    mapping = exported["evidence"]["identityMapping"]
+    mapping["importedFileFormat"] = file_format
+    mapping["provenanceSha256"] = (
+        "d" * 64 if file_format != "direct" else mapping["provenanceSha256"]
+    )
+    mapping["importedWorkbookSha256"] = mapping["provenanceSha256"]
+    exported["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] = {
+        "status": "pending"
+    }
+    exported["phases"]["servicenow-oidc"] = {
+        "status": "in-progress",
+        "checkpointResults": {
+            "SN-DA-HRSD-OIDC-001": "NotConfigured",
+        },
+        "checkpointAcknowledgements": {},
+    }
+    unproven = copy.deepcopy(exported)
+    unproven["evidence"]["identityMapping"].pop(
+        "savedMappingConfirmed",
+        None,
+    )
+    unproven["evidence"]["identityMapping"].pop(
+        "savedMappingConfirmedAt",
+        None,
+    )
+    snow._write_json_atomic(path, unproven)
+    unproven_load = snow._load_lifecycle_state(context)
+    assert unproven_load["adminSetup"]["phaseHandoffs"][
+        "servicenow-oidc"
+    ] == {"status": "pending"}
+    snow._write_json_atomic(path, exported)
+
+    reconciled = snow._load_lifecycle_state(context)
+    handoff = reconciled["adminSetup"]["phaseHandoffs"][
+        "servicenow-oidc"
+    ]
+    assert handoff["status"] == "completed"
+    assert handoff["evidence"]["configurationSavedConfirmed"] is True
+    assert handoff["evidence"]["claimMappingConfirmed"] is True
+    assert _oidc_result(
+        reconciled["adminSetup"],
+        reconciled,
+    ).status == "Manual"
+    first = copy.deepcopy(reconciled)
+    assert snow._reconcile_servicenow_handoff_from_receipt(
+        context,
+        reconciled,
+    ) is False
+    assert reconciled == first
+
+    snow._write_lifecycle_state(context, reconciled)
+    rejected = snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="email",
+        confirmed=True,
+        saved_mapping_confirmed=False,
+    )
+    assert rejected["savedMappingConfirmed"] is False
+    assert rejected["serviceNowUserField"] == "email"
+    assert rejected["importedFileFormat"] == file_format
+    before_repeated_no = path.read_bytes()
+    snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="email",
+        confirmed=True,
+        saved_mapping_confirmed=False,
+    )
+    assert path.read_bytes() == before_repeated_no
+    pending = snow._load_lifecycle_state(context)
+    assert pending["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] == {
+        "status": "pending"
+    }
+    assert _oidc_result(
+        pending["adminSetup"],
+        pending,
+    ).status == "NotConfigured"
+    _ack_identity_availability(context, stage="servicenow")
+    completion = snow.identity_direct_handoff(
+        context,
+        stage="servicenow",
+        captured_user_field="email",
+    )
+    assert len(completion["questions"]) == 1
+    assert completion["questions"][0]["canonicalQuestion"]["options"] == [
+        {"label": "Yes"},
+        {"label": "No"},
+    ]
+    resumed_completion = snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="email",
+        confirmed=True,
+        saved_mapping_confirmed=True,
+    )
+    assert resumed_completion["savedMappingConfirmed"] is True
+    assert resumed_completion["importedFileFormat"] == file_format
+    assert resumed_completion["provenanceSha256"] == (
+        rejected["provenanceSha256"]
+    )
+    resumed = snow._load_lifecycle_state(context)
+    assert resumed["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
+        "status"
+    ] == "completed"
 
 
 @pytest.mark.parametrize(

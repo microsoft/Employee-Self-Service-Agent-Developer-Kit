@@ -684,7 +684,8 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "or pause between role elevation" in oidc_normalized
     assert "record-admin-phase --phase plugin-prerequisites" in plugins
     assert "record-admin-phase --phase entra-registration" in entra
-    assert "record-admin-phase --phase servicenow-oidc" in oidc
+    assert "--confirm-saved-mapping" in oidc
+    assert "record-admin-phase --phase servicenow-oidc" not in oidc
     assert "record-admin-operation" not in plugins + entra + oidc
     assert "one complete high-level step" in credential
     assert "one completion question" in credential
@@ -882,9 +883,30 @@ def test_hr_it_admin_guides_separate_handoff_input_from_completion() -> None:
         assert '"label": "Yes"' in oidc
         assert '"label": "No"' in oidc
         assert "Only after the first option is selected" in oidc
+        assert "--confirm-saved-mapping" in oidc
+        assert "--reject-saved-mapping" in oidc
+        assert "record-admin-phase --phase servicenow-oidc" not in oidc
 
 
 def test_servicenow_oidc_guides_match_complete_stage2_workbook() -> None:
+    canonical = (
+        _SOLUTION
+        / "src"
+        / "skills"
+        / "connect"
+        / "shared"
+        / "runtime-instructions"
+        / "servicenow-administrator.md"
+    ).read_text(encoding="utf-8")
+    canonical_normalized = " ".join(canonical.split())
+    assert "select **Elevate role**" in canonical
+    assert "select `security_admin`, and select **Update**" in canonical
+    assert "Configure an OIDC provider to verify ID tokens" in canonical
+    assert "Client ID `<client ID>`" in canonical
+    assert "User Claim" in canonical
+    assert "User Field" in canonical
+    assert "configuration is saved" in canonical_normalized
+
     for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
         guide = (
             _SOLUTION
@@ -897,60 +919,17 @@ def test_servicenow_oidc_guides_match_complete_stage2_workbook() -> None:
         ).read_text(encoding="utf-8")
         normalized = " ".join(guide.split())
 
-        assert "select `Elevate roles`" in guide
-        assert "select `security_admin`, and select `Update`" in normalized
-        assert "do not bypass permissions, create a role" in normalized
-        assert "search for `OAuth`" in guide
-        assert "whose Client ID is the exact\n   Task 1 Application client ID" in (
+        assert "../../shared/runtime-instructions/servicenow-administrator.md" in (
             guide
         )
-        assert "Select `New`\n   only when no exact entry exists" in guide
-        assert "Configure an OIDC provider to verify ID tokens" in guide
-        assert "open its existing form instead of selecting the new-entry" in (
-            guide
-        )
-        assert "Client ID = verified App A Application client ID" in guide
-        assert "Scope Restriction = `Broadly scoped`" in guide
-        assert "non-secret unused placeholder" in guide
-        assert (
-            "https://login.microsoftonline.com/<tenant-id>/"
-            ".well-known/openid-configuration"
-        ) in guide
-        assert "cache lifespan = `120`" in guide
-        assert "Application = `Global`" in guide
-        assert "JTI verification = disabled" in guide
-        assert "OIDC Provider / Provider Name" in guide
-        assert "inspect existing provider configurations" in guide
-        assert "Select `New` only when no suitable configuration exists" in (
-            guide
-        )
-        assert "Do not duplicate or\n   modify another integration" in guide
-        assert "in a separate browser tab" in guide
-        assert "in that same lookup tab" in guide
-        assert "Dictionary or Configure Dictionary" in guide
-        assert "not a display label or dotted `table.field` name" in normalized
-        assert "exact locked claim name" in guide
-        assert "returns to the OIDC configuration tab" in guide
-        assert "approved custom employee claim instead of guessing" in (
+        assert "record-identity-direct --stage servicenow" in guide
+        assert "record-identity-mapping --stage servicenow" in guide
+        assert "--confirm-saved-mapping" in guide
+        assert "--reject-saved-mapping" in guide
+        assert "record-admin-phase --phase servicenow-oidc" not in guide
+        assert "generic `--yes` confirms non-secret value capture only" in (
             normalized
         )
-        assert "Do not create a test user" in guide
-        assert "c26b24aa-7874-4e06-ad55-7d06b1f79b63" in guide
-        assert "an Entra Task 1 action" in normalized
-        assert "task-2-register-oidc-provider-in-servicenow" in guide
-        assert "custom/non-email" in guide
-        assert "metadata/JWKS route" in guide
-        assert "`appid`" in guide
-        assert "Do not assume the default tenant metadata is compatible" in (
-            guide
-        )
-        assert "record-identity-mapping --stage servicenow" in guide
-        assert "record-admin-phase --phase servicenow-oidc" in guide
-        assert "`allowFreeformInput: true`" in guide
-        assert (
-            "`Please enter the returned ServiceNow admin handoff workbook "
-            "URL.`" in guide
-        )
-        assert "Import only the exact local path returned by the question" in (
-            guide
+        assert "atomically records both the mapping receipt and owning OIDC" in (
+            normalized
         )

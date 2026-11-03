@@ -141,7 +141,7 @@
     },
     {
       "id": "servicenow-oidc",
-      "label": "Guide the ServiceNow OIDC provider and active-user mapping setup",
+      "label": "Guide the ServiceNow OIDC provider and claim-to-field mapping setup",
       "responsibleRoles": ["ServiceNow Admin / security_admin"],
       "checkpoints": ["SN-DA-HRSD-OIDC-001"],
       "completionStatuses": ["Manual"],

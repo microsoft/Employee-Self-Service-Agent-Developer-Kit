@@ -4966,6 +4966,89 @@ def _reconcile_entra_handoff_from_receipt(
     return True
 
 
+def _reconcile_servicenow_handoff_from_receipt(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> bool:
+    try:
+        mapping = _validated_identity_mapping(context, state)
+    except ServiceNowConnectError:
+        return False
+    provenance_sha256 = str(mapping.get("provenanceSha256") or "")
+    source_workbook_sha256 = str(
+        mapping.get("sourceWorkbookSha256") or ""
+    )
+    imported_workbook_sha256 = str(
+        mapping.get("importedWorkbookSha256") or ""
+    )
+    provenance_current = bool(
+        re.fullmatch(r"[0-9a-fA-F]{64}", provenance_sha256)
+        and imported_workbook_sha256 == provenance_sha256
+        and source_workbook_sha256
+        == _identity_workbook_template_sha256("servicenow")
+        and mapping.get("importedFileFormat") in {"direct", "xlsx", "csv"}
+    )
+    if (
+        not provenance_current
+        or mapping.get("savedMappingConfirmed") is not True
+    ):
+        return False
+    setup = _admin_setup(state)
+    existing = setup["phaseHandoffs"].get("servicenow-oidc")
+    existing = existing if isinstance(existing, dict) else {}
+    existing_evidence = existing.get("evidence")
+    existing_evidence = (
+        copy.deepcopy(existing_evidence)
+        if isinstance(existing_evidence, dict)
+        else {}
+    )
+    evidence = {
+        **existing_evidence,
+        "kind": "structured-admin-attestation",
+        "currentSource": "identity-mapping",
+        "configurationSavedConfirmed": True,
+        "runbookCompleted": True,
+        "mappingDetailsCollected": True,
+        "claimMappingConfirmed": True,
+        "tokenClaimName": mapping["tokenClaimName"],
+        "serviceNowUserField": mapping["serviceNowUserField"],
+        "candidateSetSha256": mapping["candidateSetSha256"],
+        "mappingWorkbookSha256": imported_workbook_sha256,
+        "mappingRelationshipSha256": mapping["relationshipSha256"],
+        "binding": copy.deepcopy(mapping["binding"]),
+        "recordedAt": (
+            existing_evidence.get("recordedAt")
+            or mapping.get("savedMappingConfirmedAt")
+            or mapping.get("recordedAt")
+            or _utc_now()
+        ),
+    }
+    record = {
+        "status": (
+            "reused"
+            if existing.get("status") == "reused"
+            else "completed"
+        ),
+        "evidence": evidence,
+        "verifiedBy": (
+            existing.get("verifiedBy")
+            if existing.get("status") == "reused"
+            else "current-target-identity-mapping"
+        ),
+    }
+    if existing == record:
+        return False
+    setup["phaseHandoffs"]["servicenow-oidc"] = record
+    state.setdefault("migration", {}).setdefault(
+        "serviceNowSavedMappingCompletion",
+        {
+            "criterion": "configuration-saved-and-claim-mapped",
+            "reconciledAt": _utc_now(),
+        },
+    )
+    return True
+
+
 def _persist_identity_mapping_values(
     context: dict[str, Any],
     state: dict[str, Any],
@@ -4979,6 +5062,7 @@ def _persist_identity_mapping_values(
     source_workbook_sha256: str,
     sheet_protected: bool,
     confirmed_directory_tenant_id: str | None = None,
+    saved_mapping_confirmed: bool | None = None,
 ) -> dict[str, Any]:
     expected_identity = _required_context_identity(context, state)
     application_client_id = normalize_client_id(application_client_id)
@@ -5128,17 +5212,48 @@ def _persist_identity_mapping_values(
             _identity_mapping_relationship_hash(result)
         )
         existing = evidence.get("identityMapping")
-        if not (
+        same_relationship = bool(
             isinstance(existing, dict)
             and existing.get("relationshipSha256")
             == result["relationshipSha256"]
-        ):
+        )
+        if not same_relationship:
             _invalidate_oidc_handoff(state)
             _invalidate_identity_dependents(
                 state,
                 reason="ServiceNow internal user-field mapping changed.",
             )
+        elif isinstance(existing, dict):
+            preserved = copy.deepcopy(existing)
+            preserved.update(
+                {
+                    key: value
+                    for key, value in result.items()
+                    if key
+                    not in {
+                        "provenanceSha256",
+                        "sourceWorkbookSha256",
+                        "importedWorkbookSha256",
+                        "importedFileFormat",
+                        "sheetProtected",
+                        "recordedAt",
+                    }
+                }
+            )
+            result = preserved
+        if saved_mapping_confirmed is True:
+            result["savedMappingConfirmed"] = True
+            result.setdefault("savedMappingConfirmedAt", recorded_at)
+            result.pop("savedMappingRejectedAt", None)
+        elif saved_mapping_confirmed is False:
+            result["savedMappingConfirmed"] = False
+            result.pop("savedMappingConfirmedAt", None)
+            result.setdefault("savedMappingRejectedAt", recorded_at)
+            _invalidate_oidc_handoff(state)
+        else:
+            result.setdefault("savedMappingConfirmed", False)
         evidence["identityMapping"] = result
+        _reconcile_servicenow_handoff_from_receipt(context, state)
     _write_lifecycle_state(context, state)
     return copy.deepcopy(result)
 
@@ -5251,6 +5366,7 @@ def record_identity_direct(
     claim_name: str | None,
     user_field: str | None,
     confirmed: bool,
+    saved_mapping_confirmed: bool | None = None,
 ) -> dict[str, Any]:
     if not confirmed:
         raise ServiceNowConnectError(
@@ -5259,6 +5375,11 @@ def record_identity_direct(
     if stage not in {"entra", "servicenow"}:
         raise ServiceNowConnectError(
             "Identity direct capture stage is invalid."
+        )
+    if saved_mapping_confirmed is not None and stage != "servicenow":
+        raise ServiceNowConnectError(
+            "Saved mapping confirmation is accepted only for the "
+            "ServiceNow stage."
         )
     state = _load_lifecycle_state(context)
     if stage == "entra":
@@ -5348,6 +5469,7 @@ def record_identity_direct(
         source_workbook_sha256=source_sha256,
         sheet_protected=False,
         confirmed_directory_tenant_id=confirmed_tenant_id,
+        saved_mapping_confirmed=saved_mapping_confirmed,
     )
 
 
@@ -6141,8 +6263,8 @@ def identity_mapping_handoff(
             "3. Follow the generated instructions. In XLSX, fill the one "
             "yellow User Field cell on `Worksheet`; in CSV, fill the "
             "`ServiceNow User Field` on the `Steps` record.\n"
-            "4. Configure and verify the OIDC User Claim/User Field mapping and "
-            "one matching Active user, without returning employee values.\n"
+            "4. Save and verify the OIDC User Claim/User Field mapping for "
+            "the exact target, without returning employee values.\n"
             "5. Preserve the locked claim rows, `Steps`, `Worksheet`, hidden "
             "`_metadata`, and workbook protection. Save the completed workbook."
         )
@@ -9038,6 +9160,7 @@ def _load_lifecycle_state(
     _admin_setup(state)
     _migrate_historical_entra_confirmation(context, state)
     _reconcile_entra_handoff_from_receipt(context, state)
+    _reconcile_servicenow_handoff_from_receipt(context, state)
     state.setdefault("transactions", {}).setdefault("topics", {})
     state.setdefault("migration", {})
     return state
@@ -19459,6 +19582,23 @@ def build_parser() -> argparse.ArgumentParser:
     direct_mapping_parser.add_argument("--claim-name")
     direct_mapping_parser.add_argument("--user-field")
     direct_mapping_parser.add_argument("--yes", action="store_true")
+    saved_mapping_group = direct_mapping_parser.add_mutually_exclusive_group()
+    saved_mapping_group.add_argument(
+        "--confirm-saved-mapping",
+        action="store_true",
+        help=(
+            "Confirm that the ServiceNow configuration is saved and the "
+            "locked claim is mapped to the recorded user field."
+        ),
+    )
+    saved_mapping_group.add_argument(
+        "--reject-saved-mapping",
+        action="store_true",
+        help=(
+            "Record the latest explicit No answer and keep the ServiceNow "
+            "mapping receipt pending."
+        ),
+    )
     phase_parser = subparsers.add_parser(
         "record-admin-phase",
         help="Record one complete non-secret delegated admin phase.",
@@ -20286,6 +20426,13 @@ def main(argv: list[str] | None = None) -> int:
                 claim_name=args.claim_name,
                 user_field=args.user_field,
                 confirmed=args.yes,
+                saved_mapping_confirmed=(
+                    True
+                    if args.confirm_saved_mapping
+                    else False
+                    if args.reject_saved_mapping
+                    else None
+                ),
             )
         elif args.command == "record-admin-phase":
             result = record_admin_phase(

@@ -128,7 +128,7 @@ _RECOVERY_GUIDANCE = {
         ),
     },
     "OIDC": {
-        "step": "ServiceNow OIDC and active-user mapping",
+        "step": "ServiceNow OIDC and claim-to-field mapping",
         "owner": "ServiceNow Admin / security_admin",
         "where": (
             "ServiceNow -> All -> System OAuth -> Application Registry, then "
@@ -141,8 +141,9 @@ _RECOVERY_GUIDANCE = {
             "return an employee identifier or token value."
         ),
         "success": (
-            "The OIDC provider is ready and the bounded receipt proves one "
-            "current claim-name/user-field pair plus a matching Active user."
+            "The ServiceNow configuration is saved and the bounded receipt "
+            "proves one current claim-name/user-field pair for the exact "
+            "target."
         ),
     },
     "TOPICS": {
@@ -1565,12 +1566,13 @@ def _oidc_result(
                 "guide-servicenow-oidc.md` in Application Registry and the "
                 "protected identity-mapping handoff. "
                 "Expected evidence: one current target-bound non-secret "
-                "confirmation of OIDC capability, runbook completion, one "
-                "Entra-confirmed claim name, one ServiceNow user field, "
-                "matching Active user, source, timestamp, binding, and "
-                "relationship hash. Completion: every value matches the "
-                "current target; no employee token, request, or claim value "
-                "is proved."
+                "confirmation that the ServiceNow configuration is saved and "
+                "one locked Entra-confirmed claim name is mapped to one "
+                "actual ServiceNow user field, with current source, "
+                "timestamp, binding, and relationship hash. Completion: the "
+                "saved configuration and exact claim-to-field mapping match "
+                "the current target; no employee token, authentication, "
+                "permission, Active-user match, or business result is proved."
             )
         ),
         roles=[Role.SERVICENOW_ADMIN.value],

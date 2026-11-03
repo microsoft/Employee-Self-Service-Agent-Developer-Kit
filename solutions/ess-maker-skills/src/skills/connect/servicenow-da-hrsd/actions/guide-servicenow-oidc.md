@@ -150,10 +150,26 @@ claim-to-field mapping is complete for the exact target. It does not prove a
 real employee token, authentication success, permission, Active-user match, or
 business result.
 
-Only after the first option is selected, record the bundled confirmation:
+Only after the first option is selected, rerun the identity recorder with the
+same locked User Field and the semantic saved-mapping confirmation. This one
+command revalidates the target, receipt provenance, candidate and relationship
+hashes, preserves direct/XLSX/CSV provenance, and atomically records both the
+mapping receipt and owning OIDC handoff:
 
 ```text
-python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-admin-phase --phase servicenow-oidc --status completed --confirm-configuration-saved --confirm-claim-mapping
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage servicenow --user-field "<internal-sys_user-field>" --yes --confirm-saved-mapping
 ```
+
+The generic `--yes` confirms non-secret value capture only.
+`--confirm-saved-mapping` is the distinct business confirmation supplied by
+the visible Yes answer. On No, record the authoritative pending override with
+the same locked field:
+
+```text
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage servicenow --user-field "<internal-sys_user-field>" --yes --reject-saved-mapping
+```
+
+This preserves the mapping data, retires any older saved-mapping completion,
+and keeps the phase pending so resume asks only the same completion question.
 
 Return `ACTION_RESULT = "recorded"` only after this command succeeds.

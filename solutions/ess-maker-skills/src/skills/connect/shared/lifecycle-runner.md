@@ -89,6 +89,12 @@ questions until that acknowledgement is current. Once current, require
 and ask only its returned data/completion questions. `decision: no-action`
 means current completed/reused evidence skips both availability and
 instructions.
+For the ServiceNow saved-configuration and claim-to-field completion question,
+map **Yes** only to the action guide's semantic
+`--confirm-saved-mapping` recorder and map **No** to
+`--reject-saved-mapping`. The generic `--yes` flag is value-capture consent,
+not business completion evidence. Do not invoke the historical
+`record-admin-phase --phase servicenow-oidc` bridge on the active path.
 Use `waitingText` for the pause. For a failure, show `errorChecklistText`,
 `needsAttentionText`, and the exact full remediation returned by the
 checkpoint. For ServiceNow, that remediation is the branch-loaded recovery

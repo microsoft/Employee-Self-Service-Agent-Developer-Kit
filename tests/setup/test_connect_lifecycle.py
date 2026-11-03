@@ -52,6 +52,13 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "no recommended, preselected, default, or automatic answer" in (
         plan_normalized
     )
+    assert "`--confirm-saved-mapping` recorder" in runner
+    assert "`--reject-saved-mapping`" in runner
+    assert "generic `--yes` flag is value-capture consent" in runner
+    assert (
+        "Do not invoke the historical "
+        "`record-admin-phase --phase servicenow-oidc` bridge"
+    ) in normalized
     assert "only after the user explicitly selects **Yes, let's go**" in (
         plan_normalized
     )
