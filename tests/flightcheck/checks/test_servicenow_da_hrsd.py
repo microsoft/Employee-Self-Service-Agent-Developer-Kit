@@ -1554,7 +1554,7 @@ def test_historical_graph_pass_remains_compatible_without_fresh_graph_claim(
     assert "No current Graph authentication or read" in row.result
 
 
-def test_oidc_checkpoint_requires_capability_owned_by_oidc_phase(
+def test_oidc_checkpoint_requires_configuration_saved_evidence(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1583,7 +1583,26 @@ def test_oidc_checkpoint_requires_capability_owned_by_oidc_phase(
     )
 
     assert result.status == Status.NOT_CONFIGURED.value
-    assert "OIDC capability confirmation is missing" in result.result
+    assert "configuration-saved confirmation is missing" in result.result
+
+
+def test_oidc_checkpoint_manual_does_not_require_or_claim_active_user(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    monkeypatch.chdir(tmp_path)
+
+    result = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-OIDC-001",
+    )
+
+    assert result.status == Status.MANUAL.value
+    assert "mapped to User Field" in result.result
+    assert "Active user" not in result.result
+    assert "does not prove a real token" in result.result
 
 
 def test_oidc_checkpoint_rejects_legacy_mapping_details(

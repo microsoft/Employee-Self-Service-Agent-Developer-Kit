@@ -323,9 +323,8 @@ def _complete_servicenow_admin(
         context,
         phase="servicenow-oidc",
         status=status,
-        oidc_provider_confirmed=True,
+        configuration_saved_confirmed=True,
         claim_mapping_confirmed=True,
-        active_user_match_confirmed=True,
     )
 
 
@@ -12937,13 +12936,12 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     )
     assert source_text == canonical_entra
     assert "The Entra administrator should:" not in ordinary
-    assert len(entra["questions"]) == 4
+    assert len(entra["questions"]) == 3
     assert [
         item["canonicalQuestion"]["header"]
         for item in entra["questions"]
     ] == [
         "Application client ID",
-        "Directory tenant ID",
         "Selected User Claim",
         "Complete Entra administrator setup",
     ]
@@ -12961,7 +12959,6 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
             context,
             stage="entra",
             client_id=APP_CLIENT_ID,
-            directory_tenant_id=TENANT_ID,
             claim_name="employee_id",
             user_field=None,
             confirmed=True,
@@ -13003,6 +13000,11 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         service_now = snow.identity_direct_handoff(
             context,
             stage="servicenow",
+        )
+        service_now_completion = snow.identity_direct_handoff(
+            context,
+            stage="servicenow",
+            captured_user_field="u_employee_id",
         )
 
     assert completed_entra["decision"] == "no-action"
@@ -13055,12 +13057,44 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
             claim_name="employee_id",
         )
     assert source_text == expected_text
-    assert len(service_now["questions"]) == 2
+    assert len(service_now["questions"]) == 1
     input_card = service_now["questions"][0]
     assert input_card["canonicalQuestion"]["allowFreeformInput"] is True
     assert input_card["askUserArguments"]["requestedSchema"]["properties"][
         "response"
     ]["description"] == input_card["canonicalQuestion"]["question"]
+    assert service_now_completion["ordinaryReply"] is None
+    completion_question = service_now_completion["questions"][0][
+        "canonicalQuestion"
+    ]
+    assert completion_question == {
+        "header": "Complete ServiceNow OIDC setup",
+        "question": (
+            "Has the ServiceNow configuration been saved, and is User Claim "
+            "`employee_id` mapped to User Field `u_employee_id`?"
+        ),
+        "options": [
+            {"label": "Yes"},
+            {"label": "No"},
+        ],
+        "allowFreeformInput": False,
+    }
+    completion_arguments = service_now_completion["questions"][0][
+        "askUserArguments"
+    ]
+    completion_field = completion_arguments["requestedSchema"]["properties"][
+        "response"
+    ]
+    assert completion_arguments["message"] == (
+        "Complete ServiceNow OIDC setup"
+    )
+    assert completion_field["title"] == "Selection"
+    assert completion_field["description"] == completion_question["question"]
+    assert completion_field["oneOf"] == [
+        {"const": "Yes", "title": "Yes"},
+        {"const": "No", "title": "No"},
+    ]
+    assert completion_arguments["requestedSchema"]["required"] == ["response"]
 
 
 def test_canonical_runtime_instruction_sources_are_exact_and_structured():
@@ -13132,6 +13166,11 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
             "../../shared/runtime-instructions/entra-administrator.md"
             in entra_guide
         )
+        assert "--directory-tenant-id" not in entra_guide
+        assert (
+            "Client ID and User Claim prompts"
+            in " ".join(entra_guide.split())
+        )
         assert (
             "../../shared/runtime-instructions/"
             "servicenow-administrator.md"
@@ -13196,9 +13235,15 @@ def test_direct_identity_handoff_pauses_before_instructions_until_ack(
             context,
             stage="entra",
         )
+        acknowledged_bytes = path.read_bytes()
         after_yes = snow.identity_direct_handoff(
             context,
             stage="entra",
+        )
+        after_client = snow.identity_direct_handoff(
+            context,
+            stage="entra",
+            captured_client_id=APP_CLIENT_ID,
         )
         same_group_resume = snow.identity_direct_handoff(
             context,
@@ -13211,13 +13256,27 @@ def test_direct_identity_handoff_pauses_before_instructions_until_ack(
     assert after_yes["questions"][0]["canonicalQuestion"]["header"] == (
         "Application client ID"
     )
+    assert [
+        item["canonicalQuestion"]["header"]
+        for item in after_client["questions"]
+    ] == [
+        "Selected User Claim",
+        "Complete Entra administrator setup",
+    ]
+    assert after_client["retainedDirectInput"] == {
+        "applicationClientId": APP_CLIENT_ID,
+    }
     assert all(
         item["canonicalQuestion"]["header"]
         != "Entra administrator availability"
         for item in after_yes["questions"]
     )
     assert same_group_resume["availability"]["acknowledged"] is True
+    assert same_group_resume["questions"][0]["canonicalQuestion"][
+        "header"
+    ] == "Application client ID"
     assert same_group_resume["questions"] == after_yes["questions"]
+    assert path.read_bytes() == acknowledged_bytes
 
 
 def test_identity_availability_ack_isolated_by_group_role_target_and_contract(
@@ -13307,20 +13366,12 @@ def test_identity_availability_ack_isolated_by_group_role_target_and_contract(
 
 
 @pytest.mark.parametrize(
-    ("client_id", "directory_tenant_id", "claim_name", "message"),
+    ("client_id", "claim_name", "message"),
     (
-        ("not-a-guid", TENANT_ID, "email", "GUID"),
-        (APP_CLIENT_ID, "not-a-guid", "email", "tenant ID must be a GUID"),
+        ("not-a-guid", "email", "GUID"),
+        (APP_CLIENT_ID, "aud", "aud audience claim"),
         (
             APP_CLIENT_ID,
-            "00000000-0000-4000-8000-000000000001",
-            "email",
-            "does not match the current target tenant",
-        ),
-        (APP_CLIENT_ID, TENANT_ID, "aud", "aud audience claim"),
-        (
-            APP_CLIENT_ID,
-            TENANT_ID,
             "personal@example.com",
             "explicit non-secret attribute or claim name",
         ),
@@ -13330,7 +13381,6 @@ def test_direct_entra_capture_rejects_invalid_nonsecret_values(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     client_id: str,
-    directory_tenant_id: str,
     claim_name: str,
     message: str,
 ) -> None:
@@ -13345,8 +13395,66 @@ def test_direct_entra_capture_rejects_invalid_nonsecret_values(
             context,
             stage="entra",
             client_id=client_id,
-            directory_tenant_id=directory_tenant_id,
             claim_name=claim_name,
+            user_field=None,
+            confirmed=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("directory_tenant_id", "message"),
+    (
+        ("not-a-guid", "tenant ID must be a GUID"),
+        (
+            "00000000-0000-4000-8000-000000000001",
+            "does not match the current target tenant",
+        ),
+    ),
+)
+def test_optional_direct_entra_tenant_argument_only_validates_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    directory_tenant_id: str,
+    message: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context = _context_at(tmp_path)
+    state = snow._state_base(context, _components())
+    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
+
+    with pytest.raises(snow.ServiceNowConnectError, match=message):
+        snow.record_identity_direct(
+            context,
+            stage="entra",
+            client_id=APP_CLIENT_ID,
+            directory_tenant_id=directory_tenant_id,
+            claim_name="email",
+            user_field=None,
+            confirmed=True,
+        )
+
+
+def test_direct_entra_capture_blocks_without_target_tenant_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context = _context_at(tmp_path)
+    context["environment"]["tenant_id"] = ""
+    state = snow._state_base(_context_at(tmp_path), _components())
+    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="no tenant identity",
+    ):
+        snow.record_identity_direct(
+            context,
+            stage="entra",
+            client_id=APP_CLIENT_ID,
+            claim_name="email",
             user_field=None,
             confirmed=True,
         )
@@ -13366,7 +13474,6 @@ def test_direct_entra_tenant_receipt_is_current_target_bound(
         context,
         stage="entra",
         client_id=APP_CLIENT_ID,
-        directory_tenant_id=TENANT_ID,
         claim_name="email",
         user_field=None,
         confirmed=True,
@@ -13401,7 +13508,6 @@ def test_direct_servicenow_capture_locks_entra_values_and_requires_completion(
         context,
         stage="entra",
         client_id=APP_CLIENT_ID,
-        directory_tenant_id=TENANT_ID,
         claim_name="email",
         user_field=None,
         confirmed=True,
@@ -13426,6 +13532,17 @@ def test_direct_servicenow_capture_locks_entra_values_and_requires_completion(
             user_field="User ID",
             confirmed=True,
         )
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="valid ServiceNow-selected claim and user-field pair",
+    ):
+        snow.record_admin_phase(
+            context,
+            phase="servicenow-oidc",
+            status="completed",
+            configuration_saved_confirmed=True,
+            claim_mapping_confirmed=True,
+        )
     mapping = snow.record_identity_direct(
         context,
         stage="servicenow",
@@ -13434,9 +13551,24 @@ def test_direct_servicenow_capture_locks_entra_values_and_requires_completion(
         user_field="user_name",
         confirmed=True,
     )
+    _ack_identity_availability(context, stage="servicenow")
+    completion = snow.identity_direct_handoff(
+        context,
+        stage="servicenow",
+        captured_user_field="user_name",
+    )
+    repeated_no = snow.identity_direct_handoff(
+        context,
+        stage="servicenow",
+        captured_user_field="user_name",
+    )
+    assert completion["questions"] == repeated_no["questions"]
+    assert completion["retainedDirectInput"] == {
+        "serviceNowUserField": "user_name",
+    }
     with pytest.raises(
         snow.ServiceNowConnectError,
-        match="exact provider",
+        match="configuration is saved",
     ):
         snow.record_admin_phase(
             context,
@@ -13449,6 +13581,12 @@ def test_direct_servicenow_capture_locks_entra_values_and_requires_completion(
         pending,
         phase="servicenow-oidc",
     ) is False
+    assert pending["evidence"]["identityMapping"]["serviceNowUserField"] == (
+        "user_name"
+    )
+    assert pending["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] == {
+        "status": "pending"
+    }
     completed = _complete_servicenow_admin(context)
     complete_state = snow._load_lifecycle_state(context)
     assert snow._identity_admin_handoff_is_ready(
@@ -13465,7 +13603,11 @@ def test_direct_servicenow_capture_locks_entra_values_and_requires_completion(
     assert mapping["tokenClaimName"] == "email"
     assert mapping["serviceNowUserField"] == "user_name"
     assert mapping["importedFileFormat"] == "direct"
-    assert completed["evidence"]["activeUserMatchConfirmed"] is True
+    assert completed["evidence"]["configurationSavedConfirmed"] is True
+    assert completed["evidence"]["claimMappingConfirmed"] is True
+    assert "activeUserMatchConfirmed" not in completed["evidence"]
+    assert "tokenValidated" not in completed["evidence"]
+    assert "businessResult" not in completed["evidence"]
     assert completed["evidence"][
         "connectorPreauthorizationConfirmed"
     ] is True
@@ -13492,7 +13634,6 @@ def test_direct_and_workbook_paths_produce_equivalent_bound_identity(
                 context,
                 stage="entra",
                 client_id=APP_CLIENT_ID,
-                directory_tenant_id=TENANT_ID,
                 claim_name="email",
                 user_field=None,
                 confirmed=True,
@@ -13558,6 +13699,96 @@ def test_direct_and_workbook_paths_produce_equivalent_bound_identity(
     ]
 
 
+def test_servicenow_completion_requires_current_inherited_preauthorization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context = _context_at(tmp_path)
+    state = snow._state_base(context, _components())
+    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+    path = _lifecycle_path(tmp_path)
+    snow._write_json_atomic(path, state)
+    snow.record_identity_direct(
+        context,
+        stage="entra",
+        client_id=APP_CLIENT_ID,
+        claim_name="email",
+        user_field=None,
+        confirmed=True,
+    )
+    _complete_entra_admin(context, client_id=APP_CLIENT_ID)
+    snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="user_name",
+        confirmed=True,
+    )
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    saved["adminSetup"]["phaseHandoffs"]["entra-registration"][
+        "evidence"
+    ]["connectorPreauthorizationConfirmed"] = False
+    snow._write_json_atomic(path, saved)
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="does not confirm Microsoft ServiceNow connector "
+        "preauthorization",
+    ):
+        _complete_servicenow_admin(context)
+
+    current = snow._load_lifecycle_state(context)
+    assert current["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] == {
+        "status": "pending"
+    }
+
+
+def test_historical_oidc_completion_without_active_user_field_remains_current(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context = _context_at(tmp_path)
+    state = snow._state_base(context, _components())
+    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+    path = _lifecycle_path(tmp_path)
+    snow._write_json_atomic(path, state)
+    snow.record_identity_direct(
+        context,
+        stage="entra",
+        client_id=APP_CLIENT_ID,
+        claim_name="email",
+        user_field=None,
+        confirmed=True,
+    )
+    _complete_entra_admin(context, client_id=APP_CLIENT_ID)
+    snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="user_name",
+        confirmed=True,
+    )
+    _complete_servicenow_admin(context)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    evidence = saved["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
+        "evidence"
+    ]
+    evidence.pop("configurationSavedConfirmed", None)
+    evidence.pop("connectorPreauthorizationConfirmed", None)
+    evidence.pop("activeUserMatchConfirmed", None)
+    snow._write_json_atomic(path, saved)
+
+    assert snow._identity_admin_handoff_is_ready(
+        context,
+        snow._load_lifecycle_state(context),
+        phase="servicenow-oidc",
+    ) is True
+
+
 def test_identity_value_change_retires_downstream_current_evidence(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -13582,7 +13813,6 @@ def test_identity_value_change_retires_downstream_current_evidence(
         context,
         stage="entra",
         client_id=APP_CLIENT_ID,
-        directory_tenant_id=TENANT_ID,
         claim_name="email",
         user_field=None,
         confirmed=True,
@@ -13601,7 +13831,6 @@ def test_identity_value_change_retires_downstream_current_evidence(
         context,
         stage="entra",
         client_id=APP_CLIENT_ID,
-        directory_tenant_id=TENANT_ID,
         claim_name="upn",
         user_field=None,
         confirmed=True,
@@ -13647,13 +13876,24 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
     ] == "Application client ID"
     assert snow.main(
         [
+            "identity-direct-handoff",
+            "--stage",
+            "entra",
+            "--client-id",
+            APP_CLIENT_ID,
+        ]
+    ) == 0
+    after_client = json.loads(capsys.readouterr().out)
+    assert after_client["questions"][0]["askUserArguments"][
+        "message"
+    ] == "Selected User Claim"
+    assert snow.main(
+        [
             "record-identity-direct",
             "--stage",
             "entra",
             "--client-id",
             APP_CLIENT_ID,
-            "--directory-tenant-id",
-            TENANT_ID,
             "--claim-name",
             "email",
             "--yes",
@@ -13699,14 +13939,32 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
     capsys.readouterr()
     assert snow.main(
         [
+            "identity-direct-handoff",
+            "--stage",
+            "servicenow",
+            "--user-field",
+            "user_name",
+        ]
+    ) == 0
+    completion = json.loads(capsys.readouterr().out)
+    completion_question = completion["questions"][0]["canonicalQuestion"]
+    assert completion_question["question"] == (
+        "Has the ServiceNow configuration been saved, and is User Claim "
+        "`email` mapped to User Field `user_name`?"
+    )
+    assert completion_question["options"] == [
+        {"label": "Yes"},
+        {"label": "No"},
+    ]
+    assert snow.main(
+        [
             "record-admin-phase",
             "--phase",
             "servicenow-oidc",
             "--status",
             "completed",
-            "--confirm-oidc-provider",
+            "--confirm-configuration-saved",
             "--confirm-claim-mapping",
-            "--confirm-active-user-match",
         ]
     ) == 0
     completed = json.loads(capsys.readouterr().out)

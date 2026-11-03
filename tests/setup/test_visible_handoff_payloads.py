@@ -244,11 +244,9 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
         (
             _ACTIONS / "guide-servicenow-oidc.md",
             (
-                "OIDC provider",
-                "claim-name",
-                "user-field mapping",
-                "exact target",
-                "does not prove a real employee token",
+                "configuration been saved",
+                "User Claim",
+                "mapped to User Field",
             ),
         ),
         (
@@ -312,10 +310,7 @@ def test_visible_handoff_payloads_are_supported_and_complete(
             assert "{CURRENT_PROGRESS}" not in question["question"]
             assert "Connection progress:" not in question["question"]
             assert "**Phases**" not in question["question"]
-        if path.name in {
-            "guide-entra-registration.md",
-            "guide-servicenow-oidc.md",
-        }:
+        if path.name == "guide-entra-registration.md":
             assert "requirements above" in question["question"].casefold()
         else:
             assert "above" not in question["question"].casefold()
@@ -394,11 +389,18 @@ def test_servicenow_questions_use_buttons_and_bounded_freeform() -> None:
                 option.get("recommended")
                 for option in question.get("options") or []
             )
-            assert all(
-                option["label"].strip()
-                and option["label"].casefold() not in {"yes", "no"}
+            labels = [
+                option["label"]
                 for option in question.get("options") or []
-            )
+            ]
+            if path.name == "guide-servicenow-oidc.md":
+                assert labels == ["Yes", "No"]
+            else:
+                assert all(
+                    label.strip()
+                    and label.casefold() not in {"yes", "no"}
+                    for label in labels
+                )
             if question.get("allowFreeformInput") is True:
                 assert path.name in allowed_freeform
             adapted = snow.adapt_question_to_ask_user(question)
@@ -473,7 +475,10 @@ def test_identity_admin_guides_use_input_then_completion_questions(
     assert "Accept the local path of either the completed XLSX\nor CSV" in oidc
     assert "After import succeeds" in oidc
     assert "ask this separate\ncompletion question" in oidc
-    assert "does not prove a real employee token" in oidc
+    assert (
+        "does not prove a real employee token"
+        in " ".join(oidc.split())
+    )
     assert "record-identity-mapping" in entra
     assert "record-identity-mapping" in oidc
 

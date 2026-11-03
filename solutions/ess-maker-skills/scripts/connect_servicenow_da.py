@@ -1303,7 +1303,13 @@ def _identity_handoff_question(stage: str) -> dict[str, Any]:
     )
 
 
-def _identity_direct_questions(stage: str) -> list[dict[str, Any]]:
+def _identity_direct_questions(
+    stage: str,
+    *,
+    captured_client_id: str | None = None,
+    confirmed_claim_name: str | None = None,
+    captured_user_field: str | None = None,
+) -> list[dict[str, Any]]:
     if stage == "entra":
         canonical = [
             _native_question(
@@ -1311,15 +1317,6 @@ def _identity_direct_questions(stage: str) -> list[dict[str, Any]]:
                 question=(
                     "Enter the Application (client) ID GUID confirmed from "
                     "the app registration Overview page for this exact target."
-                ),
-                allow_freeform_input=True,
-            ),
-            _native_question(
-                header="Directory tenant ID",
-                question=(
-                    "Enter the Directory (tenant) ID GUID copied from the "
-                    "same app registration Overview page. It must match this "
-                    "exact target tenant."
                 ),
                 allow_freeform_input=True,
             ),
@@ -1347,32 +1344,49 @@ def _identity_direct_questions(stage: str) -> list[dict[str, Any]]:
                 ],
             ),
         ]
+        if captured_client_id is not None:
+            normalize_client_id(captured_client_id)
+            canonical = canonical[1:]
     elif stage == "servicenow":
-        canonical = [
-            _native_question(
-                header="ServiceNow internal user field",
-                question=(
-                    "Enter the exact internal `sys_user` field that stores the "
-                    "same identity key as the locked Entra-confirmed User "
-                    "Claim. Do not enter a display label or employee value."
-                ),
-                allow_freeform_input=True,
-            ),
-            _native_question(
+        if not confirmed_claim_name:
+            raise ServiceNowConnectError(
+                "ServiceNow direct questions require the locked "
+                "Entra-confirmed User Claim name."
+            )
+        if captured_user_field is None:
+            canonical = [
+                _native_question(
+                    header="ServiceNow internal user field",
+                    question=(
+                        "Enter the exact internal `sys_user` field that stores "
+                        "the same identity key as the locked Entra-confirmed "
+                        f"User Claim `{confirmed_claim_name}`. Do not enter a "
+                        "display label or employee value."
+                    ),
+                    allow_freeform_input=True,
+                )
+            ]
+        else:
+            user_field = str(captured_user_field).strip()
+            if not _SAFE_USER_FIELD.fullmatch(user_field):
+                raise ServiceNowConnectError(
+                    "servicenow_user_field must be an explicit safe "
+                    "ServiceNow internal field name."
+                )
+            canonical = [
+                _native_question(
                 header="Complete ServiceNow OIDC setup",
                 question=(
-                    "Are the requirements above complete for this exact "
-                    "target, including the provider, claim-to-field mapping, "
-                    "one matching Active user, and current connector "
-                    "preauthorization evidence? This Manual evidence does not "
-                    "prove a real employee token or business result."
+                    "Has the ServiceNow configuration been saved, and is User "
+                    f"Claim `{confirmed_claim_name}` mapped to User Field "
+                    f"`{user_field}`?"
                 ),
                 option_labels=[
-                    "Yes, all requirements are complete",
-                    "No, not yet",
+                    "Yes",
+                    "No",
                 ],
-            ),
-        ]
+                )
+            ]
     else:
         raise ServiceNowConnectError(
             "Identity direct handoff stage must be entra or servicenow."
@@ -1497,10 +1511,22 @@ def identity_direct_handoff(
     context: dict[str, Any],
     *,
     stage: str,
+    captured_client_id: str | None = None,
+    captured_user_field: str | None = None,
 ) -> dict[str, Any]:
     if stage not in {"entra", "servicenow"}:
         raise ServiceNowConnectError(
             "Identity direct handoff stage is invalid."
+        )
+    if stage != "entra" and captured_client_id is not None:
+        raise ServiceNowConnectError(
+            "Current-turn Client ID retention is supported only for the "
+            "Entra direct handoff."
+        )
+    if stage != "servicenow" and captured_user_field is not None:
+        raise ServiceNowConnectError(
+            "Current-turn User Field retention is supported only for the "
+            "ServiceNow direct handoff."
         )
     state = _load_lifecycle_state(context)
     phase = (
@@ -1650,13 +1676,18 @@ def identity_direct_handoff(
                 "_metadata!A1:G12",
             ]
         ),
-        "ordinaryReply": {
-            "kind": "ordinary-agent-response",
-            "text": (
-                f"{target_text}\n\n{source_text}\n\n"
-                f"Current contract boundary\n{contract_boundary}"
-            ),
-        },
+        "ordinaryReply": (
+            None
+            if captured_client_id is not None
+            or captured_user_field is not None
+            else {
+                "kind": "ordinary-agent-response",
+                "text": (
+                    f"{target_text}\n\n{source_text}\n\n"
+                    f"Current contract boundary\n{contract_boundary}"
+                ),
+            }
+        ),
         "availability": {
             "required": False,
             "acknowledged": True,
@@ -1667,7 +1698,27 @@ def identity_direct_handoff(
             "askUserArguments": None,
         },
         "lockedValues": locked_values,
-        "questions": _identity_direct_questions(stage),
+        "retainedDirectInput": (
+            {
+                "applicationClientId": normalize_client_id(
+                    captured_client_id
+                )
+            }
+            if stage == "entra" and captured_client_id is not None
+            else {
+                "serviceNowUserField": str(captured_user_field).strip()
+            }
+            if stage == "servicenow" and captured_user_field is not None
+            else None
+        ),
+        "questions": _identity_direct_questions(
+            stage,
+            captured_client_id=captured_client_id,
+            confirmed_claim_name=(
+                claim_name if stage == "servicenow" else None
+            ),
+            captured_user_field=captured_user_field,
+        ),
         "secretsAccepted": False,
         "employeeValuesAccepted": False,
         "remoteMutationCount": 0,
@@ -5138,24 +5189,25 @@ def record_identity_direct(
         )
     state = _load_lifecycle_state(context)
     if stage == "entra":
-        if not client_id or not directory_tenant_id or not claim_name:
+        if not client_id or not claim_name:
             raise ServiceNowConnectError(
                 "Direct Entra capture requires the Application client ID "
-                "GUID, Directory tenant ID GUID, and exactly one selected "
-                "User Claim name."
+                "GUID and exactly one selected User Claim name."
             )
         application_client_id = normalize_client_id(client_id)
-        confirmed_tenant_id = _normalize_directory_tenant_id(
-            directory_tenant_id
-        )
         expected_tenant_id = _normalize_directory_tenant_id(
             _required_context_identity(context, state)["tenantId"]
         )
-        if confirmed_tenant_id != expected_tenant_id:
+        if (
+            directory_tenant_id is not None
+            and _normalize_directory_tenant_id(directory_tenant_id)
+            != expected_tenant_id
+        ):
             raise ServiceNowConnectError(
                 "The confirmed Directory tenant ID does not match the "
                 "current target tenant."
             )
+        confirmed_tenant_id = expected_tenant_id
         safe_claim = _safe_identity_name(claim_name, "user_claim")
         if safe_claim.casefold() == "aud":
             raise ServiceNowConnectError(
@@ -5549,19 +5601,40 @@ def _identity_admin_handoff_is_ready(
             or migrated_historical_graph_pass
         )
     else:
+        entra_handoff = _completed_handoff(
+            setup,
+            "entra-registration",
+        )
+        entra_evidence = (
+            entra_handoff.get("evidence")
+            if isinstance(entra_handoff, dict)
+            else None
+        )
+        inherited_preauthorization_current = bool(
+            isinstance(entra_evidence, dict)
+            and entra_evidence.get(
+                "connectorPreauthorizationConfirmed"
+            )
+            is True
+        )
         ready = bool(
             isinstance(mapping, dict)
             and validated_evidence.get("kind")
             == "structured-admin-attestation"
-            and validated_evidence.get("oidcCapabilityConfirmed") is True
+            and (
+                validated_evidence.get("configurationSavedConfirmed") is True
+                or validated_evidence.get("oidcCapabilityConfirmed") is True
+            )
             and validated_evidence.get("runbookCompleted") is True
             and validated_evidence.get("mappingDetailsCollected") is True
             and validated_evidence.get("claimMappingConfirmed") is True
-            and validated_evidence.get("activeUserMatchConfirmed") is True
-            and validated_evidence.get(
-                "connectorPreauthorizationConfirmed"
+            and (
+                validated_evidence.get(
+                    "connectorPreauthorizationConfirmed"
+                )
+                is True
+                or inherited_preauthorization_current
             )
-            is True
             and validated_evidence.get("tokenClaimName")
             == mapping.get("tokenClaimName")
             and validated_evidence.get("serviceNowUserField")
@@ -10945,6 +11018,7 @@ def record_admin_phase(
     claim_emission_confirmed: bool = False,
     user_impersonation_scope_confirmed: bool = False,
     connector_preauthorization_confirmed: bool = False,
+    configuration_saved_confirmed: bool = False,
     oidc_provider_confirmed: bool = False,
     claim_mapping_confirmed: bool = False,
     active_user_match_confirmed: bool = False,
@@ -11071,15 +11145,14 @@ def record_admin_phase(
         )
 
     if phase == "servicenow-oidc":
-        if not (
-            oidc_provider_confirmed
-            and claim_mapping_confirmed
-            and active_user_match_confirmed
-        ):
+        configuration_saved = bool(
+            configuration_saved_confirmed or oidc_provider_confirmed
+        )
+        if not (configuration_saved and claim_mapping_confirmed):
             raise ServiceNowConnectError(
                 "ServiceNow OIDC completion requires explicit confirmation "
-                "of the exact provider, claim-to-field mapping, and one "
-                "matching Active user."
+                "that the exact configuration is saved and the locked User "
+                "Claim is mapped to the recorded User Field."
             )
         entra_handoff = _completed_handoff(setup, "entra-registration")
         entra_evidence = (
@@ -11101,15 +11174,13 @@ def record_admin_phase(
         mapping = _validated_identity_mapping(context, state)
         evidence.update(
             {
-                "oidcCapabilityConfirmed": oidc_provider_confirmed,
+                "oidcCapabilityConfirmed": configuration_saved,
+                "configurationSavedConfirmed": configuration_saved,
                 "runbookCompleted": bool(
-                    oidc_provider_confirmed
-                    and claim_mapping_confirmed
-                    and active_user_match_confirmed
+                    configuration_saved and claim_mapping_confirmed
                 ),
                 "mappingDetailsCollected": True,
                 "claimMappingConfirmed": claim_mapping_confirmed,
-                "activeUserMatchConfirmed": active_user_match_confirmed,
                 "connectorPreauthorizationConfirmed": True,
                 "tokenClaimName": mapping["tokenClaimName"],
                 "serviceNowUserField": mapping["serviceNowUserField"],
@@ -11122,6 +11193,8 @@ def record_admin_phase(
                 ],
             }
         )
+        if active_user_match_confirmed:
+            evidence["activeUserMatchConfirmed"] = True
         evidence["binding"]["applicationClientId"] = mapping[
             "applicationClientId"
         ]
@@ -19292,6 +19365,20 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("entra", "servicenow"),
         required=True,
     )
+    direct_handoff_parser.add_argument(
+        "--client-id",
+        help=(
+            "Current-turn Application client ID already accepted by the "
+            "caller. It is validated but not persisted."
+        ),
+    )
+    direct_handoff_parser.add_argument(
+        "--user-field",
+        help=(
+            "Current-turn ServiceNow internal user field already accepted by "
+            "the caller. It is validated but not persisted by this command."
+        ),
+    )
     requirement_parser = subparsers.add_parser(
         "record-identity-requirement",
         help=(
@@ -19337,7 +19424,10 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     direct_mapping_parser.add_argument("--client-id")
-    direct_mapping_parser.add_argument("--directory-tenant-id")
+    direct_mapping_parser.add_argument(
+        "--directory-tenant-id",
+        help=argparse.SUPPRESS,
+    )
     direct_mapping_parser.add_argument("--claim-name")
     direct_mapping_parser.add_argument("--user-field")
     direct_mapping_parser.add_argument("--yes", action="store_true")
@@ -19373,8 +19463,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
     )
     phase_parser.add_argument(
+        "--confirm-configuration-saved",
+        action="store_true",
+    )
+    phase_parser.add_argument(
         "--confirm-oidc-provider",
         action="store_true",
+        help=argparse.SUPPRESS,
     )
     phase_parser.add_argument(
         "--confirm-claim-mapping",
@@ -19383,6 +19478,7 @@ def build_parser() -> argparse.ArgumentParser:
     phase_parser.add_argument(
         "--confirm-active-user-match",
         action="store_true",
+        help=argparse.SUPPRESS,
     )
 
     create_parser = subparsers.add_parser(
@@ -20133,6 +20229,8 @@ def main(argv: list[str] | None = None) -> int:
             result = identity_direct_handoff(
                 context,
                 stage=args.stage,
+                captured_client_id=args.client_id,
+                captured_user_field=args.user_field,
             )
         elif args.command == "record-identity-requirement":
             result = record_identity_requirement(
@@ -20172,6 +20270,9 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 connector_preauthorization_confirmed=(
                     args.confirm_connector_preauthorization
+                ),
+                configuration_saved_confirmed=(
+                    args.confirm_configuration_saved
                 ),
                 oidc_provider_confirmed=args.confirm_oidc_provider,
                 claim_mapping_confirmed=args.confirm_claim_mapping,

@@ -22,8 +22,8 @@ requires one new complete OIDC handoff.
 
 ## Goal and owner
 
-- **Goal:** make ServiceNow trust App A's delegated user token and resolve the
-  signed-in employee to one matching Active ServiceNow user.
+- **Goal:** save the ServiceNow OIDC configuration and map the locked
+  Entra-confirmed User Claim to the actual ServiceNow user field.
 - **Owner role:** ServiceNow `admin` or `security_admin`, elevated to
   `security_admin`.
 
@@ -50,15 +50,20 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-sl
 ```
 
 Require `decision: instructions-required`. Render `ordinaryReply.text`
-verbatim, then pass the returned data/completion `askUserArguments` objects
-verbatim. The question list intentionally excludes availability because
-`resume-handoff` owns and deduplicates that gate. Record only the
-administrator-confirmed internal `sys_user` field; the command does not accept
-Client ID or User Claim overrides:
+verbatim, then pass the returned User Field `askUserArguments` object verbatim.
+The question list intentionally excludes availability because `resume-handoff`
+owns and deduplicates that gate. Record only the administrator-confirmed
+internal `sys_user` field; the command does not accept Client ID or User Claim
+overrides:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage servicenow --user-field "<internal-sys_user-field>" --yes
 ```
+
+Keep that accepted field in the current conversation and rerun the handoff with
+`--user-field "<internal-sys_user-field>"`. Render only its returned completion
+question; the canonical instructions and User Field question are not repeated.
+The hint is validated but not persisted by the handoff command.
 
 The protected file route remains fully supported.
 
@@ -130,20 +135,26 @@ completion question:
 [
   {
     "header": "Confirm ServiceNow OIDC evidence",
-    "question": "Are the requirements above complete for this exact target, including the OIDC provider, exact Entra claim-name to ServiceNow user-field mapping, one matching Active user, and current connector preauthorization evidence? This Manual evidence does not prove a real employee token or business result.",
+    "question": "Has the ServiceNow configuration been saved, and is User Claim `{CONFIRMED_USER_CLAIM_NAME}` mapped to User Field `{SERVICENOW_USER_FIELD}`?",
     "options": [
-      { "label": "Yes, all requirements are complete" },
-      { "label": "No, the ServiceNow administrator still needs to finish it" }
+      { "label": "Yes" },
+      { "label": "No" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
+This Yes confirms only that the configuration is saved and the displayed
+claim-to-field mapping is complete for the exact target. It does not prove a
+real employee token, authentication success, permission, Active-user match, or
+business result. Current exact-target Entra connector pre-authorization remains
+required and is inherited rather than asked again.
+
 Only after the first option is selected, record the bundled confirmation:
 
 ```text
-python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-admin-phase --phase servicenow-oidc --status completed --confirm-oidc-provider --confirm-claim-mapping --confirm-active-user-match
+python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-admin-phase --phase servicenow-oidc --status completed --confirm-configuration-saved --confirm-claim-mapping
 ```
 
 Return `ACTION_RESULT = "recorded"` only after this command succeeds.

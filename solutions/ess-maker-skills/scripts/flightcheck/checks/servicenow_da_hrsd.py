@@ -1535,9 +1535,14 @@ def _oidc_result(
     if missing:
         status = Status.NOT_CONFIGURED.value
         result = "The complete ServiceNow OIDC admin handoff is missing."
-    elif mapping.get("oidcCapabilityConfirmed") is not True:
+    elif not (
+        mapping.get("configurationSavedConfirmed") is True
+        or mapping.get("oidcCapabilityConfirmed") is True
+    ):
         status = Status.NOT_CONFIGURED.value
-        result = "The ServiceNow OIDC capability confirmation is missing."
+        result = (
+            "The ServiceNow configuration-saved confirmation is missing."
+        )
     elif mapping.get("runbookCompleted") is not True:
         status = Status.NOT_CONFIGURED.value
         result = "The complete ServiceNow OIDC runbook attestation is missing."
@@ -1566,17 +1571,19 @@ def _oidc_result(
         else:
             status = Status.MANUAL.value
             result = (
-                "The ServiceNow admin confirmed OIDC capability, "
-                "security_admin elevation, provider metadata, User Claim "
+                "The ServiceNow admin confirmed the configuration is saved "
+                "and User Claim "
                 f"{receipt['tokenClaimName']!r} sourced from "
-                f"the Entra-confirmed candidates, User Field "
-                f"{receipt['serviceNowUserField']!r}, and a matching Active "
-                "user. No employee value was returned."
+                f"the Entra-confirmed candidates is mapped to User Field "
+                f"{receipt['serviceNowUserField']!r}. No employee value was "
+                "returned, and this Manual evidence does not prove a real "
+                "token, authentication success, permission, or business "
+                "result."
             )
     return _result(
         "SN-DA-HRSD-OIDC-001",
         status,
-        "ServiceNow OIDC provider and active-user mapping",
+        "ServiceNow OIDC provider and user mapping",
         result,
         (
             "Complete or re-verify the full guided ServiceNow OIDC runbook, "

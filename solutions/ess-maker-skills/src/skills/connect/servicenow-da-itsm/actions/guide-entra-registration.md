@@ -106,10 +106,15 @@ verbatim, then pass every returned `askUserArguments` object verbatim through
 the active `ask_user` tool. The returned question list intentionally excludes
 availability because `resume-handoff` owns and deduplicates that gate. Record
 the non-secret values only after the administrator answers the separate Client
-ID, Directory tenant ID, and User Claim prompts:
+ID and User Claim prompts. Keep an accepted Client ID in the current
+conversation turn; if the handoff must be regenerated before the claim answer,
+pass `--client-id "<application-client-id-guid>"` so the next returned
+question is the claim rather than asking for Client ID again. This hint is
+validated but not persisted, so a new chat without an atomic receipt may ask
+for Client ID again.
 
 ```text
-python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage entra --client-id "<application-client-id-guid>" --directory-tenant-id "<directory-tenant-id-guid>" --claim-name "<selected-claim-name>" --yes
+python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage entra --client-id "<application-client-id-guid>" --claim-name "<selected-claim-name>" --yes
 ```
 
 The protected file route remains fully supported:
