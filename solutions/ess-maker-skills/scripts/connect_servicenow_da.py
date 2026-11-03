@@ -17702,6 +17702,126 @@ def _realm_functional_test_question(
     )
 
 
+def _realm_expected_target_values(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    realm: str,
+    target_instance: str | None,
+    target_client_id: str | None,
+) -> dict[str, Any]:
+    if bool(target_instance) != bool(target_client_id):
+        raise ServiceNowConnectError(
+            "Target ServiceNow instance and application client ID must be "
+            "provided together."
+        )
+    setup = _admin_setup(state)
+    instance_name = setup.get("preflight", {}).get("instanceName")
+    missing_reasons: dict[str, Any] = {}
+    try:
+        normalized_instance = (
+            normalize_instance_name(instance_name)
+            if isinstance(instance_name, str) and instance_name
+            else None
+        )
+        if normalized_instance is None:
+            raise ServiceNowConnectError(
+                "Current Dev ServiceNow instance evidence is missing."
+            )
+    except ServiceNowConnectError as exc:
+        normalized_instance = None
+        missing_reasons["serviceNowInstance"] = {
+            "category": "Current Dev instance evidence unavailable",
+            "message": str(exc),
+            "details": copy.deepcopy(exc.details),
+        }
+    try:
+        if _completed_handoff(setup, "entra-registration") is None:
+            raise ServiceNowConnectError(
+                "Current Entra identity handoff is incomplete."
+            )
+        candidates = _validated_claim_candidates(context, state)
+        normalized_client_id = normalize_client_id(
+            str(candidates.get("applicationClientId") or "")
+        )
+    except ServiceNowConnectError as exc:
+        candidates = None
+        normalized_client_id = None
+        missing_reasons["applicationClientId"] = {
+            "category": "Current Dev Entra evidence unavailable",
+            "message": str(exc),
+            "details": copy.deepcopy(exc.details),
+        }
+    missing_fields = []
+    if normalized_instance is None:
+        missing_fields.append("serviceNowInstance")
+    if normalized_client_id is None:
+        missing_fields.append("applicationClientId")
+    explicit = target_instance is not None and target_client_id is not None
+    if explicit and not missing_fields:
+        supplied_instance = normalize_instance_name(target_instance)
+        supplied_client_id = normalize_client_id(target_client_id)
+        mismatches = {}
+        if supplied_instance != normalized_instance:
+            mismatches["serviceNowInstance"] = {
+                "expected": normalized_instance,
+                "supplied": supplied_instance,
+            }
+        if supplied_client_id != normalized_client_id:
+            mismatches["applicationClientId"] = {
+                "expected": normalized_client_id,
+                "supplied": supplied_client_id,
+            }
+        if mismatches:
+            raise ServiceNowConnectError(
+                f"The explicit {realm.title()} target values do not match "
+                "current compatible Dev evidence.",
+                details={
+                    "realm": realm,
+                    "category": "Target value mismatch",
+                    "mismatches": mismatches,
+                },
+            )
+    source_ref = {
+        "kind": "current-dev-compatible-evidence",
+        "provider": ACTIVE_PROFILE.provider_key,
+        "profile": ACTIVE_PROFILE.key,
+        "agentSlug": _agent_slug(context),
+        "agentId": context["agent"]["id"],
+        "environmentId": context["environment"]["id"],
+        "tenantId": context["environment"]["tenant_id"],
+        "instanceName": normalized_instance,
+        "applicationClientId": normalized_client_id,
+        "instanceEvidenceSha256": _canonical_json_hash(
+            {
+                "preflight": setup.get("preflight"),
+                "handoff": setup.get("phaseHandoffs", {}).get("preflight"),
+            }
+        ),
+        "identityEvidenceSha256": (
+            _canonical_json_hash(candidates)
+            if isinstance(candidates, dict)
+            else None
+        ),
+    }
+    return {
+        "status": "missing" if missing_fields else "resolved",
+        "instanceName": normalized_instance,
+        "applicationClientId": normalized_client_id,
+        "missingFields": missing_fields,
+        "missingReasons": missing_reasons,
+        "source": (
+            "explicit-compatible-override"
+            if explicit and not missing_fields
+            else "current-dev-compatible-evidence"
+        ),
+        "explicitOverride": explicit,
+        "administratorReconfirmed": False,
+        "sourceRef": source_ref,
+        "sourceRefSha256": _canonical_json_hash(source_ref),
+    }
+
+
 def validate_realm(
     context: dict[str, Any],
     *,
@@ -17838,64 +17958,10 @@ def validate_realm(
             },
         }
 
-    if not target_instance or not target_client_id:
-        problem = (
-            "Target ServiceNow instance and application client ID are both "
-            "required before target validation. Do not copy Dev or another "
-            "realm's values."
-        )
-        raise ServiceNowConnectError(
-            problem,
-            details={
-                "realm": realm,
-                "recoveryHandoff": _recovery_handoff(
-                    problem=problem,
-                    category="Missing target confirmation",
-                    owner=(
-                        "ServiceNow Admin and Microsoft Entra Application "
-                        "Administrator with the target Power Platform Maker"
-                    ),
-                    where=_target_agent_validation_url(
-                        context,
-                        environment_id=None,
-                        agent_id=None,
-                    ),
-                    values=(
-                        f"Requested realm: {realm.title()}. Provide the exact "
-                        "target ServiceNow instance name and App A Application "
-                        "client ID together. Do not copy Dev or another "
-                        "realm's values."
-                    ),
-                    action=(
-                        "Confirm both non-secret target values with their "
-                        "authoritative administrators, then rerun only target "
-                        "validation."
-                    ),
-                    success=(
-                        "Both target values are explicitly confirmed for the "
-                        "same requested realm."
-                    ),
-                    recheck=(
-                        f"Rerun {realm.title()} validation with both target "
-                        "flags."
-                    ),
-                ),
-            },
-        )
-    normalized_target_instance = normalize_instance_name(target_instance)
-    normalized_target_client_id = normalize_client_id(target_client_id)
-    state.setdefault("evidence", {})["validationRealmSelection"] = selection
-    _write_lifecycle_state(context, state)
     target = resolved_target
     target_client = target.pop("client")
     target_identity = _realm_target_identity(target, realm)
     target_configuration_sha256 = _canonical_json_hash(target_identity)
-    existing_validations = state.get("evidence", {}).get("realmValidations")
-    prior_validation = None
-    if isinstance(existing_validations, dict):
-        candidate = existing_validations.get(realm)
-        if isinstance(candidate, dict):
-            prior_validation = candidate
     from flightcheck.checks.servicenow_deployment import (
         deployment_result_for_resolved_target,
     )
@@ -17924,6 +17990,75 @@ def validate_realm(
         realm=realm,
         target=target,
     )
+    expected_values = _realm_expected_target_values(
+        context,
+        state,
+        realm=realm,
+        target_instance=target_instance,
+        target_client_id=target_client_id,
+    )
+    selection["targetExpectedValues"] = copy.deepcopy(expected_values)
+    state.setdefault("evidence", {})["validationRealmSelection"] = selection
+    _write_lifecycle_state(context, state)
+    if expected_values["status"] != "resolved":
+        missing_fields = list(expected_values["missingFields"])
+        pending_functional = _customer_facing_realm_check(
+            {
+                "checkpoint": (
+                    f"SN-DA-{'HRSD' if ACTIVE_PROFILE.key == 'hrsd' else 'ITSM'}"
+                    "-TEST-001"
+                ),
+                "status": "NotConfigured",
+                "automationType": "manual",
+                "result": (
+                    "Functional Test remains pending until current compatible "
+                    "expected ServiceNow values are available."
+                ),
+            }
+        )
+        return {
+            "schemaVersion": "servicenow.realm-validation.v1",
+            "status": "target-values-required",
+            "selection": selection,
+            "transport": transport,
+            "target": copy.deepcopy(target),
+            "deploymentEvidence": copy.deepcopy(deployment_record),
+            "targetExpectedValues": expected_values,
+            "missingFields": missing_fields,
+            "visibleGates": [
+                {
+                    "id": "deployment",
+                    "label": "Deployment confirmed",
+                    **_customer_facing_realm_check(deployment_check),
+                },
+                {
+                    "id": "functional-test",
+                    "label": "Functional Test Pass",
+                    **pending_functional,
+                },
+            ],
+            "realmStages": _realm_stage_progress(state, realm),
+            "remoteMutationCount": 0,
+            "next": {
+                "action": "restore-current-dev-expected-values",
+                "instruction": (
+                    "Deployment is confirmed. Restore only the missing "
+                    "current Dev evidence fields, or supply matching explicit "
+                    "overrides after that evidence is current, then rerun "
+                    f"{realm.title()} validation."
+                ),
+            },
+        }
+    normalized_target_instance = str(expected_values["instanceName"])
+    normalized_target_client_id = str(
+        expected_values["applicationClientId"]
+    )
+    existing_validations = state.get("evidence", {}).get("realmValidations")
+    prior_validation = None
+    if isinstance(existing_validations, dict):
+        candidate = existing_validations.get(realm)
+        if isinstance(candidate, dict):
+            prior_validation = candidate
     realm_value = _VALIDATION_REALMS[realm]
     runner = SimpleNamespace(
         agentbuilder=target_client,
@@ -18120,9 +18255,13 @@ def validate_realm(
             dev_evidence["testBinding"]
         ),
         "targetCredentialExpectation": {
-            "source": "explicit-target-realm-confirmation",
+            "source": expected_values["source"],
             "instanceName": normalized_target_instance,
             "applicationClientId": normalized_target_client_id,
+            "explicitOverride": expected_values["explicitOverride"],
+            "administratorReconfirmed": False,
+            "sourceRef": copy.deepcopy(expected_values["sourceRef"]),
+            "sourceRefSha256": expected_values["sourceRefSha256"],
         },
         "foundationReuse": copy.deepcopy(
             foundation_check.get("evidence")
@@ -19968,15 +20107,16 @@ def build_parser() -> argparse.ArgumentParser:
     validate_realm_parser.add_argument(
         "--target-instance",
         help=(
-            "Administrator-confirmed ServiceNow instance for this exact Test "
-            "or Prod realm."
+            "Optional compatible ServiceNow instance override for this exact "
+            "Test or Prod realm. When omitted, current Dev evidence is used."
         ),
     )
     validate_realm_parser.add_argument(
         "--target-client-id",
         help=(
-            "Administrator-confirmed Entra application client ID for this "
-            "exact Test or Prod realm."
+            "Optional compatible Entra application client ID override for "
+            "this exact Test or Prod realm. When omitted, current Dev "
+            "evidence is used."
         ),
     )
     validate_realm_parser.add_argument(

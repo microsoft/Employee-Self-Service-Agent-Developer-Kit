@@ -609,6 +609,7 @@ def _seed_complete_dev_state(
     *,
     profile: str,
     legacy_publish_status: str | None = None,
+    include_expected_values: bool = False,
 ) -> tuple[dict, dict]:
     product = snow.PRODUCT_PROFILES[profile]
     slug = (
@@ -654,6 +655,8 @@ def _seed_complete_dev_state(
         state["attested"] = True
         state["attestedAt"] = "2026-10-23T00:00:00Z"
         state["acceptedContractRevision"] = contract["contractRevision"]
+        if include_expected_values:
+            state["adminSetup"]["preflight"]["instanceName"] = "dev123"
         state["evidence"]["credential"] = {
             "connectionId": CONNECTION_ID.replace("-", ""),
             "connectorId": snow.CONNECTOR_ID,
@@ -3388,7 +3391,11 @@ def test_api_first_is_shared_by_hr_it_test_prod(
     realm: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    context, _state = _seed_complete_dev_state(tmp_path, profile=profile)
+    context, _state = _seed_complete_dev_state(
+        tmp_path,
+        profile=profile,
+        include_expected_values=True,
+    )
     with snow.product_profile_context(profile):
         if realm == "prod":
             _seed_realm_promotion(
@@ -3401,6 +3408,10 @@ def test_api_first_is_shared_by_hr_it_test_prod(
                 "_revalidate_realm_target",
                 lambda *_args, **_kwargs: ({}, object()),
             )
+        path = snow._lifecycle_state_path(context)
+        state = json.loads(path.read_text(encoding="utf-8"))
+        state["evidence"].pop("identityClaimCandidates", None)
+        path.write_text(json.dumps(state), encoding="utf-8")
     calls = 0
 
     def found(
@@ -3411,6 +3422,7 @@ def test_api_first_is_shared_by_hr_it_test_prod(
         nonlocal calls
         calls += 1
         return {
+            "deploymentContract": snow._REALM_DEPLOYMENT_CONTRACT,
             "realm": realm,
             "tenantId": TENANT_ID,
             "environmentId": ENVIRONMENT_ID,
@@ -3419,18 +3431,153 @@ def test_api_first_is_shared_by_hr_it_test_prod(
             "schemaName": snow.ACTIVE_PROFILE.schema_name,
             "almFamilyId": "family-1",
             "commitSha": "api-first-commit",
+            "sameEnvironmentAsDev": True,
             "client": object(),
         }
 
     monkeypatch.setattr(snow, "_resolve_target_realm", found)
     with snow.product_profile_context(profile):
-        with pytest.raises(
-            snow.ServiceNowConnectError,
-            match="Target ServiceNow instance and application client ID",
-        ):
-            snow.validate_realm(context, realm=realm)
+        result = snow.validate_realm(context, realm=realm)
 
     assert calls == 1
+    assert result["status"] == "target-values-required"
+    assert result["missingFields"] == ["applicationClientId"]
+    assert result["visibleGates"][0]["status"] == "Passed"
+
+
+@pytest.mark.parametrize(
+    ("missing", "expected_fields"),
+    (
+        (
+            "instance",
+            ["serviceNowInstance", "applicationClientId"],
+        ),
+        ("client", ["applicationClientId"]),
+        ("stale-client", ["applicationClientId"]),
+        (
+            "both",
+            ["serviceNowInstance", "applicationClientId"],
+        ),
+    ),
+)
+def test_realm_validation_reports_deployment_before_missing_dev_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    missing: str,
+    expected_fields: list[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(
+        tmp_path,
+        profile="hrsd",
+        include_expected_values=True,
+    )
+    path = snow._lifecycle_state_path(context)
+    state = json.loads(path.read_text(encoding="utf-8"))
+    if missing in {"instance", "both"}:
+        state["adminSetup"]["preflight"].pop("instanceName", None)
+        state["adminSetup"]["phaseHandoffs"]["preflight"] = {
+            "status": "pending"
+        }
+    if missing in {"client", "both"}:
+        state["evidence"].pop("identityClaimCandidates", None)
+    if missing == "stale-client":
+        state["evidence"]["identityClaimCandidates"]["binding"][
+            "environmentId"
+        ] = "00000000-0000-4000-8000-000000008888"
+    path.write_text(json.dumps(state), encoding="utf-8")
+    target_agent_id = "00000000-0000-4000-8000-000000007777"
+    monkeypatch.setattr(
+        snow,
+        "_resolve_target_realm",
+        lambda *_args, **_kwargs: {
+            "deploymentContract": snow._REALM_DEPLOYMENT_CONTRACT,
+            "tenantId": TENANT_ID,
+            "environmentId": ENVIRONMENT_ID,
+            "agentId": target_agent_id,
+            "schemaName": snow.HR_SCHEMA_NAME,
+            "almFamilyId": "family-1",
+            "commitSha": "test-commit",
+            "client": object(),
+        },
+    )
+
+    with snow.product_profile_context("hrsd"):
+        result = snow.validate_realm(context, realm="test")
+        saved = snow._load_lifecycle_state(context)
+
+    assert result["status"] == "target-values-required"
+    assert result["missingFields"] == expected_fields
+    assert set(result["targetExpectedValues"]["missingReasons"]) == set(
+        expected_fields
+    )
+    assert result["visibleGates"][0]["label"] == "Deployment confirmed"
+    assert result["visibleGates"][0]["status"] == "Passed"
+    assert result["visibleGates"][1]["label"] == "Functional Test Pass"
+    assert result["visibleGates"][1]["status"] == "NotConfigured"
+    assert result["next"]["action"] == (
+        "restore-current-dev-expected-values"
+    )
+    assert "question" not in result
+    assert saved["evidence"]["realmDeployments"]["test"]["kind"] == (
+        "backend-proof"
+    )
+    saved_selection = saved["evidence"]["validationRealmSelection"]
+    assert saved_selection["realm"] == "test"
+    assert saved_selection["targetExpectedValues"]["missingFields"] == (
+        expected_fields
+    )
+    assert "test" not in saved["evidence"].get("realmValidations", {})
+
+
+def test_explicit_realm_values_must_match_current_dev_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(
+        tmp_path,
+        profile="itsm",
+        include_expected_values=True,
+    )
+    monkeypatch.setattr(
+        snow,
+        "_resolve_target_realm",
+        lambda *_args, **_kwargs: {
+            "deploymentContract": snow._REALM_DEPLOYMENT_CONTRACT,
+            "tenantId": TENANT_ID,
+            "environmentId": ENVIRONMENT_ID,
+            "agentId": AGENT_ID,
+            "schemaName": snow.IT_SCHEMA_NAME,
+            "almFamilyId": "family-1",
+            "commitSha": "test-commit",
+            "client": object(),
+        },
+    )
+
+    with snow.product_profile_context("itsm"):
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="do not match current compatible Dev evidence",
+        ) as raised:
+            snow.validate_realm(
+                context,
+                realm="test",
+                target_instance="different-instance",
+                target_client_id=(
+                    "00000000-0000-4000-8000-000000006667"
+                ),
+            )
+        saved = snow._load_lifecycle_state(context)
+
+    assert set(raised.value.details["mismatches"]) == {
+        "serviceNowInstance",
+        "applicationClientId",
+    }
+    assert saved["evidence"]["realmDeployments"]["test"]["kind"] == (
+        "backend-proof"
+    )
+    assert "test" not in saved["evidence"].get("realmValidations", {})
 
 
 @pytest.mark.parametrize("result", ("fail", None))
@@ -3665,13 +3812,19 @@ def test_validate_dev_records_choice_without_changing_active_agent(
 
 
 @pytest.mark.parametrize(
-    ("realm", "realm_value", "legacy_status", "already_promoted"),
     (
-        ("test", 1, None, False),
-        ("test", 1, "not-deployed", False),
-        ("test", 1, "deployment-completed", False),
-        ("test", 1, None, True),
-        ("prod", 2, "deployment-completed", False),
+        "realm",
+        "realm_value",
+        "legacy_status",
+        "already_promoted",
+        "use_explicit_values",
+    ),
+    (
+        ("test", 1, None, False, False),
+        ("test", 1, "not-deployed", False, False),
+        ("test", 1, "deployment-completed", False, True),
+        ("test", 1, None, True, False),
+        ("prod", 2, "deployment-completed", False, False),
     ),
 )
 def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
@@ -3681,9 +3834,14 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     realm_value: int,
     legacy_status: str | None,
     already_promoted: bool,
+    use_explicit_values: bool,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    context, _state = _seed_complete_dev_state(tmp_path, profile="itsm")
+    context, _state = _seed_complete_dev_state(
+        tmp_path,
+        profile="itsm",
+        include_expected_values=True,
+    )
     target_agent_id = "00000000-0000-4000-8000-000000007777"
     target_environment_id = context["environment"]["id"]
     inventory_environment_id = target_environment_id
@@ -3827,8 +3985,12 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
         result = snow.validate_realm(
             context,
             realm=realm,
-            target_instance=target_instance,
-            target_client_id=target_client_id,
+            target_instance=(
+                target_instance if use_explicit_values else None
+            ),
+            target_client_id=(
+                target_client_id if use_explicit_values else None
+            ),
             already_promoted=already_promoted,
         )
 
@@ -3936,11 +4098,21 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     assert len(realm_record["targetConfigurationSha256"]) == 64
     assert realm_record["targetTenantId"] == TENANT_ID
     assert "targetDataverseUrl" not in realm_record
-    assert realm_record["targetCredentialExpectation"] == {
-        "source": "explicit-target-realm-confirmation",
-        "instanceName": target_instance,
-        "applicationClientId": target_client_id,
-    }
+    expectation = realm_record["targetCredentialExpectation"]
+    assert expectation["source"] == (
+        "explicit-compatible-override"
+        if use_explicit_values
+        else "current-dev-compatible-evidence"
+    )
+    assert expectation["instanceName"] == target_instance
+    assert expectation["applicationClientId"] == target_client_id
+    assert expectation["explicitOverride"] is use_explicit_values
+    assert expectation["administratorReconfirmed"] is False
+    assert expectation["sourceRef"]["provider"] == (
+        snow.PRODUCT_PROFILES["itsm"].provider_key
+    )
+    assert expectation["sourceRef"]["agentId"] == context["agent"]["id"]
+    assert len(expectation["sourceRefSha256"]) == 64
     assert realm_record["legacyCheckAliases"] == {
         "SN-REALM-CREDENTIAL-001": "SN-DA-ITSM-CREDENTIAL-001",
         "SN-REALM-PROMOTED-CONTENT-001": (
@@ -20294,6 +20466,166 @@ def test_validate_realm_cli_preserves_explicit_already_promoted_intent(
         "alreadyPromoted": True
     }
     assert captured == [False, True]
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+@pytest.mark.parametrize("realm", ("test", "prod"))
+def test_validate_realm_cli_uses_current_dev_values_without_target_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    profile: str,
+    realm: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(
+        tmp_path,
+        profile=profile,
+        include_expected_values=True,
+    )
+    product = snow.PRODUCT_PROFILES[profile]
+    target_agent_id = (
+        OTHER_AGENT_ID
+        if context["agent"]["id"] != OTHER_AGENT_ID
+        else "00000000-0000-4000-8000-000000007777"
+    )
+    with snow.product_profile_context(profile):
+        if realm == "prod":
+            _seed_realm_promotion(
+                context,
+                realm="test",
+                complete_test_first=True,
+            )
+            monkeypatch.setattr(
+                snow,
+                "_revalidate_realm_target",
+                lambda *_args, **_kwargs: ({}, object()),
+            )
+    monkeypatch.setattr(snow, "load_context", lambda **_kwargs: context)
+    monkeypatch.setattr(
+        snow,
+        "_resolve_target_realm",
+        lambda *_args, **_kwargs: {
+            "deploymentContract": snow._REALM_DEPLOYMENT_CONTRACT,
+            "realm": realm,
+            "tenantId": TENANT_ID,
+            "environmentId": ENVIRONMENT_ID,
+            "agentId": target_agent_id,
+            "schemaName": product.schema_name,
+            "almFamilyId": "family-1",
+            "commitSha": f"{realm}-commit",
+            "sameEnvironmentAsDev": True,
+            "client": object(),
+        },
+    )
+    monkeypatch.setattr(snow, "run_solution_checks", lambda _runner: [])
+
+    def profile_checks(
+        *_args: object,
+        checkpoint_ids: list[str],
+        **_kwargs: object,
+    ) -> list[dict]:
+        rows = []
+        for checkpoint in checkpoint_ids:
+            manual = checkpoint.endswith(
+                ("-AGENT-CONNECTION-001", "-TEST-001")
+            )
+            status = (
+                "NotConfigured"
+                if checkpoint.endswith("-CREDENTIAL-001")
+                else "Manual"
+                if manual
+                else "Passed"
+            )
+            rows.append(
+                {
+                    "checkpoint": checkpoint,
+                    "status": status,
+                    "automationType": (
+                        "manual" if manual else "automated"
+                    ),
+                    "description": checkpoint,
+                    "result": status,
+                    "remediation": "",
+                    "roles": [],
+                }
+            )
+        return rows
+
+    monkeypatch.setattr(
+        snow,
+        "_target_profile_checkpoints",
+        profile_checks,
+    )
+    monkeypatch.setattr(
+        snow,
+        "_target_foundation_check",
+        lambda *_args, **_kwargs: {
+            "checkpoint": "SN-REALM-FOUNDATION-001",
+            "status": "Manual",
+            "automationType": "manual",
+            "description": "foundation",
+            "result": "Current local evidence requires target confirmation.",
+            "remediation": "",
+            "roles": [],
+        },
+    )
+    monkeypatch.setattr(
+        snow,
+        "_target_promoted_content_check",
+        lambda *_args, **_kwargs: {
+            "checkpoint": "SN-REALM-PROMOTED-CONTENT-001",
+            "status": "Passed",
+            "automationType": "automated",
+            "description": "promoted content",
+            "result": "passed",
+            "remediation": "",
+            "roles": [],
+            "evidence": {"contentSha256": "d" * 64},
+        },
+    )
+
+    command = [
+        "--provider",
+        product.provider_key,
+        "validate-realm",
+        "--realm",
+        realm,
+    ]
+    assert snow.main(command) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    expected = result["selection"]["targetExpectedValues"]
+    assert expected["status"] == "resolved"
+    assert expected["source"] == "current-dev-compatible-evidence"
+    assert expected["explicitOverride"] is False
+    assert expected["administratorReconfirmed"] is False
+    assert expected["instanceName"] == "dev123"
+    assert expected["applicationClientId"] == APP_CLIENT_ID
+    assert expected["sourceRef"]["provider"] == product.provider_key
+    assert expected["sourceRef"]["profile"] == profile
+    assert expected["sourceRef"]["agentId"] == context["agent"]["id"]
+    assert expected["sourceRef"]["environmentId"] == ENVIRONMENT_ID
+    assert len(expected["sourceRefSha256"]) == 64
+    assert result["status"] == "needs-configuration"
+    assert result["visibleGates"][0]["label"] == "Deployment confirmed"
+    assert result["visibleGates"][0]["status"] == "Passed"
+    assert result["visibleGates"][1]["label"] == "Functional Test Pass"
+    assert result["visibleGates"][1]["status"] == "Manual"
+    assert result["readinessSummary"] == {
+        "automaticPrechecks": "Needs attention",
+        "functionalTest": "Pending",
+        "endToEndValidation": "Not yet verified",
+    }
+    stages = {
+        stage["id"]: stage["status"] for stage in result["realmStages"]
+    }
+    assert stages == {
+        "connections": "blocked",
+        "runtime-configuration": "blocked",
+        "maker-validation": "pending",
+    }
+    assert result["remoteMutationCount"] == 0
 
 
 def test_resume_handoff_cli_jit_group_no_is_byte_stable(
