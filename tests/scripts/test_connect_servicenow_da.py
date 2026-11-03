@@ -117,6 +117,65 @@ def _lifecycle_path(root: Path) -> Path:
     )
 
 
+def _rewrite_cached_test_dataverse_url(
+    state: dict,
+    dataverse_url: str,
+) -> None:
+    validation = state["evidence"]["realmValidations"]["test"]
+    target_identity = copy.deepcopy(validation["targetIdentity"])
+    target_identity["dataverseUrl"] = dataverse_url
+    target_sha = snow._canonical_json_hash(target_identity)
+    prior_plan = validation["runtimePlan"]
+    runtime_plan = snow._runtime_plan(
+        realm="test",
+        target_identity=target_identity,
+        target_configuration_sha256=target_sha,
+        content_sha256=prior_plan["promotedContentSha256"],
+        connection_id=prior_plan["connectionId"],
+    )
+    plan_sha = runtime_plan["planSha256"]
+    validation.update(
+        {
+            "targetIdentity": target_identity,
+            "targetDataverseUrl": dataverse_url,
+            "targetConfigurationSha256": target_sha,
+            "runtimePlan": runtime_plan,
+        }
+    )
+    validation["runtimeApproval"].update(
+        {
+            "planSha256": plan_sha,
+            "targetConfigurationSha256": target_sha,
+        }
+    )
+    validation["agentBinding"].update(
+        {
+            "planSha256": plan_sha,
+            "targetConfigurationSha256": target_sha,
+            "targetDataverseUrl": dataverse_url,
+        }
+    )
+    validation["functionalTest"]["binding"].update(
+        {
+            "planSha256": plan_sha,
+            "targetConfigurationSha256": target_sha,
+            "targetDataverseUrl": dataverse_url,
+        }
+    )
+    flow = state["evidence"]["realmFlows"]["test"]
+    flow["targetIdentity"] = copy.deepcopy(target_identity)
+    flow["targetConfigurationSha256"] = target_sha
+    state["evidence"]["realmDeployments"]["test"] = {
+        "kind": "backend-proof",
+        "status": "deployment-completed",
+        "source": "exact-target-discovery",
+        "realm": "test",
+        "recordedAt": "2026-10-24T00:00:00Z",
+        "targetIdentity": copy.deepcopy(target_identity),
+        "targetConfigurationSha256": target_sha,
+    }
+
+
 def _context_at(root: Path) -> dict:
     context = _context()
     context["root"] = root
@@ -5202,6 +5261,104 @@ def test_target_discovery_supports_same_environment_sibling(
     )
     assert target["dataverseUrl"] == "https://source.crm.dynamics.com"
     assert target["dataverseUrlSource"] == "url"
+
+
+@pytest.mark.parametrize(
+    "invalid_url",
+    (
+        "https://api.powerplatform.com",
+        "https://example.environment.api.powerplatform.com",
+        "https://api.workday.com",
+        "https://dev123.service-now.com",
+        "https://example.com",
+    ),
+)
+def test_invalid_cached_dataverse_url_is_stale_without_rewriting_history(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    invalid_url: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    with snow.product_profile_context("hrsd"):
+        _seed_realm_promotion(
+            context,
+            realm="test",
+            complete_test_first=True,
+        )
+        path = snow._lifecycle_state_path(context)
+        state = json.loads(path.read_text(encoding="utf-8"))
+        _rewrite_cached_test_dataverse_url(state, invalid_url)
+        path.write_text(json.dumps(state), encoding="utf-8")
+        before = path.read_bytes()
+        emitted: list[dict] = []
+        monkeypatch.setattr(
+            snow,
+            "emit_servicenow_lifecycle_event",
+            lambda _state, event: emitted.append(copy.deepcopy(event)),
+        )
+
+        loaded = snow._load_lifecycle_state(context)
+        assert snow._realm_is_complete(loaded, "test") is False
+        assert snow._verified_realm_deployment_record(
+            loaded,
+            "test",
+        ) is None
+        handoff = snow.validation_realm_handoff(context)
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="cached Test target identity is stale",
+        ) as raised:
+            snow._realm_validation_record(loaded, "test")
+
+    labels = [row["label"] for row in handoff["question"]["options"]]
+    assert not any("Production" in label for label in labels)
+    assert raised.value.details == {
+        "realm": "test",
+        "outcome": "unknown",
+        "reason": "invalid-cached-dataverse-url",
+    }
+    assert path.read_bytes() == before
+    assert emitted == []
+
+
+@pytest.mark.parametrize(
+    "valid_url",
+    (
+        "https://org.crm.dynamics.com",
+        "https://org.api.crm.microsoftdynamics.us",
+    ),
+)
+def test_semantic_cached_dataverse_url_remains_reusable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    valid_url: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="itsm")
+    with snow.product_profile_context("itsm"):
+        _seed_realm_promotion(
+            context,
+            realm="test",
+            complete_test_first=True,
+        )
+        path = snow._lifecycle_state_path(context)
+        state = json.loads(path.read_text(encoding="utf-8"))
+        _rewrite_cached_test_dataverse_url(state, valid_url)
+        path.write_text(json.dumps(state), encoding="utf-8")
+        loaded = snow._load_lifecycle_state(context)
+
+        assert snow._realm_is_complete(loaded, "test") is True
+        assert snow._verified_realm_deployment_record(
+            loaded,
+            "test",
+        ) is not None
+        handoff = snow.validation_realm_handoff(context)
+        validation = snow._realm_validation_record(loaded, "test")
+
+    assert validation["targetDataverseUrl"] == valid_url
+    labels = [row["label"] for row in handoff["question"]["options"]]
+    assert any("Production" in label for label in labels)
 
 
 def test_prod_requires_completed_test_realm_before_promotion(

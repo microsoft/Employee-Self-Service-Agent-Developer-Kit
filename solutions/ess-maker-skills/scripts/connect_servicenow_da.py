@@ -14630,6 +14630,32 @@ def _realm_functional_test_record(
     return record if isinstance(record, dict) else None
 
 
+def _cached_realm_target_identity_current(
+    identity: Any,
+    *,
+    realm: str,
+) -> bool:
+    if not isinstance(identity, dict) or identity.get("realm") != realm:
+        return False
+    raw_url = identity.get("dataverseUrl")
+    if not isinstance(raw_url, str):
+        return False
+    normalized_url = _normalize_dataverse_url_candidate(raw_url)
+    if normalized_url is None or normalized_url != raw_url.rstrip("/"):
+        return False
+    return all(
+        isinstance(identity.get(field), str) and identity[field]
+        for field in (
+            "tenantId",
+            "environmentId",
+            "agentId",
+            "schemaName",
+            "almFamilyId",
+            "commitSha",
+        )
+    )
+
+
 def _realm_is_complete(
     state: dict[str, Any],
     realm: str,
@@ -14658,7 +14684,10 @@ def _realm_is_complete(
     binding = record.get("binding") if isinstance(record, dict) else None
     if (
         not isinstance(target_identity, dict)
-        or target_identity.get("realm") != realm
+        or not _cached_realm_target_identity_current(
+            target_identity,
+            realm=realm,
+        )
         or not isinstance(target_sha256, str)
         or _canonical_json_hash(target_identity) != target_sha256
         or not isinstance(runtime_plan, dict)
@@ -15106,6 +15135,10 @@ def _verified_realm_deployment_record(
         and record.get("status") == "deployment-completed"
         and record.get("source") == "exact-target-discovery"
         and isinstance(record.get("targetIdentity"), dict)
+        and _cached_realm_target_identity_current(
+            record["targetIdentity"],
+            realm=realm,
+        )
         and isinstance(record.get("targetConfigurationSha256"), str)
         and record["targetConfigurationSha256"]
         == _canonical_json_hash(record["targetIdentity"])
@@ -15377,6 +15410,27 @@ _DATAVERSE_HOST = re.compile(
 )
 
 
+def _normalize_dataverse_url_candidate(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = value.strip().rstrip("/")
+    parsed = urlparse(normalized)
+    hostname = (parsed.hostname or "").casefold()
+    if (
+        parsed.scheme == "https"
+        and not parsed.username
+        and not parsed.password
+        and parsed.port in (None, 443)
+        and parsed.path in ("", "/")
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+        and _DATAVERSE_HOST.fullmatch(hostname)
+    ):
+        return normalized
+    return None
+
+
 def _inventory_dataverse_url_evidence(
     environment: dict[str, Any],
 ) -> dict[str, str] | None:
@@ -15399,22 +15453,8 @@ def _inventory_dataverse_url_evidence(
         ("url", environment.get("url")),
     )
     for source_path, candidate in candidates:
-        if not isinstance(candidate, str) or not candidate.strip():
-            continue
-        normalized = candidate.strip().rstrip("/")
-        parsed = urlparse(normalized)
-        hostname = (parsed.hostname or "").casefold()
-        if (
-            parsed.scheme == "https"
-            and not parsed.username
-            and not parsed.password
-            and parsed.port in (None, 443)
-            and parsed.path in ("", "/")
-            and not parsed.params
-            and not parsed.query
-            and not parsed.fragment
-            and _DATAVERSE_HOST.fullmatch(hostname)
-        ):
+        normalized = _normalize_dataverse_url_candidate(candidate)
+        if normalized is not None:
             return {
                 "url": normalized,
                 "sourcePath": source_path,
@@ -17586,6 +17626,21 @@ def _realm_validation_record(
         raise ServiceNowConnectError(
             f"No scoped {realm.title()} realm validation exists for this "
             "exact agent."
+        )
+    target_identity = validation.get("targetIdentity")
+    if not _cached_realm_target_identity_current(
+        target_identity,
+        realm=realm,
+    ):
+        raise ServiceNowConnectError(
+            f"The cached {realm.title()} target identity is stale because "
+            "its Dataverse URL is missing or not semantically valid. Rerun "
+            "exact read-only target discovery.",
+            details={
+                "realm": realm,
+                "outcome": "unknown",
+                "reason": "invalid-cached-dataverse-url",
+            },
         )
     return validation
 
