@@ -45,6 +45,20 @@ _RECOVERY_HEADINGS = (
 )
 
 
+def _assert_entra_two_field_recovery(result) -> None:
+    combined = f"{result.result}\n{result.remediation}"
+    assert "valid Application client ID GUID" in combined
+    assert "explicit safe User Claim name" in combined
+    assert "matching binding, provenance, and hashes" in combined
+    for stale in (
+        "single-tenant app",
+        "user_impersonation",
+        "connector pre-authorization",
+        "all four",
+    ):
+        assert stale not in combined
+
+
 def _target_check(status: str, checkpoint: str):
     return hrsd_checks._result(
         checkpoint,
@@ -1350,6 +1364,7 @@ def test_entra_setup_checkpoint_rejects_missing_or_mismatched_confirmation(
     assert missing.status == Status.NOT_CONFIGURED.value
     assert "one explicit User Claim name" in missing.result
     assert "one explicit safe User Claim name" in missing.remediation
+    _assert_entra_two_field_recovery(missing)
 
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"][
@@ -1366,6 +1381,41 @@ def test_entra_setup_checkpoint_rejects_missing_or_mismatched_confirmation(
     assert "does not match the Entra handoff" in (
         mismatched.result
     )
+    _assert_entra_two_field_recovery(mismatched)
+
+
+def test_entra_setup_checkpoint_rejects_aud_claim_name(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    receipt = state["evidence"]["identityClaimCandidates"]
+    receipt["candidates"] = ["aud"]
+    receipt["candidateSetSha256"] = snow._identity_candidate_set_hash(
+        application_client_id=receipt["applicationClientId"],
+        candidates=["aud"],
+        binding=receipt["binding"],
+    )
+    handoff = state["adminSetup"]["phaseHandoffs"]["entra-registration"][
+        "evidence"
+    ]
+    handoff["tokenClaimCandidates"] = ["aud"]
+    handoff["selectedClaimName"] = "aud"
+    handoff["candidateSetSha256"] = receipt["candidateSetSha256"]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-ENTRA-SETUP-001",
+    )
+
+    assert result.status == Status.NOT_CONFIGURED.value
+    assert "aud audience claim cannot be selected" in result.result
+    _assert_entra_two_field_recovery(result)
 
 
 def test_entra_setup_checkpoint_rejects_invalid_client_id_as_error(
@@ -1414,6 +1464,7 @@ def test_entra_setup_checkpoint_rejects_invalid_client_id_as_error(
     )
     assert result.roles == ["Entra Admin", "ESS Maker / Agent Developer"]
     assert graph_calls == 0
+    _assert_entra_two_field_recovery(result)
 
 
 def test_client_and_claim_complete_entra_without_historical_four_flags(
@@ -1518,10 +1569,12 @@ def test_entra_confirmation_rejects_wrong_target_binding(
 
     results = run_servicenow_da_hrsd_checks(_runner(components))
 
-    assert _checkpoint(
+    result = _checkpoint(
         results,
         "SN-DA-HRSD-ENTRA-SETUP-001",
-    ).status == Status.NOT_CONFIGURED.value
+    )
+    assert result.status == Status.NOT_CONFIGURED.value
+    _assert_entra_two_field_recovery(result)
 
 
 def test_historical_graph_pass_remains_compatible_without_fresh_graph_claim(
@@ -2474,6 +2527,7 @@ def test_manual_confirmation_is_required_without_graph_fallback(
     )
     assert setup.status == Status.NOT_CONFIGURED.value
     assert "No Application client ID" in setup.result
+    _assert_entra_two_field_recovery(setup)
 
 
 def test_credential_rejects_resource_uri_mismatch(

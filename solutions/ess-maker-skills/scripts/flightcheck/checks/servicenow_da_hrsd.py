@@ -25,6 +25,7 @@ from connect_servicenow_da import (
     _portal_literal_value,
     _portal_topic_component,
     _servicenow_topic_changes,
+    _safe_identity_name,
     normalize_client_id,
     normalize_instance_name,
     normalize_portal_url,
@@ -106,7 +107,7 @@ _RECOVERY_GUIDANCE = {
         ),
     },
     "ENTRA": {
-        "step": "Microsoft Entra application setup",
+        "step": "Microsoft Entra identity handoff",
         "owner": "Microsoft Entra Application Administrator or higher",
         "where": (
             "Microsoft Entra admin center -> App registrations -> the App A "
@@ -115,14 +116,15 @@ _RECOVERY_GUIDANCE = {
         "values": (
             "Use the non-secret Application client ID recorded for this "
             "lifecycle. If it is absent or invalid, the Entra admin must return "
-            "the correct App A client ID through the protected handoff. Never "
-            "return a client secret, token, certificate, or PFX."
+            "the correct App A client ID through the protected handoff. Also "
+            "return exactly one explicit safe User Claim name; never return "
+            "`aud`, a personal claim value, client secret, token, certificate, "
+            "or PFX."
         ),
         "success": (
-            "The single-tenant app, emitted claim candidates, "
-            "`api://<client-id>` plus enabled `user_impersonation`, and "
-            "ServiceNow connector pre-authorization all match the verified "
-            "App A client ID."
+            "The current target-bound handoff contains one valid Application "
+            "client ID GUID and one explicit safe User Claim name, with "
+            "matching binding, provenance, and hashes."
         ),
     },
     "OIDC": {
@@ -1176,9 +1178,9 @@ def _entra_error_result(message: str) -> CheckResult:
         message,
         (
             "The Entra administrator verifies and returns the correct "
-            "Application (client) ID GUID for the current target. The Maker "
-            "re-imports or updates the target-bound handoff, then retries only "
-            "this Entra setup check."
+            "Application (client) ID GUID plus one explicit safe User Claim "
+            "name for the current target. The Maker re-imports or updates the "
+            "target-bound handoff, then retries only this Entra setup check."
         ),
         recovery_category="Invalid configuration input",
         roles=[Role.ENTRA_ADMIN.value, Role.ESS_MAKER.value],
@@ -1203,6 +1205,18 @@ def _identity_claim_candidates_contract(
         return None, (
             "The current Entra identity handoff must contain one explicit "
             "User Claim name."
+        )
+    try:
+        candidate = _safe_identity_name(
+            candidates[0],
+            "user_claim",
+        )
+    except Exception as exc:
+        return None, str(exc)
+    if candidate.casefold() == "aud":
+        return None, (
+            "The aud audience claim cannot be selected as the user-matching "
+            "User Claim."
         )
     if (
         receipt.get("kind") != "administrator-confirmed-claim-candidates"
@@ -1394,7 +1408,11 @@ def _entra_setup_result(
             Status.NOT_CONFIGURED.value,
             "Entra User Login application setup",
             "No Application client ID has been recorded.",
-            "Record only the non-secret Application client ID.",
+            (
+                "Record one valid non-secret Application client ID GUID and "
+                "one explicit safe User Claim name in the current target-bound "
+                "handoff."
+            ),
             roles=[Role.ENTRA_ADMIN.value, Role.ESS_MAKER.value],
         )
     try:
