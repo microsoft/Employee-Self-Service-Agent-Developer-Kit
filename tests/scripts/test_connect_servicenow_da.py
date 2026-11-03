@@ -5,10 +5,8 @@ from __future__ import annotations
 
 import copy
 import csv
-import importlib.util
 import io
 import json
-import re
 import subprocess
 import sys
 import uuid
@@ -372,42 +370,6 @@ def _author_servicenow_template(path: Path) -> Path:
     )
     path.write_bytes(template.read_bytes())
     return path
-
-def _validate_dynamic_visible_question(question: dict) -> dict:
-    validator_path = (
-        Path(__file__).resolve().parents[1]
-        / "setup"
-        / "test_visible_handoff_payloads.py"
-    )
-    spec = importlib.util.spec_from_file_location(
-        "_visible_handoff_validator",
-        validator_path,
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module._validate_payload(
-        [question],
-        required_phrases=(
-            "Choose the type of employee identifier",
-            "Do not provide an employee value",
-        ),
-        minimum_length=100,
-        rendered=True,
-    )
-
-
-def _visible_prose_budget(text: str) -> tuple[int, int]:
-    without_links = re.sub(
-        r"\[([^\]]+)\]\([^)]+\)",
-        r"\1",
-        text,
-    )
-    without_literals = re.sub(r"`[^`]+`", "", without_links)
-    words = re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", without_literals)
-    lines = [line for line in text.splitlines() if line.strip()]
-    return len(words), len(lines)
-
 
 def _record_test_identity_mapping(
     root: Path,
@@ -822,24 +784,6 @@ def _seed_complete_dev_state(
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(json.dumps(state), encoding="utf-8")
     return context, state
-
-
-def _target_environment(
-    environment_id: str,
-    *,
-    display_name: str = "Target",
-) -> dict:
-    return {
-        "id": environment_id,
-        "displayName": display_name,
-        "properties": {
-            "linkedEnvironmentMetadata": {
-                "instanceUrl": (
-                    f"https://{environment_id}.crm.dynamics.com"
-                ),
-            },
-        },
-    }
 
 
 def _target_profile_components(
@@ -16788,7 +16732,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             ]
             return handoff, availability
 
-        plugin_handoff, plugin = gate(frozenset({"preflight"}))
+        _, plugin = gate(frozenset({"preflight"}))
         assert plugin["currentGroup"]["id"] == "hr-prerequisite"
         plugin_yes = snow.resume_handoff(
             context,

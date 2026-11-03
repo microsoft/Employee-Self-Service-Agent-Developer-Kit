@@ -724,9 +724,9 @@ class TestHermeticRun:
         schema_name: str,
         ring: str,
     ) -> None:
-        environment_id = "6c606f06-ea15-e785-b31c-9158232e9502"
+        environment_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
         tenant_id = "935884d7-bdee-469b-a461-fcc530a3ac83"
-        agent_id = "e912a2fc-5ff3-4bc6-83a9-fdce46db2883"
+        agent_id = "cccccccc-dddd-4eee-8fff-111111111111"
         local = tmp_path / ".local"
         local.mkdir()
         (local / "config.json").write_text(
@@ -736,7 +736,7 @@ class TestHermeticRun:
                     "environmentId": environment_id,
                     "ring": ring,
                     "powerPlatformApiEndpoint": (
-                        "https://6c606f06ea15e785b31c9158232e95.02."
+                        "https://aaaaaaaabbbb4ccc8dddeeeeeeeeee.ee."
                         "environment.api.powerplatform.com"
                     ),
                     "agents": [
@@ -1362,8 +1362,8 @@ class TestHermeticRun:
             _itsm_components,
         )
 
-        environment_id = "6c606f06-ea15-e785-b31c-9158232e9502"
-        agent_id = "e912a2fc-5ff3-4bc6-83a9-fdce46db2883"
+        environment_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        agent_id = "cccccccc-dddd-4eee-8fff-111111111111"
         slug = "employee-self-service-it"
         components = copy.deepcopy(_itsm_components())
         for index, suffix in enumerate(
@@ -1404,7 +1404,7 @@ class TestHermeticRun:
                     "environmentId": environment_id,
                     "ring": "prod",
                     "powerPlatformApiEndpoint": (
-                        "https://6c606f06ea15e785b31c9158232e95.02."
+                        "https://aaaaaaaabbbb4ccc8dddeeeeeeeeee.ee."
                         "environment.api.powerplatform.com"
                     ),
                     "agents": [

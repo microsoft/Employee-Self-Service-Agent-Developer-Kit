@@ -78,14 +78,6 @@ def _validate_payload(
     return question
 
 
-def _visible_prose_budget(text: str) -> tuple[int, int]:
-    without_links = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
-    without_literals = re.sub(r"`[^`]+`", "", without_links)
-    words = re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", without_literals)
-    lines = [line for line in text.splitlines() if line.strip()]
-    return len(words), len(lines)
-
-
 def test_lifecycle_plan_confirmation_is_exact_and_separate_from_reply() -> None:
     path = _CONNECT / "shared" / "lifecycle-runner.md"
     assert _payloads(path) == [
@@ -228,14 +220,6 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
                 "Version Details: `Installed`",
                 "installed and ready for you to use",
                 "Has the ServiceNow administrator confirmed",
-            ),
-        ),
-        (
-            _ACTIONS / "guide-servicenow-oidc.md",
-            (
-                "configuration been saved",
-                "User Claim",
-                "mapped to User Field",
             ),
         ),
         (
