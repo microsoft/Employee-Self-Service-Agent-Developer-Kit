@@ -6958,12 +6958,6 @@ class ConnectivityClient:
             )
         return value
 
-    def get_connector(self) -> dict[str, Any]:
-        return self._request(
-            "GET",
-            f"/connectivity/connectors/{CONNECTOR_NAME}",
-        )
-
     def list_connections(self) -> list[dict[str, Any]]:
         body = self._request(
             "GET",

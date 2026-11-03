@@ -42,12 +42,6 @@ from ..runner import CheckResult, Priority, Role, Status
 _CATEGORY = "ServiceNow DA HRSD"
 _ROLES = [Role.ESS_MAKER.value, Role.SERVICENOW_ADMIN.value]
 _ENTRA_PREFIX = "SN-DA-HRSD-ENTRA"
-_LEGACY_ENTRA_CHECKPOINT_SUFFIXES = (
-    "APP",
-    "CLAIMS",
-    "SCOPE",
-    "PREAUTH",
-)
 _TEST_PROMPT_CATEGORY = "list-my-open-hr-cases"
 _RECOVERY_STATUSES = {
     Status.BLOCKED.value,
@@ -1343,26 +1337,6 @@ def _identity_mapping_contract(
             "current target binding, provenance, and hashes."
         )
     return mapping, None
-
-
-def _historical_entra_graph_pass(
-    state: dict[str, Any],
-) -> bool:
-    phase = state.get("phases", {}).get("entra-registration")
-    results = (
-        phase.get("checkpointResults") if isinstance(phase, dict) else None
-    )
-    if not isinstance(results, dict):
-        return False
-    return all(
-        any(
-            isinstance(checkpoint_id, str)
-            and checkpoint_id.endswith(f"-{suffix}-001")
-            and status == Status.PASSED.value
-            for checkpoint_id, status in results.items()
-        )
-        for suffix in _LEGACY_ENTRA_CHECKPOINT_SUFFIXES
-    )
 
 
 def _entra_confirmation(

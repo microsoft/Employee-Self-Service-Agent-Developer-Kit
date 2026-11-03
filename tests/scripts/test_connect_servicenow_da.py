@@ -3329,9 +3329,6 @@ def test_inspect_preserves_progress_and_reports_completed_steps(
             return _components(CONNECTION_ID)
 
     class FakeConnectivity:
-        def get_connector(self) -> dict:
-            raise AssertionError("inspect must not read connector definition")
-
         def list_connections(self) -> list[dict]:
             return [
                 {
@@ -3420,9 +3417,6 @@ def test_inspect_reopens_topics_after_later_deactivation(
             return components
 
     class FakeConnectivity:
-        def get_connector(self) -> dict:
-            raise AssertionError("inspect must not read connector definition")
-
         def list_connections(self) -> list[dict]:
             return []
 
@@ -3492,9 +3486,6 @@ def test_inspect_preserves_explicit_keep_current_topic_choice(
             return components
 
     class FakeConnectivity:
-        def get_connector(self) -> dict:
-            raise AssertionError("inspect must not read connector definition")
-
         def list_connections(self) -> list[dict]:
             return []
 
@@ -3702,9 +3693,6 @@ def test_inspect_connection_read_failure_stops_without_partial_result(
             return _components(CONNECTION_ID)
 
     class FakeConnectivity:
-        def get_connector(self) -> dict:
-            raise AssertionError("inspect must not read connector definition")
-
         def list_connections(self) -> list[dict]:
             raise snow.ServiceNowConnectError("connection inventory failed")
 
