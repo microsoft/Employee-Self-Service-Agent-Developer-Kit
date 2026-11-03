@@ -153,10 +153,9 @@
         "acceptedRecordStatuses": ["completed", "reused"],
         "requiredEvidenceKind": "structured-admin-attestation",
         "requiredValues": {
-          "oidcCapabilityConfirmed": true,
-          "runbookCompleted": true,
-          "mappingDetailsCollected": true,
-          "claimMappingConfirmed": true
+          "identityMappingReceiptConfirmed": true,
+          "mappingReceiptCurrent": true,
+          "mappingDetailsCollected": true
         }
       },
       "mutates": false

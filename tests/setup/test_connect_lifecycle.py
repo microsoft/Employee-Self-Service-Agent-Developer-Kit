@@ -52,12 +52,14 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "no recommended, preselected, default, or automatic answer" in (
         plan_normalized
     )
-    assert "`--confirm-saved-mapping` recorder" in runner
+    assert "valid current mapping receipt is the Manual" in runner
+    assert "atomically writes the receipt\nand owning handoff" in runner
+    assert "`--confirm-saved-mapping`" in runner
     assert "`--reject-saved-mapping`" in runner
-    assert "generic `--yes` flag is value-capture consent" in runner
     assert (
-        "Do not invoke the historical "
-        "`record-admin-phase --phase servicenow-oidc` bridge"
+        "do not invoke the historical "
+        "`--confirm-saved-mapping`, `--reject-saved-mapping`, or "
+        "`record-admin-phase --phase servicenow-oidc` compatibility paths"
     ) in normalized
     assert "only after the user explicitly selects **Yes, let's go**" in (
         plan_normalized
@@ -653,6 +655,8 @@ def test_matching_admin_evidence_skips_only_same_phase_manual_ack() -> None:
     }
     state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"]["evidence"].update(
         {
+            "identityMappingReceiptConfirmed": True,
+            "mappingReceiptCurrent": True,
             "oidcCapabilityConfirmed": True,
             "runbookCompleted": True,
             "mappingDetailsCollected": True,

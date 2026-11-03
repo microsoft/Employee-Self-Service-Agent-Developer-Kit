@@ -1360,20 +1360,7 @@ def _identity_direct_questions(
                     "servicenow_user_field must be an explicit safe "
                     "ServiceNow internal field name."
                 )
-            canonical = [
-                _native_question(
-                header="Complete ServiceNow OIDC setup",
-                question=(
-                    "Has the ServiceNow configuration been saved, and is User "
-                    f"Claim `{confirmed_claim_name}` mapped to User Field "
-                    f"`{user_field}`?"
-                ),
-                option_labels=[
-                    "Yes",
-                    "No",
-                ],
-                )
-            ]
+            canonical = []
     else:
         raise ServiceNowConnectError(
             "Identity direct handoff stage must be entra or servicenow."
@@ -4966,6 +4953,25 @@ def _reconcile_entra_handoff_from_receipt(
     return True
 
 
+def _servicenow_mapping_receipt_provenance_current(
+    mapping: dict[str, Any],
+) -> bool:
+    provenance_sha256 = str(mapping.get("provenanceSha256") or "")
+    source_workbook_sha256 = str(
+        mapping.get("sourceWorkbookSha256") or ""
+    )
+    imported_workbook_sha256 = str(
+        mapping.get("importedWorkbookSha256") or ""
+    )
+    return bool(
+        re.fullmatch(r"[0-9a-fA-F]{64}", provenance_sha256)
+        and imported_workbook_sha256 == provenance_sha256
+        and source_workbook_sha256
+        == _identity_workbook_template_sha256("servicenow")
+        and mapping.get("importedFileFormat") in {"direct", "xlsx", "csv"}
+    )
+
+
 def _reconcile_servicenow_handoff_from_receipt(
     context: dict[str, Any],
     state: dict[str, Any],
@@ -4974,24 +4980,7 @@ def _reconcile_servicenow_handoff_from_receipt(
         mapping = _validated_identity_mapping(context, state)
     except ServiceNowConnectError:
         return False
-    provenance_sha256 = str(mapping.get("provenanceSha256") or "")
-    source_workbook_sha256 = str(
-        mapping.get("sourceWorkbookSha256") or ""
-    )
-    imported_workbook_sha256 = str(
-        mapping.get("importedWorkbookSha256") or ""
-    )
-    provenance_current = bool(
-        re.fullmatch(r"[0-9a-fA-F]{64}", provenance_sha256)
-        and imported_workbook_sha256 == provenance_sha256
-        and source_workbook_sha256
-        == _identity_workbook_template_sha256("servicenow")
-        and mapping.get("importedFileFormat") in {"direct", "xlsx", "csv"}
-    )
-    if (
-        not provenance_current
-        or mapping.get("savedMappingConfirmed") is not True
-    ):
+    if not _servicenow_mapping_receipt_provenance_current(mapping):
         return False
     setup = _admin_setup(state)
     existing = setup["phaseHandoffs"].get("servicenow-oidc")
@@ -5006,19 +4995,17 @@ def _reconcile_servicenow_handoff_from_receipt(
         **existing_evidence,
         "kind": "structured-admin-attestation",
         "currentSource": "identity-mapping",
-        "configurationSavedConfirmed": True,
-        "runbookCompleted": True,
+        "identityMappingReceiptConfirmed": True,
+        "mappingReceiptCurrent": True,
         "mappingDetailsCollected": True,
-        "claimMappingConfirmed": True,
         "tokenClaimName": mapping["tokenClaimName"],
         "serviceNowUserField": mapping["serviceNowUserField"],
         "candidateSetSha256": mapping["candidateSetSha256"],
-        "mappingWorkbookSha256": imported_workbook_sha256,
+        "mappingWorkbookSha256": mapping["importedWorkbookSha256"],
         "mappingRelationshipSha256": mapping["relationshipSha256"],
         "binding": copy.deepcopy(mapping["binding"]),
         "recordedAt": (
             existing_evidence.get("recordedAt")
-            or mapping.get("savedMappingConfirmedAt")
             or mapping.get("recordedAt")
             or _utc_now()
         ),
@@ -5040,9 +5027,9 @@ def _reconcile_servicenow_handoff_from_receipt(
         return False
     setup["phaseHandoffs"]["servicenow-oidc"] = record
     state.setdefault("migration", {}).setdefault(
-        "serviceNowSavedMappingCompletion",
+        "serviceNowMappingReceiptCompletion",
         {
-            "criterion": "configuration-saved-and-claim-mapped",
+            "criterion": "current-target-bound-claim-field-receipt",
             "reconciledAt": _utc_now(),
         },
     )
@@ -5249,9 +5236,6 @@ def _persist_identity_mapping_values(
             result["savedMappingConfirmed"] = False
             result.pop("savedMappingConfirmedAt", None)
             result.setdefault("savedMappingRejectedAt", recorded_at)
-            _invalidate_oidc_handoff(state)
-        else:
-            result.setdefault("savedMappingConfirmed", False)
         evidence["identityMapping"] = result
         _reconcile_servicenow_handoff_from_receipt(context, state)
     _write_lifecycle_state(context, state)
@@ -5726,6 +5710,9 @@ def _identity_admin_handoff_is_ready(
             }
         else:
             derived_values = {
+                "identityMappingReceiptConfirmed": True,
+                "mappingReceiptCurrent": True,
+                "mappingDetailsCollected": True,
                 "tokenClaimName": mapping["tokenClaimName"],
                 "serviceNowUserField": mapping["serviceNowUserField"],
                 "candidateSetSha256": mapping["candidateSetSha256"],
@@ -5791,13 +5778,10 @@ def _identity_admin_handoff_is_ready(
             isinstance(mapping, dict)
             and validated_evidence.get("kind")
             == "structured-admin-attestation"
-            and (
-                validated_evidence.get("configurationSavedConfirmed") is True
-                or validated_evidence.get("oidcCapabilityConfirmed") is True
-            )
-            and validated_evidence.get("runbookCompleted") is True
+            and validated_evidence.get("identityMappingReceiptConfirmed")
+            is True
+            and validated_evidence.get("mappingReceiptCurrent") is True
             and validated_evidence.get("mappingDetailsCollected") is True
-            and validated_evidence.get("claimMappingConfirmed") is True
             and validated_evidence.get("tokenClaimName")
             == mapping.get("tokenClaimName")
             and validated_evidence.get("serviceNowUserField")
@@ -10160,6 +10144,7 @@ def _shared_mapping_compatible(
         or mapping.get("tokenClaimName") not in candidates["candidates"]
         or not mapping.get("serviceNowUserField")
         or mapping.get("binding") != binding
+        or not _servicenow_mapping_receipt_provenance_current(mapping)
         or mapping.get("relationshipSha256")
         != _identity_mapping_relationship_hash(mapping)
     ):
@@ -10338,8 +10323,6 @@ def _shared_reuse_candidates(
                 and source_oidc is not None
                 and oidc_mapping is not None
                 and identity_compatible
-                and source_oidc["evidence"].get("claimMappingConfirmed")
-                is True
                 and all(
                     source_oidc["evidence"].get(key)
                     == oidc_mapping.get(key)
@@ -10353,8 +10336,8 @@ def _shared_reuse_candidates(
                     {
                         "id": "servicenow-oidc",
                         "summary": (
-                            "ServiceNow administrator-confirmed OIDC and user "
-                            f"mapping for token claim "
+                            "Current target-bound ServiceNow user-field "
+                            f"mapping receipt for token claim "
                             f"{oidc_mapping['tokenClaimName']}"
                         ),
                     }
@@ -11359,6 +11342,8 @@ def record_admin_phase(
         ),
     }
     setup["phaseHandoffs"][phase] = record
+    if phase == "servicenow-oidc":
+        _reconcile_servicenow_handoff_from_receipt(context, state)
     _write_lifecycle_state(context, state)
     return copy.deepcopy(record)
 
@@ -17054,10 +17039,13 @@ def _target_foundation_reuse(
         and oidc_evidence.get("kind") == "structured-admin-attestation"
         and isinstance(oidc_evidence.get("recordedAt"), str)
         and bool(oidc_evidence.get("recordedAt"))
-        and oidc_evidence.get("oidcCapabilityConfirmed") is True
-        and oidc_evidence.get("runbookCompleted") is True
+        and oidc_evidence.get("identityMappingReceiptConfirmed") is True
+        and oidc_evidence.get("mappingReceiptCurrent") is True
         and oidc_evidence.get("mappingDetailsCollected") is True
-        and oidc_evidence.get("claimMappingConfirmed") is True
+        and bool(oidc_evidence.get("tokenClaimName"))
+        and bool(oidc_evidence.get("serviceNowUserField"))
+        and bool(oidc_evidence.get("candidateSetSha256"))
+        and bool(oidc_evidence.get("mappingRelationshipSha256"))
         and all(
             str(entra_binding.get(key) or "").casefold()
             == value.casefold()

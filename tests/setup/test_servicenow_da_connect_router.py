@@ -543,16 +543,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "keep the handoff waiting" in oidc
     assert "reconcile any older derived reused handoff" in oidc
     assert "Require\n`decision: no-action`; do not ask again" in oidc
-    assert "<!-- visible-handoff-question:v1-confirm-setup -->" in oidc
-    assert '"header": "Confirm ServiceNow OIDC evidence"' in oidc
-    assert (
-        '"Yes, the OIDC and mapping evidence is complete for this exact '
-        'target"' in oidc
-    )
-    assert (
-        '"No, the ServiceNow administrator still needs to finish it"'
-        in oidc
-    )
+    assert "<!-- visible-handoff-question:v1-confirm-setup -->" not in oidc
+    assert '"header": "Confirm ServiceNow OIDC evidence"' not in oidc
+    assert "do not add a separate completion question" in oidc
     assert "{TOKEN_CLAIM_NAME}" not in oidc
     assert '"label": "Completed"' not in oidc
     assert "PR #217 S4.3/S4.4 is authoritative" in oidc
@@ -684,7 +677,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "or pause between role elevation" in oidc_normalized
     assert "record-admin-phase --phase plugin-prerequisites" in plugins
     assert "record-admin-phase --phase entra-registration" in entra
-    assert "--confirm-saved-mapping" in oidc
+    assert "record-identity-direct --stage servicenow" in oidc
+    assert "--confirm-saved-mapping" not in oidc
+    assert "--reject-saved-mapping" not in oidc
     assert "record-admin-phase --phase servicenow-oidc" not in oidc
     assert "record-admin-operation" not in plugins + entra + oidc
     assert "one complete high-level step" in credential
@@ -862,7 +857,7 @@ def test_entra_guides_use_one_current_setup_checkpoint() -> None:
         assert "does not prove app configuration" in guide
 
 
-def test_hr_it_admin_guides_separate_handoff_input_from_completion() -> None:
+def test_hr_it_admin_guides_complete_from_mapping_receipt() -> None:
     for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
         actions = _SOLUTION / "src" / "skills" / "connect" / provider / "actions"
         entra = (actions / "guide-entra-registration.md").read_text(
@@ -878,13 +873,12 @@ def test_hr_it_admin_guides_separate_handoff_input_from_completion() -> None:
             entra.split()
         )
 
-        assert "<!-- visible-handoff-question:v1-confirm-setup -->" in oidc
-        assert '"header": "Confirm ServiceNow OIDC evidence"' in oidc
-        assert '"label": "Yes"' in oidc
-        assert '"label": "No"' in oidc
-        assert "Only after the first option is selected" in oidc
-        assert "--confirm-saved-mapping" in oidc
-        assert "--reject-saved-mapping" in oidc
+        assert "<!-- visible-handoff-question:v1-confirm-setup -->" not in oidc
+        assert '"header": "Confirm ServiceNow OIDC evidence"' not in oidc
+        assert "record-identity-direct --stage servicenow" in oidc
+        assert "atomically persists the mapping receipt" in oidc
+        assert "--confirm-saved-mapping" not in oidc
+        assert "--reject-saved-mapping" not in oidc
         assert "record-admin-phase --phase servicenow-oidc" not in oidc
 
 
@@ -924,12 +918,9 @@ def test_servicenow_oidc_guides_match_complete_stage2_workbook() -> None:
         )
         assert "record-identity-direct --stage servicenow" in guide
         assert "record-identity-mapping --stage servicenow" in guide
-        assert "--confirm-saved-mapping" in guide
-        assert "--reject-saved-mapping" in guide
+        assert "--confirm-saved-mapping" not in guide
+        assert "--reject-saved-mapping" not in guide
         assert "record-admin-phase --phase servicenow-oidc" not in guide
-        assert "generic `--yes` confirms non-secret value capture only" in (
-            normalized
-        )
-        assert "atomically records both the mapping receipt and owning OIDC" in (
+        assert "atomically persists the mapping receipt and owning Manual" in (
             normalized
         )

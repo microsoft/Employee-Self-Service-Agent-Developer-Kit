@@ -86,15 +86,16 @@ availability gate is the only availability question. Do not invoke
 `identity-direct-handoff`, render its ordinary instructions, or ask its data
 questions until that acknowledgement is current. Once current, require
 `decision: instructions-required`, render its `ordinaryReply.text` verbatim,
-and ask only its returned data/completion questions. `decision: no-action`
+and ask only its returned data questions. `decision: no-action`
 means current completed/reused evidence skips both availability and
 instructions.
-For the ServiceNow saved-configuration and claim-to-field completion question,
-map **Yes** only to the action guide's semantic
-`--confirm-saved-mapping` recorder and map **No** to
-`--reject-saved-mapping`. The generic `--yes` flag is value-capture consent,
-not business completion evidence. Do not invoke the historical
-`record-admin-phase --phase servicenow-oidc` bridge on the active path.
+For the ServiceNow OIDC action, the valid current mapping receipt is the Manual
+completion criterion. After the actual internal User Field is returned, run
+the action guide's value-record command once; it atomically writes the receipt
+and owning handoff. Do not ask a saved/configured or claim-mapped completion
+question, and do not invoke the historical
+`--confirm-saved-mapping`, `--reject-saved-mapping`, or
+`record-admin-phase --phase servicenow-oidc` compatibility paths.
 Use `waitingText` for the pause. For a failure, show `errorChecklistText`,
 `needsAttentionText`, and the exact full remediation returned by the
 checkpoint. For ServiceNow, that remediation is the branch-loaded recovery

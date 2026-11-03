@@ -236,6 +236,8 @@ def _write_it_state(root: Path, components: dict) -> dict:
             "evidence"
         ].update(
             {
+                "identityMappingReceiptConfirmed": True,
+                "mappingReceiptCurrent": True,
                 "oidcCapabilityConfirmed": True,
                 "runbookCompleted": True,
                 "mappingDetailsCollected": True,
@@ -294,6 +296,14 @@ def _write_it_state(root: Path, components: dict) -> dict:
             "entraAdministratorConfirmed": True,
             "tokenClaimEmissionConfirmed": True,
             "serviceNowAdministratorConfirmed": True,
+            "provenanceSha256": "b" * 64,
+            "sourceWorkbookSha256": (
+                snow.IDENTITY_WORKBOOK_SOURCE_SHA256["servicenow"]
+            ),
+            "importedWorkbookSha256": "b" * 64,
+            "importedFileFormat": "xlsx",
+            "sheetProtected": True,
+            "recordedAt": "2026-10-01T00:00:00Z",
             "binding": binding,
         }
         relationship_hash = snow._identity_mapping_relationship_hash(

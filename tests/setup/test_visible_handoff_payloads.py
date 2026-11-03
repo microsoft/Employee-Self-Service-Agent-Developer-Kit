@@ -432,7 +432,7 @@ def test_hr_plugin_completion_header_and_question_are_distinct() -> None:
 
 
 @pytest.mark.parametrize("provider", ("servicenow-da-hrsd", "servicenow-da-itsm"))
-def test_identity_admin_guides_use_input_then_completion_questions(
+def test_identity_admin_guides_use_only_required_value_questions(
     provider: str,
 ) -> None:
     actions = _CONNECT / provider / "actions"
@@ -444,7 +444,7 @@ def test_identity_admin_guides_use_input_then_completion_questions(
     )
 
     assert "<!-- visible-handoff-question:v1-confirm-setup -->" not in entra
-    assert "<!-- visible-handoff-question:v1-confirm-setup -->" in oidc
+    assert "<!-- visible-handoff-question:v1-confirm-setup -->" not in oidc
     assert "{TOKEN_CLAIM_NAME}" not in oidc
     assert '"label": "Completed"' not in oidc
     assert "question itself must contain all seven operations" not in oidc
@@ -456,14 +456,13 @@ def test_identity_admin_guides_use_input_then_completion_questions(
     assert "completes the Manual Entra identity phase" in entra
     assert "does not prove app configuration" in entra
     assert "identity-mapping-handoff --stage servicenow" in oidc
-    assert "Render the returned `instructionTitle` and `instruction`" in oidc
-    assert "send the exact\nshort question unchanged" in oidc
-    assert '"allowFreeformInput": false' in oidc
-    assert "Accept the local path of either the completed XLSX\nor CSV" in oidc
-    assert "After import succeeds" in oidc
-    assert "ask this separate\ncompletion question" in oidc
+    assert "collect only the actual\ninternal User Field" in oidc
+    assert "record-identity-direct --stage servicenow" in oidc
+    assert "atomically persists the mapping receipt and owning Manual" in oidc
+    assert "Accept the local path of either the completed XLSX or CSV" in oidc
+    assert "do not\nask a saved/configured" in oidc
     assert (
-        "does not prove a real employee token"
+        "does not prove that the OIDC provider is saved or configured"
         in " ".join(oidc.split())
     )
     assert "record-identity-mapping" in entra

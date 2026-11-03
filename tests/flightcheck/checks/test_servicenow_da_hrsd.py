@@ -655,6 +655,8 @@ def _write_state(
     )
     handoffs["servicenow-oidc"]["evidence"].update(
         {
+            "identityMappingReceiptConfirmed": True,
+            "mappingReceiptCurrent": True,
             "oidcCapabilityConfirmed": True,
             "runbookCompleted": True,
             "mappingDetailsCollected": True,
@@ -715,6 +717,14 @@ def _write_state(
                 "entraAdministratorConfirmed": True,
                 "tokenClaimEmissionConfirmed": True,
                 "serviceNowAdministratorConfirmed": True,
+                "provenanceSha256": "b" * 64,
+                "sourceWorkbookSha256": (
+                    snow.IDENTITY_WORKBOOK_SOURCE_SHA256["servicenow"]
+                ),
+                "importedWorkbookSha256": "b" * 64,
+                "importedFileFormat": "xlsx",
+                "sheetProtected": True,
+                "recordedAt": "2026-09-29T00:00:00Z",
                 "binding": {
                     "tenantId": TENANT_ID,
                     "environmentId": ENVIRONMENT_ID,
@@ -1637,7 +1647,7 @@ def test_historical_graph_pass_remains_compatible_without_fresh_graph_claim(
     assert "does not prove application configuration" in row.result
 
 
-def test_oidc_checkpoint_requires_configuration_saved_evidence(
+def test_oidc_checkpoint_ignores_historical_saved_configuration_flags(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1656,6 +1666,12 @@ def test_oidc_checkpoint_requires_configuration_saved_evidence(
     state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"]["evidence"].pop(
         "oidcCapabilityConfirmed"
     )
+    state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"]["evidence"][
+        "configurationSavedConfirmed"
+    ] = False
+    state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"]["evidence"][
+        "claimMappingConfirmed"
+    ] = False
     state_path.write_text(json.dumps(state), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
@@ -1665,8 +1681,9 @@ def test_oidc_checkpoint_requires_configuration_saved_evidence(
         if row.checkpoint_id == "SN-DA-HRSD-OIDC-001"
     )
 
-    assert result.status == Status.NOT_CONFIGURED.value
-    assert "configuration-saved confirmation is missing" in result.result
+    assert result.status == Status.MANUAL.value
+    assert "mapping receipt records" in result.result
+    assert "does not prove that the OIDC provider is saved" in result.result
 
 
 def test_oidc_checkpoint_manual_does_not_require_or_claim_active_user(
@@ -1683,12 +1700,12 @@ def test_oidc_checkpoint_manual_does_not_require_or_claim_active_user(
     )
 
     assert result.status == Status.MANUAL.value
-    assert "mapped to User Field" in result.result
-    assert "Active user" not in result.result
-    assert "does not prove a real token" in result.result
+    assert "actual internal User Field" in result.result
+    assert "employee match" in result.result
+    assert "does not prove that the OIDC provider is saved" in result.result
 
 
-def test_oidc_checkpoint_rejects_legacy_mapping_details(
+def test_oidc_checkpoint_preserves_legacy_mapping_details_as_metadata(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1718,8 +1735,8 @@ def test_oidc_checkpoint_rejects_legacy_mapping_details(
         if row.checkpoint_id == "SN-DA-HRSD-OIDC-001"
     )
 
-    assert result.status == Status.NOT_CONFIGURED.value
-    assert "privacy-minimized" in result.result
+    assert result.status == Status.MANUAL.value
+    assert "mapping receipt records" in result.result
 
 
 def test_oidc_checkpoint_rejects_legacy_bounded_shape_without_two_names(
@@ -1746,8 +1763,8 @@ def test_oidc_checkpoint_rejects_legacy_bounded_shape_without_two_names(
     )
 
     assert result.status == Status.NOT_CONFIGURED.value
-    assert "legacy OIDC attestation" in result.result
-    assert "two-name mapping handoff" in result.remediation
+    assert "does not match one exact selected claim" in result.result
+    assert "current target-bound mapping receipt" in result.remediation
 
 
 def test_recorded_mapping_workflow_reaches_real_hr_checkpoints(

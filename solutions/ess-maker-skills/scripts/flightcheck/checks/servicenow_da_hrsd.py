@@ -16,6 +16,7 @@ from connect_servicenow_da import (
     AUTH_MODE,
     CONNECTOR_NAME,
     HR_SCHEMA_NAME,
+    IDENTITY_WORKBOOK_SOURCE_SHA256,
     PROVIDER_KEY,
     _agent_binding_identity_hash,
     _connection_binding_hash,
@@ -135,15 +136,15 @@ _RECOVERY_GUIDANCE = {
             "the protected ServiceNow identity-mapping handoff"
         ),
         "values": (
-            "Use one Entra-confirmed emitted claim name and the exact "
-            "ServiceNow user field selected by the ServiceNow admin. If either "
-            "name is unknown, obtain it through the protected workbook; never "
-            "return an employee identifier or token value."
+            "Record the locked Entra-confirmed claim name and the exact "
+            "internal ServiceNow sys_user field selected by the ServiceNow "
+            "admin. If the field is unknown, obtain it through the protected "
+            "handoff; never return an employee identifier or token value."
         ),
         "success": (
-            "The ServiceNow configuration is saved and the bounded receipt "
-            "proves one current claim-name/user-field pair for the exact "
-            "target."
+            "The bounded receipt proves one current claim-name/user-field "
+            "pair with matching target binding, provenance, candidate hash, "
+            "and relationship hash."
         ),
     },
     "TOPICS": {
@@ -1290,6 +1291,24 @@ def _identity_mapping_contract(
         "servicenow-oidc",
     ).get("evidence")
     oidc = oidc if isinstance(oidc, dict) else {}
+    provenance_sha256 = str(mapping.get("provenanceSha256") or "")
+    source_workbook_sha256 = str(
+        mapping.get("sourceWorkbookSha256") or ""
+    )
+    imported_workbook_sha256 = str(
+        mapping.get("importedWorkbookSha256") or ""
+    )
+    provenance_current = bool(
+        len(provenance_sha256) == 64
+        and all(
+            character in "0123456789abcdefABCDEF"
+            for character in provenance_sha256
+        )
+        and imported_workbook_sha256 == provenance_sha256
+        and source_workbook_sha256.casefold()
+        == IDENTITY_WORKBOOK_SOURCE_SHA256["servicenow"].casefold()
+        and mapping.get("importedFileFormat") in {"direct", "xlsx", "csv"}
+    )
     try:
         mapping_client_id = normalize_client_id(
             str(mapping.get("applicationClientId") or "")
@@ -1306,7 +1325,10 @@ def _identity_mapping_contract(
         != candidates.get("candidateSetSha256")
         or mapping.get("tokenClaimName") not in candidates["candidates"]
         or not mapping.get("serviceNowUserField")
-        or oidc.get("claimMappingConfirmed") is not True
+        or not provenance_current
+        or oidc.get("identityMappingReceiptConfirmed") is not True
+        or oidc.get("mappingReceiptCurrent") is not True
+        or oidc.get("mappingDetailsCollected") is not True
         or oidc.get("tokenClaimName") != mapping.get("tokenClaimName")
         or oidc.get("serviceNowUserField")
         != mapping.get("serviceNowUserField")
@@ -1316,8 +1338,9 @@ def _identity_mapping_contract(
         != _identity_mapping_relationship_hash(mapping)
     ):
         return None, (
-            "The ServiceNow OIDC handoff does not match one exact selected "
-            "claim and user-field pair from the Entra-confirmed candidates."
+            "The ServiceNow mapping receipt does not match one exact selected "
+            "claim and user-field pair from the Entra-confirmed candidates, "
+            "current target binding, provenance, and hashes."
         )
     return mapping, None
 
@@ -1504,33 +1527,7 @@ def _oidc_result(
     mapping = mapping if isinstance(mapping, dict) else {}
     if missing:
         status = Status.NOT_CONFIGURED.value
-        result = "The complete ServiceNow OIDC admin handoff is missing."
-    elif not (
-        mapping.get("configurationSavedConfirmed") is True
-        or mapping.get("oidcCapabilityConfirmed") is True
-    ):
-        status = Status.NOT_CONFIGURED.value
-        result = (
-            "The ServiceNow configuration-saved confirmation is missing."
-        )
-    elif mapping.get("runbookCompleted") is not True:
-        status = Status.NOT_CONFIGURED.value
-        result = "The complete ServiceNow OIDC runbook attestation is missing."
-    elif "claim" in mapping or "userField" in mapping:
-        status = Status.NOT_CONFIGURED.value
-        result = (
-            "The OIDC handoff does not use the bounded privacy-minimized "
-            "completion evidence contract."
-        )
-    elif mapping.get("mappingDetailsCollected") is not True:
-        status = Status.NOT_CONFIGURED.value
-        result = (
-            "The legacy OIDC attestation does not contain the current "
-            "two-name mapping confirmation."
-        )
-    elif mapping.get("claimMappingConfirmed") is not True:
-        status = Status.NOT_CONFIGURED.value
-        result = "The ServiceNow claim mapping confirmation is missing."
+        result = "The current ServiceNow identity mapping handoff is missing."
     else:
         receipt, error = _identity_mapping_contract(admin_setup, state)
         if error or receipt is None:
@@ -1541,24 +1538,25 @@ def _oidc_result(
         else:
             status = Status.MANUAL.value
             result = (
-                "The ServiceNow admin confirmed the configuration is saved "
-                "and User Claim "
-                f"{receipt['tokenClaimName']!r} sourced from "
-                f"the Entra-confirmed candidates is mapped to User Field "
-                f"{receipt['serviceNowUserField']!r}. No employee value was "
-                "returned, and this Manual evidence does not prove a real "
-                "token, authentication success, permission, or business "
-                "result."
+                "The current target-bound ServiceNow mapping receipt records "
+                f"locked User Claim {receipt['tokenClaimName']!r} and actual "
+                f"internal User Field {receipt['serviceNowUserField']!r}. "
+                "Binding, provenance, candidate hash, and relationship hash "
+                "are current. This Manual evidence does not prove that the "
+                "OIDC provider is saved or configured, or prove a real token, "
+                "authentication success, permission, employee match, or "
+                "business result."
             )
     return _result(
         "SN-DA-HRSD-OIDC-001",
         status,
-        "ServiceNow OIDC provider and user mapping",
+        "ServiceNow identity mapping receipt",
         result,
         (
-            "Complete or re-verify the full guided ServiceNow OIDC runbook, "
-            "then record the current two-name mapping handoff and bounded "
-            "completion attestation."
+            "Record one current target-bound mapping receipt containing the "
+            "locked Entra-confirmed claim name and one actual safe internal "
+            "ServiceNow sys_user field. Recreate it when the target, binding, "
+            "provenance, candidate hash, or relationship hash is stale."
             if status != Status.MANUAL.value
             else (
                 "Owner: ServiceNow Admin / security_admin. Where/how: follow "
@@ -1566,13 +1564,13 @@ def _oidc_result(
                 "guide-servicenow-oidc.md` in Application Registry and the "
                 "protected identity-mapping handoff. "
                 "Expected evidence: one current target-bound non-secret "
-                "confirmation that the ServiceNow configuration is saved and "
-                "one locked Entra-confirmed claim name is mapped to one "
-                "actual ServiceNow user field, with current source, "
-                "timestamp, binding, and relationship hash. Completion: the "
-                "saved configuration and exact claim-to-field mapping match "
-                "the current target; no employee token, authentication, "
-                "permission, Active-user match, or business result is proved."
+                "receipt containing one locked Entra-confirmed claim name and "
+                "one actual internal ServiceNow user field, with current "
+                "source, timestamp, binding, provenance, candidate hash, and "
+                "relationship hash. Completion: the receipt is current for "
+                "the exact target; it does not prove the OIDC provider is "
+                "saved or configured, or prove a token, authentication, "
+                "permission, employee match, or business result."
             )
         ),
         roles=[Role.SERVICENOW_ADMIN.value],

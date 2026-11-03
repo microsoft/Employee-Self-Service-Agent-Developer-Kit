@@ -1,12 +1,11 @@
 # Guide the ServiceNow OIDC trust and user mapping
 
 Treat ServiceNow OIDC/auth setup as one complete high-level step. Keep the
-full runbook, owner role, completion conditions, and non-secret evidence
-requirements available to the administrator. Render the returned
-`instructionTitle` and `instruction`, followed by one unchanged short
-`question`, and pause exactly once. Do not separately render the detailed
-internal runbook or pause between role elevation, provider registration,
-metadata, claim mapping, and user checks.
+full runbook, owner role, and non-secret evidence requirements available to
+the administrator. Render the canonical instructions, collect only the actual
+internal User Field when it is missing, and record the current mapping receipt.
+Do not add a separate completion question or pause between role elevation,
+provider registration, metadata, claim mapping, and user checks.
 
 Never create or patch ServiceNow security objects.
 
@@ -22,8 +21,8 @@ requires one new complete OIDC handoff.
 
 ## Goal and owner
 
-- **Goal:** save the ServiceNow OIDC configuration and map the locked
-  Entra-confirmed User Claim to the actual ServiceNow user field.
+- **Goal:** record one current exact-target receipt that pairs the locked
+  Entra-confirmed User Claim with the actual ServiceNow user field.
 - **Owner role:** ServiceNow `admin` or `security_admin`, elevated to
   `security_admin`.
 
@@ -60,10 +59,12 @@ overrides:
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage servicenow --user-field "<internal-sys_user-field>" --yes
 ```
 
-Keep that accepted field in the current conversation and rerun the handoff with
-`--user-field "<internal-sys_user-field>"`. Render only its returned completion
-question; the canonical instructions and User Field question are not repeated.
-The hint is validated but not persisted by the handoff command.
+This command validates the locked Client ID and claim, exact target binding,
+field syntax, source provenance, candidate hash, and relationship hash, then
+atomically persists the mapping receipt and owning Manual OIDC handoff. Return
+`ACTION_RESULT = "recorded"` after it succeeds. A subsequent direct handoff
+must return `decision: no-action`; do not repeat availability, instructions,
+or the User Field question.
 
 The protected file route remains fully supported.
 
@@ -109,11 +110,9 @@ It contains exactly two records in this order:
 Both records must carry identical Client ID, User Claim, binding values, and
 candidate-set hash. Content fields must not contain embedded CR/LF.
 
-## Completion signal and evidence
+## Mapping receipt and evidence
 
-Render the returned `instructionTitle` and `instruction`, then send the exact
-short question unchanged. Accept the local path of either the completed XLSX
-or CSV and import it with:
+Accept the local path of either the completed XLSX or CSV and import it with:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-identity-mapping --stage servicenow --workbook-file "<completed-xlsx-or-csv-path>" --yes
@@ -127,49 +126,10 @@ provider/profile/agent binding. XLSX and CSV produce the same bounded identity
 mapping receipt. Existing issued legacy XLSX files remain importable and are
 not rewritten.
 
-After import succeeds, render the target placeholders and ask this separate
-completion question:
-
-<!-- visible-handoff-question:v1-confirm-setup -->
-```json
-[
-  {
-    "header": "Confirm ServiceNow OIDC evidence",
-    "question": "Has the ServiceNow configuration been saved, and is User Claim `{CONFIRMED_USER_CLAIM_NAME}` mapped to User Field `{SERVICENOW_USER_FIELD}`?",
-    "options": [
-      { "label": "Yes" },
-      { "label": "No" }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
-
-This Yes confirms only that the configuration is saved and the displayed
-claim-to-field mapping is complete for the exact target. It does not prove a
-real employee token, authentication success, permission, Active-user match, or
-business result.
-
-Only after the first option is selected, rerun the identity recorder with the
-same locked User Field and the semantic saved-mapping confirmation. This one
-command revalidates the target, receipt provenance, candidate and relationship
-hashes, preserves direct/XLSX/CSV provenance, and atomically records both the
-mapping receipt and owning OIDC handoff:
-
-```text
-python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage servicenow --user-field "<internal-sys_user-field>" --yes --confirm-saved-mapping
-```
-
-The generic `--yes` confirms non-secret value capture only.
-`--confirm-saved-mapping` is the distinct business confirmation supplied by
-the visible Yes answer. On No, record the authoritative pending override with
-the same locked field:
-
-```text
-python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage servicenow --user-field "<internal-sys_user-field>" --yes --reject-saved-mapping
-```
-
-This preserves the mapping data, retires any older saved-mapping completion,
-and keeps the phase pending so resume asks only the same completion question.
-
-Return `ACTION_RESULT = "recorded"` only after this command succeeds.
+The successful import atomically persists the mapping receipt and owning
+Manual OIDC handoff. Return `ACTION_RESULT = "recorded"` immediately; do not
+ask a saved/configured, claim-mapped, Active-user, or preauthorization
+completion question. The receipt proves only the locked claim, actual internal
+field, exact target binding, provenance, and hashes. It does not prove that the
+OIDC provider is saved or configured, or prove a real token, authentication,
+permission, employee match, or business result.
