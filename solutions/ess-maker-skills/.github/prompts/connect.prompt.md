@@ -58,11 +58,15 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   nested internal-step statuses. When
   `transport.businessGroupAvailability.gateRequired` is false, continue
   without an availability question. When true, ask only
-  `transport.businessGroupAvailability.question`: call
-  `vscode_askQuestions` with a one-element array containing that exact object,
-  preserving its complete `header`, `question`, `options`, and
-  `allowFreeformInput`. Never substitute the header for the question body or
-  rebuild its option labels;
+  `transport.businessGroupAvailability.question`: serialize that exact
+  canonical object unchanged to stdin for
+  `python scripts/connect_servicenow_da.py --provider <provider> adapt-question`.
+  Require `servicenow.ask-user-arguments.v1`, then call the active `ask_user`
+  tool with the returned `askUserArguments` object verbatim. Never rebuild
+  `message`, `requestedSchema`, its neutral field title, description, required
+  field, or `oneOf` labels. The active callable input is
+  `{message, requestedSchema}`; `questions: [...]` is internal host output,
+  not a callable tool contract;
 - on **Yes**, rerun the exact command with `--roles-available yes` plus the
   returned `--business-group-id` and `--availability-context-sha256`. Show
   the newly returned `transport.ordinaryReply.text` before any action; for an
@@ -90,9 +94,10 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   is not phase completion;
 - for a question or delegated-admin pause, prepend
   `progress.currentPhase.waitingChecklistText` as an ordinary agent response,
-  then call `vscode_askQuestions` with a one-element array containing the
-  exact compact returned question object. Preserve the complete body and
-  option labels. Then show `progress.currentPhase.waitingText` when waiting.
+  then pass the exact compact returned canonical object through the same
+  `adapt-question` stdin command and call `ask_user` with the returned
+  `askUserArguments` verbatim. Preserve the complete body and option labels.
+  Then show `progress.currentPhase.waitingText` when waiting.
   Do not add a
   `Progress` field, checklist, phase table, description, default, required
   input, hidden input, or second question;
@@ -113,9 +118,10 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   invocation and follow it;
 - when that action calls `topic-action-handoff` and returns
   `question-required`, require the supported
-  `header`/`question`/`options`/`allowFreeformInput` shape, call
-  `vscode_askQuestions` with `[question]`, and wait. After Daphne answers,
-  continue the matching branch in the already
+  `header`/`question`/`options`/`allowFreeformInput` canonical shape, pass it
+  through `adapt-question`, call `ask_user` with the generated arguments
+  verbatim, and wait. After Daphne answers, continue the matching branch in
+  the already
   loaded action document; do not call the handoff again or ask twice;
 - add `--executed-action` only after an action returns `applied` or `recorded`.
   A verified no-op still requires the phase checkpoint before completion;

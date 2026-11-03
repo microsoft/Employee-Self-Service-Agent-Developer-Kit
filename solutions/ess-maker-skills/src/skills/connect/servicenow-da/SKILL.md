@@ -124,10 +124,10 @@ identity blocks before configuration.
 Render the returned `realmStages` exactly: **Connections**, **Runtime
 configuration**, and **Maker validation**. For
 `runtime-approval-required`, show the exact `runtimePlan`, then call
-`vscode_askQuestions` with a one-element array containing the exact returned
-`question` object. Preserve its complete target-scoped body and full option
-labels; never substitute its header for the body. Translate approval/rejection
-to the command below:
+the shared lifecycle runner's `adapt-question` command with the exact returned
+canonical `question` object and call the active `ask_user` tool with the
+generated `askUserArguments` verbatim. Preserve the complete target-scoped
+body and full option labels. Translate approval/rejection to the command below:
 
 Report every returned checkpoint status exactly. Render `Manual` rows as
 **Not automatically verified** and never present `Manual` alone as if it

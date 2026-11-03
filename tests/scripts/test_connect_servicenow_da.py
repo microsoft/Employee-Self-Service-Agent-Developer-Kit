@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import csv
 import importlib.util
+import io
 import json
 import re
 import subprocess
@@ -2751,6 +2752,130 @@ def test_generated_question_families_have_distinct_headers_and_bodies() -> None:
             ), family
         else:
             assert question["allowFreeformInput"] is True, family
+        adapted = snow.adapt_question_to_ask_user(question)
+        assert adapted["canonicalQuestion"] == question, family
+        assert adapted["askUserArguments"]["message"] == (
+            question["header"]
+        ), family
+        field = adapted["askUserArguments"]["requestedSchema"][
+            "properties"
+        ]["response"]
+        assert field["description"] == question["question"], family
+        assert adapted["askUserArguments"]["requestedSchema"]["required"] == [
+            "response"
+        ], family
+        if options:
+            assert field["title"] == "Selection", family
+            assert [item["title"] for item in field["oneOf"]] == [
+                option["label"] for option in options
+            ], family
+            assert adapted["knownHostLimitation"], family
+        else:
+            assert field["title"] == "Input", family
+            assert "oneOf" not in field, family
+            assert adapted["knownHostLimitation"] is None, family
+
+
+def test_ask_user_adapter_preserves_selection_values_and_freeform() -> None:
+    selection = {
+        "header": "Choose agent",
+        "question": "Which prepared agent should be used?",
+        "options": [
+            {
+                "label": "Employee Self-Service (HR)",
+                "selectionKey": "prepared:hr",
+            },
+            {
+                "label": "Use another agent",
+                "selectionKey": "another-agent",
+            },
+        ],
+        "allowFreeformInput": False,
+    }
+    original = copy.deepcopy(selection)
+    adapted = snow.adapt_question_to_ask_user(selection)
+    field = adapted["askUserArguments"]["requestedSchema"]["properties"][
+        "response"
+    ]
+    assert selection == original
+    assert adapted["askUserArguments"]["message"] == "Choose agent"
+    assert field == {
+        "type": "string",
+        "title": "Selection",
+        "description": "Which prepared agent should be used?",
+        "oneOf": [
+            {
+                "const": "prepared:hr",
+                "title": "Employee Self-Service (HR)",
+            },
+            {
+                "const": "another-agent",
+                "title": "Use another agent",
+            },
+        ],
+    }
+    assert adapted["canonicalAllowFreeformInput"] is False
+    assert "no freeform-control field" in adapted["knownHostLimitation"]
+
+    freeform = {
+        "header": "ServiceNow instance URL",
+        "question": "Enter the public ServiceNow HTTPS root URL.",
+        "allowFreeformInput": True,
+    }
+    adapted = snow.adapt_question_to_ask_user(freeform)
+    assert adapted["askUserArguments"] == {
+        "message": "ServiceNow instance URL",
+        "requestedSchema": {
+            "properties": {
+                "response": {
+                    "type": "string",
+                    "title": "Input",
+                    "description": (
+                        "Enter the public ServiceNow HTTPS root URL."
+                    ),
+                }
+            },
+            "required": ["response"],
+        },
+    }
+    assert adapted["knownHostLimitation"] is None
+
+
+def test_adapt_question_cli_reads_canonical_json_from_stdin(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    question = snow._native_question(
+        header="HR prerequisite",
+        question="Is the ServiceNow admin available now?",
+        option_labels=[
+            "Yes, the ServiceNow admin is available now",
+            "No, I need to bring the ServiceNow admin in",
+        ],
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(question)))
+    monkeypatch.setattr(
+        snow,
+        "load_context",
+        lambda **_kwargs: pytest.fail(
+            "adapt-question must not load lifecycle context"
+        ),
+    )
+
+    assert snow.main(["adapt-question"]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["schemaVersion"] == "servicenow.ask-user-arguments.v1"
+    assert result["canonicalQuestion"] == question
+    assert result["askUserArguments"]["message"] == "HR prerequisite"
+    field = result["askUserArguments"]["requestedSchema"]["properties"][
+        "response"
+    ]
+    assert field["title"] == "Selection"
+    assert field["description"] == question["question"]
+    assert [item["title"] for item in field["oneOf"]] == [
+        option["label"] for option in question["options"]
+    ]
 
 
 @pytest.mark.parametrize(

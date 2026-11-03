@@ -44,6 +44,28 @@ or progress process. Each item retains its internal contract `label` for
 validation and supplies a short `customerLabel` for every visible checklist.
 Other providers retain this runner's existing output.
 
+**Active ServiceNow question adapter:** Every DA ServiceNow interactive
+question remains a canonical
+`header`/`question`/`options`/`allowFreeformInput` object for business and
+state semantics. Before calling the actual tool, serialize that exact object
+unchanged to stdin for:
+
+```text
+python scripts/connect_servicenow_da.py --provider {PROVIDER} adapt-question
+```
+
+Require `schemaVersion: servicenow.ask-user-arguments.v1`, then call the
+active `ask_user` tool with the returned `askUserArguments` object verbatim.
+Do not recreate the schema. The adapter maps the canonical header to top-level
+`message`, the complete canonical question to property `description`, uses a
+neutral property `title`, emits explicit `oneOf` labels for options, and marks
+the response field required. The actual callable contract is
+`{message, requestedSchema}`. `questions: [...]` is internal Agent Host output,
+not callable input. The canonical `allowFreeformInput` intent remains in the
+adapter envelope; the active host currently has a known defect that exposes
+and accepts custom enum answers because its schema has no freeform-control
+field. Do not patch the host or invent a business reject/re-ask flow here.
+
 For DA ServiceNow, render the controller's
 `transport.ordinaryReply.text` as an ordinary agent response. It contains the
 automatic preflight plus the complete HR or IT collaboration groups, one
@@ -56,8 +78,9 @@ exact current-phase `startText`. After `applied`/`recorded`, show
 `actionFinishedText` and continue checking; an action receipt is never phase
 completion. When an action asks a question, show
 `waitingChecklistText` as an ordinary agent response, then pass only the
-action's compact returned question to the question tool. Use `waitingText` for
-the pause. For a failure, show `errorChecklistText`,
+action's compact returned canonical question through the active ServiceNow
+question adapter and call `ask_user` with the generated arguments verbatim.
+Use `waitingText` for the pause. For a failure, show `errorChecklistText`,
 `needsAttentionText`, and the exact full remediation returned by the
 checkpoint. For ServiceNow, that remediation is the branch-loaded recovery
 handoff: problem, category, owner, exact location, values, action, success
@@ -179,11 +202,11 @@ below.
    `transport.businessGroupAvailability.gateRequired` is false, continue the
    returned lifecycle decision without asking availability.
 3. When the gate is true, ask only
-   `transport.businessGroupAvailability.question`. Call
-   `vscode_askQuestions` with a one-element array containing that exact object.
-   Preserve the complete `header`, `question`, `options`, and
-   `allowFreeformInput`; never substitute the header for the body. Its
-   explicit option labels answer only the current role-availability question.
+   `transport.businessGroupAvailability.question`. Pass that exact canonical
+   object through the active ServiceNow question adapter above and call
+   `ask_user` with the returned arguments verbatim. Preserve the complete
+   canonical object for answer handling and state semantics. Its explicit
+   option labels answer only the current role-availability question.
    The elicitation contains no future roles, group plan, progress, defaults,
    hidden fields, or required schema inputs.
 4. On **Yes**, rerun `resume-handoff` with
@@ -264,8 +287,8 @@ reply's content, not an unobservable render result: sending a reply is not
 proof the host displayed it. This ordinary reply does not promise a pinned,
 persistent, or non-collapsible UI.
 
-After sending the complete ordinary reply, use `vscode_askQuestions` with only
-this one short confirmation question:
+After sending the complete ordinary reply, pass only this one short canonical
+confirmation question through the active ServiceNow question adapter:
 
 <!-- visible-handoff-question:v1 -->
 ```json
@@ -541,12 +564,13 @@ question. Once a valid scoped requirement receipt exists, do not ask the
 routing question again. Never dereference a missing `workbookPath` from the
 routing response.
 
-For every interactive provider action, the question tool body is the durable
-visible handoff. Read the action document's
+For every interactive provider action, the canonical question body is the
+durable visible handoff. Read the action document's
 `<!-- visible-handoff-question:v1 -->` JSON payload, render its placeholders,
-and call `vscode_askQuestions` with the resulting one-element array. Use the
-supported `header`/`question`/`options`/`allowFreeformInput` shape exactly;
-`choices` is not a supported native question field. For DA ServiceNow,
+pass the resulting single canonical object through `adapt-question`, and call
+the active `ask_user` tool with the generated arguments verbatim. Use the
+canonical `header`/`question`/`options`/`allowFreeformInput` shape exactly;
+`choices` is not a canonical ServiceNow question field. For DA ServiceNow,
 collaboration groups and current status have
 already been shown in an ordinary reply. ServiceNow action questions are
 question-only: never add the group plan, internal-step checklist, progress,

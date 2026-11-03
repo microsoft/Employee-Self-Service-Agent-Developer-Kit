@@ -11,10 +11,12 @@ python scripts/connect_servicenow_da.py \
 
 Parse the structured result. `verified-noop` with `actionResult: applied`
 returns `ACTION_RESULT = "applied"` without asking or mutating.
-`question-required` must be passed to the question tool exactly as returned.
+`question-required` must be passed to the shared lifecycle runner exactly as
+returned.
 Any failure, unknown decision, malformed question or identity mismatch blocks
 the phase before checkpoint or mutation.
-Use `vscode_askQuestions` for that exact returned question.
+Use the shared lifecycle runner's `adapt-question` path for that exact
+returned canonical question.
 
 The command-generated question conforms to this visible contract:
 

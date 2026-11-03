@@ -104,10 +104,11 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "progress.currentPhase.waitingChecklistText" in prompt
     assert "transport.ordinaryReply.text" in prompt
     assert "transport.businessGroupAvailability.question" in prompt
-    assert "one-element array containing that exact object" in prompt
-    assert "Never substitute the header for the question body" in prompt
-    assert "preserving its complete `header`, `question`, `options`" in prompt
-    assert "rebuild its option labels" in prompt
+    assert "adapt-question" in prompt
+    assert "servicenow.ask-user-arguments.v1" in prompt
+    assert "askUserArguments" in prompt
+    assert "{message, requestedSchema}" in prompt
+    assert "`questions: [...]` is internal host output" in prompt
     assert "HR's four or IT's three collaboration groups" in prompt
     assert "Preflight and instance input never ask availability" in prompt
     assert "with `--roles-available yes`" in prompt
@@ -124,13 +125,12 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "Show a phase as complete only after" in prompt
     assert "ServiceNow phase-progress strings returned" in prompt
     assert "**ServiceNow phase-progress extension:**" in runner
-    assert "one-element array containing that exact object" in runner
-    assert "never substitute the header for the body" in runner
-    assert (
-        "explicit option labels answer only the current role-availability "
-        "question"
-    ) in runner
-    assert "`choices` is not a supported native question field" in runner
+    assert "adapt-question" in runner
+    assert "servicenow.ask-user-arguments.v1" in runner
+    assert "askUserArguments" in runner
+    assert "property `description`" in runner
+    assert "`questions: [...]` is internal Agent Host output" in runner
+    assert "known defect that exposes" in runner
     assert "Other providers retain this runner's existing output" in runner
     assert "cached `done` phase displays **Rechecking**" in runner
     assert "Do not inspect `.local/connect/steps.md` before" in prompt
@@ -354,7 +354,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "an exception or unknown response" in topics
     assert "missing target topic" in topics
     assert "must not repeat the confirmed update" in topics
-    assert "vscode_askQuestions" in topics
+    assert "adapt-question" in topics
     assert "while the\n  question is pending" in topics
     assert "Absence of\n  an answer is not cancellation" in topics
     assert "explicitly selects\n  **Not now**" in topics

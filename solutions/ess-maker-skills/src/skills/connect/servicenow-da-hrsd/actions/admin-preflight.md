@@ -90,7 +90,8 @@ briefly summarize discovery, and do not ask again. A newly visible connection
 never changes the confirmed instance automatically.
 
 When `instanceInputRequired` is `true`, send the exact returned
-`instanceQuestion` through `vscode_askQuestions`:
+`instanceQuestion` through the shared lifecycle runner's `adapt-question`
+path:
 
 - With candidates, every normalized URL is a separate **Use <URL>** choice,
   even when there is only one, plus **Provide another ServiceNow instance

@@ -13,12 +13,14 @@ Parse the structured result. This read-only command is authoritative:
 
 - `verified-noop` with `actionResult: applied` — set
   `ACTION_RESULT = "applied"` without asking or mutating.
-- `question-required` — call the question tool using the exact returned
-  `question` object; do not rebuild or shorten its inventory/names.
+- `question-required` — return the exact `question` object to the shared
+  lifecycle runner; do not rebuild or shorten its inventory/names.
 - any failure, unknown decision, malformed question or identity mismatch —
   fail closed before checkpoint or mutation.
 
-Use `vscode_askQuestions` for the returned question. Only ServiceNow ITSM topics in this inventory are in scope; unrelated topics remain unchanged.
+Use the shared lifecycle runner's `adapt-question` path for the returned
+canonical question. Only ServiceNow ITSM topics in this inventory are in
+scope; unrelated topics remain unchanged.
 
 The command-generated question conforms to the same supported
 `visible-handoff-question:v1` shape with the exact selected agent,

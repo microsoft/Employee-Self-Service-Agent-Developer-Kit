@@ -1140,6 +1140,102 @@ def _native_question(
     return payload
 
 
+def adapt_question_to_ask_user(
+    question: dict[str, Any],
+) -> dict[str, Any]:
+    canonical = copy.deepcopy(question)
+    header = canonical.get("header")
+    body = canonical.get("question")
+    allow_freeform = canonical.get("allowFreeformInput")
+    options = canonical.get("options")
+    if not isinstance(header, str) or not header.strip():
+        raise ServiceNowConnectError(
+            "Canonical question header must be a non-empty string."
+        )
+    if not isinstance(body, str) or not body.strip():
+        raise ServiceNowConnectError(
+            "Canonical question body must be a non-empty string."
+        )
+    if not isinstance(allow_freeform, bool):
+        raise ServiceNowConnectError(
+            "Canonical question allowFreeformInput must be boolean."
+        )
+    if options is None:
+        normalized_options: list[dict[str, str]] = []
+    elif isinstance(options, list):
+        normalized_options = []
+        seen_values: set[str] = set()
+        for option in options:
+            if not isinstance(option, dict):
+                raise ServiceNowConnectError(
+                    "Canonical question options must be objects."
+                )
+            label = option.get("label")
+            value = option.get("selectionKey", label)
+            if (
+                not isinstance(label, str)
+                or not label.strip()
+                or not isinstance(value, str)
+                or not value.strip()
+                or value in seen_values
+            ):
+                raise ServiceNowConnectError(
+                    "Canonical question options must have unique non-empty "
+                    "labels and values."
+                )
+            seen_values.add(value)
+            normalized_options.append(
+                {
+                    "const": value,
+                    "title": label,
+                }
+            )
+    else:
+        raise ServiceNowConnectError(
+            "Canonical question options must be a list when present."
+        )
+    if normalized_options and allow_freeform:
+        raise ServiceNowConnectError(
+            "The active ask_user_2 contract cannot faithfully combine "
+            "bounded options with canonical freeform input."
+        )
+    if not normalized_options and not allow_freeform:
+        raise ServiceNowConnectError(
+            "A canonical question without options must allow freeform input."
+        )
+
+    field: dict[str, Any] = {
+        "type": "string",
+        "title": "Selection" if normalized_options else "Input",
+        "description": body,
+    }
+    if normalized_options:
+        field["oneOf"] = normalized_options
+    requested_schema = {
+        "properties": {
+            "response": field,
+        },
+        "required": ["response"],
+    }
+    return {
+        "schemaVersion": "servicenow.ask-user-arguments.v1",
+        "canonicalQuestion": canonical,
+        "answerField": "response",
+        "canonicalAllowFreeformInput": allow_freeform,
+        "askUserArguments": {
+            "message": header,
+            "requestedSchema": requested_schema,
+        },
+        "knownHostLimitation": (
+            "The active ask_user_2 schema has no freeform-control field. "
+            "Agent Host currently exposes and accepts custom enum answers "
+            "despite canonical allowFreeformInput=false."
+            if normalized_options and not allow_freeform
+            else None
+        ),
+    }
+
+
 def _identity_requirement_question() -> dict[str, Any]:
     return _native_question(
         header="Which identifier should ServiceNow use?",
@@ -18007,6 +18103,13 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser(
+        "adapt-question",
+        help=(
+            "Read one canonical ServiceNow question object from stdin and "
+            "return the active ask_user message/requestedSchema arguments."
+        ),
+    )
+    subparsers.add_parser(
         "list-agents",
         help="List recognizable live ESS HR/IT agents for this environment.",
     )
@@ -18798,7 +18901,20 @@ def main(argv: list[str] | None = None) -> int:
         if profile is None:  # pragma: no cover
             raise ServiceNowConnectError("Unsupported ServiceNow provider.")
         configure_product_profile(profile.key)
-        if args.command == "list-agents":
+        if args.command == "adapt-question":
+            raw_question = sys.stdin.read()
+            if not raw_question.strip():
+                raise ServiceNowConnectError(
+                    "adapt-question requires one canonical question JSON "
+                    "object on stdin."
+                )
+            parsed_question = json.loads(raw_question)
+            if not isinstance(parsed_question, dict):
+                raise ServiceNowConnectError(
+                    "adapt-question stdin must be one JSON object."
+                )
+            result = adapt_question_to_ask_user(parsed_question)
+        elif args.command == "list-agents":
             result = list_agent_choices()
         elif args.command == "agent-chooser":
             result = agent_chooser_handoff(
@@ -19018,6 +19134,7 @@ def main(argv: list[str] | None = None) -> int:
                 contract_revision=args.contract_revision,
             )
         elif args.command not in {
+            "adapt-question",
             "list-agents",
             "agent-chooser",
         }:  # pragma: no cover

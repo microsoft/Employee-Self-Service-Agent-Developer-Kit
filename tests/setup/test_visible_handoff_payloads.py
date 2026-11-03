@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,9 @@ _ROOT = Path(__file__).resolve().parents[2]
 _SOLUTION = _ROOT / "solutions" / "ess-maker-skills"
 _CONNECT = _SOLUTION / "src" / "skills" / "connect"
 _ACTIONS = _CONNECT / "servicenow-da-hrsd" / "actions"
+sys.path.insert(0, str(_SOLUTION / "scripts"))
+import connect_servicenow_da as snow  # noqa: E402
+
 _MARKER = re.compile(
     r"<!-- visible-handoff-question:v1(?:-[a-z-]+)? -->\s*"
     r"```json\s*(.*?)\s*```",
@@ -391,6 +395,26 @@ def test_servicenow_questions_use_buttons_and_bounded_freeform() -> None:
             )
             if question.get("allowFreeformInput") is True:
                 assert path.name in allowed_freeform
+            adapted = snow.adapt_question_to_ask_user(question)
+            assert adapted["canonicalQuestion"] == question
+            assert adapted["askUserArguments"]["message"] == (
+                question["header"]
+            )
+            field = adapted["askUserArguments"]["requestedSchema"][
+                "properties"
+            ]["response"]
+            assert field["description"] == question["question"]
+            assert adapted["askUserArguments"]["requestedSchema"][
+                "required"
+            ] == ["response"]
+            if question.get("options"):
+                assert field["title"] == "Selection"
+                assert [item["title"] for item in field["oneOf"]] == [
+                    option["label"] for option in question["options"]
+                ]
+            else:
+                assert field["title"] == "Input"
+                assert "oneOf" not in field
 
 
 def test_hr_plugin_completion_header_and_question_are_distinct() -> None:

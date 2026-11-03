@@ -37,7 +37,8 @@ verification.
 
 ## Completion signal and evidence
 
-Use `vscode_askQuestions` with this exact compact visible handoff payload.
+Return this exact compact canonical payload to the shared lifecycle runner's
+`adapt-question` path.
 Render the target link and complete instructions above in the ordinary
 current-task reply first. The native question carries only the required
 evidence summary and completion decision:
