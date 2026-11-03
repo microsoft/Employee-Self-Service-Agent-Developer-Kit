@@ -16,10 +16,10 @@ from flightcheck.runner import Status
 
 
 _TARGET = {
+    "deploymentContract": "same-selected-environment-v1",
     "agentId": "00000000-0000-4000-8000-000000000101",
     "environmentId": "00000000-0000-4000-8000-000000000102",
     "tenantId": "00000000-0000-4000-8000-000000000103",
-    "dataverseUrl": "https://target.crm.dynamics.com",
     "almFamilyId": "family-1",
     "schemaName": "mcs_servicenow_hrsd_test",
     "commitSha": "a" * 40,

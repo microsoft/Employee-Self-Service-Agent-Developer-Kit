@@ -105,21 +105,24 @@ python scripts/connect_servicenow_da.py \
 ```
 
 On verified discovery, the controller records backend deployment proof from
-the exact target identity and continues this validation invocation. If every
-candidate environment proves the target absent, show the returned Copilot
-Studio deployment/approval question. Permission, throttling, network,
-unreadable, ambiguous, or identity/schema/family/tenant/commit failures remain
-their typed recovery handoffs; do not describe them as not deployed.
+the exact target identity inside the selected Power Platform environment and
+continues this validation invocation. A selected-scope 404 may show the
+returned deployment/recheck question. Permission, throttling, network, or
+identity/schema/family/tenant/commit failures remain their typed recovery
+handoffs; do not describe them as not deployed.
 
 Test/Production returns its structured target-stage ordinary reply. It does
 not create Dev collaboration-group availability prompts; target checks and
 mutation confirmations remain separate.
 
 If either target value is unknown, stop with the returned recoverable handoff.
-Do not copy Dev, another realm, agent, or connection values. Validation must
-prove the exact target realm, tenant, environment, Dataverse URL, agent ID,
-schema, ALM family, and deployed commit. Missing, ambiguous, or mismatched
-identity blocks before configuration.
+Do not copy Dev, another realm, agent, or connection values. The selected
+environment and tenant stay fixed; native ALM realm mapping selects a distinct
+target agent ID in that same environment. Validation must prove the exact
+target realm, tenant, selected environment, agent ID, schema, ALM family, and
+deployed commit. Dataverse URL metadata is optional deployment provenance and
+is not required to construct AgentBuilder, component, connectivity, or Maker
+links. Missing or mismatched identity blocks before configuration.
 
 Render the returned `realmStages` exactly: **Connections**, **Runtime
 configuration**, and **Maker validation**. For

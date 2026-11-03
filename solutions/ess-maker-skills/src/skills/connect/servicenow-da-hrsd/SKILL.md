@@ -112,8 +112,8 @@ returns external ALM guidance and a recheck action. Production is offered only
 after the exact Test realm completes all three target stages.
 
 For Test/Production, `validate-realm --realm <test|prod>` must fail closed
-unless it proves one exact target realm, tenant, environment, Dataverse URL,
-agent ID, schema, ALM family, and deployed commit. The resumable target stages
+unless it proves one exact target realm, selected tenant/environment, distinct
+target agent ID, schema, ALM family, and deployed commit. The resumable target stages
 are exactly **Connections**, **Runtime configuration**, and **Maker
 validation**. Runtime configuration requires a target-scoped preview and
 explicit plan approval. The only supported apply is the Maker's manual

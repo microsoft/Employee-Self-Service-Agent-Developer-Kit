@@ -15,10 +15,10 @@ from flightcheck.runner import CheckResult, Priority, Role, Status
 CHECKPOINT_ID = "SN-DA-DEPLOYMENT-001"
 _CATEGORY = "ServiceNow DA deployment"
 _TARGET_FIELDS = (
+    "deploymentContract",
     "agentId",
     "environmentId",
     "tenantId",
-    "dataverseUrl",
     "almFamilyId",
     "schemaName",
     "commitSha",
@@ -165,7 +165,8 @@ def deployment_result_for_resolved_target(
         (
             f"Read-only discovery proved the exact {realm.title()} "
             f"{profile.upper()} target deployment, agent, environment, "
-            "tenant, Dataverse URL, ALM family, schema, and deployed commit."
+            "tenant, ALM family, schema, and deployed commit under the "
+            "same-selected-environment contract."
         ),
         "",
         evidence=evidence,

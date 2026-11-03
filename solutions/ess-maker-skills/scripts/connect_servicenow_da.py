@@ -41,7 +41,7 @@ from agentbuilder import (
     TEST_REALM,
     authenticate,
     derive_environment_host,
-    list_environments,
+    list_environments,  # noqa: F401 - legacy test/adapter compatibility seam
     validate_environment_host,
 )
 from flightcheck.checks.solution import run_solution_checks
@@ -14492,6 +14492,8 @@ _REALM_STAGE_IDS = (
     "runtime-configuration",
     "maker-validation",
 )
+_REALM_DEPLOYMENT_CONTRACT = "same-selected-environment-v1"
+_REALM_DEPLOYMENT_PROOF_VERSION = 2
 
 
 def _realm_flow_record(
@@ -14634,15 +14636,25 @@ def _cached_realm_target_identity_current(
     identity: Any,
     *,
     realm: str,
+    state: dict[str, Any],
 ) -> bool:
     if not isinstance(identity, dict) or identity.get("realm") != realm:
         return False
+    if (
+        identity.get("deploymentContract") != _REALM_DEPLOYMENT_CONTRACT
+        or str(identity.get("environmentId") or "").casefold()
+        != str(state.get("environmentId") or "").casefold()
+        or str(identity.get("tenantId") or "").casefold()
+        != str(state.get("tenantId") or "").casefold()
+    ):
+        return False
     raw_url = identity.get("dataverseUrl")
-    if not isinstance(raw_url, str):
-        return False
-    normalized_url = _normalize_dataverse_url_candidate(raw_url)
-    if normalized_url is None or normalized_url != raw_url.rstrip("/"):
-        return False
+    if raw_url is not None:
+        if not isinstance(raw_url, str):
+            return False
+        normalized_url = _normalize_dataverse_url_candidate(raw_url)
+        if normalized_url is None or normalized_url != raw_url.rstrip("/"):
+            return False
     return all(
         isinstance(identity.get(field), str) and identity[field]
         for field in (
@@ -14687,6 +14699,7 @@ def _realm_is_complete(
         or not _cached_realm_target_identity_current(
             target_identity,
             realm=realm,
+            state=state,
         )
         or not isinstance(target_sha256, str)
         or _canonical_json_hash(target_identity) != target_sha256
@@ -15094,14 +15107,16 @@ def validation_realm_handoff(
         "agentId": context["agent"]["id"],
         "devCompletion": evidence,
         "question": {
-            "header": "Choose validation environment",
+            "header": "Choose validation realm",
             "question": (
                 "This exact agent has a complete current Dev Connect record. "
-                "Which deployment realm do you want to resume? Test starts "
-                "with exact read-only sibling proof. Prod is offered only "
-                "after Test configuration and Maker validation complete. "
-                "Connect never promotes, imports, publishes, checks out a "
-                "branch, or auto-advances realms."
+                "The selected Power Platform environment stays fixed. Native "
+                "ALM realm mapping selects the Dev, Test, or Production agent "
+                "ID inside that environment. Which validation realm do you "
+                "want to resume? Test starts with exact read-only sibling "
+                "proof. Prod is offered only after Test configuration and "
+                "Maker validation complete. Connect never promotes, imports, "
+                "publishes, checks out a branch, or auto-advances realms."
             ),
             "options": options,
             "allowFreeformInput": False,
@@ -15138,7 +15153,11 @@ def _verified_realm_deployment_record(
         and _cached_realm_target_identity_current(
             record["targetIdentity"],
             realm=realm,
+            state=state,
         )
+        and record.get("proofVersion") == _REALM_DEPLOYMENT_PROOF_VERSION
+        and record.get("deploymentContract")
+        == _REALM_DEPLOYMENT_CONTRACT
         and isinstance(record.get("targetConfigurationSha256"), str)
         and record["targetConfigurationSha256"]
         == _canonical_json_hash(record["targetIdentity"])
@@ -15593,7 +15612,6 @@ def _resolve_target_realm(
     realm: str,
 ) -> dict[str, Any]:
     realm_value = _VALIDATION_REALMS[realm]
-    token = _agentbuilder_token(context)
     dev_client = _without_automatic_retries(_agentbuilder_client(context))
     dev_agent_id = _normalize_agent_id(context["agent"]["id"])
     realms = dev_client.get_realms(dev_agent_id)
@@ -15884,521 +15902,310 @@ def _resolve_target_realm(
                 ),
             },
         )
-
-    try:
-        environments = list_environments(
-            token,
-            context["environment"]["ring"],
-            api_version=context["environment"].get(
-                "api_version",
-                "2024-10-01",
-            ),
-            session=_no_retry_session(),
-        )
-    except AgentBuilderHTTPError as exc:
+    selected_environment_id = str(
+        uuid.UUID(context["environment"]["id"])
+    )
+    selected_tenant_id = str(uuid.UUID(context["environment"]["tenant_id"]))
+    if (
+        authoritative_environment_id is not None
+        and authoritative_environment_id.casefold()
+        != selected_environment_id.casefold()
+    ):
         problem = (
-            "Could not list the environments needed to prove the exact "
-            f"{realm.title()} target."
-        )
-        category = (
-            "Read throttled"
-            if exc.status_code == 429
-            else "Read permission"
-            if exc.status_code in {401, 403}
-            else "Read or network error"
+            f"Native ALM binds the {realm.title()} target to a different "
+            "environment, but ServiceNow Connect supports the selected "
+            "environment only."
         )
         raise ServiceNowConnectError(
             problem,
             details={
                 "realm": realm,
-                "httpStatus": exc.status_code,
-                "errorCode": exc.error_code,
+                "selectedEnvironmentId": selected_environment_id,
+                "configuredTargetEnvironmentId": (
+                    authoritative_environment_id
+                ),
+                "targetAgentId": target_agent_id,
                 "recoveryHandoff": _target_realm_discovery_recovery(
                     context,
                     realm=realm,
                     problem=problem,
-                    category=category,
+                    category="Target identity mismatch",
                     action=(
-                        "Restore the minimum environment-inventory read access "
-                        "for the current account and reauthenticate if needed."
+                        "Correct the native ALM realm binding to the selected "
+                        "environment or select the intended environment before "
+                        "Connect. Do not switch environments automatically."
                     ),
-                    retry_after=exc.retry_after,
+                    environment_id=selected_environment_id,
+                    agent_id=target_agent_id,
                 ),
             },
-        ) from exc
-    except (AgentBuilderError, OSError) as exc:
+        )
+    if target_agent_id == dev_agent_id:
         problem = (
-            "Could not read the environment inventory needed to prove the "
-            f"exact {realm.title()} target."
+            f"Native ALM returned the Dev agent as the {realm.title()} target."
         )
         raise ServiceNowConnectError(
             problem,
             details={
                 "realm": realm,
+                "sourceAgentId": dev_agent_id,
+                "targetAgentId": target_agent_id,
+                "recoveryHandoff": _target_realm_discovery_recovery(
+                    context,
+                    realm=realm,
+                    problem=problem,
+                    category="Target identity mismatch",
+                    action=(
+                        "Have the ALM owner restore a distinct promoted target "
+                        "agent in the selected environment."
+                    ),
+                    environment_id=selected_environment_id,
+                    agent_id=target_agent_id,
+                ),
+            },
+        )
+    try:
+        agent = dev_client.get_agent(target_agent_id)
+    except AgentBuilderHTTPError as exc:
+        if exc.status_code == 404:
+            problem = (
+                f"The exact {realm.title()} target agent is absent from the "
+                "selected environment."
+            )
+            raise ServiceNowConnectError(
+                problem,
+                details={
+                    "realm": realm,
+                    "targetAgentId": target_agent_id,
+                    "environmentId": selected_environment_id,
+                    "matchCount": 0,
+                    "targetAbsenceProven": True,
+                    "statusCode": 404,
+                    "discoveryErrors": [
+                        {
+                            "environmentId": selected_environment_id,
+                            "error": "AgentBuilderHTTPError",
+                            "statusCode": 404,
+                            "requestPath": (
+                                "/copilotstudio/minimalBots/api/"
+                                f"{target_agent_id}"
+                            ),
+                        }
+                    ],
+                    "recoveryHandoff": _target_realm_discovery_recovery(
+                        context,
+                        realm=realm,
+                        problem=problem,
+                        category="Target agent not found",
+                        action=(
+                            "Complete the approved external promotion into "
+                            "the selected environment, then rerun the same "
+                            "read-only target check."
+                        ),
+                        environment_id=selected_environment_id,
+                        agent_id=target_agent_id,
+                    ),
+                },
+            ) from exc
+        problem = (
+            f"Could not read the exact {realm.title()} target agent in the "
+            "selected environment."
+        )
+        raise ServiceNowConnectError(
+            problem,
+            details={
+                "realm": realm,
+                "targetAgentId": target_agent_id,
+                "environmentId": selected_environment_id,
+                "statusCode": exc.status_code,
+                "errorCode": exc.error_code,
+                "requestId": exc.request_id,
+                "correlationId": exc.correlation_id,
+                "retryAfter": exc.retry_after,
+                "mutationMayHaveOccurred": False,
+                "recoveryHandoff": _target_realm_discovery_recovery(
+                    context,
+                    realm=realm,
+                    problem=problem,
+                    category=(
+                        "Read throttled"
+                        if exc.status_code == 429
+                        else "Read permission"
+                        if exc.status_code in {401, 403}
+                        else "Read or network error"
+                    ),
+                    action=(
+                        "Restore the selected-environment target read path and "
+                        "retry without changing the ALM binding."
+                    ),
+                    environment_id=selected_environment_id,
+                    agent_id=target_agent_id,
+                    retry_after=exc.retry_after,
+                ),
+            },
+        ) from exc
+    except (AgentBuilderError, OSError, ValueError) as exc:
+        problem = (
+            f"Could not read the exact {realm.title()} target agent in the "
+            "selected environment."
+        )
+        raise ServiceNowConnectError(
+            problem,
+            details={
+                "realm": realm,
+                "targetAgentId": target_agent_id,
+                "environmentId": selected_environment_id,
                 "error": type(exc).__name__,
+                "mutationMayHaveOccurred": False,
                 "recoveryHandoff": _target_realm_discovery_recovery(
                     context,
                     realm=realm,
                     problem=problem,
                     category="Read or network error",
                     action=(
-                        "Restore the current environment-inventory read path "
-                        "without changing target configuration."
+                        "Restore the selected-environment target read path and "
+                        "retry without changing the ALM binding."
                     ),
+                    environment_id=selected_environment_id,
+                    agent_id=target_agent_id,
                 ),
             },
         ) from exc
-    matches: list[dict[str, Any]] = []
-    discovery_errors: list[dict[str, Any]] = []
-    seen_inventory_environment_ids: set[str] = set()
-    for environment in environments:
-        raw_environment_id = environment.get("id") or environment.get("name")
-        if not isinstance(raw_environment_id, str):
-            continue
-        environment_id: str | None = None
-        client: Any = None
-        try:
-            environment_id = _normalize_inventory_environment_id(
-                raw_environment_id
-            )
-            seen_inventory_environment_ids.add(environment_id)
-            if (
-                authoritative_environment_id is not None
-                and environment_id.casefold()
-                != authoritative_environment_id.casefold()
-            ):
-                continue
-            inventory_tenant_id = _inventory_tenant_id(environment)
-            authenticated_tenant_id = str(
-                uuid.UUID(context["environment"]["tenant_id"])
-            )
-            if (
-                inventory_tenant_id is not None
-                and inventory_tenant_id.casefold()
-                != authenticated_tenant_id.casefold()
-            ):
-                discovery_errors.append(
-                    {
-                        "environmentId": environment_id,
-                        "inventoryEnvironmentId": raw_environment_id,
-                        "error": "TargetTenantMismatch",
-                        "expectedTenantId": authenticated_tenant_id,
-                        "observedTenantId": inventory_tenant_id,
-                        "targetAgentId": target_agent_id,
-                    }
-                )
-                continue
-            client = (
-                dev_client
-                if environment_id.casefold()
-                == str(context["environment"]["id"]).casefold()
-                else _without_automatic_retries(
-                    _agentbuilder_client_for_environment(
-                        context,
-                        environment_id=environment_id,
-                        token=token,
-                        require_resolved_host=True,
-                    )
-                )
-            )
-            agent = client.get_agent(target_agent_id)
-            returned_id = _normalize_agent_id(str(agent.get("botId") or ""))
-            observed_schema = str(
-                agent.get("schemaName")
-                or agent.get("schema_name")
-                or ""
-            ).strip()
-            dataverse_evidence = _inventory_dataverse_url_evidence(
-                environment
-            )
-            dataverse_url = (
-                dataverse_evidence["url"]
-                if dataverse_evidence is not None
-                else None
-            )
-            if returned_id != target_agent_id:
-                discovery_errors.append(
-                    {
-                        "environmentId": environment_id,
-                        "inventoryEnvironmentId": raw_environment_id,
-                        "error": "TargetAgentIdMismatch",
-                        "expectedAgentId": target_agent_id,
-                        "observedAgentId": returned_id,
-                    }
-                )
-                continue
-            if not _realm_matches(agent.get("realm"), realm_value):
-                discovery_errors.append(
-                    {
-                        "environmentId": environment_id,
-                        "inventoryEnvironmentId": raw_environment_id,
-                        "error": "TargetRealmMismatch",
-                        "expectedRealm": realm,
-                        "observedRealm": agent.get("realm"),
-                        "targetAgentId": target_agent_id,
-                    }
-                )
-                continue
-            if (
-                observed_schema
-                and observed_schema.casefold()
-                not in accepted_schema_names
-            ):
-                discovery_errors.append(
-                    {
-                        "environmentId": environment_id,
-                        "inventoryEnvironmentId": raw_environment_id,
-                        "error": "TargetSchemaMismatch",
-                        "expectedSchemaName": expected_schema,
-                        "expectedSchemaNames": sorted(
-                            accepted_schema_names
-                        ),
-                        "configuredSchemaName": schema_name or None,
-                        "observedSchemaName": observed_schema,
-                        "targetAgentId": target_agent_id,
-                    }
-                )
-                continue
-            if not schema_name and not observed_schema:
-                discovery_errors.append(
-                    {
-                        "environmentId": environment_id,
-                        "inventoryEnvironmentId": raw_environment_id,
-                        "error": "TargetSchemaUnknown",
-                        "expectedSchemaName": expected_schema,
-                        "configuredSchemaName": None,
-                        "observedSchemaName": None,
-                        "targetAgentId": target_agent_id,
-                    }
-                )
-                continue
-            if not dataverse_url:
-                discovery_errors.append(
-                    {
-                        "environmentId": environment_id,
-                        "inventoryEnvironmentId": raw_environment_id,
-                        "error": "TargetDataverseUrlMissing",
-                        "targetAgentId": target_agent_id,
-                        "environmentMetadataFields": (
-                            _environment_metadata_field_paths(environment)
-                        ),
-                    }
-                )
-                continue
-            matches.append(
-                {
-                    "environmentId": environment_id,
-                    "inventoryEnvironmentId": raw_environment_id,
-                    "environmentName": environment.get("displayName"),
-                    "agentId": target_agent_id,
-                    "schemaName": schema_name or observed_schema,
-                    "observedSchemaName": observed_schema or None,
-                    "almFamilyId": family_id,
-                    "commitSha": commit_sha,
-                    "tenantId": (
-                        inventory_tenant_id or authenticated_tenant_id
-                    ),
-                    "tenantEvidenceSource": (
-                        "environment-inventory"
-                        if inventory_tenant_id
-                        else "authenticated-environment-inventory"
-                    ),
-                    "dataverseUrl": dataverse_url,
-                    "dataverseUrlSource": dataverse_evidence["sourcePath"],
-                    "sameEnvironmentAsDev": (
-                        environment_id.casefold()
-                        == str(context["environment"]["id"]).casefold()
-                    ),
-                    "client": client,
-                }
-            )
-        except AgentBuilderHTTPError as exc:
-            if exc.status_code in {401, 403, 429}:
-                problem = (
-                    "Target-realm agent discovery cannot continue after an "
-                    f"authorization or throttling response in environment "
-                    f"{environment_id}."
-                )
-                raise ServiceNowConnectError(
-                    problem,
-                    details={
-                        "realm": realm,
-                        "environmentId": environment_id,
-                        "statusCode": exc.status_code,
-                        "errorCode": exc.error_code,
-                        "requestId": exc.request_id,
-                        "correlationId": exc.correlation_id,
-                        "retryAfter": exc.retry_after,
-                        "mutationMayHaveOccurred": False,
-                        "recoveryHandoff": _target_realm_discovery_recovery(
-                            context,
-                            realm=realm,
-                            problem=problem,
-                            category=(
-                                "Read throttled"
-                                if exc.status_code == 429
-                                else "Read permission"
-                            ),
-                            action=(
-                                "Restore read access to this candidate target "
-                                "environment; do not skip it or select another "
-                                "environment as a fallback."
-                            ),
-                            environment_id=environment_id,
-                            agent_id=target_agent_id,
-                            retry_after=exc.retry_after,
-                        ),
-                    },
-                ) from exc
-            discovery_errors.append(
-                {
-                    "environmentId": environment_id,
-                    "inventoryEnvironmentId": raw_environment_id,
-                    "error": type(exc).__name__,
-                    "statusCode": exc.status_code,
-                    "requestPath": (
-                        "/copilotstudio/minimalBots/api/"
-                        f"{target_agent_id}"
-                    ),
-                }
-            )
-        except (AgentBuilderError, OSError, ValueError) as exc:
-            transport = _transport_error_evidence(exc)
-            discovery_errors.append(
-                {
-                    "environmentId": environment_id,
-                    "inventoryEnvironmentId": raw_environment_id,
-                    "error": type(exc).__name__,
-                    "requestPath": (
-                        "/copilotstudio/minimalBots/api/"
-                        f"{target_agent_id}"
-                    ),
-                    "requestHost": getattr(client, "host", None),
-                    "environmentIdSource": (
-                        "default-prefix-tenant-guid"
-                        if raw_environment_id.casefold().startswith("default-")
-                        else "inventory-guid"
-                    ),
-                    **transport,
-                }
-            )
-    unknown_discovery_errors = [
-        row
-        for row in discovery_errors
-        if row.get("error")
-        not in {
-            "TargetAgentIdMismatch",
-            "TargetRealmMismatch",
-            "TargetSchemaMismatch",
-            "TargetSchemaUnknown",
-            "TargetDataverseUrlMissing",
-            "TargetTenantMismatch",
-            "AuthoritativeTargetEnvironmentNotFound",
-        }
-        and row.get("statusCode") != 404
-    ]
-    if (
-        authoritative_environment_id is not None
-        and authoritative_environment_id
-        not in seen_inventory_environment_ids
-    ):
-        discovery_errors.append(
-            {
-                "environmentId": authoritative_environment_id,
-                "error": "AuthoritativeTargetEnvironmentNotFound",
-                "targetAgentId": target_agent_id,
-            }
-        )
-    if len(matches) != 1 or unknown_discovery_errors:
+    returned_id = _normalize_agent_id(str(agent.get("botId") or ""))
+    observed_schema = str(
+        agent.get("schemaName") or agent.get("schema_name") or ""
+    ).strip()
+    if returned_id != target_agent_id:
         problem = (
-            f"Could not prove one exact {realm.title()} environment and agent "
-            "target from native ALM and environment inventory."
+            f"The selected environment returned a different {realm.title()} "
+            "target agent identity."
         )
-        recovery = _target_realm_discovery_recovery(
-            context,
-            realm=realm,
-            problem=problem,
-            category="Ambiguous or missing exact target",
-            action=(
-                "Have the ALM/Power Platform owner correct the native "
-                "target association or restore read access to every "
-                "candidate environment. Do not choose a partial match."
-            ),
-            agent_id=target_agent_id,
+        raise ServiceNowConnectError(
+            problem,
+            details={
+                "realm": realm,
+                "expectedAgentId": target_agent_id,
+                "observedAgentId": returned_id,
+                "recoveryHandoff": _target_realm_discovery_recovery(
+                    context,
+                    realm=realm,
+                    problem=problem,
+                    category="Target identity mismatch",
+                    action=(
+                        "Have the ALM owner correct the selected-environment "
+                        "target association."
+                    ),
+                    environment_id=selected_environment_id,
+                    agent_id=target_agent_id,
+                ),
+            },
         )
-        not_found_errors = [
-            row
-            for row in discovery_errors
-            if row.get("statusCode") == 404
-        ]
-        read_errors = unknown_discovery_errors
-        if read_errors:
-            pre_http_errors = [
-                row
-                for row in read_errors
-                if row.get("requestHost") is None
-                and row.get("error") in {"OSError", "ValueError"}
-            ]
-            if len(pre_http_errors) == len(read_errors):
-                recovery["category"] = (
-                    "AgentBuilder endpoint resolution unavailable"
-                )
-                recovery["owner"] = (
-                    "ESS kit / Power Platform API integration owner"
-                )
-                recovery["action"] = (
-                    "Verify the environment inventory identifier and "
-                    "supported AgentBuilder host-resolution contract before "
-                    "any HTTP request. If the derived contract is correct, "
-                    "restore DNS/network resolution for that endpoint, then "
-                    "rerun only target discovery. Do not grant permissions or "
-                    "change ALM binding without request evidence."
-                )
-            else:
-                recovery["category"] = (
-                    "Candidate environment read unavailable"
-                )
-                recovery["owner"] = (
-                    "ESS kit / Power Platform API integration owner with the "
-                    "Power Platform environment owner"
-                )
-                recovery["action"] = (
-                    "Restore the supported AgentBuilder read path for every "
-                    "unreadable candidate, then rerun only target discovery. "
-                    "Do not repair ALM binding, deploy a different agent, or "
-                    "grant permissions based only on an endpoint or network "
-                    "failure."
-                )
-            recovery["values"] = (
-                "Unreadable candidate lookups: "
-                + "; ".join(
-                    (
-                        f"inventory ID `{row.get('inventoryEnvironmentId')}`, "
-                        f"normalized ID `{row.get('environmentId') or 'unknown'}`, "
-                        f"host `{row.get('requestHost') or 'unresolved'}`, "
-                        f"path `{row.get('requestPath') or 'not reached'}`, "
-                        f"transport `{row.get('transportCategory') or 'unknown'}`, "
-                        f"errno `{row.get('errno') if row.get('errno') is not None else 'none'}`, "
-                        f"error `{row.get('error')}`"
-                    )
-                    for row in read_errors
-                )
-                + ". Target presence in these environments remains unknown."
-            )
-            recovery["message"] = _recovery_handoff(
-                problem=recovery["problem"],
-                category=recovery["category"],
-                owner=recovery["owner"],
-                where=recovery["where"],
-                values=recovery["values"],
-                action=recovery["action"],
-                success=recovery["success"],
-                recheck=recovery["recheck"],
-            )["message"]
-        elif discovery_errors and len(not_found_errors) == len(discovery_errors):
-            recovery["category"] = "Target agent not found"
-            recovery["owner"] = (
-                "Copilot Studio / Power Platform ALM deployment owner"
-            )
-            recovery["action"] = (
-                f"Verify that the {realm.title()} deployment exists in the "
-                "intended target environment and that native realm metadata "
-                "returns the deployed target agent identity. HTTP 404 means "
-                "the requested agent resource was not found at that candidate "
-                "endpoint; it does not by itself prove missing permission or "
-                "a broken binding. Do not grant access or choose another agent "
-                "without target evidence."
-            )
-            recovery["values"] = (
-                f"Native realm target agent ID: `{target_agent_id}`. "
-                "Candidate lookups: "
-                + "; ".join(
-                    (
-                        f"environment `{row.get('environmentId')}`, path "
-                        f"`{row.get('requestPath')}`, HTTP "
-                        f"{row.get('statusCode')}"
-                    )
-                    for row in not_found_errors
-                )
-                + ". Expected realm and schemas remain bound to the selected "
-                f"agent: `{realm}` and "
-                f"`{context['agent']['schema_name']}` or "
-                f"`{context['agent']['schema_name']}_{realm}`."
-            )
-            recovery["message"] = _recovery_handoff(
-                problem=recovery["problem"],
-                category=recovery["category"],
-                owner=recovery["owner"],
-                where=recovery["where"],
-                values=recovery["values"],
-                action=recovery["action"],
-                success=recovery["success"],
-                recheck=recovery["recheck"],
-            )["message"]
-        schema_evidence = [
-            row
-            for row in discovery_errors
-            if row.get("error")
-            in {"TargetSchemaMismatch", "TargetSchemaUnknown"}
-        ]
-        if schema_evidence and not read_errors:
-            rendered = "; ".join(
-                (
-                    f"environment `{row.get('environmentId')}`: expected "
-                    f"`{row.get('expectedSchemaName')}`, configured "
-                    f"`{row.get('configuredSchemaName') or 'unknown'}`, "
-                    f"observed "
-                    f"`{row.get('observedSchemaName') or 'unknown'}`"
-                )
-                for row in schema_evidence
-            )
-            recovery["values"] = (
-                f"Accepted selected-agent schemas for {realm.title()}: "
-                f"`{context['agent']['schema_name']}` or "
-                f"`{context['agent']['schema_name']}_{realm}`. Native ALM target agent "
-                f"ID: `{target_agent_id}`. Candidate schema evidence: "
-                f"{rendered}. Do not accept an unknown or mismatched schema."
-            )
-            recovery["message"] = _recovery_handoff(
-                problem=recovery["problem"],
-                category=recovery["category"],
-                owner=recovery["owner"],
-                where=recovery["where"],
-                values=recovery["values"],
-                action=recovery["action"],
-                success=recovery["success"],
-                recheck=recovery["recheck"],
-            )["message"]
+    if not _realm_matches(agent.get("realm"), realm_value):
+        problem = (
+            f"The selected environment returned the target agent in a "
+            f"different realm than {realm.title()}."
+        )
         raise ServiceNowConnectError(
             problem,
             details={
                 "realm": realm,
                 "targetAgentId": target_agent_id,
-                "matchCount": len(matches),
-                "discoveryErrors": discovery_errors,
-                "targetAbsenceProven": bool(discovery_errors)
-                and len(not_found_errors) == len(discovery_errors),
-                "recoveryHandoff": recovery,
+                "observedRealm": agent.get("realm"),
+                "recoveryHandoff": _target_realm_discovery_recovery(
+                    context,
+                    realm=realm,
+                    problem=problem,
+                    category="Target identity mismatch",
+                    action=(
+                        "Have the ALM owner correct the target realm metadata "
+                        "in the selected environment."
+                    ),
+                    environment_id=selected_environment_id,
+                    agent_id=target_agent_id,
+                ),
             },
         )
-    target = matches[0]
-    target["discoveryWarnings"] = copy.deepcopy(unknown_discovery_errors)
-    target["ignoredNotFoundCandidates"] = copy.deepcopy(
-        [
-            row
-            for row in discovery_errors
-            if row.get("statusCode") == 404
-        ]
-    )
-    target["realms"] = {
-        "routeRealm": realms.get("routeRealm"),
-        "siblingRealmCount": (
-            len(realms.get("siblingRealms"))
-            if isinstance(realms.get("siblingRealms"), list)
-            else None
-        ),
+    if (
+        observed_schema
+        and observed_schema.casefold() not in accepted_schema_names
+    ):
+        problem = (
+            f"The selected environment returned a different target schema "
+            f"for {realm.title()}."
+        )
+        raise ServiceNowConnectError(
+            problem,
+            details={
+                "realm": realm,
+                "expectedSchemaName": expected_schema,
+                "expectedSchemaNames": sorted(accepted_schema_names),
+                "configuredSchemaName": schema_name or None,
+                "observedSchemaName": observed_schema,
+                "targetAgentId": target_agent_id,
+                "recoveryHandoff": _target_realm_discovery_recovery(
+                    context,
+                    realm=realm,
+                    problem=problem,
+                    category="Target identity mismatch",
+                    action=(
+                        "Have the ALM owner correct the target schema in the "
+                        "selected environment."
+                    ),
+                    environment_id=selected_environment_id,
+                    agent_id=target_agent_id,
+                ),
+            },
+        )
+    if not schema_name and not observed_schema:
+        problem = (
+            f"The selected environment did not return the {realm.title()} "
+            "target schema."
+        )
+        raise ServiceNowConnectError(
+            problem,
+            details={
+                "realm": realm,
+                "expectedSchemaName": expected_schema,
+                "configuredSchemaName": None,
+                "observedSchemaName": None,
+                "targetAgentId": target_agent_id,
+                "recoveryHandoff": _target_realm_discovery_recovery(
+                    context,
+                    realm=realm,
+                    problem=problem,
+                    category="Target identity mismatch",
+                    action=(
+                        "Have the ALM owner restore target schema metadata in "
+                        "the selected environment."
+                    ),
+                    environment_id=selected_environment_id,
+                    agent_id=target_agent_id,
+                ),
+            },
+        )
+    return {
+        "deploymentContract": _REALM_DEPLOYMENT_CONTRACT,
+        "environmentId": selected_environment_id,
+        "inventoryEnvironmentId": selected_environment_id,
+        "environmentName": None,
+        "agentId": target_agent_id,
+        "schemaName": schema_name or observed_schema,
+        "observedSchemaName": observed_schema or None,
+        "almFamilyId": family_id,
+        "commitSha": commit_sha,
+        "tenantId": selected_tenant_id,
+        "tenantEvidenceSource": "selected-environment-context",
+        "sameEnvironmentAsDev": True,
+        "client": dev_client,
+        "realms": {
+            "routeRealm": realms.get("routeRealm"),
+            "siblingRealmCount": (
+                len(realms.get("siblingRealms"))
+                if isinstance(realms.get("siblingRealms"), list)
+                else None
+            ),
+        },
     }
-    return target
 
 
 def _target_absence_proven(
@@ -16433,6 +16240,8 @@ def _record_verified_realm_deployment(
     recorded_at = _utc_now()
     record = {
         "kind": "backend-proof",
+        "proofVersion": _REALM_DEPLOYMENT_PROOF_VERSION,
+        "deploymentContract": _REALM_DEPLOYMENT_CONTRACT,
         "status": "deployment-completed",
         "source": "exact-target-discovery",
         "realm": realm,
@@ -17488,16 +17297,20 @@ def _target_foundation_check(
 
 
 def _realm_target_identity(target: dict[str, Any], realm: str) -> dict[str, str]:
-    return {
+    identity = {
+        "deploymentContract": _REALM_DEPLOYMENT_CONTRACT,
         "realm": realm,
         "tenantId": str(target["tenantId"]),
         "environmentId": str(target["environmentId"]),
-        "dataverseUrl": str(target["dataverseUrl"]),
         "agentId": str(target["agentId"]),
         "schemaName": str(target["schemaName"]),
         "almFamilyId": str(target["almFamilyId"]),
         "commitSha": str(target["commitSha"]),
     }
+    dataverse_url = target.get("dataverseUrl")
+    if isinstance(dataverse_url, str) and dataverse_url:
+        identity["dataverseUrl"] = dataverse_url
+    return identity
 
 
 def _runtime_plan(
@@ -17549,6 +17362,12 @@ def _realm_runtime_plan_question(
     target = runtime_plan.get("target")
     target = target if isinstance(target, dict) else {}
     realm_label = realm.title()
+    dataverse_line = (
+        f"- Optional Dataverse URL evidence: "
+        f"`{target.get('dataverseUrl')}`\n"
+        if target.get("dataverseUrl")
+        else ""
+    )
     return _native_question(
         header=f"Approve {realm_label} ServiceNow runtime plan",
         question=(
@@ -17556,7 +17375,7 @@ def _realm_runtime_plan_question(
             f"{realm_label} ServiceNow target?\n\n"
             f"- Target agent ID: `{target.get('agentId')}`\n"
             f"- Environment ID: `{target.get('environmentId')}`\n"
-            f"- Dataverse URL: `{target.get('dataverseUrl')}`\n"
+            f"{dataverse_line}"
             f"- Tenant ID: `{target.get('tenantId')}`\n"
             f"- Schema: `{target.get('schemaName')}`\n"
             f"- ALM family: `{target.get('almFamilyId')}`\n"
@@ -17631,6 +17450,7 @@ def _realm_validation_record(
     if not _cached_realm_target_identity_current(
         target_identity,
         realm=realm,
+        state=state,
     ):
         raise ServiceNowConnectError(
             f"The cached {realm.title()} target identity is stale because "
@@ -18228,8 +18048,6 @@ def validate_realm(
         "targetIdentity": target_identity,
         "targetAgentId": target["agentId"],
         "targetEnvironmentId": target["environmentId"],
-        "targetDataverseUrl": target["dataverseUrl"],
-        "targetDataverseUrlSource": target["dataverseUrlSource"],
         "targetTenantId": target["tenantId"],
         "almFamilyId": target["almFamilyId"],
         "targetCommitSha": target["commitSha"],
@@ -18254,6 +18072,12 @@ def validate_realm(
         "runtimePlan": runtime_plan,
         "legacyCheckAliases": legacy_check_aliases,
     }
+    if isinstance(target.get("dataverseUrl"), str):
+        validation["targetDataverseUrl"] = target["dataverseUrl"]
+    if isinstance(target.get("dataverseUrlSource"), str):
+        validation["targetDataverseUrlSource"] = target[
+            "dataverseUrlSource"
+        ]
     if plan_current:
         validation["runtimeApproval"] = copy.deepcopy(prior_approval)
     if binding_current:
@@ -18782,10 +18606,11 @@ def record_realm_binding(
         ],
         "targetAgentId": validation["targetAgentId"],
         "targetEnvironmentId": validation["targetEnvironmentId"],
-        "targetDataverseUrl": validation["targetDataverseUrl"],
         "targetTenantId": validation["targetTenantId"],
         "recordedAt": _utc_now(),
     }
+    if isinstance(validation.get("targetDataverseUrl"), str):
+        binding["targetDataverseUrl"] = validation["targetDataverseUrl"]
     validation["agentBinding"] = binding
     validation.pop("functionalTest", None)
     flow = _realm_flow_record(state, realm, create=True)
@@ -18846,11 +18671,15 @@ def _realm_test_failure_recovery(
     target_values = (
         f"Realm: {realm.title()}; target tenant: "
         f"`{validation['targetTenantId']}`; environment: "
-        f"`{validation['targetEnvironmentId']}`; Dataverse URL: "
-        f"`{validation['targetDataverseUrl']}`; agent: "
+        f"`{validation['targetEnvironmentId']}`; agent: "
         f"`{validation['targetAgentId']}`; target configuration hash: "
         f"`{validation['targetConfigurationSha256']}`."
     )
+    if isinstance(validation.get("targetDataverseUrl"), str):
+        target_values += (
+            f" Optional Dataverse URL evidence: "
+            f"`{validation['targetDataverseUrl']}`."
+        )
     definitions = {
         "authentication": {
             "checkpoint": "SN-REALM-OIDC-MANUAL",
@@ -19132,13 +18961,16 @@ def record_realm_test(
             "sourceDevEnvironmentId": context["environment"]["id"],
             "targetAgentId": target_agent_id,
             "targetEnvironmentId": target_environment_id,
-            "targetDataverseUrl": validation["targetDataverseUrl"],
             "targetTenantId": validation["targetTenantId"],
             "targetConfigurationSha256": target_configuration_sha,
             "planSha256": runtime_plan["planSha256"],
             "connectionId": agent_binding["connectionId"],
         },
     }
+    if isinstance(validation.get("targetDataverseUrl"), str):
+        record["binding"]["targetDataverseUrl"] = validation[
+            "targetDataverseUrl"
+        ]
     validation["functionalTest"] = record
     prefix = (
         "SN-DA-HRSD"

@@ -167,6 +167,8 @@ def _rewrite_cached_test_dataverse_url(
     flow["targetConfigurationSha256"] = target_sha
     state["evidence"]["realmDeployments"]["test"] = {
         "kind": "backend-proof",
+        "proofVersion": snow._REALM_DEPLOYMENT_PROOF_VERSION,
+        "deploymentContract": snow._REALM_DEPLOYMENT_CONTRACT,
         "status": "deployment-completed",
         "source": "exact-target-discovery",
         "realm": "test",
@@ -901,11 +903,10 @@ def _seed_realm_promotion(
         "sourceEnvironmentId": context["environment"]["id"],
     }
     if complete_test_first:
-        target_environment_id = (
-            "00000000-0000-4000-8000-000000008888"
-        )
+        target_environment_id = context["environment"]["id"]
         target_agent_id = "00000000-0000-4000-8000-000000007777"
         target_identity = {
+            "deploymentContract": snow._REALM_DEPLOYMENT_CONTRACT,
             "realm": "test",
             "tenantId": TENANT_ID,
             "environmentId": target_environment_id,
@@ -2814,7 +2815,13 @@ def test_complete_dev_record_unlocks_realm_chooser_without_state_write(
         {"label": "Dev, resume the current authoring agent"},
         {"label": "Test, validate the promoted Test target"},
     ]
-    assert handoff["question"]["header"] == "Choose validation environment"
+    assert handoff["question"]["header"] == "Choose validation realm"
+    assert "selected Power Platform environment stays fixed" in (
+        handoff["question"]["question"]
+    )
+    assert "realm mapping selects the Dev, Test, or Production agent ID" in (
+        handoff["question"]["question"]
+    )
     assert handoff["question"]["header"] != handoff["question"]["question"]
     assert all(
         option["label"].casefold() not in {"yes", "no"}
@@ -3611,12 +3618,8 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     monkeypatch.chdir(tmp_path)
     context, _state = _seed_complete_dev_state(tmp_path, profile="itsm")
     target_agent_id = "00000000-0000-4000-8000-000000007777"
-    target_environment_id = "00000000-0000-4000-8000-000000008888"
-    inventory_environment_id = (
-        f"Default-{target_environment_id}"
-        if realm == "test"
-        else target_environment_id
-    )
+    target_environment_id = context["environment"]["id"]
+    inventory_environment_id = target_environment_id
     target_instance = "dev123"
     target_client_id = "00000000-0000-4000-8000-000000006666"
     with snow.product_profile_context("itsm"):
@@ -3685,8 +3688,8 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
             self.mutation_count += 1
             pytest.fail("Realm validation must not update components.")
 
-    dev_client = FakeClient(target=False)
-    target_client = FakeClient(target=True)
+    dev_client = FakeClient(target=True)
+    target_client = dev_client
 
     class FakeConnectivity:
         def list_connections(self) -> list[dict]:
@@ -3718,20 +3721,16 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     monkeypatch.setattr(
         snow,
         "list_environments",
-        lambda *_args, **_kwargs: [
-            {
-                **_target_environment(
-                    target_environment_id,
-                    display_name="Target",
-                ),
-                "id": inventory_environment_id,
-            }
-        ],
+        lambda *_args, **_kwargs: pytest.fail(
+            "Same-environment target proof must not scan inventory."
+        ),
     )
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client_for_environment",
-        lambda *_args, **_kwargs: target_client,
+        lambda *_args, **_kwargs: pytest.fail(
+            "Same-environment target proof must reuse the selected client."
+        ),
     )
     monkeypatch.setattr(
         snow,
@@ -3869,7 +3868,7 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     )
     assert len(realm_record["targetConfigurationSha256"]) == 64
     assert realm_record["targetTenantId"] == TENANT_ID
-    assert realm_record["targetDataverseUrl"].startswith("https://")
+    assert "targetDataverseUrl" not in realm_record
     assert realm_record["targetCredentialExpectation"] == {
         "source": "explicit-target-realm-confirmation",
         "instanceName": target_instance,
@@ -4612,14 +4611,13 @@ def test_target_discovery_rejects_exact_match_with_unreadable_bystander(
     assert "grant permissions" in recovery["action"]
 
 
-def test_authoritative_environment_binding_excludes_unrelated_candidates(
+def test_different_authoritative_environment_binding_conflicts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     context, _state = _seed_complete_dev_state(tmp_path, profile="itsm")
     target_agent_id = "00000000-0000-4000-8000-000000007777"
-    unrelated_id = "00000000-0000-4000-8000-000000006666"
     target_environment_id = "00000000-0000-4000-8000-000000008888"
 
     class DevClient:
@@ -4640,17 +4638,6 @@ def test_authoritative_environment_binding_excludes_unrelated_candidates(
                 "commitSha": "test-commit",
             }
 
-    class TargetClient:
-        host = "https://target.environment.example"
-
-        def get_agent(self, _agent_id: str) -> dict:
-            return {
-                "botId": target_agent_id,
-                "realm": "test",
-                "schemaName": f"{snow.IT_SCHEMA_NAME}_test",
-            }
-
-    reads: list[str] = []
     monkeypatch.setattr(snow, "_agentbuilder_token", lambda _context: "token")
     monkeypatch.setattr(
         snow,
@@ -4660,37 +4647,62 @@ def test_authoritative_environment_binding_excludes_unrelated_candidates(
     monkeypatch.setattr(
         snow,
         "list_environments",
-        lambda *_args, **_kwargs: [
-            {"id": unrelated_id, "displayName": "Unreadable"},
-            _target_environment(target_environment_id),
-        ],
-    )
-
-    def candidate_client(
-        _context: dict,
-        *,
-        environment_id: str,
-        **_kwargs: object,
-    ) -> object:
-        reads.append(environment_id)
-        if environment_id == unrelated_id:
-            pytest.fail(
-                "Authoritative binding must exclude unrelated candidates."
-            )
-        return TargetClient()
-
-    monkeypatch.setattr(
-        snow,
-        "_agentbuilder_client_for_environment",
-        candidate_client,
+        lambda *_args, **_kwargs: pytest.fail(
+            "Different ALM environment must block before inventory."
+        ),
     )
 
     with snow.product_profile_context("itsm"):
-        target = snow._resolve_target_realm(context, realm="test")
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="supports the selected environment only",
+        ) as raised:
+            snow._resolve_target_realm(context, realm="test")
 
-    assert reads == [target_environment_id]
-    assert target["environmentId"] == target_environment_id
-    assert target["agentId"] == target_agent_id
+    assert raised.value.details["configuredTargetEnvironmentId"] == (
+        target_environment_id
+    )
+    assert raised.value.details["selectedEnvironmentId"] == (
+        context["environment"]["id"]
+    )
+
+
+def test_same_environment_realm_target_must_be_distinct_from_dev(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+
+    class Client:
+        def get_realms(self, _agent_id: str) -> dict:
+            return {"routeRealm": 0, "siblingRealms": []}
+
+        def get_realm_configuration(
+            self,
+            _agent_id: str,
+            _realm: int,
+        ) -> dict:
+            return {
+                "realm": "Test",
+                "cdsBotId": context["agent"]["id"],
+                "schemaName": snow.HR_SCHEMA_NAME,
+                "grsRepositoryId": "family-1",
+                "commitSha": "test-commit",
+            }
+
+        def get_agent(self, _agent_id: str) -> dict:
+            pytest.fail("Dev-equals-target conflict must block before read.")
+
+    monkeypatch.setattr(snow, "_agentbuilder_token", lambda _context: "token")
+    monkeypatch.setattr(snow, "_agentbuilder_client", lambda _context: Client())
+
+    with snow.product_profile_context("hrsd"):
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="returned the Dev agent as the Test target",
+        ):
+            snow._resolve_target_realm(context, realm="test")
 
 
 def test_conflicting_authoritative_environment_bindings_fail_closed(
@@ -5257,10 +5269,146 @@ def test_target_discovery_supports_same_environment_sibling(
     assert target["sameEnvironmentAsDev"] is True
     assert target["tenantId"] == TENANT_ID
     assert target["tenantEvidenceSource"] == (
-        "authenticated-environment-inventory"
+        "selected-environment-context"
     )
-    assert target["dataverseUrl"] == "https://source.crm.dynamics.com"
-    assert target["dataverseUrlSource"] == "url"
+    assert "dataverseUrl" not in target
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    (
+        (
+            snow.AgentBuilderHTTPError("Direct agent", 404),
+            {
+                "statusCode": 404,
+                "targetAbsenceProven": True,
+            },
+        ),
+        (
+            snow.AgentBuilderHTTPError("Direct agent", 403),
+            {
+                "statusCode": 403,
+                "targetAbsenceProven": None,
+            },
+        ),
+        (
+            snow.AgentBuilderHTTPError(
+                "Direct agent",
+                429,
+                retry_after="30",
+            ),
+            {
+                "statusCode": 429,
+                "targetAbsenceProven": None,
+                "retryAfter": "30",
+            },
+        ),
+        (
+            OSError("selected environment read failed"),
+            {
+                "error": "OSError",
+                "targetAbsenceProven": None,
+            },
+        ),
+    ),
+)
+def test_same_environment_target_read_errors_are_typed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    error: Exception,
+    expected: dict,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    target_agent_id = "00000000-0000-4000-8000-000000007777"
+
+    class Client:
+        def get_realms(self, _agent_id: str) -> dict:
+            return {"routeRealm": 0, "siblingRealms": []}
+
+        def get_realm_configuration(
+            self,
+            _agent_id: str,
+            _realm: int,
+        ) -> dict:
+            return {
+                "realm": "Test",
+                "cdsBotId": target_agent_id,
+                "schemaName": snow.HR_SCHEMA_NAME,
+                "grsRepositoryId": "family-1",
+                "commitSha": "test-commit",
+            }
+
+        def get_agent(self, _agent_id: str) -> dict:
+            raise error
+
+    monkeypatch.setattr(snow, "_agentbuilder_token", lambda _context: "token")
+    monkeypatch.setattr(snow, "_agentbuilder_client", lambda _context: Client())
+    monkeypatch.setattr(
+        snow,
+        "list_environments",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Same-environment target read must not scan inventory."
+        ),
+    )
+
+    with snow.product_profile_context("hrsd"):
+        with pytest.raises(snow.ServiceNowConnectError) as raised:
+            snow._resolve_target_realm(context, realm="test")
+
+    for key, value in expected.items():
+        assert raised.value.details.get(key) == value
+    if expected.get("statusCode") == 429:
+        assert "Retry-After interval (30)" in (
+            raised.value.details["recoveryHandoff"]["action"]
+        )
+
+
+def test_cached_cross_environment_proof_is_historical_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="itsm")
+    with snow.product_profile_context("itsm"):
+        _seed_realm_promotion(
+            context,
+            realm="test",
+            complete_test_first=True,
+        )
+        path = snow._lifecycle_state_path(context)
+        state = json.loads(path.read_text(encoding="utf-8"))
+        validation = state["evidence"]["realmValidations"]["test"]
+        validation["targetIdentity"]["environmentId"] = (
+            "00000000-0000-4000-8000-000000008888"
+        )
+        _rewrite_cached_test_dataverse_url(
+            state,
+            validation["targetIdentity"]["dataverseUrl"],
+        )
+        validation = state["evidence"]["realmValidations"]["test"]
+        other_environment = validation["targetIdentity"]["environmentId"]
+        validation["targetEnvironmentId"] = other_environment
+        validation["agentBinding"]["targetEnvironmentId"] = other_environment
+        validation["functionalTest"]["binding"][
+            "targetEnvironmentId"
+        ] = other_environment
+        path.write_text(json.dumps(state), encoding="utf-8")
+        before = path.read_bytes()
+        loaded = snow._load_lifecycle_state(context)
+
+        assert snow._realm_is_complete(loaded, "test") is False
+        assert snow._verified_realm_deployment_record(
+            loaded,
+            "test",
+        ) is None
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="cached Test target identity is stale",
+        ):
+            snow._realm_validation_record(loaded, "test")
+
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize(
