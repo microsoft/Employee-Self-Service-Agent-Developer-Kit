@@ -28,15 +28,16 @@ Test/Production realm Not pass, the realm controller also requires one bounded
 category without response content: authentication, permission, connection,
 binding, identity-mapping, promoted-content, or unexpected.
 
-Use this exact compact visible handoff payload after rendering
-`{COPILOT_STUDIO_AGENT_URL}`:
+Render the target link, saved-draft instruction, exact prompt, and privacy
+boundary above in the ordinary current-task reply. Then use this compact
+result question:
 
 <!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "Test ServiceNow HRSD",
-    "question": "Purpose: verify whether ServiceNow functionality works correctly for the exact saved draft and selected ServiceNow connection in the Copilot Studio authoring Test pane.\n\nOwner: ESS Maker / Agent Developer, signed in as the employee used for this test.\n\nOpen Employee Self-Service (HR): {COPILOT_STUDIO_AGENT_URL}\n\n1. Save the current authored draft; unsaved editor changes are not covered.\n2. Open the Test pane from this exact agent landing.\n3. Run exactly: **List my open HR cases**.\n4. Decide whether the ServiceNow functionality worked correctly.\n5. Do not include or return a person's name, email, employee ID, case number, case title, ticket/case content, or other personal data.\n\nWhat was the result?",
+    "question": "Selected agent: Employee Self-Service (HR) (`{SELECTED_AGENT_SLUG}` / `{SELECTED_AGENT_ID}`)\nRequired prompt: **List my open HR cases**\n\nDid the ServiceNow HRSD capability work correctly for the exact saved draft and selected ServiceNow connection?\n\nReturn only Pass or Not pass. Do not include response content, personal data, case identifiers, tokens, or secrets.",
     "options": [
       { "label": "Pass, the ServiceNow HRSD capability worked correctly" },
       { "label": "Not pass, it failed or could not be verified" }

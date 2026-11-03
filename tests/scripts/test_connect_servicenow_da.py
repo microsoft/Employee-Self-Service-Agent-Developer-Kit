@@ -15821,6 +15821,27 @@ def test_topic_action_handoff_returns_complete_it_question(
     assert "ServiceNowITSMSystemReadExecution" in question
     assert "ServiceNowITSMSystemWriteExecution" in question
     assert "13 active and 2 inactive" in question
+    assert "Employee Self-Service (IT)" in question
+    assert "employee-self-service-it" in question
+    assert AGENT_ID in question
+    assert ENVIRONMENT_ID in question
+    assert result["componentHash"] in question
+    assert "Do you want to enable all listed inactive" in question
+    for instruction in (
+        "Purpose:",
+        "Owner:",
+        "Open Employee",
+        "Copilot Studio",
+        "http://",
+        "https://",
+        "→ Topics",
+        "**Phases**",
+        "✅",
+        "🔄",
+        "⬜",
+        "❌",
+    ):
+        assert instruction not in question
     assert not (tmp_path / ".local/connect").exists()
 
 
@@ -15880,7 +15901,73 @@ def test_topic_action_handoff_has_hr_parity(
 
     assert result["decision"] == "question-required"
     assert result["profile"] == "hrsd"
-    assert "Inactive ServiceNow HRSD topics" in result["question"]["question"]
+    question = result["question"]["question"]
+    assert "Inactive ServiceNow HRSD topics" in question
+    assert "Employee Self-Service (HR)" in question
+    assert result["componentHash"] in question
+    assert result["question"]["options"] == [
+        {"label": "Enable all listed inactive ServiceNow topics"},
+        {
+            "label": (
+                "Keep the current topic states for this configuration"
+            )
+        },
+        {"label": "Not now, leave the phase incomplete"},
+    ]
+    assert "Purpose:" not in question
+    assert "Owner:" not in question
+    assert "Copilot Studio" not in question
+    assert "https://" not in question
+
+
+@pytest.mark.parametrize(
+    ("profile", "phase_role"),
+    (
+        ("hrsd", "ESS Maker / Agent Developer"),
+        ("itsm", "ESS Maker / Agent Developer"),
+    ),
+)
+def test_topic_operational_guidance_is_in_ordinary_reply(
+    profile: str,
+    phase_role: str,
+) -> None:
+    product = snow.PRODUCT_PROFILES[profile]
+    context = _profile_context(
+        profile,
+        agent_id=AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile == "hrsd"
+            else "employee-self-service-it"
+        ),
+    )
+    state = {
+        "adminSetup": {
+            "preflight": {"instanceName": "dev123"},
+            "phaseHandoffs": {},
+        },
+        "evidence": {},
+    }
+
+    with snow.product_profile_context(profile):
+        ordinary = snow._current_task_guidance(
+            context,
+            state,
+            phase_id="topics",
+            role=phase_role,
+        )
+        expected_url = snow.maker_portal_links(context)[
+            "copilotStudioAgent"
+        ]["url"]
+
+    assert f"Open {expected_url} → Topics" in ordinary
+    assert f"{product.provider_key}/actions/prepare-topics.md" in ordinary
+    assert "Enable only the listed inactive topics" in ordinary
+    assert "explicitly keep the current states" in ordinary
+    assert "unrelated topics remain unchanged" in ordinary
+    assert "**Current task**" in ordinary
+    assert "**Expected nonsecret evidence**" in ordinary
+    assert "**Completion boundary**" in ordinary
 
 
 def test_topic_action_handoff_reuses_only_current_keep_current(

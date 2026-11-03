@@ -219,12 +219,11 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
         (
             _ACTIONS / "verify-plugin-prerequisites.md",
             (
-                "Purpose:",
-                "Owner:",
-                "{HR_CORE_PLUGIN_URL}",
+                "Required evidence for the selected ServiceNow instance:",
                 "Plugin id: `com.sn_hr_core`",
                 "Version Details: `Installed`",
                 "installed and ready for you to use",
+                "Has the ServiceNow administrator confirmed",
             ),
         ),
         (
@@ -251,33 +250,30 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
         (
             _ACTIONS / "prepare-topics.md",
             (
-                "Purpose:",
-                "Owner:",
+                "Selected agent:",
+                "Environment:",
+                "Component hash:",
                 "Current topic inventory:",
                 "Inactive HRSD topics:",
-                "Enable all inactive",
+                "Do you want to enable all listed inactive",
             ),
         ),
         (
             _ACTIONS / "connect-agent.md",
             (
-                "Purpose:",
-                "Owner:",
-                "{COPILOT_STUDIO_AGENT_URL}",
-                "1. Open Settings -> Connection settings",
-                "5. Save and confirm",
+                "Selected agent:",
+                "Selected credential:",
                 "Does the ServiceNow row currently show Connected",
+                "Manual agent-binding evidence",
             ),
         ),
         (
             _ACTIONS / "test-connection.md",
             (
-                "Purpose:",
-                "Owner:",
-                "1. Save the current authored draft",
-                "3. Run exactly: **List my open HR cases**",
-                "4. Decide whether the ServiceNow functionality worked correctly",
-                "What was the result?",
+                "Selected agent:",
+                "Required prompt: **List my open HR cases**",
+                "exact saved draft and selected ServiceNow connection",
+                "Return only Pass or Not pass",
             ),
         ),
         (
@@ -313,6 +309,46 @@ def test_visible_handoff_payloads_are_supported_and_complete(
             assert "Connection progress:" not in question["question"]
             assert "**Phases**" not in question["question"]
         assert "above" not in question["question"].casefold()
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        _ACTIONS / "verify-plugin-prerequisites.md",
+        _ACTIONS / "prepare-credential.md",
+        _ACTIONS / "connect-agent.md",
+        _ACTIONS / "prepare-topics.md",
+        _ACTIONS / "configure-portal-url.md",
+        _ACTIONS / "test-connection.md",
+        _CONNECT
+        / "servicenow-da-itsm"
+        / "actions"
+        / "prepare-credential.md",
+        _CONNECT / "servicenow-da-itsm" / "actions" / "connect-agent.md",
+        _CONNECT
+        / "servicenow-da-itsm"
+        / "actions"
+        / "configure-portal-url.md",
+        _CONNECT / "servicenow-da-itsm" / "actions" / "test-connection.md",
+    ),
+)
+def test_modified_completion_cards_exclude_operational_instructions(
+    path: Path,
+) -> None:
+    for payload in _payloads(path):
+        question = _validate_payload(payload, required_phrases=())["question"]
+        for forbidden in (
+            "Purpose:",
+            "Owner:",
+            "What to do:",
+            "Open Employee Self-Service",
+            "Open HR Service Delivery Core",
+            "1. Open ",
+            "{COPILOT_STUDIO_AGENT_URL}",
+            "{POWER_AUTOMATE_CONNECTIONS_URL}",
+            "{POWER_APPS_URL}",
+        ):
+            assert forbidden not in question
 
 
 def test_publish_action_is_retired_without_visible_question() -> None:
@@ -403,20 +439,12 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
     completion = _validate_payload(
         payloads[0],
         required_phrases=(
-            "Purpose:",
-            "Owner:",
-            "Expected form values, top to bottom:",
-            "{POWER_AUTOMATE_CONNECTIONS_URL}",
-            "1. If an exact candidate is unhealthy",
-            "2. Only if no usable exact candidate exists",
-            "search box in the upper-right to search `ServiceNow`",
-            "Microsoft-published `ServiceNow` connector using its `+` action",
-            "choose Microsoft Entra ID User Login",
-            "enter the exact Resource URI and Instance Name",
-            "3. If sign-in reports `Invalid_redirect_uri`",
-            "current maker's own Microsoft account",
-            "do not impersonate that owner",
-            "Never ask for or display passwords",
+            "Required connection match:",
+            "Authentication Type: Microsoft Entra ID User Login",
+            "Resource URI: `{APP_CLIENT_ID}`",
+            "Instance Name: `{INSTANCE_NAME}`",
+            "Current exact candidates:",
+            "Display name `{CONNECTION_DISPLAY_NAME}` is optional guidance",
             "triggers one fresh supported connection inventory read",
         ),
     )
@@ -455,23 +483,33 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
         source_normalized
     )
     expected = completion["question"]
-    assert expected.index("Display name (optional):") < expected.index(
-        "Authentication Type:"
-    )
     assert expected.index("Authentication Type:") < expected.index(
         "Resource URI:"
     )
     assert expected.index("Resource URI:") < expected.index("Instance Name:")
-    assert "direct form/detail route is unverified" in expected
-    assert "never create, sign in, submit, or prefill" in expected
-    assert "conditional remediation rather than an observed current error" in (
-        expected
-    )
-    completion_condition = expected.split(
-        "Does the exact ServiceNow connection now show Connected",
+    assert "Purpose:" not in expected
+    assert "Owner:" not in expected
+    assert "What to do:" not in expected
+    assert "{POWER_AUTOMATE_CONNECTIONS_URL}" not in expected
+    assert "direct form/detail route is unverified" not in expected
+    field_table = source_normalized.split(
+        "Show the exact field table from the output:",
         1,
     )[1]
-    assert "Display name" not in completion_condition
+    display_index = field_table.index("Display name (optional)")
+    auth_index = field_table.index("Authentication Type")
+    resource_index = field_table.index("Resource URI")
+    instance_index = field_table.index("Instance Name")
+    assert display_index < auth_index < resource_index < instance_index
+    assert "direct connector-form or connection-detail URL" in (
+        source_normalized
+    )
+    assert "does not create, repair, sign in, submit, or prefill" in (
+        source_normalized
+    )
+    assert "conditional remediation, not an observed current error" in (
+        source_normalized
+    )
     assert source_normalized.index("choose `New connection`") < (
         source_normalized.index("search box in the upper-right")
     )
@@ -502,11 +540,11 @@ def test_servicenow_test_question_has_explicit_result_choices(
             _CONNECT / provider / "actions" / "test-connection.md"
         )[0],
         required_phrases=(
-            "verify whether ServiceNow functionality works correctly",
-            "{COPILOT_STUDIO_AGENT_URL}",
-            "Save the current authored draft",
+            "Selected agent:",
+            "Required prompt:",
             prompt,
-            "Do not include or return",
+            "exact saved draft and selected ServiceNow connection",
+            "Return only Pass or Not pass",
         ),
     )
 
@@ -517,6 +555,10 @@ def test_servicenow_test_question_has_explicit_result_choices(
     ]
     assert not any(option.get("recommended") for option in payload["options"])
     assert payload["allowFreeformInput"] is False
+    assert "Purpose:" not in payload["question"]
+    assert "Owner:" not in payload["question"]
+    assert "{COPILOT_STUDIO_AGENT_URL}" not in payload["question"]
+    assert "Open the Test pane" not in payload["question"]
 
 
 def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
@@ -525,22 +567,18 @@ def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
     portal_input = _validate_payload(
         payloads[0],
         required_phrases=(
-            "Purpose:",
-            "Owner:",
+            "Target topic:",
             "{SERVICENOW_INSTANCE_ORIGIN}",
             "complete HTTPS employee portal URL",
-            "Use the instance root only when the administrator explicitly",
-            "will not infer `/sp`, `/esc`",
             "Set ServiceNow Portal BaseURI",
-            "guarded native component update",
-            "Copilot Studio -> Topics -> ServiceNow HRSD Setup Configurations",
+            "will not infer `/sp`, `/esc`",
         ),
     )
     fallback = _validate_payload(
         payloads[1],
         required_phrases=(
-            "guarded component API did not change the topic",
-            "Topics -> ServiceNow HRSD Setup Configurations",
+            "guarded component API did not change the exact HR target topic",
+            "ServiceNow HRSD Setup Configurations",
             "Set ServiceNow Portal BaseURI",
             "{PORTAL_URL}",
             "fresh read-only verification",
@@ -552,6 +590,12 @@ def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
         "Not yet, the portal URL is not saved",
     ]
     assert fallback["allowFreeformInput"] is False
+    for payload in (portal_input, fallback):
+        question = payload["question"]
+        assert "Purpose:" not in question
+        assert "Owner:" not in question
+        assert "Open Copilot Studio" not in question
+        assert "1. Open" not in question
     source = (_ACTIONS / "configure-portal-url.md").read_text(
         encoding="utf-8"
     )
@@ -561,6 +605,9 @@ def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
         source_normalized
     )
     assert "different same-instance HTTPS portal path is not sufficient" in (
+        source_normalized
+    )
+    assert "show this manual fallback in the ordinary current-task reply" in (
         source_normalized
     )
 

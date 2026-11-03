@@ -48,16 +48,17 @@ record a current-target confirmation, and make no update call. A different
 value follows the existing guarded update/readback/rollback transaction.
 
 If no accepted saved value applies, ask for the administrator-confirmed full
-employee portal URL. The question body must show the known instance origin,
-current value classification, and the manual fallback. Do not show a sample
-URL as the answer and do not ask for credentials.
+employee portal URL. Show the guarded update and manual fallback guidance in
+the ordinary current-task reply. The question body carries only the exact
+target, known instance origin, current value classification, and requested
+URL. Do not show a sample URL as the answer and do not ask for credentials.
 
 <!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "ServiceNow employee portal",
-    "question": "Purpose: configure the HR agent's employee portal link in the exact `ServiceNow HRSD Setup Configurations` topic.\n\nOwner: ServiceNow / ESS administrator who knows the real employee portal entry point.\n\nKnown ServiceNow instance origin: `{SERVICENOW_INSTANCE_ORIGIN}`\nCurrent Portal BaseURI: {CURRENT_PORTAL_VALUE_CLASSIFICATION}\n\nProvide the complete HTTPS employee portal URL on this same instance. Use the instance root only when the administrator explicitly confirms that exact root URL is intended; otherwise include the administrator-confirmed path. The skill will not infer `/sp`, `/esc`, or any example path.\n\nThe skill will first try a guarded native component update of only the `Set ServiceNow Portal BaseURI` node. It uses a fresh change token, full topic preimage, readback verification, and conflict-safe rollback. If that API path is unsupported or permission denied without mutating the topic, use the manual fallback: Copilot Studio -> Topics -> ServiceNow HRSD Setup Configurations -> Set ServiceNow Portal BaseURI -> To -> enter this exact URL -> Save.\n\nWhat is the complete ServiceNow employee portal URL?",
+    "question": "Target topic: `ServiceNow HRSD Setup Configurations`\nTarget node: `Set ServiceNow Portal BaseURI`\nKnown ServiceNow instance origin: `{SERVICENOW_INSTANCE_ORIGIN}`\nCurrent Portal BaseURI: {CURRENT_PORTAL_VALUE_CLASSIFICATION}\n\nWhat is the complete HTTPS employee portal URL on this same instance?\n\nUse the instance root only when the administrator explicitly confirms that exact root URL; otherwise provide the confirmed path. The skill will not infer `/sp`, `/esc`, or any example path.",
     "allowFreeformInput": true
   }
 ]
@@ -87,15 +88,23 @@ SetVariable node, preserve all unrelated topic fields, use the fresh
 `changeToken`, and verify the authored readback.
 
 If the update returns `failed-unchanged` or an explicit permission/unsupported
-error and a fresh read proves the topic stayed unchanged, show the manual
-fallback above and use the explicit completion confirmation below:
+error and a fresh read proves the topic stayed unchanged, show this manual
+fallback in the ordinary current-task reply:
+
+1. Open Copilot Studio for the exact HR agent.
+2. Open `Topics` → `ServiceNow HRSD Setup Configurations`.
+3. Edit the `Set ServiceNow Portal BaseURI` node.
+4. Set `To` to the exact administrator-confirmed URL `{PORTAL_URL}`.
+5. Save the topic without publishing.
+
+Then use the compact completion confirmation below:
 
 <!-- visible-handoff-question:v1-manual-fallback -->
 ```json
 [
   {
     "header": "Save portal Base URI manually",
-    "question": "The guarded component API did not change the topic, so complete the manual fallback now:\n1. Open Copilot Studio for the exact HR agent.\n2. Open Topics -> ServiceNow HRSD Setup Configurations.\n3. Edit the `Set ServiceNow Portal BaseURI` node.\n4. Set `To` to the exact administrator-confirmed URL `{PORTAL_URL}`.\n5. Save the topic.\n\nDo not publish as part of Connect. When the exact value is saved, choose Completed so the skill can perform a fresh read-only verification.",
+    "question": "The guarded component API did not change the exact HR target topic.\n\nTarget: `ServiceNow HRSD Setup Configurations` → `Set ServiceNow Portal BaseURI`\nExpected URL: `{PORTAL_URL}`\n\nIs this exact URL now saved in the target topic?\n\nNo Publish is included. Selecting the completed option triggers one fresh read-only verification.",
     "options": [
       { "label": "Completed, the exact portal URL is saved" },
       { "label": "Not yet, the portal URL is not saved" }

@@ -38,15 +38,16 @@ verification.
 ## Completion signal and evidence
 
 Use `vscode_askQuestions` with this exact compact visible handoff payload.
-Render `{HR_CORE_PLUGIN_URL}` first. The question body, not
-a preceding message, is the authoritative user-visible copy:
+Render the target link and complete instructions above in the ordinary
+current-task reply first. The native question carries only the required
+evidence summary and completion decision:
 
 <!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "HR Service Delivery Core",
-    "question": "Purpose: confirm this HRSD instance has its HR data foundation.\n\nOwner: ServiceNow Admin.\n\nOpen HR Service Delivery Core: {HR_CORE_PLUGIN_URL}\n\nConfirm the Application Manager page shows:\n- Title: `Human Resources Scoped App: Core`\n- Plugin id: `com.sn_hr_core`\n- Version Details: `Installed`\n- Message: `Your application is installed and ready for you to use on your instance`\n\nDo not select Configure, Repair, or Load demo data for this check. This requirement is HRSD-only and does not prove OIDC or overall connection readiness.\n\nHas the ServiceNow administrator confirmed that HR Service Delivery Core is installed and ready to use in the selected ServiceNow instance?",
+    "question": "Required evidence for the selected ServiceNow instance:\n- Title: `Human Resources Scoped App: Core`\n- Plugin id: `com.sn_hr_core`\n- Version Details: `Installed`\n- Message: `Your application is installed and ready for you to use on your instance`\n\nHas the ServiceNow administrator confirmed that all of this HR Service Delivery Core evidence is present?",
     "options": [
       { "label": "Yes, all listed installed-and-ready evidence is present" },
       { "label": "No, one or more required items are missing" },

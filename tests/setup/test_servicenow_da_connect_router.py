@@ -199,19 +199,23 @@ def test_servicenow_dev_phase_order_and_binding_intros_are_explicit() -> None:
         assert "Connect does not enable ServiceNow topics" in skill
         assert "After binding is confirmed, Connect reads the topic" in skill
         assert "After topic and portal configuration is complete" in skill
-        assert credential.index("**Authentication Type:**") < (
-            credential.index("**Resource URI:**")
+        field_table = credential.split(
+            "Show the exact field table from the output:",
+            1,
+        )[1]
+        assert field_table.index("**Display name (optional):**") < (
+            field_table.index("**Authentication Type:**")
         )
-        assert credential.index("**Resource URI:**") < (
-            credential.index("**Instance Name:**")
+        assert field_table.index("**Authentication Type:**") < (
+            field_table.index("**Resource URI:**")
+        )
+        assert field_table.index("**Resource URI:**") < (
+            field_table.index("**Instance Name:**")
         )
         visible_question = credential.split(
             "<!-- visible-handoff-question:v1 -->",
             1,
         )[1]
-        display_index = visible_question.index(
-            "Display name (optional): `{CONNECTION_DISPLAY_NAME}`"
-        )
         auth_index = visible_question.index(
             "Authentication Type: Microsoft Entra ID User Login"
         )
@@ -221,16 +225,15 @@ def test_servicenow_dev_phase_order_and_binding_intros_are_explicit() -> None:
         instance_index = visible_question.index(
             "Instance Name: `{INSTANCE_NAME}`"
         )
-        assert display_index < auth_index < resource_index < instance_index
-        assert "guidance only; never a readiness gate" in visible_question
-        completion_question = visible_question.split(
+        decision_index = visible_question.index(
             "Does the exact ServiceNow connection now show Connected",
-            1,
-        )[1]
-        assert "Display name" not in completion_question
-        assert completion_question.index("Authentication Type") < (
-            completion_question.index("Resource URI")
-        ) < completion_question.index("Instance Name")
+        )
+        assert auth_index < resource_index < instance_index < decision_index
+        required_section = visible_question[:decision_index]
+        assert "Display name" not in required_section
+        assert "optional guidance and is not a readiness gate" in (
+            visible_question
+        )
         assert "direct connector-form or connection-detail URL" in credential
         assert "conditional remediation, not an observed current error" in (
             normalized_credential

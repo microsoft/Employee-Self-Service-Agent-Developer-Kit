@@ -22,8 +22,8 @@ The command-generated question conforms to this visible contract:
 ```json
 [
   {
-    "header": "ServiceNow topics",
-    "question": "Purpose: prepare the ServiceNow HRSD topics for this exact HR agent.\n\nOwner: ESS Maker / Agent Developer.\n\nCurrent topic inventory: {TOPIC_INVENTORY}\n\nInactive HRSD topics:\n{INACTIVE_TOPIC_NAMES}\n\nEnable all inactive ServiceNow HRSD topics, or explicitly keep their current states? Only ServiceNow HRSD topics in this inventory are in scope; unrelated topics remain unchanged.",
+    "header": "ServiceNow topic states",
+    "question": "Selected agent: {AGENT_DISPLAY_NAME} (`{SELECTED_AGENT_SLUG}` / `{SELECTED_AGENT_ID}`)\nEnvironment: `{ENVIRONMENT_ID}`\nComponent hash: `{COMPONENT_HASH}`\n\nCurrent topic inventory: {TOPIC_INVENTORY}\n\nInactive HRSD topics:\n{INACTIVE_TOPIC_NAMES}\n\nDo you want to enable all listed inactive ServiceNow topics, or keep their current states? Only ServiceNow HRSD topics in this exact inventory are in scope; unrelated topics remain unchanged.",
     "options": [
       { "label": "Enable all listed inactive ServiceNow topics" },
       { "label": "Keep the current topic states for this configuration" },
@@ -36,9 +36,11 @@ The command-generated question conforms to this visible contract:
 
 [Open Employee Self-Service (HR) in Copilot Studio]({COPILOT_STUDIO_AGENT_URL})
 
-Open `Topics`; do not invent a tab-specific URL. The returned question is the
-wait boundary: while pending, do not return an `ACTION_RESULT`, emit a
-completion/remediation message, or return control to the lifecycle runner.
+Open `Topics`; do not invent a tab-specific URL. This link and action guidance
+belong in the ordinary current-task reply, not the native question. The
+returned question is the wait boundary: while pending, do not return an
+`ACTION_RESULT`, emit a completion/remediation message, or return control to
+the lifecycle runner.
 Absence of an answer is not cancellation.
 The tool call is the wait boundary: while the
   question is pending, preserve the historical action and transaction state.

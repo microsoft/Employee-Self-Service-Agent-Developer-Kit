@@ -21,17 +21,20 @@ Parse the structured result. This read-only command is authoritative:
 Use `vscode_askQuestions` for the returned question. Only ServiceNow ITSM topics in this inventory are in scope; unrelated topics remain unchanged.
 
 The command-generated question conforms to the same supported
-`visible-handoff-question:v1` shape with the IT Agent link, current inventory,
-inactive ITSM names, and exactly these returned labels:
+`visible-handoff-question:v1` shape with the exact selected agent,
+environment, component hash, current inventory, inactive ITSM names, and
+exactly these returned labels:
 **Enable all listed inactive ServiceNow topics**,
 **Keep the current topic states for this configuration**, and
 **Not now, leave the phase incomplete**.
 
 [Open Employee Self-Service (IT) in Copilot Studio]({COPILOT_STUDIO_AGENT_URL})
 
-Open `Topics`; do not invent a tab-specific URL. The returned question is the
-wait boundary: while pending, do not return an `ACTION_RESULT`, emit a
-completion/remediation message, or return control to the lifecycle runner.
+Open `Topics`; do not invent a tab-specific URL. This link and action guidance
+belong in the ordinary current-task reply, not the native question. The
+returned question is the wait boundary: while pending, do not return an
+`ACTION_RESULT`, emit a completion/remediation message, or return control to
+the lifecycle runner.
 Absence of an answer is not cancellation.
 - If the maker selects **Keep the current topic states for this
   configuration**, run

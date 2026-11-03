@@ -10,16 +10,16 @@ Use `links.copilotStudioAgent.url` from the provider inspection result.
 Open `Settings` → `Connection settings`; do not invent a tab-specific URL.
 
 Ask whether the ServiceNow row currently shows Connected. A prior attestation
-is context only and cannot answer the current question. Use this exact compact
-visible handoff payload after rendering `{COPILOT_STUDIO_AGENT_URL}` and the
-selected connection display name/ID:
+is context only and cannot answer the current question. Render the target URL
+and binding steps above in the ordinary current-task reply, then use this
+compact payload with the exact selected agent and connection:
 
 <!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "Connect ServiceNow to agent",
-    "question": "Purpose: bind the selected current ServiceNow credential to this exact HR agent.\n\nOwner: ESS Maker / Agent Developer in Copilot Studio.\n\nOpen Employee Self-Service (HR): {COPILOT_STUDIO_AGENT_URL}\n\nIn this exact agent:\n1. Open Settings -> Connection settings.\n2. Find the ServiceNow row.\n3. Select Connect.\n4. Choose the selected credential `{CONNECTION_DISPLAY_NAME}` (`{CONNECTION_ID}`).\n5. Save and confirm the ServiceNow row currently shows Connected.\n\nDo not substitute the UI `user-connections` endpoint, browser tokens, or a MinimalBot reference update.\n\nDoes the ServiceNow row currently show Connected with this selected credential?",
+    "question": "Selected agent: Employee Self-Service (HR) (`{SELECTED_AGENT_SLUG}` / `{SELECTED_AGENT_ID}`)\nSelected credential: `{CONNECTION_DISPLAY_NAME}` (`{CONNECTION_ID}`)\n\nDoes the ServiceNow row currently show Connected with this selected credential?\n\nThis records only current Manual agent-binding evidence; it does not prove business success.",
     "options": [
       { "label": "Yes, the selected credential is shown as Connected" },
       { "label": "Not yet, the agent binding is incomplete" }

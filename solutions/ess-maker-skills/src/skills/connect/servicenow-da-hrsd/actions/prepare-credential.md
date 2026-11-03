@@ -58,9 +58,12 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
 
 Show the exact field table from the output:
 
+- **Display name (optional):** `{CONNECTION_DISPLAY_NAME}`; guidance only and
+  never a readiness gate.
 - **Authentication Type:** Microsoft Entra ID User Login.
 - **Resource URI:** the verified App A Application client ID; never
-  `api://<client-id>`, the app object ID, or the connector application ID.
+  an observed failed-connection value, `api://<client-id>`, the app object ID,
+  or the connector application ID.
 - **Instance Name:** normalized from the confirmed
   `https://<instance>.service-now.com` URL; never the full URL.
 
@@ -115,15 +118,15 @@ repair or no exact connection exists and a new connection is required. It
 must never run for the multiple-healthy-candidate path. Render
 `{CONNECTION_DISPLAY_NAME}`, `{INSTANCE_NAME}`, `{APP_CLIENT_ID}`,
 `{POWER_AUTOMATE_CONNECTIONS_URL}`, `{POWER_APPS_URL}`, and the exact candidate
-summary. The question body must include both repair/new behavior and the
-required field values:
+summary in the ordinary current-task reply. The native question carries only
+the required match, current candidate context, and completion decision:
 
 <!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "ServiceNow connection",
-    "question": "Purpose: repair or create one exact healthy Connected Microsoft Entra ID User Login ServiceNow connection when automatic reuse is not currently possible.\n\nOwner: Power Platform Maker/Admin who can repair/create the connection and complete Entra sign-in with their own Microsoft account.\n\nExpected form values, top to bottom:\n- Display name (optional): `{CONNECTION_DISPLAY_NAME}` (guidance only; never a readiness gate)\n- Authentication Type: Microsoft Entra ID User Login (`entraIDUserLogin`)\n- Resource URI: `{APP_CLIENT_ID}` (the verified resource Application client ID, never an observed failed-connection value, `api://`, object ID, ADK client ID, or connector app ID)\n- Instance Name: `{INSTANCE_NAME}` (name only, not the full URL)\n\nCurrent exact candidates: {CONNECTION_CANDIDATE_SUMMARY}\n\nWhat to do:\n1. If an exact candidate is unhealthy and the current maker can repair it, use the selected-environment Connections list fallback to open that exact candidate and use Repair, Fix connection, or sign-in; require Connected plus the exact auth mode, Resource URI, and Instance Name. Display name is optional and is never part of readiness. If another maker owns it and repair is unavailable, do not impersonate that owner or request their credentials.\n2. Only if no usable exact candidate exists and the current maker is authorized to create one, open {POWER_AUTOMATE_CONNECTIONS_URL}; fallback {POWER_APPS_URL}; select the exact environment -> Connections -> New connection -> use the search box in the upper-right to search `ServiceNow` -> select the Microsoft-published `ServiceNow` connector using its `+` action -> choose Microsoft Entra ID User Login -> enter the exact Resource URI and Instance Name -> complete Entra sign-in with the current maker's own Microsoft account. The direct form/detail route is unverified; these links only navigate and never create, sign in, submit, or prefill.\n3. If sign-in reports `Invalid_redirect_uri`, treat it as conditional remediation rather than an observed current error: URL-decode that exact URI, update the ServiceNow OIDC Application Registry redirect URL, and retry.\n\nThis connection is not shareable and proves only the current maker's physical connection. Never ask for or display passwords, client secrets, tokens, PFX files, browser/session artifacts, or connection identifiers.\n\nDoes the exact ServiceNow connection now show Connected with Authentication Type Microsoft Entra ID User Login, Resource URI `{APP_CLIENT_ID}`, and Instance Name `{INSTANCE_NAME}`?\n\nSelecting the completed option triggers one fresh supported connection inventory read. It does not prove agent binding or business success.",
+    "question": "Required connection match:\n- Authentication Type: Microsoft Entra ID User Login (`entraIDUserLogin`)\n- Resource URI: `{APP_CLIENT_ID}`\n- Instance Name: `{INSTANCE_NAME}`\n\nCurrent exact candidates: {CONNECTION_CANDIDATE_SUMMARY}\n\nDoes the exact ServiceNow connection now show Connected with these required values?\n\nDisplay name `{CONNECTION_DISPLAY_NAME}` is optional guidance and is not a readiness gate. Selecting the completed option triggers one fresh supported connection inventory read; it does not prove agent binding or business success.",
     "options": [
       { "label": "Completed, the exact ServiceNow connection is Connected" },
       { "label": "Not yet, the ServiceNow connection is not ready" }

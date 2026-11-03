@@ -12112,24 +12112,23 @@ def topic_action_handoff(
             "reason": "current-keep-current-attestation",
         }
 
-    links = maker_portal_links(context)
-    agent_url = links["copilotStudioAgent"]["url"]
     inactive_names = [
         str(topic.get("displayName") or topic.get("schemaName") or "")
         for topic in inactive
     ]
     question = (
-        f"Purpose: prepare the {ACTIVE_PROFILE.product_name} topics for this "
-        f"exact agent.\n\nOwner: ESS Maker / Agent Developer.\n\n"
-        f"Open {ACTIVE_PROFILE.agent_display_name}: {agent_url}\n\n"
+        f"Selected agent: {ACTIVE_PROFILE.agent_display_name} "
+        f"(`{_agent_slug(context)}` / `{context['agent']['id']}`)\n"
+        f"Environment: `{context['environment']['id']}`\n"
+        f"Component hash: `{component_hash}`\n\n"
         f"Current topic inventory: {total} {ACTIVE_PROFILE.product_name} "
         f"topics; {active} active and {len(inactive)} inactive.\n\n"
         f"Inactive {ACTIVE_PROFILE.product_name} topics:\n"
         + "\n".join(f"- {name}" for name in inactive_names)
         + (
-            "\n\nEnable all inactive ServiceNow topics, or explicitly keep "
-            "their current states? Only topics in this exact inventory are "
-            "in scope; unrelated topics remain unchanged."
+            "\n\nDo you want to enable all listed inactive ServiceNow "
+            "topics, or keep their current states? Only topics in this exact "
+            "inventory are in scope; unrelated topics remain unchanged."
         )
     )
     return {
@@ -12757,7 +12756,15 @@ def _current_task_guidance(
             "**Where and how**\n"
             f"Open the selected environment Connections list: "
             f"{links['powerAutomateConnections']['url']}. Use "
-            f"`{provider_root}/prepare-credential.md`.\n\n"
+            f"`{provider_root}/prepare-credential.md`. Repair an exact "
+            "unhealthy current-maker candidate when possible. If no exact "
+            "candidate exists and creation is authorized, use New connection "
+            "→ search `ServiceNow` → select the Microsoft-published connector "
+            "with `+` → choose Microsoft Entra ID User Login → enter the "
+            "values below → sign in with the current Maker's own account. "
+            f"Fallback root: {links['powerApps']['url']}. Never impersonate "
+            "another owner. Treat `Invalid_redirect_uri` as conditional OIDC "
+            "redirect remediation, not an observed current error.\n\n"
             "**Expected form values, top to bottom**\n"
             f"{expected_values}\n\n"
             "**Expected nonsecret evidence**\n"
@@ -12776,7 +12783,9 @@ def _current_task_guidance(
             f"Open {links['copilotStudioAgent']['url']} → Settings → "
             "Connection settings → ServiceNow. Use "
             f"`{provider_root}/connect-agent.md` and select "
-            f"`{connection_name}`.\n\n"
+            f"`{connection_name}`, save, and confirm the ServiceNow row shows "
+            "Connected. Do not substitute the UI `user-connections` endpoint, "
+            "browser tokens, or a MinimalBot connection-reference update.\n\n"
             "**Expected nonsecret evidence**\n"
             "Current Manual Maker confirmation bound to this provider, "
             "profile, agent, environment, selected physical connection, and "
@@ -12788,9 +12797,13 @@ def _current_task_guidance(
     if phase_id == "topics":
         return common + (
             "**Where and how**\n"
-            f"Use `{provider_root}/prepare-topics.md`. A fresh supported "
+            f"Open {links['copilotStudioAgent']['url']} → Topics; do not "
+            "invent a tab-specific URL. Use "
+            f"`{provider_root}/prepare-topics.md`. A fresh supported "
             "component read lists the exact in-scope ServiceNow topics and "
-            "their current states.\n\n"
+            "their current states. Enable only the listed inactive topics, "
+            "or explicitly keep the current states; unrelated topics remain "
+            "unchanged.\n\n"
             "**Expected nonsecret evidence**\n"
             "Either fresh readback proves every in-scope topic Active, or the "
             "Maker records a current component-hash-bound keep-current "
@@ -12803,7 +12816,14 @@ def _current_task_guidance(
         return common + (
             "**Where and how**\n"
             f"Use `{provider_root}/configure-portal-url.md` for the exact "
-            f"{ACTIVE_PROFILE.product_name} Setup Configurations topic.\n\n"
+            f"{ACTIVE_PROFILE.product_name} Setup Configurations topic. "
+            "Provide the administrator-confirmed complete HTTPS URL. The "
+            "supported path first uses a guarded single-node component update "
+            "with fresh-token readback and rollback. If that path is "
+            "unsupported or permission denied without changing the topic, "
+            "open the exact agent → Topics → Setup Configurations → portal "
+            "SetVariable node, enter the same URL, and save without "
+            "publishing.\n\n"
             "**Expected nonsecret evidence**\n"
             f"One administrator-confirmed complete HTTPS portal URL on "
             f"`{instance_name}` plus guarded readback of the exact authored "
