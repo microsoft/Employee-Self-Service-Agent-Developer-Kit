@@ -431,25 +431,23 @@ def test_identity_admin_guides_use_only_required_value_questions(
     assert "{TOKEN_CLAIM_NAME}" not in oidc
     assert '"label": "Completed"' not in oidc
     assert "question itself must contain all seven operations" not in oidc
-    assert "Render the returned `instructionTitle` and `instruction`" in entra
+    assert "Render `ordinaryReply.text`" in " ".join(entra.split())
     assert "there is no\nseparate Entra completion question" in entra
-    assert "identity-mapping-handoff --stage entra" in entra
-    assert "send the\nreturned short `question` unchanged" in entra
-    assert "accepts the local path of either the completed XLSX or CSV" in entra
+    assert "identity-direct-handoff --stage entra" in entra
+    assert "pass every returned `askUserArguments` object verbatim" in (
+        " ".join(entra.split())
+    )
     assert "completes the Manual Entra identity phase" in entra
     assert "does not prove app configuration" in entra
-    assert "identity-mapping-handoff --stage servicenow" in oidc
+    assert "identity-direct-handoff --stage servicenow" in oidc
     assert "collect only the actual\ninternal User Field" in oidc
     assert "record-identity-direct --stage servicenow" in oidc
     assert "atomically persists the mapping receipt and owning Manual" in oidc
-    assert "Accept the local path of either the completed XLSX or CSV" in oidc
     assert "do not\nask a saved/configured" in oidc
     assert (
         "does not prove that the OIDC provider is saved or configured"
         in " ".join(oidc.split())
     )
-    assert "record-identity-mapping" in entra
-    assert "record-identity-mapping" in oidc
 
 
 @pytest.mark.parametrize(

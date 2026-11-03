@@ -275,7 +275,6 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         "After topic and portal configuration is complete, the Maker runs"
         in skill
     )
-    assert "protected one-row\nXLSX/equivalent CSV" in skill
     assert "matching `sys_user` field" in skill
     assert "`aud` may be\nconfigured for audience validation" in skill
     assert "Portal Base URI is now in scope" in skill
@@ -419,8 +418,6 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH"):
         assert f"--checkpoint SN-DA-HRSD-ENTRA-{suffix}-001" not in entra
     assert "completes the Manual Entra identity phase" in entra
-    assert "record-identity-mapping" in entra
-    assert "--workbook-file" in entra
     assert "--stage entra" in entra
     assert "--yes" in entra
     assert "`Expected result`" not in entra
@@ -447,9 +444,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "identity-direct-handoff --stage servicenow" in oidc
     assert "record-identity-direct --stage entra" in entra
     assert "record-identity-direct --stage servicenow" in oidc
-    assert "protected file route remains fully supported" in entra
-    assert "protected file route remains fully supported" in oidc
-    assert "`aud` is only for\naudience validation" in entra
+    assert "a blank or malformed claim, `aud`," in entra_normalized
     assert "Return `ACTION_RESULT = \"recorded\"` immediately" in oidc
     elevate = snow_admin.index("select **Elevate role**")
     application_registry = snow_admin.index("**System OAuth** > **Application Registry**")
@@ -463,7 +458,6 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Enable JTI claim verification:** off" in snow_admin
     assert "`/v2.0` URL" in snow_admin
     assert "Send back to the maker" in snow_admin
-    assert "identity-mapping-handoff" in oidc
     assert "--stage servicenow" in oidc
     assert "`Expected result`" not in oidc
     assert "choose `Not yet`" not in oidc
@@ -493,8 +487,10 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "It makes no API call" in entra_normalized
     assert "**Reuse shared identity**" in entra
     assert "If it returns `decision: no-action`, immediately return" in entra
-    assert "Do not render or generate a workbook" in entra
-    assert "rerun `record-identity-mapping`" in entra
+    assert "Do not render instructions, call the question tool" in (
+        entra_normalized
+    )
+    assert "rerun `record-identity-direct`" in entra_normalized
     assert "replace the reused admin\nhandoff with `record-admin-phase`" in entra
     assert "runner-owned Entra checkpoints still\nrun next" in entra
     assert "Only `decision: question-required` enters" in entra
@@ -702,7 +698,7 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
     assert "migrate-state" not in preflight
 
 
-def test_entra_guides_use_direct_or_file_two_field_handoff() -> None:
+def test_entra_guides_use_direct_two_field_handoff() -> None:
     for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
         guide = (
             _SOLUTION
@@ -720,10 +716,8 @@ def test_entra_guides_use_direct_or_file_two_field_handoff() -> None:
         assert "record-identity-direct --stage entra" in guide
         assert "Client ID and User Claim prompts" in " ".join(guide.split())
         assert "--directory-tenant-id" not in guide
-        assert "protected file route remains fully supported" in guide
         assert "record-identity-requirement --choice" not in guide
         assert "`identityRequirementChoices`" not in guide
-        assert "record-identity-mapping --stage entra" in guide
         assert "there is no separate Entra completion question" in " ".join(
             guide.split()
         )
@@ -746,8 +740,8 @@ def test_entra_guides_use_one_current_setup_checkpoint() -> None:
         assert f"`SN-DA-{profile}-ENTRA-SETUP-001`" in guide
         assert "historical\nstate/audit keys only" in guide
         assert "all four requirements" not in guide
-        assert "Application (client) ID" in guide
-        assert "one safe User Claim name" in guide
+        assert "Application client ID" in guide
+        assert "one safe User Claim name" in " ".join(guide.split())
         assert "does not prove app configuration" in guide
 
 
@@ -776,7 +770,7 @@ def test_hr_it_admin_guides_complete_from_mapping_receipt() -> None:
         assert "record-admin-phase --phase servicenow-oidc" not in oidc
 
 
-def test_servicenow_oidc_guides_match_complete_stage2_workbook() -> None:
+def test_servicenow_oidc_guides_match_canonical_admin_instructions() -> None:
     canonical = (
         _SOLUTION
         / "src"
@@ -811,7 +805,6 @@ def test_servicenow_oidc_guides_match_complete_stage2_workbook() -> None:
             guide
         )
         assert "record-identity-direct --stage servicenow" in guide
-        assert "record-identity-mapping --stage servicenow" in guide
         assert "--confirm-saved-mapping" not in guide
         assert "--reject-saved-mapping" not in guide
         assert "record-admin-phase --phase servicenow-oidc" not in guide

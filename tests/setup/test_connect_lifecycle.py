@@ -253,7 +253,6 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "never add `value`" in runner_normalized
     assert "`Not sure` returns waiting, writes no receipt" in runner_normalized
     assert "must not set `actionApplied`" in runner_normalized
-    assert "Never dereference a missing `workbookPath`" in runner_normalized
     assert "`resumeActionWhenIncomplete` is `true`" in runner
     assert "historical facts,\nnot authorization" in runner
     assert "fresh read-only inspection" in runner

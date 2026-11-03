@@ -16,7 +16,6 @@ from connect_servicenow_da import (
     AUTH_MODE,
     CONNECTOR_NAME,
     HR_SCHEMA_NAME,
-    IDENTITY_WORKBOOK_SOURCE_SHA256,
     PROVIDER_KEY,
     _agent_binding_identity_hash,
     _connection_binding_hash,
@@ -127,7 +126,7 @@ _RECOVERY_GUIDANCE = {
         "owner": "ServiceNow Admin / security_admin",
         "where": (
             "ServiceNow -> All -> System OAuth -> Application Registry, then "
-            "the protected ServiceNow identity-mapping handoff"
+            "the ServiceNow administrator identity handoff"
         ),
         "values": (
             "Record the locked Entra-confirmed claim name and the exact "
@@ -1286,9 +1285,6 @@ def _identity_mapping_contract(
     ).get("evidence")
     oidc = oidc if isinstance(oidc, dict) else {}
     provenance_sha256 = str(mapping.get("provenanceSha256") or "")
-    source_workbook_sha256 = str(
-        mapping.get("sourceWorkbookSha256") or ""
-    )
     imported_workbook_sha256 = str(
         mapping.get("importedWorkbookSha256") or ""
     )
@@ -1299,8 +1295,6 @@ def _identity_mapping_contract(
             for character in provenance_sha256
         )
         and imported_workbook_sha256 == provenance_sha256
-        and source_workbook_sha256.casefold()
-        == IDENTITY_WORKBOOK_SOURCE_SHA256["servicenow"].casefold()
         and mapping.get("importedFileFormat") in {"direct", "xlsx", "csv"}
     )
     try:
@@ -1536,7 +1530,7 @@ def _oidc_result(
                 "Owner: ServiceNow Admin / security_admin. Where/how: follow "
                 f"`src/skills/connect/{state.get('provider')}/actions/"
                 "guide-servicenow-oidc.md` in Application Registry and the "
-                "protected identity-mapping handoff. "
+                "administrator identity handoff. "
                 "Expected evidence: one current target-bound non-secret "
                 "receipt containing one locked Entra-confirmed claim name and "
                 "one actual internal ServiceNow user field, with current "

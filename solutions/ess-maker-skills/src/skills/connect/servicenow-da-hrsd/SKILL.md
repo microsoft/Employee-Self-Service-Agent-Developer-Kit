@@ -29,14 +29,12 @@ report the old PR behavior, current evidence, proposed deviation, and impact
 for a user decision. The explicit DA-GA scope exclusions above remain approved.
 For Entra access tokens, do not assume UPN or email. The Entra administrator
 returns exactly one selected employee-identity claim name plus the Application
-(client) ID through source-faithful direct capture or the protected one-row
-XLSX/equivalent CSV. `aud` may be
+(client) ID through source-faithful direct capture. `aud` may be
 configured for audience validation but is never accepted as that selected
-user-matching claim. The ServiceNow direct/XLSX/CSV handoff uses the same bound values and leaves
-only the actual matching `sys_user` field for the ServiceNow administrator to
-confirm. XLSX uses protected visible inputs plus hidden locked metadata; CSV
-carries the same values and binding columns.
-Neither format guesses, defaults, or manually recopies the claim.
+user-matching claim. The ServiceNow direct handoff uses the same bound values
+and leaves only the actual matching `sys_user` field for the ServiceNow
+administrator to confirm. Connect never guesses, defaults, or manually
+recopies the claim.
 The approved
 manual runbook also covers Broadly scoped ServiceNow scope
 restriction, non-email custom user identifiers, and safe coexistence with a

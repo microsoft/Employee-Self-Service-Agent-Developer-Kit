@@ -28,7 +28,8 @@ the public ServiceNow instance URL, employee portal URL, Entra Application
 client ID, selected emitted claim name, or actual internal `sys_user` field.
 Never combine multiple values in one blank field.
 Detailed technical navigation belongs in the linked administrator guide or
-workbook Steps page, while the question names the result to return.
+the canonical administrator instructions, while the question names the result
+to return.
 
 **Inputs from the calling file:**
 - `PROVIDER` — the provider key (e.g. `"workday"`), matching a contract at
@@ -580,20 +581,19 @@ run the phase's complete verification set, and only then advance.
 
 The ServiceNow Entra action has one bounded pre-handoff exception when its
 producer returns `handoffMode: identity-requirement`: show that routing-only
-Maker question before any workbook exists. Its options identify only the
-intended user identifier type; they are not `Completed`/`Not yet` admin
+Maker question before any administrator instructions are shown. Its
+options identify only the intended user identifier type; they are not `Completed`/`Not yet` admin
 evidence. Pass the returned question to the question tool unchanged: its
 options are label-only. Use the separate `identityRequirementChoices`
 envelope mapping to translate the selected label to the recorder's CLI choice;
 never add `value` or another unsupported option field. A specific answer may
 persist only the scoped routing intent, then
-the caller reruns the producer and shows the normal one-workbook admin
+the caller reruns the producer and shows the normal admin instructions and
 completion question. `Not sure` returns waiting, writes no receipt, and
-generates no workbook. This clarification must not set `actionApplied`, mark
-the phase done, confirm claim emission, or replace the later admin completion
+shows no administrator instructions. This clarification must not set
+`actionApplied`, mark the phase done, confirm claim emission, or replace the later admin completion
 question. Once a valid scoped requirement receipt exists, do not ask the
-routing question again. Never dereference a missing `workbookPath` from the
-routing response.
+routing question again.
 
 For every interactive provider action, the canonical question body is the
 durable visible handoff. Read the action document's

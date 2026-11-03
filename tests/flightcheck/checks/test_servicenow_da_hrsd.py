@@ -11,7 +11,6 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from openpyxl import load_workbook
 
 from agentbuilder import AgentBuilderHTTPError
 import flightcheck.checks.servicenow_da_hrsd as hrsd_checks
@@ -32,6 +31,7 @@ TENANT_ID = "00000000-0000-4000-8000-000000009999"
 AGENT_ID = "00000000-0000-4000-8000-000000002222"
 CONNECTION_ID = "00000000000040008000000000003333"
 APP_CLIENT_ID = "00000000-0000-4000-8000-000000006666"
+CONNECTOR_APP_ID = "c26b24aa-7874-4e06-ad55-7d06b1f79b63"
 AGENT_SLUG = "employee-self-service-hr"
 _RECOVERY_HEADINGS = (
     "**Problem**",
@@ -543,7 +543,7 @@ def _graph_client(
     require_validated_mock(graph_mock)
     application = graph_mock.application(
         app_id=APP_CLIENT_ID,
-        connector_app_id=snow.SERVICENOW_CONNECTOR_APP_ID,
+        connector_app_id=CONNECTOR_APP_ID,
         optional_claim_names=(
             optional_claim_names
             if optional_claim_names is not None
@@ -718,9 +718,8 @@ def _write_state(
                 "tokenClaimEmissionConfirmed": True,
                 "serviceNowAdministratorConfirmed": True,
                 "provenanceSha256": "b" * 64,
-                "sourceWorkbookSha256": (
-                    snow.IDENTITY_WORKBOOK_SOURCE_SHA256["servicenow"]
-                ),
+                "sourceWorkbookSha256": "c" * 64,
+                "sourceWorkbookRole": "legacy-handoff",
                 "importedWorkbookSha256": "b" * 64,
                 "importedFileFormat": "xlsx",
                 "sheetProtected": True,
@@ -899,34 +898,16 @@ def _record_new_mapping_workflow(
     state["evidence"].pop("identityMapping", None)
     state_path.write_text(json.dumps(state), encoding="utf-8")
     snow.record_identity_requirement(context, choice="email")
-    entra = snow.identity_mapping_handoff(
+    if len(candidates) != 1:
+        raise AssertionError(
+            "The current Entra handoff requires one selected claim."
+        )
+    snow.record_identity_direct(
         context,
         stage="entra",
         client_id=APP_CLIENT_ID,
-    )
-    entra_path = Path(entra["workbookPath"])
-    workbook = load_workbook(entra_path)
-    if snow.IDENTITY_ENTRA_HANDOFF_SHEET in workbook.sheetnames:
-        if len(candidates) != 1:
-            workbook.close()
-            raise AssertionError(
-                "The current Entra handoff requires one selected claim."
-            )
-        workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["C2"] = candidates[0]
-    else:
-        sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-        for offset, claim in enumerate(candidates):
-            sheet.cell(
-                snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW + offset,
-                1,
-            ).value = claim
-    workbook.save(entra_path)
-    workbook.close()
-    snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=entra_path,
-        client_id=APP_CLIENT_ID,
+        claim_name=candidates[0],
+        user_field=None,
         confirmed=True,
     )
     snow.record_admin_phase(
@@ -939,26 +920,12 @@ def _record_new_mapping_workflow(
         user_impersonation_scope_confirmed=True,
         connector_preauthorization_confirmed=True,
     )
-    service_now = snow.identity_mapping_handoff(
+    snow.record_identity_direct(
         context,
         stage="servicenow",
-    )
-    service_now_path = Path(service_now["workbookPath"])
-    workbook = load_workbook(service_now_path)
-    sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-    for row in range(
-        snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW,
-        sheet.max_row + 1,
-    ):
-        if sheet.cell(row, 1).value == selected_claim:
-            sheet.cell(row, 2).value = user_field
-    workbook.save(service_now_path)
-    workbook.close()
-    snow.record_identity_mapping(
-        context,
-        stage="servicenow",
-        workbook_path=service_now_path,
         client_id=None,
+        claim_name=None,
+        user_field=user_field,
         confirmed=True,
     )
     snow.record_admin_phase(

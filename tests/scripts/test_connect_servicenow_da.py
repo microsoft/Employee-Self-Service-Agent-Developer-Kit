@@ -4,20 +4,16 @@
 from __future__ import annotations
 
 import copy
-import csv
 import io
 import json
 import subprocess
 import sys
 import uuid
-import zipfile
 
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from openpyxl import load_workbook
-from openpyxl.styles import Protection
 
 import connect_servicenow_da as snow
 
@@ -28,6 +24,7 @@ AGENT_ID = "00000000-0000-4000-8000-000000002222"
 OTHER_AGENT_ID = "00000000-0000-4000-8000-000000002223"
 CONNECTION_ID = "00000000-0000-4000-8000-000000003333"
 APP_CLIENT_ID = "00000000-0000-4000-8000-000000006666"
+SERVICENOW_CONNECTOR_APP_ID = "c26b24aa-7874-4e06-ad55-7d06b1f79b63"
 AGENT_SLUG = "employee-self-service-hr"
 _RECOVERY_HEADINGS = (
     "**Problem**",
@@ -194,95 +191,6 @@ def _seed_current_agent_binding(
     return state
 
 
-def _fill_entra_workbook(
-    path: Path,
-    candidates: tuple[str, ...],
-) -> None:
-    workbook = load_workbook(path)
-    if snow.IDENTITY_ENTRA_HANDOFF_SHEET in workbook.sheetnames:
-        if len(candidates) != 1:
-            workbook.close()
-            raise AssertionError(
-                "The v2 Entra handoff requires exactly one selected claim."
-            )
-        workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["C2"] = candidates[0]
-        workbook.save(path)
-        workbook.close()
-        return
-    sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-    for offset, candidate in enumerate(candidates):
-        sheet.cell(
-            snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW + offset,
-            1,
-        ).value = candidate
-    workbook.save(path)
-    workbook.close()
-
-
-def _fill_servicenow_workbook(
-    path: Path,
-    *,
-    selected_claim: str,
-    user_field: str,
-) -> None:
-    workbook = load_workbook(path)
-    sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-    for row in range(
-        snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW,
-        sheet.max_row + 1,
-    ):
-        if sheet.cell(row, 1).value == selected_claim:
-            sheet.cell(row, 2).value = user_field
-            break
-    workbook.save(path)
-    workbook.close()
-
-
-def _read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
-    with path.open("r", encoding="utf-8-sig", newline="") as stream:
-        reader = csv.DictReader(stream)
-        return list(reader.fieldnames or []), list(reader)
-
-
-def _write_csv(
-    path: Path,
-    headers: list[str],
-    rows: list[dict[str, str]],
-) -> None:
-    with path.open("w", encoding="utf-8-sig", newline="") as stream:
-        writer = csv.DictWriter(
-            stream,
-            fieldnames=headers,
-            lineterminator="\r\n",
-        )
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def _fill_entra_csv(
-    path: Path,
-    *,
-    client_id: str,
-    user_claim: str,
-) -> None:
-    headers, rows = _read_csv(path)
-    assert len(rows) == 1
-    rows[0]["Client ID"] = client_id
-    rows[0]["User Claim"] = user_claim
-    _write_csv(path, headers, rows)
-
-
-def _fill_servicenow_csv(
-    path: Path,
-    *,
-    user_field: str,
-) -> None:
-    headers, rows = _read_csv(path)
-    assert [row["Record"] for row in rows] == ["Entra handoff", "Steps"]
-    rows[1]["ServiceNow User Field"] = user_field
-    _write_csv(path, headers, rows)
-
-
 def _confirm_identity_requirement(
     context: dict,
     *,
@@ -350,27 +258,6 @@ def _ack_identity_availability(
     )
 
 
-def _author_universal_entra_template(path: Path) -> Path:
-    template = (
-        Path(__file__).resolve().parents[2]
-        / "solutions"
-        / "ess-maker-skills"
-        / snow.IDENTITY_WORKBOOK_TEMPLATE_ENTRA
-    )
-    path.write_bytes(template.read_bytes())
-    return path
-
-
-def _author_servicenow_template(path: Path) -> Path:
-    template = (
-        Path(__file__).resolve().parents[2]
-        / "solutions"
-        / "ess-maker-skills"
-        / snow.IDENTITY_WORKBOOK_TEMPLATE_SERVICENOW
-    )
-    path.write_bytes(template.read_bytes())
-    return path
-
 def _record_test_identity_mapping(
     root: Path,
     *,
@@ -384,49 +271,24 @@ def _record_test_identity_mapping(
         state = snow._state_base(context, _components())
         state["adminSetup"]["preflight"]["instanceName"] = "dev123"
         snow._write_json_atomic(state_path, state)
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    if (
-        "identityRequirement" not in state.get("evidence", {})
-        and "identityClaimCandidates" not in state.get("evidence", {})
-        and not snow._identity_workbook_path(
-            context,
-            stage="entra",
-        ).exists()
-    ):
-        _confirm_identity_requirement(context)
-    entra = snow.identity_mapping_handoff(
+    assert candidates == (selected_claim,)
+    snow.record_identity_direct(
         context,
         stage="entra",
         client_id=APP_CLIENT_ID,
-    )
-    entra_path = Path(entra["workbookPath"])
-    _fill_entra_workbook(entra_path, candidates)
-    snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=entra_path,
-        client_id=APP_CLIENT_ID,
+        claim_name=selected_claim,
+        user_field=None,
         confirmed=True,
     )
     _complete_entra_admin(context, client_id=APP_CLIENT_ID)
-    service_now = snow.identity_mapping_handoff(
+    return snow.record_identity_direct(
         context,
         stage="servicenow",
-    )
-    service_now_path = Path(service_now["workbookPath"])
-    _fill_servicenow_workbook(
-        service_now_path,
-        selected_claim=selected_claim,
-        user_field=user_field,
-    )
-    result = snow.record_identity_mapping(
-        context,
-        stage="servicenow",
-        workbook_path=service_now_path,
         client_id=None,
+        claim_name=None,
+        user_field=user_field,
         confirmed=True,
     )
-    return result
 
 
 def _phase_contract(phase_id: str) -> dict:
@@ -683,9 +545,6 @@ def _seed_complete_dev_state(
             "identityHandoffConfirmed": True,
             "binding": copy.deepcopy(identity_binding),
             "provenanceSha256": "a" * 64,
-            "sourceWorkbookSha256": (
-                snow.IDENTITY_WORKBOOK_SOURCE_SHA256["entra"].upper()
-            ),
             "importedWorkbookSha256": "a" * 64,
             "importedFileFormat": "direct",
             "sheetProtected": False,
@@ -702,9 +561,6 @@ def _seed_complete_dev_state(
             "serviceNowAdministratorConfirmed": True,
             "binding": copy.deepcopy(identity_binding),
             "provenanceSha256": "b" * 64,
-            "sourceWorkbookSha256": (
-                snow.IDENTITY_WORKBOOK_SOURCE_SHA256["servicenow"].upper()
-            ),
             "importedWorkbookSha256": "b" * 64,
             "importedFileFormat": "direct",
             "sheetProtected": False,
@@ -1108,9 +964,8 @@ def _write_shared_source_state(
         "tokenClaimEmissionConfirmed": True,
         "binding": binding,
         "provenanceSha256": "a" * 64,
-        "sourceWorkbookSha256": (
-            snow.IDENTITY_WORKBOOK_SOURCE_SHA256["entra"].upper()
-        ),
+        "sourceWorkbookSha256": "c" * 64,
+        "sourceWorkbookRole": "legacy-handoff",
         "importedWorkbookSha256": "a" * 64,
         "importedFileFormat": "xlsx",
         "sheetProtected": True,
@@ -1133,9 +988,8 @@ def _write_shared_source_state(
         "serviceNowAdministratorConfirmed": True,
         "binding": binding,
         "provenanceSha256": "b" * 64,
-        "sourceWorkbookSha256": (
-            snow.IDENTITY_WORKBOOK_SOURCE_SHA256["servicenow"].upper()
-        ),
+        "sourceWorkbookSha256": "c" * 64,
+        "sourceWorkbookRole": "legacy-handoff",
         "importedWorkbookSha256": "b" * 64,
         "importedFileFormat": "xlsx",
         "sheetProtected": True,
@@ -1571,27 +1425,6 @@ def test_summarize_components_separates_servicenow_from_workday_flows() -> None:
     assert result["cloudFlowDefinitionCount"] == 0
     assert result["reference"]["instanceName"] == "dev123"
     assert result["reference"]["resourceUri"] == APP_CLIENT_ID
-
-
-def test_backend_import_defers_openpyxl_until_workbook_use() -> None:
-    scripts = snow.SOLUTION_ROOT / "scripts"
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                f"import sys; sys.path.insert(0, {str(scripts)!r}); "
-                "import connect_servicenow_da; "
-                "raise SystemExit(1 if 'openpyxl' in sys.modules else 0)"
-            ),
-        ],
-        cwd=snow.SOLUTION_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert completed.returncode == 0, completed.stderr
 
 
 def test_summarize_components_requires_active_state_and_status() -> None:
@@ -2645,8 +2478,6 @@ def test_generated_question_families_have_distinct_headers_and_bodies() -> None:
             "agent-link": snow._agent_link_question(),
             "instance-choice": instance_question,
             "instance-freeform": manual_instance_question,
-            "entra-handoff": snow._identity_handoff_question("entra"),
-            "oidc-handoff": snow._identity_handoff_question("servicenow"),
             **{
                 f"availability-{group['id']}": (
                     snow._business_group_availability_question(group)
@@ -4985,26 +4816,19 @@ def test_shared_reuse_partial_hr_to_it_requires_one_maker_acceptance(
             source_key=handoff["candidate"]["sourceKey"],
             decision="accept",
         )
-        entra_handoff = snow.identity_mapping_handoff(
+        entra_handoff = snow.identity_direct_handoff(
             context,
             stage="entra",
         )
-        oidc_handoff = snow.identity_mapping_handoff(
+        oidc_handoff = snow.identity_direct_handoff(
             context,
             stage="servicenow",
         )
-        resumed_entra = snow.identity_mapping_handoff(
+        resumed_entra = snow.identity_direct_handoff(
             context,
             stage="entra",
         )
-        entra_workbook_exists = snow._identity_workbook_path(
-            context,
-            stage="entra",
-        ).exists()
-        oidc_workbook_exists = snow._identity_workbook_path(
-            context,
-            stage="servicenow",
-        ).exists()
+
 
     assert connection_reads == 0
     assert result["reusedItems"] == [
@@ -5039,12 +4863,8 @@ def test_shared_reuse_partial_hr_to_it_requires_one_maker_acceptance(
         resumed_entra,
     ):
         assert completed_handoff["decision"] == "no-action"
-        assert completed_handoff["handoffMode"] == "complete"
-        assert completed_handoff["question"] is None
-        assert completed_handoff["instruction"] is None
-        assert completed_handoff["workbookPath"] is None
-    assert entra_workbook_exists is False
-    assert oidc_workbook_exists is False
+        assert completed_handoff["questions"] == []
+        assert completed_handoff["ordinaryReply"] is None
 
 
 def test_shared_reuse_supports_partial_it_to_hr_without_oidc_or_credential(
@@ -5075,11 +4895,11 @@ def test_shared_reuse_supports_partial_it_to_hr_without_oidc_or_credential(
             source_key=handoff["candidate"]["sourceKey"],
             decision="accept",
         )
-        entra_handoff = snow.identity_mapping_handoff(
+        entra_handoff = snow.identity_direct_handoff(
             context,
             stage="entra",
         )
-        oidc_handoff = snow.identity_mapping_handoff(
+        oidc_handoff = snow.identity_direct_handoff(
             context,
             stage="servicenow",
         )
@@ -5090,9 +4910,9 @@ def test_shared_reuse_supports_partial_it_to_hr_without_oidc_or_credential(
     ]
     assert result["reusedItems"] == ["entra-registration"]
     assert entra_handoff["decision"] == "no-action"
-    assert entra_handoff["question"] is None
-    assert oidc_handoff["decision"] == "question-required"
-    assert oidc_handoff["question"] is not None
+    assert entra_handoff["questions"] == []
+    assert oidc_handoff["decision"] == "availability-required"
+    assert oidc_handoff["availability"]["question"] is not None
     assert oidc_handoff["stage"] == "servicenow"
     saved = json.loads(target_path.read_text(encoding="utf-8"))
     assert saved["adminSetup"]["phaseHandoffs"]["entra-registration"][
@@ -5136,8 +4956,8 @@ def test_shared_reuse_full_it_to_hr_skips_both_admin_handoffs(
             source_key=offer["candidate"]["sourceKey"],
             decision="accept",
         )
-        entra = snow.identity_mapping_handoff(context, stage="entra")
-        oidc = snow.identity_mapping_handoff(context, stage="servicenow")
+        entra = snow.identity_direct_handoff(context, stage="entra")
+        oidc = snow.identity_direct_handoff(context, stage="servicenow")
         resumed = snow.shared_reuse_handoff(context)
 
     assert accepted["reusedItems"] == [
@@ -5146,9 +4966,9 @@ def test_shared_reuse_full_it_to_hr_skips_both_admin_handoffs(
     ]
     assert resumed["decision"] == "already-recorded"
     assert entra["decision"] == "no-action"
-    assert entra["question"] is None
+    assert entra["questions"] == []
     assert oidc["decision"] == "no-action"
-    assert oidc["question"] is None
+    assert oidc["questions"] == []
     saved = json.loads(target_path.read_text(encoding="utf-8"))
     assert saved["phases"]["entra-registration"]["status"] == "pending"
     assert saved["phases"]["servicenow-oidc"]["status"] == "pending"
@@ -5191,7 +5011,7 @@ def test_accepted_shared_reuse_rejects_changed_source_without_target_write(
             snow.ServiceNowConnectError,
             match="source changed after it was accepted",
         ):
-            snow.identity_mapping_handoff(context, stage="entra")
+            snow.identity_direct_handoff(context, stage="entra")
 
     assert target_path.read_bytes() == target_before
 
@@ -5236,14 +5056,16 @@ def test_accepted_shared_reuse_repairs_legacy_oidc_handoff_hash(
     target_path.write_text(json.dumps(target), encoding="utf-8")
 
     with snow.product_profile_context("itsm"):
-        handoff = snow.identity_mapping_handoff(
+        handoff = snow.identity_direct_handoff(
             context,
             stage="servicenow",
         )
 
     assert handoff["decision"] == "no-action"
-    assert handoff["question"] is None
-    repaired = json.loads(target_path.read_text(encoding="utf-8"))
+    assert handoff["questions"] == []
+    assert handoff["remoteMutationCount"] == 0
+    with snow.product_profile_context("itsm"):
+        repaired = snow._load_lifecycle_state(context)
     oidc_evidence = repaired["adminSetup"]["phaseHandoffs"][
         "servicenow-oidc"
     ]["evidence"]
@@ -5407,20 +5229,20 @@ def test_shared_reuse_can_apply_oidc_only_against_current_target_entra(
             source_key=handoff["candidate"]["sourceKey"],
             decision="accept",
         )
-        entra_handoff = snow.identity_mapping_handoff(
+        entra_handoff = snow.identity_direct_handoff(
             context,
             stage="entra",
         )
-        oidc_handoff = snow.identity_mapping_handoff(
+        oidc_handoff = snow.identity_direct_handoff(
             context,
             stage="servicenow",
         )
 
     assert result["reusedItems"] == ["servicenow-oidc"]
     assert entra_handoff["decision"] == "no-action"
-    assert entra_handoff["question"] is None
+    assert entra_handoff["questions"] == []
     assert oidc_handoff["decision"] == "no-action"
-    assert oidc_handoff["question"] is None
+    assert oidc_handoff["questions"] == []
     saved = json.loads(target_path.read_text(encoding="utf-8"))
     assert saved["adminSetup"]["phaseHandoffs"]["entra-registration"][
         "status"
@@ -6740,483 +6562,6 @@ def test_shared_reuse_rejects_source_change_after_question(
             )
 
 
-def test_entra_workbook_is_protected_with_only_claim_cells_unlocked(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    universal_template = _author_universal_entra_template(
-        tmp_path / "universal-entra-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_ENTRA",
-        universal_template,
-    )
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    path = _lifecycle_path(tmp_path)
-    snow._write_json_atomic(path, state)
-    _confirm_identity_requirement(context)
-
-    handoff = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    path = Path(handoff["workbookPath"])
-    workbook = load_workbook(path)
-    sheet = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-    metadata = workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET]
-
-    assert handoff["stage"] == "entra"
-    assert handoff["editableFields"] == [
-        "application_client_id",
-        "user_claim",
-    ]
-    assert workbook.sheetnames == ["Entra Handoff", "_metadata"]
-    assert workbook.active.title == "Entra Handoff"
-    assert sheet.max_row == 2
-    assert sheet.max_column == 3
-    assert tuple(sheet.cell(1, column).value for column in range(1, 4)) == (
-        "Instructions",
-        "Client ID",
-        "User Claim",
-    )
-    assert sheet.protection.sheet is True
-    assert sheet["A2"].protection.locked is True
-    assert sheet["B2"].protection.locked is False
-    assert sheet["C2"].protection.locked is False
-    assert sheet["B2"].fill.fgColor.rgb.endswith("FFF2CC")
-    assert sheet["C2"].fill.fgColor.rgb.endswith("FFF2CC")
-    assert sheet["B2"].value == APP_CLIENT_ID
-    assert sheet["C2"].value in {None, ""}
-    assert metadata.sheet_state == "hidden"
-    assert metadata.protection.sheet is True
-    workbook.close()
-
-
-def test_identity_workbook_short_temp_name_fits_live_windows_path_budget(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    live_parent = (
-        r"C:\Users\example123\DEV\copilot-worktrees"
-        r"\Employee-Self-Service-Agent-Developer-Kit"
-        r"\it-validation-20261007-newenv\solutions\ess-maker-skills"
-        r"\.local\connect\servicenow-da-itsm\agents"
-        r"\employee-self-service-it"
-    )
-    final_target = (
-        live_parent + r"\servicenow-identity-claims-entra.xlsx"
-    )
-    old_temporary = final_target + ".aucbxw_v.tmp.xlsx"
-    new_temporary = live_parent + r"\.identity-aucbxw_v.tmp.xlsx"
-
-    assert len(live_parent) == 206
-    assert len(final_target) == 244
-    assert len(old_temporary) == 262
-    assert len(new_temporary) == 234
-    assert len(new_temporary) < snow.WINDOWS_LEGACY_MAX_PATH
-
-    target_parent_length = 206
-    remaining = target_parent_length - len(str(tmp_path))
-    components = []
-    while remaining > 1:
-        component_length = min(remaining - 1, 80)
-        components.append("x" * component_length)
-        remaining -= component_length + 1
-    parent = tmp_path.joinpath(*components)
-    context_values = {
-        key: f"test-{key}"
-        for key in snow.IDENTITY_WORKBOOK_CONTEXT_FIELDS
-    }
-    context_values.update(
-        {
-            "provider": snow.PROVIDER_KEY,
-            "profile": snow.PROFILE_KEY,
-            "agent_slug": AGENT_SLUG,
-            "agent_id": AGENT_ID,
-            "confirmed_user_claim_name": "email",
-        }
-    )
-    original_mkstemp = snow.tempfile.mkstemp
-    calls: list[dict[str, object]] = []
-
-    def captured_mkstemp(*args: object, **kwargs: object) -> tuple[int, str]:
-        calls.append(dict(kwargs))
-        return original_mkstemp(*args, **kwargs)
-
-    monkeypatch.setattr(snow.tempfile, "mkstemp", captured_mkstemp)
-    entra_path = parent / "servicenow-identity-claims-entra.xlsx"
-    servicenow_path = (
-        parent / "servicenow-identity-mapping-servicenow.xlsx"
-    )
-    snow._write_identity_workbook(
-        entra_path,
-        context_values=context_values,
-        stage="entra",
-        candidates=[],
-        steps=snow._identity_workbook_steps(
-            stage="entra",
-            context_values=context_values,
-            missing_items=[("CLAIMS", "employee identity claim workbook")],
-        ),
-    )
-    snow._write_identity_workbook(
-        servicenow_path,
-        context_values=context_values,
-        stage="servicenow",
-        candidates=["email"],
-        steps=snow._identity_workbook_steps(
-            stage="servicenow",
-            context_values=context_values,
-            missing_items=[],
-        ),
-    )
-
-    assert len(str(parent)) == target_parent_length
-    assert entra_path.is_file()
-    assert servicenow_path.is_file()
-    assert [call["prefix"] for call in calls] == [
-        snow.IDENTITY_WORKBOOK_TEMP_PREFIX,
-        snow.IDENTITY_WORKBOOK_TEMP_PREFIX,
-    ]
-    assert [call["suffix"] for call in calls] == [
-        snow.IDENTITY_WORKBOOK_TEMP_SUFFIX,
-        snow.IDENTITY_WORKBOOK_TEMP_SUFFIX,
-    ]
-    assert all(Path(str(call["dir"])) == parent for call in calls)
-
-
-def test_identity_workbook_rejects_unsupported_windows_target_path() -> None:
-    too_long = Path("x" * snow.WINDOWS_LEGACY_MAX_PATH)
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="target path is too long",
-    ):
-        snow._validate_identity_workbook_path_budget(
-            too_long,
-            platform_name="nt",
-        )
-
-
-@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
-def test_partial_legacy_entra_rows_require_one_complete_handoff(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    profile: str,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    universal_template = _author_universal_entra_template(
-        tmp_path / "universal-entra-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_ENTRA",
-        universal_template,
-    )
-    agent_id = AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID
-    slug = AGENT_SLUG if profile == "hrsd" else "employee-self-service-it"
-    context, state_path = _write_shared_target_state(
-        tmp_path,
-        profile=profile,
-        agent_id=agent_id,
-        agent_slug=slug,
-        instance_name="dev123",
-    )
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
-        "status": "reused",
-        "evidence": {
-            "kind": "structured-admin-attestation",
-            "recordedAt": "2026-10-01T00:00:00Z",
-            "clientId": APP_CLIENT_ID,
-        },
-    }
-    prefix = "SN-DA-HRSD" if profile == "hrsd" else "SN-DA-ITSM"
-    state["phases"]["entra-registration"]["checkpointResults"] = {
-        f"{prefix}-ENTRA-APP-001": "Passed",
-        f"{prefix}-ENTRA-CLAIMS-001": "NotConfigured",
-        f"{prefix}-ENTRA-SCOPE-001": "Passed",
-        f"{prefix}-ENTRA-PREAUTH-001": "Passed",
-    }
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-
-    with snow.product_profile_context(profile):
-        _confirm_identity_requirement(context)
-        state_before = state_path.read_bytes()
-        handoff = snow.identity_mapping_handoff(context, stage="entra")
-
-    question_object = handoff["question"]
-    question = handoff["instruction"]
-    assert handoff["handoffMode"] == "full-setup"
-    assert {
-        item["checkpoint"] for item in handoff["missingItems"]
-    } == {"APP", "CLAIMS", "SCOPE", "PREAUTH"}
-    assert handoff["instructionTitle"] == (
-        "Step 1 of 2 — Entra: list employee identity options"
-    )
-    assert question_object == {
-        "header": "Entra admin handoff file",
-        "question": (
-            "Please enter the returned Entra admin handoff workbook URL."
-        ),
-        "allowFreeformInput": True,
-    }
-    assert question_object["header"] != question_object["question"]
-    assert question.startswith("**Purpose**\n")
-    assert "Step 1 of 2" not in question
-    assert "Complete the Entra application and identity-claim handoff." in question
-    assert "Application Administrator or Cloud Application Administrator" in (
-        question
-    )
-    assert "https://entra.microsoft.com/" in question
-    assert handoff["workbookUri"] in question
-    assert "options" not in question_object
-    assert question_object["allowFreeformInput"] is True
-    assert str(Path(handoff["workbookPath"])) in question
-    assert handoff["workbookUri"] in question
-    assert handoff["clientIdQuestion"] is None
-    assert state_path.read_bytes() == state_before
-    headings = ("**Purpose**", "**Owner**", "**Known target**", "**Action**")
-    positions = [question.index(heading) for heading in headings]
-    assert positions == sorted(positions)
-    assert (
-        "\n\n**Owner**\nApplication Administrator or Cloud Application "
-        "Administrator." in question
-    )
-    assert "\n\n**Action**\n1. " in question
-    assert "\n2. " in question
-    assert "\n3. " in question
-    assert "\n4. " in question
-    assert "\n5. " not in question
-    assert "**Expected result**" not in question
-    assert "Purpose:" not in question
-    assert "Owner:" not in question
-    assert str(Path(handoff["workbookPath"])) in question
-    assert str(Path(handoff["csvPath"])) in question
-    assert "`Entra Handoff`" in question
-    assert "one selected User Claim name" in question
-    assert "Do not enter `aud`" in question
-    assert "completed XLSX or CSV file" in question
-    assert "Separate readiness checks still report" not in question
-    assert "then choose Completed" not in question
-    assert "Not yet" not in question
-    for forbidden in (
-        "no setup redo",
-        "candidates",
-        "token_claim_name",
-        "current status",
-        "signed-in employee",
-    ):
-        assert forbidden not in question
-    assert "Application ID URI" not in question
-    workbook = load_workbook(Path(handoff["workbookPath"]))
-    assert workbook.sheetnames == ["Entra Handoff", "_metadata"]
-    sheet = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-    instruction = sheet["A2"].value
-    assert instruction == snow._entra_admin_instruction()
-    assert "\r" not in instruction and "\n" not in instruction
-    assert "**New registration.**" in instruction
-    assert "*Aud* - for audience validation" in instruction
-    assert "*Email* - addressable email for the user" in instruction
-    assert "*UPN* - an identifier for the user" in instruction
-    assert "Microsoft Graph permissions" in instruction
-    assert snow.SERVICENOW_NON_EMAIL_USER_MATCH_URL in instruction
-    assert sheet["A2"].hyperlink.target == (
-        snow.SERVICENOW_NON_EMAIL_USER_MATCH_URL
-    )
-    assert sheet["B2"].value == APP_CLIENT_ID
-    assert sheet["C2"].value in {None, ""}
-    workbook.close()
-
-
-@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
-@pytest.mark.parametrize(
-    ("scenario", "expected_mode", "expected_missing"),
-    (
-        (
-            "fresh",
-            "full-setup",
-            {"APP", "CLAIMS", "SCOPE", "PREAUTH"},
-        ),
-        (
-            "partial",
-            "full-setup",
-            {"APP", "CLAIMS", "SCOPE", "PREAUTH"},
-        ),
-        (
-            "claim-only",
-            "full-setup",
-            {"APP", "CLAIMS", "SCOPE", "PREAUTH"},
-        ),
-    ),
-)
-def test_public_entra_handoff_emits_v3_workbook_for_hr_and_it(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    profile: str,
-    scenario: str,
-    expected_mode: str,
-    expected_missing: set[str],
-) -> None:
-    scenario_root = tmp_path / f"{profile}-{scenario}"
-    scenario_root.mkdir()
-    monkeypatch.chdir(scenario_root)
-    universal_template = _author_universal_entra_template(
-        scenario_root / "universal-entra-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_ENTRA",
-        universal_template,
-    )
-    product = snow.PRODUCT_PROFILES[profile]
-    slug = (
-        "employee-self-service-hr"
-        if profile == "hrsd"
-        else "employee-self-service-it"
-    )
-    agent_id = AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID
-    context = _profile_context(
-        profile,
-        agent_id=agent_id,
-        agent_slug=slug,
-    )
-    context["root"] = scenario_root
-    components = _components() if profile == "hrsd" else _itsm_components()
-    prefix = "SN-DA-HRSD" if profile == "hrsd" else "SN-DA-ITSM"
-    with snow.product_profile_context(profile):
-        state = snow._state_base(context, components)
-        state["attested"] = True
-        state["acceptedContractRevision"] = 1
-        state["phases"] = {
-            phase: {"status": "pending", "checkpointResults": {}}
-            for phase in (
-                "preflight",
-                "entra-registration",
-                "servicenow-oidc",
-                "credential",
-                "topics",
-                "portal-url",
-                "agent-connection",
-                "test",
-                "publish",
-            )
-        }
-        state["adminSetup"]["preflight"]["instanceName"] = (
-            f"example-{profile}-{scenario}"
-        )
-        if scenario == "fresh":
-            checkpoint_results = {}
-        elif scenario == "partial":
-            checkpoint_results = {
-                f"{prefix}-ENTRA-APP-001": "Passed",
-                f"{prefix}-ENTRA-CLAIMS-001": "NotConfigured",
-                f"{prefix}-ENTRA-SCOPE-001": "Passed",
-                f"{prefix}-ENTRA-PREAUTH-001": "NotConfigured",
-            }
-        else:
-            checkpoint_results = {
-                f"{prefix}-ENTRA-APP-001": "Passed",
-                f"{prefix}-ENTRA-CLAIMS-001": "NotConfigured",
-                f"{prefix}-ENTRA-SCOPE-001": "Passed",
-                f"{prefix}-ENTRA-PREAUTH-001": "Passed",
-            }
-        state["phases"]["entra-registration"]["checkpointResults"] = (
-            checkpoint_results
-        )
-        if scenario != "fresh":
-            state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
-                "status": "reused",
-                "evidence": {
-                    "kind": "structured-admin-attestation",
-                    "recordedAt": "2026-10-01T00:00:00Z",
-                    "clientId": APP_CLIENT_ID,
-                },
-            }
-        state_path = snow._lifecycle_state_path(context)
-        snow._write_json_atomic(state_path, state)
-        state_before = state_path.read_bytes()
-        handoff = snow.identity_mapping_handoff(context, stage="entra")
-
-    assert state_path.read_bytes() == state_before
-    assert handoff["provider"] == product.provider_key
-    assert handoff["profile"] == profile
-    assert handoff["handoffMode"] == expected_mode
-    assert {item["checkpoint"] for item in handoff["missingItems"]} == (
-        expected_missing
-    )
-    assert handoff["clientIdQuestion"] is None
-    assert handoff["instructionTitle"] == (
-        "Step 1 of 2 — Entra: list employee identity options"
-    )
-    assert handoff["question"] == {
-        "header": "Entra admin handoff file",
-        "question": (
-            "Please enter the returned Entra admin handoff workbook URL."
-        ),
-        "allowFreeformInput": True,
-    }
-    assert handoff["question"]["header"] != handoff["question"]["question"]
-    instruction = handoff["instruction"]
-    assert "No separate readiness item is included" not in instruction
-    assert "Separate readiness checks still report" not in instruction
-    assert "Separate checks must pass on their own evidence" not in instruction
-    assert "Application ID URI and `user_impersonation` scope" not in (
-        instruction
-    )
-    assert "ServiceNow connector pre-authorization" not in instruction
-    assert "**Expected result**" not in instruction
-    assert "Completed" not in instruction
-    assert "Not yet" not in instruction
-    assert "Complete the Entra application and identity-claim handoff." in (
-        instruction
-    )
-    assert "one selected User Claim name" in instruction
-    assert handoff["workbookUri"] in instruction
-    assert handoff["csvUri"] in instruction
-    assert str(Path(handoff["workbookPath"])) in instruction
-    assert str(Path(handoff["csvPath"])) in instruction
-    assert context["environment"]["tenant_id"] in instruction
-    assert context["environment"]["id"] in instruction
-    assert context["agent"]["id"] in instruction
-    assert f"example-{profile}-{scenario}" in instruction
-    workbook_path = Path(handoff["workbookPath"])
-    assert workbook_path.is_file()
-    workbook = load_workbook(
-        workbook_path,
-        data_only=False,
-        keep_links=False,
-    )
-    sheet = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-    metadata = workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET]
-    assert workbook.sheetnames == ["Entra Handoff", "_metadata"]
-    assert sheet["A2"].value == snow._entra_admin_instruction()
-    assert "\r" not in sheet["A2"].value
-    assert "\n" not in sheet["A2"].value
-    assert sheet["A2"].hyperlink.target == (
-        snow.SERVICENOW_NON_EMAIL_USER_MATCH_URL
-    )
-    assert metadata.sheet_state == "hidden"
-    assert metadata.protection.sheet is True
-    assert sheet.protection.sheet is True
-    assert sheet["C2"].value in {None, ""}
-    client_cell = sheet["B2"]
-    if scenario == "fresh":
-        assert handoff["applicationClientId"] is None
-        assert client_cell.value in {None, ""}
-        assert client_cell.protection.locked is False
-    else:
-        assert handoff["applicationClientId"] == APP_CLIENT_ID
-        assert client_cell.value == APP_CLIENT_ID
-        assert client_cell.protection.locked is False
-    workbook.close()
-
-
 def test_identity_requirement_not_sure_idempotency_and_scope_are_safe(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -7236,10 +6581,6 @@ def test_identity_requirement_not_sure_idempotency_and_scope_are_safe(
     assert waiting["status"] == "waiting"
     assert waiting["recorded"] is False
     assert state_path.read_bytes() == before
-    assert not snow._identity_workbook_path(
-        context,
-        stage="entra",
-    ).exists()
 
     receipt = _confirm_identity_requirement(context, choice="email")
     after_record = state_path.read_bytes()
@@ -7262,136 +6603,8 @@ def test_identity_requirement_not_sure_idempotency_and_scope_are_safe(
         snow.ServiceNowConnectError,
         match="does not match the active agent",
     ):
-        snow.identity_mapping_handoff(other_context, stage="entra")
+        snow.identity_direct_handoff(other_context, stage="entra")
     assert state_path.read_bytes() == after_record
-
-
-def test_unfilled_legacy_entra_workbook_is_upgraded_in_place(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    universal_template = _author_universal_entra_template(
-        tmp_path / "universal-entra-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_ENTRA",
-        universal_template,
-    )
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "example-instance"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    expected_identity = snow._required_context_identity(context, state)
-    context_values = snow._identity_workbook_context_values(
-        context,
-        expected_identity,
-        application_client_id=None,
-        stage="entra",
-    )
-    path = snow._identity_workbook_path(context, stage="entra")
-    snow._write_identity_workbook(
-        path,
-        context_values=context_values,
-        stage="entra",
-        candidates=[],
-        steps=[],
-        missing_items=[
-            ("APP", "application"),
-            ("CLAIMS", "claims"),
-        ],
-    )
-    workbook = load_workbook(path)
-    workbook.properties.identifier = None
-    workbook.save(path)
-    workbook.close()
-    before = path.read_bytes()
-
-    handoff = snow.identity_mapping_handoff(context, stage="entra")
-
-    assert handoff["handoffMode"] == "full-setup"
-    assert handoff["workbookFileStatus"] == "generated"
-    assert Path(handoff["workbookPath"]) == path.resolve()
-    assert path.read_bytes() != before
-    assert snow._identity_workbook_template_marker(path) == (
-        snow._identity_workbook_template_sha256("entra")
-    )
-    saved = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
-    assert "identityRequirement" not in saved.get("evidence", {})
-
-
-@pytest.mark.parametrize("admin_value", ("claim", "client-id"))
-def test_filled_legacy_workbook_gets_versioned_current_template_copy(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    admin_value: str,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    template = _author_universal_entra_template(
-        tmp_path / "current-entra-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_ENTRA",
-        template,
-    )
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    initial = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-    )
-    canonical = Path(initial["workbookPath"])
-    workbook = load_workbook(canonical)
-    workbook.properties.identifier = None
-    workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["A2"] = (
-        "Legacy instructions"
-    )
-    if admin_value == "claim":
-        workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["C2"] = "email"
-    else:
-        client_cell = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["B2"]
-        assert client_cell.protection.locked is False
-        client_cell.value = APP_CLIENT_ID
-    workbook.save(canonical)
-    workbook.close()
-    canonical_before = canonical.read_bytes()
-
-    handoff = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-    )
-
-    returned = Path(handoff["workbookPath"])
-    expected_sha = snow._identity_workbook_template_sha256("entra")
-    assert handoff["workbookFileStatus"] == "generated-versioned"
-    assert returned != canonical.resolve()
-    assert returned.name == (
-        "servicenow-identity-claims-entra.template-"
-        f"{expected_sha[:12].lower()}.xlsx"
-    )
-    assert canonical.read_bytes() == canonical_before
-    assert snow._identity_workbook_template_marker(returned) == expected_sha
-    current = load_workbook(returned, data_only=False, keep_links=False)
-    assert current[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["A2"].value == (
-        snow._entra_admin_instruction()
-    )
-    assert current[snow.IDENTITY_ENTRA_HANDOFF_SHEET].protection.sheet is True
-    assert current["_metadata"].sheet_state == "hidden"
-    assert current["_metadata"].protection.sheet is True
-    current.close()
-
-    resumed = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    assert resumed["workbookFileStatus"] == "preserved-versioned"
-    assert Path(resumed["workbookPath"]) == returned
 
 
 @pytest.mark.parametrize("profile", ("hrsd", "itsm"))
@@ -7480,12 +6693,15 @@ def test_legacy_candidate_receipt_does_not_replace_setup_confirmation(
         state_path = snow._lifecycle_state_path(context)
         snow._write_json_atomic(state_path, state)
         before = state_path.read_bytes()
-        handoff = snow.identity_mapping_handoff(context, stage="entra")
+        handoff = snow.identity_direct_handoff(context, stage="entra")
 
     if not needs_handoff:
         # A current single-claim receipt is the Entra completion criterion
         # (client ID + one claim name), so no new administrator handoff.
-        saved = json.loads(state_path.read_text(encoding="utf-8"))
+        # The no-action handoff reconciles on load without rewriting disk.
+        assert state_path.read_bytes() == before
+        with snow.product_profile_context(profile):
+            saved = snow._load_lifecycle_state(context)
         entra = saved["adminSetup"]["phaseHandoffs"]["entra-registration"]
         assert entra["status"] == "completed"
         assert entra["verifiedBy"] == "current-target-identity-handoff"
@@ -7498,8 +6714,7 @@ def test_legacy_candidate_receipt_does_not_replace_setup_confirmation(
             "criterion"
         ] == "client-id-and-one-claim-name"
         assert handoff["decision"] == "no-action"
-        assert handoff["handoffMode"] == "complete"
-        assert handoff["workbookPath"] is None
+        assert handoff["questions"] == []
         return
 
     assert state_path.read_bytes() == before
@@ -7508,491 +6723,24 @@ def test_legacy_candidate_receipt_does_not_replace_setup_confirmation(
         "candidateSetSha256"
     ] == receipt["candidateSetSha256"]
     assert "identityRequirement" not in saved["evidence"]
-    assert handoff["handoffMode"] == "full-setup"
-    assert Path(handoff["workbookPath"]).is_file()
-    assert "options" not in handoff["question"]
-    assert handoff["question"]["allowFreeformInput"] is True
-    assert handoff["question"] is not None
-
-
-@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
-@pytest.mark.parametrize("scenario", ("fresh", "claim-only"))
-def test_custom_identity_overlay_flows_through_entra_and_servicenow(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    profile: str,
-    scenario: str,
-) -> None:
-    scenario_root = tmp_path / f"{profile}-{scenario}"
-    scenario_root.mkdir()
-    monkeypatch.chdir(scenario_root)
-    universal_template = _author_universal_entra_template(
-        scenario_root / "universal-entra-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_ENTRA",
-        universal_template,
-    )
-    servicenow_template = _author_servicenow_template(
-        scenario_root / "servicenow-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_SERVICENOW",
-        servicenow_template,
-    )
-    slug = (
-        "employee-self-service-hr"
-        if profile == "hrsd"
-        else "employee-self-service-it"
-    )
-    agent_id = AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID
-    context = _profile_context(
-        profile,
-        agent_id=agent_id,
-        agent_slug=slug,
-    )
-    context["root"] = scenario_root
-    components = _components() if profile == "hrsd" else _itsm_components()
-    prefix = "SN-DA-HRSD" if profile == "hrsd" else "SN-DA-ITSM"
-    with snow.product_profile_context(profile):
-        state = snow._state_base(context, components)
-        state["attested"] = True
-        state["acceptedContractRevision"] = 1
-        state["phases"] = {
-            phase: {"status": "pending", "checkpointResults": {}}
-            for phase in (
-                "preflight",
-                "entra-registration",
-                "servicenow-oidc",
-                "credential",
-                "topics",
-                "portal-url",
-                "agent-connection",
-                "test",
-                "publish",
-            )
-        }
-        state["adminSetup"]["preflight"]["instanceName"] = (
-            f"example-{profile}-{scenario}"
-        )
-        if scenario == "claim-only":
-            state["phases"]["entra-registration"]["checkpointResults"] = {
-                f"{prefix}-ENTRA-APP-001": "Passed",
-                f"{prefix}-ENTRA-CLAIMS-001": "NotConfigured",
-                f"{prefix}-ENTRA-SCOPE-001": "Passed",
-                f"{prefix}-ENTRA-PREAUTH-001": "Passed",
-                f"{prefix}-ENTRA-PERMISSIONS-001": "Passed",
-                f"{prefix}-ENTRA-CONSENT-001": "Passed",
-            }
-            state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
-                "status": "reused",
-                "evidence": {
-                    "kind": "structured-admin-attestation",
-                    "recordedAt": "2026-10-01T00:00:00Z",
-                    "clientId": APP_CLIENT_ID,
-                },
-            }
-        state_path = snow._lifecycle_state_path(context)
-        snow._write_json_atomic(state_path, state)
-        requirement = _confirm_identity_requirement(
-            context,
-            choice="pay-employee-id",
-        )
-        assert requirement["category"] == "custom"
-        entra = snow.identity_mapping_handoff(context, stage="entra")
-
-    entra_path = Path(entra["workbookPath"])
-    workbook = load_workbook(
-        entra_path,
-        data_only=False,
-        keep_links=False,
-    )
-    sheet = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-    text = sheet["A2"].value
-    assert text == snow._entra_admin_instruction()
-    assert "\r" not in text and "\n" not in text
-    assert snow.SERVICENOW_NON_EMAIL_USER_MATCH_URL in text
-    assert sheet["A2"].hyperlink.target == (
-        snow.SERVICENOW_NON_EMAIL_USER_MATCH_URL
-    )
-    assert "If the selected User Claim is not email" in text
-    assert "one selected User Claim name" in text
-    assert "*Aud* - for audience validation" in text
-    assert "must not be entered as the selected User Claim" in text
-    if scenario == "fresh":
-        assert sheet["B2"].value in {None, ""}
-        sheet["B2"] = APP_CLIENT_ID
-    else:
-        assert entra["handoffMode"] == "full-setup"
-        assert sheet["B2"].value == APP_CLIENT_ID
-    workbook.save(entra_path)
-    workbook.close()
-    _fill_entra_workbook(entra_path, ("approved_employee_key",))
-    with snow.product_profile_context(profile):
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=entra_path,
-            client_id=None,
-            confirmed=True,
-        )
-        _complete_entra_admin(context)
-        servicenow = snow.identity_mapping_handoff(
-            context,
-            stage="servicenow",
-        )
-
-    service_now_path = Path(servicenow["workbookPath"])
-    workbook = load_workbook(
-        service_now_path,
-        data_only=False,
-        keep_links=False,
-    )
-    steps = workbook[snow.IDENTITY_WORKBOOK_STEPS_SHEET]
-    text = "\n".join(
-        str(steps.cell(row, 2).value or "")
-        for row in range(2, steps.max_row + 1)
-    )
-    hyperlinks = [
-        cell.hyperlink.target
-        for row in steps.iter_rows()
-        for cell in row
-        if cell.hyperlink is not None
-    ]
-    assert hyperlinks == []
-    assert [steps.cell(row, 1).value for row in range(2, 5)] == [
-        "Overview",
-        "Entra handoff",
-        "1",
-    ]
-    assert steps["B3"].value == (
-        f"Entra handoff - Client ID: `{APP_CLIENT_ID}`  "
-        "User Claim: `approved_employee_key`"
-    )
-    instruction = steps["B4"].value
-    assert instruction.count("`approved_employee_key`") == 3
-    assert (
-        "User Claim: Auto-populated from the confirmed Entra administrator "
-        "result: `approved_employee_key`"
-    ) in instruction
-    assert "`oid`" not in instruction
-    assert "User ID" not in instruction
-    workbook.close()
+    assert handoff["decision"] in {
+        "availability-required",
+        "instructions-required",
+    }
 
 
 @pytest.mark.parametrize(
-    "client_id",
-    [APP_CLIENT_ID, snow.IDENTITY_WORKBOOK_PENDING_CLIENT_ID],
-)
-def test_entra_steps_cover_known_and_unknown_app_setup(
-    client_id: str,
-) -> None:
-    steps = snow._identity_workbook_steps(
-        stage="entra",
-        context_values={
-            "servicenow_instance": "dev123",
-            "application_client_id": client_id,
-        },
-        missing_items=[
-            ("APP", "application"),
-            ("CLAIMS", "claims"),
-            ("SCOPE", "scope"),
-            ("PREAUTH", "preauth"),
-            ("PERMISSIONS", "permissions"),
-            ("CONSENT", "consent"),
-        ],
-    )
-    text = "\n".join(action for _step, action in steps)
-    labels = [label for label, _action in steps]
-
-    assert labels == ["1"]
-    assert text == snow._entra_admin_instruction()
-    assert "\r" not in text and "\n" not in text
-    assert "**New registration.**" in text
-    assert "**Redirect URL:** Not needed" in text
-    assert "**Token type** as **Access**" in text
-    assert "*Aud* - for audience validation" in text
-    assert "*Email* - addressable email for the user" in text
-    assert "*UPN* - an identifier for the user" in text
-    assert "Microsoft Graph permissions" in text
-    assert snow.SERVICENOW_NON_EMAIL_USER_MATCH_URL in text
-    assert "must not be entered as the selected User Claim" in text
-
-
-def test_entra_template_copy_keeps_one_universal_branch_graph(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    universal_template = _author_universal_entra_template(
-        tmp_path / "universal-entra-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_ENTRA",
-        universal_template,
-    )
-    base_context = {
-        "purpose": "DRAFT EXAMPLE",
-        "target_agent": "DRAFT EXAMPLE - Employee Self-Service (IT)",
-        "tenant_id": "11111111-1111-4111-8111-111111111111",
-        "environment_id": "22222222-2222-4222-8222-222222222222",
-        "servicenow_instance": "example-instance",
-        "stage": "entra",
-        "owner": "Microsoft Entra administrator",
-        "admin_instruction": "Follow Steps.",
-        "privacy_note": "Do not add secrets.",
-    }
-    scenarios = (
-        (
-            "new",
-            snow.IDENTITY_WORKBOOK_PENDING_CLIENT_ID,
-            [
-                ("APP", "application"),
-                ("CLAIMS", "claims"),
-                ("SCOPE", "scope"),
-                ("PREAUTH", "preauth"),
-                ("PERMISSIONS", "permissions"),
-                ("CONSENT", "consent"),
-            ],
-        ),
-        (
-            "repair",
-            "33333333-3333-4333-8333-333333333333",
-            [
-                ("CLAIMS", "claims"),
-                ("PERMISSIONS", "permissions"),
-                ("CONSENT", "consent"),
-            ],
-        ),
-        (
-            "ready",
-            "44444444-4444-4444-8444-444444444444",
-            [("CLAIMS", "claims")],
-        ),
-    )
-    results = {}
-    for name, client_id, missing_items in scenarios:
-        context_values = {
-            **base_context,
-            "application_client_id": client_id,
-        }
-        path = tmp_path / f"{name}.xlsx"
-        snow._write_identity_workbook(
-            path,
-            context_values=context_values,
-            stage="entra",
-            candidates=[],
-            steps=[],
-            missing_items=missing_items,
-            identity_requirement={
-                "label": "Email",
-                "category": "standard",
-            },
-        )
-        workbook = load_workbook(path, data_only=False, keep_links=False)
-        sheet = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-        results[name] = {
-            "instruction": sheet["A2"].value,
-            "client_id": sheet["B2"].value,
-            "user_claim": sheet["C2"].value,
-            "hyperlink": sheet["A2"].hyperlink.target,
-            "shape": (sheet.max_row, sheet.max_column),
-        }
-        workbook.close()
-
-    for result in results.values():
-        text = result["instruction"]
-        assert result["shape"] == (2, 3)
-        assert text == snow._entra_admin_instruction()
-        assert "\r" not in text and "\n" not in text
-        assert result["hyperlink"] == snow.SERVICENOW_NON_EMAIL_USER_MATCH_URL
-        assert result["user_claim"] in {None, ""}
-        assert "*Aud* - for audience validation" in text
-        assert "*Email* - addressable email for the user" in text
-        assert "*UPN* - an identifier for the user" in text
-        assert "must not be entered as the selected User Claim" in text
-    assert results["new"]["client_id"] in {None, ""}
-    assert results["repair"]["client_id"] == scenarios[1][1]
-    assert results["ready"]["client_id"] == scenarios[2][1]
-
-
-def test_retired_graph_rows_do_not_drive_entra_handoff(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    universal_template = _author_universal_entra_template(
-        tmp_path / "universal-entra-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_ENTRA",
-        universal_template,
-    )
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    state["phases"] = {
-        "entra-registration": {
-            "status": "in-progress",
-            "checkpointResults": {
-                "SN-DA-HRSD-ENTRA-APP-001": "Passed",
-                "SN-DA-HRSD-ENTRA-CLAIMS-001": "Passed",
-                "SN-DA-HRSD-ENTRA-SCOPE-001": "Passed",
-                "SN-DA-HRSD-ENTRA-PREAUTH-001": "NotConfigured",
-                "SN-DA-HRSD-ENTRA-PERMISSIONS-001": "NotConfigured",
-                "SN-DA-HRSD-ENTRA-CONSENT-001": "NotConfigured",
-            },
-        }
-    }
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-
-    handoff = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    question_object = handoff["question"]
-    instruction = handoff["instruction"]
-
-    assert handoff["handoffMode"] == "full-setup"
-    assert handoff["instructionTitle"] == (
-        "Step 1 of 2 — Entra: list employee identity options"
-    )
-    assert question_object == {
-        "header": "Entra admin handoff file",
-        "question": (
-            "Please enter the returned Entra admin handoff workbook URL."
-        ),
-        "allowFreeformInput": True,
-    }
-    assert question_object["header"] != question_object["question"]
-    assert instruction.startswith("**Purpose**\n")
-    assert str(Path(handoff["workbookPath"])) in instruction
-    headings = ("**Purpose**", "**Owner**", "**Known target**", "**Action**")
-    positions = [instruction.index(heading) for heading in headings]
-    assert positions == sorted(positions)
-    assert "**Expected result**" not in instruction
-    assert "Completed" not in instruction
-    assert "Not yet" not in instruction
-    assert "ServiceNow connector pre-authorization" not in instruction
-    assert "Graph permissions" not in instruction
-    assert "tenant-wide admin consent" not in instruction
-    assert "This workbook does not configure or prove those checks" not in instruction
-    assert "Separate checks must pass on their own evidence" not in instruction
-    assert "No separate readiness item is included" not in instruction
-    assert "4. For XLSX, keep the protected `Entra Handoff`" in instruction
-    assert "5. " not in instruction
-    assert "token_claim_name" not in instruction
-    assert handoff["workbookUri"] in instruction
-    workbook = load_workbook(Path(handoff["workbookPath"]))
-    entra_instruction = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET][
-        "A2"
-    ].value
-    assert entra_instruction == snow._entra_admin_instruction()
-    assert "**New registration.**" in entra_instruction
-    assert "**Token configuration**" in entra_instruction
-    assert "Microsoft Graph permissions" in entra_instruction
-    assert snow.SERVICENOW_NON_EMAIL_USER_MATCH_URL in entra_instruction
-    assert "file://" not in entra_instruction
-    workbook.close()
-
-
-def test_entra_workbook_roundtrip_records_one_selected_claim(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    handoff = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    path = Path(handoff["workbookPath"])
-    _fill_entra_workbook(path, ("email",))
-
-    receipt = snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=path,
-        client_id=APP_CLIENT_ID,
-        confirmed=True,
-    )
-    persisted = snow._load_lifecycle_state(context)
-    app = persisted["adminSetup"]["phaseHandoffs"]["entra-registration"]
-
-    assert receipt["candidates"] == ["email"]
-    assert receipt["identityHandoffConfirmed"] is True
-    assert "tokenClaimEmissionConfirmed" not in receipt
-    assert receipt["kind"] == "administrator-confirmed-claim-candidates"
-    assert app["evidence"]["tokenClaimCandidates"] == receipt["candidates"]
-    assert app["evidence"]["candidateSetSha256"] == receipt["candidateSetSha256"]
-    assert "entraSourceAttribute" not in json.dumps(receipt)
-    assert "serviceNowUserField" not in json.dumps(receipt)
-
-
-@pytest.mark.parametrize(
-    "returned_path",
+    ("invalid_evidence", "message"),
     (
-        "Completed",
-        "https:/contoso.sharepoint.com/returned.xlsx",
-        "missing-return.xlsx",
+        ("missing-app-id", "must be a GUID"),
+        ("missing-selected-claim", "Current target-bound Entra"),
+        ("wrong-binding", "does not match the active target"),
     ),
 )
-def test_entra_workbook_path_submission_must_be_local_and_existing(
+def test_servicenow_handoff_rejects_unready_or_wrong_bound_entra_evidence(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    returned_path: str,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    state_path = _lifecycle_path(tmp_path)
-    snow._write_json_atomic(state_path, state)
-    _confirm_identity_requirement(context)
-    snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    before = state_path.read_bytes()
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="does not exist or is not a local file",
-    ):
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=Path(returned_path),
-            client_id=APP_CLIENT_ID,
-            confirmed=True,
-        )
-
-    assert state_path.read_bytes() == before
-
-
-@pytest.mark.parametrize(
-    ("claim", "message"),
-    [
-        ("aud", "aud audience claim"),
-        ("", "explicit non-secret"),
-        ("not a claim", "explicit non-secret"),
-    ],
-)
-def test_entra_workbook_rejects_invalid_candidate_sets(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    claim: str,
+    invalid_evidence: str,
     message: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -8001,431 +6749,12 @@ def test_entra_workbook_rejects_invalid_candidate_sets(
     state["adminSetup"]["preflight"]["instanceName"] = "dev123"
     snow._write_json_atomic(_lifecycle_path(tmp_path), state)
     _confirm_identity_requirement(context)
-    handoff = snow.identity_mapping_handoff(
+    snow.record_identity_direct(
         context,
         stage="entra",
         client_id=APP_CLIENT_ID,
-    )
-    path = Path(handoff["workbookPath"])
-    workbook = load_workbook(path)
-    workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["C2"] = claim
-    workbook.save(path)
-    workbook.close()
-
-    with pytest.raises(snow.ServiceNowConnectError, match=message):
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=path,
-            client_id=APP_CLIENT_ID,
-            confirmed=True,
-        )
-
-
-def test_entra_workbook_rejects_prefilled_user_field_formula_and_marker_tamper(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-
-    for mutation, message in (
-        ("instruction", "instructions changed"),
-        ("formula", "must not contain formulas"),
-        ("ownership", "editable ownership"),
-        ("metadata", "metadata keys changed"),
-    ):
-        handoff = snow.identity_mapping_handoff(
-            context,
-            stage="entra",
-            client_id=APP_CLIENT_ID,
-        )
-        path = Path(handoff["workbookPath"])
-        workbook = load_workbook(path)
-        sheet = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-        metadata = workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET]
-        sheet["C2"] = "email"
-        if mutation == "instruction":
-            sheet["A2"] = "Changed instructions"
-        elif mutation == "formula":
-            sheet["C2"] = "=A1"
-        elif mutation == "ownership":
-            sheet["C2"].protection = Protection(locked=True)
-        else:
-            metadata["A2"] = "changed"
-        workbook.save(path)
-        workbook.close()
-        with pytest.raises(snow.ServiceNowConnectError, match=message):
-            snow.record_identity_mapping(
-                context,
-                stage="entra",
-                workbook_path=path,
-                client_id=APP_CLIENT_ID,
-                confirmed=True,
-            )
-        path.unlink()
-
-
-def test_entra_import_rejects_removed_sheet_protection(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    handoff = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    path = Path(handoff["workbookPath"])
-    _fill_entra_workbook(path, ("email",))
-    workbook = load_workbook(path)
-    workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET].protection.sheet = False
-    workbook.save(path)
-    workbook.close()
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="protection changed",
-    ):
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=path,
-            client_id=APP_CLIENT_ID,
-            confirmed=True,
-        )
-
-
-def test_identity_workbook_rejects_external_links(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    handoff = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    path = Path(handoff["workbookPath"])
-    _fill_entra_workbook(path, ("email",))
-    before = _lifecycle_path(tmp_path).read_bytes()
-    with zipfile.ZipFile(path, "a") as archive:
-        archive.writestr("xl/externalLinks/externalLink1.xml", "<externalLink/>")
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="external links or macros",
-    ):
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=path,
-            client_id=APP_CLIENT_ID,
-            confirmed=True,
-        )
-    assert _lifecycle_path(tmp_path).read_bytes() == before
-
-
-def test_servicenow_workbook_freezes_candidates_and_selects_exactly_one_pair(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    servicenow_template = _author_servicenow_template(
-        tmp_path / "servicenow-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_SERVICENOW",
-        servicenow_template,
-    )
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    entra = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    entra_path = Path(entra["workbookPath"])
-    _fill_entra_workbook(entra_path, ("employee_id",))
-    snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=entra_path,
-        client_id=APP_CLIENT_ID,
-        confirmed=True,
-    )
-    _complete_entra_admin(context, client_id=APP_CLIENT_ID)
-
-    handoff = snow.identity_mapping_handoff(context, stage="servicenow")
-    path = Path(handoff["workbookPath"])
-    workbook = load_workbook(path)
-    sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-    metadata = workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET]
-    first = snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW
-    assert handoff["candidates"] == ["employee_id"]
-    assert workbook.sheetnames == ["Steps", "Worksheet", "_metadata"]
-    assert workbook.active.title == "Steps"
-    steps = workbook[snow.IDENTITY_WORKBOOK_STEPS_SHEET]
-    assert [steps.cell(row, 1).value for row in range(2, 5)] == [
-        "Overview",
-        "Entra handoff",
-        "1",
-    ]
-    assert steps["B3"].value == (
-        f"Entra handoff - Client ID: `{APP_CLIENT_ID}`  "
-        "User Claim: `employee_id`"
-    )
-    assert steps["B4"].value.count("`employee_id`") == 3
-    assert sheet["B6"].value == APP_CLIENT_ID
-    assert sheet["B6"].protection.locked is True
-    assert sheet.cell(first, 1).value == "employee_id"
-    assert sheet.cell(first, 1).fill.fgColor.rgb.endswith("E7E6E6")
-    assert sheet.cell(first, 2).fill.fgColor.rgb.endswith("FFF2CC")
-    assert sheet.protection.sheet is True
-    assert sheet.cell(first, 1).protection.locked is True
-    assert sheet.cell(first, 2).protection.locked is False
-    assert metadata["C7"].value == APP_CLIENT_ID
-    assert metadata["D12"].value == "employee_id"
-    workbook.close()
-    _fill_servicenow_workbook(
-        path,
-        selected_claim="employee_id",
-        user_field="employee_number",
-    )
-
-    mapping = snow.record_identity_mapping(
-        context,
-        stage="servicenow",
-        workbook_path=path,
-        client_id=None,
-        confirmed=True,
-    )
-    oidc = _complete_servicenow_admin(context)
-
-    assert mapping["tokenClaimName"] == "employee_id"
-    assert mapping["serviceNowUserField"] == "employee_number"
-    assert oidc["evidence"]["tokenClaimName"] == "employee_id"
-    assert oidc["evidence"]["serviceNowUserField"] == "employee_number"
-
-
-def test_servicenow_handoff_autopopulates_bound_client_and_claim(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    servicenow_template = _author_servicenow_template(
-        tmp_path / "servicenow-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_SERVICENOW",
-        servicenow_template,
-    )
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    entra = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    entra_path = Path(entra["workbookPath"])
-    confirmed_claim = "custom_employee_id"
-    _fill_entra_workbook(entra_path, (confirmed_claim,))
-    snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=entra_path,
-        client_id=APP_CLIENT_ID,
-        confirmed=True,
-    )
-
-    handoff = snow.identity_mapping_handoff(context, stage="servicenow")
-    path = Path(handoff["workbookPath"])
-    workbook = load_workbook(path, data_only=False, keep_links=False)
-    steps = workbook[snow.IDENTITY_WORKBOOK_STEPS_SHEET]
-    worksheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-    metadata = workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET]
-    handoff_summary = steps["B3"].value
-    instruction = steps["B4"].value
-
-    assert steps.max_row == 4
-    assert str(steps.freeze_panes) == "A4"
-    assert steps["A2"].value == "Overview"
-    assert steps["B2"].value == "ServiceNow administrator handoff"
-    assert steps["A3"].value == "Entra handoff"
-    assert handoff_summary == (
-        f"Entra handoff - Client ID: `{APP_CLIENT_ID}`  "
-        f"User Claim: `{confirmed_claim}`"
-    )
-    assert instruction.count(f"`{confirmed_claim}`") == 3
-    concrete_prompt = (
-        "Ensure the user claim is the same as that configured by Entra "
-        f"(Entra-confirmed User Claim: `{confirmed_claim}`)."
-    )
-    assert instruction.count(concrete_prompt) == 2
-    assert (
-        "User Claim: Auto-populated from the confirmed Entra administrator "
-        f"result: `{confirmed_claim}`"
-    ) in instruction
-    assert f"`{APP_CLIENT_ID}`" in instruction
-    assert "\r" not in instruction
-    assert "\n" not in instruction
-    assert "<br>" not in instruction.casefold()
-    for fixed_default in ("`oid`", "`upn`", "User ID", "Employee number"):
-        assert fixed_default not in instruction
-
-    assert worksheet["B6"].value == APP_CLIENT_ID
-    assert worksheet["B6"].protection.locked is True
-    assert worksheet["A13"].value == confirmed_claim
-    assert worksheet["A13"].protection.locked is True
-    assert worksheet["B13"].value in {None, ""}
-    assert worksheet["B13"].protection.locked is False
-    assert metadata["C7"].value == APP_CLIENT_ID
-    assert metadata["D12"].value == confirmed_claim
-    assert metadata["G12"].value == "yes"
-    workbook.close()
-
-
-def test_multiple_unselected_claims_block_new_handoff_and_legacy_import(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    expected_identity = snow._required_context_identity(
-        context,
-        snow._load_lifecycle_state(context),
-    )
-    entra_context = snow._identity_workbook_context_values(
-        context,
-        expected_identity,
-        application_client_id=APP_CLIENT_ID,
-        stage="entra",
-    )
-    entra_path = tmp_path / "legacy-entra-handoff.xlsx"
-    snow._author_identity_workbook(
-        entra_path,
-        context_values=entra_context,
-        stage="entra",
-        candidates=[],
-        steps=[("1", "Legacy Entra administrator instructions.")],
-    )
-    candidates = ("email", "custom_employee_id")
-    _fill_entra_workbook(entra_path, candidates)
-    snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=entra_path,
-        client_id=APP_CLIENT_ID,
-        confirmed=True,
-    )
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="Entra client ID and selected User Claim evidence is required",
-    ):
-        snow.identity_mapping_handoff(context, stage="servicenow")
-    assert not snow._identity_workbook_path(
-        context,
-        stage="servicenow",
-    ).exists()
-
-    expected_identity = snow._required_context_identity(
-        context,
-        snow._load_lifecycle_state(context),
-    )
-    context_values = snow._identity_workbook_context_values(
-        context,
-        expected_identity,
-        application_client_id=APP_CLIENT_ID,
-        stage="servicenow",
-    )
-    context_values["confirmed_user_claim_name"] = "custom_employee_id"
-    legacy_path = tmp_path / "legacy-servicenow-handoff.xlsx"
-    snow._author_identity_workbook(
-        legacy_path,
-        context_values=context_values,
-        stage="servicenow",
-        candidates=list(candidates),
-        steps=snow._identity_workbook_steps(
-            stage="servicenow",
-            context_values=context_values,
-            missing_items=[],
-        ),
-    )
-    _fill_servicenow_workbook(
-        legacy_path,
-        selected_claim="custom_employee_id",
-        user_field="u_employee_identity",
-    )
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="Entra client ID and selected User Claim evidence is required",
-    ):
-        snow.record_identity_mapping(
-            context,
-            stage="servicenow",
-            workbook_path=legacy_path,
-            client_id=APP_CLIENT_ID,
-            confirmed=True,
-        )
-    assert "identityMapping" not in snow._load_lifecycle_state(context)[
-        "evidence"
-    ]
-
-
-@pytest.mark.parametrize(
-    "invalid_evidence",
-    ("missing-app-id", "missing-selected-claim", "wrong-binding"),
-)
-def test_servicenow_handoff_rejects_unready_or_wrong_bound_entra_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    invalid_evidence: str,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    entra = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    entra_path = Path(entra["workbookPath"])
-    _fill_entra_workbook(entra_path, ("custom_employee_id",))
-    snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=entra_path,
-        client_id=APP_CLIENT_ID,
+        claim_name="custom_employee_id",
+        user_field=None,
         confirmed=True,
     )
     state = snow._load_lifecycle_state(context)
@@ -8445,410 +6774,16 @@ def test_servicenow_handoff_rejects_unready_or_wrong_bound_entra_evidence(
         binding=receipt["binding"],
     )
     snow._write_lifecycle_state(context, state)
+    _ack_identity_availability(context, stage="servicenow")
 
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="not ready",
-    ):
-        snow.identity_mapping_handoff(context, stage="servicenow")
-    assert not snow._identity_workbook_path(
-        context,
-        stage="servicenow",
-    ).exists()
-
-
-@pytest.mark.parametrize("entra_format", ("xlsx", "csv"))
-@pytest.mark.parametrize("servicenow_format", ("xlsx", "csv"))
-def test_identity_handoff_xlsx_csv_formats_flow_bound_values_end_to_end(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    entra_format: str,
-    servicenow_format: str,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    claim_name = "custom_employee_id"
-    user_field = "u_employee_identity"
-
-    entra = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    entra_path = Path(
-        entra["workbookPath"]
-        if entra_format == "xlsx"
-        else entra["csvPath"]
-    )
-    if entra_format == "xlsx":
-        _fill_entra_workbook(entra_path, (claim_name,))
-    else:
-        _fill_entra_csv(
-            entra_path,
-            client_id=APP_CLIENT_ID,
-            user_claim=claim_name,
-        )
-    candidates = snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=entra_path,
-        client_id=APP_CLIENT_ID,
-        confirmed=True,
-    )
-    assert candidates["applicationClientId"] == APP_CLIENT_ID
-    assert candidates["candidates"] == [claim_name]
-    assert candidates["importedFileFormat"] == entra_format
-
-    servicenow = snow.identity_mapping_handoff(
-        context,
-        stage="servicenow",
-    )
-    workbook = load_workbook(servicenow["workbookPath"])
-    steps = workbook[snow.IDENTITY_WORKBOOK_STEPS_SHEET]
-    worksheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-    metadata = workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET]
-    summary = steps["B3"].value
-    instruction = steps["B4"].value
-    assert summary == (
-        f"Entra handoff - Client ID: `{APP_CLIENT_ID}`  "
-        f"User Claim: `{claim_name}`"
-    )
-    assert instruction.count(f"`{claim_name}`") == 3
-    assert worksheet["B6"].value == APP_CLIENT_ID
-    assert worksheet["A13"].value == claim_name
-    assert worksheet["A13"].protection.locked is True
-    assert worksheet["B13"].protection.locked is False
-    assert metadata["C7"].value == APP_CLIENT_ID
-    assert metadata["D12"].value == claim_name
-    workbook.close()
-
-    csv_headers, csv_rows = _read_csv(Path(servicenow["csvPath"]))
-    assert csv_headers == list(snow.IDENTITY_SERVICENOW_CSV_HEADERS)
-    assert [row["Record"] for row in csv_rows] == [
-        "Entra handoff",
-        "Steps",
-    ]
-    assert {row["Client ID"] for row in csv_rows} == {APP_CLIENT_ID}
-    assert {row["User Claim"] for row in csv_rows} == {claim_name}
-    assert csv_rows[0]["Content"] == summary
-    assert csv_rows[1]["Content"] == instruction
-
-    servicenow_path = Path(
-        servicenow["workbookPath"]
-        if servicenow_format == "xlsx"
-        else servicenow["csvPath"]
-    )
-    if servicenow_format == "xlsx":
-        _fill_servicenow_workbook(
-            servicenow_path,
-            selected_claim=claim_name,
-            user_field=user_field,
-        )
-    else:
-        _fill_servicenow_csv(
-            servicenow_path,
-            user_field=user_field,
-        )
-    mapping = snow.record_identity_mapping(
-        context,
-        stage="servicenow",
-        workbook_path=servicenow_path,
-        client_id=None,
-        confirmed=True,
-    )
-    assert mapping["tokenClaimName"] == claim_name
-    assert mapping["serviceNowUserField"] == user_field
-    assert mapping["importedFileFormat"] == servicenow_format
-    assert "savedMappingConfirmed" not in mapping
-    current = snow._load_lifecycle_state(context)
-    assert current["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
-        "status"
-    ] == "completed"
-    assert current["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
-        "evidence"
-    ]["mappingReceiptCurrent"] is True
-
-
-@pytest.mark.parametrize(
-    "mutation",
-    (
-        "blank-client",
-        "invalid-client",
-        "blank-claim",
-        "aud-claim",
-        "malformed-claim",
-        "duplicate-record",
-        "wrong-binding",
-    ),
-)
-def test_entra_csv_rejects_invalid_duplicate_or_wrong_bound_records(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    mutation: str,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    state_path = _lifecycle_path(tmp_path)
-    snow._write_json_atomic(state_path, state)
-    _confirm_identity_requirement(context)
-    handoff = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    path = Path(handoff["csvPath"])
-    headers, rows = _read_csv(path)
-    rows[0]["Client ID"] = APP_CLIENT_ID
-    rows[0]["User Claim"] = "email"
-    if mutation == "blank-client":
-        rows[0]["Client ID"] = ""
-    elif mutation == "invalid-client":
-        rows[0]["Client ID"] = "not-a-guid"
-    elif mutation == "blank-claim":
-        rows[0]["User Claim"] = ""
-    elif mutation == "aud-claim":
-        rows[0]["User Claim"] = "aud"
-    elif mutation == "malformed-claim":
-        rows[0]["User Claim"] = "personal@example.com"
-    elif mutation == "duplicate-record":
-        rows.append(copy.deepcopy(rows[0]))
-    elif mutation == "wrong-binding":
-        rows[0]["Tenant ID"] = (
-            "00000000-0000-4000-8000-000000000001"
-        )
-    _write_csv(path, headers, rows)
-    before = state_path.read_bytes()
-
-    with pytest.raises(snow.ServiceNowConnectError):
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=path,
-            client_id=APP_CLIENT_ID,
-            confirmed=True,
-        )
-    assert state_path.read_bytes() == before
-
-
-@pytest.mark.parametrize(
-    "mutation",
-    (
-        "blank-user-field",
-        "invalid-user-field",
-        "conflicting-client",
-        "conflicting-claim",
-        "stale-candidate-hash",
-        "duplicate-record",
-        "changed-content",
-    ),
-)
-def test_servicenow_csv_rejects_incomplete_conflicting_or_stale_records(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    mutation: str,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    state_path = _lifecycle_path(tmp_path)
-    snow._write_json_atomic(state_path, state)
-    _confirm_identity_requirement(context)
-    entra = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    entra_path = Path(entra["workbookPath"])
-    _fill_entra_workbook(entra_path, ("email",))
-    snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=entra_path,
-        client_id=APP_CLIENT_ID,
-        confirmed=True,
-    )
-    handoff = snow.identity_mapping_handoff(
-        context,
-        stage="servicenow",
-    )
-    path = Path(handoff["csvPath"])
-    headers, rows = _read_csv(path)
-    rows[1]["ServiceNow User Field"] = "email"
-    if mutation == "blank-user-field":
-        rows[1]["ServiceNow User Field"] = ""
-    elif mutation == "invalid-user-field":
-        rows[1]["ServiceNow User Field"] = "User ID"
-    elif mutation == "conflicting-client":
-        rows[1]["Client ID"] = (
-            "00000000-0000-4000-8000-000000000001"
-        )
-    elif mutation == "conflicting-claim":
-        rows[1]["User Claim"] = "other_claim"
-    elif mutation == "stale-candidate-hash":
-        rows[1]["Candidate Set SHA256"] = "0" * 64
-    elif mutation == "duplicate-record":
-        rows.append(copy.deepcopy(rows[1]))
-    elif mutation == "changed-content":
-        rows[1]["Content"] = "Changed instructions"
-    _write_csv(path, headers, rows)
-    before = state_path.read_bytes()
-
-    with pytest.raises(snow.ServiceNowConnectError):
-        snow.record_identity_mapping(
-            context,
-            stage="servicenow",
-            workbook_path=path,
-            client_id=None,
-            confirmed=True,
-        )
-    assert state_path.read_bytes() == before
-
-
-@pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))
-def test_public_servicenow_handoff_emits_complete_task2_and_imports_mapping(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    profile_key: str,
-) -> None:
-    scenario_root = tmp_path / profile_key
-    scenario_root.mkdir()
-    monkeypatch.chdir(scenario_root)
-    servicenow_template = _author_servicenow_template(
-        scenario_root / "servicenow-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_SERVICENOW",
-        servicenow_template,
-    )
-    profile = snow.PRODUCT_PROFILES[profile_key]
-    slug = (
-        "employee-self-service-hr"
-        if profile_key == "hrsd"
-        else "employee-self-service-it"
-    )
-    agent_id = AGENT_ID if profile_key == "hrsd" else OTHER_AGENT_ID
-    context = _profile_context(
-        profile_key,
-        agent_id=agent_id,
-        agent_slug=slug,
-    )
-    context["root"] = scenario_root
-    components = (
-        _components()
-        if profile_key == "hrsd"
-        else _itsm_components()
-    )
-    with snow.product_profile_context(profile_key):
-        state = snow._state_base(context, components)
-        state["adminSetup"]["preflight"]["instanceName"] = (
-            f"example-{profile_key}"
-        )
-        state_path = snow._lifecycle_state_path(context)
-        snow._write_json_atomic(state_path, state)
-        _confirm_identity_requirement(
-            context,
-            choice="pay-employee-id",
-        )
-        entra = snow.identity_mapping_handoff(
-            context,
-            stage="entra",
-            client_id=APP_CLIENT_ID,
-        )
-        entra_path = Path(entra["workbookPath"])
-        _fill_entra_workbook(
-            entra_path,
-            ("custom_employee_id",),
-        )
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=entra_path,
-            client_id=APP_CLIENT_ID,
-            confirmed=True,
-        )
-        _complete_entra_admin(context)
-        state_before_handoff = state_path.read_bytes()
-        handoff = snow.identity_mapping_handoff(
-            context,
-            stage="servicenow",
-        )
-
-    assert state_path.read_bytes() == state_before_handoff
-    assert handoff["provider"] == profile.provider_key
-    assert handoff["profile"] == profile_key
-    assert handoff["applicationClientId"] == APP_CLIENT_ID
-    assert handoff["candidates"] == ["custom_employee_id"]
-    assert handoff["clientIdQuestion"] is None
-    assert "options" not in handoff["question"]
-    assert handoff["question"]["allowFreeformInput"] is True
-    path = Path(handoff["workbookPath"])
-    workbook = load_workbook(path, data_only=False, keep_links=False)
-    steps = workbook[snow.IDENTITY_WORKBOOK_STEPS_SHEET]
-    sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-    text = "\n".join(
-        str(steps.cell(row, 2).value or "")
-        for row in range(2, steps.max_row + 1)
-    )
-    metadata_url = (
-        f"login.microsoftonline.com/{TENANT_ID}/"
-        ".well-known/openid-configuration"
-    )
-    assert metadata_url in text
-    assert APP_CLIENT_ID in text
-    assert "<service-now-instance>" not in text
-    assert "<customer-tenant-id>" not in text
-    assert "<application-client-id>" not in text
-    hyperlinks = [
-        cell.hyperlink.target
-        for row in steps.iter_rows()
-        for cell in row
-        if cell.hyperlink is not None
-    ]
-    assert hyperlinks == []
-    first = snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW
-    assert steps["B3"].value == (
-        f"Entra handoff - Client ID: `{APP_CLIENT_ID}`  "
-        "User Claim: `custom_employee_id`"
-    )
-    assert sheet.cell(first, 1).value == "custom_employee_id"
-    assert sheet.cell(first, 1).protection.locked is True
-    assert sheet.cell(first, 2).protection.locked is False
-    assert sheet.cell(6, 2).value == APP_CLIENT_ID
-    assert sheet.cell(6, 2).protection.locked is True
-    workbook.close()
-
-    _fill_servicenow_workbook(
-        path,
-        selected_claim="custom_employee_id",
-        user_field="u_employee_number",
-    )
-    with snow.product_profile_context(profile_key):
-        mapping = snow.record_identity_mapping(
-            context,
-            stage="servicenow",
-            workbook_path=path,
-            client_id=None,
-            confirmed=True,
-        )
-        phase = _complete_servicenow_admin(context)
-    assert mapping["tokenClaimName"] == "custom_employee_id"
-    assert mapping["serviceNowUserField"] == "u_employee_number"
-    assert phase["evidence"]["tokenClaimName"] == "custom_employee_id"
-    assert phase["evidence"]["serviceNowUserField"] == "u_employee_number"
+    with pytest.raises(snow.ServiceNowConnectError, match=message):
+        snow.identity_direct_handoff(context, stage="servicenow")
 
 
 @pytest.mark.parametrize(
     ("mutation", "message"),
     (
-        ("confirmation", "unconfirmed"),
+        ("confirmation", "Current target-bound Entra"),
         ("binding", "active target"),
         ("hash", "hash"),
     ),
@@ -8865,18 +6800,12 @@ def test_servicenow_handoff_rejects_stale_candidate_receipt_before_write(
     state["adminSetup"]["preflight"]["instanceName"] = "dev123"
     snow._write_json_atomic(_lifecycle_path(tmp_path), state)
     _confirm_identity_requirement(context)
-    entra = snow.identity_mapping_handoff(
+    snow.record_identity_direct(
         context,
         stage="entra",
         client_id=APP_CLIENT_ID,
-    )
-    entra_path = Path(entra["workbookPath"])
-    _fill_entra_workbook(entra_path, ("email",))
-    snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=entra_path,
-        client_id=APP_CLIENT_ID,
+        claim_name="email",
+        user_field=None,
         confirmed=True,
     )
     persisted = json.loads(
@@ -8890,311 +6819,16 @@ def test_servicenow_handoff_rejects_stale_candidate_receipt_before_write(
     else:
         receipt["candidateSetSha256"] = "stale"
     snow._write_json_atomic(_lifecycle_path(tmp_path), persisted)
+    _ack_identity_availability(context, stage="servicenow")
     state_before = _lifecycle_path(tmp_path).read_bytes()
-    workbook_path = snow._identity_workbook_path(
-        context,
-        stage="servicenow",
-    )
 
-    assert not workbook_path.exists()
     with pytest.raises(snow.ServiceNowConnectError, match=message):
-        snow.identity_mapping_handoff(context, stage="servicenow")
+        snow.identity_direct_handoff(context, stage="servicenow")
 
-    assert not workbook_path.exists()
     assert _lifecycle_path(tmp_path).read_bytes() == state_before
 
 
-def test_entra_handoff_ignores_invalid_candidate_receipt_client_id(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
-        "status": "reused",
-        "evidence": {
-            "kind": "structured-admin-attestation",
-            "recordedAt": "2026-10-01T00:00:00Z",
-            "clientId": APP_CLIENT_ID,
-        },
-    }
-    state["evidence"]["identityClaimCandidates"] = {
-        "kind": "administrator-confirmed-claim-candidates",
-        "applicationClientId": "00000000-0000-4000-8000-000000006667",
-        "candidates": ["email"],
-        "candidateSetSha256": "stale",
-        "entraAdministratorConfirmed": False,
-        "tokenClaimEmissionConfirmed": True,
-        "binding": {},
-    }
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-
-    handoff = snow.identity_mapping_handoff(context, stage="entra")
-
-    assert handoff["applicationClientId"] == APP_CLIENT_ID
-    assert APP_CLIENT_ID not in handoff["question"]["question"]
-
-
-@pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))
-def test_entra_handoff_unknown_client_id_uses_same_workbook(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    profile_key: str,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    profile = snow.PRODUCT_PROFILES[profile_key]
-    slug = (
-        "employee-self-service-hr"
-        if profile_key == "hrsd"
-        else "employee-self-service-it"
-    )
-    context = {
-        "root": tmp_path,
-        "agent": {
-            "id": AGENT_ID,
-            "schema_name": profile.schema_name,
-            "workspace_slug": slug,
-        },
-        "active": {"slug": slug},
-        "environment": {
-            "id": ENVIRONMENT_ID,
-            "tenant_id": TENANT_ID,
-            "ring": "test",
-        },
-        "snapshotPath": tmp_path / "components.json",
-    }
-    components = (
-        _components()
-        if profile_key == "hrsd"
-        else _itsm_components()
-    )
-    with snow.product_profile_context(profile_key):
-        state = snow._state_base(context, components)
-        state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-        snow._write_json_atomic(
-            snow._lifecycle_state_path(context),
-            state,
-        )
-        _confirm_identity_requirement(context)
-        handoff = snow.identity_mapping_handoff(context, stage="entra")
-
-    assert handoff["applicationClientId"] is None
-    assert "options" not in handoff["question"]
-    assert handoff["question"]["allowFreeformInput"] is True
-    assert handoff["clientIdQuestion"] is None
-    workbook = load_workbook(Path(handoff["workbookPath"]))
-    sheet = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-    client_cell = sheet["B2"]
-    assert client_cell.value in {None, ""}
-    assert client_cell.fill.fgColor.rgb.endswith("FFF2CC")
-    assert client_cell.protection.locked is False
-    assert sheet["C2"].fill.fgColor.rgb.endswith("FFF2CC")
-    assert sheet["C2"].protection.locked is False
-    workbook.close()
-
-
-@pytest.mark.parametrize("selected_count", (0, 2))
-def test_servicenow_workbook_requires_exactly_one_selected_pair(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    selected_count: int,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    expected_identity = snow._required_context_identity(
-        context,
-        snow._load_lifecycle_state(context),
-    )
-    entra_context = snow._identity_workbook_context_values(
-        context,
-        expected_identity,
-        application_client_id=APP_CLIENT_ID,
-        stage="entra",
-    )
-    entra_path = tmp_path / "legacy-entra-candidates.xlsx"
-    snow._author_identity_workbook(
-        entra_path,
-        context_values=entra_context,
-        stage="entra",
-        candidates=[],
-        steps=[("1", "Legacy Entra administrator instructions.")],
-    )
-    _fill_entra_workbook(entra_path, ("email", "upn"))
-    snow.record_identity_mapping(context, stage="entra", workbook_path=entra_path, client_id=APP_CLIENT_ID, confirmed=True)
-    context_values = snow._identity_workbook_context_values(
-        context,
-        snow._required_context_identity(
-            context,
-            snow._load_lifecycle_state(context),
-        ),
-        application_client_id=APP_CLIENT_ID,
-        stage="servicenow",
-    )
-    context_values["confirmed_user_claim_name"] = "email"
-    path = tmp_path / "legacy-servicenow-selection.xlsx"
-    snow._author_identity_workbook(
-        path,
-        context_values=context_values,
-        stage="servicenow",
-        candidates=["email", "upn"],
-        steps=snow._identity_workbook_steps(
-            stage="servicenow",
-            context_values=context_values,
-            missing_items=[],
-        ),
-    )
-    if selected_count:
-        _fill_servicenow_workbook(path, selected_claim="email", user_field="email")
-        if selected_count == 2:
-            _fill_servicenow_workbook(path, selected_claim="upn", user_field="user_name")
-    with pytest.raises(snow.ServiceNowConnectError, match="exactly one"):
-        snow.record_identity_mapping(context, stage="servicenow", workbook_path=path, client_id=None, confirmed=True)
-
-
-@pytest.mark.parametrize(
-    "user_field",
-    (
-        "user.email",
-        "User ID",
-        "00000000-0000-4000-8000-000000001234",
-    ),
-)
-def test_servicenow_workbook_rejects_invalid_user_field_without_state_write(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    user_field: str,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    state_path = _lifecycle_path(tmp_path)
-    snow._write_json_atomic(state_path, state)
-    _confirm_identity_requirement(context)
-    entra = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    entra_path = Path(entra["workbookPath"])
-    _fill_entra_workbook(entra_path, ("email",))
-    snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=entra_path,
-        client_id=APP_CLIENT_ID,
-        confirmed=True,
-    )
-    handoff = snow.identity_mapping_handoff(context, stage="servicenow")
-    path = Path(handoff["workbookPath"])
-    _fill_servicenow_workbook(
-        path,
-        selected_claim="email",
-        user_field=user_field,
-    )
-    before = state_path.read_bytes()
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="explicit safe ServiceNow field name",
-    ):
-        snow.record_identity_mapping(
-            context,
-            stage="servicenow",
-            workbook_path=path,
-            client_id=None,
-            confirmed=True,
-        )
-
-    assert state_path.read_bytes() == before
-
-
-def test_servicenow_workbook_rejects_frozen_candidate_and_context_tamper(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    entra = snow.identity_mapping_handoff(context, stage="entra", client_id=APP_CLIENT_ID)
-    entra_path = Path(entra["workbookPath"])
-    _fill_entra_workbook(entra_path, ("email",))
-    snow.record_identity_mapping(context, stage="entra", workbook_path=entra_path, client_id=APP_CLIENT_ID, confirmed=True)
-
-    for mutation, message in (
-        ("claim", "candidate claims were changed"),
-        ("context", "context changed"),
-        ("marker", "editable ownership"),
-        ("sheet-order", "sheet structure changed"),
-        ("metadata-visible", "metadata sheet visibility changed"),
-        ("extra-sheet", "sheet structure changed"),
-    ):
-        handoff = snow.identity_mapping_handoff(context, stage="servicenow")
-        path = Path(handoff["workbookPath"])
-        workbook = load_workbook(path)
-        steps = workbook[snow.IDENTITY_WORKBOOK_STEPS_SHEET]
-        sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-        metadata = workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET]
-        first = snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW
-        metadata_first = 2 + len(snow.IDENTITY_WORKBOOK_CONTEXT_FIELDS)
-        if mutation == "claim":
-            sheet.cell(first, 1).value = "other"
-        elif mutation == "context":
-            sheet.cell(3, 2).value = "changed"
-        elif mutation == "marker":
-            metadata.cell(
-                metadata_first,
-                snow.IDENTITY_WORKBOOK_COLUMNS.index(
-                    "servicenow_user_field_editable"
-                )
-                + 1,
-            ).value = "no"
-        elif mutation == "sheet-order":
-            workbook._sheets = [sheet, steps, metadata]
-        elif mutation == "metadata-visible":
-            metadata.sheet_state = "visible"
-        else:
-            workbook.create_sheet("Extra")
-        workbook.save(path)
-        workbook.close()
-        before = _lifecycle_path(tmp_path).read_bytes()
-        with pytest.raises(snow.ServiceNowConnectError, match=message):
-            snow.record_identity_mapping(context, stage="servicenow", workbook_path=path, client_id=None, confirmed=True)
-        assert _lifecycle_path(tmp_path).read_bytes() == before
-        path.unlink()
-
-
-def test_workbook_handoff_preserves_maker_filled_stage_file(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    first = snow.identity_mapping_handoff(context, stage="entra", client_id=APP_CLIENT_ID)
-    path = Path(first["workbookPath"])
-    _fill_entra_workbook(path, ("email",))
-    before = path.read_bytes()
-
-    resumed = snow.identity_mapping_handoff(context, stage="entra", client_id=APP_CLIENT_ID)
-
-    assert resumed["workbookFileStatus"] == "preserved-existing"
-    assert path.read_bytes() == before
-
-
-def test_reimport_changed_candidates_invalidates_old_oidc_selection(
+def test_rerecording_changed_claim_invalidates_old_oidc_selection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -9219,60 +6853,19 @@ def test_reimport_changed_candidates_invalidates_old_oidc_selection(
     }
     state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] = {"status": "completed", "evidence": {"kind": "structured-admin-attestation", "recordedAt": "2026-10-01T00:00:00Z"}}
     _lifecycle_path(tmp_path).write_text(json.dumps(state), encoding="utf-8")
-    old = Path(snow.identity_mapping_handoff(context, stage="entra", client_id=APP_CLIENT_ID)["workbookPath"])
-    old.unlink()
-    fresh = snow.identity_mapping_handoff(context, stage="entra", client_id=APP_CLIENT_ID)
-    path = Path(fresh["workbookPath"])
-    _fill_entra_workbook(path, ("employee_id",))
-
-    snow.record_identity_mapping(context, stage="entra", workbook_path=path, client_id=APP_CLIENT_ID, confirmed=True)
+    snow.record_identity_direct(
+        context,
+        stage="entra",
+        client_id=APP_CLIENT_ID,
+        claim_name="employee_id",
+        user_field=None,
+        confirmed=True,
+    )
     changed = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
 
     assert "identityMapping" not in changed["evidence"]
     assert changed["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] == {"status": "pending"}
     assert changed["phases"]["servicenow-oidc"]["status"] == "pending"
-
-
-def test_entra_import_retires_legacy_mapping_without_fabricating_selection(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    state["evidence"]["identityMapping"] = {
-        "kind": "administrator-confirmed-identity-mapping",
-        "applicationClientId": APP_CLIENT_ID,
-        "entraSourceAttribute": "user.employeeid",
-        "tokenClaimName": "employee_id",
-    }
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    handoff = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    path = Path(handoff["workbookPath"])
-    _fill_entra_workbook(path, ("employee_id",))
-
-    snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=path,
-        client_id=APP_CLIENT_ID,
-        confirmed=True,
-    )
-    saved = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
-
-    assert "identityMapping" not in saved["evidence"]
-    assert saved["migration"]["retiredIdentityMapping"]["entraSourceAttribute"] == (
-        "user.employeeid"
-    )
-    assert saved["evidence"]["identityClaimCandidates"]["candidates"] == [
-        "employee_id",
-    ]
 
 
 def test_admin_operation_records_only_non_secret_identity_fields(
@@ -9291,391 +6884,6 @@ def test_admin_operation_records_only_non_secret_identity_fields(
     assert "secret" not in serialized
     assert "password" not in serialized
     assert "employee-value" not in serialized
-
-
-def test_identity_workbook_cli_roundtrips_both_admin_stages(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    universal_template = _author_universal_entra_template(
-        tmp_path / "universal-entra-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_ENTRA",
-        universal_template,
-    )
-    _write_foundation_context(tmp_path, components=_components())
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
-        "status": "reused",
-        "evidence": {
-            "kind": "structured-admin-attestation",
-            "recordedAt": "2026-10-01T00:00:00Z",
-            "clientId": APP_CLIENT_ID,
-        },
-    }
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-
-    assert snow.main(
-        [
-            "identity-mapping-handoff",
-            "--stage",
-            "entra",
-        ]
-    ) == 0
-    entra = json.loads(capsys.readouterr().out)
-    assert entra["handoffMode"] == "full-setup"
-    assert "options" not in entra["question"]
-    assert entra["question"]["allowFreeformInput"] is True
-    entra_path = Path(entra["workbookPath"])
-    _fill_entra_workbook(entra_path, ("employee_id",))
-    assert snow.main(
-        [
-            "record-identity-mapping",
-            "--stage",
-            "entra",
-            "--workbook-file",
-            str(entra_path),
-            "--yes",
-        ]
-    ) == 0
-    candidates = json.loads(capsys.readouterr().out)
-    assert candidates["candidates"] == ["employee_id"]
-    assert snow.main(
-        [
-            "record-admin-phase",
-            "--phase",
-            "entra-registration",
-            "--status",
-            "completed",
-            "--confirm-application-registration",
-            "--confirm-claim-emission",
-            "--confirm-user-impersonation-scope",
-            "--confirm-connector-preauthorization",
-        ]
-    ) == 0
-    capsys.readouterr()
-
-    assert snow.main(
-        ["identity-mapping-handoff", "--stage", "servicenow"]
-    ) == 0
-    service_now = json.loads(capsys.readouterr().out)
-    service_now_path = Path(service_now["workbookPath"])
-    _fill_servicenow_workbook(
-        service_now_path,
-        selected_claim="employee_id",
-        user_field="employee_number",
-    )
-    assert snow.main(
-        [
-            "record-identity-mapping",
-            "--stage",
-            "servicenow",
-            "--workbook-file",
-            str(service_now_path),
-            "--yes",
-        ]
-    ) == 0
-    mapping = json.loads(capsys.readouterr().out)
-
-    assert mapping["tokenClaimName"] == "employee_id"
-    assert mapping["serviceNowUserField"] == "employee_number"
-    persisted = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
-    assert persisted["evidence"]["identityClaimCandidates"][
-        "candidateSetSha256"
-    ] == mapping["candidateSetSha256"]
-
-
-def test_unknown_client_id_workbook_binds_supplied_id_through_both_stages(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    servicenow_template = _author_servicenow_template(
-        tmp_path / "servicenow-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_SERVICENOW",
-        servicenow_template,
-    )
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-
-    entra = snow.identity_mapping_handoff(context, stage="entra")
-    entra_path = Path(entra["workbookPath"])
-    workbook = load_workbook(entra_path)
-    sheet = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-    metadata = workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET]
-    visible_row = 2 + [
-        key for _label, key in snow.IDENTITY_WORKBOOK_VISIBLE_CONTEXT
-    ].index("application_client_id")
-    metadata_row = 2 + snow.IDENTITY_WORKBOOK_CONTEXT_FIELDS.index(
-        "application_client_id"
-    )
-    entra_metadata_row = 2 + snow.IDENTITY_ENTRA_METADATA_KEYS.index(
-        "application_client_id"
-    )
-    assert sheet["B2"].value in {None, ""}
-    assert metadata.cell(entra_metadata_row, 2).value == (
-        snow.IDENTITY_WORKBOOK_PENDING_CLIENT_ID
-    )
-    workbook.close()
-    _fill_entra_workbook(entra_path, ("employee_id",))
-    workbook = load_workbook(entra_path)
-    workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["B2"] = APP_CLIENT_ID
-    workbook.active = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-    workbook.save(entra_path)
-    workbook.close()
-    returned_bytes = entra_path.read_bytes()
-
-    candidates = snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=entra_path,
-        client_id=APP_CLIENT_ID,
-        confirmed=True,
-    )
-    assert entra_path.read_bytes() == returned_bytes
-    assert candidates["applicationClientId"] == APP_CLIENT_ID
-    entra_phase = _complete_entra_admin(
-        context,
-        client_id=APP_CLIENT_ID,
-    )
-    assert entra_phase["evidence"]["clientId"] == APP_CLIENT_ID
-
-    service_now = snow.identity_mapping_handoff(
-        context,
-        stage="servicenow",
-    )
-    service_now_path = Path(service_now["workbookPath"])
-    workbook = load_workbook(service_now_path)
-    sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-    metadata = workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET]
-    assert sheet.cell(visible_row, 2).value == APP_CLIENT_ID
-    assert metadata.cell(metadata_row, 3).value == APP_CLIENT_ID
-    workbook.close()
-    _fill_servicenow_workbook(
-        service_now_path,
-        selected_claim="employee_id",
-        user_field="employee_number",
-    )
-    mapping = snow.record_identity_mapping(
-        context,
-        stage="servicenow",
-        workbook_path=service_now_path,
-        client_id=None,
-        confirmed=True,
-    )
-    assert mapping["applicationClientId"] == APP_CLIENT_ID
-    assert mapping["tokenClaimName"] == "employee_id"
-    assert mapping["serviceNowUserField"] == "employee_number"
-
-
-@pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))
-def test_unknown_client_id_and_claims_import_from_same_workbook(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    profile_key: str,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    profile = snow.PRODUCT_PROFILES[profile_key]
-    slug = (
-        "employee-self-service-hr"
-        if profile_key == "hrsd"
-        else "employee-self-service-it"
-    )
-    context = {
-        "root": tmp_path,
-        "agent": {
-            "id": AGENT_ID,
-            "schema_name": profile.schema_name,
-            "workspace_slug": slug,
-        },
-        "active": {"slug": slug},
-        "environment": {
-            "id": ENVIRONMENT_ID,
-            "tenant_id": TENANT_ID,
-            "ring": "test",
-        },
-        "snapshotPath": tmp_path / "components.json",
-    }
-    components = _components() if profile_key == "hrsd" else _itsm_components()
-    with snow.product_profile_context(profile_key):
-        state = snow._state_base(context, components)
-        state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-        state_path = snow._lifecycle_state_path(context)
-        snow._write_json_atomic(state_path, state)
-        _confirm_identity_requirement(context)
-        handoff = snow.identity_mapping_handoff(context, stage="entra")
-        path = Path(handoff["workbookPath"])
-        _fill_entra_workbook(path, ("employee_id",))
-        workbook = load_workbook(path)
-        workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["B2"] = APP_CLIENT_ID
-        workbook.save(path)
-        workbook.close()
-        returned_bytes = path.read_bytes()
-        candidates = snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=path,
-            client_id=None,
-            confirmed=True,
-        )
-        phase = _complete_entra_admin(context)
-        service_now = snow.identity_mapping_handoff(
-            context,
-            stage="servicenow",
-        )
-
-    assert path.read_bytes() == returned_bytes
-    assert candidates["applicationClientId"] == APP_CLIENT_ID
-    assert candidates["candidates"] == ["employee_id"]
-    assert phase["evidence"]["clientId"] == APP_CLIENT_ID
-    assert service_now["clientIdQuestion"] is None
-    workbook = load_workbook(Path(service_now["workbookPath"]))
-    client_cell = workbook[snow.IDENTITY_WORKBOOK_SHEET].cell(6, 2)
-    assert client_cell.value == APP_CLIENT_ID
-    assert client_cell.fill.fgColor.rgb.endswith("E7E6E6")
-    assert client_cell.protection.locked is True
-    workbook.close()
-
-
-@pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))
-def test_known_client_id_and_claims_import_without_client_id_argument(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    profile_key: str,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    universal_template = _author_universal_entra_template(
-        tmp_path / "universal-entra-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_ENTRA",
-        universal_template,
-    )
-    profile = snow.PRODUCT_PROFILES[profile_key]
-    slug = (
-        "employee-self-service-hr"
-        if profile_key == "hrsd"
-        else "employee-self-service-it"
-    )
-    context = {
-        "root": tmp_path,
-        "agent": {
-            "id": AGENT_ID,
-            "schema_name": profile.schema_name,
-            "workspace_slug": slug,
-        },
-        "active": {"slug": slug},
-        "environment": {
-            "id": ENVIRONMENT_ID,
-            "tenant_id": TENANT_ID,
-            "ring": "test",
-        },
-        "snapshotPath": tmp_path / "components.json",
-    }
-    components = _components() if profile_key == "hrsd" else _itsm_components()
-    with snow.product_profile_context(profile_key):
-        state = snow._state_base(context, components)
-        state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-        state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
-            "status": "reused",
-            "evidence": {
-                "kind": "structured-admin-attestation",
-                "recordedAt": "2026-10-01T00:00:00Z",
-                "clientId": APP_CLIENT_ID,
-                "binding": {
-                    "tenantId": TENANT_ID,
-                    "environmentId": ENVIRONMENT_ID,
-                    "instanceName": "dev123",
-                    "provider": profile.provider_key,
-                    "profile": profile_key,
-                    "agentSlug": slug,
-                    "agentId": AGENT_ID,
-                    "applicationClientId": APP_CLIENT_ID,
-                },
-            },
-        }
-        state_path = snow._lifecycle_state_path(context)
-        snow._write_json_atomic(state_path, state)
-        _confirm_identity_requirement(context)
-        handoff = snow.identity_mapping_handoff(context, stage="entra")
-        path = Path(handoff["workbookPath"])
-        _fill_entra_workbook(path, ("employee_id",))
-        result = snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=path,
-            client_id=None,
-            confirmed=True,
-        )
-
-    assert result["applicationClientId"] == APP_CLIENT_ID
-    assert result["candidates"] == ["employee_id"]
-    saved = json.loads(state_path.read_text(encoding="utf-8"))
-    assert saved["evidence"]["identityClaimCandidates"][
-        "applicationClientId"
-    ] == APP_CLIENT_ID
-
-
-def test_unknown_client_id_workbook_reimports_after_admin_phase_without_argument(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    state_path = _lifecycle_path(tmp_path)
-    snow._write_json_atomic(state_path, state)
-    _confirm_identity_requirement(context)
-    handoff = snow.identity_mapping_handoff(context, stage="entra")
-    path = Path(handoff["workbookPath"])
-    _fill_entra_workbook(path, ("employee_id",))
-    workbook = load_workbook(path)
-    workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["B2"] = APP_CLIENT_ID
-    workbook.save(path)
-    workbook.close()
-
-    first = snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=path,
-        client_id=None,
-        confirmed=True,
-    )
-    phase = _complete_entra_admin(context)
-    second = snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=path,
-        client_id=None,
-        confirmed=True,
-    )
-
-    assert first["applicationClientId"] == APP_CLIENT_ID
-    assert phase["evidence"]["clientId"] == APP_CLIENT_ID
-    assert phase["verifiedBy"] == (
-        "administrator-confirmed-local-validation"
-    )
-    assert phase["evidence"]["currentSource"] == "administrator-confirmed"
-    assert phase["evidence"]["applicationRegistrationConfirmed"] is True
-    assert phase["evidence"]["selectedClaimName"] == "employee_id"
-    assert phase["evidence"]["userImpersonationScopeConfirmed"] is True
-    assert phase["evidence"]["connectorPreauthorizationConfirmed"] is True
-    assert second["applicationClientId"] == APP_CLIENT_ID
-    assert second["candidateSetSha256"] == first["candidateSetSha256"]
 
 
 @pytest.mark.parametrize(
@@ -9806,348 +7014,6 @@ def test_historical_graph_pass_reapproval_advances_without_new_admin_handoff(
         )
 
 
-def test_known_client_id_workbook_mismatch_is_zero_write(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
-        "status": "reused",
-        "evidence": {
-            "kind": "structured-admin-attestation",
-            "recordedAt": "2026-10-01T00:00:00Z",
-            "clientId": APP_CLIENT_ID,
-        },
-    }
-    state_path = _lifecycle_path(tmp_path)
-    snow._write_json_atomic(state_path, state)
-    _confirm_identity_requirement(context)
-    handoff = snow.identity_mapping_handoff(context, stage="entra")
-    path = Path(handoff["workbookPath"])
-    _fill_entra_workbook(path, ("email",))
-    other_client_id = "00000000-0000-4000-8000-000000009997"
-    workbook = load_workbook(path)
-    workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["B2"] = other_client_id
-    metadata_row = 2 + snow.IDENTITY_ENTRA_METADATA_KEYS.index(
-        "application_client_id"
-    )
-    workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET].cell(
-        metadata_row,
-        2,
-    ).value = other_client_id
-    workbook.save(path)
-    workbook.close()
-    before = state_path.read_bytes()
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="active lifecycle",
-    ):
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=path,
-            client_id=None,
-            confirmed=True,
-        )
-
-    assert state_path.read_bytes() == before
-
-
-def test_generated_known_client_id_without_lifecycle_binding_needs_argument(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    state_path = _lifecycle_path(tmp_path)
-    snow._write_json_atomic(state_path, state)
-    _confirm_identity_requirement(context)
-    handoff = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    path = Path(handoff["workbookPath"])
-    _fill_entra_workbook(path, ("email",))
-    before = state_path.read_bytes()
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="not bound to the active lifecycle",
-    ):
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=path,
-            client_id=None,
-            confirmed=True,
-        )
-
-    assert state_path.read_bytes() == before
-    result = snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=path,
-        client_id=APP_CLIENT_ID,
-        confirmed=True,
-    )
-    assert result["applicationClientId"] == APP_CLIENT_ID
-
-
-def test_known_lifecycle_does_not_replace_blank_pending_workbook_client_id(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    universal_template = _author_universal_entra_template(
-        tmp_path / "universal-entra-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_ENTRA",
-        universal_template,
-    )
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    state_path = _lifecycle_path(tmp_path)
-    snow._write_json_atomic(state_path, state)
-    _confirm_identity_requirement(context)
-    handoff = snow.identity_mapping_handoff(context, stage="entra")
-    path = Path(handoff["workbookPath"])
-    _fill_entra_workbook(path, ("email",))
-    workbook = load_workbook(path)
-    workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["B2"] = ""
-    workbook.save(path)
-    workbook.close()
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
-        "status": "reused",
-        "evidence": {
-            "kind": "structured-admin-attestation",
-            "recordedAt": "2026-10-01T00:00:00Z",
-            "clientId": APP_CLIENT_ID,
-        },
-    }
-    snow._write_json_atomic(state_path, state)
-    before = state_path.read_bytes()
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match=r"Enter the exact Application \(client\) ID",
-    ):
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=path,
-            client_id=None,
-            confirmed=True,
-        )
-
-    assert state_path.read_bytes() == before
-    workbook = load_workbook(path)
-    workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["B2"] = APP_CLIENT_ID
-    workbook.save(path)
-    workbook.close()
-    result = snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=path,
-        client_id=None,
-        confirmed=True,
-    )
-    assert result["applicationClientId"] == APP_CLIENT_ID
-
-
-@pytest.mark.parametrize(
-    "workbook_client_id",
-    ("", "not-a-guid"),
-)
-def test_same_workbook_client_id_errors_are_zero_write(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    workbook_client_id: str,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    state_path = _lifecycle_path(tmp_path)
-    snow._write_json_atomic(state_path, state)
-    _confirm_identity_requirement(context)
-    handoff = snow.identity_mapping_handoff(context, stage="entra")
-    path = Path(handoff["workbookPath"])
-    _fill_entra_workbook(path, ("email",))
-    workbook = load_workbook(path)
-    workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["B2"] = workbook_client_id
-    workbook.save(path)
-    workbook.close()
-    before = state_path.read_bytes()
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="Application",
-    ):
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=path,
-            client_id=None,
-            confirmed=True,
-        )
-
-    assert state_path.read_bytes() == before
-
-
-def test_known_client_id_workbook_rejects_different_supplied_id(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    handoff = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    path = Path(handoff["workbookPath"])
-    _fill_entra_workbook(path, ("email",))
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="Client ID does not match",
-    ):
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=path,
-            client_id="00000000-0000-4000-8000-000000009997",
-            confirmed=True,
-        )
-
-
-def test_pending_client_id_binding_still_rejects_cross_environment_workbook(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-    handoff = snow.identity_mapping_handoff(context, stage="entra")
-    path = Path(handoff["workbookPath"])
-    _fill_entra_workbook(path, ("email",))
-    workbook = load_workbook(path)
-    metadata_row = 2 + snow.IDENTITY_ENTRA_METADATA_KEYS.index(
-        "environment_id"
-    )
-    other_environment = "00000000-0000-4000-8000-000000009997"
-    workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET].cell(
-        metadata_row,
-        2,
-    ).value = other_environment
-    workbook.save(path)
-    workbook.close()
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="metadata does not match",
-    ):
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=path,
-            client_id=APP_CLIENT_ID,
-            confirmed=True,
-        )
-
-
-def test_identity_workbook_import_accepts_worksheet_as_active_sheet(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    servicenow_template = _author_servicenow_template(
-        tmp_path / "servicenow-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_SERVICENOW",
-        servicenow_template,
-    )
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-
-    entra = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-    entra_path = Path(entra["workbookPath"])
-    _fill_entra_workbook(entra_path, ("email",))
-    workbook = load_workbook(entra_path)
-    workbook.active = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-    workbook.save(entra_path)
-    workbook.close()
-
-    candidates = snow.record_identity_mapping(
-        context,
-        stage="entra",
-        workbook_path=entra_path,
-        client_id=APP_CLIENT_ID,
-        confirmed=True,
-    )
-    assert candidates["candidates"] == ["email"]
-
-    service_now = snow.identity_mapping_handoff(
-        context,
-        stage="servicenow",
-    )
-    service_now_path = Path(service_now["workbookPath"])
-    _fill_servicenow_workbook(
-        service_now_path,
-        selected_claim="email",
-        user_field="user_name",
-    )
-    workbook = load_workbook(service_now_path)
-    workbook[snow.IDENTITY_WORKBOOK_STEPS_SHEET]["B2"] = (
-        "Updated administrator guidance."
-    )
-    workbook[snow.IDENTITY_WORKBOOK_SHEET]["A1"] = "Choose the matching field"
-    workbook[snow.IDENTITY_WORKBOOK_SHEET]["A9"] = (
-        "Complete the highlighted cells."
-    )
-    workbook[snow.IDENTITY_WORKBOOK_SHEET].sheet_view.zoomScale = 140
-    workbook.active = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-    workbook.save(service_now_path)
-    workbook.close()
-
-    mapping = snow.record_identity_mapping(
-        context,
-        stage="servicenow",
-        workbook_path=service_now_path,
-        client_id=None,
-        confirmed=True,
-    )
-    assert mapping["tokenClaimName"] == "email"
-    assert mapping["serviceNowUserField"] == "user_name"
-
-
 @pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))
 def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     monkeypatch: pytest.MonkeyPatch,
@@ -10157,21 +7023,6 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     scenario = tmp_path / profile_key
     scenario.mkdir()
     monkeypatch.chdir(scenario)
-    monkeypatch.setattr(
-        snow,
-        "_checked_in_entra_workbook_steps",
-        lambda: pytest.fail(
-            "Runtime instructions must not read the legacy Entra workbook."
-        ),
-    )
-    monkeypatch.setattr(
-        snow,
-        "_checked_in_servicenow_workbook_steps",
-        lambda *_args, **_kwargs: pytest.fail(
-            "Runtime instructions must not read the legacy ServiceNow "
-            "workbook."
-        ),
-    )
     context = _profile_context(
         profile_key,
         agent_id=(
@@ -10219,12 +7070,8 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert entra["runtimeInstructionSha256"] == (
         "3EFE09214DEFAE5889AF480E041EDF7CE3D5D2F8B8E82B83D83C4856A2D80CFD"
     )
-    assert entra["sourceWorkbookSha256"] == (
-        "FF43BFC69E1112D9C73275E4AFCAC1A003AE8AA190CA24ACBAA5F39C9803BAD0"
-    )
-    assert entra["sourceWorkbookRole"] == (
-        "legacy-file-evidence-template-not-runtime-instruction"
-    )
+    assert "sourceWorkbookSha256" not in entra
+    assert "sourceWorkbookRole" not in entra
     ordinary = entra["ordinaryReply"]["text"]
     source_text = ordinary.split("\n\n", 1)[1].split(
         "\n\nCurrent contract boundary\n",
@@ -10322,9 +7169,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "connectorPreauthorizationConfirmed",
     ):
         assert historical_field not in entra_evidence
-    assert service_now["sourceWorkbookSha256"] == (
-        "2170FB0A4541227F660680AC5DFF6365359BECF15D97BC2C4FA0A21AE8828482"
-    )
+    assert "sourceWorkbookSha256" not in service_now
     assert service_now["runtimeInstructionPath"].replace("\\", "/").endswith(
         "runtime-instructions/servicenow-administrator.md"
     )
@@ -10409,7 +7254,7 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
     ) in entra
     assert "**Part 4 (only when ServiceNow identifies users" in entra
     assert "api://<client ID>" in entra
-    assert snow.SERVICENOW_CONNECTOR_APP_ID in entra
+    assert SERVICENOW_CONNECTOR_APP_ID in entra
     assert (
         "declarative-agent-servicenow-hr-it#coexistence-with-the-"
         "microsoft-graph-connector-for-servicenow"
@@ -10878,98 +7723,6 @@ def test_direct_servicenow_capture_locks_values_and_completes_from_receipt(
     assert no_action["decision"] == "no-action"
     assert no_action["ordinaryReply"] is None
     assert no_action["questions"] == []
-
-
-def test_direct_and_workbook_paths_produce_equivalent_bound_identity(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    results = {}
-    for mode in ("direct", "xlsx"):
-        root = tmp_path / mode
-        root.mkdir()
-        monkeypatch.chdir(root)
-        context = _context_at(root)
-        state = snow._state_base(context, _components())
-        state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-        snow._write_json_atomic(_lifecycle_path(root), state)
-        if mode == "direct":
-            candidates = snow.record_identity_direct(
-                context,
-                stage="entra",
-                client_id=APP_CLIENT_ID,
-                claim_name="email",
-                user_field=None,
-                confirmed=True,
-            )
-        else:
-            _confirm_identity_requirement(context)
-            handoff = snow.identity_mapping_handoff(
-                context,
-                stage="entra",
-                client_id=APP_CLIENT_ID,
-            )
-            path = Path(handoff["workbookPath"])
-            _fill_entra_workbook(path, ("email",))
-            candidates = snow.record_identity_mapping(
-                context,
-                stage="entra",
-                workbook_path=path,
-                client_id=APP_CLIENT_ID,
-                confirmed=True,
-            )
-        _complete_entra_admin(context, client_id=APP_CLIENT_ID)
-        if mode == "direct":
-            mapping = snow.record_identity_direct(
-                context,
-                stage="servicenow",
-                client_id=None,
-                claim_name=None,
-                user_field="user_name",
-                confirmed=True,
-            )
-        else:
-            handoff = snow.identity_mapping_handoff(
-                context,
-                stage="servicenow",
-            )
-            path = Path(handoff["workbookPath"])
-            _fill_servicenow_workbook(
-                path,
-                selected_claim="email",
-                user_field="user_name",
-            )
-            mapping = snow.record_identity_mapping(
-                context,
-                stage="servicenow",
-                workbook_path=path,
-                client_id=None,
-                confirmed=True,
-            )
-        current = snow._load_lifecycle_state(context)
-        assert snow._identity_admin_handoff_is_ready(
-            context,
-            current,
-            phase="servicenow-oidc",
-        ) is True
-        assert current["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
-            "evidence"
-        ]["mappingReceiptCurrent"] is True
-        results[mode] = (candidates, mapping)
-
-    direct_candidates, direct_mapping = results["direct"]
-    file_candidates, file_mapping = results["xlsx"]
-    assert direct_candidates["candidateSetSha256"] == file_candidates[
-        "candidateSetSha256"
-    ]
-    assert direct_candidates["binding"] == file_candidates["binding"]
-    assert direct_mapping["relationshipSha256"] == file_mapping[
-        "relationshipSha256"
-    ]
-    assert direct_mapping["binding"] == file_mapping["binding"]
-    assert direct_candidates["provenanceSha256"] != file_candidates[
-        "provenanceSha256"
-    ]
 
 
 def test_servicenow_mapping_receipt_does_not_infer_preauthorization_or_saved(
@@ -11807,357 +8560,6 @@ def test_pending_legacy_entra_completion_reconciles_two_field_receipt_without_re
     assert persisted["migration"]["entraTwoFieldCompletion"][
         "criterion"
     ] == "client-id-and-one-claim-name"
-
-
-def test_checked_in_entra_workbook_has_expected_protection_and_editable_cells() -> None:
-    root = Path(__file__).resolve().parents[2] / "solutions" / "ess-maker-skills"
-    for stage, template in (
-        ("entra", snow.IDENTITY_WORKBOOK_TEMPLATE_ENTRA),
-    ):
-        path = root / template
-        workbook = load_workbook(path)
-        sheet = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-        metadata = workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET]
-        assert workbook.sheetnames == ["Entra Handoff", "_metadata"]
-        assert workbook.active.title == "Entra Handoff"
-        assert tuple(
-            sheet.cell(1, column).value for column in range(1, 4)
-        ) == snow.IDENTITY_ENTRA_HANDOFF_HEADERS
-        assert sheet.max_row == 2
-        assert sheet.max_column == 3
-        assert sheet["A2"].value == snow._entra_admin_instruction()
-        assert "\r" not in sheet["A2"].value
-        assert "\n" not in sheet["A2"].value
-        assert sheet["A2"].hyperlink.target == (
-            snow.SERVICENOW_NON_EMAIL_USER_MATCH_URL
-        )
-        assert sheet["A2"].protection.locked is True
-        assert sheet["B2"].protection.locked is False
-        assert sheet["C2"].protection.locked is False
-        assert sheet["B2"].fill.fgColor.rgb.endswith("FFF2CC")
-        assert sheet["C2"].fill.fgColor.rgb.endswith("FFF2CC")
-        assert metadata.sheet_state == "hidden"
-        assert metadata.protection.sheet is True
-        assert sheet.freeze_panes == "A2"
-        assert sheet.auto_filter.ref == "A1:C2"
-        workbook.close()
-        with zipfile.ZipFile(path) as archive:
-            package_text = "\n".join(
-                archive.read(name).decode("utf-8", errors="ignore")
-                for name in archive.namelist()
-            )
-        assert snow.SERVICENOW_NON_EMAIL_USER_MATCH_URL in package_text
-        for forbidden in (
-            "file://",
-            "C:\\",
-            "C:/Users/",
-            "/Users/",
-            "/home/",
-            "\\\\",
-            "daphneshao",
-            "EmployeeHub",
-            "dev184242",
-            "ac017a3f-5f05-499c-b3f2-c1c1043db7ce",
-            "copilot-worktrees",
-        ):
-            assert forbidden not in package_text
-
-
-def test_checked_in_entra_template_has_universal_branch_graph() -> None:
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "solutions"
-        / "ess-maker-skills"
-        / snow.IDENTITY_WORKBOOK_TEMPLATE_ENTRA
-    )
-    workbook = load_workbook(path, data_only=False, keep_links=False)
-    sheet = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-    metadata = workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET]
-    text = sheet["A2"].value
-    workbook.close()
-
-    assert text == snow._entra_admin_instruction()
-    assert "\r" not in text and "\n" not in text
-    assert "**Applications** then **App registrations**" in text
-    assert "**New registration.**" in text
-    assert "**Name:**" in text
-    assert "**Redirect URL:** Not needed" in text
-    assert "**Token configuration**" in text
-    assert "**Add optional claim**" in text
-    assert "*Aud* - for audience validation" in text
-    assert "*Email* - addressable email for the user" in text
-    assert "*UPN* - an identifier for the user" in text
-    assert "Microsoft Graph permissions" in text
-    assert snow.SERVICENOW_NON_EMAIL_USER_MATCH_URL in text
-    assert "must not be entered as the selected User Claim" in text
-    assert metadata.sheet_state == "hidden"
-
-
-def test_fresh_entra_generation_uses_checked_in_template_content(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _context_at(tmp_path)
-    state = snow._state_base(context, _components())
-    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
-    _confirm_identity_requirement(context)
-
-    handoff = snow.identity_mapping_handoff(
-        context,
-        stage="entra",
-        client_id=APP_CLIENT_ID,
-    )
-
-    generated = Path(handoff["workbookPath"])
-    assert handoff["workbookFileStatus"] == "generated"
-    assert snow._identity_workbook_template_marker(generated) == (
-        snow._identity_workbook_template_sha256("entra")
-    )
-    workbook = load_workbook(generated, data_only=False, keep_links=False)
-    sheet = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-    assert sheet["A2"].value == snow._entra_admin_instruction()
-    assert sheet["B2"].value == APP_CLIENT_ID
-    assert sheet["C2"].value in {None, ""}
-    assert sheet.protection.sheet is True
-    assert workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET].sheet_state == (
-        "hidden"
-    )
-    workbook.close()
-
-
-def test_runtime_entra_workbooks_keep_customer_context_isolated(
-    tmp_path: Path,
-) -> None:
-    contexts = [
-        {
-            "purpose": "Collect claim names.",
-            "target_agent": "Customer A agent",
-            "tenant_id": "11111111-1111-4111-8111-111111111111",
-            "environment_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-            "servicenow_instance": "customer-a",
-            "application_client_id": (
-                "22222222-2222-4222-8222-222222222222"
-            ),
-            "stage": "entra",
-            "owner": "Microsoft Entra administrator",
-            "admin_instruction": "Follow Steps.",
-            "privacy_note": "Claim names only.",
-        },
-        {
-            "purpose": "Collect claim names.",
-            "target_agent": "Customer B agent",
-            "tenant_id": "33333333-3333-4333-8333-333333333333",
-            "environment_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-            "servicenow_instance": "customer-b",
-            "application_client_id": (
-                "44444444-4444-4444-8444-444444444444"
-            ),
-            "stage": "entra",
-            "owner": "Microsoft Entra administrator",
-            "admin_instruction": "Follow Steps.",
-            "privacy_note": "Claim names only.",
-        },
-    ]
-    paths = []
-    for index, context_values in enumerate(contexts):
-        path = tmp_path / f"customer-{index}.xlsx"
-        steps = snow._identity_workbook_steps(
-            stage="entra",
-            context_values=context_values,
-            missing_items=[("CLAIMS", "claims")],
-        )
-        snow._write_identity_workbook(
-            path,
-            context_values=context_values,
-            stage="entra",
-            candidates=[],
-            steps=steps,
-        )
-        paths.append(path)
-
-    for index, path in enumerate(paths):
-        workbook = load_workbook(path, data_only=False, keep_links=False)
-        sheet = workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]
-        metadata = workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET]
-        own = contexts[index]
-        other = contexts[1 - index]
-        assert sheet["B2"].value == own["application_client_id"]
-        assert sheet["C2"].value in {None, ""}
-        metadata_text = " ".join(
-            str(cell.value or "")
-            for row in metadata.iter_rows()
-            for cell in row
-        )
-        assert own["tenant_id"] in metadata_text
-        assert own["servicenow_instance"] in metadata_text
-        assert other["tenant_id"] not in metadata_text
-        assert other["servicenow_instance"] not in metadata_text
-        workbook.close()
-
-
-def test_runtime_servicenow_workbooks_keep_customer_context_isolated(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    servicenow_template = _author_servicenow_template(
-        tmp_path / "servicenow-template.xlsx"
-    )
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_SERVICENOW",
-        servicenow_template,
-    )
-    contexts = [
-        {
-            "purpose": "Choose the matching ServiceNow field.",
-            "target_agent": "Customer A agent",
-            "tenant_id": "11111111-1111-4111-8111-111111111111",
-            "environment_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-            "servicenow_instance": "customer-a",
-            "application_client_id": (
-                "22222222-2222-4222-8222-222222222222"
-            ),
-            "stage": "servicenow",
-            "owner": "ServiceNow administrator",
-            "admin_instruction": "Follow Steps.",
-            "privacy_note": "Choose one field.",
-        },
-        {
-            "purpose": "Choose the matching ServiceNow field.",
-            "target_agent": "Customer B agent",
-            "tenant_id": "33333333-3333-4333-8333-333333333333",
-            "environment_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-            "servicenow_instance": "customer-b",
-            "application_client_id": (
-                "44444444-4444-4444-8444-444444444444"
-            ),
-            "stage": "servicenow",
-            "owner": "ServiceNow administrator",
-            "admin_instruction": "Follow Steps.",
-            "privacy_note": "Choose one field.",
-        },
-    ]
-    paths = []
-    for index, context_values in enumerate(contexts):
-        context_values.update(
-            {
-                "provider": snow.PROVIDER_KEY,
-                "profile": snow.PROFILE_KEY,
-                "agent_slug": f"customer-{index}-agent",
-                "agent_id": f"customer-{index}-agent-id",
-                "confirmed_user_claim_name": (
-                    f"customer_{index}_claim"
-                ),
-            }
-        )
-        path = tmp_path / f"servicenow-customer-{index}.xlsx"
-        steps = snow._identity_workbook_steps(
-            stage="servicenow",
-            context_values=context_values,
-            missing_items=[],
-        )
-        snow._write_identity_workbook(
-            path,
-            context_values=context_values,
-            stage="servicenow",
-            candidates=[f"customer_{index}_claim"],
-            steps=steps,
-        )
-        paths.append(path)
-
-    for index, path in enumerate(paths):
-        workbook = load_workbook(path, data_only=False, keep_links=False)
-        steps_sheet = workbook[snow.IDENTITY_WORKBOOK_STEPS_SHEET]
-        sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-        metadata = workbook[snow.IDENTITY_WORKBOOK_METADATA_SHEET]
-        own = contexts[index]
-        other = contexts[1 - index]
-        steps_text = "\n".join(
-            str(steps_sheet.cell(row, 2).value or "")
-            for row in range(2, steps_sheet.max_row + 1)
-        )
-        own_metadata_url = (
-            f"login.microsoftonline.com/{own['tenant_id']}/"
-            ".well-known/openid-configuration"
-        )
-        other_metadata_url = (
-            f"login.microsoftonline.com/{other['tenant_id']}/"
-            ".well-known/openid-configuration"
-        )
-        assert sheet.cell(2, 2).value == own["target_agent"]
-        assert sheet.cell(5, 2).value == own["servicenow_instance"]
-        assert sheet.cell(6, 2).value == own["application_client_id"]
-        assert sheet.cell(
-            snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW,
-            1,
-        ).value == f"customer_{index}_claim"
-        metadata_text = " ".join(
-            str(cell.value or "")
-            for row in metadata.iter_rows()
-            for cell in row
-        )
-        assert own["tenant_id"] in metadata_text
-        assert own["servicenow_instance"] in metadata_text
-        assert other["tenant_id"] not in metadata_text
-        assert other["servicenow_instance"] not in metadata_text
-        assert f"customer_{1 - index}_claim" not in metadata_text
-        assert own_metadata_url in steps_text
-        assert own["application_client_id"] in steps_text
-        assert other_metadata_url not in steps_text
-        assert other["application_client_id"] not in steps_text
-        assert "CONFIRMED_" not in steps_text
-        hyperlinks = [
-            cell.hyperlink.target
-            for row in steps_sheet.iter_rows()
-            for cell in row
-            if cell.hyperlink is not None
-        ]
-        assert hyperlinks == []
-        workbook.close()
-
-
-@pytest.mark.parametrize("mode", ("missing", "corrupt"))
-def test_runtime_workbook_fails_closed_when_template_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    mode: str,
-) -> None:
-    template = tmp_path / "template.xlsx"
-    if mode == "corrupt":
-        template.write_text("not an xlsx", encoding="utf-8")
-    monkeypatch.setattr(
-        snow,
-        "IDENTITY_WORKBOOK_TEMPLATE_ENTRA",
-        template,
-    )
-    context_values = {
-        "purpose": "Collect claims.",
-        "target_agent": "Customer agent",
-        "tenant_id": "11111111-1111-4111-8111-111111111111",
-        "environment_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        "servicenow_instance": "customer-instance",
-        "application_client_id": snow.IDENTITY_WORKBOOK_PENDING_CLIENT_ID,
-        "stage": "entra",
-        "owner": "Microsoft Entra administrator",
-        "admin_instruction": "Follow Steps.",
-        "privacy_note": "Claim names only.",
-    }
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="template",
-    ):
-        snow._write_identity_workbook(
-            tmp_path / "output.xlsx",
-            context_values=context_values,
-            stage="entra",
-            candidates=[],
-            steps=[],
-            missing_items=[("CLAIMS", "claims")],
-        )
-    assert not (tmp_path / "output.xlsx").exists()
 
 
 def test_v2_lifecycle_migrates_to_v8_without_obsolete_preflight_gates(
@@ -18236,3 +14638,88 @@ def test_main_emits_authentication_marker_before_admin_discovery(
         "state": "starting",
         "mode": "read-only-preparation",
     }
+
+
+def test_old_receipts_with_retired_source_hash_still_validate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context = _context_at(tmp_path)
+    _record_test_identity_mapping(tmp_path)
+
+    state = snow._load_lifecycle_state(context)
+    current = state["evidence"]["identityMapping"]
+    assert "sourceWorkbookSha256" not in current
+    assert "sourceWorkbookRole" not in current
+    assert snow._servicenow_mapping_receipt_provenance_current(current)
+
+    for key in ("identityClaimCandidates", "identityMapping"):
+        receipt = state["evidence"][key]
+        receipt["sourceWorkbookSha256"] = "d" * 64
+        receipt["sourceWorkbookRole"] = "legacy-handoff"
+        receipt["importedFileFormat"] = "xlsx"
+        receipt["sheetProtected"] = True
+    snow._write_lifecycle_state(context, state)
+
+    reloaded = snow._load_lifecycle_state(context)
+    legacy = snow._validated_identity_mapping(context, reloaded)
+    assert legacy["sourceWorkbookSha256"] == "d" * 64
+    assert snow._servicenow_mapping_receipt_provenance_current(legacy)
+    assert snow._validated_claim_candidates(context, reloaded)
+
+
+def test_servicenow_connect_assets_have_no_retired_identity_file_route() -> None:
+    repo = Path(__file__).resolve().parents[2]
+    skills = repo / "solutions" / "ess-maker-skills" / "src" / "skills"
+    paths = [
+        repo
+        / "solutions"
+        / "ess-maker-skills"
+        / "scripts"
+        / "connect_servicenow_da.py",
+        repo
+        / "solutions"
+        / "ess-maker-skills"
+        / ".github"
+        / "prompts"
+        / "connect.prompt.md",
+        skills / "connect" / "shared" / "lifecycle-runner.md",
+    ]
+    for folder in ("servicenow-da", "servicenow-da-hrsd", "servicenow-da-itsm"):
+        paths.extend(
+            path
+            for path in (skills / "connect" / folder).rglob("*")
+            if path.is_file()
+        )
+    paths.extend(
+        (
+            repo
+            / "solutions"
+            / "ess-maker-skills"
+            / "scripts"
+            / "flightcheck"
+            / "checks"
+        ).glob("servicenow_da_*.py")
+    )
+    retired = (
+        "servicenow-identity-claims-entra",
+        "servicenow-identity-mapping-servicenow",
+        "IDENTITY_WORKBOOK",
+        "identity-mapping-handoff",
+        "record-identity-mapping",
+        "workbookPath",
+        ".xlsx",
+        "sourceWorkbookSha256",
+    )
+    assert paths
+    offenders = [
+        f"{path.name}: {token}"
+        for path in paths
+        for token in retired
+        if token in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+    assert not list(
+        (skills / "connect" / "shared" / "templates").glob("servicenow-*")
+    )

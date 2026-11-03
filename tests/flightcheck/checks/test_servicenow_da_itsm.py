@@ -9,7 +9,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from openpyxl import load_workbook
 
 import connect_servicenow_da as snow
 from flightcheck.checks.servicenow_da_itsm import (
@@ -297,9 +296,8 @@ def _write_it_state(root: Path, components: dict) -> dict:
             "tokenClaimEmissionConfirmed": True,
             "serviceNowAdministratorConfirmed": True,
             "provenanceSha256": "b" * 64,
-            "sourceWorkbookSha256": (
-                snow.IDENTITY_WORKBOOK_SOURCE_SHA256["servicenow"]
-            ),
+            "sourceWorkbookSha256": "c" * 64,
+            "sourceWorkbookRole": "legacy-handoff",
             "importedWorkbookSha256": "b" * 64,
             "importedFileFormat": "xlsx",
             "sheetProtected": True,
@@ -575,21 +573,12 @@ def test_recorded_mapping_workflow_reaches_real_it_checkpoints(
         state["evidence"].pop("identityMapping", None)
         state_path.write_text(json.dumps(state), encoding="utf-8")
         snow.record_identity_requirement(context, choice="email")
-        entra = snow.identity_mapping_handoff(
+        snow.record_identity_direct(
             context,
             stage="entra",
             client_id=APP_CLIENT_ID,
-        )
-        entra_path = Path(entra["workbookPath"])
-        workbook = load_workbook(entra_path)
-        workbook[snow.IDENTITY_ENTRA_HANDOFF_SHEET]["C2"] = "employee_id"
-        workbook.save(entra_path)
-        workbook.close()
-        snow.record_identity_mapping(
-            context,
-            stage="entra",
-            workbook_path=entra_path,
-            client_id=APP_CLIENT_ID,
+            claim_name="employee_id",
+            user_field=None,
             confirmed=True,
         )
         snow.record_admin_phase(
@@ -602,26 +591,12 @@ def test_recorded_mapping_workflow_reaches_real_it_checkpoints(
             user_impersonation_scope_confirmed=True,
             connector_preauthorization_confirmed=True,
         )
-        service_now = snow.identity_mapping_handoff(
+        snow.record_identity_direct(
             context,
             stage="servicenow",
-        )
-        service_now_path = Path(service_now["workbookPath"])
-        workbook = load_workbook(service_now_path)
-        sheet = workbook[snow.IDENTITY_WORKBOOK_SHEET]
-        for row in range(
-            snow.IDENTITY_WORKBOOK_FIRST_DATA_ROW,
-            sheet.max_row + 1,
-        ):
-            if sheet.cell(row, 1).value == "employee_id":
-                sheet.cell(row, 2).value = "employee_number"
-        workbook.save(service_now_path)
-        workbook.close()
-        snow.record_identity_mapping(
-            context,
-            stage="servicenow",
-            workbook_path=service_now_path,
             client_id=None,
+            claim_name=None,
+            user_field="employee_number",
             confirmed=True,
         )
         snow.record_admin_phase(
