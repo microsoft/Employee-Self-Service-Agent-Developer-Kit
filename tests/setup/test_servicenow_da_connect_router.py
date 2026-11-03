@@ -21,15 +21,15 @@ def test_realm_deployment_guidance_is_conditional_and_read_only() -> None:
     normalized = " ".join(chooser.split())
 
     assert "record-realm-deployment --realm <test|prod>" in chooser
-    assert "--status not-deployed" in chooser
-    assert "--status deployment-completed" in chooser
-    assert "organization's normal promotion process outside Connect" in chooser
-    assert "Completed only after that process finishes" in chooser
-    assert "Only the controller's conclusive all-candidate not-found result" in (
-        normalized
+    assert "--status <not-deployed|deployment-completed>" in chooser
+    assert "Always run exact read-only target discovery" in chooser
+    assert "current exact target match is authoritative backend proof" in chooser
+    assert "Only when the controller conclusively proves" in normalized
+    assert "one candidate 404, an unreadable environment" in (
+        normalized.casefold()
     )
-    assert "one candidate 404, an unreadable environment" in normalized
-    assert "Maker completion does not\npass validation" in chooser
+    assert "stores report history and requests a recheck only" in normalized
+    assert "never gates API discovery" in normalized
     assert "kit does not deploy, promote, import" in normalized
     assert "Not automatically verified" in chooser
     assert "never present `Manual` alone" in chooser

@@ -117,6 +117,33 @@ def test_resolved_target_conflict_fails_closed():
             Status.BLOCKED.value,
         ),
         (
+            {
+                "statusCode": 429,
+                "retryAfter": "30",
+                "recoveryHandoff": {"category": "Read throttled"},
+            },
+            "Target inventory is throttled.",
+            "throttled",
+            Status.BLOCKED.value,
+        ),
+        (
+            {
+                "matchCount": 2,
+                "recoveryHandoff": {"category": "Target discovery ambiguous"},
+            },
+            "Multiple target deployments matched.",
+            "ambiguous",
+            Status.FAILED.value,
+        ),
+        (
+            {
+                "recoveryHandoff": {"category": "Read or network error"},
+            },
+            "Target inventory network read failed.",
+            "network",
+            Status.ERROR.value,
+        ),
+        (
             {},
             "Target discovery is unavailable.",
             "unknown",

@@ -84,8 +84,12 @@ def _outcome_from_error(
     category = str(recovery.get("category") or "")
     if status_code in {401, 403} or category == "Read permission":
         return "permission", Status.BLOCKED.value
+    if status_code == 429 or category == "Read throttled":
+        return "throttled", Status.BLOCKED.value
     if details.get("targetAbsenceProven") is True:
         return "missing", Status.NOT_CONFIGURED.value
+    if details.get("matchCount", 0) > 1:
+        return "ambiguous", Status.FAILED.value
     if (
         "mismatch" in category.casefold()
         or "conflict" in str(exc).casefold()
@@ -100,6 +104,8 @@ def _outcome_from_error(
         )
     ):
         return "conflict", Status.FAILED.value
+    if category == "Read or network error":
+        return "network", Status.ERROR.value
     return "unknown", Status.ERROR.value
 
 

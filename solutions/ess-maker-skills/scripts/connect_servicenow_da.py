@@ -15068,11 +15068,11 @@ def validation_realm_handoff(
             "header": "Choose validation environment",
             "question": (
                 "This exact agent has a complete current Dev Connect record. "
-                "Which deployment realm do you want to resume? Test requires "
-                "an explicit organization-promotion report and exact sibling "
-                "proof. Prod is offered only after Test configuration and "
-                "Maker validation complete. Connect never promotes, imports, "
-                "publishes, checks out a branch, or auto-advances realms."
+                "Which deployment realm do you want to resume? Test starts "
+                "with exact read-only sibling proof. Prod is offered only "
+                "after Test configuration and Maker validation complete. "
+                "Connect never promotes, imports, publishes, checks out a "
+                "branch, or auto-advances realms."
             ),
             "options": options,
             "allowFreeformInput": False,
@@ -15095,31 +15095,61 @@ def _realm_deployment_record(
     return record if isinstance(record, dict) else None
 
 
+def _verified_realm_deployment_record(
+    state: dict[str, Any],
+    realm: str,
+) -> dict[str, Any] | None:
+    record = _realm_deployment_record(state, realm)
+    if (
+        isinstance(record, dict)
+        and record.get("kind") == "backend-proof"
+        and record.get("status") == "deployment-completed"
+        and record.get("source") == "exact-target-discovery"
+        and isinstance(record.get("targetIdentity"), dict)
+        and isinstance(record.get("targetConfigurationSha256"), str)
+        and record["targetConfigurationSha256"]
+        == _canonical_json_hash(record["targetIdentity"])
+    ):
+        return record
+    return None
+
+
 def _realm_deployment_question(
     context: dict[str, Any],
     *,
     realm: str,
+    absence_proven: bool = False,
 ) -> dict[str, Any]:
     realm_label = realm.title()
     return _native_question(
-        header=f"Confirm {realm_label} promotion completed",
+        header=f"Recheck {realm_label} deployment",
         question=(
             f"Source agent family: {ACTIVE_PROFILE.agent_display_name} "
             f"(`{_agent_slug(context)}`)\n"
             f"Source environment: `{context['environment']['id']}`\n"
             f"Requested realm: `{realm}`\n\n"
-            f"Has the Copilot Studio / Power Platform ALM owner confirmed "
-            f"that the organization's approved {realm_label} promotion/import "
-            "finished for this agent family?\n\n"
-            "This confirmation is only a prerequisite. Connect does not "
-            "provision, promote, import, publish, or repair the target. After "
-            "completion, exact realm, family, environment, agent, schema, and "
-            "commit proof must still pass through read-only discovery before "
-            "the bounded target Test."
+            + (
+                "Exact read-only discovery conclusively found no deployed "
+                f"target for this {realm_label} realm. "
+                if absence_proven
+                else (
+                    "This historical status report is not deployment "
+                    "evidence. "
+                )
+            )
+            + "Connect does not provision, promote, import, publish, or "
+            "repair the target.\n\n"
+            "After the organization completes its approved external "
+            "promotion/import, request another read-only check. This action "
+            "is only a recheck request; it is not deployment evidence and "
+            "cannot pass validation."
         ),
         option_labels=[
-            f"Completed, the {realm_label} promotion/import finished",
-            f"Not yet, the {realm_label} promotion is still pending",
+            (
+                f"Recheck after the {realm_label} promotion/import is "
+                "complete"
+            ),
+            f"Not yet, keep waiting for the {realm_label} deployment",
         ],
     )
 
@@ -15161,31 +15191,16 @@ def record_realm_deployment(
         "sourceEnvironmentId": context["environment"]["id"],
     }
     state.setdefault("evidence", {}).setdefault(
-        "realmDeployments",
+        "realmDeploymentReports",
         {},
     )[realm] = record
-    validations = state["evidence"].get("realmValidations")
-    if isinstance(validations, dict):
-        validations.pop(realm, None)
-    flow = _realm_flow_record(state, realm, create=True)
-    if isinstance(flow, dict):
-        flow.clear()
-        flow.update(
-            {
-                "realm": realm,
-                "promotion": copy.deepcopy(record),
-                "stages": {
-                    stage_id: {
-                        "status": "pending",
-                        "updatedAt": recorded_at,
-                    }
-                    for stage_id in _REALM_STAGE_IDS
-                },
-            }
-        )
     _write_lifecycle_state(context, state)
     question = (
-        _realm_deployment_question(context, realm=realm)
+        _realm_deployment_question(
+            context,
+            realm=realm,
+            absence_proven=False,
+        )
         if status == "not-deployed"
         else None
     )
@@ -15194,7 +15209,7 @@ def record_realm_deployment(
         "status": (
             "deployment-required"
             if status == "not-deployed"
-            else "validation-required"
+            else "recheck-required"
         ),
         "realm": realm,
         "deploymentEvidence": copy.deepcopy(record),
@@ -15208,9 +15223,9 @@ def record_realm_deployment(
                     "Studio / Power Platform ALM owner to use the "
                     "organization's approved promotion process for the "
                     "current source agent family. Connect does not provision, "
-                    "promote, import, publish, or repair the target. Then show "
-                    "the returned compact deployment question exactly and "
-                    "wait."
+                    "promote, import, publish, or repair the target. The "
+                    "compact card requests a later API recheck and is not "
+                    "evidence."
                 ),
             }
             if status == "not-deployed"
@@ -15223,8 +15238,9 @@ def record_realm_deployment(
                     f"--realm {realm}"
                 ),
                 "instruction": (
-                    "Maker-reported deployment is not validation evidence. "
-                    "Rerun exact read-only target discovery and checks."
+                    "The legacy Maker report is history only. Rerun exact "
+                    "read-only target discovery and checks; only backend proof "
+                    "can confirm deployment."
                 ),
             }
         ),
@@ -16208,6 +16224,17 @@ def _record_verified_realm_deployment(
         "targetConfigurationSha256": _canonical_json_hash(target_identity),
     }
     evidence = state.setdefault("evidence", {})
+    existing = evidence.get("realmDeployments")
+    existing = existing if isinstance(existing, dict) else {}
+    legacy_record = existing.get(realm)
+    if (
+        isinstance(legacy_record, dict)
+        and legacy_record.get("kind") != "backend-proof"
+    ):
+        evidence.setdefault("realmDeploymentReports", {}).setdefault(
+            realm,
+            copy.deepcopy(legacy_record),
+        )
     evidence.setdefault("realmDeployments", {})[realm] = record
     flow = _realm_flow_record(state, realm, create=True)
     if isinstance(flow, dict):
@@ -16231,6 +16258,84 @@ def _record_verified_realm_deployment(
         )
     _write_lifecycle_state(context, state)
     return copy.deepcopy(record)
+
+
+def _retire_missing_realm_deployment(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    realm: str,
+    details: dict[str, Any],
+) -> dict[str, Any] | None:
+    evidence = state.setdefault("evidence", {})
+    deployments = evidence.get("realmDeployments")
+    deployments = deployments if isinstance(deployments, dict) else {}
+    raw_record = deployments.get(realm)
+    raw_record = (
+        copy.deepcopy(raw_record)
+        if isinstance(raw_record, dict)
+        else None
+    )
+    prior = (
+        raw_record
+        if isinstance(raw_record, dict)
+        and raw_record.get("kind") == "backend-proof"
+        else None
+    )
+    legacy_report_moved = False
+    if raw_record is not None and prior is None:
+        evidence.setdefault("realmDeploymentReports", {}).setdefault(
+            realm,
+            raw_record,
+        )
+        deployments.pop(realm, None)
+        legacy_report_moved = True
+    validation_removed = False
+    validations = evidence.get("realmValidations")
+    if isinstance(validations, dict) and realm in validations:
+        validations.pop(realm, None)
+        validation_removed = True
+    if prior is not None:
+        deployments.pop(realm, None)
+        state.setdefault("migration", {}).setdefault(
+            "retiredRealmDeploymentProofs",
+            [],
+        ).append(
+            {
+                "realm": realm,
+                "reason": "exact-read-only-discovery-proved-target-absent",
+                "retiredAt": _utc_now(),
+                "record": prior,
+                "discoveryDetailsSha256": _canonical_json_hash(details),
+            }
+        )
+    flow = _realm_flow_record(state, realm, create=False)
+    flow_changed = False
+    if isinstance(flow, dict) and (
+        raw_record is not None or validation_removed
+    ):
+        flow.clear()
+        flow.update(
+            {
+                "realm": realm,
+                "stages": {
+                    stage_id: {
+                        "status": "pending",
+                        "updatedAt": _utc_now(),
+                    }
+                    for stage_id in _REALM_STAGE_IDS
+                },
+            }
+        )
+        flow_changed = True
+    if (
+        prior is not None
+        or legacy_report_moved
+        or validation_removed
+        or flow_changed
+    ):
+        _write_lifecycle_state(context, state)
+    return prior
 
 
 def _flightcheck_result_dict(result: Any) -> dict[str, Any]:
@@ -17565,73 +17670,52 @@ def validate_realm(
     )
 
     _require_realm_sequence(context, state, realm)
-    deployment_record = _realm_deployment_record(state, realm)
-    resolved_target: dict[str, Any] | None = None
-    if (
-        not isinstance(deployment_record, dict)
-        or deployment_record.get("status") != "deployment-completed"
-    ):
-        if not already_promoted:
-            return {
-                "schemaVersion": "servicenow.realm-validation.v1",
-                "status": "deployment-required",
-                "selection": selection,
-                "transport": transport,
-                "deploymentEvidence": copy.deepcopy(deployment_record),
-                "question": _realm_deployment_question(
-                    context,
-                    realm=realm,
-                ),
-                "remoteMutationCount": 0,
-                "next": {
-                    "action": "maker-deploys-target",
-                    "instruction": (
-                        "As an ordinary current-task reply, direct the ALM "
-                        "owner to use the organization's approved promotion "
-                        "process for this source agent family. Wait for the "
-                        "explicit completion report. Do not call target APIs, "
-                        "provision, promote, import, or publish."
-                    ),
-                },
-            }
-        try:
-            resolved_target = _resolve_target_realm(context, realm=realm)
-        except ServiceNowConnectError as exc:
-            if not _target_absence_proven(exc, realm=realm):
-                raise
-            return {
-                "schemaVersion": "servicenow.realm-validation.v1",
-                "status": "deployment-required",
-                "selection": selection,
-                "transport": transport,
-                "deploymentEvidence": None,
-                "targetDiscovery": {
-                    "status": "not-found",
-                    "source": "exact-read-only-discovery",
-                    "details": copy.deepcopy(exc.details),
-                },
-                "question": _realm_deployment_question(
-                    context,
-                    realm=realm,
-                ),
-                "remoteMutationCount": 0,
-                "next": {
-                    "action": "maker-deploys-target",
-                    "instruction": (
-                        "Exact read-only discovery proved the requested "
-                        "target is not deployed. As an ordinary current-task "
-                        "reply, return the ALM owner to the organization's "
-                        "approved promotion process, then show the compact "
-                        "deployment question and wait."
-                    ),
-                },
-            }
-        deployment_record = _record_verified_realm_deployment(
+    deployment_record = _verified_realm_deployment_record(state, realm)
+    try:
+        resolved_target = _resolve_target_realm(context, realm=realm)
+    except ServiceNowConnectError as exc:
+        if not _target_absence_proven(exc, realm=realm):
+            raise
+        retired_deployment = _retire_missing_realm_deployment(
             context,
             state,
             realm=realm,
-            target=resolved_target,
+            details=copy.deepcopy(exc.details),
         )
+        return {
+            "schemaVersion": "servicenow.realm-validation.v1",
+            "status": "deployment-required",
+            "selection": selection,
+            "transport": transport,
+            "deploymentEvidence": None,
+            "retiredDeploymentEvidence": retired_deployment,
+            "legacyDeploymentReport": copy.deepcopy(
+                state.get("evidence", {})
+                .get("realmDeploymentReports", {})
+                .get(realm)
+            ),
+            "targetDiscovery": {
+                "status": "not-found",
+                "source": "exact-read-only-discovery",
+                "details": copy.deepcopy(exc.details),
+            },
+            "question": _realm_deployment_question(
+                context,
+                realm=realm,
+                absence_proven=True,
+            ),
+            "remoteMutationCount": 0,
+            "next": {
+                "action": "maker-deploys-target-then-rechecks",
+                "instruction": (
+                    "Exact read-only discovery proved the requested target is "
+                    "not deployed. Return the ALM owner to the organization's "
+                    "approved external promotion process, then request "
+                    "another read-only check. The recheck action is not "
+                    "deployment evidence."
+                ),
+            },
+        }
 
     if not target_instance or not target_client_id:
         problem = (
@@ -17681,11 +17765,7 @@ def validate_realm(
     normalized_target_client_id = normalize_client_id(target_client_id)
     state.setdefault("evidence", {})["validationRealmSelection"] = selection
     _write_lifecycle_state(context, state)
-    target = (
-        resolved_target
-        if resolved_target is not None
-        else _resolve_target_realm(context, realm=realm)
-    )
+    target = resolved_target
     target_client = target.pop("client")
     target_identity = _realm_target_identity(target, realm)
     target_configuration_sha256 = _canonical_json_hash(target_identity)
@@ -17707,10 +17787,7 @@ def validate_realm(
             expected=(
                 deployment_record.get("targetIdentity")
                 if isinstance(deployment_record, dict)
-                and isinstance(
-                    deployment_record.get("targetIdentity"),
-                    dict,
-                )
+                and isinstance(deployment_record.get("targetIdentity"), dict)
                 else None
             ),
         )
@@ -18729,14 +18806,11 @@ def record_realm_test(
         )
     state = _load_lifecycle_state(context)
     _require_realm_sequence(context, state, realm)
-    deployment = _realm_deployment_record(state, realm)
-    if (
-        not isinstance(deployment, dict)
-        or deployment.get("status") != "deployment-completed"
-    ):
+    deployment = _verified_realm_deployment_record(state, realm)
+    if not isinstance(deployment, dict):
         raise ServiceNowConnectError(
-            f"The {realm.title()} organization promotion must be explicitly "
-            "reported complete before recording Maker validation."
+            f"The exact {realm.title()} target deployment must be proven by "
+            "current read-only discovery before recording Maker validation."
         )
     validation = _realm_validation_record(state, realm)
     if validation.get("blockingAutomatedCheckCount") not in {0, None}:

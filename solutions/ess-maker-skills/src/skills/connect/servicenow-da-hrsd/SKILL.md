@@ -106,9 +106,10 @@ second completion message.
 
 After that exact Dev lifecycle is complete with current passing Test evidence,
 run `validation-realm-handoff`. Development, Test, and Production are agent
-deployment realms, never Git branches. Test requires the Maker to report that
-the organization's promotion completed; Production is offered only after the
-exact Test realm completes all three target stages.
+deployment realms, never Git branches. Test starts with exact read-only
+discovery of the promoted target; conclusive absence
+returns external ALM guidance and a recheck action. Production is offered only
+after the exact Test realm completes all three target stages.
 
 For Test/Production, `validate-realm --realm <test|prod>` must fail closed
 unless it proves one exact target realm, tenant, environment, Dataverse URL,

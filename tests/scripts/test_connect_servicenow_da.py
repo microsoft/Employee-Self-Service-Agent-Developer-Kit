@@ -692,27 +692,85 @@ def _seed_complete_dev_state(
                     "recordedAt": "2026-10-23T00:00:05Z",
                 },
             }
+        identity_binding = {
+            "tenantId": TENANT_ID,
+            "environmentId": ENVIRONMENT_ID,
+            "instanceName": "dev123",
+            "applicationClientId": APP_CLIENT_ID,
+            "provider": product.provider_key,
+            "profile": profile,
+            "agentSlug": slug,
+            "agentId": agent_id,
+        }
+        candidate_hash = snow._identity_candidate_set_hash(
+            application_client_id=APP_CLIENT_ID,
+            candidates=["email"],
+            binding=identity_binding,
+        )
+        state["evidence"]["identityClaimCandidates"] = {
+            "kind": "administrator-confirmed-claim-candidates",
+            "status": "entra-confirmed",
+            "currentSource": "direct-capture",
+            "applicationClientId": APP_CLIENT_ID,
+            "candidates": ["email"],
+            "candidateSetSha256": candidate_hash,
+            "entraAdministratorConfirmed": True,
+            "identityHandoffConfirmed": True,
+            "binding": copy.deepcopy(identity_binding),
+            "provenanceSha256": "a" * 64,
+            "sourceWorkbookSha256": (
+                snow.IDENTITY_WORKBOOK_SOURCE_SHA256["entra"].upper()
+            ),
+            "importedWorkbookSha256": "a" * 64,
+            "importedFileFormat": "direct",
+            "sheetProtected": False,
+            "recordedAt": "2026-10-23T00:00:08Z",
+        }
+        mapping = {
+            "kind": "administrator-confirmed-identity-mapping",
+            "status": "servicenow-confirmed",
+            "applicationClientId": APP_CLIENT_ID,
+            "tokenClaimName": "email",
+            "serviceNowUserField": "email",
+            "candidateSetSha256": candidate_hash,
+            "entraAdministratorConfirmed": True,
+            "serviceNowAdministratorConfirmed": True,
+            "binding": copy.deepcopy(identity_binding),
+            "provenanceSha256": "b" * 64,
+            "sourceWorkbookSha256": (
+                snow.IDENTITY_WORKBOOK_SOURCE_SHA256["servicenow"].upper()
+            ),
+            "importedWorkbookSha256": "b" * 64,
+            "importedFileFormat": "direct",
+            "sheetProtected": False,
+            "recordedAt": "2026-10-23T00:00:10Z",
+        }
+        mapping["relationshipSha256"] = (
+            snow._identity_mapping_relationship_hash(mapping)
+        )
+        state["evidence"]["identityMapping"] = mapping
         state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] = {
             "status": "completed",
             "evidence": {
                 "kind": "structured-admin-attestation",
                 "recordedAt": "2026-10-23T00:00:10Z",
+                "currentSource": "identity-mapping",
+                "identityMappingReceiptConfirmed": True,
+                "mappingReceiptCurrent": True,
                 "oidcCapabilityConfirmed": True,
                 "runbookCompleted": True,
                 "mappingDetailsCollected": True,
                 "claimMappingConfirmed": True,
+                "tokenClaimName": "email",
+                "serviceNowUserField": "email",
+                "candidateSetSha256": candidate_hash,
+                "mappingWorkbookSha256": "b" * 64,
+                "mappingRelationshipSha256": mapping[
+                    "relationshipSha256"
+                ],
                 "activeUserMatchConfirmed": True,
                 "connectorPreauthorizationConfirmed": True,
-                "binding": {
-                    "tenantId": TENANT_ID,
-                    "environmentId": ENVIRONMENT_ID,
-                    "instanceName": "dev123",
-                    "applicationClientId": APP_CLIENT_ID,
-                    "provider": product.provider_key,
-                    "profile": profile,
-                    "agentSlug": slug,
-                    "agentId": agent_id,
-                },
+                "binding": copy.deepcopy(identity_binding),
             },
         }
         state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
@@ -720,17 +778,17 @@ def _seed_complete_dev_state(
             "evidence": {
                 "kind": "structured-admin-attestation",
                 "recordedAt": "2026-10-23T00:00:08Z",
+                "currentSource": "identity-handoff",
+                "identityHandoffConfirmed": True,
+                "entraAdministratorConfirmed": True,
+                "clientId": APP_CLIENT_ID,
+                "directoryTenantId": TENANT_ID,
+                "tokenClaimCandidates": ["email"],
+                "selectedClaimName": "email",
+                "candidateSetSha256": candidate_hash,
+                "mappingWorkbookSha256": "a" * 64,
                 "tokenClaimEmissionConfirmed": True,
-                "binding": {
-                    "tenantId": TENANT_ID,
-                    "environmentId": ENVIRONMENT_ID,
-                    "instanceName": "dev123",
-                    "applicationClientId": APP_CLIENT_ID,
-                    "provider": product.provider_key,
-                    "profile": profile,
-                    "agentSlug": slug,
-                    "agentId": agent_id,
-                },
+                "binding": copy.deepcopy(identity_binding),
             },
         }
         state["evidence"]["lastInspection"] = {
@@ -2992,7 +3050,7 @@ def test_manual_realm_status_is_not_presented_as_manually_finished() -> None:
 
 
 @pytest.mark.parametrize("realm", ("test", "prod"))
-def test_missing_realm_deployment_handoff_is_resumable_and_ordered(
+def test_legacy_realm_report_does_not_gate_api_first_discovery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     realm: str,
@@ -3029,18 +3087,20 @@ def test_missing_realm_deployment_handoff_is_resumable_and_ordered(
     body = question["question"]
     realm_label = realm.title()
     assert question["header"] == (
-        f"Confirm {realm_label} promotion completed"
+        f"Recheck {realm_label} deployment"
     )
     assert [option["label"] for option in question["options"]] == [
-        f"Completed, the {realm_label} promotion/import finished",
-        f"Not yet, the {realm_label} promotion is still pending",
+        (
+            f"Recheck after the {realm_label} promotion/import is complete"
+        ),
+        f"Not yet, keep waiting for the {realm_label} deployment",
     ]
     assert question["allowFreeformInput"] is False
     assert question["header"] != body
-    assert "organization's approved" in body
-    assert "Has the Copilot Studio / Power Platform ALM owner confirmed" in body
+    assert "historical status report is not deployment evidence" in body
+    assert "request another read-only check" in body
     assert "Connect does not provision, promote, import, publish" in body
-    assert "This confirmation is only a prerequisite" in body
+    assert "not deployment evidence" in body
     assert "employee-self-service-it" in body
     assert context["environment"]["id"] in body
     assert "**Purpose**" not in body
@@ -3051,24 +3111,37 @@ def test_missing_realm_deployment_handoff_is_resumable_and_ordered(
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["phases"] == phases_before
     assert saved["evidence"]["test"] == dev_test_before
-    assert saved["evidence"]["realmDeployments"][realm]["status"] == (
+    assert saved["evidence"]["realmDeploymentReports"][realm]["status"] == (
         "not-deployed"
     )
     assert realm not in saved["evidence"].get("realmValidations", {})
 
-    monkeypatch.setattr(
-        snow,
-        "_agentbuilder_token",
-        lambda _context: pytest.fail(
-            "Deployment-required resume must not call target APIs."
-        ),
-    )
-    with snow.product_profile_context("itsm"):
-        resumed = snow.validate_realm(context, realm=realm)
+    calls = 0
 
-    assert resumed["status"] == "deployment-required"
-    assert resumed["question"] == question
-    assert resumed["remoteMutationCount"] == 0
+    def api_first(
+        _context: dict,
+        *,
+        realm: str,
+    ) -> dict:
+        nonlocal calls
+        calls += 1
+        raise snow.ServiceNowConnectError(
+            "api-first-sentinel",
+            details={
+                "realm": realm,
+                "targetAbsenceProven": False,
+            },
+        )
+
+    monkeypatch.setattr(snow, "_resolve_target_realm", api_first)
+    with snow.product_profile_context("itsm"):
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="api-first-sentinel",
+        ):
+            snow.validate_realm(context, realm=realm)
+
+    assert calls == 1
 
 
 def test_deployment_completion_requires_exact_read_only_validation(
@@ -3092,17 +3165,20 @@ def test_deployment_completion_requires_exact_read_only_validation(
             status="deployment-completed",
         )
 
-    assert completed["status"] == "validation-required"
+    assert completed["status"] == "recheck-required"
     assert completed["question"] is None
     assert completed["remoteMutationCount"] == 0
     assert completed["next"]["action"] == (
         "rerun-read-only-realm-validation"
     )
-    assert "not validation evidence" in completed["next"]["instruction"]
+    assert "history only" in completed["next"]["instruction"]
+    assert "only backend proof can confirm deployment" in (
+        completed["next"]["instruction"]
+    )
 
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["phases"] == phases_before
-    assert saved["evidence"]["realmDeployments"]["test"]["status"] == (
+    assert saved["evidence"]["realmDeploymentReports"]["test"]["status"] == (
         "deployment-completed"
     )
     assert "realmValidations" not in saved["evidence"]
@@ -3130,6 +3206,98 @@ def test_deployment_completion_requires_exact_read_only_validation(
     saved_after = json.loads(path.read_text(encoding="utf-8"))
     assert saved_after["phases"] == phases_before
     assert "realmValidations" not in saved_after["evidence"]
+
+
+def test_legacy_realm_report_does_not_replace_current_backend_proof(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    target = {
+        "realm": "test",
+        "tenantId": TENANT_ID,
+        "environmentId": "00000000-0000-4000-8000-000000008888",
+        "dataverseUrl": "https://target.crm.dynamics.com",
+        "agentId": "00000000-0000-4000-8000-000000007777",
+        "schemaName": f"{snow.HR_SCHEMA_NAME}_test",
+        "almFamilyId": "family-1",
+        "commitSha": "current-commit",
+    }
+    with snow.product_profile_context("hrsd"):
+        state = snow._load_lifecycle_state(context)
+        proof = snow._record_verified_realm_deployment(
+            context,
+            state,
+            realm="test",
+            target=target,
+        )
+        report = snow.record_realm_deployment(
+            context,
+            realm="test",
+            status="not-deployed",
+        )
+        saved = snow._load_lifecycle_state(context)
+
+    assert report["status"] == "deployment-required"
+    assert saved["evidence"]["realmDeployments"]["test"] == proof
+    assert saved["evidence"]["realmDeploymentReports"]["test"][
+        "status"
+    ] == "not-deployed"
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+@pytest.mark.parametrize("realm", ("test", "prod"))
+def test_api_first_is_shared_by_hr_it_test_prod(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    realm: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile=profile)
+    with snow.product_profile_context(profile):
+        if realm == "prod":
+            _seed_realm_promotion(
+                context,
+                realm="test",
+                complete_test_first=True,
+            )
+            monkeypatch.setattr(
+                snow,
+                "_revalidate_realm_target",
+                lambda *_args, **_kwargs: ({}, object()),
+            )
+    calls = 0
+
+    def found(
+        _context: dict,
+        *,
+        realm: str,
+    ) -> dict:
+        nonlocal calls
+        calls += 1
+        return {
+            "realm": realm,
+            "tenantId": TENANT_ID,
+            "environmentId": ENVIRONMENT_ID,
+            "dataverseUrl": "https://target.crm.dynamics.com",
+            "agentId": OTHER_AGENT_ID,
+            "schemaName": snow.ACTIVE_PROFILE.schema_name,
+            "almFamilyId": "family-1",
+            "commitSha": "api-first-commit",
+            "client": object(),
+        }
+
+    monkeypatch.setattr(snow, "_resolve_target_realm", found)
+    with snow.product_profile_context(profile):
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="Target ServiceNow instance and application client ID",
+        ):
+            snow.validate_realm(context, realm=realm)
+
+    assert calls == 1
 
 
 @pytest.mark.parametrize("result", ("fail", None))
@@ -3364,15 +3532,22 @@ def test_validate_dev_records_choice_without_changing_active_agent(
 
 
 @pytest.mark.parametrize(
-    ("realm", "realm_value", "discovery_first"),
-    (("test", 1, False), ("test", 1, True), ("prod", 2, False)),
+    ("realm", "realm_value", "legacy_status", "already_promoted"),
+    (
+        ("test", 1, None, False),
+        ("test", 1, "not-deployed", False),
+        ("test", 1, "deployment-completed", False),
+        ("test", 1, None, True),
+        ("prod", 2, "deployment-completed", False),
+    ),
 )
 def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     realm: str,
     realm_value: int,
-    discovery_first: bool,
+    legacy_status: str | None,
+    already_promoted: bool,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     context, _state = _seed_complete_dev_state(tmp_path, profile="itsm")
@@ -3385,12 +3560,18 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     )
     target_instance = "dev123"
     target_client_id = "00000000-0000-4000-8000-000000006666"
-    if not discovery_first:
-        with snow.product_profile_context("itsm"):
+    with snow.product_profile_context("itsm"):
+        if realm == "prod":
             _seed_realm_promotion(
                 context,
                 realm=realm,
-                complete_test_first=realm == "prod",
+                complete_test_first=True,
+            )
+        elif legacy_status is not None:
+            snow.record_realm_deployment(
+                context,
+                realm=realm,
+                status=legacy_status,
             )
 
     class FakeClient:
@@ -3523,7 +3704,7 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
             realm=realm,
             target_instance=target_instance,
             target_client_id=target_client_id,
-            already_promoted=discovery_first,
+            already_promoted=already_promoted,
         )
 
     assert result["status"] == "runtime-approval-required", json.dumps(
@@ -3617,6 +3798,10 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
         saved = json.loads(
             snow._lifecycle_state_path(context).read_text(encoding="utf-8")
         )
+    if legacy_status is not None:
+        assert saved["evidence"]["realmDeploymentReports"][realm][
+            "status"
+        ] == legacy_status
     realm_record = saved["evidence"]["realmValidations"][realm]
     assert realm_record["targetEnvironmentId"] == target_environment_id
     assert realm_record["targetAgentId"] == target_agent_id
@@ -3733,7 +3918,7 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
             realm=realm,
             target_instance=target_instance,
             target_client_id=target_client_id,
-            already_promoted=discovery_first,
+            already_promoted=already_promoted,
         )
 
     assert tested["status"] == "recorded"
@@ -3832,7 +4017,7 @@ def test_already_promoted_all_candidate_not_found_returns_deployment_guidance(
     context, _state = _seed_complete_dev_state(tmp_path, profile="itsm")
     with snow.product_profile_context("itsm"):
         path = snow._lifecycle_state_path(context)
-    before = path.read_bytes()
+        _seed_realm_promotion(context, realm="test")
     details = {
         "realm": "test",
         "targetAgentId": "00000000-0000-4000-8000-000000007777",
@@ -3876,17 +4061,101 @@ def test_already_promoted_all_candidate_not_found_returns_deployment_guidance(
     assert calls == 1
     assert result["status"] == "deployment-required"
     assert result["deploymentEvidence"] is None
+    assert result["legacyDeploymentReport"]["status"] == (
+        "deployment-completed"
+    )
     assert result["targetDiscovery"] == {
         "status": "not-found",
         "source": "exact-read-only-discovery",
         "details": details,
     }
-    assert result["question"]["header"] == "Confirm Test promotion completed"
-    assert "organization's approved Test promotion/import" in (
+    assert result["question"]["header"] == "Recheck Test deployment"
+    assert "Exact read-only discovery conclusively found no deployed target" in (
         result["question"]["question"]
     )
-    assert "ordinary current-task reply" in result["next"]["instruction"]
-    assert path.read_bytes() == before
+    assert result["question"]["options"] == [
+        {
+            "label": (
+                "Recheck after the Test promotion/import is complete"
+            )
+        },
+        {"label": "Not yet, keep waiting for the Test deployment"},
+    ]
+    assert result["next"]["action"] == (
+        "maker-deploys-target-then-rechecks"
+    )
+    assert "another read-only check" in result["next"]["instruction"]
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert "test" not in saved["evidence"].get("realmDeployments", {})
+    assert saved["evidence"]["realmDeploymentReports"]["test"][
+        "status"
+    ] == "deployment-completed"
+
+
+def test_conclusive_missing_retires_stale_backend_proof(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    target = {
+        "realm": "test",
+        "tenantId": TENANT_ID,
+        "environmentId": "00000000-0000-4000-8000-000000008888",
+        "dataverseUrl": "https://target.crm.dynamics.com",
+        "agentId": "00000000-0000-4000-8000-000000007777",
+        "schemaName": f"{snow.HR_SCHEMA_NAME}_test",
+        "almFamilyId": "family-1",
+        "commitSha": "old-commit",
+    }
+    with snow.product_profile_context("hrsd"):
+        state = snow._load_lifecycle_state(context)
+        prior = snow._record_verified_realm_deployment(
+            context,
+            state,
+            realm="test",
+            target=target,
+        )
+        state = snow._load_lifecycle_state(context)
+        state["evidence"].setdefault("realmValidations", {})["test"] = {
+            "status": "in-progress",
+            "targetConfigurationSha256": prior[
+                "targetConfigurationSha256"
+            ],
+        }
+        snow._write_lifecycle_state(context, state)
+
+    details = {
+        "realm": "test",
+        "targetAgentId": target["agentId"],
+        "matchCount": 0,
+        "targetAbsenceProven": True,
+        "discoveryErrors": [
+            {
+                "environmentId": target["environmentId"],
+                "statusCode": 404,
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        snow,
+        "_resolve_target_realm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            snow.ServiceNowConnectError("target missing", details=details)
+        ),
+    )
+
+    with snow.product_profile_context("hrsd"):
+        result = snow.validate_realm(context, realm="test")
+        saved = snow._load_lifecycle_state(context)
+
+    assert result["status"] == "deployment-required"
+    assert result["retiredDeploymentEvidence"] == prior
+    assert "test" not in saved["evidence"].get("realmDeployments", {})
+    assert "test" not in saved["evidence"].get("realmValidations", {})
+    retired = saved["migration"]["retiredRealmDeploymentProofs"]
+    assert retired[-1]["realm"] == "test"
+    assert retired[-1]["record"] == prior
 
 
 @pytest.mark.parametrize(
@@ -3919,7 +4188,10 @@ def test_already_promoted_all_candidate_not_found_returns_deployment_guidance(
                 "targetAgentId": "target-id",
                 "matchCount": 0,
                 "targetAbsenceProven": False,
-                "discoveryErrors": [{"statusCode": 429}],
+                "retryAfter": "30",
+                "discoveryErrors": [
+                    {"statusCode": 429, "retryAfter": "30"}
+                ],
             },
         ),
         (
@@ -3991,7 +4263,7 @@ def test_already_promoted_all_candidate_not_found_returns_deployment_guidance(
         ),
     ),
 )
-def test_already_promoted_preserves_typed_discovery_errors(
+def test_api_first_preserves_typed_discovery_errors_without_manual_override(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     category: str,
@@ -4023,7 +4295,6 @@ def test_already_promoted_preserves_typed_discovery_errors(
                 realm="test",
                 target_instance="target-snow",
                 target_client_id=APP_CLIENT_ID,
-                already_promoted=True,
             )
 
     assert raised.value.details == details
@@ -4494,7 +4765,7 @@ def test_prod_requires_completed_test_realm_before_promotion(
             status="deployment-completed",
         )
 
-    assert recorded["status"] == "validation-required"
+    assert recorded["status"] == "recheck-required"
 
 
 def test_prod_rejects_internally_stale_test_plan_binding(

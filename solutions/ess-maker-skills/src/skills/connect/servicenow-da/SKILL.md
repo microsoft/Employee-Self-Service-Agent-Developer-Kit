@@ -182,38 +182,34 @@ exits with `status: error` and `details.recoveryHandoff`, render its `message`
 unchanged and stop. That branch distinguishes target mismatch, permission,
 throttling, and read/network failures without changing the target.
 
-When the user has not asked for already-promoted discovery, preserve the
-manual deployment-report path. Before target reads, record whether the Maker
-reports the organization promotion incomplete or completed:
+Always run exact read-only target discovery before showing deployment
+guidance. A current exact target match is authoritative backend proof and
+continues without a Maker/ALM completion card. Permission, throttling,
+read/network, ambiguity, schema, family, tenant, environment, agent, or commit
+errors remain typed blockers and must never fall back to manual confirmation.
 
-```text
-python scripts/connect_servicenow_da.py \
-  --provider "{SELECTED_PROVIDER}" \
-  --agent-slug "{SELECTED_AGENT_SLUG}" \
-  record-realm-deployment --realm <test|prod> --status not-deployed
-```
+Only when the controller conclusively proves the exact target absent, show its
+external ALM guidance and compact recheck card. The kit does not deploy,
+promote, import, publish, click, sign in, or change permissions. One candidate
+404, an unreadable environment, or an unknown target does not prove absence.
+After the organization completes its approved external promotion/import, the
+Maker may request another read-only check. That request is not evidence and
+cannot pass the deployment checkpoint.
 
-Show the returned question exactly. It directs the ALM owner to use the
-organization's normal promotion process outside Connect and asks the Maker to
-choose Completed only after that process finishes. The kit does not deploy, promote, import, publish, click, sign in, or change
-permissions. Only the controller's conclusive all-candidate not-found result
-proves absence; one candidate 404, an unreadable environment, or an unknown
-target does not.
-
-When the Maker answers `Completed`, record only their report:
+The historical recorder remains accepted for compatibility:
 
 ```text
 python scripts/connect_servicenow_da.py \
   --provider "{SELECTED_PROVIDER}" \
   --agent-slug "{SELECTED_AGENT_SLUG}" \
   record-realm-deployment --realm <test|prod> \
-  --status deployment-completed
+  --status <not-deployed|deployment-completed>
 ```
 
-Then run the returned read-only validation command. Maker completion does not
-pass validation. On `Not yet`, stop; the persisted record makes the same
-question visible when resumed. Production confirmation remains blocked until
-Test configuration and Maker validation complete.
+It stores report history and requests a recheck only. It never gates API
+discovery, clears current backend proof, or substitutes for
+`SN-DA-DEPLOYMENT-001`. Production discovery remains blocked until Test
+configuration and Maker validation are currently complete.
 
 After the customer answers, record only the bounded result:
 
