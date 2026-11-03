@@ -93,8 +93,9 @@ with the returned bring-admin reply and changes no state; a Yes answer is
 recorded only by `resume-handoff --roles-available yes` with its exact group ID
 and context hash.
 
-After that acknowledgement, return the authoritative workbook instructions and
-native data/completion questions without writing state:
+After that acknowledgement, return the canonical runtime instructions from
+[the shared Entra administrator source](../../shared/runtime-instructions/entra-administrator.md)
+and native data/completion questions without writing state:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage entra
@@ -105,10 +106,10 @@ verbatim, then pass every returned `askUserArguments` object verbatim through
 the active `ask_user` tool. The returned question list intentionally excludes
 availability because `resume-handoff` owns and deduplicates that gate. Record
 the non-secret values only after the administrator answers the separate Client
-ID and User Claim prompts:
+ID, Directory tenant ID, and User Claim prompts:
 
 ```text
-python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage entra --client-id "<application-client-id-guid>" --claim-name "<selected-claim-name>" --yes
+python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage entra --client-id "<application-client-id-guid>" --directory-tenant-id "<directory-tenant-id-guid>" --claim-name "<selected-claim-name>" --yes
 ```
 
 The protected file route remains fully supported:

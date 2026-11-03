@@ -410,18 +410,6 @@ def _visible_prose_budget(text: str) -> tuple[int, int]:
     return len(words), len(lines)
 
 
-def _normalized_instruction_content(text: str) -> str:
-    without_list_markers = re.sub(
-        r"(?m)^\s*-\s+",
-        "",
-        text,
-    )
-    without_markdown = (
-        without_list_markers.replace("**", "").replace("*", "")
-    )
-    return " ".join(without_markdown.split())
-
-
 def _record_test_identity_mapping(
     root: Path,
     *,
@@ -12871,6 +12859,21 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     scenario = tmp_path / profile_key
     scenario.mkdir()
     monkeypatch.chdir(scenario)
+    monkeypatch.setattr(
+        snow,
+        "_checked_in_entra_workbook_steps",
+        lambda: pytest.fail(
+            "Runtime instructions must not read the legacy Entra workbook."
+        ),
+    )
+    monkeypatch.setattr(
+        snow,
+        "_checked_in_servicenow_workbook_steps",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Runtime instructions must not read the legacy ServiceNow "
+            "workbook."
+        ),
+    )
     context = _profile_context(
         profile_key,
         agent_id=(
@@ -12912,19 +12915,38 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert gated_arguments["requestedSchema"]["required"] == ["response"]
     assert entra["decision"] == "instructions-required"
     assert entra["availability"]["acknowledged"] is True
+    assert entra["runtimeInstructionPath"].replace("\\", "/").endswith(
+        "runtime-instructions/entra-administrator.md"
+    )
+    assert entra["runtimeInstructionSha256"] == (
+        "3EFE09214DEFAE5889AF480E041EDF7CE3D5D2F8B8E82B83D83C4856A2D80CFD"
+    )
     assert entra["sourceWorkbookSha256"] == (
         "FF43BFC69E1112D9C73275E4AFCAC1A003AE8AA190CA24ACBAA5F39C9803BAD0"
+    )
+    assert entra["sourceWorkbookRole"] == (
+        "legacy-file-evidence-template-not-runtime-instruction"
     )
     ordinary = entra["ordinaryReply"]["text"]
     source_text = ordinary.split("\n\n", 1)[1].split(
         "\n\nCurrent contract boundary\n",
         1,
     )[0]
-    assert source_text == snow._format_identity_instruction_steps(
-        snow._checked_in_entra_workbook_steps()
+    _, canonical_entra, _ = snow._identity_runtime_instruction_source(
+        "entra"
     )
+    assert source_text == canonical_entra
     assert "The Entra administrator should:" not in ordinary
-    assert len(entra["questions"]) == 3
+    assert len(entra["questions"]) == 4
+    assert [
+        item["canonicalQuestion"]["header"]
+        for item in entra["questions"]
+    ] == [
+        "Application client ID",
+        "Directory tenant ID",
+        "Selected User Claim",
+        "Complete Entra administrator setup",
+    ]
     for item in entra["questions"]:
         canonical = item["canonicalQuestion"]
         arguments = item["askUserArguments"]
@@ -12939,6 +12961,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
             context,
             stage="entra",
             client_id=APP_CLIENT_ID,
+            directory_tenant_id=TENANT_ID,
             claim_name="employee_id",
             user_field=None,
             confirmed=True,
@@ -12965,6 +12988,9 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
             completed_state,
             phase="entra-registration",
         ) is True
+        assert completed_state["adminSetup"]["phaseHandoffs"][
+            "entra-registration"
+        ]["evidence"]["directoryTenantId"] == TENANT_ID
         completed_entra = snow.identity_direct_handoff(
             context,
             stage="entra",
@@ -12985,13 +13011,21 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert gated_service_now["decision"] == "availability-required"
     assert gated_service_now["ordinaryReply"] is None
     assert captured["currentSource"] == "direct-capture"
+    assert captured["directoryTenantId"] == TENANT_ID
     assert captured["tokenClaimEmissionConfirmed"] is False
     assert captured["importedFileFormat"] == "direct"
     assert service_now["sourceWorkbookSha256"] == (
         "2170FB0A4541227F660680AC5DFF6365359BECF15D97BC2C4FA0A21AE8828482"
     )
+    assert service_now["runtimeInstructionPath"].replace("\\", "/").endswith(
+        "runtime-instructions/servicenow-administrator.md"
+    )
+    assert service_now["runtimeInstructionSha256"] == (
+        "F4BE4C961DA8C0A7548D8F346C3A46831EFFF571718001B59A1CBF42B5C62020"
+    )
     assert service_now["lockedValues"] == {
         "applicationClientId": APP_CLIENT_ID,
+        "directoryTenantId": TENANT_ID,
         "selectedClaimName": "employee_id",
     }
     ordinary = service_now["ordinaryReply"]["text"]
@@ -12999,20 +13033,28 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert "employee_id" in ordinary
     assert TENANT_ID in ordinary
     assert "CONFIRMED_" not in ordinary
+    assert "<client ID>" not in ordinary
+    assert "<tenant ID>" not in ordinary
+    assert "<instance>" not in ordinary
+    assert "`employee_id`" in ordinary
+    assert "custom claim name `employee_id`" in ordinary
+    assert "or `employee_id`." in ordinary
+    assert "`https://dev123.service-now.com`" in ordinary
+    assert ("8. **HR agent only:**" in ordinary) is (
+        profile_key == "hrsd"
+    )
     source_text = ordinary.split("\n\n", 1)[1].split(
         "\n\nCurrent contract boundary\n",
         1,
     )[0]
-    expected_steps = snow._checked_in_servicenow_workbook_steps(
-        {
-            "application_client_id": APP_CLIENT_ID,
-            "confirmed_user_claim_name": "employee_id",
-            "tenant_id": TENANT_ID,
-        }
-    )
-    assert source_text == snow._format_identity_instruction_steps(
-        expected_steps
-    )
+    with snow.product_profile_context(profile_key):
+        expected_text, _, _ = snow._render_identity_runtime_instruction(
+            context,
+            stage="servicenow",
+            application_client_id=APP_CLIENT_ID,
+            claim_name="employee_id",
+        )
+    assert source_text == expected_text
     assert len(service_now["questions"]) == 2
     input_card = service_now["questions"][0]
     assert input_card["canonicalQuestion"]["allowFreeformInput"] is True
@@ -13021,73 +13063,80 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     ]["description"] == input_card["canonicalQuestion"]["question"]
 
 
-def test_authoritative_identity_instruction_formatter_preserves_content_and_hierarchy():
-    entra_steps = snow._checked_in_entra_workbook_steps()
-    entra_source = " ".join(
-        action if label == "1" else f"{label} {action}"
-        for label, action in entra_steps
+def test_canonical_runtime_instruction_sources_are_exact_and_structured():
+    entra_path, entra, entra_sha = (
+        snow._identity_runtime_instruction_source("entra")
     )
-    entra = snow._format_identity_instruction_steps(entra_steps)
-    assert _normalized_instruction_content(entra) == (
-        _normalized_instruction_content(entra_source)
+    service_now_path, service_now, service_now_sha = (
+        snow._identity_runtime_instruction_source("servicenow")
     )
-    assert (
-        "3. If an Entra app already exists:\n\n"
-        "   - **3.1** The Entra administrator"
-    ) in entra
-    assert (
-        "   - **4.1** The Entra administrator needs to register"
-    ) in entra
-    assert (
-        "      - **4.1.2** In the new registration form"
-    ) in entra
-    assert (
-        "         - **4.1.2.1** **Name:** Any name"
-    ) in entra
-    assert (
-        "      - **4.1.5** Select **Token type** as **Access**"
-    ) in entra
-    assert "         - **4.1.5.3** *UPN* -" in entra
-    assert snow.SERVICENOW_NON_EMAIL_USER_MATCH_URL in entra
 
-    values = {
-        "application_client_id": APP_CLIENT_ID,
-        "confirmed_user_claim_name": "employee_id",
-        "tenant_id": TENANT_ID,
-    }
-    service_now_steps = snow._checked_in_servicenow_workbook_steps(values)
-    service_now_source = " ".join(
-        action if label == "1" else f"{label} {action}"
-        for label, action in service_now_steps
+    assert str(entra_path).replace("\\", "/").endswith(
+        "runtime-instructions/entra-administrator.md"
     )
-    service_now = snow._format_identity_instruction_steps(
-        service_now_steps
+    assert str(service_now_path).replace("\\", "/").endswith(
+        "runtime-instructions/servicenow-administrator.md"
     )
-    assert _normalized_instruction_content(service_now) == (
-        _normalized_instruction_content(service_now_source)
+    assert entra_sha == (
+        "3EFE09214DEFAE5889AF480E041EDF7CE3D5D2F8B8E82B83D83C4856A2D80CFD"
     )
+    assert service_now_sha == (
+        "F4BE4C961DA8C0A7548D8F346C3A46831EFFF571718001B59A1CBF42B5C62020"
+    )
+    assert "\u00a0" not in entra + service_now
+    assert entra.startswith("#### Instructions for the Entra administrator")
+    assert "**Part 1: Register the app**" in entra
+    assert "**Part 2: Add the user claims to the token**" in entra
     assert (
-        "6. Check whether an OAuth provider already exists"
-    ) in service_now
-    assert "   - **6.1** YES - Reuse the existing provider:" in service_now
-    assert "   - **6.2** NO - Create a new OAuth provider app:" in service_now
+        "**Part 3: Allow the Microsoft ServiceNow connector to sign users "
+        "in**"
+    ) in entra
+    assert "**Part 4 (only when ServiceNow identifies users" in entra
+    assert "api://<client ID>" in entra
+    assert snow.SERVICENOW_CONNECTOR_APP_ID in entra
     assert (
-        "         - **6.2.1.1** YES - Reuse it."
-    ) in service_now
-    assert (
-        "      - **6.2.2** New-provider application configuration:"
-    ) in service_now
-    assert "         - **Name:** Enter a meaningful name" in service_now
-    assert (
-        "         - **Client ID:** Auto-populated from the confirmed"
-    ) in service_now
-    assert (
-        "         - **OAuth OIDC provider configuration:**"
-    ) in service_now
-    assert "            - **OIDC Provider:**" in service_now
-    assert "            - **User Field:**" in service_now
-    assert "   - **ii.** Ensure the user claim" in service_now
-    assert "   - **iii.** Confirm the ServiceNow User Field" in service_now
+        "declarative-agent-servicenow-hr-it#coexistence-with-the-"
+        "microsoft-graph-connector-for-servicenow"
+    ) in entra
+    assert service_now.startswith(
+        "#### Instructions for the ServiceNow administrator"
+    )
+    assert "**Values from the maker:** Client ID `<client ID>`" in service_now
+    assert "1. Sign in to `https://<instance>.service-now.com`." in (
+        service_now
+    )
+    assert "   - **Client ID:** `<client ID>`." in service_now
+    assert "   - **OIDC Metadata URL:**" in service_now
+    assert "8. **HR agent only:**" in service_now
+    assert "**Send back to the maker:**" in service_now
+    for profile in ("servicenow-da-hrsd", "servicenow-da-itsm"):
+        entra_guide = (
+            snow.SOLUTION_ROOT
+            / "src"
+            / "skills"
+            / "connect"
+            / profile
+            / "actions"
+            / "guide-entra-registration.md"
+        ).read_text(encoding="utf-8")
+        service_now_guide = (
+            snow.SOLUTION_ROOT
+            / "src"
+            / "skills"
+            / "connect"
+            / profile
+            / "actions"
+            / "guide-servicenow-oidc.md"
+        ).read_text(encoding="utf-8")
+        assert (
+            "../../shared/runtime-instructions/entra-administrator.md"
+            in entra_guide
+        )
+        assert (
+            "../../shared/runtime-instructions/"
+            "servicenow-administrator.md"
+            in service_now_guide
+        )
 
 
 @pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))
@@ -13258,12 +13307,20 @@ def test_identity_availability_ack_isolated_by_group_role_target_and_contract(
 
 
 @pytest.mark.parametrize(
-    ("client_id", "claim_name", "message"),
+    ("client_id", "directory_tenant_id", "claim_name", "message"),
     (
-        ("not-a-guid", "email", "GUID"),
-        (APP_CLIENT_ID, "aud", "aud audience claim"),
+        ("not-a-guid", TENANT_ID, "email", "GUID"),
+        (APP_CLIENT_ID, "not-a-guid", "email", "tenant ID must be a GUID"),
         (
             APP_CLIENT_ID,
+            "00000000-0000-4000-8000-000000000001",
+            "email",
+            "does not match the current target tenant",
+        ),
+        (APP_CLIENT_ID, TENANT_ID, "aud", "aud audience claim"),
+        (
+            APP_CLIENT_ID,
+            TENANT_ID,
             "personal@example.com",
             "explicit non-secret attribute or claim name",
         ),
@@ -13273,6 +13330,7 @@ def test_direct_entra_capture_rejects_invalid_nonsecret_values(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     client_id: str,
+    directory_tenant_id: str,
     claim_name: str,
     message: str,
 ) -> None:
@@ -13287,9 +13345,46 @@ def test_direct_entra_capture_rejects_invalid_nonsecret_values(
             context,
             stage="entra",
             client_id=client_id,
+            directory_tenant_id=directory_tenant_id,
             claim_name=claim_name,
             user_field=None,
             confirmed=True,
+        )
+
+
+def test_direct_entra_tenant_receipt_is_current_target_bound(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context = _context_at(tmp_path)
+    state = snow._state_base(context, _components())
+    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+    path = _lifecycle_path(tmp_path)
+    snow._write_json_atomic(path, state)
+    snow.record_identity_direct(
+        context,
+        stage="entra",
+        client_id=APP_CLIENT_ID,
+        directory_tenant_id=TENANT_ID,
+        claim_name="email",
+        user_field=None,
+        confirmed=True,
+    )
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    saved["evidence"]["identityClaimCandidates"]["directoryTenantId"] = (
+        "00000000-0000-4000-8000-000000000001"
+    )
+    snow._write_json_atomic(path, saved)
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="Directory tenant ID does not match",
+    ):
+        snow._validated_claim_candidates(
+            context,
+            snow._load_lifecycle_state(context),
+            require_completion=False,
         )
 
 
@@ -13306,6 +13401,7 @@ def test_direct_servicenow_capture_locks_entra_values_and_requires_completion(
         context,
         stage="entra",
         client_id=APP_CLIENT_ID,
+        directory_tenant_id=TENANT_ID,
         claim_name="email",
         user_field=None,
         confirmed=True,
@@ -13396,6 +13492,7 @@ def test_direct_and_workbook_paths_produce_equivalent_bound_identity(
                 context,
                 stage="entra",
                 client_id=APP_CLIENT_ID,
+                directory_tenant_id=TENANT_ID,
                 claim_name="email",
                 user_field=None,
                 confirmed=True,
@@ -13485,6 +13582,7 @@ def test_identity_value_change_retires_downstream_current_evidence(
         context,
         stage="entra",
         client_id=APP_CLIENT_ID,
+        directory_tenant_id=TENANT_ID,
         claim_name="email",
         user_field=None,
         confirmed=True,
@@ -13503,6 +13601,7 @@ def test_identity_value_change_retires_downstream_current_evidence(
         context,
         stage="entra",
         client_id=APP_CLIENT_ID,
+        directory_tenant_id=TENANT_ID,
         claim_name="upn",
         user_field=None,
         confirmed=True,
@@ -13553,6 +13652,8 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
             "entra",
             "--client-id",
             APP_CLIENT_ID,
+            "--directory-tenant-id",
+            TENANT_ID,
             "--claim-name",
             "email",
             "--yes",

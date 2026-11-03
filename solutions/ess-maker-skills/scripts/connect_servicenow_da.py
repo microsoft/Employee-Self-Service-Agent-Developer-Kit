@@ -187,6 +187,16 @@ IDENTITY_WORKBOOK_TEMPLATE_SERVICENOW = Path(
     "src/skills/connect/shared/templates/"
     "servicenow-identity-mapping-servicenow.xlsx"
 )
+IDENTITY_RUNTIME_INSTRUCTION_PATHS = {
+    "entra": Path(
+        "src/skills/connect/shared/runtime-instructions/"
+        "entra-administrator.md"
+    ),
+    "servicenow": Path(
+        "src/skills/connect/shared/runtime-instructions/"
+        "servicenow-administrator.md"
+    ),
+}
 IDENTITY_WORKBOOK_SOURCE_SHA256 = {
     "entra": (
         "ff43bfc69e1112d9c73275e4afcac1a003ae8aa190ca24acba"
@@ -1305,11 +1315,21 @@ def _identity_direct_questions(stage: str) -> list[dict[str, Any]]:
                 allow_freeform_input=True,
             ),
             _native_question(
+                header="Directory tenant ID",
+                question=(
+                    "Enter the Directory (tenant) ID GUID copied from the "
+                    "same app registration Overview page. It must match this "
+                    "exact target tenant."
+                ),
+                allow_freeform_input=True,
+            ),
+            _native_question(
                 header="Selected User Claim",
                 question=(
-                    "Enter exactly one emitted User Claim name for this exact "
-                    "target. Enter a claim name only; do not enter `aud` or a "
-                    "personal claim value."
+                    "Enter the User Claim name for this exact target: `email`, "
+                    "`upn`, or the custom claim name used for Part 4. Enter a "
+                    "claim name only; do not enter `aud` or a personal claim "
+                    "value."
                 ),
                 allow_freeform_input=True,
             ),
@@ -1392,6 +1412,87 @@ def _identity_direct_group(
     return contract, group
 
 
+def _normalize_directory_tenant_id(value: str) -> str:
+    try:
+        return str(uuid.UUID(str(value).strip()))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ServiceNowConnectError(
+            "Directory tenant ID must be a GUID."
+        ) from exc
+
+
+def _identity_runtime_instruction_source(
+    stage: str,
+) -> tuple[Path, str, str]:
+    relative_path = IDENTITY_RUNTIME_INSTRUCTION_PATHS.get(stage)
+    if relative_path is None:
+        raise ServiceNowConnectError(
+            "Identity runtime instruction stage is invalid."
+        )
+    path = SOLUTION_ROOT / relative_path
+    if not path.is_file():
+        raise ServiceNowConnectError(
+            f"Required identity runtime instruction is missing: {path}"
+        )
+    raw = path.read_text(encoding="utf-8")
+    normalized = raw.replace("\u00a0", " ").replace("\r\n", "\n").strip()
+    return (
+        relative_path,
+        normalized,
+        hashlib.sha256(normalized.encode("utf-8")).hexdigest().upper(),
+    )
+
+
+def _render_identity_runtime_instruction(
+    context: dict[str, Any],
+    *,
+    stage: str,
+    application_client_id: str | None = None,
+    claim_name: str | None = None,
+) -> tuple[str, str, str]:
+    relative_path, text, source_sha256 = (
+        _identity_runtime_instruction_source(stage)
+    )
+    if stage == "entra":
+        return text, str(relative_path), source_sha256
+    if not application_client_id or not claim_name:
+        raise ServiceNowConnectError(
+            "ServiceNow runtime instructions require the current confirmed "
+            "Application client ID and User Claim name."
+        )
+    state = _load_lifecycle_state(context)
+    identity = _required_context_identity(context, state)
+    tenant_id = _normalize_directory_tenant_id(identity["tenantId"])
+    instance_name = normalize_instance_name(identity["instanceName"])
+    rendered = (
+        text.replace("<client ID>", application_client_id)
+        .replace("<tenant ID>", tenant_id)
+        .replace("<instance>", instance_name)
+    )
+    if claim_name.casefold() not in {"email", "upn"}:
+        rendered = rendered.replace(
+            "the custom claim name if the Entra administrator added one",
+            f"custom claim name `{claim_name}`",
+        ).replace(
+            "the custom claim name from the Entra administrator",
+            f"`{claim_name}`",
+        )
+    if ACTIVE_PROFILE.key != "hrsd":
+        rendered = re.sub(
+            r"(?m)^8\. \*\*HR agent only:\*\*.*(?:\n|$)",
+            "",
+            rendered,
+        ).rstrip()
+    if any(
+        placeholder in rendered
+        for placeholder in ("<client ID>", "<tenant ID>", "<instance>")
+    ):
+        raise ServiceNowConnectError(
+            "ServiceNow runtime instruction placeholders were not resolved."
+        )
+    return rendered, str(relative_path), source_sha256
+
+
 def identity_direct_handoff(
     context: dict[str, Any],
     *,
@@ -1470,16 +1571,22 @@ def identity_direct_handoff(
             "remoteMutationCount": 0,
         }
     expected_identity = _required_context_identity(context, state)
-    source_sha256 = _identity_workbook_template_sha256(stage)
+    evidence_workbook_sha256 = _identity_workbook_template_sha256(stage)
     candidate_receipt = None
     if stage == "entra":
-        source_steps = _checked_in_entra_workbook_steps()
+        source_text, instruction_path, instruction_sha256 = (
+            _render_identity_runtime_instruction(
+                context,
+                stage="entra",
+            )
+        )
         locked_values = None
         contract_boundary = (
-            "The authoritative source does not complete the existing "
-            "`user_impersonation` scope or Microsoft ServiceNow connector "
-            "preauthorization requirements. Confirm both separately before "
-            "the Entra phase can be ready."
+            "The instructions include app registration, claim, "
+            "`user_impersonation` scope, and Microsoft ServiceNow connector "
+            "preauthorization operations. Completion remains separate "
+            "target-bound Manual evidence; displaying these instructions or "
+            "capturing their non-secret values does not mark them complete."
         )
     else:
         candidate_receipt = _validated_claim_candidates(context, state)
@@ -1496,17 +1603,17 @@ def identity_direct_handoff(
             candidates[0],
             "confirmed_user_claim_name",
         )
-        source_steps = _checked_in_servicenow_workbook_steps(
-            {
-                "application_client_id": client_id,
-                "confirmed_user_claim_name": claim_name,
-                "tenant_id": str(
-                    context["environment"].get("tenant_id") or ""
-                ),
-            }
+        source_text, instruction_path, instruction_sha256 = (
+            _render_identity_runtime_instruction(
+                context,
+                stage="servicenow",
+                application_client_id=client_id,
+                claim_name=claim_name,
+            )
         )
         locked_values = {
             "applicationClientId": client_id,
+            "directoryTenantId": expected_identity["tenantId"],
             "selectedClaimName": claim_name,
         }
         contract_boundary = (
@@ -1514,7 +1621,6 @@ def identity_direct_handoff(
             "provider and mapping, one matching Active user, and current "
             "ServiceNow connector preauthorization from the Entra stage."
         )
-    source_text = _format_identity_instruction_steps(source_steps)
     target_text = (
         f"Target agent: `{_agent_slug(context)}` "
         f"(`{context['agent']['id']}`)\n"
@@ -1528,7 +1634,13 @@ def identity_direct_handoff(
         "provider": PROVIDER_KEY,
         "profile": PROFILE_KEY,
         "decision": "instructions-required",
-        "sourceWorkbookSha256": source_sha256,
+        "runtimeInstructionPath": instruction_path,
+        "runtimeInstructionSha256": instruction_sha256,
+        "runtimeInstructionContentSha256": _canonical_json_hash(source_text),
+        "sourceWorkbookSha256": evidence_workbook_sha256,
+        "sourceWorkbookRole": (
+            "legacy-file-evidence-template-not-runtime-instruction"
+        ),
         "sourceSheets": (
             ["Entra Handoff!A2", "_metadata!A1:B17"]
             if stage == "entra"
@@ -2037,116 +2149,6 @@ def _checked_in_entra_workbook_steps() -> list[tuple[str, str]]:
         ]
     finally:
         workbook.close()
-
-
-_IDENTITY_INSTRUCTION_MARKER = re.compile(
-    r"(?<!\S)(?P<marker>(?:\d+\.|\d+(?:\.\d+)+|[ivxlcdm]+\.))\s+"
-)
-
-
-def _identity_instruction_marker_depth(marker: str) -> int:
-    value = marker.removesuffix(".")
-    if value.isdigit():
-        return 0
-    if all(part.isdigit() for part in value.split(".")):
-        return value.count(".")
-    return 1
-
-
-def _format_identity_field_label(value: str) -> str:
-    label, separator, remainder = value.partition(": ")
-    if not separator:
-        return value
-    return f"**{label}:** {remainder}"
-
-
-def _format_servicenow_configuration_fields(
-    body: str,
-    *,
-    marker_depth: int,
-) -> list[str] | None:
-    prefix = "New-provider application configuration: "
-    if not body.startswith(prefix):
-        return None
-    parts = body[len(prefix) :].split("; ")
-    lines = ["New-provider application configuration:"]
-    nested_provider_fields = False
-    base_indent = "   " * (marker_depth + 1)
-    for index, part in enumerate(parts):
-        suffix = ";" if index < len(parts) - 1 else ""
-        provider_fields_marker = "complete these fields: "
-        if (
-            part.startswith("OAuth OIDC provider configuration: ")
-            and provider_fields_marker in part
-        ):
-            introduction, first_field = part.split(
-                provider_fields_marker,
-                1,
-            )
-            lines.append(
-                f"{base_indent}- "
-                f"{_format_identity_field_label(introduction)}"
-                f"{provider_fields_marker}"
-            )
-            lines.append(
-                f"{base_indent}   - "
-                f"{_format_identity_field_label(first_field)}{suffix}"
-            )
-            nested_provider_fields = True
-            continue
-        indent = (
-            f"{base_indent}   "
-            if nested_provider_fields
-            else base_indent
-        )
-        lines.append(
-            f"{indent}- {_format_identity_field_label(part)}{suffix}"
-        )
-    return lines
-
-
-def _format_identity_instruction_text(value: str) -> str:
-    text = " ".join(str(value).split())
-    matches = list(_IDENTITY_INSTRUCTION_MARKER.finditer(text))
-    if not matches:
-        return text
-    blocks: list[str] = []
-    prefix = text[: matches[0].start()].strip()
-    if prefix:
-        blocks.append(prefix)
-    for index, match in enumerate(matches):
-        marker = match.group("marker")
-        body = text[
-            match.end() : (
-                matches[index + 1].start()
-                if index + 1 < len(matches)
-                else len(text)
-            )
-        ].strip()
-        depth = _identity_instruction_marker_depth(marker)
-        structured_fields = _format_servicenow_configuration_fields(
-            body,
-            marker_depth=depth,
-        )
-        body_lines = structured_fields or [body]
-        if depth == 0:
-            first = f"{marker} {body_lines[0]}"
-        else:
-            first = f"{'   ' * depth}- **{marker}** {body_lines[0]}"
-        blocks.append("\n\n".join([first, *body_lines[1:]]))
-    return "\n\n".join(blocks)
-
-
-def _format_identity_instruction_steps(
-    steps: list[tuple[str, str]],
-) -> str:
-    rendered: list[str] = []
-    for label, action in steps:
-        formatted = _format_identity_instruction_text(action)
-        rendered.append(
-            formatted if label == "1" else f"**{label}**\n\n{formatted}"
-        )
-    return "\n\n".join(rendered)
 
 
 def _checked_in_servicenow_workbook_steps(
@@ -4858,6 +4860,7 @@ def _persist_identity_mapping_values(
     provenance_format: str,
     source_workbook_sha256: str,
     sheet_protected: bool,
+    confirmed_directory_tenant_id: str | None = None,
 ) -> dict[str, Any]:
     expected_identity = _required_context_identity(context, state)
     application_client_id = normalize_client_id(application_client_id)
@@ -4935,6 +4938,8 @@ def _persist_identity_mapping_values(
             "sheetProtected": sheet_protected,
             "recordedAt": recorded_at,
         }
+        if confirmed_directory_tenant_id is not None:
+            result["directoryTenantId"] = confirmed_directory_tenant_id
         evidence["identityClaimCandidates"] = result
     else:
         candidate_receipt = _validated_claim_candidates(context, state)
@@ -5109,6 +5114,7 @@ def record_identity_mapping(
         provenance_format=workbook_path.suffix.casefold().lstrip("."),
         source_workbook_sha256=_identity_workbook_template_sha256(stage),
         sheet_protected=bool(parsed["sheetProtected"]),
+        confirmed_directory_tenant_id=None,
     )
 
 
@@ -5117,6 +5123,7 @@ def record_identity_direct(
     *,
     stage: str,
     client_id: str | None,
+    directory_tenant_id: str | None = None,
     claim_name: str | None,
     user_field: str | None,
     confirmed: bool,
@@ -5131,12 +5138,24 @@ def record_identity_direct(
         )
     state = _load_lifecycle_state(context)
     if stage == "entra":
-        if not client_id or not claim_name:
+        if not client_id or not directory_tenant_id or not claim_name:
             raise ServiceNowConnectError(
-                "Direct Entra capture requires the Application client ID GUID "
-                "and exactly one selected User Claim name."
+                "Direct Entra capture requires the Application client ID "
+                "GUID, Directory tenant ID GUID, and exactly one selected "
+                "User Claim name."
             )
         application_client_id = normalize_client_id(client_id)
+        confirmed_tenant_id = _normalize_directory_tenant_id(
+            directory_tenant_id
+        )
+        expected_tenant_id = _normalize_directory_tenant_id(
+            _required_context_identity(context, state)["tenantId"]
+        )
+        if confirmed_tenant_id != expected_tenant_id:
+            raise ServiceNowConnectError(
+                "The confirmed Directory tenant ID does not match the "
+                "current target tenant."
+            )
         safe_claim = _safe_identity_name(claim_name, "user_claim")
         if safe_claim.casefold() == "aud":
             raise ServiceNowConnectError(
@@ -5146,10 +5165,15 @@ def record_identity_direct(
         candidates = [safe_claim]
         selection = None
     else:
-        if client_id is not None or claim_name is not None:
+        if (
+            client_id is not None
+            or directory_tenant_id is not None
+            or claim_name is not None
+        ):
             raise ServiceNowConnectError(
                 "The ServiceNow stage uses the locked Entra-confirmed client "
-                "ID and User Claim; do not re-enter or change them."
+                "ID, tenant ID, and User Claim; do not re-enter or change "
+                "them."
             )
         if not user_field:
             raise ServiceNowConnectError(
@@ -5170,6 +5194,7 @@ def record_identity_direct(
             "tokenClaimName": candidates[0],
             "serviceNowUserField": user_field,
         }
+        confirmed_tenant_id = None
     source_sha256 = _identity_workbook_template_sha256(stage)
     provenance_sha256 = _canonical_json_hash(
         {
@@ -5197,6 +5222,7 @@ def record_identity_direct(
         provenance_format="direct",
         source_workbook_sha256=source_sha256,
         sheet_protected=False,
+        confirmed_directory_tenant_id=confirmed_tenant_id,
     )
 
 
@@ -5503,6 +5529,15 @@ def _identity_admin_handoff_is_ready(
             and len(candidates.get("candidates") or []) == 1
             and validated_evidence.get("selectedClaimName")
             == candidates["candidates"][0]
+            and _normalize_directory_tenant_id(
+                str(
+                    validated_evidence.get("directoryTenantId")
+                    or candidates["binding"]["tenantId"]
+                )
+            )
+            == _normalize_directory_tenant_id(
+                str(candidates["binding"]["tenantId"])
+            )
         )
         historical_graph_pass = _has_historical_entra_graph_pass(state)
         migrated_historical_graph_pass = (
@@ -10819,6 +10854,22 @@ def _validated_claim_candidates(
             "Claim candidate evidence does not match the recorded "
             "Application client ID."
         )
+    receipt_tenant_id = receipt.get("directoryTenantId")
+    if (
+        receipt.get("currentSource") == "direct-capture"
+        and not receipt_tenant_id
+    ):
+        raise ServiceNowConnectError(
+            "Direct Entra evidence has no confirmed Directory tenant ID."
+        )
+    if receipt_tenant_id and (
+        _normalize_directory_tenant_id(str(receipt_tenant_id))
+        != _normalize_directory_tenant_id(expected["tenantId"])
+    ):
+        raise ServiceNowConnectError(
+            "The confirmed Directory tenant ID does not match the active "
+            "target."
+        )
     if (
         binding.get("provider") != PROVIDER_KEY
         or binding.get("profile") != PROFILE_KEY
@@ -10977,6 +11028,10 @@ def record_admin_phase(
                     application_registration_confirmed
                 ),
                 "clientId": normalized_client_id,
+                "directoryTenantId": (
+                    candidates.get("directoryTenantId")
+                    or candidates["binding"]["tenantId"]
+                ),
                 "tokenClaimCandidates": copy.deepcopy(
                     selected_claims
                 ),
@@ -19282,6 +19337,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     direct_mapping_parser.add_argument("--client-id")
+    direct_mapping_parser.add_argument("--directory-tenant-id")
     direct_mapping_parser.add_argument("--claim-name")
     direct_mapping_parser.add_argument("--user-field")
     direct_mapping_parser.add_argument("--yes", action="store_true")
@@ -20096,6 +20152,7 @@ def main(argv: list[str] | None = None) -> int:
                 context,
                 stage=args.stage,
                 client_id=args.client_id,
+                directory_tenant_id=args.directory_tenant_id,
                 claim_name=args.claim_name,
                 user_field=args.user_field,
                 confirmed=args.yes,
