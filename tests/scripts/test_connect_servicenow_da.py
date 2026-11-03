@@ -3471,11 +3471,12 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
             already_promoted=discovery_first,
         )
 
-    assert result["status"] == "runtime-approval-required"
-    assert result["deploymentEvidence"]["status"] == "deployment-completed"
-    assert result["deploymentEvidence"]["kind"] == (
-        "backend-proof" if discovery_first else "maker-attestation"
+    assert result["status"] == "runtime-approval-required", json.dumps(
+        result,
+        indent=2,
     )
+    assert result["deploymentEvidence"]["status"] == "deployment-completed"
+    assert result["deploymentEvidence"]["kind"] == "backend-proof"
     assert dev_client.realm_read_count == 1
     assert result["readinessSummary"] == {
         "automaticPrechecks": "Complete",
@@ -3505,38 +3506,57 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     ]
     assert runtime_question["allowFreeformInput"] is False
     assert "**Phases**" not in runtime_question["question"]
-    assert result["allAutomatedChecksPassed"] is True
+    assert result["allAutomatedChecksPassed"] is True, json.dumps(
+        result["automatedChecks"],
+        indent=2,
+    )
     assert result["target"]["environmentId"] == target_environment_id
     assert result["target"]["inventoryEnvironmentId"] == (
         inventory_environment_id
     )
     assert result["target"]["agentId"] == target_agent_id
     assert result["target"]["schemaName"] == f"{snow.IT_SCHEMA_NAME}_{realm}"
-    assert result["automatedChecks"][0]["checkpoint"] == "ESS-SOLN-001"
-    assert result["automatedChecks"][0]["status"] == "Passed"
-    assert result["automatedChecks"][1]["checkpoint"] == (
-        "SN-REALM-CREDENTIAL-001"
-    )
-    assert result["automatedChecks"][1]["status"] == "Passed"
-    assert result["automatedChecks"][2]["checkpoint"] == (
-        "SN-REALM-FOUNDATION-001"
-    )
-    assert result["automatedChecks"][2]["status"] == "Passed"
-    assert result["automatedChecks"][3]["checkpoint"] == (
-        "SN-REALM-PROMOTED-CONTENT-001"
-    )
-    assert result["automatedChecks"][3]["status"] == "Passed"
-    assert {
-        row["checkpoint"] for row in result["manualChecks"]
-    } == {
-        "SN-REALM-OIDC-MANUAL",
-        "SN-REALM-AGENT-BINDING-MANUAL",
+    automated_by_id = {
+        row["checkpoint"]: row for row in result["automatedChecks"]
     }
+    expected_automated = {
+        "ESS-SOLN-001",
+        "SN-DA-ITSM-PKG-001",
+        "SN-DA-ITSM-CREDENTIAL-001",
+        "SN-DA-ITSM-TOPICS-001",
+        "SN-DA-ITSM-PORTAL-001",
+        "SN-REALM-PROMOTED-CONTENT-001",
+    }
+    assert expected_automated <= set(automated_by_id)
     assert all(
-        row["status"] == "Manual"
-        and row["customerStatus"] == "Not automatically verified"
-        and "does not mean" in row["customerExplanation"]
-        for row in result["manualChecks"]
+        automated_by_id[checkpoint]["status"] == "Passed"
+        for checkpoint in expected_automated
+    )
+    assert automated_by_id["SN-DA-ITSM-CREDENTIAL-001"]["evidence"] == {
+        "connectionId": CONNECTION_ID.replace("-", ""),
+        "instanceName": target_instance,
+        "applicationClientId": target_client_id,
+    }
+    manual_by_id = {
+        row["checkpoint"]: row for row in result["manualChecks"]
+    }
+    assert set(manual_by_id) == {
+        "SN-DA-ITSM-AGENT-CONNECTION-001",
+        "SN-REALM-FOUNDATION-001",
+    }
+    assert manual_by_id["SN-REALM-FOUNDATION-001"]["status"] == "Manual"
+    assert manual_by_id["SN-REALM-FOUNDATION-001"][
+        "customerStatus"
+    ] == "Not automatically verified"
+    assert manual_by_id["SN-DA-ITSM-AGENT-CONNECTION-001"][
+        "status"
+    ] == "NotConfigured"
+    assert [gate["label"] for gate in result["visibleGates"]] == [
+        "Deployment confirmed",
+        "Functional Test Pass",
+    ]
+    assert result["visibleGates"][0]["checkpoint"] == (
+        "SN-DA-DEPLOYMENT-001"
     )
     with snow.product_profile_context("itsm"):
         saved = json.loads(
@@ -3555,6 +3575,18 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
         "source": "explicit-target-realm-confirmation",
         "instanceName": target_instance,
         "applicationClientId": target_client_id,
+    }
+    assert realm_record["legacyCheckAliases"] == {
+        "SN-REALM-CREDENTIAL-001": "SN-DA-ITSM-CREDENTIAL-001",
+        "SN-REALM-PROMOTED-CONTENT-001": (
+            "SN-REALM-PROMOTED-CONTENT-001"
+        ),
+        "SN-REALM-FOUNDATION-001": "SN-REALM-FOUNDATION-001",
+        "SN-REALM-OIDC-MANUAL": "SN-REALM-FOUNDATION-001",
+        "SN-REALM-AGENT-BINDING-MANUAL": (
+            "SN-DA-ITSM-AGENT-CONNECTION-001"
+        ),
+        "SN-REALM-MAKER-VALIDATION-MANUAL": "SN-DA-ITSM-TEST-001",
     }
     assert result["remoteMutationCount"] == 0
     assert target_client.mutation_count == 0
@@ -3633,6 +3665,35 @@ def test_validate_target_realm_is_read_only_and_uses_exact_target_context(
     assert target_agent_id in bound["next"]["url"]
     assert "Test pane" in bound["next"]["instruction"]
     assert "Open the exact target agent" not in bound["question"]["question"]
+
+    with snow.product_profile_context("itsm"):
+        tested = snow.record_realm_test(
+            context,
+            realm=realm,
+            result="pass",
+            failure_category=None,
+        )
+        complete = snow.validate_realm(
+            context,
+            realm=realm,
+            target_instance=target_instance,
+            target_client_id=target_client_id,
+            already_promoted=discovery_first,
+        )
+
+    assert tested["status"] == "recorded"
+    assert complete["status"] == "realm-complete"
+    assert complete["question"] is None
+    assert complete["readinessSummary"]["functionalTest"] == "Complete"
+    assert complete["next"]["action"] == "realm-complete"
+    functional_gate = next(
+        gate
+        for gate in complete["visibleGates"]
+        if gate["id"] == "functional-test"
+    )
+    assert functional_gate["checkpoint"] == "SN-DA-ITSM-TEST-001"
+    assert functional_gate["status"] == "Manual"
+    assert functional_gate["customerStatus"] == "Confirmed manually"
 
 
 def test_validate_target_realm_blocks_when_exact_environment_is_unproven(
@@ -4570,17 +4631,21 @@ def test_incompatible_foundation_blocks_runtime_plan(
     monkeypatch.setattr(snow, "run_solution_checks", lambda _runner: [])
     monkeypatch.setattr(
         snow,
-        "_target_credential_check",
-        lambda *_args, **_kwargs: {
-            "checkpoint": "SN-REALM-CREDENTIAL-001",
-            "status": "Passed",
-            "automationType": "automated",
-            "description": "credential",
-            "result": "passed",
-            "remediation": "",
-            "roles": [],
-            "evidence": {"connectionId": CONNECTION_ID.replace("-", "")},
-        },
+        "_target_profile_checkpoints",
+        lambda *_args, **_kwargs: [
+            {
+                "checkpoint": "SN-DA-HRSD-CREDENTIAL-001",
+                "status": "Passed",
+                "automationType": "automated",
+                "description": "credential",
+                "result": "passed",
+                "remediation": "",
+                "roles": [],
+                "evidence": {
+                    "connectionId": CONNECTION_ID.replace("-", "")
+                },
+            }
+        ],
     )
     monkeypatch.setattr(
         snow,
@@ -4607,7 +4672,7 @@ def test_incompatible_foundation_blocks_runtime_plan(
 
     foundation = next(
         row
-        for row in result["blockingAutomatedChecks"]
+        for row in result["manualChecks"]
         if row["checkpoint"] == "SN-REALM-FOUNDATION-001"
     )
     assert foundation["status"] == "Blocked"
@@ -5599,7 +5664,7 @@ def test_missing_target_credential_prevents_ready_for_test_pane(
     credential = next(
         row
         for row in result["automatedChecks"]
-        if row["checkpoint"] == "SN-REALM-CREDENTIAL-001"
+        if row["checkpoint"] == "SN-DA-HRSD-CREDENTIAL-001"
     )
     assert credential["status"] == "NotConfigured"
     _assert_recovery_handoff(credential["recoveryHandoff"])

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
@@ -347,6 +348,29 @@ def _result(
 
 
 def _active_agent(runner) -> tuple[str, dict[str, Any]] | None:
+    target_context = getattr(runner, "servicenow_target_context", None)
+    if isinstance(target_context, dict):
+        target = target_context.get("target")
+        target = target if isinstance(target, dict) else {}
+        source_slug = str(
+            target_context.get("sourceAgentSlug")
+            or getattr(runner, "agent_slug", "")
+            or ""
+        )
+        try:
+            source_slug = validate_agent_slug(source_slug)
+        except ValueError:
+            return None
+        if all(
+            isinstance(target.get(key), str) and target[key]
+            for key in ("agentId", "schemaName")
+        ):
+            return source_slug, {
+                "slug": source_slug,
+                "botId": target["agentId"],
+                "schemaName": target["schemaName"],
+                "realm": target_context.get("realm"),
+            }
     config = getattr(runner, "config", {}) or {}
     if not isinstance(config, dict):
         return None
@@ -391,6 +415,11 @@ def _load_state(slug: str) -> dict[str, Any]:
     if not path.exists():
         return {}
     value = json.loads(path.read_text(encoding="utf-8"))
+    return value if isinstance(value, dict) else {}
+
+
+def _target_context(runner) -> dict[str, Any]:
+    value = getattr(runner, "servicenow_target_context", None)
     return value if isinstance(value, dict) else {}
 
 
@@ -593,6 +622,8 @@ def _acquire_servicenow_reads(
 
 def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
     target = getattr(runner, "checkpoint_target", None)
+    target_context = _target_context(runner)
+    target_mode = bool(target_context)
     selected = _active_agent(runner)
     if selected is None:
         return _all_unavailable(
@@ -605,7 +636,12 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
     schema = str(
         agent.get("schemaName") or agent.get("schema_name") or ""
     ).casefold()
-    if schema != HR_SCHEMA_NAME.casefold():
+    accepted_schemas = {HR_SCHEMA_NAME.casefold()}
+    if target_mode:
+        realm = str(target_context.get("realm") or "").casefold()
+        if realm:
+            accepted_schemas.add(f"{HR_SCHEMA_NAME}_{realm}".casefold())
+    if schema not in accepted_schemas:
         return _all_unavailable(
             Status.NOT_CONFIGURED.value,
             f"The selected agent '{slug}' is not the ESS DA HR agent.",
@@ -626,7 +662,16 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         "SN-DA-HRSD-TEST-001",
         None,
     }
-    environment_id = str(getattr(runner, "env_id", None) or "")
+    target_identity = target_context.get("target")
+    target_identity = (
+        target_identity if isinstance(target_identity, dict) else {}
+    )
+    environment_id = str(
+        target_identity.get("environmentId")
+        if target_mode
+        else getattr(runner, "env_id", None)
+        or ""
+    )
     (
         components,
         component_error,
@@ -674,11 +719,30 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
             target=target,
         )
 
-    state = _load_state(slug)
+    state = _load_state(
+        str(target_context.get("sourceAgentSlug") or slug)
+    )
     evidence = state.get("evidence")
     evidence = evidence if isinstance(evidence, dict) else {}
     admin_setup = state.get("adminSetup")
     admin_setup = admin_setup if isinstance(admin_setup, dict) else {}
+    if target_mode:
+        admin_setup = copy.deepcopy(admin_setup)
+        expected_instance = str(
+            target_context.get("expectedInstanceName") or ""
+        )
+        expected_client_id = str(
+            target_context.get("expectedApplicationClientId") or ""
+        )
+        if expected_instance:
+            admin_setup.setdefault("preflight", {})[
+                "instanceName"
+            ] = expected_instance
+        if expected_client_id:
+            handoffs = admin_setup.setdefault("phaseHandoffs", {})
+            entra = handoffs.setdefault("entra-registration", {})
+            entra_evidence = entra.setdefault("evidence", {})
+            entra_evidence["clientId"] = expected_client_id
     if target == "SN-DA-HRSD-PKG-001":
         return [_package_result(slug, summary)]
     if target == "SN-DA-HRSD-ADMIN-PREFLIGHT-001":
@@ -759,15 +823,19 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         admin_setup,
         connections,
         connectivity_error,
+        require_handoff=not target_mode,
     )
     if target == "SN-DA-HRSD-CREDENTIAL-001":
         return [credential_result]
 
-    needs_draft_identity = target in {
-        "SN-DA-HRSD-AGENT-CONNECTION-001",
-        "SN-DA-HRSD-TEST-001",
-        None,
-    }
+    needs_draft_identity = (
+        target in {
+            "SN-DA-HRSD-AGENT-CONNECTION-001",
+            "SN-DA-HRSD-TEST-001",
+            None,
+        }
+        and not target_mode
+    )
     draft_semantic_hash = ""
     binding_identity_sha256 = ""
     current_connection_binding_hash = None
@@ -827,6 +895,12 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
                 )
 
     agent_connection_result = (
+        _target_agent_connection_result(
+            target_context,
+            credential_result,
+        )
+        if target_mode
+        else
         _result(
             "SN-DA-HRSD-AGENT-CONNECTION-001",
             Status.ERROR.value,
@@ -850,6 +924,16 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
     topics_result = _topics_result(summary, evidence, component_hash)
     portal_result = _portal_result(components, admin_setup, state)
     if target == "SN-DA-HRSD-TEST-001":
+        if target_mode:
+            return [
+                _target_test_result(
+                    target_context,
+                    topics_result,
+                    portal_result,
+                    credential_result,
+                    agent_connection_result,
+                )
+            ]
         return [
             _test_result(
                 evidence,
@@ -1732,12 +1816,94 @@ def _credential_result(
     admin_setup: dict[str, Any],
     connections: list[dict[str, Any]],
     error: str,
+    *,
+    require_handoff: bool = True,
 ) -> CheckResult:
     match, credential = _selected_connection(evidence, connections)
+    actual_instance = None
+    actual_resource = None
+    ambiguous_target = False
+    if not require_handoff and not error:
+        expected_instance = (
+            (admin_setup.get("preflight") or {}).get("instanceName")
+            if isinstance(admin_setup.get("preflight"), dict)
+            else None
+        )
+        expected_client_id = _entra_client_id(admin_setup)
+        exact_matches: list[tuple[dict[str, Any], str, str]] = []
+        for candidate in connections:
+            if (
+                _connection_status(candidate) != "Connected"
+                or _auth_mode(candidate) != AUTH_MODE
+            ):
+                continue
+            properties = candidate.get("properties")
+            properties = (
+                properties if isinstance(properties, dict) else {}
+            )
+            parameter_set = properties.get("connectionParametersSet")
+            parameter_set = (
+                parameter_set if isinstance(parameter_set, dict) else {}
+            )
+            values = parameter_set.get("values")
+            values = values if isinstance(values, dict) else {}
+
+            def candidate_parameter(name: str) -> Any:
+                value = values.get(name)
+                return (
+                    value.get("value")
+                    if isinstance(value, dict)
+                    else None
+                )
+
+            candidate_instance = candidate_parameter(
+                "token:InstanceName"
+            ) or candidate_parameter("instance")
+            candidate_resource = candidate_parameter("token:ResourceUri")
+            try:
+                if (
+                    expected_instance
+                    and expected_client_id
+                    and normalize_instance_name(str(candidate_instance))
+                    == expected_instance
+                    and normalize_client_id(str(candidate_resource))
+                    == expected_client_id
+                ):
+                    exact_matches.append(
+                        (
+                            candidate,
+                            str(candidate_instance),
+                            str(candidate_resource),
+                        )
+                    )
+            except Exception:
+                continue
+        if len(exact_matches) == 1:
+            match, actual_instance, actual_resource = exact_matches[0]
+            credential = {
+                "connectionId": str(match.get("name") or ""),
+            }
+        elif len(exact_matches) > 1:
+            ambiguous_target = True
+            match = None
+            credential = {}
+        else:
+            match = None
+            credential = {}
     if error:
         status = Status.ERROR.value
         result = error
-    elif not _phase_attested(admin_setup, "credential"):
+    elif ambiguous_target:
+        status = Status.ERROR.value
+        result = (
+            "Fresh target inventory found multiple Connected ServiceNow "
+            "connections with the exact auth mode, Instance Name, and "
+            "Application client ID."
+        )
+    elif require_handoff and not _phase_attested(
+        admin_setup,
+        "credential",
+    ):
         status = Status.NOT_CONFIGURED.value
         result = "The bundled physical-connection handoff is incomplete."
     elif not credential.get("connectionId"):
@@ -1815,7 +1981,7 @@ def _credential_result(
                     "entraIDUserLogin with the exact Instance Name and "
                     "Application client ID."
                 )
-    return _result(
+    check = _result(
         "SN-DA-HRSD-CREDENTIAL-001",
         status,
         "ServiceNow HRSD credential health",
@@ -1827,6 +1993,25 @@ def _credential_result(
             else ""
         ),
     )
+    if status == Status.PASSED.value:
+        check.evidence = {
+            "connectionId": str(
+                credential.get("connectionId")
+                or (match or {}).get("name")
+                or ""
+            ),
+            "instanceName": (
+                normalize_instance_name(str(actual_instance))
+                if actual_instance
+                else None
+            ),
+            "applicationClientId": (
+                normalize_client_id(str(actual_resource))
+                if actual_resource
+                else None
+            ),
+        }
+    return check
 
 
 def _binding_evaluation(
@@ -1918,6 +2103,173 @@ def _agent_connection_result(
         result,
         "Confirm the ServiceNow row in Copilot Studio Connection settings.",
     )
+
+
+def _target_agent_connection_result(
+    target_context: dict[str, Any],
+    credential_check: CheckResult,
+) -> CheckResult:
+    validation = target_context.get("validation")
+    validation = validation if isinstance(validation, dict) else {}
+    runtime_plan = validation.get("runtimePlan")
+    runtime_plan = runtime_plan if isinstance(runtime_plan, dict) else {}
+    approval = validation.get("runtimeApproval")
+    approval = approval if isinstance(approval, dict) else {}
+    binding = validation.get("agentBinding")
+    binding = binding if isinstance(binding, dict) else {}
+    target = target_context.get("target")
+    target = target if isinstance(target, dict) else {}
+    target_sha = str(
+        target_context.get("targetConfigurationSha256") or ""
+    )
+    expected_connection = str(
+        target_context.get("connectionId")
+        or runtime_plan.get("connectionId")
+        or ""
+    )
+    current = bool(
+        credential_check.status == Status.PASSED.value
+        and binding.get("status") == "completed"
+        and binding.get("targetConfigurationSha256") == target_sha
+        and binding.get("targetAgentId") == target.get("agentId")
+        and binding.get("targetEnvironmentId") == target.get("environmentId")
+        and binding.get("planSha256") == runtime_plan.get("planSha256")
+        and approval.get("decision") == "approved"
+        and approval.get("planSha256") == runtime_plan.get("planSha256")
+        and str(binding.get("connectionId") or "").casefold()
+        == expected_connection.casefold()
+    )
+    status = (
+        Status.MANUAL.value
+        if current
+        else credential_check.status
+        if credential_check.status != Status.PASSED.value
+        else Status.NOT_CONFIGURED.value
+    )
+    result = (
+        "Current target-bound Manual evidence confirms the exact target "
+        "agent shows the approved ServiceNow connection."
+        if current
+        else credential_check.result
+        if credential_check.status != Status.PASSED.value
+        else (
+            "Current target-bound agent connection evidence is missing, "
+            "stale, or belongs to another target, plan, or connection."
+        )
+    )
+    check = _result(
+        "SN-DA-HRSD-AGENT-CONNECTION-001",
+        status,
+        "ServiceNow credential connected to the selected agent",
+        result,
+        (
+            "Bind the exact approved connection in the target agent UI and "
+            "record current target/hash-bound Manual evidence."
+            if not current
+            else ""
+        ),
+    )
+    check.evidence = {
+        "targetMode": True,
+        "manualEvidenceCurrent": current,
+        "targetConfigurationSha256": target_sha,
+        "planSha256": runtime_plan.get("planSha256"),
+        "connectionId": expected_connection or None,
+    }
+    check.automation_type = "manual"
+    return check
+
+
+def _target_test_result(
+    target_context: dict[str, Any],
+    topics_check: CheckResult,
+    portal_check: CheckResult,
+    credential_check: CheckResult,
+    agent_connection_check: CheckResult,
+) -> CheckResult:
+    prerequisite = _test_prerequisite_gate(
+        topics_check,
+        portal_check,
+        credential_check,
+        agent_connection_check,
+    )
+    if prerequisite is not None:
+        return prerequisite
+    validation = target_context.get("validation")
+    validation = validation if isinstance(validation, dict) else {}
+    record = validation.get("functionalTest")
+    record = record if isinstance(record, dict) else {}
+    binding = record.get("binding")
+    binding = binding if isinstance(binding, dict) else {}
+    target = target_context.get("target")
+    target = target if isinstance(target, dict) else {}
+    runtime_plan = validation.get("runtimePlan")
+    runtime_plan = runtime_plan if isinstance(runtime_plan, dict) else {}
+    expected = {
+        "provider": PROVIDER_KEY,
+        "profile": target_context.get("profile"),
+        "targetAgentId": target.get("agentId"),
+        "targetEnvironmentId": target.get("environmentId"),
+        "targetConfigurationSha256": target_context.get(
+            "targetConfigurationSha256"
+        ),
+        "planSha256": runtime_plan.get("planSha256"),
+        "connectionId": target_context.get("connectionId")
+        or runtime_plan.get("connectionId"),
+    }
+    current = bool(
+        record.get("status") == "completed"
+        and all(
+            str(binding.get(key) or "").casefold()
+            == str(value or "").casefold()
+            for key, value in expected.items()
+        )
+        and record.get("promptCategory") in {
+            None,
+            _TEST_PROMPT_CATEGORY,
+        }
+    )
+    if not current:
+        status = Status.NOT_CONFIGURED.value
+        result = (
+            "No current target-bound Test pane evidence matches the exact "
+            "target, configuration, approved plan, connection, and binding."
+        )
+    elif record.get("result") == "pass" and record.get(
+        "failureCategory"
+    ) is None:
+        status = Status.MANUAL.value
+        result = "Maker recorded a current passing HRSD target Test result."
+    elif record.get("result") == "fail":
+        status = Status.FAILED.value
+        result = "Maker recorded a current failing HRSD target Test result."
+    else:
+        status = Status.NOT_CONFIGURED.value
+        result = "Target Test evidence does not use the bounded result contract."
+    check = _result(
+        "SN-DA-HRSD-TEST-001",
+        status,
+        "ServiceNow HRSD Test pane result",
+        result,
+        (
+            "Run the profile's bounded low-side-effect scenario in the exact "
+            "target Test pane and record current target/hash-bound Manual "
+            "evidence."
+            if status != Status.MANUAL.value
+            else ""
+        ),
+    )
+    check.evidence = {
+        "targetMode": True,
+        "manualEvidenceCurrent": current,
+        "targetConfigurationSha256": expected[
+            "targetConfigurationSha256"
+        ],
+        "planSha256": expected["planSha256"],
+        "connectionId": expected["connectionId"],
+    }
+    check.automation_type = "manual"
+    return check
 
 
 def _publish_result(

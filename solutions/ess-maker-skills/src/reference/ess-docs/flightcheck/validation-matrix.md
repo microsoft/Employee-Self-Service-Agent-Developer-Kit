@@ -352,6 +352,25 @@ standalone FlightCheck tool did not have.
 | SN-LOCAL-002 | HRSD topics present                            | Medium   | Scan `topics/` | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
 | SN-LOCAL-003 | ITSM topics present                            | Medium   | Scan `topics/` | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
 
+### ServiceNow DA Test/Production realm validation
+
+`SN-DA-DEPLOYMENT-001` is one shared, registered read-only checkpoint for
+HRSD and ITSM. Its invocation context supplies the profile (`hrsd` or `itsm`),
+realm (`test` or `prod`), and exact expected target. It proves one target agent,
+environment, tenant, Dataverse URL, ALM family, schema, and deployed commit.
+Missing, ambiguous, conflicting, permission-limited, or otherwise unknown
+discovery never passes, and this checkpoint does not run promotion.
+
+The controller then reruns the profile's existing `PKG`, `CREDENTIAL`, `TOPICS`,
+`PORTAL`, `AGENT-CONNECTION`, and `TEST` definitions against invocation-local
+target clients without changing `activeAgent`. Promoted content is read-only.
+Entra/OIDC foundation, agent binding, and functional Test remain Manual
+evidence. The customer-facing realm status exposes only **Deployment
+confirmed** and **Functional Test Pass**; package, credential, content, and
+foundation prerequisites remain internal diagnostics. A current passing Manual
+Test is reused only while its target, configuration, plan, connection, and
+binding hashes remain current.
+
 ## 6.5. Cloud Policies / Telemetry & Feedback (POL-FB-xxx)
 
 These checkpoints validate the two Microsoft 365 Cloud Policies (Office Cloud

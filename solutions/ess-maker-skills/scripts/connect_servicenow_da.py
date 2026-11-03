@@ -15191,7 +15191,122 @@ def _flightcheck_result_dict(result: Any) -> dict[str, Any]:
         "result": result.result,
         "remediation": result.remediation,
         "roles": list(result.roles),
+        "evidence": copy.deepcopy(result.evidence),
     }
+
+
+def _target_profile_checkpoints(
+    context: dict[str, Any],
+    *,
+    realm: str,
+    target: dict[str, Any],
+    target_client: Any,
+    checkpoint_ids: list[str],
+    expected_instance: str,
+    expected_client_id: str,
+    target_configuration_sha256: str,
+    validation: dict[str, Any] | None = None,
+    connection_id: str | None = None,
+) -> list[dict[str, Any]]:
+    from flightcheck.checks.servicenow_da_hrsd import (
+        run_servicenow_da_hrsd_checks,
+    )
+    from flightcheck.checks.servicenow_da_itsm import (
+        run_servicenow_da_itsm_checks,
+    )
+
+    validation = validation if isinstance(validation, dict) else {}
+    target_identity = validation.get("targetIdentity")
+    target_identity = (
+        target_identity if isinstance(target_identity, dict) else {}
+    )
+    target = copy.deepcopy(target)
+    target.setdefault(
+        "agentId",
+        validation.get("targetAgentId")
+        or target_identity.get("agentId"),
+    )
+    target.setdefault(
+        "environmentId",
+        validation.get("targetEnvironmentId")
+        or target_identity.get("environmentId"),
+    )
+    target.setdefault(
+        "schemaName",
+        target_identity.get("schemaName")
+        or f"{ACTIVE_PROFILE.schema_name}_{realm}",
+    )
+    try:
+        target_connectivity = _connectivity_client_for_environment(
+            context,
+            environment_id=str(target["environmentId"]),
+        )
+
+        def list_target_connections(
+            _environment_id: str,
+            _connector_name: str,
+        ) -> list[dict[str, Any]]:
+            records = copy.deepcopy(target_connectivity.list_connections())
+            for record in records:
+                properties = record.get("properties")
+                if isinstance(properties, dict) and not properties.get(
+                    "apiId"
+                ):
+                    properties["apiId"] = f"/apis/{CONNECTOR_NAME}"
+            return records
+
+        connectivity = SimpleNamespace(
+            list_connector_connections=list_target_connections
+        )
+    except Exception:  # noqa: BLE001 - owning check returns typed Error
+        connectivity = None
+    target_context = {
+        "profile": ACTIVE_PROFILE.key,
+        "realm": realm,
+        "sourceAgentSlug": _agent_slug(context),
+        "target": copy.deepcopy(target),
+        "targetConfigurationSha256": target_configuration_sha256,
+        "expectedInstanceName": expected_instance,
+        "expectedApplicationClientId": expected_client_id,
+        "validation": copy.deepcopy(validation),
+        "connectionId": connection_id,
+    }
+    runner = SimpleNamespace(
+        checkpoint_target=None,
+        agent_slug=_agent_slug(context),
+        config={
+            "activeAgent": _agent_slug(context),
+            "agents": [
+                {
+                    "slug": _agent_slug(context),
+                    "botId": target["agentId"],
+                    "schemaName": target["schemaName"],
+                    "realm": realm,
+                }
+            ],
+        },
+        env_id=target["environmentId"],
+        agentbuilder=target_client,
+        connectivity=connectivity,
+        servicenow_target_context=target_context,
+        servicenow_parallel_reads=True,
+    )
+    run_checks = (
+        run_servicenow_da_hrsd_checks
+        if ACTIVE_PROFILE.key == "hrsd"
+        else run_servicenow_da_itsm_checks
+    )
+    output: list[dict[str, Any]] = []
+    for checkpoint_id in checkpoint_ids:
+        runner.checkpoint_target = checkpoint_id
+        results = run_checks(runner)
+        if len(results) != 1:
+            raise ServiceNowConnectError(
+                f"Target FlightCheck {checkpoint_id} returned "
+                f"{len(results)} rows."
+            )
+        output.append(_flightcheck_result_dict(results[0]))
+    return output
 
 
 def _target_credential_check(
@@ -15929,13 +16044,13 @@ def _target_foundation_check(
             "ServiceNow Admin / security_admin",
             "Microsoft Entra Application Administrator or higher",
         ],
-        "automationType": "automated",
+        "automationType": "manual",
         "evidence": reuse,
     }
     if reuse["compatible"]:
         return {
             **base,
-            "status": "Passed",
+            "status": "Manual",
             "result": reuse["reason"],
             "remediation": "",
         }
@@ -16163,12 +16278,14 @@ def _target_automated_recovery(
     *,
     realm: str,
     target: dict[str, Any],
+    expected_instance: str,
+    expected_client_id: str,
     result: dict[str, Any],
 ) -> dict[str, Any]:
     if result.get("status") == "Passed":
         return result
     remediation = str(result.get("remediation") or "")
-    if all(
+    if isinstance(result.get("recoveryHandoff"), dict) and all(
         heading in remediation
         for heading in (
             "**Problem**",
@@ -16220,9 +16337,11 @@ def _target_automated_recovery(
         where=target_url,
         values=(
             f"Target realm: {realm.title()}; exact target agent and environment "
-            "are the values encoded by the returned target link. Use target-"
-            "realm administrator-confirmed settings only; do not copy Dev "
-            "values or return employee data, tokens, or secrets."
+            "are the values encoded by the returned target link. Expected "
+            f"ServiceNow instance: `{expected_instance}`; expected Application "
+            f"client ID: `{expected_client_id}`. Use target-realm "
+            "administrator-confirmed settings only; do not copy Dev values or "
+            "return employee data, tokens, or secrets."
         ),
         action=action,
         success=(
@@ -16248,12 +16367,20 @@ def _customer_facing_realm_check(result: dict[str, Any]) -> dict[str, Any]:
         rendered["customerStatus"] = "Verified automatically"
         rendered["customerExplanation"] = str(result.get("result") or "")
     elif status == "Manual":
-        rendered["customerStatus"] = "Not automatically verified"
-        rendered["customerExplanation"] = (
-            str(result.get("result") or "")
-            + " This does not mean a Maker or administrator has already "
-            "finished or confirmed the step."
-        )
+        evidence = result.get("evidence")
+        evidence = evidence if isinstance(evidence, dict) else {}
+        if evidence.get("manualEvidenceCurrent") is True:
+            rendered["customerStatus"] = "Confirmed manually"
+            rendered["customerExplanation"] = str(
+                result.get("result") or ""
+            )
+        else:
+            rendered["customerStatus"] = "Not automatically verified"
+            rendered["customerExplanation"] = (
+                str(result.get("result") or "")
+                + " This does not mean a Maker or administrator has already "
+                "finished or confirmed the step."
+            )
     else:
         rendered["customerStatus"] = status or "Needs attention"
         rendered["customerExplanation"] = str(result.get("result") or "")
@@ -16505,6 +16632,43 @@ def validate_realm(
     target_client = target.pop("client")
     target_identity = _realm_target_identity(target, realm)
     target_configuration_sha256 = _canonical_json_hash(target_identity)
+    existing_validations = state.get("evidence", {}).get("realmValidations")
+    prior_validation = None
+    if isinstance(existing_validations, dict):
+        candidate = existing_validations.get(realm)
+        if isinstance(candidate, dict):
+            prior_validation = candidate
+    from flightcheck.checks.servicenow_deployment import (
+        deployment_result_for_resolved_target,
+    )
+
+    deployment_check = _flightcheck_result_dict(
+        deployment_result_for_resolved_target(
+            profile=ACTIVE_PROFILE.key,
+            realm=realm,
+            resolved=target,
+            expected=(
+                deployment_record.get("targetIdentity")
+                if isinstance(deployment_record, dict)
+                and isinstance(
+                    deployment_record.get("targetIdentity"),
+                    dict,
+                )
+                else None
+            ),
+        )
+    )
+    if deployment_check["status"] != "Passed":
+        raise ServiceNowConnectError(
+            deployment_check["result"],
+            details={"deploymentCheck": deployment_check},
+        )
+    deployment_record = _record_verified_realm_deployment(
+        context,
+        state,
+        realm=realm,
+        target=target,
+    )
     realm_value = _VALIDATION_REALMS[realm]
     runner = SimpleNamespace(
         agentbuilder=target_client,
@@ -16522,17 +16686,31 @@ def validate_realm(
             ],
         },
     )
-    results = [
+    solution_results = [
         _flightcheck_result_dict(result)
         for result in run_solution_checks(runner)
     ]
-    results.append(
-        _target_credential_check(
-            context,
-            target_environment_id=target["environmentId"],
-            expected_instance=normalized_target_instance,
-            expected_client_id=normalized_target_client_id,
-        )
+    prefix = (
+        "SN-DA-HRSD"
+        if ACTIVE_PROFILE.key == "hrsd"
+        else "SN-DA-ITSM"
+    )
+    profile_results = _target_profile_checkpoints(
+        context,
+        realm=realm,
+        target=target,
+        target_client=target_client,
+        checkpoint_ids=[
+            f"{prefix}-PKG-001",
+            f"{prefix}-CREDENTIAL-001",
+            f"{prefix}-TOPICS-001",
+            f"{prefix}-PORTAL-001",
+            f"{prefix}-AGENT-CONNECTION-001",
+        ],
+        expected_instance=normalized_target_instance,
+        expected_client_id=normalized_target_client_id,
+        target_configuration_sha256=target_configuration_sha256,
+        validation=prior_validation,
     )
     foundation_check = _target_foundation_check(
         context,
@@ -16542,22 +16720,26 @@ def validate_realm(
         instance_name=normalized_target_instance,
         application_client_id=normalized_target_client_id,
     )
-    results.append(foundation_check)
-    results.append(
-        _target_promoted_content_check(
-            context,
-            source_state=state,
-            realm=realm,
-            target=target,
-            target_client=target_client,
-            expected_instance=normalized_target_instance,
-        )
+    promoted_content_guard = _target_promoted_content_check(
+        context,
+        source_state=state,
+        realm=realm,
+        target=target,
+        target_client=target_client,
+        expected_instance=normalized_target_instance,
     )
+    results = [
+        *solution_results,
+        *profile_results,
+        promoted_content_guard,
+    ]
     results = [
         _target_automated_recovery(
             context,
             realm=realm,
             target=target,
+            expected_instance=normalized_target_instance,
+            expected_client_id=normalized_target_client_id,
             result=result,
         )
         for result in results
@@ -16565,41 +16747,7 @@ def validate_realm(
     manual_checks = [
         result for result in results if result["automationType"] == "manual"
     ]
-    manual_checks.extend(
-        [
-            {
-                "checkpoint": "SN-REALM-OIDC-MANUAL",
-                "status": "Manual",
-                "automationType": "manual",
-                "description": "Target-realm ServiceNow OIDC and user mapping",
-                "result": (
-                    "No supported read API proves the target realm's "
-                    "ServiceNow OIDC provider, User Claim, and User Field."
-                ),
-                "remediation": (
-                    "Check these settings only if the target Test pane result "
-                    "fails in an identity or authorization category."
-                ),
-                "roles": ["ServiceNow Admin"],
-            },
-            {
-                "checkpoint": "SN-REALM-AGENT-BINDING-MANUAL",
-                "status": "Manual",
-                "automationType": "manual",
-                "description": "Exact target agent UI connection binding",
-                "result": (
-                    "Connection inventory does not prove that the exact "
-                    "target agent UI is bound to the intended credential."
-                ),
-                "remediation": (
-                    "Check the target agent's Connection settings only if "
-                    "the Test pane result fails in a binding or connection "
-                    "category."
-                ),
-                "roles": ["ESS Maker / Agent Developer"],
-            },
-        ]
-    )
+    manual_checks.append(foundation_check)
     manual_checks = [
         _customer_facing_realm_check(result)
         for result in manual_checks
@@ -16627,7 +16775,7 @@ def validate_realm(
         (
             row
             for row in automated_checks
-            if row["checkpoint"] == "SN-REALM-CREDENTIAL-001"
+            if row["checkpoint"] == f"{prefix}-CREDENTIAL-001"
         ),
         None,
     )
@@ -16652,6 +16800,7 @@ def validate_realm(
     runtime_plan = None
     if (
         not automated_blockers
+        and foundation_check.get("status") in {"Manual", "Passed"}
         and isinstance(credential_evidence, dict)
         and isinstance(content_evidence, dict)
         and isinstance(credential_evidence.get("connectionId"), str)
@@ -16664,12 +16813,6 @@ def validate_realm(
             content_sha256=content_evidence["contentSha256"],
             connection_id=credential_evidence["connectionId"],
         )
-    prior_validation = None
-    existing_validations = state.get("evidence", {}).get("realmValidations")
-    if isinstance(existing_validations, dict):
-        candidate = existing_validations.get(realm)
-        if isinstance(candidate, dict):
-            prior_validation = candidate
     prior_approval = (
         prior_validation.get("runtimeApproval")
         if isinstance(prior_validation, dict)
@@ -16697,6 +16840,18 @@ def validate_realm(
         and prior_binding.get("connectionId")
         == credential_evidence.get("connectionId")
     )
+    legacy_check_aliases = {
+        "SN-REALM-CREDENTIAL-001": f"{prefix}-CREDENTIAL-001",
+        "SN-REALM-PROMOTED-CONTENT-001": (
+            "SN-REALM-PROMOTED-CONTENT-001"
+        ),
+        "SN-REALM-FOUNDATION-001": "SN-REALM-FOUNDATION-001",
+        "SN-REALM-OIDC-MANUAL": "SN-REALM-FOUNDATION-001",
+        "SN-REALM-AGENT-BINDING-MANUAL": (
+            f"{prefix}-AGENT-CONNECTION-001"
+        ),
+        "SN-REALM-MAKER-VALIDATION-MANUAL": f"{prefix}-TEST-001",
+    }
     validation = {
         **selection,
         "targetIdentity": target_identity,
@@ -16725,6 +16880,7 @@ def validate_realm(
         "allAutomatedChecksPassed": all_passed,
         "blockingAutomatedCheckCount": len(automated_blockers),
         "runtimePlan": runtime_plan,
+        "legacyCheckAliases": legacy_check_aliases,
     }
     if plan_current:
         validation["runtimeApproval"] = copy.deepcopy(prior_approval)
@@ -16744,6 +16900,23 @@ def validate_realm(
             and binding.get("planSha256") == runtime_plan.get("planSha256")
         ):
             validation["functionalTest"] = copy.deepcopy(prior_test)
+    functional_check = _target_profile_checkpoints(
+        context,
+        realm=realm,
+        target=target,
+        target_client=target_client,
+        checkpoint_ids=[f"{prefix}-TEST-001"],
+        expected_instance=normalized_target_instance,
+        expected_client_id=normalized_target_client_id,
+        target_configuration_sha256=target_configuration_sha256,
+        validation=validation,
+        connection_id=(
+            credential_evidence.get("connectionId")
+            if isinstance(credential_evidence, dict)
+            else None
+        ),
+    )[0]
+    validation["functionalCheck"] = copy.deepcopy(functional_check)
     state["evidence"].setdefault("realmValidations", {})[realm] = validation
     flow = _realm_flow_record(state, realm, create=True)
     assert flow is not None
@@ -16796,7 +16969,16 @@ def validate_realm(
         f"{studio_origin}/environments/"
         f"{target['environmentId']}/bots/{target['agentId']}/overview"
     )
-    ready_for_test = binding_current and not automated_blockers
+    functional_pass_current = bool(
+        functional_check.get("status") == "Manual"
+        and isinstance(functional_check.get("evidence"), dict)
+        and functional_check["evidence"].get("manualEvidenceCurrent") is True
+    )
+    ready_for_test = (
+        binding_current
+        and not automated_blockers
+        and not functional_pass_current
+    )
     approval_required = (
         runtime_plan is not None
         and not plan_current
@@ -16808,10 +16990,24 @@ def validate_realm(
         and not binding_current
         and not automated_blockers
     )
+    visible_gates = [
+        {
+            "id": "deployment",
+            "label": "Deployment confirmed",
+            **_customer_facing_realm_check(deployment_check),
+        },
+        {
+            "id": "functional-test",
+            "label": "Functional Test Pass",
+            **_customer_facing_realm_check(functional_check),
+        },
+    ]
     return {
         "schemaVersion": "servicenow.realm-validation.v1",
         "status": (
-            "ready-for-test-pane"
+            "realm-complete"
+            if functional_pass_current
+            else "ready-for-test-pane"
             if ready_for_test
             else "runtime-approval-required"
             if approval_required
@@ -16824,6 +17020,8 @@ def validate_realm(
         "target": target,
         "automatedChecks": automated_checks,
         "manualChecks": manual_checks,
+        "internalChecks": automated_checks + manual_checks,
+        "visibleGates": visible_gates,
         "deploymentEvidence": copy.deepcopy(deployment_record),
         "allAutomatedChecksPassed": all_passed,
         "blockingAutomatedChecks": automated_blockers,
@@ -16834,7 +17032,11 @@ def validate_realm(
                 "Complete" if not automated_blockers else "Needs attention"
             ),
             "functionalTest": (
-                "Ready" if ready_for_test else "Pending"
+                "Complete"
+                if functional_pass_current
+                else "Ready"
+                if ready_for_test
+                else "Pending"
             ),
             "endToEndValidation": "Not yet verified",
         },
@@ -16853,6 +17055,17 @@ def validate_realm(
         ),
         "remoteMutationCount": 0,
         "next": (
+            {
+                "action": "realm-complete",
+                "instruction": (
+                    f"The current {realm.title()} deployment and Manual "
+                    "functional Test evidence remain current. Do not repeat "
+                    "the Test unless target, configuration, plan, connection, "
+                    "binding, or evidence changes."
+                ),
+            }
+            if functional_pass_current
+            else
             {
                 "action": "customer-test-pane-validation",
                 "url": test_pane_url,
@@ -16987,7 +17200,7 @@ def record_realm_runtime_plan(
     )
     if (
         credential.get("status") != "Passed"
-        or foundation.get("status") != "Passed"
+        or foundation.get("status") not in {"Manual", "Passed"}
         or content.get("status") != "Passed"
     ):
         raise ServiceNowConnectError(
@@ -17160,7 +17373,7 @@ def record_realm_binding(
     )
     if (
         credential.get("status") != "Passed"
-        or foundation.get("status") != "Passed"
+        or foundation.get("status") not in {"Manual", "Passed"}
         or content.get("status") != "Passed"
     ):
         raise ServiceNowConnectError(
@@ -17510,7 +17723,7 @@ def record_realm_test(
             "Complete the current approved runtime plan and exact target "
             "agent binding before recording Maker validation."
         )
-    target, _target_client = _revalidate_realm_target(
+    target, target_client = _revalidate_realm_target(
         context,
         realm=realm,
         validation=validation,
@@ -17527,7 +17740,7 @@ def record_realm_test(
             expectation.get("applicationClientId") or ""
         ),
     )
-    if foundation.get("status") != "Passed":
+    if foundation.get("status") not in {"Manual", "Passed"}:
         raise ServiceNowConnectError(
             "Current target-compatible administrator foundation evidence is "
             "required before recording Maker validation.",
@@ -17540,6 +17753,7 @@ def record_realm_test(
         "realm": realm,
         "result": result,
         "failureCategory": failure_category,
+        "promptCategory": ACTIVE_PROFILE.test_prompt_category,
         "recordedAt": recorded_at,
         "binding": {
             "provider": ACTIVE_PROFILE.provider_key,
@@ -17557,6 +17771,25 @@ def record_realm_test(
         },
     }
     validation["functionalTest"] = record
+    prefix = (
+        "SN-DA-HRSD"
+        if ACTIVE_PROFILE.key == "hrsd"
+        else "SN-DA-ITSM"
+    )
+    validation["functionalCheck"] = _target_profile_checkpoints(
+        context,
+        realm=realm,
+        target=target,
+        target_client=target_client,
+        checkpoint_ids=[f"{prefix}-TEST-001"],
+        expected_instance=str(expectation.get("instanceName") or ""),
+        expected_client_id=str(
+            expectation.get("applicationClientId") or ""
+        ),
+        target_configuration_sha256=target_configuration_sha,
+        validation=validation,
+        connection_id=str(agent_binding.get("connectionId") or ""),
+    )[0]
     validation.pop("recovery", None)
     flow = _realm_flow_record(state, realm, create=True)
     assert flow is not None

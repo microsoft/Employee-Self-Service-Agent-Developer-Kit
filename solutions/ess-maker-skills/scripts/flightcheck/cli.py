@@ -1193,12 +1193,16 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     target = args.checkpoint
     explicit_agent_slug = getattr(args, "agent_slug", None)
     service_now_profile = (
-        "itsm"
-        if str(target).startswith("SN-DA-ITSM-")
+        "shared"
+        if target == "SN-DA-DEPLOYMENT-001"
         else (
-            "hrsd"
-            if str(target).startswith("SN-DA-HRSD-")
-            else None
+            "itsm"
+            if str(target).startswith("SN-DA-ITSM-")
+            else (
+                "hrsd"
+                if str(target).startswith("SN-DA-HRSD-")
+                else None
+            )
         )
     )
     if (
@@ -1248,6 +1252,29 @@ def _run_single_checkpoint(args, *, compact_stream=None):
         if service_now_profile is not None and explicit_agent_slug:
             from connect_servicenow_da import product_profile_for_schema
 
+            target_context = config.get("servicenowTargetContext")
+            target_context = (
+                target_context if isinstance(target_context, dict) else {}
+            )
+            expected_profile = (
+                str(target_context.get("profile") or "").casefold()
+                if service_now_profile == "shared"
+                else service_now_profile
+            )
+            if expected_profile not in {"hrsd", "itsm"}:
+                raise ValueError(
+                    "SN-DA-DEPLOYMENT-001 requires "
+                    "servicenowTargetContext.profile set to hrsd or itsm."
+                )
+            if (
+                service_now_profile == "shared"
+                and str(target_context.get("realm") or "").casefold()
+                not in {"test", "prod"}
+            ):
+                raise ValueError(
+                    "SN-DA-DEPLOYMENT-001 requires "
+                    "servicenowTargetContext.realm set to test or prod."
+                )
             selected_agents = [
                 item
                 for item in config.get("agents", [])
@@ -1264,11 +1291,11 @@ def _run_single_checkpoint(args, *, compact_stream=None):
             )
             if (
                 selected_profile is None
-                or selected_profile.key != service_now_profile
+                or selected_profile.key != expected_profile
             ):
                 raise ValueError(
                     "The selected ServiceNow agent does not match the "
-                    f"{service_now_profile.upper()} checkpoint profile."
+                    f"{expected_profile.upper()} checkpoint profile."
                 )
     except (OSError, ValueError, json.JSONDecodeError) as e:
         if compact_stream is not None:

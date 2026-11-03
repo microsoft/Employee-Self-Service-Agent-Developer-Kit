@@ -45,6 +45,16 @@ _RECOVERY_HEADINGS = (
 )
 
 
+def _target_check(status: str, checkpoint: str):
+    return hrsd_checks._result(
+        checkpoint,
+        status,
+        "target prerequisite",
+        "target prerequisite result",
+        "",
+    )
+
+
 def _components() -> dict:
     return {
         "changeToken": "token",
@@ -2710,3 +2720,125 @@ def test_hrsd_checks_prefer_explicit_agent_slug(
     run_servicenow_da_hrsd_checks(runner)
 
     assert fetched == [requested_id]
+
+
+def test_target_binding_requires_current_target_plan_and_connection_hashes():
+    credential = _target_check(
+        Status.PASSED.value,
+        "SN-DA-HRSD-CREDENTIAL-001",
+    )
+    context = {
+        "target": {
+            "agentId": AGENT_ID,
+            "environmentId": ENVIRONMENT_ID,
+        },
+        "targetConfigurationSha256": "a" * 64,
+        "connectionId": CONNECTION_ID,
+        "validation": {
+            "runtimePlan": {
+                "planSha256": "b" * 64,
+                "connectionId": CONNECTION_ID,
+            },
+            "runtimeApproval": {
+                "decision": "approved",
+                "planSha256": "b" * 64,
+            },
+            "agentBinding": {
+                "status": "completed",
+                "targetAgentId": AGENT_ID,
+                "targetEnvironmentId": ENVIRONMENT_ID,
+                "targetConfigurationSha256": "a" * 64,
+                "planSha256": "b" * 64,
+                "connectionId": CONNECTION_ID,
+            },
+        },
+    }
+
+    current = hrsd_checks._target_agent_connection_result(
+        context,
+        credential,
+    )
+    stale_context = json.loads(json.dumps(context))
+    stale_context["validation"]["agentBinding"][
+        "targetConfigurationSha256"
+    ] = "stale"
+    stale = hrsd_checks._target_agent_connection_result(
+        stale_context,
+        credential,
+    )
+
+    assert current.status == Status.MANUAL.value
+    assert current.automation_type == "manual"
+    assert current.evidence["targetMode"] is True
+    assert stale.status == Status.NOT_CONFIGURED.value
+    assert "missing, stale" in stale.result
+
+
+def test_target_test_reuses_profile_definition_and_invalidates_stale_binding():
+    topics = _target_check(Status.PASSED.value, "SN-DA-HRSD-TOPICS-001")
+    portal = _target_check(Status.PASSED.value, "SN-DA-HRSD-PORTAL-001")
+    credential = _target_check(
+        Status.PASSED.value,
+        "SN-DA-HRSD-CREDENTIAL-001",
+    )
+    binding = _target_check(
+        Status.MANUAL.value,
+        "SN-DA-HRSD-AGENT-CONNECTION-001",
+    )
+    expected_binding = {
+        "provider": snow.PROVIDER_KEY,
+        "profile": "hrsd",
+        "targetAgentId": AGENT_ID,
+        "targetEnvironmentId": ENVIRONMENT_ID,
+        "targetConfigurationSha256": "a" * 64,
+        "planSha256": "b" * 64,
+        "connectionId": CONNECTION_ID,
+    }
+    context = {
+        "profile": "hrsd",
+        "target": {
+            "agentId": AGENT_ID,
+            "environmentId": ENVIRONMENT_ID,
+        },
+        "targetConfigurationSha256": "a" * 64,
+        "connectionId": CONNECTION_ID,
+        "validation": {
+            "runtimePlan": {
+                "planSha256": "b" * 64,
+                "connectionId": CONNECTION_ID,
+            },
+            "functionalTest": {
+                "status": "completed",
+                "result": "pass",
+                "failureCategory": None,
+                "promptCategory": "list-my-open-hr-cases",
+                "binding": expected_binding,
+            },
+        },
+    }
+
+    current = hrsd_checks._target_test_result(
+        context,
+        topics,
+        portal,
+        credential,
+        binding,
+    )
+    stale_context = json.loads(json.dumps(context))
+    stale_context["validation"]["functionalTest"]["binding"][
+        "planSha256"
+    ] = "stale"
+    stale = hrsd_checks._target_test_result(
+        stale_context,
+        topics,
+        portal,
+        credential,
+        binding,
+    )
+
+    assert current.checkpoint_id == "SN-DA-HRSD-TEST-001"
+    assert current.status == Status.MANUAL.value
+    assert current.automation_type == "manual"
+    assert "current passing HRSD target Test" in current.result
+    assert stale.status == Status.NOT_CONFIGURED.value
+    assert "No current target-bound Test pane evidence" in stale.result
