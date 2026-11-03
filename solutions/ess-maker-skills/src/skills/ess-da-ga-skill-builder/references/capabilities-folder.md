@@ -88,7 +88,7 @@ If the MCP server is registered as a federated Copilot connector (FCC) in the Mi
 - An FCC is tenant-wide: Copilot Chat, Researcher and other agents can use it, not just this agent.
 - Copilot shows its own approval card for each write tool (Allow once, for the conversation, or always). Account for it when choosing the confirmation style in Round 6, so users aren't asked twice.
 - MCP Apps widgets are documented only for MCP plugins in an agent, so keep widget and form steps in the plugin.
-- Whether this agent can scope the FCC and name its tools is unverified. Confirm in a test tenant before a skill depends on FCC tool names.
+- Whether a declarative agent can use an FCC's tools and name them in a skill is unverified. Confirm in a test tenant before a skill depends on FCC tool names.
 
 ## Getting the files from an agent package
 
