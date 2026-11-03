@@ -9,10 +9,25 @@ import time
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Unpack
+from typing import TYPE_CHECKING, Any, Literal, Unpack
 
 if TYPE_CHECKING:
-    from adk_telemetry import ApiCallUsage, McpResultKind
+    from adk_telemetry import ApiCallUsage, HttpRequestOutcome, McpResultKind
+
+
+CORRELATION_ID = "com.microsoft.ess/correlation-id"
+CLIENT_REQUEST_ID = "com.microsoft.ess/client-request-id"
+SERVER_OPERATION_ID = "com.microsoft.ess/server-operation-id"
+
+
+def valid_correlation_id(value: object) -> str | None:
+    """Keep only canonical hyphenated UUIDs, never arbitrary request metadata."""
+    if not isinstance(value, str) or len(value) != 36:
+        return None
+    try:
+        return value if str(uuid.UUID(value)) == value.lower() else None
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -20,6 +35,8 @@ class Operation:
     mcp_server: str
     api_endpoint: str = "unknown"
     server_operation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    correlation_id: str = ""
+    client_request_id: str | None = None
     started_at: float = field(default_factory=time.monotonic)
     handler_entered: bool = False
     tenant_id: str = ""
@@ -34,6 +51,43 @@ class Operation:
     error_code: str = ""
     error_category: str = ""
     usage: ApiCallUsage = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.correlation_id = self.correlation_id or self.server_operation_id
+
+    def complete_http_request(
+        self,
+        *,
+        http_request_id: str,
+        http_attempt_number: int,
+        http_method: str,
+        outcome: HttpRequestOutcome,
+        latency_ms: int,
+        http_status: int | None,
+    ) -> None:
+        try:
+            import adk_telemetry
+
+            if not adk_telemetry.telemetry_enabled():
+                return
+            adk_telemetry.emit_http_request(
+                mcp_server=self.mcp_server,
+                api_endpoint=self.api_endpoint,
+                correlation_id=self.correlation_id,
+                client_request_id=self.client_request_id,
+                server_operation_id=self.server_operation_id,
+                http_request_id=http_request_id,
+                http_attempt_number=http_attempt_number,
+                http_method=http_method,
+                outcome=outcome,
+                latency_ms=latency_ms,
+                http_status=http_status,
+                tenant_id=self.tenant_id,
+                tenant_name=self.tenant_name,
+            )
+        except Exception:
+            # Collector failures must not mask a response or the original exception.
+            pass
 
     def complete(self, result_kind: McpResultKind) -> None:
         try:
@@ -52,6 +106,8 @@ class Operation:
                 tenant_name=self.tenant_name,
                 mcp_server=self.mcp_server,
                 server_operation_id=self.server_operation_id,
+                correlation_id=self.correlation_id,
+                client_request_id=self.client_request_id,
                 result_kind=result_kind,
                 http_attempt_count=self.http_attempt_count,
                 retry_count=self.retry_count,
@@ -68,6 +124,19 @@ class Operation:
 
 
 current_operation: ContextVar[Operation | None] = ContextVar("adk_operation", default=None)
+
+
+def result_metadata(meta: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Merge correlation into widget results without changing unobserved results."""
+    operation = current_operation.get()
+    if operation is None:
+        return meta
+    merged = dict(meta or {})
+    merged[CORRELATION_ID] = operation.correlation_id
+    merged[SERVER_OPERATION_ID] = operation.server_operation_id
+    if operation.client_request_id is not None:
+        merged[CLIENT_REQUEST_ID] = operation.client_request_id
+    return merged
 
 
 def handler_entered() -> None:

@@ -82,7 +82,7 @@ from flightcheck import telemetry as _fc  # noqa: E402
 #        so PMs can split adoption dashboards by CA vs DA — ADO 7830949.
 # 1.6.0: added derived ``connector`` (workday|servicenow|"") on
 #        adk.flightcheck.run/result + adk.capability.use — ADO 7943641.
-SCHEMA_VERSION = "1.8.0"
+SCHEMA_VERSION = "1.9.0"
 
 
 class ApiCallUsage(TypedDict, total=False):
@@ -107,6 +107,9 @@ class ApiCallUsage(TypedDict, total=False):
 McpResultKind = Literal[
     "success", "tool_error", "invalid_arguments", "exception", "cancelled", "unknown_tool"
 ]
+HttpRequestOutcome = Literal[
+    "success", "http_error", "network_error", "cancelled", "exception"
+]
 
 # Surfaces the ADK emits from (spec enum: sdk | cli | studio | docs). The
 # Python skill scripts are the CLI surface.
@@ -120,6 +123,7 @@ EVENT_AGENT_DEPLOY = "adk.agent.deploy"
 EVENT_BUILD_START = "adk.build.start"
 EVENT_BUILD_COMPLETE = "adk.build.complete"
 EVENT_API_CALL = "adk.api.call"
+EVENT_HTTP_REQUEST = "adk.http.request"
 EVENT_CAPABILITY_USE = "adk.capability.use"
 EVENT_FLIGHTCHECK_RUN = "adk.flightcheck.run"
 EVENT_FLIGHTCHECK_RESULT = "adk.flightcheck.result"
@@ -1142,6 +1146,14 @@ def _validate_client_events_envelope(envelope: Any) -> tuple[str | None, list[di
             row["client_theme_name"] = theme_name
         if operation_id is not None:
             row["client_operation_id"] = operation_id
+        for source, target in (
+            ("correlationId", "client_root_correlation_id"),
+            ("requestId", "client_request_id"),
+            ("serverOperationId", "client_server_operation_id"),
+        ):
+            value = event.get(source)
+            if _valid_client_operation_id(value):
+                row[target] = value
         blob, dropped = _client_properties_blob(event.get("properties"))
         row["client_properties"] = blob
         row["client_prop_dropped_count"] = dropped
@@ -1365,6 +1377,8 @@ def emit_api_call(
     tenant_name: str | None = None,
     mcp_server: str | None = None,
     server_operation_id: str | None = None,
+    correlation_id: str | None = None,
+    client_request_id: str | None = None,
     result_kind: McpResultKind | None = None,
     http_attempt_count: int | None = None,
     retry_count: int | None = None,
@@ -1388,6 +1402,8 @@ def emit_api_call(
         key: value for key, value in {
             "mcp_server": mcp_server,
             "server_operation_id": server_operation_id,
+            "correlation_id": correlation_id,
+            "client_request_id": client_request_id,
             "result_kind": result_kind,
             "http_attempt_count": http_attempt_count,
             "retry_count": retry_count,
@@ -1404,6 +1420,49 @@ def emit_api_call(
         })
     _apply_error_fields(data, outcome, error_code, error_message, error_category)
     return _emit(EVENT_API_CALL, data, block=block)
+
+
+def emit_http_request(
+    *,
+    mcp_server: str,
+    api_endpoint: str,
+    correlation_id: str,
+    server_operation_id: str,
+    http_request_id: str,
+    http_attempt_number: int,
+    http_method: str,
+    outcome: HttpRequestOutcome,
+    latency_ms: int,
+    client_request_id: str | None = None,
+    http_status: int | None = None,
+    tenant_id: str | None = None,
+    tenant_name: str | None = None,
+    surface: str = SURFACE_CLI,
+    block: bool = False,
+) -> dict[str, Any]:
+    """Emit one content-free HTTP attempt, retaining its ID through buffered retries."""
+    if not telemetry_enabled():
+        return {"sent": False, "reason": "disabled", "event": EVENT_HTTP_REQUEST}
+    sid, _ = get_session(surface)
+    data = common_dimensions(
+        surface, session_id=sid, tenant_id=tenant_id, tenant_name=tenant_name,
+    )
+    data.update({
+        "mcp_server": mcp_server,
+        "api_endpoint": api_endpoint,
+        "correlation_id": correlation_id,
+        "server_operation_id": server_operation_id,
+        "http_request_id": http_request_id,
+        "http_attempt_number": http_attempt_number,
+        "http_method": http_method,
+        "outcome": outcome,
+        "latency_ms": int(latency_ms),
+    })
+    if client_request_id is not None:
+        data["client_request_id"] = client_request_id
+    if http_status is not None:
+        data["http_status"] = http_status
+    return _emit(EVENT_HTTP_REQUEST, data, block=block)
 
 
 def emit_capability_use(

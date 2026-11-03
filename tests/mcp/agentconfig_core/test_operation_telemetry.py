@@ -40,7 +40,14 @@ SENSITIVE = "QuarterlyPayrollReview"
 
 
 @pytest.fixture
-def records(monkeypatch):
+def http_records(monkeypatch):
+    rows = []
+    monkeypatch.setattr(adk, "emit_http_request", lambda **fields: rows.append(fields))
+    return rows
+
+
+@pytest.fixture
+def records(monkeypatch, http_records):
     rows = []
     monkeypatch.setattr(adk, "telemetry_enabled", lambda: True)
     monkeypatch.setattr(adk, "emit_api_call", lambda **fields: rows.append(fields))
@@ -118,6 +125,8 @@ def test_native_boundary_emits_once_and_preserves_results(records, scenario, kin
     assert row["latency_ms"] >= 0
     assert row["tenant_id"] == row["tenant_name"] == ""
     assert str(UUID(row["server_operation_id"])) == row["server_operation_id"]
+    assert row["correlation_id"] == row["server_operation_id"]
+    assert row["client_request_id"] is None
     assert SENSITIVE not in json.dumps(row)
 
 
@@ -241,15 +250,19 @@ def _client(monkeypatch, handler):
     ],
 )
 def test_actual_http_attempts_and_existing_exception_metadata(
-    monkeypatch, records, statuses, idempotent, attempts, retries, exhausted,
+    monkeypatch, records, http_records, statuses, idempotent, attempts, retries, exhausted,
     exception_status,
 ):
     responses = iter(statuses)
+    sent_ids = []
+
+    def handler(request):
+        sent_ids.append(request.headers["client-request-id"])
+        return httpx.Response(next(responses), json={"Code": SENSITIVE, "Message": SENSITIVE})
+
     client = _client(
         monkeypatch,
-        lambda request: httpx.Response(
-            next(responses), json={"Code": SENSITIVE, "Message": SENSITIVE},
-        ),
+        handler,
     )
 
     async def no_sleep(delay):
@@ -288,10 +301,23 @@ def test_actual_http_attempts_and_existing_exception_metadata(
     assert row["auth_refresh_count"] == 0
     assert SENSITIVE not in json.dumps(row)
     assert "customer-route" not in json.dumps(row)
+    assert [event["http_request_id"] for event in http_records] == sent_ids
+    assert len(set(sent_ids)) == attempts
+    assert [event["http_attempt_number"] for event in http_records] == list(range(1, attempts + 1))
+    assert [event["http_status"] for event in http_records] == statuses
+    for event, status in zip(http_records, statuses):
+        assert event["outcome"] == ("success" if status == 200 else "http_error")
+        assert event["http_method"] == "POST"
+        assert event["api_endpoint"] == "business"
+        assert event["server_operation_id"] == row["server_operation_id"]
+        assert event["correlation_id"] == row["correlation_id"]
+        assert event["latency_ms"] >= 0
+    assert SENSITIVE not in json.dumps(http_records)
+    assert "customer-route" not in json.dumps(http_records)
 
 
 @pytest.mark.parametrize("idempotent", [True, False])
-def test_network_retries_keep_nonidempotent_policy(monkeypatch, records, idempotent):
+def test_network_retries_keep_nonidempotent_policy(monkeypatch, records, http_records, idempotent):
     def fail(request):
         raise httpx.ConnectError(SENSITIVE, request=request)
 
@@ -318,9 +344,15 @@ def test_network_retries_keep_nonidempotent_policy(monkeypatch, records, idempot
     assert operation.retry_exhausted is idempotent
     assert operation.http_status is None
     assert records == []
+    assert len(http_records) == operation.http_attempt_count
+    assert len({event["http_request_id"] for event in http_records}) == operation.http_attempt_count
+    for event in http_records:
+        assert event["outcome"] == "network_error"
+        assert event["http_status"] is None
+    assert SENSITIVE not in json.dumps(http_records)
 
 
-def test_concurrent_401_refresh_counts_actual_singleflight_once(monkeypatch, records):
+def test_concurrent_401_refresh_counts_actual_singleflight_once(monkeypatch, records, http_records):
     ready = asyncio.Event()
     arrivals = 0
 
@@ -367,20 +399,37 @@ def test_concurrent_401_refresh_counts_actual_singleflight_once(monkeypatch, rec
         assert row["retry_count"] == 1
         assert row["http_status"] == 200
         assert row["failure_http_status"] == 401
+        events = [
+            event for event in http_records
+            if event["server_operation_id"] == row["server_operation_id"]
+        ]
+        assert [event["http_status"] for event in events] == [401, 200]
+        assert [event["http_attempt_number"] for event in events] == [1, 2]
+    assert len({event["http_request_id"] for event in http_records}) == 4
 
 
-def test_unobserved_http_is_noop_and_core_import_needs_no_mcp(monkeypatch, records):
-    client = _client(monkeypatch, lambda request: httpx.Response(200, json={}))
+def test_unobserved_http_is_noop_and_core_import_needs_no_mcp(monkeypatch, records, http_records):
+    sent = []
+
+    def handler(request):
+        sent.append(request)
+        return httpx.Response(200, json={})
+
+    client = _client(monkeypatch, handler)
 
     async def run():
         try:
             await client._request("GET", "/resource")
+            await client._request("GET", "/resource", headers={"client-request-id": "existing"})
         finally:
             await client.aclose()
 
     asyncio.run(run())
     assert ot.current_operation.get() is None
     assert records == []
+    assert http_records == []
+    assert "client-request-id" not in sent[0].headers
+    assert sent[1].headers["client-request-id"] == "existing"
     result = subprocess.run(
         [
             sys.executable, "-c",
@@ -520,3 +569,165 @@ def test_final_network_failure_does_not_reuse_prior_http_status(monkeypatch, rec
     assert operation.retry_exhausted
     assert operation.http_status is None
     assert operation.failure_http_status == 503
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None, {},
+        {ot.CORRELATION_ID: SENSITIVE, ot.CLIENT_REQUEST_ID: 1},
+        {ot.CORRELATION_ID: TENANT.replace("-", ""), ot.CLIENT_REQUEST_ID: [TENANT]},
+        {ot.CORRELATION_ID: f"{{{TENANT}}}", ot.CLIENT_REQUEST_ID: TENANT + "\n"},
+        {ot.CORRELATION_ID: TENANT, ot.CLIENT_REQUEST_ID: OTHER_TENANT},
+        {ot.CORRELATION_ID: TENANT},
+        {ot.CLIENT_REQUEST_ID: OTHER_TENANT},
+    ],
+)
+def test_native_request_metadata_correlates_each_execution(
+    monkeypatch, records, http_records, metadata,
+):
+    server = ObservedFastMCP("test-server")
+    sent_ids = []
+
+    async def handler(request):
+        sent_ids.append(request.headers["client-request-id"])
+        await asyncio.sleep(0)
+        return httpx.Response(200, json={})
+
+    backend = _client(monkeypatch, handler)
+
+    @server.tool()
+    async def business() -> CallToolResult:
+        ot.handler_entered()
+        await backend._request("GET", "/private-route")
+        return CallToolResult(content=[], _meta=ot.result_metadata({"ui": {"preserved": True}}))
+
+    async def run():
+        async with create_client_server_memory_streams() as (client_streams, server_streams):
+            task = asyncio.create_task(server._mcp_server.run(
+                *server_streams, server._mcp_server.create_initialization_options(),
+            ))
+            try:
+                async with ClientSession(*client_streams) as client:
+                    await client.initialize()
+                    results = await asyncio.gather(
+                        client.call_tool("business", {}, meta=metadata),
+                        client.call_tool("business", {}, meta=metadata),
+                        client.call_tool("business", {}, meta={
+                            ot.CORRELATION_ID: OTHER_TENANT, ot.CLIENT_REQUEST_ID: TENANT,
+                        }),
+                    )
+                    return results
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                await backend.aclose()
+
+    results = asyncio.run(run())
+    assert len(records) == len(http_records) == len(results) == 3
+    assert len({row["server_operation_id"] for row in records}) == 3
+    assert len(set(sent_ids)) == 3
+    assert {row["http_request_id"] for row in http_records} == set(sent_ids)
+    for index, result in enumerate(results):
+        meta = (metadata or {}) if index < 2 else {
+            ot.CORRELATION_ID: OTHER_TENANT, ot.CLIENT_REQUEST_ID: TENANT,
+        }
+        returned = result.meta
+        assert returned["ui"] == {"preserved": True}
+        server_id = returned[ot.SERVER_OPERATION_ID]
+        row, = [row for row in records if row["server_operation_id"] == server_id]
+        event, = [event for event in http_records if event["server_operation_id"] == server_id]
+        correlation = ot.valid_correlation_id(meta.get(ot.CORRELATION_ID)) or server_id
+        request = ot.valid_correlation_id(meta.get(ot.CLIENT_REQUEST_ID))
+        assert returned[ot.CORRELATION_ID] == row["correlation_id"] == event["correlation_id"] == correlation
+        assert returned.get(ot.CLIENT_REQUEST_ID) == row["client_request_id"] == event["client_request_id"] == request
+        assert event["http_attempt_number"] == 1
+        assert event["api_endpoint"] == "business"
+        assert str(UUID(server_id)) == server_id
+    assert ot.current_operation.get() is None
+
+
+@pytest.mark.parametrize("failure", ["cancelled", "network_error", "exception"])
+@pytest.mark.parametrize("emitter_fails", [False, True])
+def test_http_exception_identity_and_fail_open(
+    monkeypatch, records, http_records, failure, emitter_fails,
+):
+    error = {
+        "cancelled": asyncio.CancelledError(SENSITIVE),
+        "network_error": httpx.ReadTimeout(SENSITIVE),
+        "exception": RuntimeError(SENSITIVE),
+    }[failure]
+
+    def handler(request):
+        raise error
+
+    def unavailable(**kwargs):
+        raise OSError(SENSITIVE)
+
+    if emitter_fails:
+        monkeypatch.setattr(adk, "emit_http_request", unavailable)
+    client = _client(monkeypatch, handler)
+    operation = ot.Operation("test-server")
+
+    async def run():
+        token = ot.current_operation.set(operation)
+        try:
+            with pytest.raises(type(error)) as caught:
+                await client._request("POST", "/private-route", idempotent=False)
+            assert caught.value is error
+        finally:
+            ot.current_operation.reset(token)
+            await client.aclose()
+
+    asyncio.run(run())
+    assert operation.http_attempt_count == 1
+    if not emitter_fails:
+        event, = http_records
+        assert event["outcome"] == failure
+        assert event["http_status"] is None
+        assert SENSITIVE not in json.dumps(event)
+
+
+@pytest.mark.parametrize("telemetry", ["enabled", "disabled", "broken"])
+def test_http_headers_are_local_and_opt_out_does_not_change_requests(
+    monkeypatch, records, http_records, telemetry,
+):
+    sent = []
+
+    def handler(request):
+        sent.append(request)
+        return httpx.Response(200, json={})
+
+    def unavailable(**kwargs):
+        raise OSError(SENSITIVE)
+
+    monkeypatch.setattr(adk, "telemetry_enabled", lambda: telemetry != "disabled")
+    if telemetry == "broken":
+        monkeypatch.setattr(adk, "emit_http_request", unavailable)
+    client = _client(monkeypatch, handler)
+    original = httpx.Headers({"CLIENT-REQUEST-ID": "caller-id", "X-Custom": "preserved"})
+    operation = ot.Operation("test-server")
+
+    async def run():
+        shared = await client._ensure_client()
+        shared.headers["client-request-id"] = "shared-id"
+        before = dict(shared.headers)
+        token = ot.current_operation.set(operation)
+        try:
+            await client._request("GET", "/resource", headers=original)
+            await client._request("GET", "/resource")
+            assert dict(shared.headers) == before
+        finally:
+            ot.current_operation.reset(token)
+            await client.aclose()
+
+    asyncio.run(run())
+    assert original["client-request-id"] == "caller-id"
+    assert sent[0].headers["X-Custom"] == "preserved"
+    assert len({request.headers["client-request-id"] for request in sent}) == 2
+    for request in sent:
+        assert len(request.headers.get_list("client-request-id")) == 1
+        assert str(UUID(request.headers["client-request-id"])) == request.headers["client-request-id"]
+        assert "Authorization" in request.headers
+        assert request.headers["Accept"] == "application/json"
+    assert len(http_records) == (2 if telemetry == "enabled" else 0)

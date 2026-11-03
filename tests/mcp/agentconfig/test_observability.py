@@ -12,7 +12,9 @@ import warnings
 from pathlib import Path
 
 import pytest
+from mcp import ClientSession
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.shared.memory import create_client_server_memory_streams
 from pydantic_settings.exceptions import IncompleteFieldDefinitionWarning
 
 LPC_DIR = (
@@ -90,6 +92,7 @@ def records(monkeypatch):
     monkeypatch.setattr(
         server.adk_telemetry, "emit_api_call", lambda **fields: rows.append(fields),
     )
+    monkeypatch.setattr(server.adk_telemetry, "emit_http_request", lambda **fields: None)
     monkeypatch.setattr(
         server.adk_telemetry, "get_tenant_identity",
         lambda tenant_id, **kwargs: {"tenant_id": tenant_id, "tenant_name": "Contoso"},
@@ -139,6 +142,66 @@ def test_all_business_tools_emit_one_content_free_record(records, tool):
         assert row["usage"]["draft_present"] is False
     assert SENSITIVE not in json.dumps(row)
     assert "example.test" not in json.dumps(row)
+
+
+@pytest.mark.parametrize("error", [False, True])
+@pytest.mark.parametrize("observed", [False, True])
+def test_widget_result_metadata_preserves_existing_fields(error, observed):
+    original_meta = {"ui": {"preserved": True}}
+    operation = ot.Operation("test", correlation_id=TENANT, client_request_id=TENANT)
+    token = ot.current_operation.set(operation if observed else None)
+    try:
+        result = (
+            server._widget_error_result(ValueError(SENSITIVE), meta=original_meta)
+            if error else server._structured_result({"value": 1}, "ok", meta=original_meta)
+        )
+    finally:
+        ot.current_operation.reset(token)
+    expected = {"ui": {"preserved": True}}
+    if observed:
+        expected.update({
+            ot.CORRELATION_ID: TENANT,
+            ot.CLIENT_REQUEST_ID: TENANT,
+            ot.SERVER_OPERATION_ID: operation.server_operation_id,
+        })
+    assert result.meta == result.model_dump(by_alias=True)["_meta"] == expected
+    assert original_meta == {"ui": {"preserved": True}}
+    assert result.isError is error
+
+
+@pytest.mark.parametrize("error", [False, True])
+def test_native_widget_response_returns_request_correlation(records, monkeypatch, error):
+    class RejectingClient(FakeClient):
+        async def open_quick_links(self, title_id):
+            raise server.AgentConfigApiError(SENSITIVE, http_status=403)
+
+    if error:
+        monkeypatch.setattr(server, "_client", RejectingClient())
+
+    async def run():
+        async with create_client_server_memory_streams() as (client_streams, server_streams):
+            task = asyncio.create_task(server.mcp._mcp_server.run(
+                *server_streams, server.mcp._mcp_server.create_initialization_options(),
+            ))
+            try:
+                async with ClientSession(*client_streams) as client:
+                    await client.initialize()
+                    return await client.call_tool(
+                        "open_quick_links", {"titleId": SENSITIVE},
+                        meta={ot.CORRELATION_ID: TENANT, ot.CLIENT_REQUEST_ID: TENANT},
+                    )
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    result = asyncio.run(run())
+    row, = records
+    assert result.isError is error
+    assert result.meta == {
+        ot.CORRELATION_ID: TENANT,
+        ot.CLIENT_REQUEST_ID: TENANT,
+        ot.SERVER_OPERATION_ID: row["server_operation_id"],
+    }
 
 
 def test_valid_draft_counts_are_separate_from_baseline(records):

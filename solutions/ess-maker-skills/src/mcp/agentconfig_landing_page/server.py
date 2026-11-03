@@ -31,6 +31,7 @@ from operation_telemetry import (
     capture_tenant,
     confirm_write,
     handler_entered,
+    result_metadata,
 )
 from lpc_telemetry import record_configuration
 
@@ -180,10 +181,13 @@ def _format(data: Any) -> str:
 def _structured_result(
     payload: dict[str, Any],
     message: str,
+    *,
+    meta: dict[str, Any] | None = None,
 ) -> CallToolResult:
     return CallToolResult(
         content=[TextContent(type="text", text=message)],
         structuredContent=payload,
+        _meta=result_metadata(meta),
     )
 
 
@@ -207,6 +211,8 @@ def _extract_png_base64(icon: Any) -> str:
 
 def _widget_error_result(
     error: AgentConfigApiError | httpx.RequestError | ValueError,
+    *,
+    meta: dict[str, Any] | None = None,
 ) -> CallToolResult:
     record_error(error)
     if isinstance(error, AgentConfigApiError):
@@ -231,6 +237,7 @@ def _widget_error_result(
         content=[TextContent(type="text", text=str(error))],
         structuredContent={"error": error_payload},
         isError=True,
+        _meta=result_metadata(meta),
     )
 
 
