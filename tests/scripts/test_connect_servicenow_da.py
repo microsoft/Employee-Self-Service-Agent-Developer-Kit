@@ -410,6 +410,18 @@ def _visible_prose_budget(text: str) -> tuple[int, int]:
     return len(words), len(lines)
 
 
+def _normalized_instruction_content(text: str) -> str:
+    without_list_markers = re.sub(
+        r"(?m)^\s*-\s+",
+        "",
+        text,
+    )
+    without_markdown = (
+        without_list_markers.replace("**", "").replace("*", "")
+    )
+    return " ".join(without_markdown.split())
+
+
 def _record_test_identity_mapping(
     root: Path,
     *,
@@ -12908,7 +12920,9 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "\n\nCurrent contract boundary\n",
         1,
     )[0]
-    assert source_text == snow._entra_admin_instruction()
+    assert source_text == snow._format_identity_instruction_steps(
+        snow._checked_in_entra_workbook_steps()
+    )
     assert "The Entra administrator should:" not in ordinary
     assert len(entra["questions"]) == 3
     for item in entra["questions"]:
@@ -12996,9 +13010,8 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
             "tenant_id": TENANT_ID,
         }
     )
-    assert source_text == "\n\n".join(
-        action if label == "1" else f"{label}\n{action}"
-        for label, action in expected_steps
+    assert source_text == snow._format_identity_instruction_steps(
+        expected_steps
     )
     assert len(service_now["questions"]) == 2
     input_card = service_now["questions"][0]
@@ -13006,6 +13019,75 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert input_card["askUserArguments"]["requestedSchema"]["properties"][
         "response"
     ]["description"] == input_card["canonicalQuestion"]["question"]
+
+
+def test_authoritative_identity_instruction_formatter_preserves_content_and_hierarchy():
+    entra_steps = snow._checked_in_entra_workbook_steps()
+    entra_source = " ".join(
+        action if label == "1" else f"{label} {action}"
+        for label, action in entra_steps
+    )
+    entra = snow._format_identity_instruction_steps(entra_steps)
+    assert _normalized_instruction_content(entra) == (
+        _normalized_instruction_content(entra_source)
+    )
+    assert (
+        "3. If an Entra app already exists:\n\n"
+        "   - **3.1** The Entra administrator"
+    ) in entra
+    assert (
+        "   - **4.1** The Entra administrator needs to register"
+    ) in entra
+    assert (
+        "      - **4.1.2** In the new registration form"
+    ) in entra
+    assert (
+        "         - **4.1.2.1** **Name:** Any name"
+    ) in entra
+    assert (
+        "      - **4.1.5** Select **Token type** as **Access**"
+    ) in entra
+    assert "         - **4.1.5.3** *UPN* -" in entra
+    assert snow.SERVICENOW_NON_EMAIL_USER_MATCH_URL in entra
+
+    values = {
+        "application_client_id": APP_CLIENT_ID,
+        "confirmed_user_claim_name": "employee_id",
+        "tenant_id": TENANT_ID,
+    }
+    service_now_steps = snow._checked_in_servicenow_workbook_steps(values)
+    service_now_source = " ".join(
+        action if label == "1" else f"{label} {action}"
+        for label, action in service_now_steps
+    )
+    service_now = snow._format_identity_instruction_steps(
+        service_now_steps
+    )
+    assert _normalized_instruction_content(service_now) == (
+        _normalized_instruction_content(service_now_source)
+    )
+    assert (
+        "6. Check whether an OAuth provider already exists"
+    ) in service_now
+    assert "   - **6.1** YES - Reuse the existing provider:" in service_now
+    assert "   - **6.2** NO - Create a new OAuth provider app:" in service_now
+    assert (
+        "         - **6.2.1.1** YES - Reuse it."
+    ) in service_now
+    assert (
+        "      - **6.2.2** New-provider application configuration:"
+    ) in service_now
+    assert "         - **Name:** Enter a meaningful name" in service_now
+    assert (
+        "         - **Client ID:** Auto-populated from the confirmed"
+    ) in service_now
+    assert (
+        "         - **OAuth OIDC provider configuration:**"
+    ) in service_now
+    assert "            - **OIDC Provider:**" in service_now
+    assert "            - **User Field:**" in service_now
+    assert "   - **ii.** Ensure the user claim" in service_now
+    assert "   - **iii.** Confirm the ServiceNow User Field" in service_now
 
 
 @pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))

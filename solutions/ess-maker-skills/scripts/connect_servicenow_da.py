@@ -1514,14 +1514,7 @@ def identity_direct_handoff(
             "provider and mapping, one matching Active user, and current "
             "ServiceNow connector preauthorization from the Entra stage."
         )
-    source_text = "\n\n".join(
-        (
-            action
-            if label == "1"
-            else f"{label}\n{action}"
-        )
-        for label, action in source_steps
-    )
+    source_text = _format_identity_instruction_steps(source_steps)
     target_text = (
         f"Target agent: `{_agent_slug(context)}` "
         f"(`{context['agent']['id']}`)\n"
@@ -2044,6 +2037,116 @@ def _checked_in_entra_workbook_steps() -> list[tuple[str, str]]:
         ]
     finally:
         workbook.close()
+
+
+_IDENTITY_INSTRUCTION_MARKER = re.compile(
+    r"(?<!\S)(?P<marker>(?:\d+\.|\d+(?:\.\d+)+|[ivxlcdm]+\.))\s+"
+)
+
+
+def _identity_instruction_marker_depth(marker: str) -> int:
+    value = marker.removesuffix(".")
+    if value.isdigit():
+        return 0
+    if all(part.isdigit() for part in value.split(".")):
+        return value.count(".")
+    return 1
+
+
+def _format_identity_field_label(value: str) -> str:
+    label, separator, remainder = value.partition(": ")
+    if not separator:
+        return value
+    return f"**{label}:** {remainder}"
+
+
+def _format_servicenow_configuration_fields(
+    body: str,
+    *,
+    marker_depth: int,
+) -> list[str] | None:
+    prefix = "New-provider application configuration: "
+    if not body.startswith(prefix):
+        return None
+    parts = body[len(prefix) :].split("; ")
+    lines = ["New-provider application configuration:"]
+    nested_provider_fields = False
+    base_indent = "   " * (marker_depth + 1)
+    for index, part in enumerate(parts):
+        suffix = ";" if index < len(parts) - 1 else ""
+        provider_fields_marker = "complete these fields: "
+        if (
+            part.startswith("OAuth OIDC provider configuration: ")
+            and provider_fields_marker in part
+        ):
+            introduction, first_field = part.split(
+                provider_fields_marker,
+                1,
+            )
+            lines.append(
+                f"{base_indent}- "
+                f"{_format_identity_field_label(introduction)}"
+                f"{provider_fields_marker}"
+            )
+            lines.append(
+                f"{base_indent}   - "
+                f"{_format_identity_field_label(first_field)}{suffix}"
+            )
+            nested_provider_fields = True
+            continue
+        indent = (
+            f"{base_indent}   "
+            if nested_provider_fields
+            else base_indent
+        )
+        lines.append(
+            f"{indent}- {_format_identity_field_label(part)}{suffix}"
+        )
+    return lines
+
+
+def _format_identity_instruction_text(value: str) -> str:
+    text = " ".join(str(value).split())
+    matches = list(_IDENTITY_INSTRUCTION_MARKER.finditer(text))
+    if not matches:
+        return text
+    blocks: list[str] = []
+    prefix = text[: matches[0].start()].strip()
+    if prefix:
+        blocks.append(prefix)
+    for index, match in enumerate(matches):
+        marker = match.group("marker")
+        body = text[
+            match.end() : (
+                matches[index + 1].start()
+                if index + 1 < len(matches)
+                else len(text)
+            )
+        ].strip()
+        depth = _identity_instruction_marker_depth(marker)
+        structured_fields = _format_servicenow_configuration_fields(
+            body,
+            marker_depth=depth,
+        )
+        body_lines = structured_fields or [body]
+        if depth == 0:
+            first = f"{marker} {body_lines[0]}"
+        else:
+            first = f"{'   ' * depth}- **{marker}** {body_lines[0]}"
+        blocks.append("\n\n".join([first, *body_lines[1:]]))
+    return "\n\n".join(blocks)
+
+
+def _format_identity_instruction_steps(
+    steps: list[tuple[str, str]],
+) -> str:
+    rendered: list[str] = []
+    for label, action in steps:
+        formatted = _format_identity_instruction_text(action)
+        rendered.append(
+            formatted if label == "1" else f"**{label}**\n\n{formatted}"
+        )
+    return "\n\n".join(rendered)
 
 
 def _checked_in_servicenow_workbook_steps(
