@@ -343,30 +343,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
             ],
         ),
     ]
-    assert contract["deploymentRealms"]["realmOrder"] == [
-        "dev",
-        "test",
-        "prod",
-    ]
-    assert contract["deploymentRealms"]["connectPromotesOrPublishes"] is False
-    assert [
-        stage["id"] for stage in contract["deploymentRealms"]["stages"]
-    ] == [
-        "connections",
-        "runtime-configuration",
-        "maker-validation",
-    ]
-    assert contract["deploymentRealms"]["stages"][2][
-        "failureCategories"
-    ] == [
-        "authentication",
-        "permission",
-        "connection",
-        "binding",
-        "identity-mapping",
-        "promoted-content",
-        "unexpected",
-    ]
+    assert "deploymentRealms" not in contract
     assert all(phase["responsibleRoles"] for phase in contract["phases"])
     assert next(
         phase for phase in contract["phases"] if phase["id"] == "portal-url"
@@ -492,23 +469,7 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
         "servicenow-sso",
         "maker-configuration",
     ]
-    assert contract["deploymentRealms"]["realmOrder"] == [
-        "dev",
-        "test",
-        "prod",
-    ]
-    assert contract["deploymentRealms"]["connectPromotesOrPublishes"] is False
-    assert contract["deploymentRealms"]["stages"][2][
-        "failureCategories"
-    ] == [
-        "authentication",
-        "permission",
-        "connection",
-        "binding",
-        "identity-mapping",
-        "promoted-content",
-        "unexpected",
-    ]
+    assert "deploymentRealms" not in contract
     assert all(phase["responsibleRoles"] for phase in contract["phases"])
     assert "stateMigrationCommand" not in contract
     assert contract["stateInitializationCommand"] == (

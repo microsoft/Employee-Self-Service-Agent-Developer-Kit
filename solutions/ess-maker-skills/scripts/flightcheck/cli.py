@@ -1193,16 +1193,12 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     target = args.checkpoint
     explicit_agent_slug = getattr(args, "agent_slug", None)
     service_now_profile = (
-        "shared"
-        if target == "SN-DA-DEPLOYMENT-001"
+        "itsm"
+        if str(target).startswith("SN-DA-ITSM-")
         else (
-            "itsm"
-            if str(target).startswith("SN-DA-ITSM-")
-            else (
-                "hrsd"
-                if str(target).startswith("SN-DA-HRSD-")
-                else None
-            )
+            "hrsd"
+            if str(target).startswith("SN-DA-HRSD-")
+            else None
         )
     )
     if (
@@ -1252,29 +1248,7 @@ def _run_single_checkpoint(args, *, compact_stream=None):
         if service_now_profile is not None and explicit_agent_slug:
             from connect_servicenow_da import product_profile_for_schema
 
-            target_context = config.get("servicenowTargetContext")
-            target_context = (
-                target_context if isinstance(target_context, dict) else {}
-            )
-            expected_profile = (
-                str(target_context.get("profile") or "").casefold()
-                if service_now_profile == "shared"
-                else service_now_profile
-            )
-            if expected_profile not in {"hrsd", "itsm"}:
-                raise ValueError(
-                    "SN-DA-DEPLOYMENT-001 requires "
-                    "servicenowTargetContext.profile set to hrsd or itsm."
-                )
-            if (
-                service_now_profile == "shared"
-                and str(target_context.get("realm") or "").casefold()
-                not in {"test", "prod"}
-            ):
-                raise ValueError(
-                    "SN-DA-DEPLOYMENT-001 requires "
-                    "servicenowTargetContext.realm set to test or prod."
-                )
+            expected_profile = service_now_profile
             selected_agents = [
                 item
                 for item in config.get("agents", [])

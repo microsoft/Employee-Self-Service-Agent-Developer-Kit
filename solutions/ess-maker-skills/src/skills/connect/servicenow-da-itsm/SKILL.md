@@ -123,27 +123,3 @@ final configuration.
 Only report the integration connected after the runner completes all eight
 ITSM phases. The IT lifecycle intentionally omits the HR-only ServiceNow
 plugin phase. Do not add a second completion message.
-
-After that exact Dev lifecycle is complete with current passing Test evidence,
-run `validation-realm-handoff`. Development, Test, and Production are agent
-deployment realms, never Git branches. Test starts with exact read-only
-discovery of the promoted target; conclusive absence
-returns external ALM guidance and a recheck action. Production is offered only
-after the exact Test realm completes all three target stages.
-
-For Test/Production, `validate-realm --realm <test|prod>` must fail closed
-unless it proves one exact target realm, selected tenant/environment, distinct
-target agent ID, schema, ALM family, and deployed commit. The resumable target stages
-are exactly **Connections**, **Runtime configuration**, and **Maker
-validation**. Runtime configuration requires a target-scoped preview and
-explicit plan approval. The only supported apply is the Maker's manual
-Copilot Studio connection binding; revalidate the target, plan, connection,
-and promoted-content hashes before recording it, then reread afterward.
-
-Promoted topics, topic state, and the ServiceNow Setup Configurations portal
-value are read-only in Test/Production. Never enable topics, push Dev topic
-files, PUT components, or silently change a realm-specific portal URL. Return
-incorrect promoted content to Dev and the organization's re-promotion flow.
-The target Test pane remains Manual evidence and completes only that realm.
-Connect never provisions, promotes, imports, publishes, auto-advances realms,
-or claims an API-proven Test result.

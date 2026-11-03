@@ -23,9 +23,6 @@ from flightcheck.checks.solution import run_solution_checks
 from flightcheck.checks.servicenow_da_hrsd import (
     run_servicenow_da_hrsd_checks,
 )
-from flightcheck.checks.servicenow_deployment import (
-    run_servicenow_deployment_checks,
-)
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
@@ -299,18 +296,8 @@ class TestTransitiveRequirements:
         )
         assert preflight.clients == frozenset({registry.AGENTBUILDER})
 
-    def test_servicenow_deployment_is_one_shared_exact_target_checkpoint(self):
-        spec = registry.resolve("SN-DA-DEPLOYMENT-001")
-
-        assert spec is not None
-        assert spec.key == "SN-DA-DEPLOYMENT-001"
-        assert spec.category_fn is run_servicenow_deployment_checks
-        assert spec.provider == "servicenow-da"
-        assert spec.profile == "shared"
-        assert spec.clients == frozenset({registry.AGENTBUILDER})
-        assert spec.requires_config is True
-        assert spec.requires_dataverse_endpoint is False
-        assert spec.prereqs == ()
+    def test_servicenow_realm_deployment_checkpoints_are_not_registered(self):
+        assert registry.resolve("SN-DA-DEPLOYMENT-001") is None
         assert registry.resolve("SN-DA-HRSD-DEPLOYMENT-001") is None
         assert registry.resolve("SN-DA-ITSM-DEPLOYMENT-001") is None
 

@@ -57,9 +57,6 @@ from flightcheck.checks.servicenow_da_hrsd import (
 from flightcheck.checks.servicenow_da_itsm import (
     run_servicenow_da_itsm_checks,
 )
-from flightcheck.checks.servicenow_deployment import (
-    run_servicenow_deployment_checks,
-)
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
@@ -269,22 +266,6 @@ _SPECS: list[CheckpointSpec] = [
             Role.POWER_PLATFORM_ADMIN.value,
         ),
         is_family=True,
-    ),
-    CheckpointSpec(
-        key="SN-DA-DEPLOYMENT-001",
-        category_fn=run_servicenow_deployment_checks,
-        category_label="ServiceNow DA deployment",
-        clients=frozenset({AGENTBUILDER}),
-        requires_config=True,
-        requires_dataverse_endpoint=False,
-        priority=Priority.HIGH.value,
-        roles=(
-            Role.ESS_MAKER.value,
-            Role.POWER_PLATFORM_ADMIN.value,
-        ),
-        inherit_prereq_clients=False,
-        provider="servicenow-da",
-        profile="shared",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-PKG-001",

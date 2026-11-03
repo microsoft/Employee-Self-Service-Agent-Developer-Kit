@@ -17,52 +17,6 @@
     "meansInstalled": "Passed",
     "meansNotInstalled": "NotConfigured"
   },
-  "deploymentRealms": {
-    "realmOrder": ["dev", "test", "prod"],
-    "selectionMeaning": "Agent deployment realm, never a Git branch",
-    "promotionOwner": "Organization ALM owner",
-    "connectPromotesOrPublishes": false,
-    "targetIdentityFields": [
-      "realm",
-      "tenantId",
-      "environmentId",
-      "dataverseUrl",
-      "agentId",
-      "schemaName",
-      "almFamilyId",
-      "commitSha"
-    ],
-    "stages": [
-      {
-        "id": "connections",
-        "label": "Connections",
-        "requiresTargetPhysicalConnection": true,
-        "agentBindingEvidence": "manual-maker-ui-target-scoped"
-      },
-      {
-        "id": "runtime-configuration",
-        "label": "Runtime configuration",
-        "requiresPreviewApproval": true,
-        "promotedContentMode": "read-only",
-        "supportedApply": "manual-maker-ui-agent-binding"
-      },
-      {
-        "id": "maker-validation",
-        "label": "Maker validation",
-        "evidence": "manual-target-test-pane",
-        "failureCategories": [
-          "authentication",
-          "permission",
-          "connection",
-          "binding",
-          "identity-mapping",
-          "promoted-content",
-          "unexpected"
-        ],
-        "publishesAgent": false
-      }
-    ]
-  },
   "businessGroups": [
     {
       "id": "entra-identity",

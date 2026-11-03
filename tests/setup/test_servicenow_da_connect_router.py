@@ -9,7 +9,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _SOLUTION = _ROOT / "solutions" / "ess-maker-skills"
 
 
-def test_realm_deployment_guidance_is_conditional_and_read_only() -> None:
+def test_test_and_prod_realm_surface_is_not_advertised() -> None:
     chooser = (
         _SOLUTION
         / "src"
@@ -18,36 +18,15 @@ def test_realm_deployment_guidance_is_conditional_and_read_only() -> None:
         / "servicenow-da"
         / "SKILL.md"
     ).read_text(encoding="utf-8")
-    normalized = " ".join(chooser.split())
-
-    assert "record-realm-deployment --realm <test|prod>" in chooser
-    assert "--status <not-deployed|deployment-completed>" in chooser
-    assert "Always run exact read-only target discovery" in chooser
-    assert "current exact target match is authoritative backend proof" in chooser
-    assert "Only when the controller conclusively proves" in normalized
-    assert "one candidate 404, an unreadable environment" in (
-        normalized.casefold()
-    )
-    assert "stores report history and requests a recheck only" in normalized
-    assert "never gates API discovery" in normalized
-    assert "kit does not deploy, promote, import" in normalized
-    assert "Not automatically verified" in chooser
-    assert "never present `Manual` alone" in chooser
-    assert "record-realm-runtime-plan" in chooser
-    assert "record-realm-binding" in chooser
-    assert "no supported direct binding\nAPI" in chooser
-    assert "Promoted topics" in chooser
-    assert "`List my open HR cases` or `List my open IT tickets`" in normalized
-    assert "empty list is not an automatic failure" in normalized
-    assert "generic answer is not an automatic pass" in normalized
-    assert "record exactly one bounded category" in normalized
-    assert "Only confirmed promoted-content defects return to Dev" in normalized
-    assert "target-scoped recovery handoff" in normalized
-    assert "validate-realm --realm <test|prod>" in normalized
-    assert "--already-promoted" in chooser
-    assert "records backend deployment proof" in normalized
-    assert "does not accept the user's claim as evidence" in normalized
-    assert "literal Workday request" in normalized
+    for parked_command in (
+        "validation-realm-handoff",
+        "validate-realm",
+        "record-realm-deployment",
+        "record-realm-runtime-plan",
+        "record-realm-binding",
+        "record-realm-test",
+    ):
+        assert parked_command not in chooser
 
 
 def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
@@ -80,8 +59,7 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "resume-handoff" in prompt
     assert "mandatory on every `/connect servicenow` invocation" in prompt
     assert "before any FlightCheck/checkpoint command" in prompt
-    assert "validate-realm\n--already-promoted" in prompt
-    assert "literal Workday request on the Workday route" in prompt
+    assert "validate-realm" not in prompt
     assert '`planReason: "revision-reapproval"`' in prompt
     assert "stateInitializationRequired" in prompt
     assert "must never run\n    first-run initialization" in prompt
