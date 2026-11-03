@@ -231,17 +231,6 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
             ),
         ),
         (
-            _ACTIONS / "guide-entra-registration.md",
-            (
-                "application registration",
-                "selected emitted claim",
-                "`user_impersonation` scope",
-                "connector pre-authorization",
-                "exact target",
-                "does not perform or claim a Microsoft Graph read",
-            ),
-        ),
-        (
             _ACTIONS / "guide-servicenow-oidc.md",
             (
                 "configuration been saved",
@@ -454,20 +443,18 @@ def test_identity_admin_guides_use_input_then_completion_questions(
         encoding="utf-8"
     )
 
-    assert "<!-- visible-handoff-question:v1-confirm-setup -->" in entra
+    assert "<!-- visible-handoff-question:v1-confirm-setup -->" not in entra
     assert "<!-- visible-handoff-question:v1-confirm-setup -->" in oidc
     assert "{TOKEN_CLAIM_NAME}" not in oidc
     assert '"label": "Completed"' not in oidc
     assert "question itself must contain all seven operations" not in oidc
     assert "Render the returned `instructionTitle` and `instruction`" in entra
-    assert "ask this separate completion question" in entra
+    assert "there is no\nseparate Entra completion question" in entra
     assert "identity-mapping-handoff --stage entra" in entra
     assert "send the\nreturned short `question` unchanged" in entra
-    assert '"allowFreeformInput": false' in entra
     assert "accepts the local path of either the completed XLSX or CSV" in entra
-    assert "The file alone does not complete the setup confirmation" in entra
-    assert "must explicitly confirm all four requirements" in entra
-    assert "It does not perform or claim a Microsoft Graph read" in entra
+    assert "completes the Manual Entra identity phase" in entra
+    assert "does not prove app configuration" in entra
     assert "identity-mapping-handoff --stage servicenow" in oidc
     assert "Render the returned `instructionTitle` and `instruction`" in oidc
     assert "send the exact\nshort question unchanged" in oidc

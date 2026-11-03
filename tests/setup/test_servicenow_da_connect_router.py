@@ -428,7 +428,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "python scripts/flightcheck/cli.py" not in entra
     for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH"):
         assert f"--checkpoint SN-DA-HRSD-ENTRA-{suffix}-001" not in entra
-    assert "all four requirements" in entra
+    assert "completes the Manual Entra identity phase" in entra
     assert "never enter `aud`" in entra
     assert "employee-identity candidate claim per yellow" in entra
     assert "never enter `aud`" in entra
@@ -474,14 +474,11 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "actual local path" in entra
     assert "HTTP/SharePoint/OneDrive URL" in entra_normalized
     assert "Use the exact local path returned by the question" in entra
-    assert "There is no separate client-ID question" in entra
-    assert "<!-- visible-handoff-question:v1-confirm-setup -->" in entra
-    assert '"header": "Confirm Entra setup evidence"' in entra
-    assert (
-        '"Yes, all four requirements are confirmed for this exact target"'
-        in entra
+    assert "<!-- visible-handoff-question:v1-confirm-setup -->" not in entra
+    assert '"header": "Confirm Entra setup evidence"' not in entra
+    assert "there is no separate Entra completion question" in " ".join(
+        entra.split()
     )
-    assert '"No, the administrator handoff is incomplete"' in entra
     assert "acceptMappedClaims" in entra
     assert "custom signing-key route" in entra
     assert "freezes the exact Entra-confirmed candidate claim names" in (
@@ -815,7 +812,7 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
     assert "migrate-state" not in preflight
 
 
-def test_entra_guides_use_one_workbook_for_client_id_and_claims() -> None:
+def test_entra_guides_use_direct_or_file_two_field_handoff() -> None:
     for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
         guide = (
             _SOLUTION
@@ -827,31 +824,20 @@ def test_entra_guides_use_one_workbook_for_client_id_and_claims() -> None:
             / "guide-entra-registration.md"
         ).read_text(encoding="utf-8")
 
-        assert "There is no separate client-ID question" in guide
         assert "--agent-slug {SELECTED_AGENT_SLUG}" in guide
         assert "Do not add a separate\nEmail/UPN/Pay ID routing question" in guide
-        assert "`allowFreeformInput: true`" in guide
-        assert (
-            "`Please enter the returned Entra admin handoff workbook URL.`"
-            in guide
-        )
-        assert "generated workbook link" in guide
-        assert "not the returned answer" in " ".join(guide.split())
-        assert "successful validation and import are still\nrequired" in guide
+        assert "identity-direct-handoff --stage entra" in guide
+        assert "record-identity-direct --stage entra" in guide
+        assert "Client ID and User Claim prompts" in " ".join(guide.split())
+        assert "--directory-tenant-id" not in guide
+        assert "protected file route remains fully supported" in guide
         assert "record-identity-requirement --choice" not in guide
         assert "`identityRequirementChoices`" not in guide
-        assert "plan-cloud-hr-provision" in guide
-        assert "reference-connect-sync-attributes-synchronized" in guide
-        assert "jwt-claims-customization" in guide
-        assert "Do not require both methods" in guide
-        assert "task-1-register-an-application-in-microsoft-entra-id" in guide
-        assert "yellow Application Client ID cell" in guide
-        assert "one or more yellow Token Claim Name rows" in " ".join(
+        assert "record-identity-mapping --stage entra" in guide
+        assert "there is no separate Entra completion question" in " ".join(
             guide.split()
         )
-        assert "record-identity-mapping --stage entra" in guide
-        assert "--client-id <application-client-id>" not in guide
-        assert "record-admin-phase --phase entra-registration" in guide
+        assert "record-admin-phase --phase entra-registration" not in guide
 
 
 def test_entra_guides_use_one_current_setup_checkpoint() -> None:
@@ -869,10 +855,10 @@ def test_entra_guides_use_one_current_setup_checkpoint() -> None:
 
         assert f"`SN-DA-{profile}-ENTRA-SETUP-001`" in guide
         assert "historical\nstate/audit keys only" in guide
-        assert "all four requirements" in guide
+        assert "all four requirements" not in guide
         assert "Application (client) ID" in guide
-        assert "`user_impersonation` scope" in guide
-        assert "preauthorized for that scope" in guide
+        assert "one safe User Claim name" in guide
+        assert "does not prove app configuration" in guide
 
 
 def test_hr_it_admin_guides_separate_handoff_input_from_completion() -> None:
@@ -885,25 +871,16 @@ def test_hr_it_admin_guides_separate_handoff_input_from_completion() -> None:
             encoding="utf-8"
         )
 
-        assert "<!-- visible-handoff-question:v1-confirm-setup -->" in entra
-        assert '"header": "Confirm Entra setup evidence"' in entra
-        assert (
-            '"Yes, all four requirements are confirmed for this exact target"'
-            in entra
+        assert "<!-- visible-handoff-question:v1-confirm-setup -->" not in entra
+        assert '"header": "Confirm Entra setup evidence"' not in entra
+        assert "there is no separate Entra completion question" in " ".join(
+            entra.split()
         )
-        assert '"No, the administrator handoff is incomplete"' in entra
-        assert "Only after the first option is selected" in entra
 
         assert "<!-- visible-handoff-question:v1-confirm-setup -->" in oidc
         assert '"header": "Confirm ServiceNow OIDC evidence"' in oidc
-        assert (
-            '"Yes, the OIDC and mapping evidence is complete for this exact '
-            'target"' in oidc
-        )
-        assert (
-            '"No, the ServiceNow administrator still needs to finish it"'
-            in oidc
-        )
+        assert '"label": "Yes"' in oidc
+        assert '"label": "No"' in oidc
         assert "Only after the first option is selected" in oidc
 
 

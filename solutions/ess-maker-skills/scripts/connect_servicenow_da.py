@@ -1330,19 +1330,6 @@ def _identity_direct_questions(
                 ),
                 allow_freeform_input=True,
             ),
-            _native_question(
-                header="Complete Entra administrator setup",
-                question=(
-                    "Are all four requirements above complete for this exact "
-                    "target: app registration, selected claim emission, "
-                    "`user_impersonation` scope, and Microsoft ServiceNow "
-                    "connector preauthorization?"
-                ),
-                option_labels=[
-                    "Yes, all four requirements are complete",
-                    "No, not yet",
-                ],
-            ),
         ]
         if captured_client_id is not None:
             normalize_client_id(captured_client_id)
@@ -1608,11 +1595,12 @@ def identity_direct_handoff(
         )
         locked_values = None
         contract_boundary = (
-            "The instructions include app registration, claim, "
-            "`user_impersonation` scope, and Microsoft ServiceNow connector "
-            "preauthorization operations. Completion remains separate "
-            "target-bound Manual evidence; displaying these instructions or "
-            "capturing their non-secret values does not mark them complete."
+            "The Manual Entra identity phase completes only from one valid "
+            "Application client ID GUID and one explicit safe User Claim name "
+            "with current target binding, provenance, and hashes. This does "
+            "not prove app configuration, claim emission, scope, "
+            "pre-authorization, a real token, authentication, permission, or "
+            "a business result."
         )
     else:
         candidate_receipt = _validated_claim_candidates(context, state)
@@ -1644,8 +1632,9 @@ def identity_direct_handoff(
         }
         contract_boundary = (
             "Completion remains Manual evidence. It requires the exact "
-            "provider and mapping, one matching Active user, and current "
-            "ServiceNow connector preauthorization from the Entra stage."
+            "saved configuration and locked claim-to-field mapping for the "
+            "current target. It does not prove a real token, authentication, "
+            "permission, Active-user match, or business result."
         )
     target_text = (
         f"Target agent: `{_agent_slug(context)}` "
@@ -4899,6 +4888,84 @@ def _invalidate_identity_dependents(
             phase.pop(key, None)
 
 
+def _reconcile_entra_handoff_from_receipt(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> bool:
+    try:
+        receipt = _validated_claim_candidates(
+            context,
+            state,
+            require_completion=True,
+        )
+    except ServiceNowConnectError:
+        return False
+    candidates = list(receipt.get("candidates") or [])
+    imported_receipt_sha256 = receipt.get("importedWorkbookSha256")
+    if (
+        len(candidates) != 1
+        or not isinstance(imported_receipt_sha256, str)
+        or not imported_receipt_sha256
+    ):
+        return False
+    setup = _admin_setup(state)
+    existing = setup["phaseHandoffs"].get("entra-registration")
+    existing = existing if isinstance(existing, dict) else {}
+    existing_evidence = existing.get("evidence")
+    existing_evidence = (
+        copy.deepcopy(existing_evidence)
+        if isinstance(existing_evidence, dict)
+        else {}
+    )
+    evidence = {
+        **existing_evidence,
+        "kind": "structured-admin-attestation",
+        "currentSource": "identity-handoff",
+        "identityHandoffConfirmed": True,
+        "entraAdministratorConfirmed": True,
+        "clientId": receipt["applicationClientId"],
+        "directoryTenantId": (
+            receipt.get("directoryTenantId")
+            or receipt["binding"]["tenantId"]
+        ),
+        "tokenClaimCandidates": candidates,
+        "selectedClaimName": candidates[0],
+        "candidateSetSha256": receipt["candidateSetSha256"],
+        "mappingWorkbookSha256": imported_receipt_sha256,
+        "binding": copy.deepcopy(receipt["binding"]),
+        "recordedAt": (
+            existing_evidence.get("recordedAt")
+            or receipt.get("recordedAt")
+            or _utc_now()
+        ),
+    }
+    record = {
+        "status": (
+            "reused"
+            if existing.get("status") == "reused"
+            else "completed"
+        ),
+        "evidence": evidence,
+        "verifiedBy": (
+            existing.get("verifiedBy")
+            if existing.get("status") == "reused"
+            else "current-target-identity-handoff"
+        ),
+    }
+    if existing == record:
+        return False
+    setup["phaseHandoffs"]["entra-registration"] = record
+    migration = state.setdefault("migration", {})
+    migration.setdefault(
+        "entraTwoFieldCompletion",
+        {
+            "criterion": "client-id-and-one-claim-name",
+            "reconciledAt": _utc_now(),
+        },
+    )
+    return True
+
+
 def _persist_identity_mapping_values(
     context: dict[str, Any],
     state: dict[str, Any],
@@ -4978,9 +5045,7 @@ def _persist_identity_mapping_values(
             "candidates": safe_candidates,
             "candidateSetSha256": candidate_hash,
             "entraAdministratorConfirmed": True,
-            "tokenClaimEmissionConfirmed": (
-                provenance_format != "direct"
-            ),
+            "identityHandoffConfirmed": True,
             "binding": binding,
             "provenanceSha256": provenance_sha256,
             "sourceWorkbookSha256": source_workbook_sha256,
@@ -4989,9 +5054,17 @@ def _persist_identity_mapping_values(
             "sheetProtected": sheet_protected,
             "recordedAt": recorded_at,
         }
+        if (
+            isinstance(existing, dict)
+            and "tokenClaimEmissionConfirmed" in existing
+        ):
+            result["tokenClaimEmissionConfirmed"] = existing[
+                "tokenClaimEmissionConfirmed"
+            ]
         if confirmed_directory_tenant_id is not None:
             result["directoryTenantId"] = confirmed_directory_tenant_id
         evidence["identityClaimCandidates"] = result
+        _reconcile_entra_handoff_from_receipt(context, state)
     else:
         candidate_receipt = _validated_claim_candidates(context, state)
         expected_candidates = list(
@@ -5522,8 +5595,12 @@ def _identity_admin_handoff_is_ready(
                 "tokenClaimCandidates": copy.deepcopy(
                     candidates["candidates"]
                 ),
-                "tokenClaimEmissionConfirmed": True,
+                "identityHandoffConfirmed": True,
+                "selectedClaimName": candidates["candidates"][0],
                 "candidateSetSha256": candidates["candidateSetSha256"],
+                "mappingWorkbookSha256": candidates[
+                    "importedWorkbookSha256"
+                ],
             }
         else:
             derived_values = {
@@ -5560,24 +5637,11 @@ def _identity_admin_handoff_is_ready(
             and evidence_client_id == client_id
             and validated_evidence.get("tokenClaimCandidates")
             == candidates.get("candidates")
-            and validated_evidence.get("tokenClaimEmissionConfirmed") is True
             and validated_evidence.get("candidateSetSha256")
             == candidates.get("candidateSetSha256")
             and validated_evidence.get("mappingWorkbookSha256")
             == candidates.get("importedWorkbookSha256")
-            and validated_evidence.get("currentSource")
-            == "administrator-confirmed"
             and validated_evidence.get("entraAdministratorConfirmed") is True
-            and validated_evidence.get(
-                "applicationRegistrationConfirmed"
-            )
-            is True
-            and validated_evidence.get("userImpersonationScopeConfirmed")
-            is True
-            and validated_evidence.get(
-                "connectorPreauthorizationConfirmed"
-            )
-            is True
             and len(candidates.get("candidates") or []) == 1
             and validated_evidence.get("selectedClaimName")
             == candidates["candidates"][0]
@@ -5601,22 +5665,6 @@ def _identity_admin_handoff_is_ready(
             or migrated_historical_graph_pass
         )
     else:
-        entra_handoff = _completed_handoff(
-            setup,
-            "entra-registration",
-        )
-        entra_evidence = (
-            entra_handoff.get("evidence")
-            if isinstance(entra_handoff, dict)
-            else None
-        )
-        inherited_preauthorization_current = bool(
-            isinstance(entra_evidence, dict)
-            and entra_evidence.get(
-                "connectorPreauthorizationConfirmed"
-            )
-            is True
-        )
         ready = bool(
             isinstance(mapping, dict)
             and validated_evidence.get("kind")
@@ -5628,13 +5676,6 @@ def _identity_admin_handoff_is_ready(
             and validated_evidence.get("runbookCompleted") is True
             and validated_evidence.get("mappingDetailsCollected") is True
             and validated_evidence.get("claimMappingConfirmed") is True
-            and (
-                validated_evidence.get(
-                    "connectorPreauthorizationConfirmed"
-                )
-                is True
-                or inherited_preauthorization_current
-            )
             and validated_evidence.get("tokenClaimName")
             == mapping.get("tokenClaimName")
             and validated_evidence.get("serviceNowUserField")
@@ -8996,6 +9037,7 @@ def _load_lifecycle_state(
     state.setdefault("evidence", {})
     _admin_setup(state)
     _migrate_historical_entra_confirmation(context, state)
+    _reconcile_entra_handoff_from_receipt(context, state)
     state.setdefault("transactions", {}).setdefault("topics", {})
     state.setdefault("migration", {})
     return state
@@ -9910,9 +9952,8 @@ def _shared_mapping_compatible(
         != "administrator-confirmed-claim-candidates"
         or candidates.get("status") != "entra-confirmed"
         or candidates.get("entraAdministratorConfirmed") is not True
-        or candidates.get("tokenClaimEmissionConfirmed") is not True
         or not isinstance(candidates.get("candidates"), list)
-        or not candidates["candidates"]
+        or len(candidates["candidates"]) != 1
     ):
         return None
     binding = candidates.get("binding")
@@ -10148,10 +10189,6 @@ def _shared_reuse_candidates(
                 and entra_candidates is not None
                 and client_id == entra_candidates.get("applicationClientId")
                 and identity_compatible
-                and source_entra["evidence"].get(
-                    "tokenClaimEmissionConfirmed"
-                )
-                is True
             ):
                 items.append(
                     {
@@ -10897,12 +10934,12 @@ def _validated_claim_candidates(
         or receipt.get("kind")
         != "administrator-confirmed-claim-candidates"
         or receipt.get("entraAdministratorConfirmed") is not True
-        or (
-            require_completion
-            and receipt.get("tokenClaimEmissionConfirmed") is not True
-        )
         or not isinstance(receipt.get("candidates"), list)
         or not receipt["candidates"]
+        or (
+            require_completion
+            and len(receipt.get("candidates") or []) != 1
+        )
     ):
         raise ServiceNowConnectError(
             "Current target-bound Entra client ID and selected User Claim "
@@ -10928,13 +10965,6 @@ def _validated_claim_candidates(
             "Application client ID."
         )
     receipt_tenant_id = receipt.get("directoryTenantId")
-    if (
-        receipt.get("currentSource") == "direct-capture"
-        and not receipt_tenant_id
-    ):
-        raise ServiceNowConnectError(
-            "Direct Entra evidence has no confirmed Directory tenant ID."
-        )
     if receipt_tenant_id and (
         _normalize_directory_tenant_id(str(receipt_tenant_id))
         != _normalize_directory_tenant_id(expected["tenantId"])
@@ -11031,6 +11061,17 @@ def record_admin_phase(
         )
     state = _load_lifecycle_state(context)
     setup = _admin_setup(state)
+    prior_handoff = setup["phaseHandoffs"].get(phase)
+    prior_evidence = (
+        prior_handoff.get("evidence")
+        if isinstance(prior_handoff, dict)
+        else None
+    )
+    prior_evidence = (
+        copy.deepcopy(prior_evidence)
+        if isinstance(prior_evidence, dict)
+        else {}
+    )
 
     evidence: dict[str, Any] = {
         "kind": "structured-admin-attestation",
@@ -11154,23 +11195,6 @@ def record_admin_phase(
                 "that the exact configuration is saved and the locked User "
                 "Claim is mapped to the recorded User Field."
             )
-        entra_handoff = _completed_handoff(setup, "entra-registration")
-        entra_evidence = (
-            entra_handoff.get("evidence")
-            if isinstance(entra_handoff, dict)
-            else None
-        )
-        if (
-            not isinstance(entra_evidence, dict)
-            or entra_evidence.get(
-                "connectorPreauthorizationConfirmed"
-            )
-            is not True
-        ):
-            raise ServiceNowConnectError(
-                "Current Entra evidence does not confirm Microsoft ServiceNow "
-                "connector preauthorization for this exact target."
-            )
         mapping = _validated_identity_mapping(context, state)
         evidence.update(
             {
@@ -11181,7 +11205,6 @@ def record_admin_phase(
                 ),
                 "mappingDetailsCollected": True,
                 "claimMappingConfirmed": claim_mapping_confirmed,
-                "connectorPreauthorizationConfirmed": True,
                 "tokenClaimName": mapping["tokenClaimName"],
                 "serviceNowUserField": mapping["serviceNowUserField"],
                 "candidateSetSha256": mapping["candidateSetSha256"],
@@ -11195,6 +11218,10 @@ def record_admin_phase(
         )
         if active_user_match_confirmed:
             evidence["activeUserMatchConfirmed"] = True
+        if "connectorPreauthorizationConfirmed" in prior_evidence:
+            evidence["connectorPreauthorizationConfirmed"] = prior_evidence[
+                "connectorPreauthorizationConfirmed"
+            ]
         evidence["binding"]["applicationClientId"] = mapping[
             "applicationClientId"
         ]
@@ -13738,16 +13765,14 @@ def _current_task_guidance(
             f"`{provider_root}/guide-entra-registration.md`. The Maker "
             "transports and imports the handoff only.\n\n"
             "**Expected nonsecret evidence**\n"
-            "One target-bound handoff confirming the application "
-            "registration, one actually emitted claim name, the enabled "
-            "`user_impersonation` scope, and Microsoft ServiceNow connector "
-            "pre-authorization. The Application client ID is collected and "
-            "validated through that handoff; no value is assumed before "
-            "import.\n\n"
+            "One target-bound handoff containing a valid Application client "
+            "ID GUID and one explicit safe User Claim name, with current "
+            "binding, provenance, and hashes.\n\n"
             "**Completion boundary**\n"
-            "The handoff path/input and the all-four confirmation are "
-            "separate questions. Completion remains Manual and performs no "
-            "Microsoft Graph client, token, or read."
+            "The two-field handoff completes this Manual identity phase. It "
+            "does not prove app configuration, claim emission, scope, "
+            "pre-authorization, a real token, authentication, permission, or "
+            "a business result."
         )
     if phase_id == "servicenow-oidc":
         return common + (
@@ -13758,7 +13783,7 @@ def _current_task_guidance(
             "**Expected nonsecret evidence**\n"
             f"Application client ID `{client_id or 'not current'}`, one "
             "Entra-confirmed claim name, one ServiceNow `sys_user` field, "
-            "matching Active user confirmation, target binding, timestamp, "
+            "saved-configuration confirmation, target binding, timestamp, "
             "candidate-set hash, and relationship hash.\n\n"
             "**Completion boundary**\n"
             "The mapping handoff input and completion confirmation are "
@@ -16899,7 +16924,10 @@ def _target_foundation_reuse(
         and entra_evidence.get("kind") == "structured-admin-attestation"
         and isinstance(entra_evidence.get("recordedAt"), str)
         and bool(entra_evidence.get("recordedAt"))
-        and entra_evidence.get("tokenClaimEmissionConfirmed") is True
+        and (
+            entra_evidence.get("identityHandoffConfirmed") is True
+            or entra_evidence.get("tokenClaimEmissionConfirmed") is True
+        )
         and oidc_evidence.get("kind") == "structured-admin-attestation"
         and isinstance(oidc_evidence.get("recordedAt"), str)
         and bool(oidc_evidence.get("recordedAt"))
@@ -19449,18 +19477,22 @@ def build_parser() -> argparse.ArgumentParser:
     phase_parser.add_argument(
         "--confirm-application-registration",
         action="store_true",
+        help=argparse.SUPPRESS,
     )
     phase_parser.add_argument(
         "--confirm-claim-emission",
         action="store_true",
+        help=argparse.SUPPRESS,
     )
     phase_parser.add_argument(
         "--confirm-user-impersonation-scope",
         action="store_true",
+        help=argparse.SUPPRESS,
     )
     phase_parser.add_argument(
         "--confirm-connector-preauthorization",
         action="store_true",
+        help=argparse.SUPPRESS,
     )
     phase_parser.add_argument(
         "--confirm-configuration-saved",

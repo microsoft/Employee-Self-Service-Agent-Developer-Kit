@@ -95,7 +95,7 @@ and context hash.
 
 After that acknowledgement, return the canonical runtime instructions from
 [the shared Entra administrator source](../../shared/runtime-instructions/entra-administrator.md)
-and native data/completion questions without writing state:
+and native data questions without writing state:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage entra
@@ -190,36 +190,15 @@ Successfully imported XLSX and CSV produce the same scoped
 legacy XLSX handoffs remain importable through the legacy parser; generation
 does not rewrite issued runtime files or lifecycle state.
 
-The file alone does not complete the setup confirmation. Before recording the
-phase, the Entra administrator must explicitly confirm all four requirements
-for the exact target: the returned app/client ID is correct, the returned user
-claim is actually emitted, `api://<client-id>` exposes the enabled
-`user_impersonation` scope, and the Microsoft ServiceNow connector is
-preauthorized for that scope. After the handoff import succeeds, render the
-target placeholders and ask this separate completion question:
+A valid current handoff containing one Application client ID GUID and exactly
+one safe User Claim name completes the Manual Entra identity phase. The import
+atomically derives the completed target-bound handoff evidence; there is no
+separate Entra completion question. Historical app-registration, claim,
+scope, pre-authorization, permission, or consent fields remain preserved when
+present, but they are not inferred and do not gate this phase.
 
-<!-- visible-handoff-question:v1-confirm-setup -->
-```json
-[
-  {
-    "header": "Confirm Entra setup evidence",
-    "question": "Are all four requirements above complete for this exact target: application registration, selected emitted claim, `user_impersonation` scope, and Microsoft ServiceNow connector pre-authorization? It does not perform or claim a Microsoft Graph read.",
-    "options": [
-      { "label": "Yes, all four requirements are confirmed for this exact target" },
-      { "label": "No, the administrator handoff is incomplete" }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
-
-Only after the first option is selected, record the bundled confirmation:
-
-```text
-python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-admin-phase --phase entra-registration --status completed --confirm-application-registration --confirm-claim-emission --confirm-user-impersonation-scope --confirm-connector-preauthorization
-```
-
-This command fails closed unless the locally imported handoff has one selected
-claim and matches the active tenant, environment, instance, provider, profile,
-and agent. It records no token, claim value, personal identifier, or live
-Graph result. Return `ACTION_RESULT = "recorded"` only after it succeeds.
+This completion does not prove app configuration, claim emission,
+`user_impersonation`, connector pre-authorization, a real token,
+authentication, permission, or a business result. Later connection, binding,
+and functional Test checks remain independent. Return
+`ACTION_RESULT = "recorded"` after the direct or file import succeeds.

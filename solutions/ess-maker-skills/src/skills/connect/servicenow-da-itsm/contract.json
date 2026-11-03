@@ -123,10 +123,7 @@
           "completed",
           "reused"
         ],
-        "requiredEvidenceKind": "structured-admin-attestation",
-        "requiredValues": {
-          "tokenClaimEmissionConfirmed": true
-        }
+        "requiredEvidenceKind": "structured-admin-attestation"
       },
       "mutates": false
     },

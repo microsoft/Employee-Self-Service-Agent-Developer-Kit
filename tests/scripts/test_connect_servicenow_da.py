@@ -9202,7 +9202,8 @@ def test_validated_identity_mapping_rejects_application_id_mismatch(
     context = _context_at(tmp_path)
     state = snow._state_base(context, _components())
     state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
+    path = _lifecycle_path(tmp_path)
+    snow._write_json_atomic(path, state)
     _record_test_identity_mapping(tmp_path)
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
     mapping = state["evidence"]["identityMapping"]
@@ -9493,7 +9494,8 @@ def test_entra_workbook_is_protected_with_only_claim_cells_unlocked(
     context = _context_at(tmp_path)
     state = snow._state_base(context, _components())
     state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
+    path = _lifecycle_path(tmp_path)
+    snow._write_json_atomic(path, state)
     _confirm_identity_requirement(context)
 
     handoff = snow.identity_mapping_handoff(
@@ -10642,10 +10644,12 @@ def test_entra_workbook_roundtrip_records_one_selected_claim(
         client_id=APP_CLIENT_ID,
         confirmed=True,
     )
-    app = _complete_entra_admin(context, client_id=APP_CLIENT_ID)
+    persisted = snow._load_lifecycle_state(context)
+    app = persisted["adminSetup"]["phaseHandoffs"]["entra-registration"]
 
     assert receipt["candidates"] == ["email"]
-    assert receipt["tokenClaimEmissionConfirmed"] is True
+    assert receipt["identityHandoffConfirmed"] is True
+    assert "tokenClaimEmissionConfirmed" not in receipt
     assert receipt["kind"] == "administrator-confirmed-claim-candidates"
     assert app["evidence"]["tokenClaimCandidates"] == receipt["candidates"]
     assert app["evidence"]["candidateSetSha256"] == receipt["candidateSetSha256"]
@@ -12936,14 +12940,13 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     )
     assert source_text == canonical_entra
     assert "The Entra administrator should:" not in ordinary
-    assert len(entra["questions"]) == 3
+    assert len(entra["questions"]) == 2
     assert [
         item["canonicalQuestion"]["header"]
         for item in entra["questions"]
     ] == [
         "Application client ID",
         "Selected User Claim",
-        "Complete Entra administrator setup",
     ]
     for item in entra["questions"]:
         canonical = item["canonicalQuestion"]
@@ -12963,22 +12966,6 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
             user_field=None,
             confirmed=True,
         )
-        with pytest.raises(
-            snow.ServiceNowConnectError,
-            match="all four",
-        ):
-            snow.record_admin_phase(
-                context,
-                phase="entra-registration",
-                status="completed",
-            )
-        pending = snow._load_lifecycle_state(context)
-        assert snow._identity_admin_handoff_is_ready(
-            context,
-            pending,
-            phase="entra-registration",
-        ) is False
-        _complete_entra_admin(context, client_id=APP_CLIENT_ID)
         completed_state = snow._load_lifecycle_state(context)
         assert snow._identity_admin_handoff_is_ready(
             context,
@@ -13014,8 +13001,20 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert gated_service_now["ordinaryReply"] is None
     assert captured["currentSource"] == "direct-capture"
     assert captured["directoryTenantId"] == TENANT_ID
-    assert captured["tokenClaimEmissionConfirmed"] is False
+    assert captured["identityHandoffConfirmed"] is True
+    assert "tokenClaimEmissionConfirmed" not in captured
     assert captured["importedFileFormat"] == "direct"
+    entra_evidence = completed_state["adminSetup"]["phaseHandoffs"][
+        "entra-registration"
+    ]["evidence"]
+    assert entra_evidence["identityHandoffConfirmed"] is True
+    for historical_field in (
+        "applicationRegistrationConfirmed",
+        "tokenClaimEmissionConfirmed",
+        "userImpersonationScopeConfirmed",
+        "connectorPreauthorizationConfirmed",
+    ):
+        assert historical_field not in entra_evidence
     assert service_now["sourceWorkbookSha256"] == (
         "2170FB0A4541227F660680AC5DFF6365359BECF15D97BC2C4FA0A21AE8828482"
     )
@@ -13261,7 +13260,6 @@ def test_direct_identity_handoff_pauses_before_instructions_until_ack(
         for item in after_client["questions"]
     ] == [
         "Selected User Claim",
-        "Complete Entra administrator setup",
     ]
     assert after_client["retainedDirectInput"] == {
         "applicationClientId": APP_CLIENT_ID,
@@ -13293,6 +13291,12 @@ def test_identity_availability_ack_isolated_by_group_role_target_and_contract(
         (snow.SOLUTION_ROOT / snow.HRSD_PROFILE.contract_path).read_text(
             encoding="utf-8"
         )
+    )
+    target_contract = tmp_path / snow.HRSD_PROFILE.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_text(
+        json.dumps(contract),
+        encoding="utf-8",
     )
     groups = {
         group["id"]: group
@@ -13388,7 +13392,9 @@ def test_direct_entra_capture_rejects_invalid_nonsecret_values(
     context = _context_at(tmp_path)
     state = snow._state_base(context, _components())
     state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
+    path = _lifecycle_path(tmp_path)
+    snow._write_json_atomic(path, state)
+    before = path.read_bytes()
 
     with pytest.raises(snow.ServiceNowConnectError, match=message):
         snow.record_identity_direct(
@@ -13399,6 +13405,7 @@ def test_direct_entra_capture_rejects_invalid_nonsecret_values(
             user_field=None,
             confirmed=True,
         )
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize(
@@ -13421,7 +13428,9 @@ def test_optional_direct_entra_tenant_argument_only_validates_target(
     context = _context_at(tmp_path)
     state = snow._state_base(context, _components())
     state["adminSetup"]["preflight"]["instanceName"] = "dev123"
-    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
+    path = _lifecycle_path(tmp_path)
+    snow._write_json_atomic(path, state)
+    before = path.read_bytes()
 
     with pytest.raises(snow.ServiceNowConnectError, match=message):
         snow.record_identity_direct(
@@ -13433,6 +13442,7 @@ def test_optional_direct_entra_tenant_argument_only_validates_target(
             user_field=None,
             confirmed=True,
         )
+    assert path.read_bytes() == before
 
 
 def test_direct_entra_capture_blocks_without_target_tenant_context(
@@ -13699,7 +13709,7 @@ def test_direct_and_workbook_paths_produce_equivalent_bound_identity(
     ]
 
 
-def test_servicenow_completion_requires_current_inherited_preauthorization(
+def test_servicenow_completion_does_not_require_or_infer_preauthorization(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -13732,17 +13742,12 @@ def test_servicenow_completion_requires_current_inherited_preauthorization(
     ]["connectorPreauthorizationConfirmed"] = False
     snow._write_json_atomic(path, saved)
 
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="does not confirm Microsoft ServiceNow connector "
-        "preauthorization",
-    ):
-        _complete_servicenow_admin(context)
+    completed = _complete_servicenow_admin(context)
 
-    current = snow._load_lifecycle_state(context)
-    assert current["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] == {
-        "status": "pending"
-    }
+    assert completed["status"] == "completed"
+    assert "connectorPreauthorizationConfirmed" not in completed["evidence"]
+    assert completed["evidence"]["configurationSavedConfirmed"] is True
+    assert completed["evidence"]["claimMappingConfirmed"] is True
 
 
 def test_historical_oidc_completion_without_active_user_field_remains_current(
@@ -13857,6 +13862,8 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    from flightcheck.checks.servicenow_da_hrsd import _entra_setup_result
+
     monkeypatch.chdir(tmp_path)
     _write_foundation_context(tmp_path, components=_components())
     context = _context_at(tmp_path)
@@ -13899,21 +13906,23 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
             "--yes",
         ]
     ) == 0
-    capsys.readouterr()
-    assert snow.main(
-        [
-            "record-admin-phase",
-            "--phase",
-            "entra-registration",
-            "--status",
-            "completed",
-            "--confirm-application-registration",
-            "--confirm-claim-emission",
-            "--confirm-user-impersonation-scope",
-            "--confirm-connector-preauthorization",
-        ]
-    ) == 0
-    capsys.readouterr()
+    captured = json.loads(capsys.readouterr().out)
+    assert captured["applicationClientId"] == APP_CLIENT_ID
+    persisted = json.loads(
+        _lifecycle_path(tmp_path).read_text(encoding="utf-8")
+    )
+    entra_handoff = persisted["adminSetup"]["phaseHandoffs"][
+        "entra-registration"
+    ]
+    assert entra_handoff["status"] == "completed"
+    assert entra_handoff["evidence"]["identityHandoffConfirmed"] is True
+    assert entra_handoff["evidence"]["clientId"] == APP_CLIENT_ID
+    assert "tokenClaimEmissionConfirmed" not in captured
+    owning_result = _entra_setup_result(
+        persisted["adminSetup"],
+        persisted,
+    )
+    assert owning_result.status == "Manual"
     assert snow.main(
         ["identity-direct-handoff", "--stage", "servicenow"]
     ) == 0
@@ -13971,6 +13980,206 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
 
     assert completed["evidence"]["tokenClaimName"] == "email"
     assert completed["evidence"]["serviceNowUserField"] == "user_name"
+
+
+@pytest.mark.parametrize(
+    ("current_source", "file_format"),
+    (
+        ("direct-capture", "direct"),
+        ("local-handoff", "xlsx"),
+    ),
+)
+def test_pending_legacy_entra_completion_reconciles_two_field_receipt_without_reask(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    current_source: str,
+    file_format: str,
+) -> None:
+    from flightcheck.checks.servicenow_da_hrsd import _entra_setup_result
+
+    monkeypatch.chdir(tmp_path)
+    context = _context_at(tmp_path)
+    contract = json.loads(
+        (snow.SOLUTION_ROOT / snow.HRSD_PROFILE.contract_path).read_text(
+            encoding="utf-8"
+        )
+    )
+    target_contract = tmp_path / snow.HRSD_PROFILE.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_text(
+        json.dumps(contract),
+        encoding="utf-8",
+    )
+    state = snow._state_base(context, _components())
+    state["attested"] = True
+    state["acceptedContractRevision"] = contract["contractRevision"]
+    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+    state["phases"] = {
+        phase["id"]: {
+            "status": (
+                "done"
+                if phase["id"] in {"preflight", "plugin-prerequisites"}
+                else "in-progress"
+                if phase["id"] == "entra-registration"
+                else "pending"
+            ),
+            "checkpointResults": (
+                {phase["checkpoints"][0]: "Passed"}
+                if phase["id"] == "preflight"
+                else {phase["checkpoints"][0]: "Manual"}
+                if phase["id"] == "plugin-prerequisites"
+                else {}
+            ),
+            "checkpointAcknowledgements": {},
+        }
+        for phase in contract["phases"]
+    }
+    binding = {
+        **snow._required_context_identity(context, state),
+        "applicationClientId": APP_CLIENT_ID,
+        "provider": snow.PROVIDER_KEY,
+        "profile": snow.PROFILE_KEY,
+        "agentSlug": "employee-self-service-hr",
+        "agentId": AGENT_ID,
+    }
+    candidate_hash = snow._identity_candidate_set_hash(
+        application_client_id=APP_CLIENT_ID,
+        candidates=["email"],
+        binding=binding,
+    )
+    state["evidence"]["identityClaimCandidates"] = {
+        "kind": "administrator-confirmed-claim-candidates",
+        "status": "entra-confirmed",
+        "currentSource": current_source,
+        "applicationClientId": APP_CLIENT_ID,
+        "candidates": ["email"],
+        "candidateSetSha256": candidate_hash,
+        "entraAdministratorConfirmed": True,
+        "identityHandoffConfirmed": True,
+        "binding": binding,
+        "provenanceSha256": "a" * 64,
+        "sourceWorkbookSha256": "b" * 64,
+        "importedWorkbookSha256": "a" * 64,
+        "importedFileFormat": file_format,
+        "sheetProtected": file_format == "xlsx",
+        "recordedAt": "2026-11-03T00:00:00Z",
+    }
+    state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
+        "status": "pending",
+        "evidence": {
+            "kind": "structured-admin-attestation",
+            "applicationRegistrationConfirmed": False,
+            "tokenClaimEmissionConfirmed": False,
+            "userImpersonationScopeConfirmed": False,
+            "connectorPreauthorizationConfirmed": False,
+            "oldCompletionSha256": "c" * 64,
+            "recordedAt": "2026-11-03T00:00:01Z",
+        },
+    }
+    contract_group = next(
+        group
+        for group in snow._business_groups(contract)
+        if group["id"] == "entra-identity"
+    )
+    group_context = snow._business_group_context(
+        context,
+        contract,
+        contract_group,
+    )
+    state["businessGroupAcknowledgements"] = {
+        "entra-identity": {
+            "kind": "maker-attestation",
+            "status": "available",
+            "businessGroupId": "entra-identity",
+            "role": contract_group["role"],
+            "contextIdentity": group_context,
+            "contextIdentitySha256": snow._canonical_json_hash(
+                group_context
+            ),
+            "recordedAt": "2026-11-03T00:00:02Z",
+        }
+    }
+    path = _lifecycle_path(tmp_path)
+    snow._write_json_atomic(path, state)
+    emitted = []
+    monkeypatch.setattr(
+        snow,
+        "emit_servicenow_lifecycle_event",
+        lambda _state, event: emitted.append(copy.deepcopy(event)),
+    )
+
+    first_resume = snow.resume_handoff(
+        context,
+        verified_phases=frozenset(
+            {"preflight", "plugin-prerequisites"}
+        ),
+    )
+    assert emitted == []
+    reconciled = snow._load_lifecycle_state(context)
+    handoff = reconciled["adminSetup"]["phaseHandoffs"][
+        "entra-registration"
+    ]
+    assert handoff["status"] == "completed"
+    assert handoff["evidence"]["identityHandoffConfirmed"] is True
+    assert handoff["evidence"]["applicationRegistrationConfirmed"] is False
+    assert handoff["evidence"]["tokenClaimEmissionConfirmed"] is False
+    assert handoff["evidence"]["userImpersonationScopeConfirmed"] is False
+    assert handoff["evidence"]["connectorPreauthorizationConfirmed"] is False
+    assert handoff["evidence"]["oldCompletionSha256"] == "c" * 64
+    assert first_resume["transport"]["businessGroupAvailability"][
+        "question"
+    ] is None
+    direct = snow.identity_direct_handoff(context, stage="entra")
+    assert direct["decision"] == "no-action"
+    assert direct["ordinaryReply"] is None
+    assert direct["questions"] == []
+
+    checkpoint = _entra_setup_result(
+        reconciled["adminSetup"],
+        reconciled,
+    )
+    assert checkpoint.status == "Manual"
+    reconciled["phases"]["entra-registration"].update(
+        {
+            "status": "done",
+            "checkpointResults": {
+                "SN-DA-HRSD-ENTRA-SETUP-001": checkpoint.status
+            },
+            "lastVerifiedAt": "2026-11-03T00:00:03Z",
+        }
+    )
+    snow._write_lifecycle_state(context, reconciled)
+    advanced = snow.resume_handoff(
+        context,
+        verified_phases=frozenset(
+            {
+                "preflight",
+                "plugin-prerequisites",
+                "entra-registration",
+            }
+        ),
+    )
+    assert advanced["lifecycle"]["phase"]["id"] == "servicenow-oidc"
+    assert advanced["transport"]["businessGroupAvailability"][
+        "currentGroup"
+    ]["id"] == "servicenow-sso"
+
+    after_advance_event_count = len(emitted)
+    snow.resume_handoff(
+        context,
+        verified_phases=frozenset(
+            {
+                "preflight",
+                "plugin-prerequisites",
+                "entra-registration",
+            }
+        ),
+    )
+    assert len(emitted) == after_advance_event_count
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["migration"]["entraTwoFieldCompletion"][
+        "criterion"
+    ] == "client-id-and-one-claim-name"
 
 
 def test_checked_in_entra_workbook_has_expected_protection_and_editable_cells() -> None:
@@ -18970,10 +19179,9 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         entra_guidance = entra_yes["transport"]["ordinaryReply"]["text"]
         assert "Confirm Entra identity options" in entra_guidance
         assert "guide-entra-registration.md" in entra_guidance
-        assert "user_impersonation" in entra_guidance
-        assert "performs no Microsoft Graph client, token, or read" in (
-            entra_guidance
-        )
+        assert "valid Application client ID GUID" in entra_guidance
+        assert "one explicit safe User Claim name" in entra_guidance
+        assert "does not prove app configuration" in entra_guidance
 
         state = json.loads(path.read_text(encoding="utf-8"))
         state["phases"]["entra-registration"]["status"] = "done"

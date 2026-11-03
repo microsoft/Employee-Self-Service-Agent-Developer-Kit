@@ -176,7 +176,11 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "separate sections with two newlines" in runner
     assert "Use numbered or bulleted lines under Action" in runner
     assert "Prefer buttons with no recommended" in runner
-    assert "Freeform is allowed only for one genuinely unknown value" in runner
+    assert (
+        "Freeform is allowed only for one genuinely unknown non-secret value "
+        "per card"
+        in runner_normalized
+    )
     assert "**ServiceNow phase-progress extension:**" in runner
     assert "Other providers retain this runner's existing output" in runner
     assert "`transport.ordinaryReply.text`" in runner
@@ -405,9 +409,9 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert by_id["entra-registration"]["checkpoints"] == [
         "SN-DA-HRSD-ENTRA-SETUP-001"
     ]
-    assert by_id["entra-registration"][
+    assert "requiredValues" not in by_id["entra-registration"][
         "manualAcknowledgementEvidence"
-    ]["requiredValues"] == {"tokenClaimEmissionConfirmed": True}
+    ]
     for phase_id in (
         "plugin-prerequisites",
         "entra-registration",
@@ -504,9 +508,7 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
         for phase in contract["phases"]
         if phase["id"] == "entra-registration"
     )
-    assert entra_ack["requiredValues"] == {
-        "tokenClaimEmissionConfirmed": True
-    }
+    assert "requiredValues" not in entra_ack
     assert [phase["id"] for phase in contract["phases"]] == [
         "preflight",
         "entra-registration",
@@ -540,7 +542,11 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
         ).read_text(encoding="utf-8")
         assert "connect_lifecycle.py next-step" in skill
         assert "topic-action-handoff" in action
-        assert "exact returned" in action or "exactly as returned" in action
+        normalized_action = " ".join(action.split())
+        assert (
+            "exactly as returned" in normalized_action
+            or "returned canonical question" in normalized_action
+        )
 
 
 def _resolve_safe_path(value: object, path: str) -> object:

@@ -148,8 +148,7 @@ completion question:
 This Yes confirms only that the configuration is saved and the displayed
 claim-to-field mapping is complete for the exact target. It does not prove a
 real employee token, authentication success, permission, Active-user match, or
-business result. Current exact-target Entra connector pre-authorization remains
-required and is inherited rather than asked again.
+business result.
 
 Only after the first option is selected, record the bundled confirmation:
 

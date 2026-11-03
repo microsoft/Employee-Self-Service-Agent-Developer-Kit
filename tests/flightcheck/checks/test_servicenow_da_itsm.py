@@ -308,6 +308,7 @@ def _write_it_state(root: Path, components: dict) -> dict:
             {
                 "candidateSetSha256": candidate_hash,
                 "currentSource": "administrator-confirmed",
+                "identityHandoffConfirmed": True,
                 "entraAdministratorConfirmed": True,
                 "applicationRegistrationConfirmed": True,
                 "selectedClaimName": "upn",
@@ -634,7 +635,7 @@ def test_recorded_mapping_workflow_reaches_real_it_checkpoints(
         if row.checkpoint_id.startswith("SN-DA-ITSM-ENTRA-")
     ] == ["SN-DA-ITSM-ENTRA-SETUP-001"]
     assert entra.status == Status.MANUAL.value
-    assert "currentSource=administrator-confirmed" in entra.result
+    assert "one valid Application client ID GUID" in entra.result
     assert "Owner:" in entra.remediation
     assert entra.roles == ["Entra Admin", "ESS Maker / Agent Developer"]
     assert oidc.status == Status.MANUAL.value

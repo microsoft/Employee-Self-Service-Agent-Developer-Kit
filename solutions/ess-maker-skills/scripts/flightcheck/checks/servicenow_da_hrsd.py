@@ -1197,18 +1197,16 @@ def _identity_claim_candidates_contract(
     candidates = entra.get("tokenClaimCandidates")
     if (
         not _phase_attested(admin_setup, "entra-registration")
-        or entra.get("tokenClaimEmissionConfirmed") is not True
         or not isinstance(candidates, list)
-        or not candidates
+        or len(candidates) != 1
     ):
         return None, (
-            "The employee identity claim candidates or actual claim emission "
-            "confirmation are missing."
+            "The current Entra identity handoff must contain one explicit "
+            "User Claim name."
         )
     if (
         receipt.get("kind") != "administrator-confirmed-claim-candidates"
         or receipt.get("entraAdministratorConfirmed") is not True
-        or receipt.get("tokenClaimEmissionConfirmed") is not True
         or receipt.get("candidates") != candidates
         or receipt.get("candidateSetSha256")
         != entra.get("candidateSetSha256")
@@ -1375,45 +1373,14 @@ def _entra_confirmation(
             "The Entra administrator confirmation does not match the "
             "locally validated handoff values and provenance."
         )
-    source = evidence.get("currentSource")
-    if source == "administrator-confirmed":
-        required = (
-            "entraAdministratorConfirmed",
-            "applicationRegistrationConfirmed",
-            "tokenClaimEmissionConfirmed",
-            "userImpersonationScopeConfirmed",
-            "connectorPreauthorizationConfirmed",
+    selected_claim = str(evidence.get("selectedClaimName") or "")
+    candidates = list(receipt.get("candidates") or [])
+    if len(candidates) != 1 or selected_claim != candidates[0]:
+        return None, (
+            "The Entra identity handoff must identify the one selected User "
+            "Claim name from the current receipt."
         )
-        missing = [
-            field for field in required if evidence.get(field) is not True
-        ]
-        selected_claim = str(evidence.get("selectedClaimName") or "")
-        candidates = list(receipt.get("candidates") or [])
-        if missing:
-            return None, (
-                "The Entra administrator confirmation is missing: "
-                + ", ".join(missing)
-                + "."
-            )
-        if len(candidates) != 1 or selected_claim != candidates[0]:
-            return None, (
-                "The Entra administrator confirmation must identify the one "
-                "selected emitted user claim from the current handoff."
-            )
-        return evidence, None
-    if (
-        source == "historical-graph-pass"
-        and evidence.get("historicalGraphPassCompatible") is True
-        and isinstance(evidence.get("historicalGraphPassMigratedAt"), str)
-        and evidence["historicalGraphPassMigratedAt"]
-    ) or _historical_entra_graph_pass(state):
-        historical = dict(evidence)
-        historical["currentSource"] = "historical-graph-pass"
-        return historical, None
-    return None, (
-        "The current Entra source is neither a complete administrator "
-        "confirmation nor compatible historical Graph-pass evidence."
-    )
+    return evidence, None
 
 
 def _entra_setup_result(
@@ -1442,30 +1409,18 @@ def _entra_setup_result(
             "Entra User Login application setup",
             error or "The Entra administrator confirmation is missing.",
             (
-                "Have the Entra administrator confirm the application, "
-                "selected emitted claim, user_impersonation scope, and "
-                "ServiceNow connector pre-authorization for this exact "
-                "target, return the structured handoff, and record the full "
-                "administrator confirmation."
+                "Record one valid Application client ID GUID and one explicit "
+                "safe User Claim name in a current target-bound handoff."
             ),
             roles=[Role.ENTRA_ADMIN.value, Role.ESS_MAKER.value],
         )
-    source = confirmation["currentSource"]
-    if source == "historical-graph-pass":
-        result = (
-            "Compatible historical Microsoft Graph pass evidence is retained "
-            "for this target. No current Graph authentication or read was "
-            "performed; currentSource=historical-graph-pass."
-        )
-    else:
-        result = (
-            "The Entra administrator confirmed the application registration, "
-            "selected emitted claim, user_impersonation scope, and ServiceNow "
-            "connector pre-authorization for the exact target. The local "
-            "handoff binding and provenance were validated. Cloud "
-            "configuration was not queried; "
-            "currentSource=administrator-confirmed."
-        )
+    result = (
+        "The current target-bound Entra identity handoff contains one valid "
+        "Application client ID GUID and one explicit User Claim name. Binding, "
+        "provenance, and hashes are current. This Manual result does not prove "
+        "application configuration, claim emission, scope, pre-authorization, "
+        "a real token, authentication, permission, or a business result."
+    )
     handoff = _phase_handoff(admin_setup, "entra-registration")
     handoff_evidence = handoff.get("evidence")
     handoff_evidence = (
@@ -1494,11 +1449,9 @@ def _entra_setup_result(
         ),
         "bindingSha256": _hash(binding),
         "runbook": runbook,
-        "requiredConfirmations": [
-            "application-registration",
-            "emitted-claim-name",
-            "user-impersonation-scope",
-            "servicenow-connector-preauthorization",
+        "requiredValues": [
+            "application-client-id",
+            "user-claim-name",
         ],
     }
     return _result(
@@ -1511,13 +1464,11 @@ def _entra_setup_result(
             "the Maker only transports/imports the protected handoff. "
             f"Where/how: follow `{runbook}` in the Microsoft Entra admin "
             "center for the exact target app. Expected "
-            "evidence: one current target-bound non-secret handoff confirming "
-            "the application registration, selected emitted claim name, "
-            "api://<client-id>/user_impersonation scope, and Microsoft "
-            "ServiceNow connector pre-authorization. Completion: all four "
-            "confirmations, binding, provenance, timestamp, and hashes are "
-            "valid for the current target; the result remains Manual and is "
-            "never cloud/API proof."
+            "evidence: one current target-bound non-secret handoff containing "
+            "a valid Application client ID GUID and one explicit safe User "
+            "Claim name. Completion: both values, binding, provenance, "
+            "timestamp, and hashes are valid for the current target; the "
+            "result remains Manual and is never cloud/API proof."
         ),
         roles=[Role.ENTRA_ADMIN.value, Role.ESS_MAKER.value],
         evidence=evidence,
