@@ -5717,6 +5717,144 @@ def test_shared_reuse_not_now_is_stable_and_zero_write(
 
 
 @pytest.mark.parametrize(
+    "decision",
+    ("accept", "configure-separately", "not-now"),
+)
+def test_it_cli_resume_offers_compatible_hr_reuse_before_availability(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    request: pytest.FixtureRequest,
+    decision: str,
+) -> None:
+    request.addfinalizer(lambda: snow.configure_product_profile("hrsd"))
+    monkeypatch.chdir(tmp_path)
+    context, source_path, target_path = _prepare_shared_reuse_resume(
+        tmp_path
+    )
+    source_before = source_path.read_bytes()
+    target_before = target_path.read_bytes()
+    config_path = tmp_path / ".local" / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "activeAgent": "employee-self-service-hr",
+                "sentinel": "must-not-change",
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_before = config_path.read_bytes()
+    monkeypatch.setattr(snow, "load_context", lambda **_kwargs: context)
+    base = [
+        "--provider",
+        snow.ITSM_PROFILE.provider_key,
+        "--agent-slug",
+        "employee-self-service-it",
+    ]
+    resume = [
+        *base,
+        "resume-handoff",
+        "--verified-phase",
+        "preflight",
+    ]
+
+    assert snow.main(resume) == 0
+    first = json.loads(capsys.readouterr().out)
+
+    assert first["status"] == "shared-identity-reuse-required"
+    assert first["provider"] == snow.ITSM_PROFILE.provider_key
+    assert first["agentSlug"] == "employee-self-service-it"
+    assert first["transport"]["businessGroupAvailability"]["question"] is None
+    reuse = first["preActionHandoff"]
+    assert reuse["decision"] == "question-required"
+    assert reuse["candidate"]["sourceProfile"] == "hrsd"
+    assert reuse["candidate"]["sourceAgentSlug"] == (
+        "employee-self-service-hr"
+    )
+    assert [item["id"] for item in reuse["candidate"]["items"]] == [
+        "entra-registration",
+        "servicenow-oidc",
+    ]
+    assert target_path.read_bytes() == target_before
+
+    if decision == "not-now":
+        assert snow.main(resume) == 0
+        repeated = json.loads(capsys.readouterr().out)
+        assert repeated == first
+        assert target_path.read_bytes() == target_before
+    else:
+        assert snow.main(
+            [
+                *base,
+                "record-shared-reuse",
+                "--source-key",
+                reuse["candidate"]["sourceKey"],
+                "--decision",
+                "accept" if decision == "accept" else "decline",
+            ]
+        ) == 0
+        recorded = json.loads(capsys.readouterr().out)
+        assert snow.main(resume) == 0
+        next_resume = json.loads(capsys.readouterr().out)
+        if decision == "configure-separately":
+            assert recorded["decision"] == "declined"
+            assert next_resume["status"] == (
+                "business-group-availability-required"
+            )
+            assert next_resume["transport"]["businessGroupAvailability"][
+                "currentGroup"
+            ]["id"] == "entra-identity"
+            assert "preActionHandoff" not in next_resume
+        else:
+            assert recorded["reusedItems"] == [
+                "entra-registration",
+                "servicenow-oidc",
+            ]
+            assert next_resume.get("status") != (
+                "business-group-availability-required"
+            )
+            assert next_resume["transport"]["businessGroupAvailability"][
+                "question"
+            ] is None
+            saved = json.loads(target_path.read_text(encoding="utf-8"))
+            assert saved["adminSetup"]["phaseHandoffs"][
+                "entra-registration"
+            ]["status"] == "reused"
+            assert saved["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
+                "status"
+            ] == "reused"
+            assert saved["evidence"]["identityClaimCandidates"]["binding"][
+                "provider"
+            ] == snow.ITSM_PROFILE.provider_key
+            assert saved["evidence"]["identityClaimCandidates"]["binding"][
+                "agentSlug"
+            ] == "employee-self-service-it"
+            assert saved["evidence"]["identityMapping"]["binding"][
+                "agentId"
+            ] == OTHER_AGENT_ID
+            for key in (
+                "credential",
+                "agentConnection",
+                "topics",
+                "portal",
+                "test",
+            ):
+                assert key not in saved["evidence"]
+            for phase in (
+                "credential",
+                "agent-connection",
+                "topics",
+                "portal-url",
+                "test",
+            ):
+                assert saved["phases"][phase]["status"] == "pending"
+
+    assert source_path.read_bytes() == source_before
+    assert config_path.read_bytes() == config_before
+
+
+@pytest.mark.parametrize(
     ("legacy_items", "expected_decision"),
     (
         (["preflight", "credential"], "question-required"),
