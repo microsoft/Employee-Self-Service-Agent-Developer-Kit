@@ -15640,6 +15640,71 @@ def _resolve_target_realm(
                     ),
                 },
             )
+    authoritative_environment_ids: set[str] = set()
+    for source in [configuration, *realm_siblings]:
+        raw_environment_id = source.get("environmentId")
+        if raw_environment_id is None:
+            continue
+        try:
+            authoritative_environment_ids.add(
+                _normalize_inventory_environment_id(
+                    str(raw_environment_id)
+                )
+            )
+        except ValueError as exc:
+            problem = (
+                f"Native ALM returned an invalid {realm.title()} target "
+                "environment identity."
+            )
+            raise ServiceNowConnectError(
+                problem,
+                details={
+                    "realm": realm,
+                    "targetAgentId": target_agent_id,
+                    "recoveryHandoff": _target_realm_discovery_recovery(
+                        context,
+                        realm=realm,
+                        problem=problem,
+                        category="Target identity mismatch",
+                        action=(
+                            "Have the ALM owner correct the authoritative "
+                            "target environment binding. Do not infer an "
+                            "environment from its friendly name or URL."
+                        ),
+                        agent_id=target_agent_id,
+                    ),
+                },
+            ) from exc
+    if len(authoritative_environment_ids) > 1:
+        problem = (
+            f"Native ALM returned conflicting {realm.title()} target "
+            "environment identities."
+        )
+        raise ServiceNowConnectError(
+            problem,
+            details={
+                "realm": realm,
+                "targetAgentId": target_agent_id,
+                "authoritativeEnvironmentIds": sorted(
+                    authoritative_environment_ids
+                ),
+                "recoveryHandoff": _target_realm_discovery_recovery(
+                    context,
+                    realm=realm,
+                    problem=problem,
+                    category="Target identity mismatch",
+                    action=(
+                        "Have the ALM owner restore one exact target "
+                        "environment binding for this agent family."
+                    ),
+                    agent_id=target_agent_id,
+                ),
+            },
+        )
+    authoritative_environment_id = next(
+        iter(authoritative_environment_ids),
+        None,
+    )
     schema_name = str(configuration.get("schemaName") or "").strip()
     commit_sha = str(configuration.get("commitSha") or "").strip()
     expected_schema = str(context["agent"]["schema_name"])
@@ -15809,6 +15874,7 @@ def _resolve_target_realm(
         ) from exc
     matches: list[dict[str, Any]] = []
     discovery_errors: list[dict[str, Any]] = []
+    seen_inventory_environment_ids: set[str] = set()
     for environment in environments:
         raw_environment_id = environment.get("id") or environment.get("name")
         if not isinstance(raw_environment_id, str):
@@ -15819,6 +15885,33 @@ def _resolve_target_realm(
             environment_id = _normalize_inventory_environment_id(
                 raw_environment_id
             )
+            seen_inventory_environment_ids.add(environment_id)
+            if (
+                authoritative_environment_id is not None
+                and environment_id.casefold()
+                != authoritative_environment_id.casefold()
+            ):
+                continue
+            inventory_tenant_id = _inventory_tenant_id(environment)
+            authenticated_tenant_id = str(
+                uuid.UUID(context["environment"]["tenant_id"])
+            )
+            if (
+                inventory_tenant_id is not None
+                and inventory_tenant_id.casefold()
+                != authenticated_tenant_id.casefold()
+            ):
+                discovery_errors.append(
+                    {
+                        "environmentId": environment_id,
+                        "inventoryEnvironmentId": raw_environment_id,
+                        "error": "TargetTenantMismatch",
+                        "expectedTenantId": authenticated_tenant_id,
+                        "observedTenantId": inventory_tenant_id,
+                        "targetAgentId": target_agent_id,
+                    }
+                )
+                continue
             client = (
                 dev_client
                 if environment_id.casefold()
@@ -15840,10 +15933,6 @@ def _resolve_target_realm(
                 or ""
             ).strip()
             dataverse_url = _inventory_dataverse_url(environment)
-            inventory_tenant_id = _inventory_tenant_id(environment)
-            authenticated_tenant_id = str(
-                uuid.UUID(context["environment"]["tenant_id"])
-            )
             if returned_id != target_agent_id:
                 discovery_errors.append(
                     {
@@ -15910,22 +15999,6 @@ def _resolve_target_realm(
                         "environmentMetadataFields": (
                             _environment_metadata_field_paths(environment)
                         ),
-                    }
-                )
-                continue
-            if (
-                inventory_tenant_id is not None
-                and inventory_tenant_id.casefold()
-                != authenticated_tenant_id.casefold()
-            ):
-                discovery_errors.append(
-                    {
-                        "environmentId": environment_id,
-                        "inventoryEnvironmentId": raw_environment_id,
-                        "error": "TargetTenantMismatch",
-                        "expectedTenantId": authenticated_tenant_id,
-                        "observedTenantId": inventory_tenant_id,
-                        "targetAgentId": target_agent_id,
                     }
                 )
                 continue
@@ -16036,9 +16109,22 @@ def _resolve_target_realm(
             "TargetSchemaUnknown",
             "TargetDataverseUrlMissing",
             "TargetTenantMismatch",
+            "AuthoritativeTargetEnvironmentNotFound",
         }
         and row.get("statusCode") != 404
     ]
+    if (
+        authoritative_environment_id is not None
+        and authoritative_environment_id
+        not in seen_inventory_environment_ids
+    ):
+        discovery_errors.append(
+            {
+                "environmentId": authoritative_environment_id,
+                "error": "AuthoritativeTargetEnvironmentNotFound",
+                "targetAgentId": target_agent_id,
+            }
+        )
     if len(matches) != 1 or unknown_discovery_errors:
         problem = (
             f"Could not prove one exact {realm.title()} environment and agent "

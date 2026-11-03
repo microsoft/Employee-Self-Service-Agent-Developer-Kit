@@ -4553,6 +4553,149 @@ def test_target_discovery_rejects_exact_match_with_unreadable_bystander(
     assert "grant permissions" in recovery["action"]
 
 
+def test_authoritative_environment_binding_excludes_unrelated_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="itsm")
+    target_agent_id = "00000000-0000-4000-8000-000000007777"
+    unrelated_id = "00000000-0000-4000-8000-000000006666"
+    target_environment_id = "00000000-0000-4000-8000-000000008888"
+
+    class DevClient:
+        def get_realms(self, _agent_id: str) -> dict:
+            return {"routeRealm": 0, "siblingRealms": []}
+
+        def get_realm_configuration(
+            self,
+            _agent_id: str,
+            _realm: int,
+        ) -> dict:
+            return {
+                "realm": "Test",
+                "cdsBotId": target_agent_id,
+                "environmentId": target_environment_id,
+                "schemaName": f"{snow.IT_SCHEMA_NAME}_test",
+                "grsRepositoryId": "family-1",
+                "commitSha": "test-commit",
+            }
+
+    class TargetClient:
+        host = "https://target.environment.example"
+
+        def get_agent(self, _agent_id: str) -> dict:
+            return {
+                "botId": target_agent_id,
+                "realm": "test",
+                "schemaName": f"{snow.IT_SCHEMA_NAME}_test",
+            }
+
+    reads: list[str] = []
+    monkeypatch.setattr(snow, "_agentbuilder_token", lambda _context: "token")
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: DevClient(),
+    )
+    monkeypatch.setattr(
+        snow,
+        "list_environments",
+        lambda *_args, **_kwargs: [
+            {"id": unrelated_id, "displayName": "Unreadable"},
+            _target_environment(target_environment_id),
+        ],
+    )
+
+    def candidate_client(
+        _context: dict,
+        *,
+        environment_id: str,
+        **_kwargs: object,
+    ) -> object:
+        reads.append(environment_id)
+        if environment_id == unrelated_id:
+            pytest.fail(
+                "Authoritative binding must exclude unrelated candidates."
+            )
+        return TargetClient()
+
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client_for_environment",
+        candidate_client,
+    )
+
+    with snow.product_profile_context("itsm"):
+        target = snow._resolve_target_realm(context, realm="test")
+
+    assert reads == [target_environment_id]
+    assert target["environmentId"] == target_environment_id
+    assert target["agentId"] == target_agent_id
+
+
+def test_conflicting_authoritative_environment_bindings_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    target_agent_id = "00000000-0000-4000-8000-000000007777"
+
+    class DevClient:
+        def get_realms(self, _agent_id: str) -> dict:
+            return {
+                "routeRealm": 0,
+                "siblingRealms": [
+                    {
+                        "realm": "Test",
+                        "botId": target_agent_id,
+                        "grsRepositoryId": "family-1",
+                        "environmentId": (
+                            "00000000-0000-4000-8000-000000008888"
+                        ),
+                    }
+                ],
+            }
+
+        def get_realm_configuration(
+            self,
+            _agent_id: str,
+            _realm: int,
+        ) -> dict:
+            return {
+                "realm": "Test",
+                "cdsBotId": target_agent_id,
+                "environmentId": (
+                    "00000000-0000-4000-8000-000000006666"
+                ),
+                "schemaName": snow.HR_SCHEMA_NAME,
+                "grsRepositoryId": "family-1",
+                "commitSha": "test-commit",
+            }
+
+    monkeypatch.setattr(snow, "_agentbuilder_token", lambda _context: "token")
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: DevClient(),
+    )
+    monkeypatch.setattr(
+        snow,
+        "list_environments",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Conflicting authoritative bindings must block before inventory."
+        ),
+    )
+
+    with snow.product_profile_context("hrsd"):
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="conflicting Test target environment identities",
+        ):
+            snow._resolve_target_realm(context, realm="test")
+
+
 def test_target_discovery_matches_redacted_pre_http_and_missing_url_shape(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -4599,6 +4742,7 @@ def test_target_discovery_matches_redacted_pre_http_and_missing_url_shape(
 
     dev_client = DevClient()
     factory_calls: list[str] = []
+    real_factory = snow._agentbuilder_client_for_environment
     monkeypatch.setattr(snow, "_agentbuilder_token", lambda _context: "token")
     monkeypatch.setattr(
         snow,
@@ -4620,20 +4764,36 @@ def test_target_discovery_matches_redacted_pre_http_and_missing_url_shape(
             {
                 "id": source_environment_id,
                 "displayName": "Source",
-                "properties": {"linkedEnvironmentMetadata": {}},
+                "properties": {
+                    "tenantId": TENANT_ID,
+                    "linkedEnvironmentMetadata": {},
+                },
             },
         ],
+    )
+    monkeypatch.setattr(
+        snow.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            snow.socket.gaierror("not found")
+        ),
     )
 
     def candidate_client(
         _context: dict,
         *,
         environment_id: str,
-        **_kwargs: object,
+        token: str,
+        require_resolved_host: bool,
     ) -> object:
         factory_calls.append(environment_id)
         if environment_id == default_environment_id:
-            raise OSError("No supported environment host resolved")
+            return real_factory(
+                _context,
+                environment_id=environment_id,
+                token=token,
+                require_resolved_host=require_resolved_host,
+            )
         if environment_id == missing_environment_id:
             return MissingClient()
         pytest.fail("The exact current environment must reuse its bound client.")
@@ -4673,6 +4833,7 @@ def test_target_discovery_matches_redacted_pre_http_and_missing_url_shape(
         "id",
         "properties",
         "properties.linkedEnvironmentMetadata",
+        "properties.tenantId",
     ]
     recovery = details["recoveryHandoff"]
     assert recovery["category"] == (
@@ -4827,7 +4988,9 @@ def test_target_discovery_blocks_explicit_tenant_mismatch(
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client_for_environment",
-        lambda *_args, **_kwargs: client,
+        lambda *_args, **_kwargs: pytest.fail(
+            "Tenant mismatch must block before client construction."
+        ),
     )
 
     with snow.product_profile_context("hrsd"):
@@ -4889,7 +5052,9 @@ def test_target_discovery_supports_same_environment_sibling(
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client_for_environment",
-        lambda *_args, **_kwargs: client,
+        lambda *_args, **_kwargs: pytest.fail(
+            "Same-environment sibling must reuse the bound client."
+        ),
     )
 
     with snow.product_profile_context("itsm"):
@@ -5602,6 +5767,37 @@ def test_target_discovery_requires_a_resolved_environment_host(
 
     assert len(attempted) == 2
     assert all(host in str(raised.value) for host in attempted)
+
+
+def test_environment_client_factory_constructs_real_agentbuilder_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context()
+    resolved_host = (
+        "https://example.environment.api.test.powerplatform.com"
+    )
+    calls: list[tuple[str, str]] = []
+
+    def resolve(environment_id: str, ring: str) -> str:
+        calls.append((environment_id, ring))
+        return resolved_host
+
+    monkeypatch.setattr(
+        snow,
+        "_derive_resolved_environment_host",
+        resolve,
+    )
+    client = snow._agentbuilder_client_for_environment(
+        context,
+        environment_id=ENVIRONMENT_ID,
+        token="token",
+        require_resolved_host=True,
+    )
+
+    assert isinstance(client, snow.AgentBuilderClient)
+    assert client.host == resolved_host
+    assert client.tenant_id == TENANT_ID
+    assert calls == [(ENVIRONMENT_ID, "test")]
 
 
 @pytest.mark.parametrize(
