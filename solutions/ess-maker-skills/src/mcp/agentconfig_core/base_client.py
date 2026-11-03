@@ -36,16 +36,20 @@ import os
 import random
 import sys
 import threading
+import time
 import urllib.parse
 import uuid
 import webbrowser
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 
 from _tenant_context import configured_tenant_id
 from _token_cache import create_token_cache
 import operation_telemetry
+
+if TYPE_CHECKING:
+    from adk_telemetry import HttpRequestOutcome
 
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -406,6 +410,52 @@ class AgentConfigBaseClient:
             if self._client is not None:
                 self._client.headers["Authorization"] = f"Bearer {token}"
 
+    async def _send_request(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        path: str,
+        *,
+        retry: bool,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        operation_telemetry.http_attempt(retry=retry)
+        operation = operation_telemetry.current_operation.get()
+        if operation is None:
+            return await client.request(method, path, **kwargs)
+
+        # A local copy avoids leaking an invocation's ID into concurrent requests.
+        headers = httpx.Headers(kwargs.get("headers"))
+        http_request_id = str(uuid.uuid4())
+        headers["client-request-id"] = http_request_id
+        kwargs["headers"] = headers
+        attempt_number = operation.http_attempt_count
+        outcome: HttpRequestOutcome = "exception"
+        status = None
+        started_at = time.monotonic()
+        try:
+            response = await client.request(method, path, **kwargs)
+            status = response.status_code
+            outcome = "success" if 200 <= status < 300 else "http_error"
+            return response
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        except httpx.RequestError:
+            outcome = "network_error"
+            raise
+        finally:
+            operation.complete_http_request(
+                http_request_id=http_request_id,
+                http_attempt_number=attempt_number,
+                http_method=method.upper() if method.upper() in {
+                    "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH",
+                } else "OTHER",
+                outcome=outcome,
+                latency_ms=int((time.monotonic() - started_at) * 1000),
+                http_status=status,
+            )
+
     async def _request(
         self,
         method: str,
@@ -448,15 +498,17 @@ class AgentConfigBaseClient:
             client = await self._ensure_client()
             request_token = self._token
             try:
-                operation_telemetry.http_attempt(retry=attempt > 0)
-                response = await client.request(method, path, **kwargs)
+                response = await self._send_request(
+                    client, method, path, retry=attempt > 0, **kwargs,
+                )
                 operation_telemetry.http_response(response.status_code)
                 if response.status_code == 401 and not refreshed:
                     await response.aclose()
                     await self._refresh_token(request_token)
                     refreshed = True
-                    operation_telemetry.http_attempt(retry=True)
-                    response = await client.request(method, path, **kwargs)
+                    response = await self._send_request(
+                        client, method, path, retry=True, **kwargs,
+                    )
                     operation_telemetry.http_response(response.status_code)
                 if response.status_code == 429 or response.status_code in (
                     502,

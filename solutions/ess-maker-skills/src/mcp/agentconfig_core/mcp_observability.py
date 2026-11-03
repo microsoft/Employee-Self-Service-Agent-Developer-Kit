@@ -16,7 +16,13 @@ from mcp.types import CallToolResult, ContentBlock, TextContent, ToolAnnotations
 from pydantic import ValidationError
 
 from base_client import AgentConfigApiError
-from operation_telemetry import Operation, current_operation
+from operation_telemetry import (
+    CLIENT_REQUEST_ID,
+    CORRELATION_ID,
+    Operation,
+    current_operation,
+    valid_correlation_id,
+)
 
 if TYPE_CHECKING:
     from adk_telemetry import McpResultKind
@@ -74,6 +80,18 @@ class ObservedFastMCP(FastMCP):
             return await super().call_tool(name, arguments)
 
         operation = Operation(self._telemetry_server_name)
+        try:
+            meta = self.get_context().request_context.meta
+        except (LookupError, ValueError):
+            # Direct Python calls have no MCP request context.
+            meta = None
+        if meta is not None:
+            fields = meta.model_extra or {}
+            operation.correlation_id = (
+                valid_correlation_id(fields.get(CORRELATION_ID))
+                or operation.server_operation_id
+            )
+            operation.client_request_id = valid_correlation_id(fields.get(CLIENT_REQUEST_ID))
         token = current_operation.set(operation)
         result_kind: McpResultKind = "exception"
         registry_resolved = False

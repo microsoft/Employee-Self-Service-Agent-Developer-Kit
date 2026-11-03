@@ -3253,13 +3253,13 @@ def test_emit_flightcheck_error_carries_connector(captured_post, monkeypatch):
 
 def test_schema_version_bump_records_agent_type_dim():
     # agent_type is added in 1.7.0 so cubes can version-gate the CA/DA split.
-    assert adk.SCHEMA_VERSION == "1.8.0"
+    assert adk.SCHEMA_VERSION == "1.9.0"
 
 
 @pytest.mark.parametrize("outcome", ["success", "failure"])
 def test_legacy_api_call_shape_is_exactly_compatible(monkeypatch, outcome):
     captured = []
-    common = {"schema_version": "1.8.0", "agent_type": "declarative_agent"}
+    common = {"schema_version": adk.SCHEMA_VERSION, "agent_type": "declarative_agent"}
     monkeypatch.setattr(adk, "get_session", lambda surface: ("session", False))
     monkeypatch.setattr(adk, "common_dimensions", lambda *args, **kwargs: dict(common))
     monkeypatch.setattr(
@@ -3291,6 +3291,8 @@ def test_mcp_optional_projection_preserves_safe_values_and_identity(captured_pos
     adk.emit_api_call(
         api_endpoint="registered_business_tool", mcp_server="code-owned-server",
         server_operation_id="7d556dce-36c8-45db-a6cd-b23d3c091898",
+        correlation_id="6f7c8f9c-1234-4abc-9def-0123456789ab",
+        client_request_id="7d556dce-36c8-45db-a6cd-b23d3c091899",
         result_kind="success", tenant_id="", tenant_name="",
         http_attempt_count=0, retry_count=0, auth_refresh_count=0,
         retry_exhausted=False,
@@ -3305,6 +3307,8 @@ def test_mcp_optional_projection_preserves_safe_values_and_identity(captured_pos
     assert row["tenant_id"] == row["tenant_name"] == ""
     assert row["tenant_class"] == "unknown"
     assert row["mcp_server"] == "code-owned-server"
+    assert row["correlation_id"] == "6f7c8f9c-1234-4abc-9def-0123456789ab"
+    assert row["client_request_id"] == "7d556dce-36c8-45db-a6cd-b23d3c091899"
     assert row["quick_link_count"] == 3
     assert row["prompt_count"] == 5
     assert row["category_count"] == 2
@@ -3317,6 +3321,104 @@ def test_mcp_optional_projection_preserves_safe_values_and_identity(captured_pos
     assert "write_state" not in row
     assert "agent_type" in row
     assert "toolkit_git_sha" in row
+
+
+def _http_attempt_fields():
+    return {
+        "mcp_server": "test-server",
+        "api_endpoint": "registered_tool",
+        "correlation_id": "6f7c8f9c-1234-4abc-9def-0123456789ab",
+        "client_request_id": "7d556dce-36c8-45db-a6cd-b23d3c091897",
+        "server_operation_id": "7d556dce-36c8-45db-a6cd-b23d3c091898",
+        "http_request_id": "7d556dce-36c8-45db-a6cd-b23d3c091899",
+        "http_attempt_number": 2,
+        "http_method": "POST",
+        "outcome": "http_error",
+        "latency_ms": 12,
+        "http_status": 429,
+    }
+
+
+@pytest.mark.parametrize("optional", [False, True])
+def test_http_attempt_event_exact_projection(monkeypatch, optional):
+    captured = []
+    fields = _http_attempt_fields()
+    if not optional:
+        fields.pop("client_request_id")
+        fields.pop("http_status")
+    monkeypatch.setattr(adk, "get_session", lambda surface: ("session", False))
+    monkeypatch.setattr(adk, "common_dimensions", lambda *args, **kwargs: {})
+    monkeypatch.setattr(adk, "_emit", lambda name, data, **kwargs: captured.append((name, data)))
+    adk.emit_http_request(**fields)
+    assert captured == [(adk.EVENT_HTTP_REQUEST, fields)]
+
+
+def test_http_attempt_opt_out_skips_session_and_event_construction(monkeypatch, captured_post):
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Opt-out must not construct an HTTP event")
+
+    monkeypatch.setattr(adk, "get_session", unexpected)
+    monkeypatch.setattr(adk, "common_dimensions", unexpected)
+    adk.emit_http_request(**_http_attempt_fields(), block=True)
+    assert captured_post == []
+
+
+def test_http_attempt_identity_survives_buffer_redelivery(monkeypatch):
+    fields = _http_attempt_fields()
+    monkeypatch.setattr(_fc, "_post", lambda *args: 503)
+    adk.emit_http_request(**fields, block=True)
+    with open(adk.BUFFER_PATH, encoding="utf-8") as handle:
+        buffered = [json.loads(line) for line in handle]
+    attempt, = [event for event in buffered if event["name"] == adk.EVENT_HTTP_REQUEST]
+    assert {key: attempt["data"][key] for key in fields} == fields
+    redelivered = []
+    monkeypatch.setattr(_fc, "_post", lambda ikey, events: redelivered.extend(events) or 200)
+    adk._buffer_flush(adk.resolve_ikey()[0])
+    assert redelivered == buffered
+    assert [event for event in redelivered if event["name"] == adk.EVENT_HTTP_REQUEST] == [attempt]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, "", 42, [], {}, "customer text", "6f7c8f9c12344abc9def0123456789ab",
+     "{6f7c8f9c-1234-4abc-9def-0123456789ab}", "6f7c8f9c-1234-4abc-9def-0123456789ab\n"],
+)
+def test_optional_bridge_correlation_omits_malformed_ids(value, captured_post):
+    envelope = _client_events_envelope()
+    envelope["events"][0].update(correlationId=value, requestId=value, serverOperationId=value)
+    result = adk.report_client_events(envelope, block=True)
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    rows = [
+        event["data"] for _, batch in captured_post for event in batch
+        if event["name"] == adk.EVENT_CLIENT
+    ]
+    assert len(rows) == 2
+    for row in rows:
+        assert not {"client_root_correlation_id", "client_request_id", "client_server_operation_id"} & row.keys()
+
+
+def test_bridge_correlation_is_verbatim_but_properties_remain_scrubbed(captured_post):
+    fields = _http_attempt_fields()
+    envelope = _client_events_envelope()
+    envelope["events"][0].update(
+        operationId=fields["correlation_id"],
+        correlationId=fields["correlation_id"],
+        requestId=fields["client_request_id"],
+        serverOperationId=fields["server_operation_id"],
+        properties={"id": fields["client_request_id"]},
+    )
+    assert adk.CLIENT_EVENTS_SCHEMA_VERSION == 2
+    assert adk.report_client_events(envelope, block=True)["status"] == "accepted"
+    row = next(
+        event["data"] for _, batch in captured_post for event in batch
+        if event["name"] == adk.EVENT_CLIENT
+    )
+    assert row["client_operation_id"] == row["client_root_correlation_id"] == fields["correlation_id"]
+    assert row["client_request_id"] == fields["client_request_id"]
+    assert row["client_server_operation_id"] == fields["server_operation_id"]
+    assert json.loads(row["client_properties"]) == {"id": "<guid>"}
 
 
 def test_mcp_operation_id_survives_buffer_redelivery(monkeypatch, captured_post):
