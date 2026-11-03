@@ -15409,6 +15409,23 @@ def _inventory_tenant_id(environment: dict[str, Any]) -> str | None:
     return None
 
 
+def _environment_metadata_field_paths(
+    environment: dict[str, Any],
+) -> list[str]:
+    paths: list[str] = []
+
+    def collect(value: Any, prefix: str, depth: int) -> None:
+        if not isinstance(value, dict) or depth > 3:
+            return
+        for key in sorted(value):
+            path = f"{prefix}.{key}" if prefix else str(key)
+            paths.append(path)
+            collect(value[key], path, depth + 1)
+
+    collect(environment, "", 0)
+    return paths
+
+
 def _transport_error_evidence(exc: BaseException) -> dict[str, Any]:
     chain: list[BaseException] = []
     current: BaseException | None = exc
@@ -15802,12 +15819,17 @@ def _resolve_target_realm(
             environment_id = _normalize_inventory_environment_id(
                 raw_environment_id
             )
-            client = _without_automatic_retries(
-                _agentbuilder_client_for_environment(
-                    context,
-                    environment_id=environment_id,
-                    token=token,
-                    require_resolved_host=True,
+            client = (
+                dev_client
+                if environment_id.casefold()
+                == str(context["environment"]["id"]).casefold()
+                else _without_automatic_retries(
+                    _agentbuilder_client_for_environment(
+                        context,
+                        environment_id=environment_id,
+                        token=token,
+                        require_resolved_host=True,
+                    )
                 )
             )
             agent = client.get_agent(target_agent_id)
@@ -15885,6 +15907,9 @@ def _resolve_target_realm(
                         "inventoryEnvironmentId": raw_environment_id,
                         "error": "TargetDataverseUrlMissing",
                         "targetAgentId": target_agent_id,
+                        "environmentMetadataFields": (
+                            _environment_metadata_field_paths(environment)
+                        ),
                     }
                 )
                 continue
@@ -16014,7 +16039,7 @@ def _resolve_target_realm(
         }
         and row.get("statusCode") != 404
     ]
-    if len(matches) != 1:
+    if len(matches) != 1 or unknown_discovery_errors:
         problem = (
             f"Could not prove one exact {realm.title()} environment and agent "
             "target from native ALM and environment inventory."
@@ -16038,15 +16063,42 @@ def _resolve_target_realm(
         ]
         read_errors = unknown_discovery_errors
         if read_errors:
-            recovery["category"] = "Candidate environment read unavailable"
-            recovery["owner"] = "Power Platform environment owner"
-            recovery["action"] = (
-                "Restore the supported AgentBuilder read endpoint for each "
-                "unreadable candidate environment, then rerun only target "
-                "discovery. Do not repair ALM binding, deploy a different "
-                "agent, or grant permissions based only on an endpoint or "
-                "network failure."
-            )
+            pre_http_errors = [
+                row
+                for row in read_errors
+                if row.get("requestHost") is None
+                and row.get("error") in {"OSError", "ValueError"}
+            ]
+            if len(pre_http_errors) == len(read_errors):
+                recovery["category"] = (
+                    "AgentBuilder endpoint resolution unavailable"
+                )
+                recovery["owner"] = (
+                    "ESS kit / Power Platform API integration owner"
+                )
+                recovery["action"] = (
+                    "Verify the environment inventory identifier and "
+                    "supported AgentBuilder host-resolution contract before "
+                    "any HTTP request. If the derived contract is correct, "
+                    "restore DNS/network resolution for that endpoint, then "
+                    "rerun only target discovery. Do not grant permissions or "
+                    "change ALM binding without request evidence."
+                )
+            else:
+                recovery["category"] = (
+                    "Candidate environment read unavailable"
+                )
+                recovery["owner"] = (
+                    "ESS kit / Power Platform API integration owner with the "
+                    "Power Platform environment owner"
+                )
+                recovery["action"] = (
+                    "Restore the supported AgentBuilder read path for every "
+                    "unreadable candidate, then rerun only target discovery. "
+                    "Do not repair ALM binding, deploy a different agent, or "
+                    "grant permissions based only on an endpoint or network "
+                    "failure."
+                )
             recovery["values"] = (
                 "Unreadable candidate lookups: "
                 + "; ".join(

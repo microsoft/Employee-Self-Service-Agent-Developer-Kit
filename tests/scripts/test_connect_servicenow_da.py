@@ -3985,24 +3985,22 @@ def test_validate_target_realm_blocks_when_exact_environment_is_unproven(
     )
 
     with snow.product_profile_context("hrsd"):
-        with pytest.raises(
-            snow.ServiceNowConnectError,
-            match="Could not prove one exact Test environment",
-        ) as raised:
-            snow.validate_realm(
-                context,
-                realm="test",
-                target_instance="target-snow",
-                target_client_id=APP_CLIENT_ID,
-            )
+        result = snow.validate_realm(
+            context,
+            realm="test",
+            target_instance="target-snow",
+            target_client_id=APP_CLIENT_ID,
+        )
 
-    assert raised.value.details["matchCount"] == 0
-    assert raised.value.details["targetAbsenceProven"] is True
-    _assert_recovery_handoff(raised.value.details["recoveryHandoff"])
-    recovery = raised.value.details["recoveryHandoff"]
+    assert result["status"] == "deployment-required"
+    details = result["targetDiscovery"]["details"]
+    assert details["matchCount"] == 0
+    assert details["targetAbsenceProven"] is True
+    _assert_recovery_handoff(details["recoveryHandoff"])
+    recovery = details["recoveryHandoff"]
     assert recovery["category"] == "Target agent not found"
     assert "does not by itself prove missing permission" in recovery["action"]
-    discovery_error = raised.value.details["discoveryErrors"][0]
+    discovery_error = details["discoveryErrors"][0]
     assert discovery_error["statusCode"] == 404
     assert discovery_error["requestPath"].endswith(
         "/00000000-0000-4000-8000-000000007777"
@@ -4329,6 +4327,12 @@ def test_target_discovery_normalizes_default_ids_and_preserves_unknown_target(
                 "commitSha": "test-commit",
             }
 
+        def get_agent(self, _agent_id: str) -> dict:
+            return {
+                "botId": target_agent_id,
+                "realm": "dev",
+            }
+
     class CandidateClient:
         def __init__(self, outcome: str, environment_id: str) -> None:
             self.outcome = outcome
@@ -4438,7 +4442,7 @@ def test_target_discovery_normalizes_default_ids_and_preserves_unknown_target(
     assert "Deploy to Test" not in recovery["message"]
 
 
-def test_target_discovery_accepts_exact_native_match_with_unreadable_bystander(
+def test_target_discovery_rejects_exact_match_with_unreadable_bystander(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -4518,13 +4522,15 @@ def test_target_discovery_accepts_exact_native_match_with_unreadable_bystander(
     )
 
     with snow.product_profile_context("itsm"):
-        target = snow._resolve_target_realm(context, realm="test")
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="Could not prove one exact Test environment",
+        ) as raised:
+            snow._resolve_target_realm(context, realm="test")
 
-    assert target["environmentId"] == matched_guid
-    assert target["agentId"] == target_agent_id
-    assert target["schemaName"] == f"{snow.IT_SCHEMA_NAME}_test"
-    assert target["almFamilyId"] == "family-1"
-    assert target["discoveryWarnings"] == [
+    assert raised.value.details["matchCount"] == 1
+    assert raised.value.details["targetAbsenceProven"] is False
+    assert raised.value.details["discoveryErrors"] == [
         {
             "environmentId": unreadable_guid,
             "inventoryEnvironmentId": f"Default-{unreadable_guid}",
@@ -4542,6 +4548,141 @@ def test_target_discovery_accepts_exact_native_match_with_unreadable_bystander(
             "detail": "candidate endpoint unavailable",
         }
     ]
+    recovery = raised.value.details["recoveryHandoff"]
+    assert recovery["category"] == "Candidate environment read unavailable"
+    assert "grant permissions" in recovery["action"]
+
+
+def test_target_discovery_matches_redacted_pre_http_and_missing_url_shape(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    target_agent_id = "00000000-0000-4000-8000-000000007777"
+    default_environment_id = context["environment"]["tenant_id"]
+    missing_environment_id = "00000000-0000-4000-8000-000000006666"
+    source_environment_id = context["environment"]["id"]
+    target_reads = 0
+
+    class DevClient:
+        def get_realms(self, _agent_id: str) -> dict:
+            return {"routeRealm": 0, "siblingRealms": []}
+
+        def get_realm_configuration(
+            self,
+            _agent_id: str,
+            _realm: int,
+        ) -> dict:
+            return {
+                "realm": "Test",
+                "cdsBotId": target_agent_id,
+                "schemaName": snow.HR_SCHEMA_NAME,
+                "grsRepositoryId": "family-1",
+                "commitSha": "test-commit",
+            }
+
+        def get_agent(self, _agent_id: str) -> dict:
+            nonlocal target_reads
+            target_reads += 1
+            return {
+                "botId": target_agent_id,
+                "realm": "test",
+                "schemaName": snow.HR_SCHEMA_NAME,
+            }
+
+    class MissingClient:
+        host = "https://missing.environment.example"
+
+        def get_agent(self, _agent_id: str) -> dict:
+            raise snow.AgentBuilderHTTPError("Direct agent", 404)
+
+    dev_client = DevClient()
+    factory_calls: list[str] = []
+    monkeypatch.setattr(snow, "_agentbuilder_token", lambda _context: "token")
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: dev_client,
+    )
+    monkeypatch.setattr(
+        snow,
+        "list_environments",
+        lambda *_args, **_kwargs: [
+            {
+                "id": f"Default-{default_environment_id}",
+                "displayName": "Default",
+            },
+            {
+                "id": missing_environment_id,
+                "displayName": "Missing",
+            },
+            {
+                "id": source_environment_id,
+                "displayName": "Source",
+                "properties": {"linkedEnvironmentMetadata": {}},
+            },
+        ],
+    )
+
+    def candidate_client(
+        _context: dict,
+        *,
+        environment_id: str,
+        **_kwargs: object,
+    ) -> object:
+        factory_calls.append(environment_id)
+        if environment_id == default_environment_id:
+            raise OSError("No supported environment host resolved")
+        if environment_id == missing_environment_id:
+            return MissingClient()
+        pytest.fail("The exact current environment must reuse its bound client.")
+
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client_for_environment",
+        candidate_client,
+    )
+
+    with snow.product_profile_context("hrsd"):
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="Could not prove one exact Test environment",
+        ) as raised:
+            snow._resolve_target_realm(context, realm="test")
+
+    assert factory_calls == [
+        default_environment_id,
+        missing_environment_id,
+    ]
+    assert target_reads == 1
+    details = raised.value.details
+    assert details["matchCount"] == 0
+    assert details["targetAbsenceProven"] is False
+    errors = details["discoveryErrors"]
+    assert [row["error"] for row in errors] == [
+        "OSError",
+        "AgentBuilderHTTPError",
+        "TargetDataverseUrlMissing",
+    ]
+    assert errors[0]["requestHost"] is None
+    assert errors[0]["transportCategory"] == "os-transport"
+    assert errors[1]["statusCode"] == 404
+    assert errors[2]["environmentMetadataFields"] == [
+        "displayName",
+        "id",
+        "properties",
+        "properties.linkedEnvironmentMetadata",
+    ]
+    recovery = details["recoveryHandoff"]
+    assert recovery["category"] == (
+        "AgentBuilder endpoint resolution unavailable"
+    )
+    assert recovery["owner"] == (
+        "ESS kit / Power Platform API integration owner"
+    )
+    assert "before any HTTP request" in recovery["action"]
+    assert "Do not grant permissions" in recovery["action"]
 
 
 def test_target_discovery_requires_dataverse_url_for_exact_match(
@@ -4604,8 +4745,39 @@ def test_target_discovery_requires_dataverse_url_for_exact_match(
             "inventoryEnvironmentId": target_environment_id,
             "error": "TargetDataverseUrlMissing",
             "targetAgentId": target_agent_id,
+            "environmentMetadataFields": ["id"],
         }
     ]
+
+
+@pytest.mark.parametrize(
+    "environment",
+    (
+        {"instanceUrl": "https://org.crm.dynamics.com/"},
+        {"instanceApiUrl": "https://org.api.crm.dynamics.com"},
+        {
+            "properties": {
+                "linkedEnvironmentMetadata": {
+                    "instanceUrl": "https://org.crm.dynamics.com/",
+                }
+            }
+        },
+        {
+            "properties": {
+                "linkedEnvironmentMetadata": {
+                    "instanceApiUrl": "https://org.api.crm.dynamics.com",
+                }
+            }
+        },
+    ),
+)
+def test_inventory_dataverse_url_accepts_supported_shapes(
+    environment: dict,
+) -> None:
+    assert snow._inventory_dataverse_url(environment) in {
+        "https://org.crm.dynamics.com",
+        "https://org.api.crm.dynamics.com",
+    }
 
 
 def test_target_discovery_blocks_explicit_tenant_mismatch(
@@ -20269,6 +20441,27 @@ def test_target_realm_remains_outside_dev_business_group_gates(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     context, _state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    monkeypatch.setattr(
+        snow,
+        "_resolve_target_realm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            snow.ServiceNowConnectError(
+                "target missing",
+                details={
+                    "realm": "test",
+                    "targetAgentId": OTHER_AGENT_ID,
+                    "matchCount": 0,
+                    "targetAbsenceProven": True,
+                    "discoveryErrors": [
+                        {
+                            "environmentId": ENVIRONMENT_ID,
+                            "statusCode": 404,
+                        }
+                    ],
+                },
+            )
+        ),
+    )
     with snow.product_profile_context("hrsd"):
         result = snow.validate_realm(
             context,
