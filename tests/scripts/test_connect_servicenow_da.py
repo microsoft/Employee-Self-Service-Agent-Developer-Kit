@@ -4919,7 +4919,7 @@ def test_target_discovery_requires_dataverse_url_for_exact_match(
 @pytest.mark.parametrize(
     "environment",
     (
-        {"url": "https://org.cached.crm.dynamics.com/"},
+        {"url": "https://orgcached.crm.dynamics.com/"},
         {"instanceUrl": "https://org.crm.dynamics.com/"},
         {"instanceApiUrl": "https://org.api.crm.dynamics.com"},
         {
@@ -4942,10 +4942,46 @@ def test_inventory_dataverse_url_accepts_supported_shapes(
     environment: dict,
 ) -> None:
     assert snow._inventory_dataverse_url(environment) in {
-        "https://org.cached.crm.dynamics.com",
+        "https://orgcached.crm.dynamics.com",
         "https://org.crm.dynamics.com",
         "https://org.api.crm.dynamics.com",
     }
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "https://org.crm.dynamics.com",
+        "https://org.api.crm4.dynamics.com",
+        "https://org.crm.dynamics.cn",
+        "https://org.api.crm.microsoftdynamics.us",
+        "https://org.crm.microsoftdynamics.de",
+    ),
+)
+def test_inventory_dataverse_url_accepts_known_cloud_hosts(
+    url: str,
+) -> None:
+    assert snow._inventory_dataverse_url({"url": url}) == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "https://api.powerplatform.com",
+        "https://example.environment.api.powerplatform.com",
+        "https://api.workday.com",
+        "https://dev123.service-now.com",
+        "https://example.com",
+        "http://org.crm.dynamics.com",
+        "https://org.crm.dynamics.com/path",
+        "https://org.crm.dynamics.com?query=1",
+        "not-a-url",
+    ),
+)
+def test_inventory_generic_url_rejects_non_dataverse_hosts(
+    url: str,
+) -> None:
+    assert snow._inventory_dataverse_url({"url": url}) is None
 
 
 @pytest.mark.parametrize(
@@ -4965,7 +5001,7 @@ def test_inventory_dataverse_url_accepts_supported_shapes(
                     }
                 },
             },
-            "https://preferred.crm.dynamics.com",
+            "https://instance.crm.dynamics.com",
         ),
         (
             {
@@ -5013,6 +5049,27 @@ def test_inventory_dataverse_url_precedence_and_validation(
     expected: str | None,
 ) -> None:
     assert snow._inventory_dataverse_url(environment) == expected
+
+
+def test_inventory_dataverse_url_records_source_path() -> None:
+    strong = snow._inventory_dataverse_url_evidence(
+        {
+            "instanceUrl": "https://strong.crm.dynamics.com",
+            "url": "https://generic.crm.dynamics.com",
+        }
+    )
+    generic = snow._inventory_dataverse_url_evidence(
+        {"url": "https://generic.crm.dynamics.com"}
+    )
+
+    assert strong == {
+        "url": "https://strong.crm.dynamics.com",
+        "sourcePath": "instanceUrl",
+    }
+    assert generic == {
+        "url": "https://generic.crm.dynamics.com",
+        "sourcePath": "url",
+    }
 
 
 def test_target_discovery_blocks_explicit_tenant_mismatch(
@@ -5144,6 +5201,7 @@ def test_target_discovery_supports_same_environment_sibling(
         "authenticated-environment-inventory"
     )
     assert target["dataverseUrl"] == "https://source.crm.dynamics.com"
+    assert target["dataverseUrlSource"] == "url"
 
 
 def test_prod_requires_completed_test_realm_before_promotion(

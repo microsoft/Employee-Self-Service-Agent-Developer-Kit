@@ -15370,31 +15370,61 @@ def _normalize_inventory_environment_id(value: str) -> str:
     return str(uuid.UUID(candidate))
 
 
-def _inventory_dataverse_url(environment: dict[str, Any]) -> str | None:
-    """Return the first valid Dataverse URL from supported inventory aliases.
+_DATAVERSE_HOST = re.compile(
+    r"^[a-z0-9-]+(?:\.api)?\.crm[0-9]*\."
+    r"(?:dynamics\.(?:com|cn)|microsoftdynamics\.(?:us|de))$",
+    re.IGNORECASE,
+)
 
-    The cached top-level ``url`` alias takes precedence. Existing ServiceNow
-    alias order remains unchanged after it.
-    """
+
+def _inventory_dataverse_url_evidence(
+    environment: dict[str, Any],
+) -> dict[str, str] | None:
+    """Return a semantically valid Dataverse URL and inventory source path."""
     properties = environment.get("properties")
     properties = properties if isinstance(properties, dict) else {}
     linked = properties.get("linkedEnvironmentMetadata")
     linked = linked if isinstance(linked, dict) else {}
     candidates = (
-        environment.get("url"),
-        environment.get("instanceUrl"),
-        environment.get("instanceApiUrl"),
-        linked.get("instanceUrl"),
-        linked.get("instanceApiUrl"),
+        ("instanceUrl", environment.get("instanceUrl")),
+        ("instanceApiUrl", environment.get("instanceApiUrl")),
+        (
+            "properties.linkedEnvironmentMetadata.instanceUrl",
+            linked.get("instanceUrl"),
+        ),
+        (
+            "properties.linkedEnvironmentMetadata.instanceApiUrl",
+            linked.get("instanceApiUrl"),
+        ),
+        ("url", environment.get("url")),
     )
-    for candidate in candidates:
+    for source_path, candidate in candidates:
         if not isinstance(candidate, str) or not candidate.strip():
             continue
         normalized = candidate.strip().rstrip("/")
         parsed = urlparse(normalized)
-        if parsed.scheme == "https" and parsed.hostname:
-            return normalized
+        hostname = (parsed.hostname or "").casefold()
+        if (
+            parsed.scheme == "https"
+            and not parsed.username
+            and not parsed.password
+            and parsed.port in (None, 443)
+            and parsed.path in ("", "/")
+            and not parsed.params
+            and not parsed.query
+            and not parsed.fragment
+            and _DATAVERSE_HOST.fullmatch(hostname)
+        ):
+            return {
+                "url": normalized,
+                "sourcePath": source_path,
+            }
     return None
+
+
+def _inventory_dataverse_url(environment: dict[str, Any]) -> str | None:
+    evidence = _inventory_dataverse_url_evidence(environment)
+    return evidence["url"] if evidence is not None else None
 
 
 def _inventory_tenant_id(environment: dict[str, Any]) -> str | None:
@@ -15938,7 +15968,14 @@ def _resolve_target_realm(
                 or agent.get("schema_name")
                 or ""
             ).strip()
-            dataverse_url = _inventory_dataverse_url(environment)
+            dataverse_evidence = _inventory_dataverse_url_evidence(
+                environment
+            )
+            dataverse_url = (
+                dataverse_evidence["url"]
+                if dataverse_evidence is not None
+                else None
+            )
             if returned_id != target_agent_id:
                 discovery_errors.append(
                     {
@@ -16027,6 +16064,7 @@ def _resolve_target_realm(
                         else "authenticated-environment-inventory"
                     ),
                     "dataverseUrl": dataverse_url,
+                    "dataverseUrlSource": dataverse_evidence["sourcePath"],
                     "sameEnvironmentAsDev": (
                         environment_id.casefold()
                         == str(context["environment"]["id"]).casefold()
@@ -18136,6 +18174,7 @@ def validate_realm(
         "targetAgentId": target["agentId"],
         "targetEnvironmentId": target["environmentId"],
         "targetDataverseUrl": target["dataverseUrl"],
+        "targetDataverseUrlSource": target["dataverseUrlSource"],
         "targetTenantId": target["tenantId"],
         "almFamilyId": target["almFamilyId"],
         "targetCommitSha": target["commitSha"],
