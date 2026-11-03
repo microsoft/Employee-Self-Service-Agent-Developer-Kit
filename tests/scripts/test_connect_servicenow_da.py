@@ -4885,7 +4885,12 @@ def test_target_discovery_requires_dataverse_url_for_exact_match(
     monkeypatch.setattr(
         snow,
         "list_environments",
-        lambda *_args, **_kwargs: [{"id": target_environment_id}],
+        lambda *_args, **_kwargs: [
+            {
+                "id": target_environment_id,
+                "url": "http://insecure.crm.dynamics.com",
+            }
+        ],
     )
     monkeypatch.setattr(
         snow,
@@ -4906,7 +4911,7 @@ def test_target_discovery_requires_dataverse_url_for_exact_match(
             "inventoryEnvironmentId": target_environment_id,
             "error": "TargetDataverseUrlMissing",
             "targetAgentId": target_agent_id,
-            "environmentMetadataFields": ["id"],
+            "environmentMetadataFields": ["id", "url"],
         }
     ]
 
@@ -4914,6 +4919,7 @@ def test_target_discovery_requires_dataverse_url_for_exact_match(
 @pytest.mark.parametrize(
     "environment",
     (
+        {"url": "https://org.cached.crm.dynamics.com/"},
         {"instanceUrl": "https://org.crm.dynamics.com/"},
         {"instanceApiUrl": "https://org.api.crm.dynamics.com"},
         {
@@ -4936,9 +4942,77 @@ def test_inventory_dataverse_url_accepts_supported_shapes(
     environment: dict,
 ) -> None:
     assert snow._inventory_dataverse_url(environment) in {
+        "https://org.cached.crm.dynamics.com",
         "https://org.crm.dynamics.com",
         "https://org.api.crm.dynamics.com",
     }
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    (
+        (
+            {
+                "url": "https://preferred.crm.dynamics.com/",
+                "instanceUrl": "https://instance.crm.dynamics.com/",
+                "instanceApiUrl": "https://api.crm.dynamics.com",
+                "properties": {
+                    "linkedEnvironmentMetadata": {
+                        "instanceUrl": "https://linked.crm.dynamics.com/",
+                        "instanceApiUrl": (
+                            "https://linked-api.crm.dynamics.com"
+                        ),
+                    }
+                },
+            },
+            "https://preferred.crm.dynamics.com",
+        ),
+        (
+            {
+                "url": "http://insecure.crm.dynamics.com",
+                "instanceUrl": "https://instance.crm.dynamics.com/",
+            },
+            "https://instance.crm.dynamics.com",
+        ),
+        (
+            {
+                "instanceUrl": "https://instance.crm.dynamics.com/",
+                "instanceApiUrl": "https://api.crm.dynamics.com",
+            },
+            "https://instance.crm.dynamics.com",
+        ),
+        (
+            {
+                "properties": {
+                    "linkedEnvironmentMetadata": {
+                        "instanceUrl": "https://linked.crm.dynamics.com/",
+                        "instanceApiUrl": (
+                            "https://linked-api.crm.dynamics.com"
+                        ),
+                    }
+                },
+            },
+            "https://linked.crm.dynamics.com",
+        ),
+        (
+            {
+                "url": "not-a-url",
+                "instanceUrl": "ftp://invalid.example",
+                "properties": {
+                    "linkedEnvironmentMetadata": {
+                        "instanceApiUrl": "",
+                    }
+                },
+            },
+            None,
+        ),
+    ),
+)
+def test_inventory_dataverse_url_precedence_and_validation(
+    environment: dict,
+    expected: str | None,
+) -> None:
+    assert snow._inventory_dataverse_url(environment) == expected
 
 
 def test_target_discovery_blocks_explicit_tenant_mismatch(
@@ -5046,7 +5120,10 @@ def test_target_discovery_supports_same_environment_sibling(
         snow,
         "list_environments",
         lambda *_args, **_kwargs: [
-            _target_environment(context["environment"]["id"])
+            {
+                "id": context["environment"]["id"],
+                "url": "https://source.crm.dynamics.com/",
+            }
         ],
     )
     monkeypatch.setattr(
@@ -5066,7 +5143,7 @@ def test_target_discovery_supports_same_environment_sibling(
     assert target["tenantEvidenceSource"] == (
         "authenticated-environment-inventory"
     )
-    assert target["dataverseUrl"].startswith("https://")
+    assert target["dataverseUrl"] == "https://source.crm.dynamics.com"
 
 
 def test_prod_requires_completed_test_realm_before_promotion(

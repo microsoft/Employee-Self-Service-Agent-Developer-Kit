@@ -15371,11 +15371,17 @@ def _normalize_inventory_environment_id(value: str) -> str:
 
 
 def _inventory_dataverse_url(environment: dict[str, Any]) -> str | None:
+    """Return the first valid Dataverse URL from supported inventory aliases.
+
+    The cached top-level ``url`` alias takes precedence. Existing ServiceNow
+    alias order remains unchanged after it.
+    """
     properties = environment.get("properties")
     properties = properties if isinstance(properties, dict) else {}
     linked = properties.get("linkedEnvironmentMetadata")
     linked = linked if isinstance(linked, dict) else {}
     candidates = (
+        environment.get("url"),
         environment.get("instanceUrl"),
         environment.get("instanceApiUrl"),
         linked.get("instanceUrl"),
