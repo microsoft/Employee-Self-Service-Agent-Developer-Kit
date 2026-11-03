@@ -312,7 +312,13 @@ def test_visible_handoff_payloads_are_supported_and_complete(
             assert "{CURRENT_PROGRESS}" not in question["question"]
             assert "Connection progress:" not in question["question"]
             assert "**Phases**" not in question["question"]
-        assert "above" not in question["question"].casefold()
+        if path.name in {
+            "guide-entra-registration.md",
+            "guide-servicenow-oidc.md",
+        }:
+            assert "requirements above" in question["question"].casefold()
+        else:
+            assert "above" not in question["question"].casefold()
 
 
 @pytest.mark.parametrize(

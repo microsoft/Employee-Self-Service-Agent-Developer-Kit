@@ -187,6 +187,16 @@ IDENTITY_WORKBOOK_TEMPLATE_SERVICENOW = Path(
     "src/skills/connect/shared/templates/"
     "servicenow-identity-mapping-servicenow.xlsx"
 )
+IDENTITY_WORKBOOK_SOURCE_SHA256 = {
+    "entra": (
+        "ff43bfc69e1112d9c73275e4afcac1a003ae8aa190ca24acba"
+        "a5f39c9803bad0"
+    ),
+    "servicenow": (
+        "2170fb0a4541227f660680ac5dff6365359becf15d97bc2c4f"
+        "a0a21ae8828482"
+    ),
+}
 IDENTITY_REQUIREMENT_CHOICES = {
     "email": {
         "label": "Email",
@@ -1283,6 +1293,197 @@ def _identity_handoff_question(stage: str) -> dict[str, Any]:
     )
 
 
+def _identity_direct_questions(stage: str) -> list[dict[str, Any]]:
+    if stage == "entra":
+        canonical = [
+            _native_question(
+                header="Entra administrator availability",
+                question=(
+                    "Is a Microsoft Entra administrator available now for "
+                    "this exact target?"
+                ),
+                option_labels=["Yes", "No"],
+            ),
+            _native_question(
+                header="Application client ID",
+                question=(
+                    "Enter the Application (client) ID GUID confirmed from "
+                    "the app registration Overview page for this exact target."
+                ),
+                allow_freeform_input=True,
+            ),
+            _native_question(
+                header="Selected User Claim",
+                question=(
+                    "Enter exactly one emitted User Claim name for this exact "
+                    "target. Enter a claim name only; do not enter `aud` or a "
+                    "personal claim value."
+                ),
+                allow_freeform_input=True,
+            ),
+            _native_question(
+                header="Complete Entra administrator setup",
+                question=(
+                    "Are all four requirements above complete for this exact "
+                    "target: app registration, selected claim emission, "
+                    "`user_impersonation` scope, and Microsoft ServiceNow "
+                    "connector preauthorization?"
+                ),
+                option_labels=[
+                    "Yes, all four requirements are complete",
+                    "No, not yet",
+                ],
+            ),
+        ]
+    elif stage == "servicenow":
+        canonical = [
+            _native_question(
+                header="ServiceNow administrator availability",
+                question=(
+                    "Is a ServiceNow administrator who can elevate to "
+                    "`security_admin` available now for this exact target?"
+                ),
+                option_labels=["Yes", "No"],
+            ),
+            _native_question(
+                header="ServiceNow internal user field",
+                question=(
+                    "Enter the exact internal `sys_user` field that stores the "
+                    "same identity key as the locked Entra-confirmed User "
+                    "Claim. Do not enter a display label or employee value."
+                ),
+                allow_freeform_input=True,
+            ),
+            _native_question(
+                header="Complete ServiceNow OIDC setup",
+                question=(
+                    "Are the requirements above complete for this exact "
+                    "target, including the provider, claim-to-field mapping, "
+                    "one matching Active user, and current connector "
+                    "preauthorization evidence? This Manual evidence does not "
+                    "prove a real employee token or business result."
+                ),
+                option_labels=[
+                    "Yes, all requirements are complete",
+                    "No, not yet",
+                ],
+            ),
+        ]
+    else:
+        raise ServiceNowConnectError(
+            "Identity direct handoff stage must be entra or servicenow."
+        )
+    return [
+        {
+            "canonicalQuestion": question,
+            "askUserArguments": adapt_question_to_ask_user(question)[
+                "askUserArguments"
+            ],
+        }
+        for question in canonical
+    ]
+
+
+def identity_direct_handoff(
+    context: dict[str, Any],
+    *,
+    stage: str,
+) -> dict[str, Any]:
+    if stage not in {"entra", "servicenow"}:
+        raise ServiceNowConnectError(
+            "Identity direct handoff stage is invalid."
+        )
+    state = _load_lifecycle_state(context)
+    expected_identity = _required_context_identity(context, state)
+    source_sha256 = _identity_workbook_template_sha256(stage)
+    candidate_receipt = None
+    if stage == "entra":
+        source_steps = _checked_in_entra_workbook_steps()
+        locked_values = None
+        contract_boundary = (
+            "The authoritative source does not complete the existing "
+            "`user_impersonation` scope or Microsoft ServiceNow connector "
+            "preauthorization requirements. Confirm both separately before "
+            "the Entra phase can be ready."
+        )
+    else:
+        candidate_receipt = _validated_claim_candidates(context, state)
+        candidates = list(candidate_receipt.get("candidates") or [])
+        if len(candidates) != 1:
+            raise ServiceNowConnectError(
+                "Direct ServiceNow capture requires exactly one current "
+                "Entra-confirmed User Claim name."
+            )
+        client_id = normalize_client_id(
+            str(candidate_receipt.get("applicationClientId") or "")
+        )
+        claim_name = _safe_identity_name(
+            candidates[0],
+            "confirmed_user_claim_name",
+        )
+        source_steps = _checked_in_servicenow_workbook_steps(
+            {
+                "application_client_id": client_id,
+                "confirmed_user_claim_name": claim_name,
+                "tenant_id": str(
+                    context["environment"].get("tenant_id") or ""
+                ),
+            }
+        )
+        locked_values = {
+            "applicationClientId": client_id,
+            "selectedClaimName": claim_name,
+        }
+        contract_boundary = (
+            "Completion remains Manual evidence. It requires the exact "
+            "provider and mapping, one matching Active user, and current "
+            "ServiceNow connector preauthorization from the Entra stage."
+        )
+    source_text = "\n\n".join(
+        (
+            action
+            if label == "1"
+            else f"{label}\n{action}"
+        )
+        for label, action in source_steps
+    )
+    target_text = (
+        f"Target agent: `{_agent_slug(context)}` "
+        f"(`{context['agent']['id']}`)\n"
+        f"Tenant: `{context['environment'].get('tenant_id')}`\n"
+        f"Environment: `{context['environment']['id']}`\n"
+        f"ServiceNow instance: `{expected_identity['instanceName']}`"
+    )
+    return {
+        "schemaVersion": "servicenow.identity-direct-handoff.v1",
+        "stage": stage,
+        "provider": PROVIDER_KEY,
+        "profile": PROFILE_KEY,
+        "sourceWorkbookSha256": source_sha256,
+        "sourceSheets": (
+            ["Entra Handoff!A2", "_metadata!A1:B17"]
+            if stage == "entra"
+            else [
+                "Steps!A1:B4",
+                "Worksheet!A1:B13",
+                "_metadata!A1:G12",
+            ]
+        ),
+        "ordinaryReply": {
+            "kind": "ordinary-agent-response",
+            "text": (
+                f"{target_text}\n\n{source_text}\n\n"
+                f"Current contract boundary\n{contract_boundary}"
+            ),
+        },
+        "lockedValues": locked_values,
+        "questions": _identity_direct_questions(stage),
+        "secretsAccepted": False,
+        "employeeValuesAccepted": False,
+        "remoteMutationCount": 0,
+    }
+
+
 def _identity_requirement_choices() -> list[dict[str, str]]:
     return [
         {
@@ -1386,6 +1587,8 @@ def _identity_csv_path(
 
 
 def _identity_workbook_template_sha256(stage: str) -> str:
+    if stage not in IDENTITY_WORKBOOK_SOURCE_SHA256:
+        raise ServiceNowConnectError("Identity workbook stage is invalid.")
     template = SOLUTION_ROOT / (
         IDENTITY_WORKBOOK_TEMPLATE_ENTRA
         if stage == "entra"
@@ -1395,7 +1598,13 @@ def _identity_workbook_template_sha256(stage: str) -> str:
         raise ServiceNowConnectError(
             f"Required identity workbook template is missing: {template}"
         )
-    return hashlib.sha256(template.read_bytes()).hexdigest().upper()
+    observed = hashlib.sha256(template.read_bytes()).hexdigest()
+    expected = IDENTITY_WORKBOOK_SOURCE_SHA256[stage]
+    if observed.casefold() != expected.casefold():
+        raise ServiceNowConnectError(
+            "The authoritative identity workbook source hash changed."
+        )
+    return observed.upper()
 
 
 def _identity_workbook_versioned_path(
@@ -1752,6 +1961,65 @@ def _checked_in_entra_workbook_steps() -> list[tuple[str, str]]:
         workbook.close()
 
 
+def _checked_in_servicenow_workbook_steps(
+    context_values: dict[str, str],
+) -> list[tuple[str, str]]:
+    template = SOLUTION_ROOT / IDENTITY_WORKBOOK_TEMPLATE_SERVICENOW
+    _identity_workbook_template_sha256("servicenow")
+    _Workbook, load_workbook, *_styles = _identity_workbook_openpyxl()
+    try:
+        workbook = load_workbook(
+            template,
+            read_only=False,
+            data_only=False,
+            keep_links=False,
+        )
+    except Exception as exc:
+        raise ServiceNowConnectError(
+            "The checked-in ServiceNow identity workbook template could not "
+            "be read."
+        ) from exc
+    try:
+        if workbook.sheetnames != [
+            IDENTITY_WORKBOOK_STEPS_SHEET,
+            IDENTITY_WORKBOOK_SHEET,
+            IDENTITY_WORKBOOK_METADATA_SHEET,
+        ]:
+            raise ServiceNowConnectError(
+                "The checked-in ServiceNow identity workbook template sheet "
+                "contract changed."
+            )
+        steps = workbook[IDENTITY_WORKBOOK_STEPS_SHEET]
+        if steps.max_row != 4 or steps.max_column != 2:
+            raise ServiceNowConnectError(
+                "The checked-in ServiceNow instruction shape changed."
+            )
+        substitutions = {
+            "CONFIRMED_APPLICATION_CLIENT_ID": context_values[
+                "application_client_id"
+            ],
+            "CONFIRMED_USER_CLAIM_NAME": context_values[
+                "confirmed_user_claim_name"
+            ],
+            "CONFIRMED_TENANT_ID": context_values["tenant_id"],
+        }
+        output: list[tuple[str, str]] = []
+        for row in range(2, 5):
+            label = str(steps.cell(row, 1).value or "")
+            action = str(steps.cell(row, 2).value or "")
+            for placeholder, value in substitutions.items():
+                action = action.replace(placeholder, value)
+            if "CONFIRMED_" in action:
+                raise ServiceNowConnectError(
+                    "The ServiceNow administrator instruction has an "
+                    "unresolved source placeholder."
+                )
+            output.append((label, action))
+        return output
+    finally:
+        workbook.close()
+
+
 def _identity_workbook_steps(
     *,
     stage: str,
@@ -1766,6 +2034,10 @@ def _identity_workbook_steps(
     )
     if stage == "entra":
         return _checked_in_entra_workbook_steps()
+    if context_values.get("confirmed_user_claim_name"):
+        return _checked_in_servicenow_workbook_steps(context_values)
+
+    if False:  # Historical generated guide expansion; intentionally inactive.
         known_client_id = client_id not in {
             IDENTITY_WORKBOOK_PENDING_CLIENT_ID,
             IDENTITY_WORKBOOK_TEMPLATE_CLIENT_ID,
@@ -4323,6 +4595,237 @@ def _parse_identity_workbook(
         workbook.close()
 
 
+def _invalidate_identity_dependents(
+    state: dict[str, Any],
+    *,
+    reason: str,
+) -> None:
+    evidence = state.setdefault("evidence", {})
+    if not isinstance(evidence, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow lifecycle evidence must be an object."
+        )
+    retired = {
+        key: copy.deepcopy(evidence[key])
+        for key in (
+            "credential",
+            "agentConnection",
+            "test",
+            "realmValidations",
+            "realmFlows",
+        )
+        if key in evidence
+    }
+    if retired:
+        state.setdefault("migration", {}).setdefault(
+            "identityDependentInvalidations",
+            [],
+        ).append(
+            {
+                "reason": reason,
+                "invalidatedAt": _utc_now(),
+                "evidence": retired,
+            }
+        )
+    for key in retired:
+        evidence.pop(key, None)
+    state.pop("agentBindingIdentitySha256", None)
+    state.pop("connectionBindingHash", None)
+    setup = _admin_setup(state)
+    setup["phaseHandoffs"]["credential"] = {"status": "pending"}
+    for phase_id in ("credential", "agent-connection", "test"):
+        phase = state.setdefault("phases", {}).setdefault(
+            phase_id,
+            {
+                "status": "pending",
+                "checkpointResults": {},
+                "checkpointAcknowledgements": {},
+            },
+        )
+        if not isinstance(phase, dict):
+            raise ServiceNowConnectError(
+                f"ServiceNow lifecycle phase {phase_id} must be an object."
+            )
+        phase["status"] = "pending"
+        phase["checkpointResults"] = {}
+        phase["checkpointAcknowledgements"] = {}
+        for key in (
+            "actionApplied",
+            "lastActionAt",
+            "lastVerifiedAt",
+            "rollbackPushGlob",
+        ):
+            phase.pop(key, None)
+
+
+def _persist_identity_mapping_values(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    stage: str,
+    application_client_id: str,
+    candidates: list[str],
+    selection: dict[str, str] | None,
+    provenance_sha256: str,
+    provenance_format: str,
+    source_workbook_sha256: str,
+    sheet_protected: bool,
+) -> dict[str, Any]:
+    expected_identity = _required_context_identity(context, state)
+    application_client_id = normalize_client_id(application_client_id)
+    binding = {
+        **expected_identity,
+        "applicationClientId": application_client_id,
+        "provider": PROVIDER_KEY,
+        "profile": PROFILE_KEY,
+        "agentSlug": _agent_slug(context),
+        "agentId": context["agent"]["id"],
+    }
+    evidence = state.setdefault("evidence", {})
+    recorded_at = _utc_now()
+    if stage == "entra":
+        safe_candidates = [
+            _safe_identity_name(candidate, "token_claim_name")
+            for candidate in candidates
+        ]
+        if not safe_candidates or (
+            provenance_format == "direct"
+            and len(safe_candidates) != 1
+        ):
+            raise ServiceNowConnectError(
+                "At least one selected User Claim name is required; direct "
+                "capture requires exactly one."
+            )
+        if safe_candidates[0].casefold() == "aud":
+            raise ServiceNowConnectError(
+                "The aud audience claim cannot be selected as the "
+                "user-matching User Claim."
+            )
+        candidate_hash = _identity_candidate_set_hash(
+            application_client_id=application_client_id,
+            candidates=safe_candidates,
+            binding=binding,
+        )
+        existing = evidence.get("identityClaimCandidates")
+        unchanged = (
+            isinstance(existing, dict)
+            and existing.get("candidateSetSha256") == candidate_hash
+        )
+        if not unchanged:
+            legacy = evidence.get("identityMapping")
+            if isinstance(legacy, dict):
+                state.setdefault("migration", {}).setdefault(
+                    "retiredIdentityMapping",
+                    copy.deepcopy(legacy),
+                )
+                evidence.pop("identityMapping", None)
+            _invalidate_identity_mapping_handoffs(state)
+            _invalidate_identity_dependents(
+                state,
+                reason="Entra client ID or selected User Claim changed.",
+            )
+        result = {
+            "kind": "administrator-confirmed-claim-candidates",
+            "status": "entra-confirmed",
+            "currentSource": (
+                "direct-capture"
+                if provenance_format == "direct"
+                else "local-handoff"
+            ),
+            "applicationClientId": application_client_id,
+            "candidates": safe_candidates,
+            "candidateSetSha256": candidate_hash,
+            "entraAdministratorConfirmed": True,
+            "tokenClaimEmissionConfirmed": (
+                provenance_format != "direct"
+            ),
+            "binding": binding,
+            "provenanceSha256": provenance_sha256,
+            "sourceWorkbookSha256": source_workbook_sha256,
+            "importedWorkbookSha256": provenance_sha256,
+            "importedFileFormat": provenance_format,
+            "sheetProtected": sheet_protected,
+            "recordedAt": recorded_at,
+        }
+        evidence["identityClaimCandidates"] = result
+    else:
+        candidate_receipt = _validated_claim_candidates(context, state)
+        expected_candidates = list(
+            candidate_receipt.get("candidates") or []
+        )
+        if (
+            candidate_receipt.get("candidateSetSha256")
+            != _identity_candidate_set_hash(
+                application_client_id=application_client_id,
+                candidates=expected_candidates,
+                binding=binding,
+            )
+        ):
+            raise ServiceNowConnectError(
+                "The Entra candidate receipt is stale for this lifecycle."
+            )
+        if not isinstance(selection, dict):
+            raise ServiceNowConnectError(
+                "The ServiceNow identity mapping selection is required."
+            )
+        claim_name = _safe_identity_name(
+            selection.get("tokenClaimName"),
+            "token_claim_name",
+        )
+        if claim_name not in expected_candidates:
+            raise ServiceNowConnectError(
+                "The ServiceNow mapping must use the exact locked "
+                "Entra-confirmed User Claim name."
+            )
+        user_field = str(
+            selection.get("serviceNowUserField") or ""
+        ).strip()
+        if not _SAFE_USER_FIELD.fullmatch(user_field):
+            raise ServiceNowConnectError(
+                "servicenow_user_field must be an explicit safe ServiceNow "
+                "internal field name."
+            )
+        result = {
+            "kind": "administrator-confirmed-identity-mapping",
+            "status": "servicenow-confirmed",
+            "applicationClientId": application_client_id,
+            "tokenClaimName": claim_name,
+            "serviceNowUserField": user_field,
+            "candidateSetSha256": candidate_receipt[
+                "candidateSetSha256"
+            ],
+            "entraAdministratorConfirmed": True,
+            "tokenClaimEmissionConfirmed": (
+                candidate_receipt.get("tokenClaimEmissionConfirmed") is True
+            ),
+            "serviceNowAdministratorConfirmed": True,
+            "binding": binding,
+            "provenanceSha256": provenance_sha256,
+            "sourceWorkbookSha256": source_workbook_sha256,
+            "importedWorkbookSha256": provenance_sha256,
+            "importedFileFormat": provenance_format,
+            "sheetProtected": sheet_protected,
+            "recordedAt": recorded_at,
+        }
+        result["relationshipSha256"] = (
+            _identity_mapping_relationship_hash(result)
+        )
+        existing = evidence.get("identityMapping")
+        if not (
+            isinstance(existing, dict)
+            and existing.get("relationshipSha256")
+            == result["relationshipSha256"]
+        ):
+            _invalidate_oidc_handoff(state)
+            _invalidate_identity_dependents(
+                state,
+                reason="ServiceNow internal user-field mapping changed.",
+            )
+        evidence["identityMapping"] = result
+    _write_lifecycle_state(context, state)
+    return copy.deepcopy(result)
+
+
 def record_identity_mapping(
     context: dict[str, Any],
     *,
@@ -4402,98 +4905,111 @@ def record_identity_mapping(
     )
     if stage == "entra":
         application_client_id = parsed["applicationClientId"]
-    recorded_at = _utc_now()
-    binding = {
-        **expected_identity,
-        "applicationClientId": application_client_id,
-        "provider": PROVIDER_KEY,
-        "profile": PROFILE_KEY,
-        "agentSlug": _agent_slug(context),
-        "agentId": context["agent"]["id"],
-    }
     workbook_hash = hashlib.sha256(workbook_path.read_bytes()).hexdigest()
-    evidence = state.setdefault("evidence", {})
+    return _persist_identity_mapping_values(
+        context,
+        state,
+        stage=stage,
+        application_client_id=application_client_id,
+        candidates=(
+            list(parsed["candidates"])
+            if stage == "entra"
+            else list(expected_candidates or [])
+        ),
+        selection=parsed["selection"],
+        provenance_sha256=workbook_hash,
+        provenance_format=workbook_path.suffix.casefold().lstrip("."),
+        source_workbook_sha256=_identity_workbook_template_sha256(stage),
+        sheet_protected=bool(parsed["sheetProtected"]),
+    )
+
+
+def record_identity_direct(
+    context: dict[str, Any],
+    *,
+    stage: str,
+    client_id: str | None,
+    claim_name: str | None,
+    user_field: str | None,
+    confirmed: bool,
+) -> dict[str, Any]:
+    if not confirmed:
+        raise ServiceNowConnectError(
+            "Direct identity data capture requires explicit confirmation."
+        )
+    if stage not in {"entra", "servicenow"}:
+        raise ServiceNowConnectError(
+            "Identity direct capture stage is invalid."
+        )
+    state = _load_lifecycle_state(context)
     if stage == "entra":
-        candidates = parsed["candidates"]
-        candidate_hash = _identity_candidate_set_hash(
-            application_client_id=application_client_id,
-            candidates=candidates,
-            binding=binding,
+        if not client_id or not claim_name:
+            raise ServiceNowConnectError(
+                "Direct Entra capture requires the Application client ID GUID "
+                "and exactly one selected User Claim name."
+            )
+        application_client_id = normalize_client_id(client_id)
+        safe_claim = _safe_identity_name(claim_name, "user_claim")
+        if safe_claim.casefold() == "aud":
+            raise ServiceNowConnectError(
+                "The aud audience claim cannot be selected as the "
+                "user-matching User Claim."
+            )
+        candidates = [safe_claim]
+        selection = None
+    else:
+        if client_id is not None or claim_name is not None:
+            raise ServiceNowConnectError(
+                "The ServiceNow stage uses the locked Entra-confirmed client "
+                "ID and User Claim; do not re-enter or change them."
+            )
+        if not user_field:
+            raise ServiceNowConnectError(
+                "Direct ServiceNow capture requires the actual internal "
+                "sys_user field."
+            )
+        candidate_receipt = _validated_claim_candidates(context, state)
+        candidates = list(candidate_receipt.get("candidates") or [])
+        if len(candidates) != 1:
+            raise ServiceNowConnectError(
+                "Direct ServiceNow capture requires exactly one current "
+                "Entra-confirmed User Claim."
+            )
+        application_client_id = normalize_client_id(
+            str(candidate_receipt.get("applicationClientId") or "")
         )
-        existing = evidence.get("identityClaimCandidates")
-        unchanged = (
-            isinstance(existing, dict)
-            and existing.get("candidateSetSha256") == candidate_hash
-        )
-        if not unchanged:
-            legacy = evidence.get("identityMapping")
-            if isinstance(legacy, dict):
-                state.setdefault("migration", {}).setdefault(
-                    "retiredIdentityMapping",
-                    copy.deepcopy(legacy),
-                )
-                evidence.pop("identityMapping", None)
-            _invalidate_identity_mapping_handoffs(state)
-        result = {
-            "kind": "administrator-confirmed-claim-candidates",
-            "status": "entra-confirmed",
-            "currentSource": "local-handoff",
+        selection = {
+            "tokenClaimName": candidates[0],
+            "serviceNowUserField": user_field,
+        }
+    source_sha256 = _identity_workbook_template_sha256(stage)
+    provenance_sha256 = _canonical_json_hash(
+        {
+            "kind": "administrator-direct-capture",
+            "stage": stage,
             "applicationClientId": application_client_id,
             "candidates": candidates,
-            "candidateSetSha256": candidate_hash,
-            "entraAdministratorConfirmed": True,
-            "tokenClaimEmissionConfirmed": True,
-            "binding": binding,
-            "importedWorkbookSha256": workbook_hash,
-            "importedFileFormat": workbook_path.suffix.casefold().lstrip("."),
-            "sheetProtected": parsed["sheetProtected"],
-            "recordedAt": recorded_at,
+            "selection": selection,
+            "sourceWorkbookSha256": source_sha256,
+            "binding": _required_context_identity(context, state),
+            "provider": PROVIDER_KEY,
+            "profile": PROFILE_KEY,
+            "agentSlug": _agent_slug(context),
+            "agentId": context["agent"]["id"],
         }
-        evidence["identityClaimCandidates"] = result
-    else:
-        if (
-            candidate_receipt.get("candidateSetSha256")
-            != _identity_candidate_set_hash(
-                application_client_id=application_client_id,
-                candidates=expected_candidates,
-                binding=binding,
-            )
-        ):
-            raise ServiceNowConnectError(
-                "The Entra candidate receipt is stale for this lifecycle."
-            )
-        selected = parsed["selection"]
-        result = {
-            "kind": "administrator-confirmed-identity-mapping",
-            "status": "servicenow-confirmed",
-            "applicationClientId": application_client_id,
-            "tokenClaimName": selected["tokenClaimName"],
-            "serviceNowUserField": selected["serviceNowUserField"],
-            "candidateSetSha256": candidate_receipt[
-                "candidateSetSha256"
-            ],
-            "entraAdministratorConfirmed": True,
-            "tokenClaimEmissionConfirmed": True,
-            "serviceNowAdministratorConfirmed": True,
-            "binding": binding,
-            "importedWorkbookSha256": workbook_hash,
-            "importedFileFormat": workbook_path.suffix.casefold().lstrip("."),
-            "sheetProtected": parsed["sheetProtected"],
-            "recordedAt": recorded_at,
-        }
-        result["relationshipSha256"] = (
-            _identity_mapping_relationship_hash(result)
-        )
-        existing = evidence.get("identityMapping")
-        if not (
-            isinstance(existing, dict)
-            and existing.get("relationshipSha256")
-            == result["relationshipSha256"]
-        ):
-            _invalidate_oidc_handoff(state)
-        evidence["identityMapping"] = result
-    _write_lifecycle_state(context, state)
-    return copy.deepcopy(result)
+    )
+    return _persist_identity_mapping_values(
+        context,
+        state,
+        stage=stage,
+        application_client_id=application_client_id,
+        candidates=candidates,
+        selection=selection,
+        provenance_sha256=provenance_sha256,
+        provenance_format="direct",
+        source_workbook_sha256=source_sha256,
+        sheet_protected=False,
+    )
 
 
 def _identity_handoff_binding_matches(
@@ -4818,6 +5334,11 @@ def _identity_admin_handoff_is_ready(
             and validated_evidence.get("runbookCompleted") is True
             and validated_evidence.get("mappingDetailsCollected") is True
             and validated_evidence.get("claimMappingConfirmed") is True
+            and validated_evidence.get("activeUserMatchConfirmed") is True
+            and validated_evidence.get(
+                "connectorPreauthorizationConfirmed"
+            )
+            is True
             and validated_evidence.get("tokenClaimName")
             == mapping.get("tokenClaimName")
             and validated_evidence.get("serviceNowUserField")
@@ -10071,6 +10592,8 @@ def resolve_credential_completion(
 def _validated_claim_candidates(
     context: dict[str, Any],
     state: dict[str, Any],
+    *,
+    require_completion: bool = True,
 ) -> dict[str, Any]:
     receipt = state.get("evidence", {}).get("identityClaimCandidates")
     if (
@@ -10078,12 +10601,16 @@ def _validated_claim_candidates(
         or receipt.get("kind")
         != "administrator-confirmed-claim-candidates"
         or receipt.get("entraAdministratorConfirmed") is not True
-        or receipt.get("tokenClaimEmissionConfirmed") is not True
+        or (
+            require_completion
+            and receipt.get("tokenClaimEmissionConfirmed") is not True
+        )
         or not isinstance(receipt.get("candidates"), list)
         or not receipt["candidates"]
     ):
         raise ServiceNowConnectError(
-            "A Maker-confirmed Entra claim-candidate workbook is required."
+            "Current target-bound Entra client ID and selected User Claim "
+            "evidence is required."
         )
     expected = _required_context_identity(context, state)
     binding = receipt.get("binding")
@@ -10175,6 +10702,13 @@ def record_admin_phase(
     phase: str,
     status: str,
     client_id: str | None = None,
+    application_registration_confirmed: bool = False,
+    claim_emission_confirmed: bool = False,
+    user_impersonation_scope_confirmed: bool = False,
+    connector_preauthorization_confirmed: bool = False,
+    oidc_provider_confirmed: bool = False,
+    claim_mapping_confirmed: bool = False,
+    active_user_match_confirmed: bool = False,
 ) -> dict[str, Any]:
     if phase not in ADMIN_PHASES:
         raise ServiceNowConnectError("Unsupported ServiceNow admin phase.")
@@ -10202,7 +10736,31 @@ def record_admin_phase(
         },
     }
     if phase == "entra-registration":
-        candidates = _validated_claim_candidates(context, state)
+        confirmations = {
+            "application registration": application_registration_confirmed,
+            "selected claim emission": claim_emission_confirmed,
+            "user_impersonation scope": user_impersonation_scope_confirmed,
+            "Microsoft ServiceNow connector preauthorization": (
+                connector_preauthorization_confirmed
+            ),
+        }
+        missing = [
+            label
+            for label, confirmed in confirmations.items()
+            if confirmed is not True
+        ]
+        if missing:
+            raise ServiceNowConnectError(
+                "Entra completion requires explicit confirmation of all four "
+                "current-target requirements: "
+                + ", ".join(missing)
+                + "."
+            )
+        candidates = _validated_claim_candidates(
+            context,
+            state,
+            require_completion=False,
+        )
         workbook_client_id = normalize_client_id(
             str(candidates.get("applicationClientId") or "")
         )
@@ -10227,21 +10785,32 @@ def record_admin_phase(
             {
                 "currentSource": "administrator-confirmed",
                 "entraAdministratorConfirmed": True,
-                "applicationRegistrationConfirmed": True,
+                "applicationRegistrationConfirmed": (
+                    application_registration_confirmed
+                ),
                 "clientId": normalized_client_id,
                 "tokenClaimCandidates": copy.deepcopy(
                     selected_claims
                 ),
                 "selectedClaimName": selected_claims[0],
-                "tokenClaimEmissionConfirmed": True,
-                "userImpersonationScopeConfirmed": True,
-                "connectorPreauthorizationConfirmed": True,
+                "tokenClaimEmissionConfirmed": claim_emission_confirmed,
+                "userImpersonationScopeConfirmed": (
+                    user_impersonation_scope_confirmed
+                ),
+                "connectorPreauthorizationConfirmed": (
+                    connector_preauthorization_confirmed
+                ),
                 "candidateSetSha256": candidates["candidateSetSha256"],
                 "mappingWorkbookSha256": candidates[
                     "importedWorkbookSha256"
                 ],
             }
         )
+        candidates["tokenClaimEmissionConfirmed"] = True
+        candidates["completionConfirmedAt"] = _utc_now()
+        state.setdefault("evidence", {})[
+            "identityClaimCandidates"
+        ] = candidates
         evidence["binding"]["applicationClientId"] = normalized_client_id
     elif client_id is not None:
         raise ServiceNowConnectError(
@@ -10259,13 +10828,46 @@ def record_admin_phase(
         )
 
     if phase == "servicenow-oidc":
+        if not (
+            oidc_provider_confirmed
+            and claim_mapping_confirmed
+            and active_user_match_confirmed
+        ):
+            raise ServiceNowConnectError(
+                "ServiceNow OIDC completion requires explicit confirmation "
+                "of the exact provider, claim-to-field mapping, and one "
+                "matching Active user."
+            )
+        entra_handoff = _completed_handoff(setup, "entra-registration")
+        entra_evidence = (
+            entra_handoff.get("evidence")
+            if isinstance(entra_handoff, dict)
+            else None
+        )
+        if (
+            not isinstance(entra_evidence, dict)
+            or entra_evidence.get(
+                "connectorPreauthorizationConfirmed"
+            )
+            is not True
+        ):
+            raise ServiceNowConnectError(
+                "Current Entra evidence does not confirm Microsoft ServiceNow "
+                "connector preauthorization for this exact target."
+            )
         mapping = _validated_identity_mapping(context, state)
         evidence.update(
             {
-                "oidcCapabilityConfirmed": True,
-                "runbookCompleted": True,
+                "oidcCapabilityConfirmed": oidc_provider_confirmed,
+                "runbookCompleted": bool(
+                    oidc_provider_confirmed
+                    and claim_mapping_confirmed
+                    and active_user_match_confirmed
+                ),
                 "mappingDetailsCollected": True,
-                "claimMappingConfirmed": True,
+                "claimMappingConfirmed": claim_mapping_confirmed,
+                "activeUserMatchConfirmed": active_user_match_confirmed,
+                "connectorPreauthorizationConfirmed": True,
                 "tokenClaimName": mapping["tokenClaimName"],
                 "serviceNowUserField": mapping["serviceNowUserField"],
                 "candidateSetSha256": mapping["candidateSetSha256"],
@@ -18435,6 +19037,18 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     mapping_handoff_parser.add_argument("--client-id")
+    direct_handoff_parser = subparsers.add_parser(
+        "identity-direct-handoff",
+        help=(
+            "Return source-faithful administrator instructions and native "
+            "direct-capture questions without changing state."
+        ),
+    )
+    direct_handoff_parser.add_argument(
+        "--stage",
+        choices=("entra", "servicenow"),
+        required=True,
+    )
     requirement_parser = subparsers.add_parser(
         "record-identity-requirement",
         help=(
@@ -18467,6 +19081,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mapping_parser.add_argument("--client-id")
     mapping_parser.add_argument("--yes", action="store_true")
+    direct_mapping_parser = subparsers.add_parser(
+        "record-identity-direct",
+        help=(
+            "Record direct non-secret Entra or ServiceNow identity values "
+            "after explicit confirmation."
+        ),
+    )
+    direct_mapping_parser.add_argument(
+        "--stage",
+        choices=("entra", "servicenow"),
+        required=True,
+    )
+    direct_mapping_parser.add_argument("--client-id")
+    direct_mapping_parser.add_argument("--claim-name")
+    direct_mapping_parser.add_argument("--user-field")
+    direct_mapping_parser.add_argument("--yes", action="store_true")
     phase_parser = subparsers.add_parser(
         "record-admin-phase",
         help="Record one complete non-secret delegated admin phase.",
@@ -18482,6 +19112,34 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("completed", "reused"),
     )
     phase_parser.add_argument("--client-id")
+    phase_parser.add_argument(
+        "--confirm-application-registration",
+        action="store_true",
+    )
+    phase_parser.add_argument(
+        "--confirm-claim-emission",
+        action="store_true",
+    )
+    phase_parser.add_argument(
+        "--confirm-user-impersonation-scope",
+        action="store_true",
+    )
+    phase_parser.add_argument(
+        "--confirm-connector-preauthorization",
+        action="store_true",
+    )
+    phase_parser.add_argument(
+        "--confirm-oidc-provider",
+        action="store_true",
+    )
+    phase_parser.add_argument(
+        "--confirm-claim-mapping",
+        action="store_true",
+    )
+    phase_parser.add_argument(
+        "--confirm-active-user-match",
+        action="store_true",
+    )
 
     create_parser = subparsers.add_parser(
         "create",
@@ -18816,18 +19474,27 @@ def _command_error_recovery(
         else "entra-registration"
         if command
         in {
-            "identity-mapping-handoff",
             "record-identity-requirement",
             "entra-registration",
         }
         or (
-            command == "record-identity-mapping"
+            command in {
+                "identity-mapping-handoff",
+                "record-identity-mapping",
+                "record-identity-direct",
+                "identity-direct-handoff",
+            }
             and getattr(args, "stage", "") == "entra"
         )
         else "servicenow-oidc"
         if command in {"servicenow-oidc"}
         or (
-            command == "record-identity-mapping"
+            command in {
+                "identity-mapping-handoff",
+                "record-identity-mapping",
+                "record-identity-direct",
+                "identity-direct-handoff",
+            }
             and getattr(args, "stage", "") == "servicenow"
         )
         else "credential"
@@ -19218,6 +19885,11 @@ def main(argv: list[str] | None = None) -> int:
                 stage=args.stage,
                 client_id=args.client_id,
             )
+        elif args.command == "identity-direct-handoff":
+            result = identity_direct_handoff(
+                context,
+                stage=args.stage,
+            )
         elif args.command == "record-identity-requirement":
             result = record_identity_requirement(
                 context,
@@ -19231,12 +19903,36 @@ def main(argv: list[str] | None = None) -> int:
                 client_id=args.client_id,
                 confirmed=args.yes,
             )
+        elif args.command == "record-identity-direct":
+            result = record_identity_direct(
+                context,
+                stage=args.stage,
+                client_id=args.client_id,
+                claim_name=args.claim_name,
+                user_field=args.user_field,
+                confirmed=args.yes,
+            )
         elif args.command == "record-admin-phase":
             result = record_admin_phase(
                 context,
                 phase=args.phase,
                 status=args.status,
                 client_id=args.client_id,
+                application_registration_confirmed=(
+                    args.confirm_application_registration
+                ),
+                claim_emission_confirmed=args.confirm_claim_emission,
+                user_impersonation_scope_confirmed=(
+                    args.confirm_user_impersonation_scope
+                ),
+                connector_preauthorization_confirmed=(
+                    args.confirm_connector_preauthorization
+                ),
+                oidc_provider_confirmed=args.confirm_oidc_provider,
+                claim_mapping_confirmed=args.confirm_claim_mapping,
+                active_user_match_confirmed=(
+                    args.confirm_active_user_match
+                ),
             )
         elif args.command == "create":
             result = prepare_manual_connection(
@@ -19388,8 +20084,10 @@ def main(argv: list[str] | None = None) -> int:
             "record-shared-reuse",
             "record-preflight",
             "identity-mapping-handoff",
+            "identity-direct-handoff",
             "record-identity-requirement",
             "record-identity-mapping",
+            "record-identity-direct",
             "record-admin-phase",
             "create",
             "record-credential",

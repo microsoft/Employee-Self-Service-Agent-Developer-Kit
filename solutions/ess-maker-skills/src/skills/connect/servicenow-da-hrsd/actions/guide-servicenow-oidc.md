@@ -34,6 +34,22 @@ valid Application (client) ID and exactly one selected User Claim name. Missing,
 multiple-unselected, stale, or wrong-bound evidence must return waiting; never
 choose the first claim or apply a default.
 
+For direct capture, return the authoritative workbook instructions with the
+confirmed Client ID and User Claim already locked:
+
+```text
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage servicenow
+```
+
+Record only the administrator-confirmed internal `sys_user` field; the command
+does not accept Client ID or User Claim overrides:
+
+```text
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage servicenow --user-field "<internal-sys_user-field>" --yes
+```
+
+The protected file route remains fully supported.
+
 Generate both equivalent local formats:
 
 ```text
@@ -102,9 +118,9 @@ completion question:
 [
   {
     "header": "Confirm ServiceNow OIDC evidence",
-    "question": "Has the ServiceNow administrator confirmed the OIDC provider and the exact Entra claim-name to ServiceNow user-field mapping for {AGENT_DISPLAY_NAME} in environment `{ENVIRONMENT_ID}` and ServiceNow instance `{INSTANCE_NAME}`?\n\nThis completes only the current target-bound Manual OIDC evidence for this exact target. It does not prove a real employee token, request, permission, or business result.",
+    "question": "Are the requirements above complete for this exact target, including the OIDC provider, exact Entra claim-name to ServiceNow user-field mapping, one matching Active user, and current connector preauthorization evidence? This Manual evidence does not prove a real employee token or business result.",
     "options": [
-      { "label": "Yes, the OIDC and mapping evidence is complete for this exact target" },
+      { "label": "Yes, all requirements are complete" },
       { "label": "No, the ServiceNow administrator still needs to finish it" }
     ],
     "allowFreeformInput": false
@@ -115,7 +131,7 @@ completion question:
 Only after the first option is selected, record the bundled confirmation:
 
 ```text
-python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-admin-phase --phase servicenow-oidc --status completed
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-admin-phase --phase servicenow-oidc --status completed --confirm-oidc-provider --confirm-claim-mapping --confirm-active-user-match
 ```
 
 Return `ACTION_RESULT = "recorded"` only after this command succeeds.

@@ -1,7 +1,8 @@
 # Guide and verify the Entra User Login application
 
-Treat Entra registration as one complete high-level setup step. Render the one
-executable protected-workbook question directly. Do not add a separate
+Treat Entra registration as one complete high-level setup step. Use either
+the source-faithful direct-capture handoff or the protected XLSX/CSV handoff.
+Do not add a separate
 Email/UPN/Pay ID routing question or pauses between Create App, claims, scope,
 pre-authorization, permissions, and consent.
 
@@ -84,6 +85,23 @@ Never infer physical-connection readiness from Shared Identity.
   confirmation shown by the Task 1 claim flow.
 
 ## Complete admin instructions
+
+For direct capture, return the authoritative workbook instructions and native
+questions without writing state:
+
+```text
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage entra
+```
+
+Pass every returned `askUserArguments` object verbatim through the active
+`ask_user` tool. Record the non-secret values only after the administrator
+answers the separate Client ID and User Claim prompts:
+
+```text
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage entra --client-id "<application-client-id-guid>" --claim-name "<selected-claim-name>" --yes
+```
+
+The protected file route remains fully supported:
 
 Generate both equivalent local handoff formats before the administrator pause:
 
@@ -169,7 +187,7 @@ target placeholders and ask this separate completion question:
 [
   {
     "header": "Confirm Entra setup evidence",
-    "question": "Has the Entra administrator confirmed the application registration, selected emitted claim, `user_impersonation` scope, and Microsoft ServiceNow connector pre-authorization for {AGENT_DISPLAY_NAME} in environment `{ENVIRONMENT_ID}` and ServiceNow instance `{INSTANCE_NAME}`?\n\nThis confirmation completes only the current target-bound Manual Entra setup evidence for this exact target. It does not perform or claim a Microsoft Graph read.",
+    "question": "Are all four requirements above complete for this exact target: application registration, selected emitted claim, `user_impersonation` scope, and Microsoft ServiceNow connector pre-authorization? It does not perform or claim a Microsoft Graph read.",
     "options": [
       { "label": "Yes, all four requirements are confirmed for this exact target" },
       { "label": "No, the administrator handoff is incomplete" }
@@ -182,7 +200,7 @@ target placeholders and ask this separate completion question:
 Only after the first option is selected, record the bundled confirmation:
 
 ```text
-python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-admin-phase --phase entra-registration --status completed
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-admin-phase --phase entra-registration --status completed --confirm-application-registration --confirm-claim-emission --confirm-user-impersonation-scope --confirm-connector-preauthorization
 ```
 
 This command fails closed unless the locally imported handoff has one selected

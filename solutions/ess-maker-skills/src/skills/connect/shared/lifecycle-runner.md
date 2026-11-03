@@ -23,9 +23,10 @@ question into one paragraph. Say exactly what value or choice the user must
 provide. Show only current missing work; do not repeat passed steps or
 internal IDs/status machinery. Prefer buttons with no recommended,
 preselected, default, or automatic answer.
-Freeform is allowed only for one genuinely unknown value: the public
-ServiceNow instance URL, employee portal URL, or an unknown/replaced Entra
-Application client ID. Never combine multiple values in one blank field.
+Freeform is allowed only for one genuinely unknown non-secret value per card:
+the public ServiceNow instance URL, employee portal URL, Entra Application
+client ID, selected emitted claim name, or actual internal `sys_user` field.
+Never combine multiple values in one blank field.
 Detailed technical navigation belongs in the linked administrator guide or
 workbook Steps page, while the question names the result to return.
 

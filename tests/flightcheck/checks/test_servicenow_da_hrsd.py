@@ -909,6 +909,10 @@ def _record_new_mapping_workflow(
         phase="entra-registration",
         status="completed",
         client_id=APP_CLIENT_ID,
+        application_registration_confirmed=True,
+        claim_emission_confirmed=True,
+        user_impersonation_scope_confirmed=True,
+        connector_preauthorization_confirmed=True,
     )
     service_now = snow.identity_mapping_handoff(
         context,
@@ -936,6 +940,9 @@ def _record_new_mapping_workflow(
         context,
         phase="servicenow-oidc",
         status="completed",
+        oidc_provider_confirmed=True,
+        claim_mapping_confirmed=True,
+        active_user_match_confirmed=True,
     )
 
 

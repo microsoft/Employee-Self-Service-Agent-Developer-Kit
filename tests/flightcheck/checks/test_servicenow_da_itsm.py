@@ -586,6 +586,10 @@ def test_recorded_mapping_workflow_reaches_real_it_checkpoints(
             phase="entra-registration",
             status="completed",
             client_id=APP_CLIENT_ID,
+            application_registration_confirmed=True,
+            claim_emission_confirmed=True,
+            user_impersonation_scope_confirmed=True,
+            connector_preauthorization_confirmed=True,
         )
         service_now = snow.identity_mapping_handoff(
             context,
@@ -613,6 +617,9 @@ def test_recorded_mapping_workflow_reaches_real_it_checkpoints(
             context,
             phase="servicenow-oidc",
             status="completed",
+            oidc_provider_confirmed=True,
+            claim_mapping_confirmed=True,
+            active_user_match_confirmed=True,
         )
     runner = _runner(components)
     runner.graph = _graph_client(optional_claim_names=())
