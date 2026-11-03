@@ -62,6 +62,202 @@ Column casing differs by table family:
 
 Time column on every table: `EventInfo_Time` (UTC).
 
+## Internal test-tenant attribution
+
+FlightCheck and ADK platform events share the explicit tenant-ID allow-list in
+`flightcheck/telemetry.py` for their `tenantClass` / `tenant_class` dimensions.
+`internal` is the historical reporting bucket for **known non-customer
+traffic**. It includes Microsoft corporate and dogfood tenancy as well as
+explicitly verified partner, self-service, and demo test tenants; the label
+does not assert that every listed tenant is Microsoft-owned. Classification
+never uses display-name patterns, so an unrelated customer with a similar name
+is not reclassified. `ESS_ADK_INTERNAL_TENANTS` can extend the allow-list
+locally.
+
+Hard-coded additions require recorded provenance: confirmation from the tenant
+owner, or a production-usage investigation that resolves the tenant through
+Microsoft Graph followed by an explicit maintainer decision that it is
+non-customer traffic. The six test/demo IDs added in PR #458 followed the latter
+path and were also excluded from every externally scoped Aria chart.
+
+Classification happens when an updated clone emits an event. It does not
+rewrite historical events or change older clones. External dashboard charts
+therefore also need tenant-ID exclusions for previously misclassified test
+activity; keep those exclusions when adding tenants to the emitter allow-list.
+Raw customer-only queries must apply the canonical
+`knownNonCustomerTenantIds` exclusion in
+[`telemetry_queries.kql`](telemetry_queries.kql), because historical rows and
+events from older clones may still say `tenantClass == "customer"`.
+
+## Diagnostic outcomes are not release readiness
+
+Native DA diagnostic runs retain their diagnostic `overall` in legacy
+FlightCheck events. Their `runOutcome` labels describe inspection, never
+release approval:
+
+| `overall` | Legacy `runOutcome` | Additive `adk.flightcheck.result` |
+|---|---|---|
+| `SETUP_CHECKS_PASSED` | Setup checks passed | `pass` |
+| `CHECKED_WITH_NOTES` | Checked with notes | `partial` |
+| `SOME_CHECKS_UNVERIFIED` | Some checks could not run | `partial` |
+| `ISSUES_FOUND` | Setup issues found | `fail` |
+
+A skipped-only diagnostic is unverified even when failure, error, blocked,
+and warning counts are zero. Legacy readiness runs and profiles that retain
+the `READY` / `READY_WITH_WARNINGS` / `NOT_READY` contract keep their existing
+count-based projection.
+
+The time-to-green and per-tenant readiness queries explicitly restrict both
+their denominators and verdict predicates to readiness outcomes. Diagnostic
+runs remain in usage and outcome distributions, but do not start a readiness
+failure clock, end one, or inflate the ready rate. For historical data, use
+`overall` for that exclusion: older emitters could label diagnostic
+`runOutcome` as `Ready`. This updates emitted payloads and the checked-in query
+pack, not deployed dashboards or historical events.
+
+## Sessions and active-install reporting
+
+All SDK activity emitters, including the capability shim and validated client
+event batches, ensure `adk.session.start` is recorded before sending activity.
+Allocating a session ID (including for a FlightCheck run index) is not evidence
+that its start event was recorded. The SDK persists that distinction in
+`~/.adk/session.json`, reuses sessions within the 30-minute inactivity window,
+and records a missing start for legacy session files on their next activity.
+Starts use the activity's session, install, tenant, and agent-type attribution;
+they do not carry capability-specific dimensions. Recording is tracked per
+install/tenant/agent-type/telemetry-project context within the session, so an
+earlier unknown-tenant or other-clone start cannot suppress a start in the
+correct dashboard cohort. A session spanning contexts can therefore have a
+start in each; use distinct `session_id` when combining cohorts.
+
+A start is marked recorded only after delivery or successful local buffering.
+The reservation owner sends the start and its first activity in one ordered
+collector batch, so bounded process-exit flushing cannot persist the start
+while dropping that activity between two network calls. While another process
+owns a pending start, later activity is buffered with that exact
+session/context prerequisite instead of being sent ahead of it; unrelated
+contexts may continue flushing without releasing the waiting activity.
+Completed start evidence is persisted separately from the current 30-minute
+session record, so a queued follower remains eligible after session rollover
+or after an older clone rewrites `session.json`. The completion ledger retains
+the latest 1,000 contexts; current-session starts use the session record without
+scanning that history. If a late follower outlives its completion evidence and
+has no unexpired start reservation, retry reconstructs a matching recovery start
+ahead of it. This can duplicate an older start, so count distinct session IDs,
+not start-event rows, even within a cohort.
+
+The legacy `telemetry-buffer.ndjson` compatibility boundary remains a sequence
+of raw Common Schema envelopes. Prerequisite-bearing followers use a new
+sidecar queue; older clones ignore that sidecar instead of uploading its wrapper
+objects as malformed telemetry, and a current clone promotes eligible nested
+envelopes back into the legacy queue. Current readers also migrate wrapper rows
+written by prerelease revisions of this change. Failed buffered events are
+retried by the normal transport. Successful raw-buffer flushes promote eligible
+followers before the current activity is appended, so repeated public emissions
+do not indefinitely starve the sidecar. Promotion respects the retry-buffer count
+and UTF-8 byte budgets; followers that do not fit remain pending. Invalid retry
+rows are removed into a bounded local `telemetry-buffer.ndjson.invalid`
+quarantine rather than blocking all later valid events.
+
+File locks coordinate overlapping CLI processes; network requests do not hold
+the session-state lock or the active retry-buffer lock. A flush atomically
+detaches its snapshot under a fresh token and claim timestamp, so concurrent
+appends remain active, an aged queue does not create an immediately stale
+lease, and an expired owner cannot delete or reconcile a successor's snapshot.
+When a start/activity batch exceeds a retry-buffer count or byte budget, the
+start is retained and activities are shed until both limits are met.
+This remains best-effort telemetry, not exactly-once delivery: process crashes,
+unwritable state, and bounded-buffer eviction can still cause loss or duplicates.
+
+The active-user charts deduplicate session starts by `instance_id`; they measure
+active installs, not identified people. The fix is prospective: it does not
+backfill historical capability events whose session starts were never emitted.
+
+### Validating capability-first session recording
+
+You do not need to reproduce a missing session in a real tenant. From the
+**repository root**, run this deterministic, offline check:
+
+```powershell
+python -m pytest -q -s tests\test_adk_telemetry.py::test_allocated_session_and_run_index_do_not_suppress_start
+```
+
+It allocates a session and FlightCheck run index **without starting telemetry**,
+then emits `setup` and `connect` capabilities before calling `start_session`.
+Expected: a printed `PASS` explanation and `1 passed`. Assertions require one
+start followed by both activities, the same session and attribution/project on
+all three, and no duplicate from the later explicit start. The test captures the
+real SDK's outgoing envelopes in memory, uses temporary state, and makes no
+network requests or changes to your existing `~/.adk` files. It fails if
+capability-first activity can bypass recording its start.
+
+Run the transport/session regressions, including Dawn's concurrent-owner failure
+case, with:
+
+```powershell
+python -m pytest -q tests\test_adk_telemetry.py
+```
+
+The public-emission follower regression deliberately holds the first collector
+request open, buffers a concurrent capability, returns HTTP 503 for the owner,
+then emits more capabilities. It requires the waiting capability to arrive
+behind its start without manually draining private queues. Other regressions
+cover failed state writes, malformed retry files, legacy state, rollover, and
+followers arriving both before and after completion-history eviction.
+
+**Optional live ingestion check:** offline assertions prove emitter behavior,
+not collector ingestion or dashboard freshness. This PowerShell command routes
+two test capabilities to the **dev project only**, respects your existing
+telemetry consent, and prints the session ID and synchronous results. It uses
+your normal local session/identity; do not delete session files or disable
+consent to run it.
+
+```powershell
+@'
+import json
+import os
+import sys
+from pathlib import Path
+
+os.environ["ESS_ADK_ARIA_ENV"] = "dev"
+os.environ.pop("ESS_ADK_ARIA_IKEY", None)
+sys.path.insert(0, str(Path("solutions") / "ess-maker-skills" / "scripts"))
+import adk_telemetry as adk
+
+print("session_id:", adk.get_session()[0])
+print("setup:", json.dumps(adk.emit_capability_use("setup", block=True)))
+print("connect:", json.dumps(adk.emit_capability_use("connect", block=True)))
+print("later start:", json.dumps(adk.start_session(block=True)))
+'@ | python -
+```
+
+`sent: true` with HTTP 200/204 means collector acceptance, not proof that Kusto
+or Aria has processed the events. `disabled` means consent is off; `buffered`
+means delivery needs a later successful retry. If both capability deliveries
+succeed, the later start should report `existing-session`.
+
+In the **dev** Kusto database `08e397b2c6c243eeaeb341e111c36167`, substitute the
+printed ID:
+
+```kusto
+let validationSession = "<printed-session-id>";
+union withsource=EventTable adk_session_start, adk_capability_use
+| where session_id == validationSession
+| project EventInfo_Time, EventTable, session_id, instance_id, tenant_id,
+          tenant_class, agent_type, surface, adk_capability
+| order by EventInfo_Time asc
+```
+
+After ingestion, verify both capabilities have a matching start for their
+session/install/tenant/agent-type/surface. The session may already have a dev
+start, so it need not be newly timestamped; recovery can also duplicate starts.
+Agent type follows the checkout (`main` = DA, `main-ca` = CA, PR branch =
+`unknown`); local cohort correctness is separately asserted by
+`test_first_activity_records_start_with_matching_attribution`.
+Do not use production dashboard changes as the immediate pass/fail signal.
+The existing `--emit-synthetic` smoke test explicitly starts a session first,
+so it is not a reproduction of the capability-first defect.
+
 ## What each identifier means
 
 | Field | Meaning |
@@ -108,7 +304,63 @@ target without combining them in Kusto.
 
 ---
 
-## Investigation workflow: "was tenant X on an up-to-date ADK when this happened?"
+## Blocked verdict: splitting by cause (`blockReason`, schema 1.5)
+
+The run verdict donut shows a single `Blocked (gate)` wedge: an essential
+platform capability was unavailable, so the run is release-blocking. That
+wedge does not say *why*. `blockReason` splits it by cause so admin-API
+authorization denials are countable on their own.
+
+Emitted on both `essmakerkit_flightcheck_run` and
+`essmakerkit_flightcheck_check`. Bounded enum (never free-form):
+
+| `blockReason` | Meaning |
+|---|---|
+| `adminApiAuthorization` | Admin-API call denied by authorization: HTTP 401/403 or an `AADSTS*` error. This is the signal the split exists to count. |
+| `adminApiUnavailable` | Required admin API could not be reached for a non-auth reason: 404 wrong-environment, 5xx, timeout, connect error. Kept separate so the known test-ring 404 wrong-host case does not inflate the auth count. |
+| `checkpointContract` | A checkpoint contract was missing or unresolved (target context/evidence not provided). |
+| `profileCardinality` | A profile family did not emit its required minimum validation rows. |
+| `evidenceAmbiguous` | The evidence window held multiple candidate or non-terminal runs, so the result could not be scored. |
+| `other` | Blocked for a cause outside the set above (explicit exhaustive fallback). |
+
+Nuances:
+
+- **Check events:** `blockReason` is non-empty only when `status == "Blocked"`.
+  It is `""` for every non-blocked check.
+- **Run events:** when a run has one or more blocked checks, the run's
+  `blockReason` is the highest-precedence cause among them. Precedence
+  (highest first): `adminApiAuthorization` > `adminApiUnavailable` >
+  `checkpointContract` > `profileCardinality` > `evidenceAmbiguous` >
+  `other`. A run with no blocked checks emits `""`.
+- **Decoupled from `runOutcome`.** A run can have `blocked > 0` but an overall
+  `runOutcome` of `Failed`/`Blocked (check errored)` (errored/failed rank above
+  blocked in the donut). The run still emits its `blockReason` whenever any
+  blocked check exists, so auth blocks are countable regardless of the final
+  donut slice. Count blocked customers/runs from `blockReason`, not from the
+  `runOutcome` wedge.
+- **Pre-1.5 data:** an empty `blockReason` on a blocked row is an event emitted
+  before this field shipped, not a classification of "no reason."
+
+### Coverage boundary (known gap, tracked as follow-up)
+
+`adminApiAuthorization` is emitted only when a required admin-API client
+raises on the authorization/binding path, where `cli._classify_client_block`
+sees the HTTP 401/403 or `AADSTS*` error. The Graph and Power Platform admin
+clients normalize *later* API responses into structured error dicts rather
+than raising, so a **post-auth** authorization denial (a 401/403 returned by
+a data call after the client already authenticated) may bypass the classifier
+and surface as a `Failed` check or `adminApiUnavailable`, not
+`adminApiAuthorization`. This path is not exercised by an automated test
+because there is no safe test tenant that reliably returns a post-auth
+401/403 without side effects. Treat the `adminApiAuthorization` count as a
+**lower bound** on admin-API authorization blocks, and track closing this gap
+(classify normalized client error dicts, add a tenant-free regression) as
+follow-up work.
+
+See `telemetry_queries.kql` section 3b for the customers-and-runs-blocked
+queries.
+
+
 
 1. **Fetch the (install, SHA, branch) triple for the tenant / event of interest.**
    Use `telemetry_queries.kql` §9a (FlightCheck) or §9b (ADK platform tables).

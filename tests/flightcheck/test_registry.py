@@ -87,8 +87,8 @@ class TestResolve:
     def test_dynamic_id_resolves_to_family(self):
         assert registry.resolve("WD-CONN-003").key == "WD-CONN"
         assert registry.resolve("WD-FLOW-002").key == "WD-FLOW"
-        assert registry.resolve("WD-WF-007").key == "WD-WF"
-        assert registry.resolve("WD-ENV-001").key == "WD-ENV"
+        assert registry.resolve("WD-WF-007").legacy_family == "WD-WF"
+        assert registry.resolve("WD-ENV-001").legacy_family == "WD-ENV"
 
     def test_wildcard_family_request_resolves(self):
         assert registry.resolve("WD-FLOW-*").key == "WD-FLOW"
@@ -209,7 +209,7 @@ class TestTransitiveRequirements:
         assert registry.AGENTBUILDER in plan.clients
         assert plan.requires_dataverse_endpoint is False
         assert plan.requires_config is True
-        assert registry.resolve("ENV-004-GRS") is None
+        assert registry.resolve("ENV-004-GRS").da.disposition == "deferred"
         assert registry.resolve("ENV-004-UR-001") is None
 
     def test_native_agent_checkpoints_use_only_native_read_clients(self):

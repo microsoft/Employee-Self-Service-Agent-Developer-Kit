@@ -19,7 +19,7 @@ samples(<Area>/<Topic>): <short summary> (#<issue-number>)
 Examples:
 
 - `samples(Facilities/EmployeeInviteGuest): tighten modelDescription wording (#123)`
-- `samples(WorkdayCustomEngineAgent/Employee/EmployeeGetBenefitsSummary): add new topic (#124)`
+- `samples(Workday/Employee/EmployeeGetVacationBalance): fix date handling (#124)`
 
 ## PR title
 

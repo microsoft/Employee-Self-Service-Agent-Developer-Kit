@@ -2,8 +2,12 @@
 
 # ESS Foundation Setup
 
-Every **Message** block is exact user-facing text. Do not expose internal step IDs,
-checkpoint IDs, state paths, or tool narration.
+Render every **Message** block in this file and every delegated setup file
+using its fixed wording and structure. Replace documented placeholders with
+resolved evidence and send only the block contents. Surrounding instructions
+remain internal.
+
+Do not expose internal step IDs, checkpoint IDs, state paths, or tool narration.
 
 Follow `src/reference/ui-formatting-guidelines.md` for every user-facing
 instruction in this flow. Resolve its examples with the actual environment,
@@ -191,6 +195,8 @@ For **Help me decide** on the multiple-account surface, follow the shared contra
 
 Retain a confirmed cached sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, `setup_alm_import.py`, and `reconcile_setup_agent.py` command in this invocation. Never infer a corp account.
 
+Pass `--preferred-username "{SETUP_ACCOUNT}"` to every setup-owned `flightcheck/cli.py` command, including retries and rechecks. Use the current `{SETUP_ACCOUNT}` after any account change.
+
 When no cached account exists, or the maker selects **Use a different user** or **Use the Microsoft account picker**, omit `--account` and append `--select-account` only to the first read-only command that can authenticate. Parse `DA_AGENTBUILDER_AUTH_JSON:` from that command's output, retain its non-empty `account` as `{SETUP_ACCOUNT}`, and use `--account "{SETUP_ACCOUNT}"` for every later command in this invocation. The picker establishes the identity once; later commands reuse its cached token and sign-in name.
 
 `reconcile_setup_agent.py` does not accept `--select-account`, and a command that may mutate remote state must not establish the selected identity. When reconciliation or a mutating operation would otherwise be the first authenticated command, first run `setup_existing_da.py list-environments --ring "{RING}" --select-account` only to establish `{SETUP_ACCOUNT}`. Do not use its environment rows to replace an already selected target. Parse `DA_AGENTBUILDER_AUTH_JSON:`, retain the selected account, and pass it to reconciliation or mutation with `--account "{SETUP_ACCOUNT}"`. Do not pass `--select-account` to `reconcile_setup_agent.py` or a mutating command.
@@ -202,6 +208,16 @@ authorization** in `permission-guidance.md` before retaining an account or
 using the read-only operation result.
 
 If the first authenticated command succeeds but does not return an account identity, run `setup_existing_da.py cached-accounts` again. Retain its sole account when exactly one is present. When no single identity can be established, state that setup could not retain the selected sign-in and rerun the Microsoft account picker before continuing.
+
+Run this local operation once after the first authenticated account is established as `{SETUP_ACCOUNT}`, before the next setup operation:
+
+```text
+python scripts/setup_existing_da.py seed-shared-cache --account "{SETUP_ACCOUNT}"
+```
+
+Parse `DA_AUTH_CACHE_SEED_JSON:`. `copied` means the workspace's AgentBuilder cache was copied into a new shared authentication cache. `already-exists` means the existing shared cache was left unchanged. The operation performs no sign-in. No later account change repeats the copy; each cache is maintained by the commands that use it.
+
+On failure, stop before the next setup operation and explain the reported problem, including any partial-completion note. Keep `{SETUP_ACCOUNT}` selected. Resolve the reported local cache problem before rerunning this operation. A later command may still request Microsoft authorization for its own application or permissions.
 
 Account selection does not prove that the maker holds a particular administrator role. Let each service operation validate its own permissions and preserve its specific authorization error instead of rejecting the selected account through a blanket local admin check.
 
@@ -560,6 +576,58 @@ case, and replace or omit `{SUPPORTED_INTEGRATION_SHORTCUTS}` under the
 its first agent-setup decision surface with the recorded environment
 and ring. Every other selected follow-up begins at that follow-up's first
 decision surface rather than rendering the durable completion snapshot.
+
+## Prepare the workspace for an integration
+
+An explicit integration request may invoke Setup automatically when its entry
+prerequisites are missing. This is an entry-only prerequisite handoff, not
+a return from the middle or completion of an integration lifecycle. Retain
+the caller's selected integration, original request, supplied target and
+realm intent, and any verified maker in this invocation.
+
+Check for `.local/config.json` and canonical `.local/setup/config.json` before
+reading them. If `.local` or either file is absent, or a read reports
+`Path does not exist`, treat it as missing preparation and continue normal
+Setup target resolution in this invocation. Do not show the global
+setup-required welcome message, ask the maker to type `/setup`, retry a
+missing-file read, or recreate deleted metadata by guessing old state.
+Unreadable or malformed files still require supported state recovery.
+Resolve a known workspace target by `activeAgent`, schema version `4`, and canonical
+`agent.workspace_slug`. Preserve the recorded workspace Dev identity; do not
+replace it with a promoted Test or Production integration target.
+
+If canonical workspace evidence is complete and `steps.SETUP-07.state: "done"`,
+return immediately to the caller without rerunning setup or showing the Start
+menu, even when `connect_ready` is false. Otherwise perform Setup's normal
+target resolution, access verification, and workspace materialization. For a
+known incomplete target, treat the request as **Resume setup for this agent**
+without asking the maker to select that option. Reuse a retained verified
+maker rather than repeating account selection. If no target or verified
+sign-in is known, use the normal setup questions and authorization controls.
+An integration request does not authorize silently creating or selecting an
+agent, resetting a workspace, installing software, or changing tenants.
+
+Preserve existing setup progress and local edits. Follow normal approval,
+conflicting-workspace, supported-product, and state-recovery rules. A changed,
+expired, or mismatched sign-in still follows Microsoft authorization recovery
+in `permission-guidance.md`; never silently switch account or tenant.
+
+After successful workspace materialization, verify `schema_version: 4`,
+canonical workspace evidence, and `steps.SETUP-07.state: "done"` for the
+resolved workspace agent. Return to the caller's entry point in this same
+invocation, carrying the verified target and maker, without asking the maker
+to repeat Connect or choose it from the post-setup menu. This preparation
+return takes precedence over the usual post-attachment readiness-check and
+terminal-choice handoff. Do not wait for `connect_ready: true`, because
+integration connections may be needed to resolve runtime readiness. Do not
+claim that overall setup readiness passed or mark unfinished records done.
+Carry any unresolved local-cleanup warning into the return.
+
+If preparation is blocked, cancelled, or exited, retain that evidence and the
+caller's request but do not start the integration. Do not return success,
+repeat the automatic handoff, or bypass a missing prerequisite. Ordinary
+standalone `/setup` still runs its full readiness and completion behavior;
+Setup does not proactively launch an integration without a retained caller.
 
 ## Start
 

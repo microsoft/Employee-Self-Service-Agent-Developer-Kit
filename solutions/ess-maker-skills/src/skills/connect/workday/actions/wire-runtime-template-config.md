@@ -2,11 +2,19 @@
 
 # Action: Initialize Workday runtime templates at conversation start
 
+**Development only.** Require verified `activeTargetRealm: dev` before
+checkpointing, editing, converting or pushing any local topic. Test and
+Production use `record-runtime-template-wiring` to inspect promoted content
+read-only; do not run this authoring action for those realms.
+
 Run this action only after all reviewed Workday topics are enabled and
 `record-topic-activation` has verified them. Run it before wiring the Admin
 User Context redirect. It initializes the Workday runtime template
 configuration on every new conversation, rather than depending on the
 separately cached employee user context.
+
+For Test and Production, the topic-state prerequisite is a read-only
+verification of promoted content, not a new activation or maker confirmation.
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 
@@ -20,8 +28,8 @@ Do not edit Conversation Start unless the Runtime phase already contains
 
 **Message:**
 
-I'll connect your agent's conversation start to the Workday runtime
-configuration so each new conversation receives the current Workday templates.
+I'll configure the agent to load its Workday settings whenever a new
+conversation starts.
 
 **End message.**
 

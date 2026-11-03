@@ -653,6 +653,15 @@ def test_minimalbot_activation_rejects_non_workday_topic(tmp_path):
         )
 
 
+def test_workday_reviewed_inventory_excludes_retired_access_check():
+    schema = "gptagent_copilotforemployeeselfservicehr"
+
+    assert (
+        f"{schema}.topic.WorkdaySystemAccessCheck"
+        not in mbe.reviewed_workday_topic_schemas(schema)
+    )
+
+
 def test_workday_topic_resolution_enforces_reviewed_ess_hr_count(tmp_path):
     _write_workday_topics(tmp_path)
     component_map_path = tmp_path / ".component-map.json"
@@ -673,7 +682,7 @@ def test_workday_topic_resolution_enforces_reviewed_ess_hr_count(tmp_path):
 
     with pytest.raises(
         mbe.MinimalBotEvaluationError,
-        match="reviewed 23-topic",
+        match="reviewed 22-topic",
     ):
         mbe.resolve_workday_dialogs(
             tmp_path,
@@ -681,7 +690,13 @@ def test_workday_topic_resolution_enforces_reviewed_ess_hr_count(tmp_path):
         )
 
 
-def test_workday_topic_resolution_uses_exact_reviewed_hr_inventory(tmp_path):
+@pytest.mark.parametrize("extra_suffix", [
+    "WorkdayEmployeeScenariosHandoff",
+    "WorkdaySystemAccessCheck",
+])
+def test_workday_topic_resolution_uses_exact_reviewed_hr_inventory(
+    tmp_path, extra_suffix,
+):
     schema = "gptagent_copilotforemployeeselfservicehr"
     expected_topics = frozenset(
         json.loads(
@@ -710,16 +725,16 @@ def test_workday_topic_resolution_uses_exact_reviewed_hr_inventory(tmp_path):
             "schemaName": f"{schema}.topic.{suffix}",
             "displayName": f"Workday {suffix}",
         }
-    handoff_path = "topics/employee-handoff.mcs.yml"
-    tmp_path.joinpath(handoff_path).write_text(
+    extra_path = "topics/unreviewed.mcs.yml"
+    tmp_path.joinpath(extra_path).write_text(
         "kind: AdaptiveDialog\n",
         encoding="utf-8",
     )
-    component_map[handoff_path] = {
+    component_map[extra_path] = {
         "componentKind": "DialogComponent",
-        "componentId": "employee-handoff",
-        "schemaName": f"{schema}.topic.WorkdayEmployeeScenariosHandoff",
-        "displayName": "Workday Employee Scenarios Handoff",
+        "componentId": "unreviewed-topic",
+        "schemaName": f"{schema}.topic.{extra_suffix}",
+        "displayName": f"Workday {extra_suffix}",
     }
     tmp_path.joinpath(".component-map.json").write_text(
         json.dumps(component_map),
@@ -728,11 +743,12 @@ def test_workday_topic_resolution_uses_exact_reviewed_hr_inventory(tmp_path):
 
     resolved = mbe.resolve_workday_dialogs(tmp_path, schema)
 
-    assert len(resolved) == 23
+    assert len(resolved) == 22
     schemas = {entry["schemaName"] for entry in resolved}
     assert f"{schema}.topic.EmployeeUpdatePhoneNumber" in schemas
     assert f"{schema}.topic.GetReferenceData" in schemas
     assert f"{schema}.topic.WorkdayEmployeeScenariosHandoff" not in schemas
+    assert f"{schema}.topic.WorkdaySystemAccessCheck" not in schemas
 
 
 def test_minimalbot_activation_rejects_local_topic_content_changes(
