@@ -61,6 +61,10 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
         "`--confirm-saved-mapping`, `--reject-saved-mapping`, or "
         "`record-admin-phase --phase servicenow-oidc` compatibility paths"
     ) in normalized
+    assert "`status: shared-identity-reuse-required`" in runner
+    assert "`preActionHandoff`" in runner
+    assert "Do not render\nor ask Entra availability in the same turn" in runner
+    assert "After decline, the next\nresume may ask Entra availability" in runner
     assert "only after the user explicitly selects **Yes, let's go**" in (
         plan_normalized
     )

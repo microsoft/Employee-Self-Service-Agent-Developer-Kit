@@ -89,6 +89,21 @@ questions until that acknowledgement is current. Once current, require
 and ask only its returned data questions. `decision: no-action`
 means current completed/reused evidence skips both availability and
 instructions.
+Before Entra availability, honor a returned
+`status: shared-identity-reuse-required` and its `preActionHandoff`. This is a
+local zero-write pre-action for the current selected target provider and
+agent. For `source-selection-required`, ask one label-only candidate question
+and rerun `shared-reuse-handoff --source-key <internal-source-key>`. For
+`question-required`, pass its canonical question through the active question
+adapter. Translate **Reuse shared identity** to the existing target-scoped
+`record-shared-reuse ... --decision accept`, **Configure separately** to
+`--decision decline`, and **Not now** to no command plus waiting. Do not render
+or ask Entra availability in the same turn. After accept, rerun
+`resume-handoff`; current reused Entra/OIDC handoffs skip their corresponding
+availability gates and proceed to owning checks. After decline, the next
+resume may ask Entra availability. `none` and declined/already-recorded
+decisions continue through the normal availability flow; accepted/current
+already-recorded evidence skips the corresponding availability.
 For the ServiceNow OIDC action, the valid current mapping receipt is the Manual
 completion criterion. After the actual internal User Field is returned, run
 the action guide's value-record command once; it atomically writes the receipt

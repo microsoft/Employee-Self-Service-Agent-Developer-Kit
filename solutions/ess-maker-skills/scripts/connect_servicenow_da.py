@@ -6076,6 +6076,7 @@ def identity_mapping_handoff(
             if stage == "servicenow"
             else final_mapping
         )
+        _write_lifecycle_state(context, state)
         return _identity_no_action_handoff(
             context,
             state,
@@ -14323,6 +14324,52 @@ def _record_business_group_acknowledgement(
     return copy.deepcopy(record)
 
 
+def _shared_reuse_before_availability(
+    context: dict[str, Any],
+    state: dict[str, Any] | None,
+    decision: dict[str, Any],
+) -> tuple[dict[str, Any] | None, bool]:
+    if not isinstance(state, dict):
+        return None, False
+    phase = decision.get("phase")
+    phase_id = phase.get("id") if isinstance(phase, dict) else None
+    if phase_id not in {"entra-registration", "servicenow-oidc"}:
+        return None, False
+    accepted_current = bool(
+        any(
+            row.get("itemId") == phase_id
+            and row.get("decision") == "accepted"
+            for row in _shared_identity_item_decisions(
+                state.get("sharedConfigurationReuse")
+                if isinstance(
+                    state.get("sharedConfigurationReuse"),
+                    dict,
+                )
+                else None
+            )
+        )
+        and _identity_admin_handoff_is_ready(
+            context,
+            state,
+            phase=phase_id,
+        )
+    )
+    if accepted_current:
+        return None, True
+    if (
+        phase_id != "entra-registration"
+        or decision.get("decision") != "run-action"
+    ):
+        return None, False
+    handoff = shared_reuse_handoff(context)
+    if handoff.get("decision") in {
+        "question-required",
+        "source-selection-required",
+    }:
+        return handoff, True
+    return handoff, False
+
+
 def resume_handoff(
     context: dict[str, Any],
     *,
@@ -14362,13 +14409,22 @@ def resume_handoff(
         verified_phases=verified_phases,
     )
     current_group = _current_business_group(contract, progress)
+    pre_action_handoff, bypass_availability = (
+        _shared_reuse_before_availability(
+            context,
+            state,
+            decision,
+        )
+    )
     transport = _business_group_transport(
         context=context,
         contract=contract,
         state=state,
         title=str(progress["headline"]),
         phase_items=progress["items"],
-        current_group=current_group,
+        current_group=(
+            None if bypass_availability else current_group
+        ),
         roles_available=roles_available,
         availability_group_id=availability_group_id,
         availability_context_sha256=availability_context_sha256,
@@ -14384,6 +14440,14 @@ def resume_handoff(
         "progress": progress,
         "transport": transport,
     }
+    if (
+        isinstance(pre_action_handoff, dict)
+        and pre_action_handoff.get("decision")
+        in {"question-required", "source-selection-required"}
+    ):
+        result["status"] = "shared-identity-reuse-required"
+        result["preActionHandoff"] = pre_action_handoff
+        return result
     availability = transport["businessGroupAvailability"]
     group_question = availability["question"]
     if group_question is not None and roles_available is not True:

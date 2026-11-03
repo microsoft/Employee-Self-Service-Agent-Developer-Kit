@@ -1328,7 +1328,11 @@ def _write_shared_source_state(
         "entraAdministratorConfirmed": True,
         "tokenClaimEmissionConfirmed": True,
         "binding": binding,
-        "importedWorkbookSha256": "entra-workbook-hash",
+        "provenanceSha256": "a" * 64,
+        "sourceWorkbookSha256": (
+            snow.IDENTITY_WORKBOOK_SOURCE_SHA256["entra"].upper()
+        ),
+        "importedWorkbookSha256": "a" * 64,
         "importedFileFormat": "xlsx",
         "sheetProtected": True,
         "recordedAt": "2026-10-01T00:01:00Z",
@@ -1349,7 +1353,13 @@ def _write_shared_source_state(
         "tokenClaimEmissionConfirmed": True,
         "serviceNowAdministratorConfirmed": True,
         "binding": binding,
-        "importedWorkbookSha256": "servicenow-workbook-hash",
+        "provenanceSha256": "b" * 64,
+        "sourceWorkbookSha256": (
+            snow.IDENTITY_WORKBOOK_SOURCE_SHA256["servicenow"].upper()
+        ),
+        "importedWorkbookSha256": "b" * 64,
+        "importedFileFormat": "xlsx",
+        "sheetProtected": True,
         "recordedAt": "2026-10-01T00:01:00Z",
     }
     mapping["relationshipSha256"] = snow._identity_mapping_relationship_hash(
@@ -1378,7 +1388,7 @@ def _write_shared_source_state(
                 "userImpersonationScopeConfirmed": True,
                 "connectorPreauthorizationConfirmed": True,
                 "candidateSetSha256": candidates["candidateSetSha256"],
-                "mappingWorkbookSha256": "entra-workbook-hash",
+                "mappingWorkbookSha256": "a" * 64,
                 "binding": binding,
                 "recordedAt": "2026-10-01T00:00:00Z",
             },
@@ -1389,6 +1399,8 @@ def _write_shared_source_state(
                 "evidence": {
                     "kind": "structured-admin-attestation",
                     "oidcCapabilityConfirmed": True,
+                    "identityMappingReceiptConfirmed": True,
+                    "mappingReceiptCurrent": True,
                     "runbookCompleted": True,
                     "mappingDetailsCollected": True,
                     "claimMappingConfirmed": True,
@@ -1402,6 +1414,7 @@ def _write_shared_source_state(
                     "mappingRelationshipSha256": mapping[
                         "relationshipSha256"
                     ],
+                    "binding": binding,
                     "recordedAt": "2026-10-01T00:01:00Z",
                 },
             }
@@ -1534,6 +1547,60 @@ def _write_shared_target_state(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state), encoding="utf-8")
     return context, path
+
+
+def _prepare_shared_reuse_resume(
+    root: Path,
+) -> tuple[dict, Path, Path]:
+    source_path = _write_shared_source_state(
+        root,
+        profile="hrsd",
+        agent_id=AGENT_ID,
+        agent_slug="employee-self-service-hr",
+        include_oidc=True,
+        include_credential=True,
+    )
+    source_state = json.loads(source_path.read_text(encoding="utf-8"))
+    source_state["phases"]["test"]["checkpointResults"] = {
+        "SN-DA-HRSD-TEST-001": "Manual"
+    }
+    source_path.write_text(json.dumps(source_state), encoding="utf-8")
+    context, target_path = _write_shared_target_state(
+        root,
+        profile="itsm",
+        agent_id=OTHER_AGENT_ID,
+        agent_slug="employee-self-service-it",
+        instance_name="dev123",
+    )
+    contract_source = (
+        snow.SOLUTION_ROOT / snow.ITSM_PROFILE.contract_path
+    )
+    contract_target = root / snow.ITSM_PROFILE.contract_path
+    contract_target.parent.mkdir(parents=True, exist_ok=True)
+    contract_target.write_bytes(contract_source.read_bytes())
+    contract = json.loads(contract_target.read_text(encoding="utf-8"))
+    state = json.loads(target_path.read_text(encoding="utf-8"))
+    state["acceptedContractRevision"] = contract["contractRevision"]
+    state["phases"]["preflight"] = {
+        "status": "done",
+        "checkpointResults": {
+            contract["phases"][0]["checkpoints"][0]: "Passed"
+        },
+        "checkpointAcknowledgements": {},
+    }
+    state["adminSetup"]["phaseHandoffs"]["preflight"] = {
+        "status": "completed",
+        "evidence": {
+            "kind": "maker-confirmed-target",
+            "instanceName": "dev123",
+            "recordedAt": "2026-11-03T00:00:00Z",
+        },
+    }
+    target_path.write_text(json.dumps(state), encoding="utf-8")
+    with snow.product_profile_context("itsm"):
+        normalized = snow._load_lifecycle_state(context)
+        snow._write_lifecycle_state(context, normalized)
+    return context, source_path, target_path
 
 
 def _write_portal_value_source_state(
@@ -9080,7 +9147,7 @@ def test_shared_reuse_partial_hr_to_it_requires_one_maker_acceptance(
         assert "Confirmed ServiceNow instance: `dev123`" in body
         assert "HRSD agent `employee-self-service-hr`" in body
         assert "Entra administrator-confirmed application" in body
-        assert "ServiceNow administrator-confirmed OIDC" in body
+        assert "Current target-bound ServiceNow user-field mapping" in body
         assert "Physical ServiceNow" not in body
         assert "fresh read of that exact connection" not in body
         assert "each owning readiness check still runs" in body
@@ -9575,6 +9642,150 @@ def test_shared_reuse_does_not_offer_before_target_confirmation(
         "decision": "none",
         "candidates": [],
     }
+
+
+def test_resume_offers_shared_reuse_before_entra_availability(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _source_path, target_path = _prepare_shared_reuse_resume(
+        tmp_path
+    )
+    before = target_path.read_bytes()
+
+    with snow.product_profile_context("itsm"):
+        first = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+        )
+
+    assert first["status"] == "shared-identity-reuse-required"
+    assert first["provider"] == snow.ITSM_PROFILE.provider_key
+    assert first["agentSlug"] == "employee-self-service-it"
+    assert first["transport"]["businessGroupAvailability"]["question"] is None
+    reuse = first["preActionHandoff"]
+    assert reuse["decision"] == "question-required"
+    assert reuse["candidate"]["sourceProfile"] == "hrsd"
+    assert reuse["candidate"]["sourceAgentSlug"] == (
+        "employee-self-service-hr"
+    )
+    assert [item["id"] for item in reuse["candidate"]["items"]] == [
+        "entra-registration",
+        "servicenow-oidc",
+    ]
+    assert target_path.read_bytes() == before
+
+    with snow.product_profile_context("itsm"):
+        accepted = snow.apply_shared_configuration_reuse(
+            context,
+            source_key=reuse["candidate"]["sourceKey"],
+            decision="accept",
+        )
+        after_accept = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+        )
+
+    assert accepted["reusedItems"] == [
+        "entra-registration",
+        "servicenow-oidc",
+    ]
+    assert after_accept.get("status") != (
+        "business-group-availability-required"
+    )
+    assert after_accept["transport"]["businessGroupAvailability"][
+        "question"
+    ] is None
+    saved = json.loads(target_path.read_text(encoding="utf-8"))
+    assert saved["adminSetup"]["phaseHandoffs"]["entra-registration"][
+        "status"
+    ] == "reused"
+    assert saved["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
+        "status"
+    ] == "reused"
+    assert "identityClaimCandidates" in saved["evidence"]
+    assert "identityMapping" in saved["evidence"]
+    for key in (
+        "credential",
+        "agentConnection",
+        "topics",
+        "portal",
+        "test",
+        "realmValidations",
+    ):
+        assert key not in saved["evidence"]
+    assert saved["phases"]["credential"]["status"] == "pending"
+    assert saved["phases"]["topics"]["status"] == "pending"
+    assert saved["phases"]["portal-url"]["status"] == "pending"
+    assert saved["phases"]["agent-connection"]["status"] == "pending"
+    assert saved["phases"]["test"]["status"] == "pending"
+
+
+def test_declined_shared_reuse_then_asks_entra_availability(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _source_path, target_path = _prepare_shared_reuse_resume(
+        tmp_path
+    )
+
+    with snow.product_profile_context("itsm"):
+        first = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+        )
+        reuse = first["preActionHandoff"]
+        snow.apply_shared_configuration_reuse(
+            context,
+            source_key=reuse["candidate"]["sourceKey"],
+            decision="decline",
+        )
+        next_resume = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+        )
+
+    assert next_resume["status"] == "business-group-availability-required"
+    assert next_resume["transport"]["businessGroupAvailability"][
+        "currentGroup"
+    ]["id"] == "entra-identity"
+    assert "preActionHandoff" not in next_resume
+    saved = json.loads(target_path.read_text(encoding="utf-8"))
+    decisions = saved["sharedConfigurationReuse"]["identityItemDecisions"]
+    assert {
+        (row["itemId"], row["decision"]) for row in decisions
+    } == {
+        ("entra-registration", "declined"),
+        ("servicenow-oidc", "declined"),
+    }
+
+
+def test_shared_reuse_not_now_is_stable_and_zero_write(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _source_path, target_path = _prepare_shared_reuse_resume(
+        tmp_path
+    )
+    before = target_path.read_bytes()
+
+    with snow.product_profile_context("itsm"):
+        first = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+        )
+        second = snow.resume_handoff(
+            context,
+            verified_phases=frozenset({"preflight"}),
+        )
+
+    assert first["status"] == "shared-identity-reuse-required"
+    assert second["status"] == "shared-identity-reuse-required"
+    assert first["preActionHandoff"] == second["preActionHandoff"]
+    assert target_path.read_bytes() == before
 
 
 @pytest.mark.parametrize(
