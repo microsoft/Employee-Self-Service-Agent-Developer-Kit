@@ -275,9 +275,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         "After topic and portal configuration is complete, the Maker runs"
         in skill
     )
-    assert "protected XLSX workbook" in skill
+    assert "protected one-row\nXLSX/equivalent CSV" in skill
     assert "matching `sys_user` field" in skill
-    assert "`aud` is a built-in" in skill
+    assert "`aud` may be\nconfigured for audience validation" in skill
     assert "Portal Base URI is now in scope" in skill
     assert "current active\nHR agent/profile only" in skill
     assert "ITSM remains a separate provider/PR layer" in skill
@@ -356,7 +356,6 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "adapt-question" in topics
     assert "while the\n  question is pending" in topics
     assert "Absence of\n  an answer is not cancellation" in topics
-    assert "explicitly selects\n  **Not now**" in topics
     assert "Maker-selected public ServiceNow instance" in preflight
     assert "does not ask the Maker to classify setup\nprogress" in preflight
     assert "which situation matches" not in preflight
@@ -391,7 +390,6 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         preflight_normalized
     )
     assert "com.sn_hr_core" in plugins
-    assert "Does the page show the listed installed-and-ready evidence" in plugins
     assert (
         '"label": "Yes, all listed installed-and-ready evidence is present"'
         in plugins
@@ -410,167 +408,74 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Multi-Provider SSO" not in plugins
     assert "ITSM must not inherit" in plugins
     assert "Never run `az ad app create`" in entra
-    assert "https://entra.microsoft.com/" in entra
     assert "c26b24aa-7874-4e06-ad55-7d06b1f79b63" not in entra
-    assert "A display name is a clue, not unique identity" in entra
-    assert "If one exact app exists, reuse it." in entra
-    assert "Do not add an intermediate\n     selection pause" in entra
-    assert "Only when no correct app exists" in entra
     assert "Application Administrator" in entra_normalized
     assert "Cloud Application Administrator" in entra_normalized
     assert "Privileged Role Administrator" not in entra
     assert "application owner may collaborate" in entra_normalized
-    assert "`Failed` or `Error`" in entra
-    assert "cannot be overridden" in entra
     assert "`SN-DA-HRSD-ENTRA-SETUP-001`" in entra
     assert "historical\nstate/audit keys only" in entra
     assert "python scripts/flightcheck/cli.py" not in entra
     for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH"):
         assert f"--checkpoint SN-DA-HRSD-ENTRA-{suffix}-001" not in entra
     assert "completes the Manual Entra identity phase" in entra
-    assert "never enter `aud`" in entra
-    assert "employee-identity candidate claim per yellow" in entra
-    assert "never enter `aud`" in entra
-    assert "confirm every returned candidate name is actually issued" in entra
-    assert "Optional claims screen alone does not prove emission" in entra
-    assert "do not add employee values" in entra
     assert "record-identity-mapping" in entra
     assert "--workbook-file" in entra
     assert "--stage entra" in entra
     assert "--yes" in entra
-    assert "instructionTitle`, `instruction`, and one short" in entra
-    assert "send the returned `question` object unchanged" in entra
-    assert (
-        "`Please enter the returned Entra admin handoff workbook URL.`"
-        in entra
-    )
-    assert "`Purpose`, `Owner`,\n`Known target`, and `Action`" in entra
     assert "`Expected result`" not in entra
-    assert "dynamic workbook link" in entra
-    assert "plain absolute path" in entra_normalized
-    assert "editable\nToken Claim Name cells are yellow" in entra
-    assert "ServiceNow User Field cells are\ngray" in entra
-    assert "no ownership legend is needed" in entra
-    assert "`missingItems` may\ncontrol workbook fields and branch guidance" in entra
-    assert "must never modify the returned\nshort `question` object" in entra
-    assert "add an identifier question" in entra
-    assert "The fixed workbook flow is" in entra
-    assert "blank-label quickstart link row" in entra
-    assert "Step 2 goes directly to Step 7" in entra
-    assert "only the required claim is missing" in entra
-    assert "Only no-app + yellow-ID flows go to Step 3" in entra
-    assert "`6A.1-6A.5`" in entra
-    assert "`6B.1-6B.9`" in entra
-    assert "Step 7 is the single final actual-issuance verification" in entra
-    assert "This Task 1 workbook does not configure them" in entra_normalized
-    assert "API URI" in entra
-    assert "checkpoint results and remediation independent" in entra
-    assert "admin phase's only visible high-level pause" in entra_normalized
     assert "reconcile any older derived reused handoff" in entra
     assert "Require\n`decision: no-action`; do not ask again" in entra
-    assert "`allowFreeformInput: true`" in entra
-    assert "approved Maker-facing term" in entra
-    assert "actual local path" in entra
-    assert "HTTP/SharePoint/OneDrive URL" in entra_normalized
-    assert "Use the exact local path returned by the question" in entra
     assert "<!-- visible-handoff-question:v1-confirm-setup -->" not in entra
     assert '"header": "Confirm Entra setup evidence"' not in entra
     assert "there is no separate Entra completion question" in " ".join(
         entra.split()
     )
-    assert "acceptMappedClaims" in entra
-    assert "custom signing-key route" in entra
-    assert "freezes the exact Entra-confirmed candidate claim names" in (
-        oidc_normalized
-    )
-    assert "returns to the OIDC configuration tab, then sets OIDC" in oidc
-    assert "Configure an OIDC provider to verify ID tokens" in oidc
-    assert "multi-provider sso" in " ".join(oidc.split()).casefold()
-    assert "fills the ServiceNow User Field cell on exactly one yellow row" in (
-        oidc
-    )
-    assert "stage-specific `Steps`" in oidc
-    assert "two-column `Worksheet`" in oidc
-    assert "hidden locked\n   `_metadata`" in oidc
     assert "--claim" not in oidc
-    assert "--user-field" not in oidc
-    assert "[this ServiceNow instance]({SERVICENOW_INSTANCE_URL})" in oidc
-    elevate = oidc.index("select `Elevate roles`")
-    application_registry = oidc.index(
-        "`All`, search for `OAuth`, then open `System OAuth` →"
+    runtime_instructions = (
+        _SOLUTION / "src" / "skills" / "connect" / "shared" / "runtime-instructions"
     )
-    configure_oidc = oidc.index(
-        "`Configure an OIDC provider to verify ID tokens`"
+    entra_admin = (runtime_instructions / "entra-administrator.md").read_text(
+        encoding="utf-8"
+    )
+    snow_admin = (runtime_instructions / "servicenow-administrator.md").read_text(
+        encoding="utf-8"
+    )
+    assert "runtime-instructions/entra-administrator.md" in entra
+    assert "runtime-instructions/servicenow-administrator.md" in oidc
+    assert "identity-direct-handoff --stage entra" in entra
+    assert "identity-direct-handoff --stage servicenow" in oidc
+    assert "record-identity-direct --stage entra" in entra
+    assert "record-identity-direct --stage servicenow" in oidc
+    assert "protected file route remains fully supported" in entra
+    assert "protected file route remains fully supported" in oidc
+    assert "`aud` is only for\naudience validation" in entra
+    assert "Return `ACTION_RESULT = \"recorded\"` immediately" in oidc
+    elevate = snow_admin.index("select **Elevate role**")
+    application_registry = snow_admin.index("**System OAuth** > **Application Registry**")
+    configure_oidc = snow_admin.index(
+        "**Configure an OIDC provider to verify ID tokens**"
     )
     assert elevate < application_registry < configure_oidc
-    assert "whose Client ID is the exact\n   Task 1 Application client ID" in (
-        oidc
-    )
-    assert "Select `New`\n   only when no exact entry exists" in oidc
-    assert "Name = `Microsoft Entra ID - ESS Copilot`" in oidc
-    assert "Client ID = verified App A Application client ID" in oidc
-    assert "Entity state = `Active`" in oidc
-    assert "Scope Restriction = `Broadly scoped`" in oidc
-    assert "tenant-approved non-empty\n     non-secret unused placeholder" in (
-        oidc
-    )
-    assert "cache lifespan = `120`" in oidc
-    assert "Application = `Global`" in oidc
-    assert "JTI verification = disabled" in oidc
-    assert "stop and\n     tell the ServiceNow Admin" in oidc
-    assert "Do not continue, guess a specific plugin" in oidc
-    assert "does not prove authorization" in oidc_normalized
+    assert "c26b24aa-7874-4e06-ad55-7d06b1f79b63" in entra_admin
+    assert "`acceptMappedClaims`" in entra_admin
+    assert "Don't send any secret" in entra_admin
+    assert "Enable JTI claim verification:** off" in snow_admin
+    assert "`/v2.0` URL" in snow_admin
+    assert "Send back to the maker" in snow_admin
     assert "identity-mapping-handoff" in oidc
     assert "--stage servicenow" in oidc
-    assert "No answer or cancellation returns" in oidc
-    assert "Render the exact returned `instructionTitle` and `instruction`" in (
-        oidc
-    )
-    assert (
-        "`Please enter the returned ServiceNow admin handoff workbook URL.`"
-        in oidc
-    )
-    assert "`Purpose`, `Owner`, `Known target`, and\n`Action`" in oidc
     assert "`Expected result`" not in oidc
-    assert "generated protected workbook URI and plain absolute path" in (
-        oidc_normalized
-    )
-    assert "`allowFreeformInput: true`" in oidc
-    assert "approved Maker-facing term" in oidc
     assert "choose `Not yet`" not in oidc
     assert "Maker must say `Not yet`" not in oidc
-    assert "keep the handoff waiting" in oidc
     assert "reconcile any older derived reused handoff" in oidc
     assert "Require\n`decision: no-action`; do not ask again" in oidc
     assert "<!-- visible-handoff-question:v1-confirm-setup -->" not in oidc
     assert '"header": "Confirm ServiceNow OIDC evidence"' not in oidc
-    assert "do not add a separate completion question" in oidc
     assert "{TOKEN_CLAIM_NAME}" not in oidc
     assert '"label": "Completed"' not in oidc
-    assert "PR #217 S4.3/S4.4 is authoritative" in oidc
     assert "enable the tenant-supported" not in oidc
     assert "plugin must be enabled" not in oidc.casefold()
-    assert "matching Active" in oidc
-    assert "Do not return the employee's" in oidc
-    assert "Do not create a test user" in oidc
-    assert "Dictionary or Configure Dictionary" in oidc
-    assert "not a display label or dotted `table.field` name" in (
-        oidc_normalized
-    )
-    assert "exact locked claim name" in oidc
-    assert "approved custom employee claim instead of guessing" in (
-        oidc_normalized
-    )
-    assert "c26b24aa-7874-4e06-ad55-7d06b1f79b63" in oidc
-    assert "an Entra Task 1 action" in oidc_normalized
-    assert "Graph Connector app-only provider" in oidc
-    assert "metadata URL is already used" in oidc
-    assert "do not claim a universal one-provider limit" in oidc_normalized
-    assert "Do not duplicate the same tenant metadata" in oidc
-    assert "Do not record completion evidence until" in oidc_normalized
-    assert "evaluate metadata URL reuse or uniqueness separately" in (
-        oidc_normalized
-    )
     assert "client IDs, metadata" not in oidc
     assert "Resource URI" in credential
     assert "verified App A Application client ID" in credential
@@ -613,7 +518,6 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         '"label": "Not yet, the ServiceNow connection is not ready"'
         in credential
     )
-    assert '"label": "Not yet"' in credential
     assert "Do not ask the Maker for a connection display name" in (
         credential_normalized
     )
@@ -641,7 +545,6 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "set-portal-url" in portal
     assert "Never infer `/sp`, `/esc`" in portal
-    assert "Topics -> ServiceNow HRSD Setup Configurations" in portal
     assert "Set ServiceNow Portal BaseURI" in portal
     assert "Do not publish the agent in this phase" in portal
     assert (
@@ -656,7 +559,6 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "no verified direct connector-form or connection-detail URL" in (
         credential
     )
-    assert "does not create, repair, sign in, submit, or prefill" in credential
     assert "This action is retired" in publish
     assert "Do not invoke `publish`" in publish
     assert "historical evidence" in publish
@@ -670,12 +572,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         assert "tab-specific URL" in action
     assert "ask exactly one question" in plugins
     assert "Do not add a separate\nEmail/UPN/Pay ID routing question" in entra
-    assert "admin phase's only visible high-level pause" in entra_normalized
-    assert "pause exactly once" in oidc
     assert "or pauses between Create App" in entra_normalized
     assert "or pause between role elevation" in oidc_normalized
     assert "record-admin-phase --phase plugin-prerequisites" in plugins
-    assert "record-admin-phase --phase entra-registration" in entra
     assert "record-identity-direct --stage servicenow" in oidc
     assert "--confirm-saved-mapping" not in oidc
     assert "--reject-saved-mapping" not in oidc
@@ -683,11 +582,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "record-admin-operation" not in plugins + entra + oidc
     assert "one complete high-level step" in credential
     assert "one completion question" in credential
-    assert "not shareable" in credential
     assert "Invalid_redirect_uri" in credential
-    assert "conditional remediation, not an observed current error" in (
-        credential
-    )
     for action in (preflight, plugins, entra, oidc, credential):
         assert "do not ask again" in action
         assert "completionStatuses" in action

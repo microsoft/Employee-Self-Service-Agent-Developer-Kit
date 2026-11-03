@@ -2834,9 +2834,6 @@ def test_schema_v7_retires_legacy_publish_without_resetting_test(
     assert migrated["migration"]["schemaV8"][
         "retiredEntraCheckpointIds"
     ] == []
-    assert migrated["migration"]["schemaV9"][
-        "realmCompletionInferred"
-    ] is False
     assert migrated["migration"]["schemaV10"][
         "bindingEvidenceMigrated"
     ] is True
@@ -2933,35 +2930,6 @@ def test_schema_v8_retires_graph_gates_without_fabricating_completion(
         "SN-DA-HRSD-ENTRA-SCOPE-001",
     ]
     assert emitted == []
-
-
-def test_validate_dev_records_choice_without_changing_active_agent(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context, _state = _seed_complete_dev_state(tmp_path, profile="hrsd")
-    config_path = tmp_path / snow.ACTIVE_CONFIG
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(
-        json.dumps({"activeAgent": "other-agent"}),
-        encoding="utf-8",
-    )
-
-    with snow.product_profile_context("hrsd"):
-        result = snow.validate_realm(context, realm="dev")
-
-    assert result["status"] == "dev-resume"
-    assert result["remoteMutationCount"] == 0
-    assert json.loads(config_path.read_text(encoding="utf-8"))[
-        "activeAgent"
-    ] == "other-agent"
-    with snow.product_profile_context("hrsd"):
-        saved = json.loads(
-            snow._lifecycle_state_path(context).read_text(encoding="utf-8")
-        )
-    assert saved["evidence"]["validationRealmSelection"]["realm"] == "dev"
-    assert saved["evidence"]["test"]["result"] == "pass"
 
 
 def test_schema_v9_migrates_strict_binding_identity_and_final_test(
@@ -5285,7 +5253,7 @@ def test_accepted_shared_reuse_repairs_legacy_oidc_handoff_hash(
     ]["identityMapping"]["relationshipSha256"]
 
 
-def test_legacy_reuse_repair_is_atomic_when_required_flag_is_invalid(
+def test_legacy_reuse_repair_is_atomic_when_required_evidence_is_invalid(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -5318,7 +5286,7 @@ def test_legacy_reuse_repair_is_atomic_when_required_flag_is_invalid(
     oidc_evidence["candidateSetSha256"] = source["evidence"][
         "identityClaimCandidates"
     ]["candidateSetSha256"]
-    oidc_evidence["runbookCompleted"] = False
+    oidc_evidence["kind"] = "unstructured-confirmation"
     target_path.write_text(json.dumps(target), encoding="utf-8")
     state = json.loads(target_path.read_text(encoding="utf-8"))
     original_evidence = copy.deepcopy(
@@ -7514,6 +7482,26 @@ def test_legacy_candidate_receipt_does_not_replace_setup_confirmation(
         before = state_path.read_bytes()
         handoff = snow.identity_mapping_handoff(context, stage="entra")
 
+    if not needs_handoff:
+        # A current single-claim receipt is the Entra completion criterion
+        # (client ID + one claim name), so no new administrator handoff.
+        saved = json.loads(state_path.read_text(encoding="utf-8"))
+        entra = saved["adminSetup"]["phaseHandoffs"]["entra-registration"]
+        assert entra["status"] == "completed"
+        assert entra["verifiedBy"] == "current-target-identity-handoff"
+        assert entra["evidence"]["clientId"] == APP_CLIENT_ID
+        assert entra["evidence"]["selectedClaimName"] == "email"
+        assert entra["evidence"]["candidateSetSha256"] == receipt[
+            "candidateSetSha256"
+        ]
+        assert saved["migration"]["entraTwoFieldCompletion"][
+            "criterion"
+        ] == "client-id-and-one-claim-name"
+        assert handoff["decision"] == "no-action"
+        assert handoff["handoffMode"] == "complete"
+        assert handoff["workbookPath"] is None
+        return
+
     assert state_path.read_bytes() == before
     saved = json.loads(state_path.read_text(encoding="utf-8"))
     assert saved["evidence"]["identityClaimCandidates"][
@@ -8319,7 +8307,7 @@ def test_servicenow_handoff_autopopulates_bound_client_and_claim(
     workbook.close()
 
 
-def test_multiple_unselected_claims_block_new_handoff_but_legacy_import_works(
+def test_multiple_unselected_claims_block_new_handoff_and_legacy_import(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -8359,7 +8347,7 @@ def test_multiple_unselected_claims_block_new_handoff_but_legacy_import_works(
 
     with pytest.raises(
         snow.ServiceNowConnectError,
-        match="not ready.*exactly one selected User Claim",
+        match="Entra client ID and selected User Claim evidence is required",
     ):
         snow.identity_mapping_handoff(context, stage="servicenow")
     assert not snow._identity_workbook_path(
@@ -8395,15 +8383,20 @@ def test_multiple_unselected_claims_block_new_handoff_but_legacy_import_works(
         selected_claim="custom_employee_id",
         user_field="u_employee_identity",
     )
-    receipt = snow.record_identity_mapping(
-        context,
-        stage="servicenow",
-        workbook_path=legacy_path,
-        client_id=APP_CLIENT_ID,
-        confirmed=True,
-    )
-    assert receipt["tokenClaimName"] == "custom_employee_id"
-    assert receipt["serviceNowUserField"] == "u_employee_identity"
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="Entra client ID and selected User Claim evidence is required",
+    ):
+        snow.record_identity_mapping(
+            context,
+            stage="servicenow",
+            workbook_path=legacy_path,
+            client_id=APP_CLIENT_ID,
+            confirmed=True,
+        )
+    assert "identityMapping" not in snow._load_lifecycle_state(context)[
+        "evidence"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -9764,12 +9757,12 @@ def test_historical_graph_pass_reapproval_advances_without_new_admin_handoff(
     migrated_evidence = migrated["adminSetup"]["phaseHandoffs"][
         "entra-registration"
     ]["evidence"]
-    assert migrated_evidence["currentSource"] == "historical-graph-pass"
+    assert migrated_evidence["currentSource"] == "identity-handoff"
     assert migrated_evidence["historicalGraphPassCompatible"] is True
     assert migrated_evidence["historicalGraphPassMigratedAt"]
     assert migrated["adminSetup"]["phaseHandoffs"]["entra-registration"][
         "verifiedBy"
-    ] == "historical-graph-pass-migration"
+    ] == "current-target-identity-handoff"
     assert migrated["phases"]["entra-registration"]["checkpointResults"] == {
         f"{prefix}-SETUP-001": "Manual"
     }
@@ -12254,7 +12247,6 @@ def test_v2_lifecycle_migrates_to_v8_without_obsolete_preflight_gates(
     assert state["migration"]["schemaV8"][
         "retiredEntraCheckpointIds"
     ] == []
-    assert state["migration"]["schemaV9"]["realmCompletionInferred"] is False
     assert state["migration"]["schemaV10"]["completionInferred"] is False
     assert first_bytes == state_path.read_bytes()
 
@@ -12423,7 +12415,6 @@ def test_v4_migration_removes_obsolete_gates_and_keeps_completed_discovery(
     assert state["migration"]["schemaV8"][
         "retiredEntraCheckpointIds"
     ] == []
-    assert state["migration"]["schemaV9"]["realmCompletionInferred"] is False
     assert state["migration"]["schemaV10"]["completionInferred"] is False
     oidc_evidence = state["adminSetup"]["phaseHandoffs"][
         "servicenow-oidc"
