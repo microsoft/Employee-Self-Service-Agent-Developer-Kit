@@ -124,11 +124,11 @@ ESS skills include no scripts, even though Copilot runs them. A script can't rea
 
 ## Unverified
 
-| ID    | Question                                                                                                                                                                                                                  | Status     |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| UV-03 | The description length Copilot's catalog accepts, beyond the specification's 1,024 characters.                                                                                                                            | Unverified |
-| UV-04 | Whether an agent can be limited to specific FCCs by listing their connection IDs in `GraphConnectors.connections`, which today lists synced connectors, and whether FCC tool names are stable enough for a skill to name. | Unverified |
-| UV-05 | Whether FCC tools render MCP Apps widgets.                                                                                                                                                                                | Unverified |
+| ID    | Question                                                                                                           | Status     |
+| ----- | ------------------------------------------------------------------------------------------------------------------ | ---------- |
+| UV-03 | The description length Copilot's catalog accepts, beyond the specification's 1,024 characters.                     | Unverified |
+| UV-04 | Whether a declarative agent can use an FCC's tools, and whether their names are stable enough for a skill to name. | Unverified |
+| UV-05 | Whether FCC tools render MCP Apps widgets.                                                                         | Unverified |
 
 ## Changelog
 
