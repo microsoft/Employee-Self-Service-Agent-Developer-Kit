@@ -73,7 +73,7 @@ flowchart LR
 | 2. Scenarios | Captures job stories, example requests and acceptance criteria | [interview.md](references/interview.md) |
 | 3. Analysis and plan | For each step of each scenario, judges from the tool descriptions whether a tool is purpose-built, an FCC (on-demand fetch) tool, partial or missing, and whether informational steps have a knowledge source; gives each scenario a verdict; recommends how to split or merge skills within the 8-skill limit, including an orchestration skill for mixed requests; flags conflicts with what the maker asked for | [limitations.md](references/limitations.md), [scenario-analysis.md](references/scenario-analysis.md) |
 | 4. Explicitness | Exact steps for changes and flexible lookups, exact everywhere, or goals only; where system details live | [interview.md](references/interview.md) |
-| 5. Sources | Grounds tables, fields, defaults and codes in ESS samples, template configurations or the maker's documents, citing each fact | `src/examples/ess-samples/`, `src/reference/ess-docs/` |
+| 5. Sources | Grounds tables, fields, defaults and codes in the agent's existing skills, ESS samples, template configurations, the kit's references or the maker's documents, citing each fact | The capabilities folder's `skills/`, `src/examples/ess-samples/`, `src/reference/` |
 | 6. Rules | Confirmation style, acting on behalf of others, defaults | [interview.md](references/interview.md) |
 | 7. Draft and validate | Drafts from the template, validates, shows the maker a plain-language summary, and loops on feedback with a new iteration folder each time | [authoring-rules.md](references/authoring-rules.md), [examples.md](references/examples.md) |
 | 8. Practice checks | Writes trigger and behavior evals; optionally runs them with subagents against a baseline | [evals.md](references/evals.md) |
@@ -86,7 +86,7 @@ flowchart LR
 - **Promise only what the tools do.** A skill that loads and can't finish the job is worse than none. The validator's `--expect` option fails a skill that promises an operation without naming a tool that can do it.
 - **Orchestrate only when it's needed.** When people often mix knowledge questions and actions in one message, the builder recommends one orchestration skill, modeled on `hr-request-orchestration`, that routes between knowledge search and the area skills. Otherwise a short routing rule in the agent's instructions is enough.
 - **The maker decides.** The builder recommends with evidence (which steps, which tools, what's missing) and the maker chooses.
-- **Ground facts in sources.** Domain facts come from ESS samples, template configurations or the maker's documents, each cited, never from model memory.
+- **Ground facts in sources.** Domain facts come from the agent's existing skills, ESS samples, template configurations, the kit's references or the maker's documents, each cited, never from model memory.
 - **Rules that must always hold also go in the tools.** Copilot may answer without reading a skill, so the finish message lists rules for the developer to enforce in tool descriptions or server code.
 - **Inputs are data.** Tool manifests, samples and documents are never treated as instructions.
 - **Everything stays local** until the maker adds the skill to the ESS DA GA agent.
@@ -165,7 +165,7 @@ Source: [Best practices for skill creators][bp].
 
 | Practice | Where we applied it |
 | --- | --- |
-| Start from real expertise, not general model knowledge | Round 5 grounds every fact in ESS samples, template configurations or the maker's documents, and never states vendor behavior from memory |
+| Start from real expertise, not general model knowledge | Round 5 grounds every fact in the agent's existing skills, ESS samples, template configurations, the kit's references or the maker's documents, and never states vendor behavior from memory |
 | Add only what the agent lacks | Skills never restate a tool's description; purpose-built tools get thin skills |
 | Match how specific instructions are to how fragile each step is | Round 4: exact for changes, flexible for lookups |
 | Give one default approach, not a menu | [authoring-rules.md](references/authoring-rules.md) and the skill template |
