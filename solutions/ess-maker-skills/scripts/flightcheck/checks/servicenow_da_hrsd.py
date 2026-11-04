@@ -288,16 +288,6 @@ _RECOVERY_GUIDANCE = {
             "and selected connection."
         ),
     },
-    "PUBLISH": {
-        "step": "publish evidence",
-        "owner": "ESS Maker / Agent Developer",
-        "where": "Copilot Studio -> the exact selected agent -> Publish details",
-        "values": (
-            "Use only the current tested draft identity and explicit maker "
-            "confirmation. Publishing remains outside ServiceNow Connect."
-        ),
-        "success": "A definitive receipt exists for the exact tested draft.",
-    },
 }
 
 
@@ -851,55 +841,12 @@ def _run_checks(runner, profile: CheckProfile) -> list[CheckResult]:
         in {
             profile.cid("TOPICS"),
             profile.cid("TEST"),
-            profile.cid("PUBLISH"),
             None,
         }
         else ""
     )
     if target == profile.cid("TOPICS"):
         return [_topics_result(summary, evidence, component_hash, profile=profile)]
-    if target == profile.cid("PUBLISH"):
-        try:
-            draft_semantic_hash = _draft_semantic_hash(components)
-            current_connection_binding_hash = (
-                _connection_binding_hash(
-                    {
-                        "agent": {
-                            "id": agent.get("botId"),
-                            "workspace_slug": slug,
-                        },
-                        "environment": {
-                            "id": str(
-                                getattr(runner, "env_id", None) or ""
-                            )
-                        },
-                    },
-                    state,
-                    components,
-                    require_agent_attestation=False,
-                )
-                if isinstance(evidence.get("credential"), dict)
-                and evidence["credential"].get("connectionId")
-                else None
-            )
-        except Exception as exc:
-            return _all_unavailable(
-                Status.ERROR.value,
-                f"Unable to inspect the {profile.agent_short} agent draft identity: "
-                f"{type(exc).__name__}: {exc}",
-                f"Verify the selected {profile.agent_short} agent component state and retry.",
-                target=target,
-                profile=profile,
-            )
-        return [
-            _publish_result(
-                evidence,
-                component_hash,
-                draft_semantic_hash,
-                current_connection_binding_hash,
-                profile=profile,
-            )
-        ]
 
     connectivity_error = ""
     if needs_inventory:
@@ -1082,27 +1029,6 @@ def _run_checks(runner, profile: CheckProfile) -> list[CheckResult]:
         topics_result,
         portal_result,
         test_result,
-        (
-            _result(
-                profile.cid("PUBLISH"),
-                Status.ERROR.value,
-                f"{profile.product} publish evidence",
-                identity_inspection_error,
-                (
-                    f"Verify the selected {profile.agent_short} agent connection-reference and "
-                    "final component identity, then retry."
-                ),
-                profile=profile,
-            )
-            if identity_inspection_error
-            else _publish_result(
-                evidence,
-                component_hash,
-                draft_semantic_hash,
-                current_connection_binding_hash,
-                profile=profile,
-            )
-        ),
     ]
 
 
@@ -1126,7 +1052,6 @@ def _all_unavailable(
         "TOPICS",
         "PORTAL",
         "TEST",
-        "PUBLISH",
     )
     return _target_rows(
         target,
@@ -2364,76 +2289,6 @@ def _target_test_result(
     }
     check.automation_type = "manual"
     return check
-
-
-def _publish_result(
-    evidence: dict[str, Any],
-    component_hash: str,
-    draft_semantic_hash: str,
-    connection_binding_hash: str | None,
-    *,
-    profile: CheckProfile,
-) -> CheckResult:
-    record = evidence.get("publish")
-    test_outcome = _test_evidence_outcome(
-        evidence,
-        draft_semantic_hash,
-        connection_binding_hash,
-        profile=profile,
-    )
-    published_hash = (
-        record.get("publishedComponentHash") or record.get("componentHash")
-        if isinstance(record, dict)
-        else None
-    )
-    semantic_bridge_current = bool(
-        isinstance(record, dict)
-        and record.get("testedDraftSemanticHash") == draft_semantic_hash
-        and record.get("publishedSemanticHash") == draft_semantic_hash
-    )
-    if test_outcome == "fail":
-        status = Status.FAILED.value
-        result = (
-            "The maker recorded Not pass for the current saved draft and "
-            "selected connection; publish is blocked."
-        )
-    elif test_outcome != "pass":
-        status = Status.NOT_CONFIGURED.value
-        result = (
-            "A current passing Test pane result is required before publish."
-        )
-    elif not isinstance(record, dict) or published_hash != component_hash:
-        status = Status.NOT_CONFIGURED.value
-        result = (
-            "The current tested draft identity has no matching publish "
-            "receipt."
-        )
-    elif record.get("status") == "needs_remediation":
-        status = Status.FAILED.value
-        result = "Publish needs remediation; automatic unpublish is unavailable."
-    elif not semantic_bridge_current:
-        status = Status.NOT_CONFIGURED.value
-        result = (
-            "The current tested draft identity has no matching publish "
-            "receipt."
-        )
-    elif record.get("status") == "completed":
-        status = Status.PASSED.value
-        result = "The current component revision has a definitive publish receipt."
-    elif record.get("status") == "confirmation-required":
-        status = Status.MANUAL.value
-        result = "Publish was accepted but requires current maker confirmation."
-    else:
-        status = Status.FAILED.value
-        result = "Publish needs remediation; automatic unpublish is unavailable."
-    return _result(
-        profile.cid("PUBLISH"),
-        status,
-        f"{profile.product} agent publish status",
-        result,
-        "Review Copilot Studio publish details and republish only after explicit confirmation.",
-        profile=profile,
-    )
 
 
 def _test_result(

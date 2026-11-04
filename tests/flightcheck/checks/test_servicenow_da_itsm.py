@@ -169,7 +169,6 @@ def test_all_itsm_blocking_phase_outputs_include_actionable_recovery() -> None:
         "CREDENTIAL",
         "AGENT-CONNECTION",
         "TEST",
-        "PUBLISH",
     }
     assert {
         result.checkpoint_id.removeprefix("SN-DA-ITSM-").removesuffix("-001")
@@ -966,7 +965,7 @@ def test_itsm_checkpoint_rejects_hr_agent_schema() -> None:
     assert "IT agent" in result.result
 
 
-def test_itsm_not_pass_blocks_test_and_publish(
+def test_itsm_not_pass_fails_test_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -984,41 +983,6 @@ def test_itsm_not_pass_blocks_test_and_publish(
         results,
         "SN-DA-ITSM-TEST-001",
     ).status == Status.FAILED.value
-    assert _checkpoint(
-        results,
-        "SN-DA-ITSM-PUBLISH-001",
-    ).status == Status.FAILED.value
-
-
-@pytest.mark.parametrize("result", ("pass", "fail"))
-def test_itsm_publish_rejects_test_bound_to_previous_connection(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    result: str,
-) -> None:
-    components = _itsm_components()
-    state = _write_it_state(tmp_path, components)
-    state["evidence"]["test"]["result"] = result
-    state["evidence"]["test"]["status"] = (
-        "completed" if result == "pass" else "failed"
-    )
-    state["evidence"]["credential"]["connectionId"] = (
-        "00000000000040008000000000009999"
-    )
-    _state_path(tmp_path).write_text(json.dumps(state), encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    full = _checkpoint(
-        run_servicenow_da_itsm_checks(_runner(components)),
-        "SN-DA-ITSM-PUBLISH-001",
-    )
-    targeted_runner = _runner(components, "SN-DA-ITSM-PUBLISH-001")
-    targeted_runner.connectivity = SimpleNamespace(
-        list_connector_connections=lambda *_args: pytest.fail(
-            "Publish-only checkpoint must not read connection inventory."
-        )
-    )
-    targeted = run_servicenow_da_itsm_checks(targeted_runner)
-
-    assert full.status == Status.NOT_CONFIGURED.value
-    assert targeted[0].status == Status.NOT_CONFIGURED.value
+    assert "SN-DA-ITSM-PUBLISH-001" not in {
+        result.checkpoint_id for result in results
+    }

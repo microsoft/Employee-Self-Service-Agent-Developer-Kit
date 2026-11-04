@@ -63,8 +63,8 @@ SUFFIXES = (
     "TOPICS",
     "PORTAL",
     "TEST",
-    "PUBLISH",
 )
+RETIRED_CHECKPOINT = "-PUBLISH-"
 PLAN_SHA = "d" * 64
 TARGET_SHA = "e" * 64
 
@@ -495,7 +495,18 @@ def test_profile_results_match_pre_refactor_golden(
 ) -> None:
     golden = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
     collected = collect_results(profile_key, tmp_path, monkeypatch.chdir)
-    expected = golden["scenarios"][profile_key]
+    # The PUBLISH checkpoint was retired after the golden was captured. Its
+    # rows and PUBLISH-targeted scenarios are the only permitted difference.
+    expected = {
+        name: [
+            digest
+            for digest in digests
+            if RETIRED_CHECKPOINT
+            not in golden["rows"][digest]["checkpoint_id"]
+        ]
+        for name, digests in golden["scenarios"][profile_key].items()
+        if not name.endswith("-PUBLISH-001")
+    }
     assert set(collected) == set(expected)
     for name, rows in collected.items():
         assert [_row_hash(row) for row in rows] == expected[name], name

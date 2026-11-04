@@ -171,7 +171,6 @@ def test_all_hrsd_blocking_phase_outputs_include_actionable_recovery() -> None:
         "CREDENTIAL",
         "AGENT-CONNECTION",
         "TEST",
-        "PUBLISH",
     }
     assert {
         result.checkpoint_id.removeprefix("SN-DA-HRSD-").removesuffix("-001")
@@ -969,7 +968,7 @@ def test_hrsd_checks_preserve_manual_maker_evidence(
         == Status.MANUAL.value
     )
     assert "SN-DA-HRSD-PARAMETER-SHARING-001" not in statuses
-    assert statuses["SN-DA-HRSD-PUBLISH-001"] == Status.PASSED.value
+    assert "SN-DA-HRSD-PUBLISH-001" not in statuses
     assert statuses["SN-DA-HRSD-TEST-001"] == Status.MANUAL.value
 
 
@@ -990,7 +989,6 @@ def test_hrsd_package_and_topics_remain_dynamic_with_one_matching_topic() -> Non
     for checkpoint_id in (
         "SN-DA-HRSD-AGENT-CONNECTION-001",
         "SN-DA-HRSD-TEST-001",
-        "SN-DA-HRSD-PUBLISH-001",
     ):
         assert by_id[checkpoint_id].status == Status.ERROR.value
         assert "binding/final-configuration identity" in (
@@ -1941,122 +1939,6 @@ def test_portal_checkpoint_requires_latest_requested_url(
     assert matching.status == Status.PASSED.value
 
 
-def test_publish_checkpoint_ignores_metadata_only_drift_and_reopens_on_semantic_drift(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    components = _components()
-    _write_state(tmp_path, components)
-    state_path = (
-        tmp_path
-        / ".local"
-        / "connect"
-        / snow.PROVIDER_KEY
-        / "agents"
-        / AGENT_SLUG
-        / "lifecycle.json"
-    )
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    current_hash = snow._component_hash(components)
-    semantic_hash = snow._draft_semantic_hash(components)
-    state["evidence"]["publish"] = {
-        "status": "completed",
-        "requestedComponentHash": "pre-publish-hash",
-        "publishedComponentHash": current_hash,
-        "componentHash": current_hash,
-        "testedDraftSemanticHash": semantic_hash,
-        "publishedSemanticHash": semantic_hash,
-        "connectionBindingHash": state["connectionBindingHash"],
-    }
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    current = run_servicenow_da_hrsd_checks(_runner(components))
-    publish = next(
-        row
-        for row in current
-        if row.checkpoint_id == "SN-DA-HRSD-PUBLISH-001"
-    )
-    assert publish.status == Status.PASSED.value
-    target_runner = _runner(components)
-    target_runner.checkpoint_target = "SN-DA-HRSD-PUBLISH-001"
-    targeted = run_servicenow_da_hrsd_checks(target_runner)
-    assert targeted[0].status == Status.PASSED.value
-
-    components["changeToken"] = "later-edit"
-    metadata_only = run_servicenow_da_hrsd_checks(_runner(components))
-    publish = next(
-        row
-        for row in metadata_only
-        if row.checkpoint_id == "SN-DA-HRSD-PUBLISH-001"
-    )
-    assert publish.status == Status.NOT_CONFIGURED.value
-
-    state["evidence"]["publish"]["publishedComponentHash"] = snow._component_hash(
-        components
-    )
-    state["evidence"]["publish"]["componentHash"] = snow._component_hash(
-        components
-    )
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    metadata_only = run_servicenow_da_hrsd_checks(_runner(components))
-    publish = next(
-        row
-        for row in metadata_only
-        if row.checkpoint_id == "SN-DA-HRSD-PUBLISH-001"
-    )
-    assert publish.status == Status.PASSED.value
-
-    components["botComponentChanges"][0]["component"]["displayName"] = (
-        "Edited ServiceNow topic"
-    )
-    semantic_drift = run_servicenow_da_hrsd_checks(_runner(components))
-    publish = next(
-        row
-        for row in semantic_drift
-        if row.checkpoint_id == "SN-DA-HRSD-PUBLISH-001"
-    )
-    assert publish.status == Status.NOT_CONFIGURED.value
-
-
-def test_publish_checkpoint_surfaces_current_semantic_drift_as_failed(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    components = _components()
-    _write_state(tmp_path, components)
-    state_path = (
-        tmp_path
-        / ".local"
-        / "connect"
-        / snow.PROVIDER_KEY
-        / "agents"
-        / AGENT_SLUG
-        / "lifecycle.json"
-    )
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["evidence"]["publish"] = {
-        "kind": "maker-attestation",
-        "status": "needs_remediation",
-        "publishedComponentHash": snow._component_hash(components),
-        "componentHash": snow._component_hash(components),
-        "testedDraftSemanticHash": "pre-publish-semantic-hash",
-        "publishedSemanticHash": snow._draft_semantic_hash(components),
-        "remediation": "Run Test again before any later publish.",
-    }
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    result = next(
-        row
-        for row in run_servicenow_da_hrsd_checks(_runner(components))
-        if row.checkpoint_id == "SN-DA-HRSD-PUBLISH-001"
-    )
-
-    assert result.status == Status.FAILED.value
-    assert "needs remediation" in result.result
-
-
 @pytest.mark.parametrize(
     "test_record",
     [
@@ -2171,50 +2053,8 @@ def test_test_checkpoint_accepts_maker_failure_without_category(
 
     results = run_servicenow_da_hrsd_checks(_runner(components))
     test_result = _checkpoint(results, "SN-DA-HRSD-TEST-001")
-    publish = _checkpoint(results, "SN-DA-HRSD-PUBLISH-001")
 
     assert test_result.status == Status.FAILED.value
-    assert publish.status == Status.FAILED.value
-    assert "maker recorded Not pass" in publish.result
-
-    target_runner = _runner(components)
-    target_runner.checkpoint_target = "SN-DA-HRSD-PUBLISH-001"
-    targeted = run_servicenow_da_hrsd_checks(target_runner)
-    assert targeted[0].status == Status.FAILED.value
-
-
-@pytest.mark.parametrize("result", ["pass", "fail"])
-def test_publish_rejects_test_bound_to_previous_connection(
-    monkeypatch,
-    tmp_path: Path,
-    result: str,
-) -> None:
-    components = _components()
-    _write_state(tmp_path, components)
-    state_path = _state_path(tmp_path)
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["evidence"]["test"]["result"] = result
-    state["evidence"]["test"]["status"] = (
-        "completed" if result == "pass" else "failed"
-    )
-    state["evidence"]["test"]["failureCategory"] = None
-    state["evidence"]["credential"]["connectionId"] = (
-        "00000000000040008000000000009999"
-    )
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    full_publish = _checkpoint(
-        run_servicenow_da_hrsd_checks(_runner(components)),
-        "SN-DA-HRSD-PUBLISH-001",
-    )
-    target_runner = _runner(components)
-    target_runner.checkpoint_target = "SN-DA-HRSD-PUBLISH-001"
-    targeted = run_servicenow_da_hrsd_checks(target_runner)
-
-    assert full_publish.status == Status.NOT_CONFIGURED.value
-    assert targeted[0].status == Status.NOT_CONFIGURED.value
-    assert "current passing Test pane result" in targeted[0].result
 
 
 def test_entra_phase_evaluation_uses_one_logical_read_set(
@@ -2323,7 +2163,6 @@ def test_entra_phase_evaluation_uses_one_logical_read_set(
         ("SN-DA-HRSD-TOPICS-001", 1, 0, 0),
         ("SN-DA-HRSD-AGENT-CONNECTION-001", 1, 1, 0),
         ("SN-DA-HRSD-TEST-001", 1, 1, 0),
-        ("SN-DA-HRSD-PUBLISH-001", 1, 0, 0),
     ],
 )
 def test_target_aware_evaluation_uses_only_required_clients(
@@ -2643,7 +2482,7 @@ def test_hrsd_checks_reopen_stale_maker_evidence(
         == Status.MANUAL.value
     )
     assert "SN-DA-HRSD-PARAMETER-SHARING-001" not in statuses
-    assert statuses["SN-DA-HRSD-PUBLISH-001"] == Status.NOT_CONFIGURED.value
+    assert "SN-DA-HRSD-PUBLISH-001" not in statuses
     assert statuses["SN-DA-HRSD-TEST-001"] == Status.NOT_CONFIGURED.value
 
 

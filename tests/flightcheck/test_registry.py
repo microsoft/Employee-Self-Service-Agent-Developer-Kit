@@ -12,6 +12,9 @@ feature relies on.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from flightcheck import registry
@@ -286,9 +289,6 @@ class TestTransitiveRequirements:
         assert registry.resolve("SN-DA-HRSD-TEST-001").prereqs == (
             "SN-DA-HRSD-TOPICS-001",
             "SN-DA-HRSD-AGENT-CONNECTION-001",
-        )
-        assert registry.resolve("SN-DA-HRSD-PUBLISH-001").prereqs == (
-            "SN-DA-HRSD-TEST-001",
         )
 
         preflight = registry.transitive_requirements(
@@ -583,3 +583,66 @@ class TestDaProfilesExcludeCeaSolutionGate:
         # Removing it from the DA profiles must not deregister the check;
         # the CEA/legacy paths still resolve and target it.
         assert registry.resolve("ESS-SOLN-001") is not None
+
+
+_CONNECT_SKILLS = (
+    Path(__file__).resolve().parents[2]
+    / "solutions"
+    / "ess-maker-skills"
+    / "src"
+    / "skills"
+    / "connect"
+)
+# Registered SN-DA-* checkpoints that no contract references, with the reason.
+_UNREFERENCED_SN_DA_ALLOWLIST: dict[str, str] = {
+    key: "Shared DA registry check used outside Connect contracts."
+    for key in ("SN-DA-AUTH-001", "SN-DA-TOPIC-001", "SN-DA-PORTAL-001")
+}
+
+
+def _contract_checkpoints(contract: dict) -> set[str]:
+    referenced = {contract["detect"]["checkpoint"]}
+    for phase in contract["phases"]:
+        referenced.update(phase.get("checkpoints", []))
+    return referenced
+
+
+class TestServiceNowDaRegistryMatchesContracts:
+    def test_every_sn_da_checkpoint_is_referenced_by_a_contract(self):
+        referenced: set[str] = set()
+        for contract_path in _CONNECT_SKILLS.glob("servicenow-da-*/contract.json"):
+            contract = json.loads(contract_path.read_text(encoding="utf-8"))
+            pending = list(_contract_checkpoints(contract))
+            while pending:
+                key = pending.pop()
+                if key in referenced:
+                    continue
+                referenced.add(key)
+                spec = registry.resolve(key)
+                assert spec is not None, key
+                pending.extend(spec.prereqs)
+        registered = {
+            spec.key
+            for spec in registry.list_checkpoints()
+            if spec.key.startswith("SN-DA-")
+        }
+
+        assert registered
+        assert registered - referenced - set(_UNREFERENCED_SN_DA_ALLOWLIST) == set()
+
+    def test_publish_checkpoint_is_not_registered(self):
+        keys = {spec.key for spec in registry.list_checkpoints()}
+
+        assert not {key for key in keys if "PUBLISH" in key}
+        assert registry.resolve("SN-DA-HRSD-PUBLISH-001") is None
+        assert registry.resolve("SN-DA-ITSM-PUBLISH-001") is None
+
+    def test_list_checkpoints_output_omits_publish(self, capsys):
+        from flightcheck.cli import _print_checkpoint_list
+
+        _print_checkpoint_list()
+        output = capsys.readouterr().out
+
+        assert "SN-DA-HRSD-PKG-001" in output
+        assert "SN-DA-ITSM-PKG-001" in output
+        assert "PUBLISH" not in output
