@@ -22,6 +22,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+import broker_auth
+
 
 CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 DEFAULT_API_VERSION = "2024-10-01"
@@ -544,7 +546,10 @@ def _interactive_token(
         arguments["login_hint"] = account_hint
     else:
         arguments["prompt"] = "select_account"
-    return app.acquire_token_interactive(**arguments)
+    try:
+        return broker_auth.acquire_token_interactive(app, **arguments)
+    except broker_auth.BrokerAuthenticationError as exc:
+        raise AgentBuilderError(str(exc)) from exc
 
 
 def tenant_id_from_access_token(token: str) -> str:
@@ -579,11 +584,14 @@ def _acquire_token(
     return_account_identity: bool = False,
 ) -> str | tuple[str, str | None]:
     cache = _load_token_cache(cache_path)
-    app = msal.PublicClientApplication(
-        CLIENT_ID,
-        authority=authority,
-        token_cache=cache,
-    )
+    try:
+        app = broker_auth.create_public_client_application(
+            CLIENT_ID,
+            authority=authority,
+            token_cache=cache,
+        )
+    except broker_auth.BrokerAuthenticationError as exc:
+        raise AgentBuilderError(str(exc)) from exc
     requested_scopes = list(scopes or (minimal_bot_scope(ring),))
     selected_account = (
         None
@@ -591,7 +599,9 @@ def _acquire_token(
         else _select_cached_account(app.get_accounts(), account_hint)
     )
     result = (
-        app.acquire_token_silent(requested_scopes, account=selected_account)
+        broker_auth.acquire_token_silent(
+            app, requested_scopes, account=selected_account
+        )
         if selected_account is not None
         else None
     )

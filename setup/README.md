@@ -206,7 +206,7 @@ The installer provisions the following dependencies. Users do not need to instal
 
 | Package | Purpose |
 |---------|---------|
-| `msal` | Microsoft Authentication Library — Entra ID auth for FlightCheck |
+| `msal` | Microsoft Authentication Library — Entra ID auth; includes broker dependencies on Windows for ESS sign-in through WAM |
 | `requests` | HTTP client for Dataverse / Graph API calls |
 | `urllib3` | HTTP transport layer (requests dependency, pinned) |
 | `httpx` | Async HTTP client for the AgentConfiguration API |
@@ -214,6 +214,13 @@ The installer provisions the following dependencies. Users do not need to instal
 | `PyYAML` | YAML parsing for topic schema validation |
 | `defusedxml` | Safe XML parsing for Workday SOAP responses (XXE-hardened) |
 | `pythonnet` | Loads the Microsoft Object Model serializer in Python (full install only) |
+
+ESS sign-in on Windows requires Web Account Manager (WAM) and an interactive
+desktop session. The ESS app registration must include the broker redirect URI
+`ms-appx-web://microsoft.aad.brokerplugin/417219b4-3a7d-42a2-bdb1-972bd8281a02`.
+Broker initialization failures are reported without falling back to browser
+sign-in. Non-Windows sign-in is unchanged.
+Existing browser-created cached accounts require a one-time WAM sign-in.
 
 ### VS Code extensions
 

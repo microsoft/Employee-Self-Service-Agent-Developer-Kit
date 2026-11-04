@@ -11,7 +11,8 @@ own base URL and logger name.
 
 Token acquisition, in priority order:
   1. AGENTCONFIG_ACCESS_TOKEN_FILE/AGENTCONFIG_ACCESS_TOKEN.
-  2. MSAL public-client sign-in with a local form_post callback.
+  2. MSAL public-client sign-in through WAM on Windows, or a local
+     form_post callback on other platforms.
 
 The workspace's configured Dataverse tenant constrains authentication and the
 resolved token's ``tid`` claim. Unavailable configuration or tenant discovery
@@ -45,6 +46,15 @@ import httpx
 
 from _tenant_context import configured_tenant_id
 from _token_cache import create_token_cache
+
+
+sys.path.insert(
+    0,
+    os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts")
+    ),
+)
+import broker_auth  # noqa: E402
 
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -133,15 +143,13 @@ class _FormPostCaptureHandler(http.server.BaseHTTPRequestHandler):
 
 
 def _create_msal_app(expected_tenant_id: str | None) -> Any:
-    import msal
-
     cache = create_token_cache(_TOKEN_CACHE_PATH)
     authority = (
         f"https://login.microsoftonline.com/{expected_tenant_id}"
         if expected_tenant_id is not None
         else _AUTHORITY
     )
-    return msal.PublicClientApplication(
+    return broker_auth.create_public_client_application(
         _CLIENT_ID,
         authority=authority,
         token_cache=cache,
@@ -152,9 +160,19 @@ def acquire_token_msal_interactive(expected_tenant_id: str | None = None) -> str
     """Acquire a delegated AgentConfiguration token through cached or interactive MSAL auth."""
     app = _create_msal_app(expected_tenant_id)
     accounts = app.get_accounts()
-    result = app.acquire_token_silent(_SCOPE, account=accounts[0]) if accounts else None
+    result = (
+        broker_auth.acquire_token_silent(app, _SCOPE, account=accounts[0])
+        if accounts
+        else None
+    )
     if not result or "access_token" not in result:
-        result = _acquire_token_interactive_form_post(app)
+        if broker_auth.is_windows():
+            print("Opening Windows account sign-in...", file=sys.stderr, flush=True)
+            result = broker_auth.acquire_token_interactive(
+                app, _SCOPE, prompt="select_account"
+            )
+        else:
+            result = _acquire_token_interactive_form_post(app)
 
     if "access_token" not in result:
         error = result.get("error", "unknown_error")
@@ -188,7 +206,9 @@ def _refresh_msal_token(tenant_id: str, object_id: str) -> str:
             "Sign in again as that account and retry.",
             http_status=401,
         )
-    result = app.acquire_token_silent(_SCOPE, account=accounts[0], force_refresh=True)
+    result = broker_auth.acquire_token_silent(
+        app, _SCOPE, account=accounts[0], force_refresh=True
+    )
     if not result or not result.get("access_token"):
         raise AgentConfigApiError(
             "Could not refresh the access token for the original account. "

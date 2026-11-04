@@ -48,12 +48,16 @@ def isolate_authentication(monkeypatch):
     monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN_FILE", raising=False)
     monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN", raising=False)
     monkeypatch.setattr(base_client, "configured_tenant_id", lambda: TENANT_ID)
+    monkeypatch.setattr(base_client.broker_auth, "is_windows", lambda: False)
 
     def unexpected_interactive(*args, **kwargs):
         pytest.fail("Automatic refresh must not open an interactive sign-in")
 
     monkeypatch.setattr(
         base_client, "_acquire_token_interactive_form_post", unexpected_interactive
+    )
+    monkeypatch.setattr(
+        base_client.broker_auth, "acquire_token_interactive", unexpected_interactive
     )
 
 
@@ -167,7 +171,7 @@ def test_replacement_cannot_change_the_original_account_or_tenant(
     assert requests == [f"Bearer {initial}"]
 
 
-def _mock_msal_refresh(monkeypatch, result, accounts=None, profiles=None):
+def _mock_msal_refresh(monkeypatch, result, accounts=None, profiles=None, windows=False):
     original = _token("initial")
     monkeypatch.setattr(base_client, "_resolve_token", lambda: original)
     calls = []
@@ -175,6 +179,7 @@ def _mock_msal_refresh(monkeypatch, result, accounts=None, profiles=None):
         "home_account_id": "home-account",
         "local_account_id": OBJECT_ID,
         "realm": TENANT_ID,
+        "account_source": "broker" if windows else "authorization_code",
     }
     available = accounts if accounts is not None else [
         {"local_account_id": OTHER_OBJECT_ID, "realm": TENANT_ID},
@@ -190,6 +195,7 @@ def _mock_msal_refresh(monkeypatch, result, accounts=None, profiles=None):
     cache = FakeCache()
 
     class FakeApp:
+        _enable_broker = windows
         token_cache = cache
 
         def get_accounts(self):
@@ -201,10 +207,17 @@ def _mock_msal_refresh(monkeypatch, result, accounts=None, profiles=None):
 
     def create_app(client_id, **kwargs):
         assert client_id == base_client._CLIENT_ID
-        assert kwargs == {
+        expected = {
             "authority": f"https://login.microsoftonline.com/{TENANT_ID}",
             "token_cache": cache,
         }
+        if windows:
+            expected["enable_broker_on_windows"] = True
+            expected["http_client"] = kwargs["http_client"]
+            assert isinstance(
+                kwargs["http_client"], base_client.broker_auth._BrokerOnlyHttpClient
+            )
+        assert kwargs == expected
         return FakeApp()
 
     monkeypatch.setattr(base_client, "create_token_cache", lambda path: cache)
@@ -249,10 +262,12 @@ def test_msal_refresh_resolves_the_original_profile_in_a_multitenant_account(mon
     assert calls == [(base_client._SCOPE, grouped_account, {"force_refresh": True})]
 
 
-def test_msal_refresh_is_forced_for_original_identity_and_bounded_on_401(monkeypatch):
+@pytest.mark.parametrize("windows", [False, True])
+def test_msal_refresh_is_forced_for_original_identity_and_bounded_on_401(monkeypatch, windows):
+    monkeypatch.setattr(base_client.broker_auth, "is_windows", lambda: windows)
     replacement = _token("replacement")
     initial, account, calls = _mock_msal_refresh(
-        monkeypatch, {"access_token": replacement}
+        monkeypatch, {"access_token": replacement}, windows=windows
     )
     requests = []
 
@@ -276,11 +291,26 @@ def test_msal_refresh_is_forced_for_original_identity_and_bounded_on_401(monkeyp
     assert requests == [f"Bearer {initial}", f"Bearer {replacement}"]
 
 
-@pytest.mark.parametrize("failure", ["missing-account", "interaction-required"])
-def test_failed_silent_refresh_does_not_select_another_account(monkeypatch, failure):
+@pytest.mark.parametrize("windows", [False, True])
+@pytest.mark.parametrize("failure", ["missing-account", "interaction-required", "legacy-account"])
+def test_failed_silent_refresh_does_not_select_another_account(monkeypatch, failure, windows):
+    monkeypatch.setattr(base_client.broker_auth, "is_windows", lambda: windows)
     result = {"error": "interaction_required"}
     accounts = [] if failure == "missing-account" else None
-    initial, _, calls = _mock_msal_refresh(monkeypatch, result, accounts)
+    initial, _, calls = _mock_msal_refresh(
+        monkeypatch, result, accounts, windows=windows
+    )
+    if windows and failure == "legacy-account":
+        # Keep a working broker but an original account created before migration.
+        original_create_app = msal.PublicClientApplication
+
+        def legacy_app(*args, **kwargs):
+            app = original_create_app(*args, **kwargs)
+            for account in app.get_accounts():
+                account["account_source"] = "authorization_code"
+            return app
+
+        monkeypatch.setattr(msal, "PublicClientApplication", legacy_app)
     requests = []
 
     def handler(request):
@@ -300,7 +330,9 @@ def test_failed_silent_refresh_does_not_select_another_account(monkeypatch, fail
 
     asyncio.run(run())
     assert requests == [f"Bearer {initial}"]
-    assert len(calls) == (0 if failure == "missing-account" else 1)
+    assert len(calls) == (
+        0 if failure == "missing-account" or (windows and failure == "legacy-account") else 1
+    )
 
 
 def test_concurrent_401_responses_share_one_refresh(monkeypatch):

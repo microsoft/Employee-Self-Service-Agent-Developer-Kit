@@ -31,6 +31,78 @@ HOST = (
 )
 
 
+@pytest.fixture(autouse=True)
+def non_windows_authentication(monkeypatch):
+    monkeypatch.setattr(agentbuilder.broker_auth, "is_windows", lambda: False)
+
+
+@pytest.mark.parametrize(
+    "account_hint,force_selection,expected_choice",
+    [
+        ("maker@example.test", False, {"login_hint": "maker@example.test"}),
+        ("maker@example.test", True, {"prompt": "select_account"}),
+        (None, False, {"prompt": "select_account"}),
+    ],
+)
+def test_windows_authentication_uses_broker_with_selected_tenant_and_scopes(
+    monkeypatch, tmp_path, account_hint, force_selection, expected_choice
+):
+    calls = {}
+    account = {
+        "username": "maker@example.test",
+        "account_source": "authorization_code",
+    }
+
+    class FakeApp:
+        _enable_broker = True
+
+        def __init__(self, client_id, **kwargs):
+            calls["constructor"] = (client_id, kwargs)
+
+        def get_accounts(self):
+            return [account]
+
+        def acquire_token_silent(self, *args, **kwargs):
+            pytest.fail("A browser-created account must first sign in through WAM")
+
+        def acquire_token_interactive(self, **kwargs):
+            calls["interactive"] = kwargs
+            kwargs["on_before_launching_ui"](ui="broker")
+            return {
+                "access_token": "broker-token",
+                "id_token_claims": {"preferred_username": "maker@example.test"},
+            }
+
+    monkeypatch.setattr(agentbuilder.broker_auth, "is_windows", lambda: True)
+    monkeypatch.setattr(agentbuilder.broker_auth, "_parent_window_handle", lambda: 12345)
+    monkeypatch.setattr(agentbuilder.msal, "PublicClientApplication", FakeApp)
+    scopes = agentbuilder.flightcheck_read_scopes("preprod")
+    tenant_id = "00000000-0000-4000-8000-000000001111"
+
+    assert agentbuilder.authenticate(
+        tenant_id,
+        "preprod",
+        cache_path=tmp_path / "cache",
+        account_hint=account_hint,
+        force_account_selection=force_selection,
+        scopes=scopes,
+    ) == "broker-token"
+    client_id, options = calls["constructor"]
+    assert client_id == agentbuilder.CLIENT_ID
+    assert options["authority"] == f"https://login.microsoftonline.com/{tenant_id}"
+    assert options["enable_broker_on_windows"] is True
+    assert isinstance(
+        options["http_client"], agentbuilder.broker_auth._BrokerOnlyHttpClient
+    )
+    assert isinstance(options["token_cache"], agentbuilder.msal.SerializableTokenCache)
+    assert calls["interactive"] == {
+        "scopes": list(scopes),
+        "parent_window_handle": 12345,
+        "on_before_launching_ui": agentbuilder.broker_auth._require_broker_ui,
+        **expected_choice,
+    }
+
+
 def test_flightcheck_scopes_are_read_only_and_ring_specific() -> None:
     assert agentbuilder.flightcheck_read_scopes("preprod") == (
         "https://api.preprod.powerplatform.com/CopilotStudio.MinimalBot.Read",

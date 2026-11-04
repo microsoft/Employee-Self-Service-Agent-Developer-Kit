@@ -55,6 +55,7 @@ except ImportError:  # pragma: no cover - dependency guard mirrors siblings
         "ERROR: 'PyYAML' package not found. Run: pip install -r scripts/requirements.txt"
     )
 
+import broker_auth
 from agentbuilder import RING_CONFIG, ring_from_environment_host
 from evaluation_method_policy import (
     EvaluationMethodError,
@@ -808,9 +809,12 @@ def acquire_test_pp_token(
         with open(_TOKEN_CACHE_PATH, "r", encoding="utf-8") as handle:
             cache.deserialize(handle.read())
 
-    app = msal.PublicClientApplication(
-        CLIENT_ID, authority=authority, token_cache=cache
-    )
+    try:
+        app = broker_auth.create_public_client_application(
+            CLIENT_ID, authority=authority, token_cache=cache
+        )
+    except broker_auth.BrokerAuthenticationError as exc:
+        raise MinimalBotEvaluationError(str(exc)) from exc
     accounts = app.get_accounts()
     preferred = str(preferred_username or "").casefold()
     selected_account = next(
@@ -825,15 +829,27 @@ def acquire_test_pp_token(
         selected_account = accounts[0] if accounts else None
     result = None
     if selected_account:
-        result = app.acquire_token_silent([scope], account=selected_account)
+        result = broker_auth.acquire_token_silent(
+            app, [scope], account=selected_account
+        )
     if not result or "access_token" not in result:
-        print("Opening browser for Power Platform sign-in...")
+        print(
+            "Opening Windows account sign-in..."
+            if broker_auth.is_windows()
+            else "Opening browser for Power Platform sign-in..."
+        )
         interactive_options = (
             {"login_hint": preferred_username}
             if preferred_username
             else {"prompt": "select_account"}
         )
-        result = app.acquire_token_interactive([scope], **interactive_options)
+        try:
+            result = broker_auth.acquire_token_interactive(
+                app, [scope], **interactive_options
+            )
+        except broker_auth.BrokerAuthenticationError as exc:
+            raise MinimalBotEvaluationError(str(exc)) from exc
+        selected_account = None
     if "access_token" not in result:
         # Don't echo error_description (CWE-209); mirror auth.py.
         error = result.get("error", "unknown_error")

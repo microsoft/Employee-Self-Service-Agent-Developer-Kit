@@ -50,6 +50,66 @@ def isolate_authentication(monkeypatch) -> None:
     monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN_FILE", raising=False)
     monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN", raising=False)
     monkeypatch.setattr(base_client, "configured_tenant_id", lambda: None)
+    monkeypatch.setattr(base_client.broker_auth, "is_windows", lambda: False)
+
+
+@pytest.mark.parametrize("silent", [True, False])
+def test_windows_msal_uses_broker_and_keeps_stdout_clean(monkeypatch, capsys, silent):
+    calls = {}
+    cache = object()
+    account = {"home_account_id": "cached-account", "account_source": "broker"}
+
+    class FakeApp:
+        _enable_broker = True
+
+        def __init__(self, client_id, **kwargs):
+            calls["constructor"] = (client_id, kwargs)
+
+        def get_accounts(self):
+            return [account]
+
+        def acquire_token_silent(self, scopes, **kwargs):
+            calls["silent"] = (scopes, kwargs)
+            return {"access_token": "broker-token"} if silent else None
+
+        def acquire_token_interactive(self, **kwargs):
+            calls["interactive"] = kwargs
+            kwargs["on_before_launching_ui"](ui="broker")
+            return {"access_token": "broker-token"}
+
+    def unexpected_browser(*args):
+        pytest.fail("Windows MCP sign-in must not open the form_post browser flow")
+
+    monkeypatch.setattr(base_client.broker_auth, "is_windows", lambda: True)
+    monkeypatch.setattr(base_client.broker_auth, "_parent_window_handle", lambda: 12345)
+    monkeypatch.setattr(msal, "PublicClientApplication", FakeApp)
+    monkeypatch.setattr(base_client, "create_token_cache", lambda path: cache)
+    monkeypatch.setattr(base_client, "_acquire_token_interactive_form_post", unexpected_browser)
+
+    assert base_client.acquire_token_msal_interactive(TENANT_ID) == "broker-token"
+    http_client = calls["constructor"][1]["http_client"]
+    assert isinstance(http_client, base_client.broker_auth._BrokerOnlyHttpClient)
+    assert calls["constructor"] == (
+        base_client._CLIENT_ID,
+        {
+            "authority": f"https://login.microsoftonline.com/{TENANT_ID}",
+            "token_cache": cache,
+            "enable_broker_on_windows": True,
+            "http_client": http_client,
+        },
+    )
+    assert calls["silent"] == (base_client._SCOPE, {"account": account})
+    assert ("interactive" in calls) is not silent
+    if not silent:
+        assert calls["interactive"] == {
+            "scopes": base_client._SCOPE,
+            "prompt": "select_account",
+            "parent_window_handle": 12345,
+            "on_before_launching_ui": base_client.broker_auth._require_broker_ui,
+        }
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert ("Opening Windows account sign-in..." in output.err) is not silent
 
 
 def test_token_cache_uses_shared_local_state() -> None:
