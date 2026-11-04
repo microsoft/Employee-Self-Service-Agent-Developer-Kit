@@ -9569,44 +9569,54 @@ def _build_phase_progress(
         item["status"] not in {"pending", "current"} for item in items
     )
     display_name = str(contract.get("displayName") or "ServiceNow")
-    def render_checklist(
+    headline = (
+        f"Resuming {display_name} connection."
+        if has_prior_progress
+        else f"Starting {display_name} connection."
+    )
+
+    def render_grouped(
         *,
         current_status: tuple[str, str] | None = None,
     ) -> str:
-        lines = []
-        for item in items:
-            icon = _phase_status_icon(item["status"])
-            text = item["text"]
-            if current_status is not None and item["id"] == current_id:
-                icon, text = current_status
-            lines.append(f"- {icon} {item['customerLabel']} — {text}")
-        return "Connection progress:\n\n" + "\n".join(lines)
+        override = (
+            (current_id, current_status[0], current_status[1])
+            if current_status is not None and current_id is not None
+            else None
+        )
+        return _render_grouped_phases(
+            contract,
+            items,
+            title=headline,
+            current_override=override,
+        )
 
-    checklist = render_checklist()
+    grouped = render_grouped()
     final_message = (
         f"Complete — every {display_name} step was checked in this run."
         if decision.get("decision") == "complete"
         and completed_count == len(items)
         else None
     )
-    progress: dict[str, Any] = {
-        "schemaVersion": "servicenow.phase-progress.v1",
-        "mode": "resume" if has_prior_progress else "fresh",
-        "headline": (
-            f"Resuming {display_name} connection."
-            if has_prior_progress
-            else f"Starting {display_name} connection."
-        ),
-        "completedCount": completed_count,
-        "totalCount": len(items),
-        "items": items,
-        "checklistText": checklist,
-        "currentPhase": None,
-        "finalText": (
-            f"{checklist}\n\n{final_message}"
+    internal: dict[str, Any] = {
+        "renderable": False,
+        "groupedText": grouped,
+        "groupedFinalText": (
+            f"{grouped}\n\n{final_message}"
             if final_message is not None
             else None
         ),
+        "currentPhase": None,
+    }
+    progress: dict[str, Any] = {
+        "schemaVersion": "servicenow.phase-progress.v1",
+        "mode": "resume" if has_prior_progress else "fresh",
+        "headline": headline,
+        "completedCount": completed_count,
+        "totalCount": len(items),
+        "items": items,
+        "currentPhase": None,
+        "internal": internal,
     }
     if current_item is not None:
         label = current_item["customerLabel"]
@@ -9615,19 +9625,16 @@ def _build_phase_progress(
             "checking": "Checking",
             "needs-attention": "Needs attention",
         }.get(current_item["status"], "Starting")
-        progress["currentPhase"] = {
-            **current_item,
+        progress["currentPhase"] = dict(current_item)
+        internal["currentPhase"] = {
             "startText": f"{start_verb}: {label}",
-            "waitingChecklistText": render_checklist(
+            "groupedWaitingText": render_grouped(
                 current_status=("⏳", "Waiting")
             ),
-            "errorChecklistText": render_checklist(
+            "groupedErrorText": render_grouped(
                 current_status=("❌", "Needs attention")
             ),
             "waitingText": f"Waiting — {label}: your input is needed.",
-            "actionFinishedText": (
-                f"Action finished — checking: {label}"
-            ),
             "needsAttentionText": f"Needs attention — {label}.",
         }
     return progress
@@ -10085,6 +10092,54 @@ def _current_task_guidance(
     )
 
 
+def _render_grouped_phases(
+    contract: dict[str, Any],
+    items: list[dict[str, Any]],
+    *,
+    title: str,
+    current_override: tuple[str, str, str] | None = None,
+) -> str:
+    """Render the one grouped phase view every Connect transition uses.
+
+    ``current_override`` is ``(phase_id, icon, text)`` for a Waiting or
+    Needs-attention display of the current step.
+    """
+    items_by_id = {str(item["id"]): item for item in items}
+
+    def status_line(item: dict[str, Any]) -> str:
+        icon = _phase_status_icon(item["status"])
+        text = item["text"]
+        if current_override is not None and item["id"] == current_override[0]:
+            icon, text = current_override[1], current_override[2]
+        return f"{icon} {item['customerLabel']} — {text}"
+
+    automatic = items_by_id.get("preflight")
+    lines = [title]
+    if isinstance(automatic, dict):
+        lines.extend(
+            ["", "**Automatic setup**", "", f"- {status_line(automatic)}"]
+        )
+    lines.extend(["", "**Phases**", ""])
+    for index, group in enumerate(_business_groups(contract), start=1):
+        lines.append(
+            f"{index}. **{group['label']}** — Responsible role: "
+            f"{group['role']}"
+        )
+        for phase_id in group["phaseIds"]:
+            lines.append(f"   - {status_line(items_by_id[phase_id])}")
+    lines.extend(
+        [
+            "",
+            (
+                "✅ Complete — admin confirmed or reused means current "
+                "compatible evidence was accepted; it is not automatic API "
+                "verification."
+            ),
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _business_group_transport(
     *,
     context: dict[str, Any],
@@ -10097,43 +10152,10 @@ def _business_group_transport(
     availability_group_id: str | None,
     availability_context_sha256: str | None,
 ) -> dict[str, Any]:
-    items_by_id = {str(item["id"]): item for item in phase_items}
-    automatic = items_by_id.get("preflight")
-    lines = [title]
-    if isinstance(automatic, dict):
-        lines.extend(
-            [
-                "",
-                "**Automatic setup**",
-                "",
-                f"- {_phase_status_icon(automatic['status'])} "
-                f"{automatic['customerLabel']} — {automatic['text']}",
-            ]
-        )
-    lines.extend(["", "**Phases**", ""])
     groups = _business_groups(contract)
-    for index, group in enumerate(groups, start=1):
-        lines.append(
-            f"{index}. **{group['label']}** — Responsible role: "
-            f"{group['role']}"
-        )
-        for phase_id in group["phaseIds"]:
-            item = items_by_id[phase_id]
-            lines.append(
-                f"   - {_phase_status_icon(item['status'])} "
-                f"{item['customerLabel']} — {item['text']}"
-            )
-    lines.extend(
-        [
-            "",
-            (
-                "✅ Complete — admin confirmed or reused means current "
-                "compatible evidence was accepted; it is not automatic API "
-                "verification."
-            ),
-        ]
+    ordinary_text = _render_grouped_phases(
+        contract, phase_items, title=title
     )
-    ordinary_text = "\n".join(lines)
     group_context = (
         _business_group_context(context, contract, current_group)
         if current_group is not None
@@ -10204,10 +10226,13 @@ def _business_group_transport(
             )
     return {
         "schemaVersion": "servicenow.lifecycle-transport.v2",
-        "ordinaryReply": {
-            "kind": "ordinary-agent-response",
-            "text": ordinary_text,
-            "businessGroupCount": len(groups),
+        "internal": {
+            "renderable": False,
+            "ordinaryReply": {
+                "kind": "ordinary-agent-response",
+                "text": ordinary_text,
+                "businessGroupCount": len(groups),
+            },
         },
         "businessGroupAvailability": {
             "gateRequired": gate_required,
@@ -10446,18 +10471,42 @@ def _shared_reuse_before_availability(
     return handoff, False
 
 
+_RENDER_INSTRUCTION = (
+    "Emit `text` verbatim as your very next assistant message, before any "
+    "other tool call. Terminal or tool output does not count as showing it. "
+    "This is the only renderable field; everything under `internal` is "
+    "never shown."
+)
+
+
 def _resume_render_block(
     progress: dict[str, Any],
     transport: dict[str, Any],
     *,
     group_changed: bool,
+    waiting: bool = False,
 ) -> dict[str, Any]:
     availability = transport["businessGroupAvailability"]
-    current_phase = progress.get("currentPhase")
-    final_text = progress.get("finalText")
+    internal = progress["internal"]
+    current = internal.get("currentPhase")
+    current_item = progress.get("currentPhase")
+    final_text = internal.get("groupedFinalText")
     if isinstance(final_text, str) and final_text:
         kind = "final"
         parts = [final_text]
+    elif waiting and isinstance(current, dict):
+        kind = "waiting"
+        parts = [str(current["groupedWaitingText"]), str(current["waitingText"])]
+    elif (
+        isinstance(current, dict)
+        and isinstance(current_item, dict)
+        and current_item.get("status") == "needs-attention"
+    ):
+        kind = "error"
+        parts = [
+            str(current["groupedErrorText"]),
+            str(current["needsAttentionText"]),
+        ]
     else:
         plan = (
             progress.get("mode") == "fresh"
@@ -10467,21 +10516,59 @@ def _resume_render_block(
         kind = "plan" if plan else "progress"
         parts = [
             str(
-                transport["ordinaryReply"]["text"]
+                transport["internal"]["ordinaryReply"]["text"]
                 if plan
-                else progress["checklistText"]
+                else internal["groupedText"]
             )
         ]
-        if isinstance(current_phase, dict) and not availability["gateRequired"]:
-            parts.append(str(current_phase["startText"]))
+        if isinstance(current, dict) and not availability["gateRequired"]:
+            parts.append(str(current["startText"]))
     return {
         "kind": kind,
         "text": "\n\n".join(parts),
-        "instruction": (
-            "Emit `text` verbatim as your very next assistant message, "
-            "before any other tool call. Terminal or tool output does not "
-            "count as showing it."
-        ),
+        "instruction": _RENDER_INSTRUCTION,
+    }
+
+
+def _checkpoint_render_block(
+    context: dict[str, Any],
+    *,
+    phase_id: str,
+    outcome: str,
+) -> dict[str, Any] | None:
+    """Grouped render for a recorded checkpoint outcome, else ``None``.
+
+    A ``done`` outcome has nothing to show yet; the following
+    ``resume-handoff`` renders the transition.
+    """
+    if outcome == "done":
+        return None
+    root = Path(context["root"])
+    contract = _load_json(root / CONTRACT_PATH)
+    state = _load_json(_lifecycle_state_path(context))
+    done = frozenset(
+        key
+        for key, value in (state.get("phases") or {}).items()
+        if isinstance(value, dict) and value.get("status") == "done"
+    )
+    progress = _build_phase_progress(
+        contract,
+        state,
+        {"decision": "run-checkpoints", "phase": {"id": phase_id}},
+        executed_actions=frozenset(),
+        verified_phases=done,
+    )
+    current = progress["internal"]["currentPhase"]
+    if outcome == "blocked":
+        kind = "error"
+        parts = [current["groupedErrorText"], current["needsAttentionText"]]
+    else:
+        kind = "waiting"
+        parts = [current["groupedWaitingText"], current["waitingText"]]
+    return {
+        "kind": kind,
+        "text": "\n\n".join(parts),
+        "instruction": _RENDER_INSTRUCTION,
     }
 
 
@@ -10593,6 +10680,12 @@ def resume_handoff(
     pending_input = _pending_preflight_input(state, decision)
     if pending_input is not None:
         result["pendingInput"] = pending_input
+        result["renderBlock"] = _resume_render_block(
+            progress,
+            transport,
+            group_changed=group_changed,
+            waiting=True,
+        )
         return result
     if decision.get("decision") == "run-action":
         phase = decision.get("phase")
@@ -11027,6 +11120,11 @@ def record_checkpoint_results(
             ["--verified-phase", phase_id] if outcome == "done" else []
         ),
     }
+    block = _checkpoint_render_block(
+        context, phase_id=phase_id, outcome=outcome
+    )
+    if block is not None:
+        result = {"renderBlock": block, **result}
     return result
 
 
@@ -12116,9 +12214,10 @@ def _command_error_recovery(
 AGENT_RULES = (
     "Run every command with the /setup launcher (py -3 on Windows), never "
     "bare `python`.",
-    "Emit renderBlock.text (or the plan, checklist or recovery message this "
-    "output returns) as an assistant message before any other tool call; "
-    "terminal output is not shown to the maker.",
+    "Emit renderBlock.text verbatim (the grouped phases view), or the "
+    "ordinaryReply/recovery text a guide output returns, as an assistant "
+    "message before any other tool call; never write your own checklist or "
+    "a Check/Status table, and terminal output is not shown to the maker.",
     "Never edit lifecycle.json by hand; record results with "
     "record-checkpoint-results or the matching record-* command.",
     "Never hide command output (no `*> $null`, no `| Out-Null`); read the "

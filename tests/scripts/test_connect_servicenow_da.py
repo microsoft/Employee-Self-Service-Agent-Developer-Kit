@@ -11883,11 +11883,12 @@ def test_resume_handoff_consumes_controller_and_returns_exact_action(
     assert result["progress"]["currentPhase"]["label"] == (
         "Prepare ServiceNow topics"
     )
-    assert result["progress"]["currentPhase"]["startText"] == (
+    internal = result["progress"]["internal"]
+    assert internal["currentPhase"]["startText"] == (
         "Starting: Prepare agent topics"
     )
     assert result["progress"]["completedCount"] == 1
-    assert result["progress"]["finalText"] is None
+    assert internal["groupedFinalText"] is None
     assert result["transport"]["businessGroupAvailability"][
         "gateRequired"
     ] is False
@@ -12012,7 +12013,7 @@ def test_resume_handoff_withholds_preflight_checkpoint_for_pending_instance(
     assert "Connection progress" not in body
     assert "**Phases**" not in body
     assert "**Phases**" in (
-        result["transport"]["ordinaryReply"]["text"]
+        result["transport"]["internal"]["ordinaryReply"]["text"]
     )
     assert result["businessGroupAvailabilityAccepted"] is False
     assert result["transport"]["businessGroupAvailability"][
@@ -12161,44 +12162,40 @@ def test_phase_progress_uses_provider_contract_labels_and_order(
     )
 
 
+def _real_contract(provider: str) -> dict[str, object]:
+    return json.loads(
+        (
+            snow.SOLUTION_ROOT
+            / "src"
+            / "skills"
+            / "connect"
+            / provider
+            / "contract.json"
+        ).read_text(encoding="utf-8")
+    )
+
+
 def test_phase_progress_distinguishes_reused_manual_recheck_and_blocked() -> None:
-    contract = {
-        "displayName": "ServiceNow HRSD",
-        "phases": [
-            {"id": "reused", "label": "Reuse setup"},
-            {"id": "manual", "label": "Confirm admin setup"},
-            {"id": "cached", "label": "Recheck cached setup"},
-            {"id": "later", "label": "Later work"},
-            {"id": "blocked", "label": "Blocked work"},
-        ],
+    contract = _real_contract("servicenow-da-itsm")
+    statuses = {
+        "preflight": ("done", {"A": "Manual"}),
+        "entra-registration": ("done", {"B": "Manual"}),
+        "servicenow-oidc": ("done", {"C": "Passed"}),
+        "credential": ("pending", {}),
+        "agent-connection": ("pending", {}),
+        "topics": ("blocked", {"E": "Failed"}),
+        "portal-url": ("pending", {}),
+        "test": ("pending", {}),
     }
     state = {
         "adminSetup": {
             "phaseHandoffs": {
-                "reused": {"status": "reused"},
+                "preflight": {"status": "reused"},
             }
         },
         "phases": {
-            "reused": {
-                "status": "done",
-                "checkpointResults": {"A": "Manual"},
-            },
-            "manual": {
-                "status": "done",
-                "checkpointResults": {"B": "Manual"},
-            },
-            "cached": {
-                "status": "done",
-                "checkpointResults": {"C": "Passed"},
-            },
-            "later": {
-                "status": "pending",
-                "checkpointResults": {},
-            },
-            "blocked": {
-                "status": "blocked",
-                "checkpointResults": {"E": "Failed"},
-            },
+            phase_id: {"status": status, "checkpointResults": results}
+            for phase_id, (status, results) in statuses.items()
         },
     }
 
@@ -12207,10 +12204,10 @@ def test_phase_progress_distinguishes_reused_manual_recheck_and_blocked() -> Non
         state,
         {
             "decision": "run-checkpoints",
-            "phase": {"id": "cached"},
+            "phase": {"id": "servicenow-oidc"},
         },
         executed_actions=frozenset(),
-        verified_phases=frozenset({"reused", "manual"}),
+        verified_phases=frozenset({"preflight", "entra-registration"}),
     )
 
     assert [item["status"] for item in progress["items"]] == [
@@ -12218,31 +12215,38 @@ def test_phase_progress_distinguishes_reused_manual_recheck_and_blocked() -> Non
         "complete-manual",
         "rechecking",
         "pending",
+        "pending",
         "needs-attention",
+        "pending",
+        "pending",
     ]
     assert progress["items"][0]["text"] == "Reused — checked"
     assert progress["items"][1]["text"] == "Complete — admin confirmed"
-    assert progress["currentPhase"]["startText"] == (
-        "Rechecking: Recheck cached setup"
+    internal = progress["internal"]["currentPhase"]
+    assert internal["startText"] == (
+        "Rechecking: Confirm ServiceNow user mapping"
     )
-    assert progress["currentPhase"]["waitingText"] == (
-        "Waiting — Recheck cached setup: your input is needed."
+    assert internal["waitingText"] == (
+        "Waiting — Confirm ServiceNow user mapping: your input is needed."
     )
+    grouped = progress["internal"]["groupedText"]
+    assert "   - ✅ Check existing setup — Reused — checked" not in grouped
+    assert "- ✅ Check existing setup — Reused — checked" in grouped
+    assert "   - ❌ Prepare agent topics — Needs attention" in grouped
 
 
 def test_phase_progress_does_not_complete_after_action_only() -> None:
-    contract = {
-        "displayName": "ServiceNow ITSM",
-        "phases": [{"id": "topics", "label": "Prepare ServiceNow topics"}],
-    }
+    contract = _real_contract("servicenow-da-itsm")
     state = {
         "phases": {
-            "topics": {
-                "status": "in-progress",
-                "actionApplied": True,
-                "checkpointResults": {"TOPICS": "NotConfigured"},
-            }
+            phase["id"]: {"status": "pending", "checkpointResults": {}}
+            for phase in contract["phases"]
         }
+    }
+    state["phases"]["topics"] = {
+        "status": "in-progress",
+        "actionApplied": True,
+        "checkpointResults": {"TOPICS": "NotConfigured"},
     }
 
     progress = snow._build_phase_progress(
@@ -12256,50 +12260,31 @@ def test_phase_progress_does_not_complete_after_action_only() -> None:
         verified_phases=frozenset(),
     )
 
-    assert progress["items"][0]["status"] == "checking"
+    topics = next(i for i in progress["items"] if i["id"] == "topics")
+    assert topics["status"] == "checking"
     assert progress["completedCount"] == 0
-    assert progress["finalText"] is None
-    assert progress["currentPhase"]["actionFinishedText"] == (
-        "Action finished — checking: Prepare agent topics"
+    assert progress["internal"]["groupedFinalText"] is None
+    assert progress["internal"]["currentPhase"]["startText"] == (
+        "Checking: Prepare agent topics"
     )
 
 
-def test_phase_progress_reemits_updated_board_for_transition_wait_and_error(
+def test_phase_progress_grouped_text_follows_transitions_wait_and_error(
 ) -> None:
-    contract = {
-        "displayName": "ServiceNow ITSM",
-        "phases": [
-            {"id": "preflight", "label": "Check existing setup"},
-            {
-                "id": "entra-registration",
-                "label": "Collect Entra identity options",
-            },
-            {"id": "topics", "label": "Prepare ServiceNow topics"},
-        ],
+    contract = _real_contract("servicenow-da-itsm")
+    pending = {
+        phase["id"]: {"status": "pending", "checkpointResults": {}}
+        for phase in contract["phases"]
     }
-    initial_state = {
-        "phases": {
-            "preflight": {"status": "pending", "checkpointResults": {}},
-            "entra-registration": {
-                "status": "pending",
-                "checkpointResults": {},
-            },
-            "topics": {"status": "pending", "checkpointResults": {}},
-        }
+    initial_state = {"phases": json.loads(json.dumps(pending))}
+    transitioned_state = {"phases": json.loads(json.dumps(pending))}
+    transitioned_state["phases"]["preflight"] = {
+        "status": "done",
+        "checkpointResults": {"PRE": "Passed"},
     }
-    transitioned_state = {
-        "phases": {
-            "preflight": {
-                "status": "done",
-                "checkpointResults": {"PRE": "Passed"},
-            },
-            "entra-registration": {
-                "status": "in-progress",
-                "checkpointResults": {},
-            },
-            "topics": {"status": "pending", "checkpointResults": {}},
-        }
-    }
+    transitioned_state["phases"]["entra-registration"]["status"] = (
+        "in-progress"
+    )
 
     initial = snow._build_phase_progress(
         contract,
@@ -12319,74 +12304,71 @@ def test_phase_progress_reemits_updated_board_for_transition_wait_and_error(
         verified_phases=frozenset({"preflight"}),
     )
 
-    assert "- 🔄 Check existing setup — In progress" in initial["checklistText"]
-    assert "- ⬜ Confirm Entra identity options — Pending" in (
-        initial["checklistText"]
+    assert "- 🔄 Check existing setup — In progress" in (
+        initial["internal"]["groupedText"]
     )
-    assert "- ✅ Check existing setup — Complete — checked" in (
-        transitioned["checklistText"]
+    assert "   - ⬜ Confirm Entra identity options — Pending" in (
+        initial["internal"]["groupedText"]
     )
-    assert "- 🔄 Confirm Entra identity options — In progress" in (
-        transitioned["checklistText"]
-    )
+    grouped = transitioned["internal"]["groupedText"]
+    assert "- ✅ Check existing setup — Complete — checked" in grouped
+    assert "   - 🔄 Confirm Entra identity options — In progress" in grouped
+    assert "Connection progress:" not in grouped
     assert "questionText" not in transitioned["currentPhase"]
+    current = transitioned["internal"]["currentPhase"]
     assert "- ✅ Check existing setup — Complete — checked" in (
-        transitioned["currentPhase"]["waitingChecklistText"]
+        current["groupedWaitingText"]
     )
-    assert "- ⏳ Confirm Entra identity options — Waiting" in (
-        transitioned["currentPhase"]["waitingChecklistText"]
+    assert "   - ⏳ Confirm Entra identity options — Waiting" in (
+        current["groupedWaitingText"]
     )
-    assert "- ❌ Confirm Entra identity options — Needs attention" in (
-        transitioned["currentPhase"]["errorChecklistText"]
+    assert "   - ❌ Confirm Entra identity options — Needs attention" in (
+        current["groupedErrorText"]
     )
 
 
 def test_phase_progress_final_text_requires_every_current_verified_marker() -> None:
-    contract = {
-        "displayName": "ServiceNow ITSM",
-        "phases": [
-            {"id": "test", "label": "Test the agent"},
-            {"id": "publish", "label": "Publish the agent"},
-        ],
-    }
+    contract = _real_contract("servicenow-da-itsm")
     state = {
         "phases": {
-            "test": {
+            phase["id"]: {
                 "status": "done",
-                "checkpointResults": {"TEST": "Manual"},
-            },
-            "publish": {
-                "status": "done",
-                "checkpointResults": {"PUBLISH": "Passed"},
-            },
+                "checkpointResults": {"X": "Passed"},
+            }
+            for phase in contract["phases"]
         }
     }
+    state["phases"]["test"]["checkpointResults"] = {"TEST": "Manual"}
+    all_ids = frozenset(phase["id"] for phase in contract["phases"])
 
     incomplete = snow._build_phase_progress(
         contract,
         state,
         {"decision": "complete"},
         executed_actions=frozenset(),
-        verified_phases=frozenset({"test"}),
+        verified_phases=all_ids - {"portal-url"},
     )
     complete = snow._build_phase_progress(
         contract,
         state,
         {"decision": "complete"},
         executed_actions=frozenset(),
-        verified_phases=frozenset({"test", "publish"}),
+        verified_phases=all_ids,
     )
 
-    assert incomplete["finalText"] is None
-    assert incomplete["items"][1]["status"] == "rechecking"
-    assert complete["finalText"] == (
-        "Connection progress:\n\n"
-        "- ✅ Test ServiceNow — Complete — admin confirmed\n"
-        "- ✅ Publish agent — Complete — checked\n\n"
+    assert incomplete["internal"]["groupedFinalText"] is None
+    portal = next(i for i in incomplete["items"] if i["id"] == "portal-url")
+    assert portal["status"] == "rechecking"
+    final = complete["internal"]["groupedFinalText"]
+    assert final.endswith(
         "Complete — every ServiceNow ITSM step was checked in this run."
     )
-    assert complete["items"][0]["text"] == "Complete — admin confirmed"
-    assert complete["items"][1]["text"] == "Complete — checked"
+    assert "**Phases**" in final
+    assert "Responsible role:" in final
+    assert "Connection progress:" not in final
+    assert "   - ✅ Test ServiceNow — Complete — admin confirmed" in final
+    assert "   - ✅ Publish agent" not in final
+    assert "   - ✅ Set employee portal URL — Complete — checked" in final
 
 
 @pytest.mark.parametrize(
@@ -12483,8 +12465,8 @@ def test_portal_phase_reenters_action_when_checkpoint_is_incomplete(
     assert progress["currentPhase"]["customerLabel"] == (
         "Set employee portal URL"
     )
-    assert "- ❌ Set employee portal URL — Needs attention" in (
-        progress["currentPhase"]["errorChecklistText"]
+    assert "   - ❌ Set employee portal URL — Needs attention" in (
+        progress["internal"]["currentPhase"]["groupedErrorText"]
     )
 
 
@@ -12572,7 +12554,7 @@ def test_resume_handoff_cli_initializes_preflight_without_role_question(
     assert availability["gateRequired"] is False
     assert availability["question"] is None
     assert "**Phases**" in (
-        result["transport"]["ordinaryReply"]["text"]
+        result["transport"]["internal"]["ordinaryReply"]["text"]
     )
     state_path = (
         connect_root
@@ -12834,7 +12816,7 @@ def test_initial_plan_shows_business_groups_without_preflight_gate(
         lifecycle_path = snow._lifecycle_state_path(context)
 
     transport = initial["transport"]
-    ordinary = transport["ordinaryReply"]["text"]
+    ordinary = transport["internal"]["ordinaryReply"]["text"]
     availability = transport["businessGroupAvailability"]
     expected_groups = 4 if profile == "hrsd" else 3
     assert initial["lifecycle"]["phase"]["id"] == "preflight"
@@ -13063,7 +13045,7 @@ def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
             availability_context_sha256=None,
         )
 
-    ordinary = transport["ordinaryReply"]["text"]
+    ordinary = transport["internal"]["ordinaryReply"]["text"]
     assert "- ✅ Check existing setup — Complete — checked" in ordinary
     assert "   - ✅ Confirm HR ServiceNow prerequisite — Reused — checked" in (
         ordinary
@@ -13160,7 +13142,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         assert plugin_yes["transport"]["businessGroupAvailability"][
             "question"
         ] is None
-        plugin_guidance = plugin_yes["transport"]["ordinaryReply"]["text"]
+        plugin_guidance = plugin_yes["transport"]["internal"]["ordinaryReply"]["text"]
         assert "**Current task**" in plugin_guidance
         assert "Confirm HR ServiceNow prerequisite" in plugin_guidance
         assert "ServiceNow Application Manager" in plugin_guidance
@@ -13198,7 +13180,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             availability_group_id="entra-identity",
             availability_context_sha256=entra["contextIdentitySha256"],
         )
-        entra_guidance = entra_yes["transport"]["ordinaryReply"]["text"]
+        entra_guidance = entra_yes["transport"]["internal"]["ordinaryReply"]["text"]
         assert "Confirm Entra identity options" in entra_guidance
         assert "guide-entra-registration.md" in entra_guidance
         assert "valid Application client ID GUID" in entra_guidance
@@ -13258,7 +13240,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             availability_group_id="servicenow-sso",
             availability_context_sha256=sso["contextIdentitySha256"],
         )
-        sso_guidance = sso_yes["transport"]["ordinaryReply"]["text"]
+        sso_guidance = sso_yes["transport"]["internal"]["ordinaryReply"]["text"]
         assert "Confirm ServiceNow user mapping" in sso_guidance
         assert "guide-servicenow-oidc.md" in sso_guidance
         assert "Manual evidence does not prove a real employee token" in (
@@ -13297,7 +13279,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             availability_group_id="maker-configuration",
             availability_context_sha256=maker["contextIdentitySha256"],
         )
-        maker_guidance = maker_yes["transport"]["ordinaryReply"]["text"]
+        maker_guidance = maker_yes["transport"]["internal"]["ordinaryReply"]["text"]
         assert "Check ServiceNow connection" in maker_guidance
         display_index = maker_guidance.index("Display name (optional)")
         auth_index = maker_guidance.index("Authentication Type")
@@ -15267,43 +15249,29 @@ def test_resume_handoff_render_block_is_one_ready_to_emit_message(
 
     block = result["renderBlock"]
     assert block["kind"] == "progress"
-    assert result["progress"]["checklistText"] in block["text"]
-    assert block["text"].endswith(result["progress"]["currentPhase"]["startText"])
+    assert result["progress"]["internal"]["groupedText"] in block["text"]
+    assert block["text"].endswith(
+        result["progress"]["internal"]["currentPhase"]["startText"]
+    )
     assert "assistant message" in block["instruction"]
     assert "Replace the leading `python`" in (result["checkpoints"]["interpreterNote"])
 
 
 @pytest.mark.parametrize(
-    ("progress", "group_changed", "gate", "kind", "expected"),
+    ("progress", "group_changed", "gate", "waiting", "kind", "expected"),
     [
+        ({"mode": "fresh"}, False, False, False, "plan", "PLAN\n\nSTART"),
+        ({"mode": "resume"}, True, False, False, "plan", "PLAN\n\nSTART"),
+        ({"mode": "resume"}, False, True, False, "plan", "PLAN"),
+        ({"mode": "resume"}, False, False, False, "progress", "G\n\nSTART"),
+        ({"mode": "resume"}, False, False, True, "waiting", "W\n\nWAIT"),
         (
-            {"mode": "fresh", "checklistText": "C"},
+            {"mode": "resume", "currentPhase": {"status": "needs-attention"}},
             False,
             False,
-            "plan",
-            "PLAN\n\nSTART",
-        ),
-        (
-            {"mode": "resume", "checklistText": "C"},
-            True,
             False,
-            "plan",
-            "PLAN\n\nSTART",
-        ),
-        ({"mode": "resume", "checklistText": "C"}, False, True, "plan", "PLAN"),
-        (
-            {"mode": "resume", "checklistText": "C"},
-            False,
-            False,
-            "progress",
-            "C\n\nSTART",
-        ),
-        (
-            {"mode": "resume", "checklistText": "C", "finalText": "DONE"},
-            False,
-            False,
-            "final",
-            "DONE",
+            "error",
+            "E\n\nATTN",
         ),
     ],
 )
@@ -15311,20 +15279,156 @@ def test_resume_render_block_kinds(
     progress: dict,
     group_changed: bool,
     gate: bool,
+    waiting: bool,
     kind: str,
     expected: str,
 ) -> None:
-    progress = {**progress, "currentPhase": {"startText": "START"}}
+    progress = {
+        "currentPhase": {"status": "current"},
+        **progress,
+        "internal": {
+            "groupedText": "G",
+            "groupedFinalText": None,
+            "currentPhase": {
+                "startText": "START",
+                "groupedWaitingText": "W",
+                "waitingText": "WAIT",
+                "groupedErrorText": "E",
+                "needsAttentionText": "ATTN",
+            },
+        },
+    }
     transport = {
         "businessGroupAvailability": {"gateRequired": gate},
-        "ordinaryReply": {"text": "PLAN"},
+        "internal": {"ordinaryReply": {"text": "PLAN"}},
     }
 
     block = snow._resume_render_block(
         progress,
         transport,
         group_changed=group_changed,
+        waiting=waiting,
     )
 
     assert block["kind"] == kind
     assert block["text"] == expected
+
+
+def test_resume_render_block_final_is_grouped_final_text() -> None:
+    progress = {
+        "mode": "resume",
+        "currentPhase": None,
+        "internal": {"groupedText": "G", "groupedFinalText": "G\n\nDONE"},
+    }
+    transport = {
+        "businessGroupAvailability": {"gateRequired": False},
+        "internal": {"ordinaryReply": {"text": "PLAN"}},
+    }
+
+    block = snow._resume_render_block(progress, transport, group_changed=False)
+
+    assert block == {
+        "kind": "final",
+        "text": "G\n\nDONE",
+        "instruction": snow._RENDER_INSTRUCTION,
+    }
+
+
+def _assert_grouped_phase_view(text: str, contract: dict) -> None:
+    assert "**Phases**" in text
+    assert "Connection progress:" not in text
+    assert "Complete — admin confirmed or reused" in text
+    for index, group in enumerate(snow._business_groups(contract), start=1):
+        assert (
+            f"{index}. **{group['label']}** — Responsible role: {group['role']}"
+            in text
+        )
+
+
+@pytest.mark.parametrize(
+    "provider", ["servicenow-da-hrsd", "servicenow-da-itsm"]
+)
+def test_progress_render_block_is_grouped_and_shows_reused_status(
+    provider: str,
+) -> None:
+    contract = _real_contract(provider)
+    done = {"preflight", "plugin-prerequisites", "entra-registration"}
+    done |= {"servicenow-oidc", "credential"}
+    state = {
+        "adminSetup": {"phaseHandoffs": {"credential": {"status": "reused"}}},
+        "phases": {
+            phase["id"]: {
+                "status": "done" if phase["id"] in done else "pending",
+                "checkpointResults": (
+                    {"X": "Passed"} if phase["id"] in done else {}
+                ),
+            }
+            for phase in contract["phases"]
+        },
+    }
+    progress = snow._build_phase_progress(
+        contract,
+        state,
+        {"decision": "run-action", "phase": {"id": "agent-connection"}},
+        executed_actions=frozenset(),
+        verified_phases=frozenset(done),
+    )
+    transport = {
+        "businessGroupAvailability": {"gateRequired": False},
+        "internal": {"ordinaryReply": {"text": "PLAN"}},
+    }
+
+    block = snow._resume_render_block(progress, transport, group_changed=False)
+
+    assert block["kind"] == "progress"
+    _assert_grouped_phase_view(block["text"], contract)
+    assert "- ✅ Check ServiceNow connection — Reused — checked" in block["text"]
+    assert block["text"].count("Starting:") == 1
+    assert block["text"].endswith("Starting: Connect this agent")
+    serialized = json.dumps({"progress": progress, "block": block})
+    for removed in (
+        "checklistText",
+        "waitingChecklistText",
+        "errorChecklistText",
+        "finalText",
+    ):
+        assert removed not in serialized
+    renderable = {
+        key for key in progress if key not in {"internal"}
+    }
+    assert "groupedText" not in renderable
+
+
+def test_resume_handoff_moves_flat_ordinary_reply_under_internal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    with snow.product_profile_context(profile):
+        result = snow.resume_handoff(context)
+
+    assert "ordinaryReply" in result["transport"]["internal"]
+    assert result["transport"]["internal"]["renderable"] is False
+    assert "ordinaryReply" not in result["transport"]
+    assert result["renderBlock"]["kind"] == "plan"
+
+
+@pytest.mark.parametrize("profile_key", ["hrsd", "itsm"])
+def test_checkpoint_recording_emits_grouped_waiting_and_error_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile_key: str,
+) -> None:
+    context, contract, profile = _recording_setup(
+        monkeypatch, tmp_path, profile_key
+    )
+    with snow.product_profile_context(profile):
+        done = _record_phase(context, profile, "preflight", "Passed")
+        failed = _record_phase(context, profile, "preflight", "Failed")
+
+    assert "renderBlock" not in done
+    block = failed["renderBlock"]
+    assert block["kind"] == "error"
+    _assert_grouped_phase_view(block["text"], contract)
+    assert "❌ Check existing setup — Needs attention" in block["text"]
+    assert list(failed)[0] == "renderBlock"
