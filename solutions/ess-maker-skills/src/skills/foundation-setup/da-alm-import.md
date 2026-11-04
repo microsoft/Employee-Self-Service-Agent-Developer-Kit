@@ -132,7 +132,7 @@ If attachment fails after import `kind: success`, state:
 was not prepared. No new import is needed.** Show the attachment error and
 rerun only the attach command after resolving it.
 
-After all four FlightChecks have been attempted, render the factual workspace and runtime-readiness report from `da-existing-dev.md` using **Supplied native agent package** as the starting point, including when `connectReady` is false. Build every workspace field from `DA_EXISTING_DEV_SETUP_JSON:` and retain the report's limits on completion claims.
+After every available check in the shared maintenance sequence has been attempted, render the factual workspace and runtime-readiness report from `da-existing-dev.md` using **Supplied native agent package** as the starting point, including when `connectReady` is false. Build every workspace field from `DA_EXISTING_DEV_SETUP_JSON:` and retain the report's limits on completion claims.
 
 ## Handle a collision
 
