@@ -1784,9 +1784,8 @@ def _run_single_checkpoint(args, *, compact_stream=None):
         sys.exit(1)
 
     # --- Emit anonymous outcome telemetry (best-effort; never affects exit) ---
-    # Single-checkpoint mode never auto-opens the HTML report. The default
-    # path still writes results.json / report.html; compact lifecycle mode
-    # emits its versioned stdout contract without per-step report files.
+    # Single-checkpoint mode never auto-opens the report; compact lifecycle
+    # mode emits its stdout contract without per-step report files.
     # Single-checkpoint runs are the "connect" invocation source: incremental
     # FlightChecks that gate individual setup/connect steps (ADO 7587431).
     # Without this, checkpoint runs were invisible to the Aria dashboards even

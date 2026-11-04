@@ -10205,10 +10205,9 @@ def _render_grouped_phases(
     title: str,
     current_override: tuple[str, str, str] | None = None,
 ) -> str:
-    """Render the one grouped phase view every Connect transition uses.
+    """Render the grouped phase view used by every Connect transition.
 
-    ``current_override`` is ``(phase_id, icon, text)`` for a Waiting or
-    Needs-attention display of the current step.
+    ``current_override`` is ``(phase_id, icon, text)`` for the current step.
     """
     items_by_id = {str(item["id"]): item for item in items}
 
@@ -10642,11 +10641,7 @@ def _checkpoint_render_block(
     phase_id: str,
     outcome: str,
 ) -> dict[str, Any] | None:
-    """Grouped render for a recorded checkpoint outcome, else ``None``.
-
-    A ``done`` outcome has nothing to show yet; the following
-    ``resume-handoff`` renders the transition.
-    """
+    """Grouped render for a recorded outcome; ``None`` for ``done`` (resume-handoff renders it)."""
     if outcome == "done":
         return None
     root = Path(context["root"])
@@ -11070,11 +11065,7 @@ def record_checkpoint_results(
     results: list[str],
     maker_acknowledged: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Persist validated checkpoint outcomes for one lifecycle phase.
-
-    This is the only supported writer for ``phases.{id}.checkpointResults``
-    and ``checkpointAcknowledgements``; callers never edit lifecycle state.
-    """
+    """Persist validated checkpoint outcomes; the sole writer of phase checkpoint state."""
     root = Path(context["root"])
     contract = _load_json(root / CONTRACT_PATH)
     if not _lifecycle_state_path(context).exists():
@@ -12347,10 +12338,7 @@ def _with_agent_rules(
     result: Any,
     command: str | None = None,
 ) -> Any:
-    """Prepend rules so continued chats see them in every command output.
-
-    `adapt-question` output is passed to `ask_user` unchanged.
-    """
+    """Prepend rules to every command output; `adapt-question` output stays unchanged."""
     if not isinstance(result, dict) or command == "adapt-question":
         return result
     ordered: dict[str, Any] = {}

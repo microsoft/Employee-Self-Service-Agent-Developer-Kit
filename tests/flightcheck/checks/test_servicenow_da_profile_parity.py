@@ -3,9 +3,7 @@
 
 """Parity and isolation tests for the shared ServiceNow DA check profiles.
 
-The golden fixture was captured from the implementation that rewrote HRSD
-output into ITSM output after the fact. The profile-driven implementation must
-produce byte-identical CheckResult rows for both profiles.
+The golden fixture predates the profile table; both profiles must still match it.
 """
 
 from __future__ import annotations
@@ -495,8 +493,7 @@ def test_profile_results_match_pre_refactor_golden(
 ) -> None:
     golden = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
     collected = collect_results(profile_key, tmp_path, monkeypatch.chdir)
-    # The PUBLISH checkpoint was retired after the golden was captured. Its
-    # rows and PUBLISH-targeted scenarios are the only permitted difference.
+    # PUBLISH rows/scenarios were retired after capture; the only allowed difference.
     expected = {
         name: [
             digest

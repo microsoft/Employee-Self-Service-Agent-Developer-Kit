@@ -646,8 +646,7 @@ def _acquire_token(
         result,
         selected_account,
     )
-    # Strict identity verification is opt-in so existing callers keep
-    # treating account_hint as a sign-in preference only.
+    # Opt-in; other callers treat account_hint as a preference only.
     if require_account_identity:
         if not account_name:
             raise AgentBuilderError(

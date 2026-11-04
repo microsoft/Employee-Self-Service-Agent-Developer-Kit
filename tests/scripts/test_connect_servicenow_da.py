@@ -6859,9 +6859,8 @@ def test_legacy_candidate_receipt_does_not_replace_setup_confirmation(
         handoff = snow.identity_direct_handoff(context, stage="entra")
 
     if not needs_handoff:
-        # A current single-claim receipt is the Entra completion criterion
-        # (client ID + one claim name), so no new administrator handoff.
-        # The no-action handoff reconciles on load without rewriting disk.
+        # A current single-claim receipt completes Entra, so no new admin handoff;
+        # the no-action handoff reconciles on load without rewriting disk.
         assert state_path.read_bytes() == before
         with snow.product_profile_context(profile):
             saved = snow._load_lifecycle_state(context)
@@ -10757,10 +10756,7 @@ def test_enable_all_topics_accepts_unattributed_active_postimage_difference(
 ) -> None:
     """A successful write plus Active readback outranks full-content drift.
 
-    A non-target difference may be service normalization or an external edit.
-    The old implementation treated any difference as a concurrency conflict,
-    attempted rollback, and failed the phase even though every requested topic
-    was Active.
+    Non-target differences may be service normalization or an external edit.
     """
 
     components = _components()

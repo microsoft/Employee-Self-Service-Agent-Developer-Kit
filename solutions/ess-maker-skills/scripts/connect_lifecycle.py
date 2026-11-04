@@ -49,10 +49,7 @@ def state_integrity_digest(state: dict[str, Any]) -> str:
 
 
 def state_integrity_mismatch(state: dict[str, Any]) -> bool:
-    """Return True when a recorded integrity hash no longer matches.
-
-    State written before the hash existed carries no value and is accepted.
-    """
+    """True when the recorded integrity hash differs; legacy state without one is accepted."""
     recorded = state.get(STATE_INTEGRITY_KEY)
     if recorded is None:
         return False
