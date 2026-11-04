@@ -58,6 +58,12 @@ HTML comment the tooling reads.
 
 ## U.0 — Show the checkpoint result to the user (in chat)
 
+> **ServiceNow exception.** Providers whose contract sets
+> `checkpointRecording: "provider-command-v1"` (ServiceNow HRSD/ITSM) never
+> render the U.0 table, the U.0a steps, or FlightCheck-health rows during
+> Connect. Their checkpoint outcomes only drive the grouped phase statuses in
+> `renderBlock.text`; see `lifecycle-runner.md`.
+
 **Timing — render this the instant a checkpoint run returns, and for a
 manual/attest row *before* you ask the attestation question.** When a
 `python scripts/flightcheck/cli.py --checkpoint <ID>` run just produced

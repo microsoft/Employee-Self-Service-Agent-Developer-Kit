@@ -73,22 +73,21 @@ adapter envelope; the active host currently has a known defect that exposes
 and accepts custom enum answers because its schema has no freeform-control
 field. Do not patch the host or invent a business reject/re-ask flow here.
 
-**STOP — render before acting.** After every `resume-handoff`, your very next assistant message — before any other tool call — must contain `transport.ordinaryReply.text` verbatim (first run or group change) or `progress.checklistText` (transitions), and `progress.currentPhase.startText` before each action or checkpoint. Never summarize it or write "render the plan" instead.
+**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead.
 
 When the controller returns `renderBlock`, emit `renderBlock.text` verbatim as that assistant message; printing it from a terminal or tool call does not count. Run every command with the launcher selected during `/setup` (for example `py -3`), never bare `python`. When the contract sets `checkpointRecording: "provider-command-v1"`, never edit `lifecycle.json` by hand; use the controller commands.
 
 For DA ServiceNow, render the controller's
-`transport.ordinaryReply.text` as an ordinary agent response. It contains the
-automatic preflight plus the complete HR or IT collaboration groups, one
-responsible role per group, and nested internal-step statuses. Re-emit the
-freshly returned ordinary reply only on an actual phase
-completion/next-phase transition, waiting pause, or blocked/error transition.
-A cached `done` phase displays **Rechecking** until this invocation adds its
-verified marker. Before each meaningful action or checkpoint run, show the
-exact current-phase `startText`. After `applied`/`recorded`, show
-`actionFinishedText` and continue checking; an action receipt is never phase
-completion. When an action asks a question, show
-`waitingChecklistText` as an ordinary agent response, then pass only the
+`renderBlock.text` as an ordinary agent response. It is the grouped phases view:
+the automatic preflight plus the complete HR or IT collaboration groups, one
+responsible role per group, and nested internal-step statuses (it already
+ends with the current step line). `renderBlock.text` is the only renderable
+field; the flat items and everything under `internal` are data. Re-emit the
+freshly returned block on every phase completion/next-phase transition,
+waiting pause, blocked/error transition, and completion. A cached `done` phase
+displays **Rechecking** until this invocation adds its verified marker. An
+`applied`/`recorded` receipt is never phase completion. When an action asks a
+question, emit the waiting `renderBlock.text` as an ordinary agent response, then pass only the
 action's compact returned canonical question through the active ServiceNow
 question adapter and call `ask_user` with the generated arguments verbatim.
 For Entra and ServiceNow identity actions, the `resume-handoff` business-group
@@ -121,9 +120,8 @@ and owning handoff. Do not ask a saved/configured or claim-mapped completion
 question, and do not invoke the historical
 `--confirm-saved-mapping`, `--reject-saved-mapping`, or
 `record-admin-phase --phase servicenow-oidc` compatibility paths.
-Use `waitingText` for the pause. For a failure, show `errorChecklistText`,
-`needsAttentionText`, and the exact full remediation returned by the
-checkpoint. For ServiceNow, that remediation is the branch-loaded recovery
+For a failure, emit the error `renderBlock.text` and the exact full
+remediation returned by the checkpoint. For ServiceNow, that remediation is the branch-loaded recovery
 handoff: problem, category, owner, exact location, values, action, success
 condition, and local recheck/resume point. Render it in full in the same
 visible turn; do not summarize it into the generic stop message.
@@ -151,7 +149,7 @@ Only a verified phase may display **Complete — checked**,
 **Complete — admin confirmed**, or **Reused — checked**. Waiting remains
 waiting; Test requires the actual maker result, and any contract-defined
 interactive mutation requires its actual maker choice and validation. Show
-`finalText` only when the controller
+the final `renderBlock.text` only when the controller
 returns complete and every contract phase has a current invocation verified
 marker. Keep these updates short: one current step and one result update, not
 per-subrequest heartbeats or repeated full tables.
@@ -234,7 +232,7 @@ DA ServiceNow uses the provider controller's
 `servicenow.lifecycle-transport.v2` result instead of the generic confirmation
 below.
 
-1. Show `transport.ordinaryReply.text` as an ordinary agent response. It has
+1. Show `renderBlock.text` as an ordinary agent response. It has
    one automatic preflight line, then exactly four HR or three IT
    **Collaboration groups**. Each group has one responsible role and its
    internal phase statuses.
@@ -255,7 +253,7 @@ below.
    --availability-context-sha256 {contextIdentitySha256}`. The controller
    records an acknowledgement scoped to that business group, provider,
    profile, agent, environment, contract revision, and group definition.
-   Show the newly returned `transport.ordinaryReply.text` before any action.
+   Show the newly returned `renderBlock.text` before any action.
    It contains the current task's target, responsible role, supported
    runbook/location, expected non-secret evidence, and completion boundary.
    Availability is acknowledgement only. Continue only from the returned
@@ -764,6 +762,16 @@ If the contract has `connectConfig` and that file exists, add
 also add `--agent-slug "{AGENT_SLUG}"`. Use the same target and arguments when
 re-verifying completed phases in L.2.
 
+**ServiceNow exception — no FlightCheck health display.** When the contract
+sets `checkpointRecording: "provider-command-v1"`, skip the U.0/U.0a
+routines: never render a `| Check | Status |` table, FlightCheck-health
+rows, or a "Confirmed by the Maker" echo. Checkpoint outcomes only drive
+the grouped phase statuses in `renderBlock.text` (the `record-checkpoint-results`
+waiting/error `renderBlock` carries the same view). A Manual row's
+acknowledgement is asked through the existing question card, which carries
+the controller's returned remediation/recovery text rather than a results
+table. Other providers keep U.0/U.0a unchanged.
+
 After each run, render the result using the exact U.0 and U.0a routines from
 `checklist-updater.md` (read that file's U.0/U.0a
 sections and apply them verbatim against the validated compact rows, or against
@@ -824,6 +832,8 @@ below apply only to providers without this flag.
   include the complete just-rendered Manual/Warning row: status, description,
   result, remediation/manual steps, and final acknowledgement prompt. Do not
   rely on the preceding U.0/U.0a assistant message as the only visible copy.
+  For ServiceNow (no U.0 render), the card instead carries the controller's
+  returned remediation/recovery text and the Manual prompt, never a table.
   Never reuse this shortcut
   for an older action, unrelated phase evidence, `Warning`, or mismatched
   status/kind/timestamp. A persisted matching-evidence acknowledgement may be

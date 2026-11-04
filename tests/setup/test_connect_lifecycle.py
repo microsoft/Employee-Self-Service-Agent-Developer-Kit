@@ -157,7 +157,7 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "DA ServiceNow business-group availability" in runner
     assert "exactly four HR or three IT" in runner
     assert "Preflight, chooser, and instance confirmation" in runner
-    assert "`transport.ordinaryReply.text`" in runner
+    assert "`renderBlock.text`" in runner
     assert "`transport.businessGroupAvailability.question`" in runner
     assert "exactly four HR or three IT" in runner
     assert "Preflight, chooser, and instance confirmation" in runner
@@ -224,14 +224,18 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     )
     assert "**ServiceNow phase-progress extension:**" in runner
     assert "Other providers retain this runner's existing output" in runner
-    assert "`transport.ordinaryReply.text`" in runner
-    assert "Re-emit the freshly returned ordinary reply" in runner_normalized
+    assert "`renderBlock.text`" in runner
+    assert "Re-emit the freshly returned block" in runner_normalized
     assert "phase checklist once" not in runner
-    assert "cached `done` phase displays **Rechecking**" in runner
+    assert "cached `done` phase displays **Rechecking**" in runner_normalized
     assert "**Complete — admin confirmed**" in runner
     assert "**Reused — checked**" in runner
-    assert "an action receipt is never phase\ncompletion" in runner
-    assert "Show\n`finalText` only when the controller" in runner
+    assert (
+        "receipt is never phase completion" in runner_normalized
+    )
+    assert "the final `renderBlock.text` only when the controller" in (
+        runner_normalized
+    )
     assert '`planReason: "revision-reapproval"`' in runner
     assert "`stateInitializationRequired: false`" in runner
     assert '`status: "existing-compatible-state"`' in runner

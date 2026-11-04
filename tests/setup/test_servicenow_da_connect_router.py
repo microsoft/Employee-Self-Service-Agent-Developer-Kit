@@ -70,14 +70,44 @@ def test_servicenow_connect_entry_files_gate_progress_rendering() -> None:
         assert "**STOP — render before acting.**" in text, path.name
         assert (
             "your very next assistant message — before any other tool call — "
-            "must contain `transport.ordinaryReply.text` verbatim"
+            "must contain `renderBlock.text` verbatim"
         ) in text, path.name
-        assert "`progress.checklistText`" in text, path.name
-        assert "`progress.currentPhase.startText`" in text, path.name
+        assert "`resume-handoff` or `record-checkpoint-results`" in text, (
+            path.name
+        )
+        assert "the only renderable field" in text, path.name
+        assert "never add a Check/Status table" in text, path.name
+        assert "`progress.checklistText`" not in text, path.name
+        assert "`progress.currentPhase.startText`" not in text, path.name
         assert 'write "render the plan" instead' in text, path.name
 
 
-def test_servicenow_connect_entry_files_carry_hard_rules() -> None:
+def test_servicenow_connect_docs_suppress_flightcheck_health_table() -> None:
+    skills = _SOLUTION / "src" / "skills" / "connect"
+    runner = " ".join(
+        (skills / "shared" / "lifecycle-runner.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    updater = " ".join(
+        (skills / "shared" / "checklist-updater.md")
+        .read_text(encoding="utf-8")
+        .replace("> ", "")
+        .split()
+    )
+    prompt = " ".join(
+        (_SOLUTION / ".github" / "prompts" / "connect.prompt.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+
+    assert "**ServiceNow exception — no FlightCheck health display.**" in runner
+    assert "never render a `| Check | Status |` table" in runner
+    assert "Other providers keep U.0/U.0a unchanged." in runner
+    assert "**ServiceNow exception.**" in updater
+    assert "never render the U.0 table" in updater
+    assert "never render a FlightCheck-style `| Check | Status |` table" in prompt
+
     skills = _SOLUTION / "src" / "skills" / "connect"
     entry_files = (
         _SOLUTION / ".github" / "prompts" / "connect.prompt.md",
@@ -163,9 +193,15 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "verified no-op still requires the phase checkpoint" in prompt
     assert "Never report connected from cached state alone" in prompt
     assert "servicenow.phase-progress.v1" in prompt
-    assert "progress.currentPhase.startText" in prompt
-    assert "progress.currentPhase.waitingChecklistText" in prompt
-    assert "transport.ordinaryReply.text" in prompt
+    assert "renderBlock.text" in prompt
+    for removed in (
+        "progress.currentPhase.startText",
+        "progress.currentPhase.waitingChecklistText",
+        "progress.currentPhase.errorChecklistText",
+        "transport.ordinaryReply.text",
+        "progress.finalText",
+    ):
+        assert removed not in prompt
     assert "transport.businessGroupAvailability.question" in prompt
     assert "adapt-question" in prompt
     assert "servicenow.ask-user-arguments.v1" in prompt
@@ -182,8 +218,8 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
         1,
     )[0]
     assert "--roles-available" not in initial_boundary
-    assert "progress.currentPhase.errorChecklistText" in prompt
-    assert "Re-emit the freshly returned" in prompt
+    assert "the error `renderBlock.text`" in " ".join(prompt.split())
+    assert "Always emit the freshly returned" in " ".join(prompt.split())
     assert "an action receipt" in prompt
     assert "Show a phase as complete only after" in prompt
     assert "ServiceNow phase-progress strings returned" in prompt
@@ -195,7 +231,7 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "`questions: [...]` is internal Agent Host output" in runner
     assert "known defect that exposes" in runner
     assert "Other providers retain this runner's existing output" in runner
-    assert "cached `done` phase displays **Rechecking**" in runner
+    assert "cached `done` phase\ndisplays **Rechecking**" in runner
     assert "Do not inspect `.local/connect/steps.md` before" in prompt
     assert "a DA ServiceNow route starts\nwith its provider lifecycle" in prompt
     chooser = (

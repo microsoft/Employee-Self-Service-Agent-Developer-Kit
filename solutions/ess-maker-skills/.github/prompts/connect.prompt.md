@@ -67,7 +67,7 @@ This command is mandatory on every `/connect servicenow` invocation. Do not
 reuse previously read lifecycle instructions or manually infer the next phase
 from `actionApplied`, phase status, or earlier conversation context.
 
-**STOP — render before acting.** After every `resume-handoff`, your very next assistant message — before any other tool call — must contain `transport.ordinaryReply.text` verbatim (first run or group change) or `progress.checklistText` (transitions), and `progress.currentPhase.startText` before each action or checkpoint. Never summarize it or write "render the plan" instead.
+**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead.
 
 **Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the `/setup` launcher (`py -3`), never bare `python`.
 
@@ -79,7 +79,7 @@ rollback gates, action-result handling, or L.5 completion.
 Parse the returned `servicenow.resume-handoff.v1` object:
 
 - before any lifecycle action/checkpoint, show
-  `transport.ordinaryReply.text` as an ordinary agent response. It renders
+  `renderBlock.text` as an ordinary agent response. It renders
   HR's four or IT's three collaboration groups with one responsible role and
   nested internal-step statuses. When
   `transport.businessGroupAvailability.gateRequired` is false, continue
@@ -95,7 +95,7 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   not a callable tool contract;
 - on **Yes**, rerun the exact command with `--roles-available yes` plus the
   returned `--business-group-id` and `--availability-context-sha256`. Show
-  the newly returned `transport.ordinaryReply.text` before any action; for an
+  the newly returned `renderBlock.text` before any action; for an
   acknowledged current group it contains the exact current task, target,
   owner, runbook/location, expected non-secret evidence, and completion
   boundary. Availability remains acknowledgement only. On
@@ -109,32 +109,35 @@ Parse the returned `servicenow.resume-handoff.v1` object:
 - validate `progress.schemaVersion` as
   `servicenow.phase-progress.v1` and require its labels/order to match the
   selected provider contract. Render only each item's returned
-  `customerLabel`, never its internal phase ID or long contract label. After
-  plan acceptance, show `progress.headline`
-  once, then show `progress.checklistText`. Re-emit the freshly returned
-  checklist only on a real phase completion/next-phase transition, waiting
-  pause, or blocked/error transition. Before each returned action or
-  checkpoint run, show `progress.currentPhase.startText`;
-- after an action returns `applied` or `recorded`, show
-  `progress.currentPhase.actionFinishedText` and continue to checkpoints. This
-  is not phase completion;
-- for a question or delegated-admin pause, prepend
-  `progress.currentPhase.waitingChecklistText` as an ordinary agent response,
-  then pass the exact compact returned canonical object through the same
+  `customerLabel`, never its internal phase ID or long contract label. Always emit the freshly returned
+  `renderBlock.text` (the grouped phases view with each step's current
+  status and the current step line) as an assistant message: after plan
+  acceptance, on every phase completion/next-phase transition, waiting
+  pause, blocked/error transition, and completion. The flat
+  `progress.items` list is data, not a rendering; everything under
+  `progress.internal` and `transport.internal` is never shown. An action
+  receipt (`applied`/`recorded`) is not phase completion;
+- for a question or delegated-admin pause, emit the waiting
+  `renderBlock.text` as an ordinary agent response (`pendingInput` and
+  `record-checkpoint-results --outcome in-progress` return it), then pass the
+  exact compact returned canonical object through the same
   `adapt-question` stdin command and call `ask_user` with the returned
   `askUserArguments` verbatim. Preserve the complete body and option labels.
-  Then show `progress.currentPhase.waitingText` when waiting.
   Do not add a
   `Progress` field, checklist, phase table, description, default, required
   input, hidden input, or second question;
-- for blocked/error results, show
-  `progress.currentPhase.errorChecklistText`,
-  `progress.currentPhase.needsAttentionText`, and the result's short next
-  action. Show a phase as complete only after its current checkpoint result
-  and acknowledgement/evidence requirements add it to `--verified-phase`;
-- show `progress.finalText` only when non-null. Waiting, an action receipt,
+- for blocked/error results, emit the error `renderBlock.text` and the
+  result's short next action. Show a phase as complete only after its current
+  checkpoint result and acknowledgement/evidence requirements add it to
+  `--verified-phase`;
+- the final `renderBlock.text` (`kind: final`) is the grouped view plus the
+  completion line. Waiting, an action receipt,
   cached `done`, Test without a maker result, and any contract-defined
   interactive mutation without its maker choice are never final completion;
+- never render a FlightCheck-style `| Check | Status |` table or
+  health rows, and never ask for Manual acknowledgement in a table: checkpoint
+  outcomes only drive the grouped phase statuses, and Manual evidence is
+  asked through the existing question card;
 - when `lifecycle.phase.mode` is `reverify-done`, follow shared L.2. A returned
   `run-action` first executes the current every-invocation action through L.4a;
   `run-checkpoints` runs that phase's live checkpoints. Add
