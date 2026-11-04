@@ -2,6 +2,7 @@
 
 ## 0.4.26 (POC)
 
+- The landing-page tutorial presents accent colors, categorized starter prompts, quick links, and Stay up to date. ([PR 393 - Stay up to date-only configuration (CA)](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/pull/393))
 - **Customize landing page** opens `/landing-page` and appears after **Push to Copilot Studio** at the bottom of Quick Actions. The tutorial follows the same action order. ([PR 311 - Align landing-page quick action](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/pull/311))
 
 ## 0.4.25 (POC)
