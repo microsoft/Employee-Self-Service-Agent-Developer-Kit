@@ -129,7 +129,11 @@ def test_landing_page_tools_delegate_without_initializing_configuration(monkeypa
             return [{"titleId": "deployed-title"}]
 
     server = LANDING["server"]
-    monkeypatch.setattr(server, "get_client", lambda: DiscoveryOnly())
+
+    async def get_client():
+        return DiscoveryOnly()
+
+    monkeypatch.setattr(server, "get_client", get_client)
 
     async def run():
         assert json.loads(await server.list_agent_configs()) == [{"titleId": "deployed-title"}]

@@ -447,12 +447,12 @@ def test_landing_page_missing_target_explains_org_deployment() -> None:
     normalized_skill = " ".join(skill.replace("> ", "").split())
 
     assert (
-        "`list_agent_configs` has no configured match and `search_agents` "
-        "returns no matching tenant-visible agent"
+        "shared resolver returns `RegistrationRequired` because neither "
+        "Microsoft 365 registration title ID is available"
         in normalized_skill
     )
     assert "Do not guess a `titleId` or call `create_agent_config`." in skill
-    assert "publish the agent from Copilot Studio" in normalized_skill
+    assert "publish the agent from copilot studio" in normalized_skill.lower()
     assert "submit it for admin approval" in normalized_skill
     assert "administrator deploy it to your organization" in normalized_skill
     assert "deploying through Integrated apps" in normalized_skill

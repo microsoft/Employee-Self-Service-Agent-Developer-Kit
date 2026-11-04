@@ -294,7 +294,7 @@ def test_the_announcements_server_introduces_no_third_token_cache() -> None:
         if candidate.__name__ == "AgentConfigBaseClient"
     )
     cache = Path(base_class.__init__.__globals__["_TOKEN_CACHE_PATH"])
-    factory = modules["agent_title"]._create_msal_app
+    factory = server.resolve_configured_agent_title.__globals__["_create_msal_app"]
     title_cache = Path(factory.__globals__["_TOKEN_CACHE_PATH"])
     assert factory.__globals__["_CLIENT_ID"] == base_class.__init__.__globals__["_CLIENT_ID"]
     locations = {Path(graph_directory_client.GRAPH_TOKEN_CACHE_PATH), cache, title_cache}

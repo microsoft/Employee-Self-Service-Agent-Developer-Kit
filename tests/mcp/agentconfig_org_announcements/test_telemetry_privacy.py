@@ -50,6 +50,7 @@ NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
 TENANT_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 OBJECT_ID = "00000000-0000-0000-0000-000000003333"
 TITLE_ID = "secret-agent-title"
+LOB_TITLE_ID = "secret-lob-agent-title"
 BULLETIN_ID = "10000000-0000-0000-0000-000000000001"
 CREATED_BULLETIN_ID = "10000000-0000-0000-0000-000000000002"
 
@@ -64,6 +65,7 @@ SECRET_URL = "https://contoso.example/secret-plan"
 
 FORBIDDEN = (
     TITLE_ID,
+    LOB_TITLE_ID,
     TENANT_ID,
     OBJECT_ID,
     SECRET_TITLE,
@@ -495,6 +497,7 @@ def test_discovery_telemetry_records_success_without_input(
         lambda target, tenant_id, object_id: {
             "botId": OBJECT_ID,
             "titleId": TITLE_ID,
+            "lobTitleId": LOB_TITLE_ID,
         },
     )
 
@@ -505,6 +508,7 @@ def test_discovery_telemetry_records_success_without_input(
     assert SECRET_TITLE not in _flatten(emitted[-1])
     assert OBJECT_ID not in _flatten(emitted[-1])
     assert TITLE_ID not in _flatten(emitted[-1])
+    assert LOB_TITLE_ID not in _flatten(emitted[-1])
 
 
 def test_a_transition_emits_no_identifier(monkeypatch, emitted) -> None:

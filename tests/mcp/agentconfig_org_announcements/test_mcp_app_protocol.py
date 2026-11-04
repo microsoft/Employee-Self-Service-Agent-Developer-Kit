@@ -315,6 +315,46 @@ def _structured(result: Any) -> dict[str, Any]:
     return result.structuredContent
 
 
+@pytest.mark.parametrize("view", ["manager", "editor"])
+@pytest.mark.parametrize(
+    ("regular", "lob", "chosen_field"),
+    [
+        ("regular-registration", "lob-registration", "titleId"),
+        ("regular-registration", "lob-registration", "lobTitleId"),
+        (None, "lob-registration", "lobTitleId"),
+        ("regular-registration", None, "titleId"),
+    ],
+)
+def test_discovered_registration_scopes_the_opener_without_overwriting_the_other_id(
+    fake_clients, monkeypatch, view, regular, lob, chosen_field
+):
+    client, _ = fake_clients(client=_FakeClient(items=[]))
+    registrations = {"botId": OBJECT_ID, "titleId": regular, "lobTitleId": lob}
+    monkeypatch.setattr(org_server, "load_configured_target", lambda bot_id: object())
+    monkeypatch.setattr(
+        org_server, "resolve_configured_agent_title",
+        lambda target, tenant_id, object_id: dict(registrations),
+    )
+
+    discovered = _structured(_call(
+        "resolve_agent_title_id", {"botId": OBJECT_ID}, include_scope=False,
+    ))
+    assert discovered == registrations
+    selected_id = discovered[chosen_field]
+    arguments = {"titleId": selected_id, "view": view}
+    if view == "editor":
+        arguments["mode"] = "create"
+    opened = _structured(_call("open_org_announcements", arguments))
+
+    assert opened["titleId"] == selected_id
+    assert discovered == registrations
+    assert all(title_id == selected_id for title_id in client.title_ids)
+    if view == "manager":
+        assert client.title_ids == [selected_id]
+    assert client.saves == []
+    assert client.transitions == []
+
+
 # --------------------------------------------------------------------------
 # Resource and tool metadata
 # --------------------------------------------------------------------------

@@ -160,6 +160,46 @@ def test_write_config_omits_unresolved_title_id(
     config = _write_config(tmp_path, _agent_info())
 
     assert "titleId" not in config["agent"]
+    assert "registrationTitleIds" not in config["agent"]
+
+
+@pytest.mark.parametrize(
+    "registrations",
+    [
+        {"titleId": "regular-title", "lobTitleId": "lob-title"},
+        {"titleId": "regular-title", "lobTitleId": None},
+        {"titleId": None, "lobTitleId": "lob-title"},
+    ],
+)
+@pytest.mark.parametrize("scenario", ["refresh", "replacement", "other-agent"])
+def test_setup_preserves_both_registration_fields_only_for_their_own_agent(
+    tmp_path: Path, monkeypatch, registrations, scenario
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _seed_config(tmp_path)
+    path = tmp_path / ".local" / "config.json"
+    cached = json.loads(path.read_text(encoding="utf-8"))
+    for entry in [cached["agent"], *cached["agents"]]:
+        entry["registrationTitleIds"] = dict(registrations)
+    path.write_text(json.dumps(cached), encoding="utf-8")
+    bot_id = "bot-1" if scenario == "refresh" else "bot-2"
+    slug = "other-agent" if scenario == "other-agent" else "mock-ess-agent"
+
+    config = _write_config(tmp_path, _agent_info(botId=bot_id), slug=slug)
+
+    assert config["agent"] == next(
+        entry for entry in config["agents"] if entry["botId"] == bot_id
+    )
+    if scenario == "refresh":
+        assert config["agent"]["registrationTitleIds"] == registrations
+        assert config["agent"]["titleId"] == "title-1"
+    else:
+        assert "registrationTitleIds" not in config["agent"]
+        assert "titleId" not in config["agent"]
+    if scenario == "other-agent":
+        original = next(entry for entry in config["agents"] if entry["botId"] == "bot-1")
+        assert original["registrationTitleIds"] == registrations
+        assert original["titleId"] == "title-1"
 
 
 def test_write_config_records_each_agents_endpoint_after_consecutive_setup(

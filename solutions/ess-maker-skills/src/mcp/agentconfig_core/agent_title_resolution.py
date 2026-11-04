@@ -1,13 +1,15 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Resolve one configured agent's Microsoft 365 title through Dataverse."""
+"""Shared, read-only Microsoft 365 registration resolution for configured agents."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sys
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,9 +18,6 @@ from uuid import UUID
 
 import requests
 from portalocker.exceptions import LockException
-
-from validation import validate_title_id
-
 
 _SOLUTION_ROOT = Path(__file__).resolve().parents[3]
 CONFIG_PATH = _SOLUTION_ROOT / ".local" / "config.json"
@@ -30,10 +29,10 @@ from base_client import (  # noqa: E402
     account_for_identity,
     validate_token_identity,
 )
-from _odata import _validate_https_base_url  # noqa: E402
+from _odata import _validate_https_base_url, _validate_title_id  # noqa: E402
 
 
-_LOGGER = logging.getLogger("ess-org-announcements.agent-title")
+_LOGGER = logging.getLogger("ess-agentconfig.title-resolution")
 _INTERACTIVE_SIGN_IN_TIMEOUT_SECONDS = 300
 
 
@@ -44,6 +43,35 @@ class AgentTitleResolutionError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.source = source
+
+
+class TitleResolutionCoordinator:
+    """Retain one bounded lookup across caller cancellation, without caching results."""
+
+    def __init__(self) -> None:
+        self._task: asyncio.Task[dict[str, str | None]] | None = None
+
+    async def run(
+        self,
+        operation: Callable[[], Coroutine[Any, Any, dict[str, str | None]]],
+    ) -> dict[str, str | None]:
+        if self._task is not None and not self._task.done():
+            raise AgentTitleResolutionError(
+                "Agent title resolution is already in progress. Complete the "
+                "pending sign-in or wait for the current lookup to finish "
+                "before retrying.",
+                code="ServiceError",
+            )
+        task = asyncio.create_task(operation())
+        self._task = task
+        task.add_done_callback(self._release)
+        return await asyncio.shield(task)
+
+    def _release(self, task: asyncio.Task[dict[str, str | None]]) -> None:
+        if self._task is task:
+            self._task = None
+        if not task.cancelled():
+            task.exception()
 
 
 @dataclass(frozen=True)
@@ -89,7 +117,7 @@ def load_configured_target(bot_id: str) -> ConfiguredAgentTarget:
         ) from error
     if not isinstance(config, dict) or config.get("setup") != "complete":
         raise AgentTitleResolutionError(
-            "Complete /setup before resolving an announcement agent.",
+            "Complete /setup before resolving a configured agent.",
             code="InvalidRequest",
         )
     agents = config.get("agents", [])
@@ -209,7 +237,7 @@ def acquire_dataverse_token(
         ) from error
 
 
-def _registered_title(payload: Any, bot_id: str) -> str:
+def _registered_titles(payload: Any, bot_id: str) -> dict[str, str | None]:
     try:
         if (
             not isinstance(payload, dict)
@@ -228,7 +256,7 @@ def _registered_title(payload: Any, bot_id: str) -> str:
         isinstance(raw_manifest, str) and not raw_manifest.strip()
     ):
         raise AgentTitleResolutionError(
-            "The selected agent has no Microsoft 365 registration titleId. "
+            "The selected agent has no Microsoft 365 registration titleId or lobTitleId. "
             "Publish/register this agent for Microsoft 365, then retry.",
             code="RegistrationRequired",
             source="backend",
@@ -249,28 +277,33 @@ def _registered_title(payload: Any, bot_id: str) -> str:
             code="ServiceError",
             source="backend",
         ) from error
-    title_id = metadata.get("titleId") if metadata is not None else None
-    if title_id is None or (isinstance(title_id, str) and not title_id.strip()):
+    titles: dict[str, str | None] = {"titleId": None, "lobTitleId": None}
+    for field in titles:
+        value = metadata.get(field) if metadata is not None else None
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        try:
+            titles[field] = _validate_title_id(value)
+        except ValueError as error:
+            raise AgentTitleResolutionError(
+                f"Dataverse returned an invalid Microsoft 365 {field}. "
+                "No registration title IDs were accepted.",
+                code="ServiceError",
+                source="backend",
+            ) from error
+    if not any(titles.values()):
         raise AgentTitleResolutionError(
-            "The selected agent has no Microsoft 365 registration titleId. "
+            "The selected agent has no Microsoft 365 registration titleId or lobTitleId. "
             "Publish/register this agent for Microsoft 365, then retry.",
             code="RegistrationRequired",
             source="backend",
         )
-    try:
-        return validate_title_id(title_id)
-    except ValueError as error:
-        raise AgentTitleResolutionError(
-            "Dataverse returned an invalid Microsoft 365 titleId. "
-            "No titleId was accepted.",
-            code="ServiceError",
-            source="backend",
-        ) from error
+    return titles
 
 
 def resolve_configured_agent_title(
     target: ConfiguredAgentTarget, tenant_id: str, object_id: str | None
-) -> dict[str, str]:
+) -> dict[str, str | None]:
     """Read bot metadata off the event loop; never write tenant or local state."""
     try:
         token = acquire_dataverse_token(target.dataverse_endpoint, tenant_id, object_id)
@@ -282,7 +315,7 @@ def resolve_configured_agent_title(
         )
         return {
             "botId": target.bot_id,
-            "titleId": _registered_title(payload, target.bot_id),
+            **_registered_titles(payload, target.bot_id),
         }
     except requests.HTTPError as error:
         status = (

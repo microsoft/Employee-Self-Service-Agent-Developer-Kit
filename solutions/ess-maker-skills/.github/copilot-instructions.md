@@ -369,9 +369,13 @@ not call an AgentConfiguration MCP tool from a generic flow.
 
 **Org Announcements invocation:** Before invoking ANY tool from the
 `ess-org-announcements` MCP server, read and follow
-`src/skills/org-announcements/SKILL.md`. Its own `list_agent_configs` and
-`search_agents` tools resolve missing deployed titleIds; do not start or call
-the landing-page server for announcement discovery. This applies whether the
+`src/skills/org-announcements/SKILL.md` and its shared reference
+`src/skills/shared/agent-title-resolution.md`. Preserve explicit/cached-ID
+precedence. When discovery is needed, use this provider's read-only
+`resolve_agent_title_id` tool with the selected configured `botId`, then follow
+the shared Regular/LOB selection and GUID-bound verified per-agent persistence
+procedure. Do not use tenant-wide discovery or agent-name search, and do not
+start or call the landing-page server for announcement discovery. This applies whether the
 user asks to see, create, edit, republish, archive, or delete an announcement,
 mentions announcements, org announcements, bulletins, or alerts, or asks who
 an announcement reaches. Org Announcements are scoped to the authenticated
