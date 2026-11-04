@@ -15,6 +15,7 @@ import pytest
 from agentbuilder import AgentBuilderHTTPError
 import flightcheck.checks.servicenow_da_hrsd as hrsd_checks
 from flightcheck.checks.servicenow_da_hrsd import (
+    HR_CHECK_PROFILE,
     _acquire_servicenow_reads,
     invalidate_servicenow_read_snapshot,
     run_servicenow_da_hrsd_checks,
@@ -66,6 +67,7 @@ def _target_check(status: str, checkpoint: str):
         "target prerequisite",
         "target prerequisite result",
         "",
+        profile=hrsd_checks.HR_CHECK_PROFILE,
     )
 
 
@@ -232,6 +234,7 @@ def test_recovery_output_preserves_error_category(
         "Portal",
         problem,
         "Repair the current value",
+        profile=hrsd_checks.HR_CHECK_PROFILE,
     )
 
     assert f"**Category**\n{category}" in result.remediation
@@ -329,6 +332,7 @@ def test_servicenow_read_acquisition_overlaps_two_independent_sources() -> None:
             agent_id=AGENT_ID,
             environment_id=ENVIRONMENT_ID,
             needs_inventory=True,
+            profile=HR_CHECK_PROFILE,
         )
     )
     elapsed = time.perf_counter() - started
@@ -366,6 +370,7 @@ def test_servicenow_read_snapshot_reuses_one_exact_components_read() -> None:
             agent_id=AGENT_ID,
             environment_id=ENVIRONMENT_ID,
             needs_inventory=True,
+            profile=HR_CHECK_PROFILE,
         )
 
     assert calls == {"components": 1, "connections": 1}
@@ -413,6 +418,7 @@ def test_servicenow_throttle_quiesces_new_read_dispatch() -> None:
         agent_id=AGENT_ID,
         environment_id=ENVIRONMENT_ID,
         needs_inventory=True,
+        profile=HR_CHECK_PROFILE,
     )
     first_calls = dict(calls)
     second = _acquire_servicenow_reads(
@@ -420,6 +426,7 @@ def test_servicenow_throttle_quiesces_new_read_dispatch() -> None:
         agent_id=AGENT_ID,
         environment_id=ENVIRONMENT_ID,
         needs_inventory=True,
+        profile=HR_CHECK_PROFILE,
     )
     invalidate_servicenow_read_snapshot(runner)
     third = _acquire_servicenow_reads(
@@ -427,6 +434,7 @@ def test_servicenow_throttle_quiesces_new_read_dispatch() -> None:
         agent_id=AGENT_ID,
         environment_id=ENVIRONMENT_ID,
         needs_inventory=True,
+        profile=HR_CHECK_PROFILE,
     )
 
     assert isinstance(first[1], AgentBuilderHTTPError)
@@ -462,6 +470,7 @@ def test_servicenow_serial_throttle_stops_second_prepared_dispatch() -> None:
         agent_id=AGENT_ID,
         environment_id=ENVIRONMENT_ID,
         needs_inventory=True,
+        profile=HR_CHECK_PROFILE,
     )
 
     assert calls == {"components": 1, "connections": 0}
@@ -493,6 +502,7 @@ def test_servicenow_read_snapshot_invalidates_at_external_boundary() -> None:
         agent_id=AGENT_ID,
         environment_id=ENVIRONMENT_ID,
         needs_inventory=True,
+        profile=HR_CHECK_PROFILE,
     )
     invalidate_servicenow_read_snapshot(runner)
     _acquire_servicenow_reads(
@@ -500,6 +510,7 @@ def test_servicenow_read_snapshot_invalidates_at_external_boundary() -> None:
         agent_id=AGENT_ID,
         environment_id=ENVIRONMENT_ID,
         needs_inventory=True,
+        profile=HR_CHECK_PROFILE,
     )
 
     assert calls == {"components": 2, "connections": 2}
@@ -2851,6 +2862,7 @@ def test_target_binding_requires_current_target_plan_and_connection_hashes():
     current = hrsd_checks._target_agent_connection_result(
         context,
         credential,
+        profile=hrsd_checks.HR_CHECK_PROFILE,
     )
     stale_context = json.loads(json.dumps(context))
     stale_context["validation"]["agentBinding"][
@@ -2859,6 +2871,7 @@ def test_target_binding_requires_current_target_plan_and_connection_hashes():
     stale = hrsd_checks._target_agent_connection_result(
         stale_context,
         credential,
+        profile=hrsd_checks.HR_CHECK_PROFILE,
     )
 
     assert current.status == Status.MANUAL.value
@@ -2917,6 +2930,7 @@ def test_target_test_reuses_profile_definition_and_invalidates_stale_binding():
         portal,
         credential,
         binding,
+        profile=hrsd_checks.HR_CHECK_PROFILE,
     )
     stale_context = json.loads(json.dumps(context))
     stale_context["validation"]["functionalTest"]["binding"][
@@ -2928,6 +2942,7 @@ def test_target_test_reuses_profile_definition_and_invalidates_stale_binding():
         portal,
         credential,
         binding,
+        profile=hrsd_checks.HR_CHECK_PROFILE,
     )
 
     assert current.checkpoint_id == "SN-DA-HRSD-TEST-001"

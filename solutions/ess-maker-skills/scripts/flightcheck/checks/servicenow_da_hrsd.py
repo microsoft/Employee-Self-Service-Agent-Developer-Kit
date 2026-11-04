@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -15,8 +16,9 @@ from typing import Any
 from connect_servicenow_da import (
     AUTH_MODE,
     CONNECTOR_NAME,
-    HR_SCHEMA_NAME,
-    PROVIDER_KEY,
+    HRSD_PROFILE,
+    ITSM_PROFILE,
+    ServiceNowProductProfile,
     _agent_binding_identity_hash,
     _connection_binding_hash,
     _draft_semantic_hash,
@@ -31,6 +33,7 @@ from connect_servicenow_da import (
     normalize_portal_url,
     portal_confirmation_url,
     portal_configuration_summary,
+    product_profile_context,
     required_servicenow_prerequisites,
 )
 
@@ -38,10 +41,71 @@ from ..agent_scope import validate_agent_slug
 from ..runner import CheckResult, Priority, Role, Status
 
 
-_CATEGORY = "ServiceNow DA HRSD"
 _ROLES = [Role.ESS_MAKER.value, Role.SERVICENOW_ADMIN.value]
-_ENTRA_PREFIX = "SN-DA-HRSD-ENTRA"
-_TEST_PROMPT_CATEGORY = "list-my-open-hr-cases"
+
+
+@dataclass(frozen=True)
+class CheckProfile:
+    """Per-product identity and wording for the shared ServiceNow DA checks."""
+
+    service: ServiceNowProductProfile
+    id_prefix: str
+    category: str
+    family: str
+    agent_short: str
+    package_remediation: str | None = None
+    has_plugin: bool = True
+
+    @property
+    def product(self) -> str:
+        return self.service.product_name
+
+    @property
+    def provider_key(self) -> str:
+        return self.service.provider_key
+
+    @property
+    def schema_name(self) -> str:
+        return self.service.schema_name
+
+    @property
+    def test_prompt_category(self) -> str:
+        return self.service.test_prompt_category
+
+    @property
+    def install_action(self) -> str:
+        return (
+            f"Install the {self.product} extension for this exact "
+            f"{self.agent_short} agent."
+        )
+
+    @property
+    def package_action(self) -> str:
+        return self.package_remediation or self.install_action
+
+    def cid(self, suffix: str) -> str:
+        return f"{self.id_prefix}-{suffix}-001"
+
+
+HR_CHECK_PROFILE = CheckProfile(
+    service=HRSD_PROFILE,
+    id_prefix="SN-DA-HRSD",
+    category="ServiceNow DA HRSD",
+    family="HRSD",
+    agent_short="HR",
+)
+IT_CHECK_PROFILE = CheckProfile(
+    service=ITSM_PROFILE,
+    id_prefix="SN-DA-ITSM",
+    category="ServiceNow DA ITSM",
+    family="ITSM",
+    agent_short="IT",
+    package_remediation=(
+        "Verify the exact Employee Self-Service (IT) agent contains the "
+        "built-in ServiceNow ITSM topics."
+    ),
+    has_plugin=False,
+)
 _RECOVERY_STATUSES = {
     Status.BLOCKED.value,
     Status.ERROR.value,
@@ -237,8 +301,10 @@ _RECOVERY_GUIDANCE = {
 }
 
 
-def _recovery_key(checkpoint_id: str) -> str:
-    suffix = checkpoint_id.removeprefix("SN-DA-HRSD-").removesuffix("-001")
+def _recovery_key(checkpoint_id: str, profile: CheckProfile) -> str:
+    suffix = checkpoint_id.removeprefix(f"{profile.id_prefix}-").removesuffix(
+        "-001"
+    )
     return "ENTRA" if suffix.startswith("ENTRA-") else suffix
 
 
@@ -272,11 +338,12 @@ def _actionable_remediation(
     result: str,
     action: str,
     *,
+    profile: CheckProfile,
     category_override: str | None = None,
 ) -> str:
     if status not in _RECOVERY_STATUSES:
         return action
-    guidance = _RECOVERY_GUIDANCE.get(_recovery_key(checkpoint_id))
+    guidance = _RECOVERY_GUIDANCE.get(_recovery_key(checkpoint_id, profile))
     if guidance is None:
         return action
     category = category_override or _recovery_category(status, result)
@@ -318,6 +385,7 @@ def _result(
     result: str,
     remediation: str = "",
     *,
+    profile: CheckProfile,
     format_recovery: bool = True,
     recovery_category: str | None = None,
     roles: list[str] | None = None,
@@ -330,10 +398,11 @@ def _result(
             result,
             remediation,
             category_override=recovery_category,
+            profile=profile,
         )
     return CheckResult(
         checkpoint_id=checkpoint_id,
-        category=_CATEGORY,
+        category=profile.category,
         priority=Priority.HIGH.value,
         status=status,
         description=description,
@@ -401,10 +470,10 @@ def _hash(value: Any) -> str:
     ).hexdigest()
 
 
-def _load_state(slug: str) -> dict[str, Any]:
+def _load_state(slug: str, *, profile: CheckProfile) -> dict[str, Any]:
     path = (
         Path(".local/connect")
-        / PROVIDER_KEY
+        / profile.provider_key
         / "agents"
         / slug
         / "lifecycle.json"
@@ -501,6 +570,7 @@ def _is_throttled_error(exc: BaseException) -> bool:
 def _acquire_servicenow_reads(
     runner,
     *,
+    profile: CheckProfile,
     agent_id: str,
     environment_id: str,
     needs_inventory: bool,
@@ -511,7 +581,7 @@ def _acquire_servicenow_reads(
     BaseException | None,
 ]:
     """Acquire independent remote reads once; evaluation remains serial."""
-    key = (PROVIDER_KEY, agent_id.casefold(), environment_id.casefold())
+    key = (profile.provider_key, agent_id.casefold(), environment_id.casefold())
     snapshot = _read_snapshot(runner)
     entry = snapshot.setdefault(key, {})
     components = entry.get("components")
@@ -617,7 +687,15 @@ def _acquire_servicenow_reads(
     )
 
 
-def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
+def run_servicenow_da_hrsd_checks(
+    runner, profile: CheckProfile = HR_CHECK_PROFILE
+) -> list[CheckResult]:
+    # The snow helpers read the active product profile; scope it to this run.
+    with product_profile_context(profile.service.key):
+        return _run_checks(runner, profile)
+
+
+def _run_checks(runner, profile: CheckProfile) -> list[CheckResult]:
     target = getattr(runner, "checkpoint_target", None)
     target_context = _target_context(runner)
     target_mode = bool(target_context)
@@ -626,37 +704,40 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         return _all_unavailable(
             Status.FAILED.value,
             "The selected agent could not be resolved.",
-            "Select the exact editable ESS HR agent and rerun the checkpoint.",
+            f"Select the exact editable ESS {profile.agent_short} agent and rerun the checkpoint.",
             target=target,
+            profile=profile,
         )
     slug, agent = selected
     schema = str(
         agent.get("schemaName") or agent.get("schema_name") or ""
     ).casefold()
-    accepted_schemas = {HR_SCHEMA_NAME.casefold()}
+    accepted_schemas = {profile.schema_name.casefold()}
     if target_mode:
         realm = str(target_context.get("realm") or "").casefold()
         if realm:
-            accepted_schemas.add(f"{HR_SCHEMA_NAME}_{realm}".casefold())
+            accepted_schemas.add(f"{profile.schema_name}_{realm}".casefold())
     if schema not in accepted_schemas:
         return _all_unavailable(
             Status.NOT_CONFIGURED.value,
-            f"The selected agent '{slug}' is not the ESS DA HR agent.",
-            "Select the Employee Self-Service HR agent.",
+            f"The selected agent '{slug}' is not the ESS DA {profile.agent_short} agent.",
+            f"Select the Employee Self-Service {profile.agent_short} agent.",
             target=target,
+            profile=profile,
         )
     agent_id = str(agent.get("botId") or agent.get("id") or "")
     if not agent_id:
         return _all_unavailable(
             Status.FAILED.value,
-            "The selected HR agent has no AgentBuilder ID.",
+            f"The selected {profile.agent_short} agent has no AgentBuilder ID.",
             "Refresh the local setup handoff for this agent.",
             target=target,
+            profile=profile,
         )
     needs_inventory = target in {
-        "SN-DA-HRSD-CREDENTIAL-001",
-        "SN-DA-HRSD-AGENT-CONNECTION-001",
-        "SN-DA-HRSD-TEST-001",
+        profile.cid("CREDENTIAL"),
+        profile.cid("AGENT-CONNECTION"),
+        profile.cid("TEST"),
         None,
     }
     target_identity = target_context.get("target")
@@ -679,24 +760,29 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         agent_id=agent_id,
         environment_id=environment_id,
         needs_inventory=needs_inventory,
+        profile=profile,
     )
     if component_error is not None or components is None:
         error = component_error or RuntimeError("Component state is unavailable.")
         return _all_unavailable(
             Status.ERROR.value,
-            f"Unable to inspect the HR agent: "
+            f"Unable to inspect the {profile.agent_short} agent: "
             f"{type(error).__name__}: {error}",
             "Verify AgentBuilder access to the selected environment and retry.",
             target=target,
+            profile=profile,
         )
     try:
         topic_changes = _servicenow_topic_changes(components)
         if not topic_changes:
             return _all_unavailable(
                 Status.NOT_CONFIGURED.value,
-                f"The selected HR agent '{slug}' has no ServiceNow HRSD topics.",
-                "Install the ServiceNow HRSD extension for this exact HR agent.",
+                f"The selected {profile.agent_short} agent '{slug}' has no "
+                f"{profile.product} topics.",
+                profile.install_action,
                 target=target,
+                profile=profile,
+                package_remediation=profile.package_action,
             )
         summary = {
             "serviceNowTopicCount": len(topic_changes),
@@ -711,13 +797,15 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
     except Exception as exc:
         return _all_unavailable(
             Status.ERROR.value,
-            f"Unable to inspect the HR agent: {type(exc).__name__}: {exc}",
+            f"Unable to inspect the {profile.agent_short} agent: {type(exc).__name__}: {exc}",
             "Verify AgentBuilder access to the selected environment and retry.",
             target=target,
+            profile=profile,
         )
 
     state = _load_state(
-        str(target_context.get("sourceAgentSlug") or slug)
+        str(target_context.get("sourceAgentSlug") or slug),
+        profile=profile,
     )
     evidence = state.get("evidence")
     evidence = evidence if isinstance(evidence, dict) else {}
@@ -740,33 +828,37 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
             entra = handoffs.setdefault("entra-registration", {})
             entra_evidence = entra.setdefault("evidence", {})
             entra_evidence["clientId"] = expected_client_id
-    if target == "SN-DA-HRSD-PKG-001":
-        return [_package_result(slug, summary)]
-    if target == "SN-DA-HRSD-ADMIN-PREFLIGHT-001":
-        return [_preflight_result(admin_setup)]
-    if target == "SN-DA-HRSD-PLUGIN-001":
-        return [_plugin_result(admin_setup)]
-    if target == f"{_ENTRA_PREFIX}-SETUP-001":
-        return [_entra_setup_result(admin_setup, state)]
-    if target == "SN-DA-HRSD-OIDC-001":
-        return [_oidc_result(admin_setup, state)]
-    if target == "SN-DA-HRSD-PORTAL-001":
-        return [_portal_result(components, admin_setup, state)]
+    if target == profile.cid("PKG"):
+        return [_package_result(slug, summary, profile=profile)]
+    if target == profile.cid("ADMIN-PREFLIGHT"):
+        return [_preflight_result(admin_setup, profile=profile)]
+    if target == profile.cid("PLUGIN"):
+        return (
+            [_plugin_result(admin_setup, profile=profile)]
+            if profile.has_plugin
+            else []
+        )
+    if target == profile.cid("ENTRA-SETUP"):
+        return [_entra_setup_result(admin_setup, state, profile=profile)]
+    if target == profile.cid("OIDC"):
+        return [_oidc_result(admin_setup, state, profile=profile)]
+    if target == profile.cid("PORTAL"):
+        return [_portal_result(components, admin_setup, state, profile=profile)]
 
     component_hash = (
         _hash(components)
         if target
         in {
-            "SN-DA-HRSD-TOPICS-001",
-            "SN-DA-HRSD-TEST-001",
-            "SN-DA-HRSD-PUBLISH-001",
+            profile.cid("TOPICS"),
+            profile.cid("TEST"),
+            profile.cid("PUBLISH"),
             None,
         }
         else ""
     )
-    if target == "SN-DA-HRSD-TOPICS-001":
-        return [_topics_result(summary, evidence, component_hash)]
-    if target == "SN-DA-HRSD-PUBLISH-001":
+    if target == profile.cid("TOPICS"):
+        return [_topics_result(summary, evidence, component_hash, profile=profile)]
+    if target == profile.cid("PUBLISH"):
         try:
             draft_semantic_hash = _draft_semantic_hash(components)
             current_connection_binding_hash = (
@@ -793,10 +885,11 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         except Exception as exc:
             return _all_unavailable(
                 Status.ERROR.value,
-                f"Unable to inspect the HR agent draft identity: "
+                f"Unable to inspect the {profile.agent_short} agent draft identity: "
                 f"{type(exc).__name__}: {exc}",
-                "Verify the selected HR agent component state and retry.",
+                f"Verify the selected {profile.agent_short} agent component state and retry.",
                 target=target,
+                profile=profile,
             )
         return [
             _publish_result(
@@ -804,6 +897,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
                 component_hash,
                 draft_semantic_hash,
                 current_connection_binding_hash,
+                profile=profile,
             )
         ]
 
@@ -821,14 +915,15 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         connections,
         connectivity_error,
         require_handoff=not target_mode,
+        profile=profile,
     )
-    if target == "SN-DA-HRSD-CREDENTIAL-001":
+    if target == profile.cid("CREDENTIAL"):
         return [credential_result]
 
     needs_draft_identity = (
         target in {
-            "SN-DA-HRSD-AGENT-CONNECTION-001",
-            "SN-DA-HRSD-TEST-001",
+            profile.cid("AGENT-CONNECTION"),
+            profile.cid("TEST"),
             None,
         }
         and not target_mode
@@ -853,7 +948,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
                 state,
                 components,
             )
-            if target in {"SN-DA-HRSD-TEST-001", None}:
+            if target in {profile.cid("TEST"), None}:
                 current_connection_binding_hash = (
                     _connection_binding_hash(
                         {
@@ -877,7 +972,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
                 )
         except Exception as exc:
             identity_inspection_error = (
-                "Unable to inspect the HR agent binding/final-configuration "
+                f"Unable to inspect the {profile.agent_short} agent binding/final-configuration "
                 f"identity: {type(exc).__name__}: {exc}"
             )
             if target is not None:
@@ -885,42 +980,46 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
                     Status.ERROR.value,
                     identity_inspection_error,
                     (
-                        "Verify the selected HR agent connection-reference "
+                        f"Verify the selected {profile.agent_short} agent connection-reference "
                         "and component state, then retry this checkpoint."
                     ),
                     target=target,
+                    profile=profile,
                 )
 
     agent_connection_result = (
         _target_agent_connection_result(
             target_context,
             credential_result,
+            profile=profile,
         )
         if target_mode
         else
         _result(
-            "SN-DA-HRSD-AGENT-CONNECTION-001",
+            profile.cid("AGENT-CONNECTION"),
             Status.ERROR.value,
             "ServiceNow credential connected to the selected agent",
             identity_inspection_error,
             (
-                "Verify the selected HR agent connection-reference and "
+                f"Verify the selected {profile.agent_short} agent connection-reference and "
                 "binding metadata, then retry."
             ),
+            profile=profile,
         )
         if identity_inspection_error
         else _agent_connection_result(
             evidence,
             credential_result,
             binding_identity_sha256,
+            profile=profile,
         )
     )
-    if target == "SN-DA-HRSD-AGENT-CONNECTION-001":
+    if target == profile.cid("AGENT-CONNECTION"):
         return [agent_connection_result]
 
-    topics_result = _topics_result(summary, evidence, component_hash)
-    portal_result = _portal_result(components, admin_setup, state)
-    if target == "SN-DA-HRSD-TEST-001":
+    topics_result = _topics_result(summary, evidence, component_hash, profile=profile)
+    portal_result = _portal_result(components, admin_setup, state, profile=profile)
+    if target == profile.cid("TEST"):
         if target_mode:
             return [
                 _target_test_result(
@@ -929,6 +1028,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
                     portal_result,
                     credential_result,
                     agent_connection_result,
+                    profile=profile,
                 )
             ]
         return [
@@ -940,18 +1040,20 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
                 portal_result,
                 credential_result,
                 agent_connection_result,
+                profile=profile,
             )
         ]
     test_result = (
         _result(
-            "SN-DA-HRSD-TEST-001",
+            profile.cid("TEST"),
             Status.ERROR.value,
-            "ServiceNow HRSD Test pane result",
+            f"{profile.product} Test pane result",
             identity_inspection_error,
             (
-                "Verify the selected HR agent connection-reference and "
+                f"Verify the selected {profile.agent_short} agent connection-reference and "
                 "final component identity, then retry."
             ),
+            profile=profile,
         )
         if identity_inspection_error
         else _test_result(
@@ -962,14 +1064,19 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
             portal_result,
             credential_result,
             agent_connection_result,
+            profile=profile,
         )
     )
     return [
-        _package_result(slug, summary),
-        _preflight_result(admin_setup),
-        _plugin_result(admin_setup),
-        _entra_setup_result(admin_setup, state),
-        _oidc_result(admin_setup, state),
+        _package_result(slug, summary, profile=profile),
+        _preflight_result(admin_setup, profile=profile),
+        *(
+            [_plugin_result(admin_setup, profile=profile)]
+            if profile.has_plugin
+            else []
+        ),
+        _entra_setup_result(admin_setup, state, profile=profile),
+        _oidc_result(admin_setup, state, profile=profile),
         credential_result,
         agent_connection_result,
         topics_result,
@@ -977,14 +1084,15 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         test_result,
         (
             _result(
-                "SN-DA-HRSD-PUBLISH-001",
+                profile.cid("PUBLISH"),
                 Status.ERROR.value,
-                "ServiceNow HRSD publish evidence",
+                f"{profile.product} publish evidence",
                 identity_inspection_error,
                 (
-                    "Verify the selected HR agent connection-reference and "
+                    f"Verify the selected {profile.agent_short} agent connection-reference and "
                     "final component identity, then retry."
                 ),
+                profile=profile,
             )
             if identity_inspection_error
             else _publish_result(
@@ -992,6 +1100,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
                 component_hash,
                 draft_semantic_hash,
                 current_connection_binding_hash,
+                profile=profile,
             )
         ),
     ]
@@ -1002,6 +1111,8 @@ def _all_unavailable(
     result: str,
     remediation: str,
     *,
+    profile: CheckProfile,
+    package_remediation: str | None = None,
     target: str | None = None,
 ) -> list[CheckResult]:
     ids = (
@@ -1020,32 +1131,38 @@ def _all_unavailable(
     return _target_rows(
         target,
         [
-        _result(
-            f"SN-DA-HRSD-{suffix}-001",
-            status,
-            f"ServiceNow HRSD {suffix.lower()} readiness",
-            result,
-            remediation,
-        )
-        for suffix in ids
+            _result(
+                profile.cid(suffix),
+                status,
+                f"{profile.product} {suffix.lower()} readiness",
+                result,
+                package_remediation
+                if suffix == "PKG" and package_remediation
+                else remediation,
+                profile=profile,
+            )
+            for suffix in ids
+            if suffix != "PLUGIN" or profile.has_plugin
         ],
     )
 
 
-def _package_result(slug: str, summary: dict[str, Any]) -> CheckResult:
+def _package_result(
+    slug: str, summary: dict[str, Any], *, profile: CheckProfile
+) -> CheckResult:
     count = summary["serviceNowTopicCount"]
     passed = bool(count)
     return _result(
-        "SN-DA-HRSD-PKG-001",
+        profile.cid("PKG"),
         Status.PASSED.value if passed else Status.NOT_CONFIGURED.value,
-        "ServiceNow HRSD package installed for the selected DA HR agent",
+        f"{profile.product} package installed for the selected DA "
+        f"{profile.agent_short} agent",
         (
-            f"Selected HR agent '{slug}' contains {count} ServiceNow HRSD "
-            "topic(s)."
+            f"Selected {profile.agent_short} agent '{slug}' contains {count} "
+            f"{profile.product} topic(s)."
         ),
-        "Install the ServiceNow HRSD extension for this exact HR agent."
-        if not count
-        else "",
+        profile.package_action if not count else "",
+        profile=profile,
     )
 
 
@@ -1072,7 +1189,7 @@ def _phase_attested(
     }
 
 
-def _preflight_result(admin_setup: dict[str, Any]) -> CheckResult:
+def _preflight_result(admin_setup: dict[str, Any], *, profile: CheckProfile) -> CheckResult:
     preflight = admin_setup.get("preflight")
     preflight = preflight if isinstance(preflight, dict) else {}
     if not _phase_attested(admin_setup, "preflight"):
@@ -1089,7 +1206,7 @@ def _preflight_result(admin_setup: dict[str, Any]) -> CheckResult:
             "binding, and functional readiness."
         )
     return _result(
-        "SN-DA-HRSD-ADMIN-PREFLIGHT-001",
+        profile.cid("ADMIN-PREFLIGHT"),
         status,
         "ServiceNow target confirmation",
         result,
@@ -1100,10 +1217,11 @@ def _preflight_result(admin_setup: dict[str, Any]) -> CheckResult:
             if status != Status.PASSED.value
             else ""
         ),
+        profile=profile,
     )
 
 
-def _plugin_result(admin_setup: dict[str, Any]) -> CheckResult:
+def _plugin_result(admin_setup: dict[str, Any], *, profile: CheckProfile) -> CheckResult:
     requirements = required_servicenow_prerequisites(
         str(admin_setup.get("scope") or "hrsd"),
         str(admin_setup.get("authMode") or AUTH_MODE),
@@ -1124,7 +1242,7 @@ def _plugin_result(admin_setup: dict[str, Any]) -> CheckResult:
         Status.MANUAL.value if not missing else Status.NOT_CONFIGURED.value
     )
     return _result(
-        "SN-DA-HRSD-PLUGIN-001",
+        profile.cid("PLUGIN"),
         status,
         "Scope-derived ServiceNow plugin prerequisites",
         (
@@ -1152,6 +1270,7 @@ def _plugin_result(admin_setup: dict[str, Any]) -> CheckResult:
             )
         ),
         roles=[Role.SERVICENOW_ADMIN.value],
+        profile=profile,
     )
 
 
@@ -1165,9 +1284,9 @@ def _entra_client_id(admin_setup: dict[str, Any]) -> str:
     return str(value or "")
 
 
-def _entra_error_result(message: str) -> CheckResult:
+def _entra_error_result(message: str, *, profile: CheckProfile) -> CheckResult:
     return _result(
-        "SN-DA-HRSD-ENTRA-SETUP-001",
+        profile.cid("ENTRA-SETUP"),
         Status.ERROR.value,
         "Entra User Login application setup",
         message,
@@ -1179,6 +1298,7 @@ def _entra_error_result(message: str) -> CheckResult:
         ),
         recovery_category="Invalid configuration input",
         roles=[Role.ENTRA_ADMIN.value, Role.ESS_MAKER.value],
+        profile=profile,
     )
 
 
@@ -1392,11 +1512,13 @@ def _entra_confirmation(
 def _entra_setup_result(
     admin_setup: dict[str, Any],
     state: dict[str, Any],
+    *,
+    profile: CheckProfile = HR_CHECK_PROFILE,
 ) -> CheckResult:
     client_id = _entra_client_id(admin_setup)
     if not client_id:
         return _result(
-            "SN-DA-HRSD-ENTRA-SETUP-001",
+            profile.cid("ENTRA-SETUP"),
             Status.NOT_CONFIGURED.value,
             "Entra User Login application setup",
             "No Application client ID has been recorded.",
@@ -1406,15 +1528,16 @@ def _entra_setup_result(
                 "handoff."
             ),
             roles=[Role.ENTRA_ADMIN.value, Role.ESS_MAKER.value],
+            profile=profile,
         )
     try:
         normalize_client_id(client_id)
     except Exception as exc:
-        return _entra_error_result(str(exc))
+        return _entra_error_result(str(exc), profile=profile)
     confirmation, error = _entra_confirmation(admin_setup, state)
     if error or confirmation is None:
         return _result(
-            "SN-DA-HRSD-ENTRA-SETUP-001",
+            profile.cid("ENTRA-SETUP"),
             Status.NOT_CONFIGURED.value,
             "Entra User Login application setup",
             error or "The Entra administrator confirmation is missing.",
@@ -1423,6 +1546,7 @@ def _entra_setup_result(
                 "safe User Claim name in a current target-bound handoff."
             ),
             roles=[Role.ENTRA_ADMIN.value, Role.ESS_MAKER.value],
+            profile=profile,
         )
     result = (
         "The current target-bound Entra identity handoff contains one valid "
@@ -1465,7 +1589,7 @@ def _entra_setup_result(
         ],
     }
     return _result(
-        "SN-DA-HRSD-ENTRA-SETUP-001",
+        profile.cid("ENTRA-SETUP"),
         Status.MANUAL.value,
         "Entra User Login application setup",
         result,
@@ -1482,12 +1606,15 @@ def _entra_setup_result(
         ),
         roles=[Role.ENTRA_ADMIN.value, Role.ESS_MAKER.value],
         evidence=evidence,
+        profile=profile,
     )
 
 
 def _oidc_result(
     admin_setup: dict[str, Any],
     state: dict[str, Any],
+    *,
+    profile: CheckProfile = HR_CHECK_PROFILE,
 ) -> CheckResult:
     handoff = _phase_handoff(admin_setup, "servicenow-oidc")
     missing = not _phase_attested(admin_setup, "servicenow-oidc")
@@ -1516,7 +1643,7 @@ def _oidc_result(
                 "business result."
             )
     return _result(
-        "SN-DA-HRSD-OIDC-001",
+        profile.cid("OIDC"),
         status,
         "ServiceNow identity mapping receipt",
         result,
@@ -1542,6 +1669,7 @@ def _oidc_result(
             )
         ),
         roles=[Role.SERVICENOW_ADMIN.value],
+        profile=profile,
     )
 
 
@@ -1549,6 +1677,8 @@ def _topics_result(
     summary: dict[str, Any],
     evidence: dict[str, Any],
     component_hash: str,
+    *,
+    profile: CheckProfile,
 ) -> CheckResult:
     total = summary["serviceNowTopicCount"]
     active = summary["activeServiceNowTopicCount"]
@@ -1565,14 +1695,15 @@ def _topics_result(
     else:
         status = Status.NOT_CONFIGURED.value
     return _result(
-        "SN-DA-HRSD-TOPICS-001",
+        profile.cid("TOPICS"),
         status,
-        "ServiceNow HRSD topic readiness",
-        f"{active}/{total} ServiceNow HRSD topics are Active.",
-        "Enable the inactive HRSD topics or explicitly attest that their "
+        f"{profile.product} topic readiness",
+        f"{active}/{total} {profile.product} topics are Active.",
+        f"Enable the inactive {profile.family} topics or explicitly attest that their "
         "current states should be retained."
         if status != Status.PASSED.value
         else "",
+        profile=profile,
     )
 
 
@@ -1580,6 +1711,8 @@ def _portal_result(
     components: dict[str, Any],
     admin_setup: dict[str, Any],
     state: dict[str, Any],
+    *,
+    profile: CheckProfile,
 ) -> CheckResult:
     preflight = admin_setup.get("preflight")
     preflight = preflight if isinstance(preflight, dict) else {}
@@ -1595,16 +1728,17 @@ def _portal_result(
         )
     except Exception as exc:
         return _result(
-            "SN-DA-HRSD-PORTAL-001",
+            profile.cid("PORTAL"),
             Status.ERROR.value,
-            "ServiceNow HRSD employee portal Base URI",
+            f"{profile.product} employee portal Base URI",
             f"Unable to inspect the exact portal configuration: "
             f"{type(exc).__name__}: {exc}",
             (
-                "Open Copilot Studio Topics -> ServiceNow HRSD Setup "
+                f"Open Copilot Studio Topics -> {profile.product} Setup "
                 "Configurations and review the Set ServiceNow Portal BaseURI "
                 "node without overwriting unrelated topic content."
             ),
+            profile=profile,
         )
     confirmed_url = None
     if (
@@ -1629,14 +1763,15 @@ def _portal_result(
     expected_url = confirmed_url or _latest_requested_portal_url(state)
     if portal["valid"] and portal["path"] == "/" and not confirmed_url:
         return _result(
-            "SN-DA-HRSD-PORTAL-001",
+            profile.cid("PORTAL"),
             Status.NOT_CONFIGURED.value,
-            "ServiceNow HRSD employee portal Base URI",
+            f"{profile.product} employee portal Base URI",
             "The Portal BaseURI is the ServiceNow instance root, but the "
             "lifecycle has no evidence that the administrator explicitly "
             "confirmed that exact root URL for the employee portal.",
             "Confirm the exact root URL through the portal phase before "
             "recording completion.",
+            profile=profile,
         )
     if portal["valid"] and expected_url:
         try:
@@ -1650,23 +1785,25 @@ def _portal_result(
             )
         except Exception as exc:
             return _result(
-                "SN-DA-HRSD-PORTAL-001",
+                profile.cid("PORTAL"),
                 Status.ERROR.value,
-                "ServiceNow HRSD employee portal Base URI",
+                f"{profile.product} employee portal Base URI",
                 "Unable to verify the current portal URL against the URL "
                 f"requested for this phase: {type(exc).__name__}: {exc}",
                 "Review the latest portal transaction and the exact authored "
                 "topic value before retrying.",
+                profile=profile,
             )
         if actual_url != normalized_expected:
             return _result(
-                "SN-DA-HRSD-PORTAL-001",
+                profile.cid("PORTAL"),
                 Status.NOT_CONFIGURED.value,
-                "ServiceNow HRSD employee portal Base URI",
+                f"{profile.product} employee portal Base URI",
                 "The current Portal BaseURI is valid but does not match the "
                 "administrator-confirmed URL requested for this phase.",
                 "Set the exact requested employee portal URL, save the topic, "
                 "and run a fresh read-only verification.",
+                profile=profile,
             )
     if portal["valid"]:
         status = Status.PASSED.value
@@ -1704,11 +1841,12 @@ def _portal_result(
             "never infer /sp or /esc."
         )
     return _result(
-        "SN-DA-HRSD-PORTAL-001",
+        profile.cid("PORTAL"),
         status,
-        "ServiceNow HRSD employee portal Base URI",
+        f"{profile.product} employee portal Base URI",
         result,
         remediation,
+        profile=profile,
     )
 
 
@@ -1761,6 +1899,7 @@ def _credential_result(
     connections: list[dict[str, Any]],
     error: str,
     *,
+    profile: CheckProfile,
     require_handoff: bool = True,
 ) -> CheckResult:
     match, credential = _selected_connection(evidence, connections)
@@ -1926,9 +2065,9 @@ def _credential_result(
                     "Application client ID."
                 )
     check = _result(
-        "SN-DA-HRSD-CREDENTIAL-001",
+        profile.cid("CREDENTIAL"),
         status,
-        "ServiceNow HRSD credential health",
+        f"{profile.product} credential health",
         result,
         (
             "Create or select a Connected Microsoft Entra ID User Login "
@@ -1936,6 +2075,7 @@ def _credential_result(
             if status != Status.PASSED.value
             else ""
         ),
+        profile=profile,
     )
     if status == Status.PASSED.value:
         check.evidence = {
@@ -1991,6 +2131,8 @@ def _agent_connection_result(
     evidence: dict[str, Any],
     credential_check: CheckResult,
     binding_identity_sha256: str,
+    *,
+    profile: CheckProfile,
 ) -> CheckResult:
     record = evidence.get("agentConnection")
     if credential_check.status not in {
@@ -2041,17 +2183,20 @@ def _agent_connection_result(
         status = Status.MANUAL.value
         result = "Maker attested that the ServiceNow row currently shows Connected."
     return _result(
-        "SN-DA-HRSD-AGENT-CONNECTION-001",
+        profile.cid("AGENT-CONNECTION"),
         status,
         "ServiceNow credential connected to the selected agent",
         result,
         "Confirm the ServiceNow row in Copilot Studio Connection settings.",
+        profile=profile,
     )
 
 
 def _target_agent_connection_result(
     target_context: dict[str, Any],
     credential_check: CheckResult,
+    *,
+    profile: CheckProfile,
 ) -> CheckResult:
     validation = target_context.get("validation")
     validation = validation if isinstance(validation, dict) else {}
@@ -2102,7 +2247,7 @@ def _target_agent_connection_result(
         )
     )
     check = _result(
-        "SN-DA-HRSD-AGENT-CONNECTION-001",
+        profile.cid("AGENT-CONNECTION"),
         status,
         "ServiceNow credential connected to the selected agent",
         result,
@@ -2112,6 +2257,7 @@ def _target_agent_connection_result(
             if not current
             else ""
         ),
+        profile=profile,
     )
     check.evidence = {
         "targetMode": True,
@@ -2130,12 +2276,15 @@ def _target_test_result(
     portal_check: CheckResult,
     credential_check: CheckResult,
     agent_connection_check: CheckResult,
+    *,
+    profile: CheckProfile,
 ) -> CheckResult:
     prerequisite = _test_prerequisite_gate(
         topics_check,
         portal_check,
         credential_check,
         agent_connection_check,
+        profile=profile,
     )
     if prerequisite is not None:
         return prerequisite
@@ -2150,7 +2299,7 @@ def _target_test_result(
     runtime_plan = validation.get("runtimePlan")
     runtime_plan = runtime_plan if isinstance(runtime_plan, dict) else {}
     expected = {
-        "provider": PROVIDER_KEY,
+        "provider": profile.provider_key,
         "profile": target_context.get("profile"),
         "targetAgentId": target.get("agentId"),
         "targetEnvironmentId": target.get("environmentId"),
@@ -2170,7 +2319,7 @@ def _target_test_result(
         )
         and record.get("promptCategory") in {
             None,
-            _TEST_PROMPT_CATEGORY,
+            profile.test_prompt_category,
         }
     )
     if not current:
@@ -2183,17 +2332,17 @@ def _target_test_result(
         "failureCategory"
     ) is None:
         status = Status.MANUAL.value
-        result = "Maker recorded a current passing HRSD target Test result."
+        result = f"Maker recorded a current passing {profile.family} target Test result."
     elif record.get("result") == "fail":
         status = Status.FAILED.value
-        result = "Maker recorded a current failing HRSD target Test result."
+        result = f"Maker recorded a current failing {profile.family} target Test result."
     else:
         status = Status.NOT_CONFIGURED.value
         result = "Target Test evidence does not use the bounded result contract."
     check = _result(
-        "SN-DA-HRSD-TEST-001",
+        profile.cid("TEST"),
         status,
-        "ServiceNow HRSD Test pane result",
+        f"{profile.product} Test pane result",
         result,
         (
             "Run the profile's bounded low-side-effect scenario in the exact "
@@ -2202,6 +2351,7 @@ def _target_test_result(
             if status != Status.MANUAL.value
             else ""
         ),
+        profile=profile,
     )
     check.evidence = {
         "targetMode": True,
@@ -2221,12 +2371,15 @@ def _publish_result(
     component_hash: str,
     draft_semantic_hash: str,
     connection_binding_hash: str | None,
+    *,
+    profile: CheckProfile,
 ) -> CheckResult:
     record = evidence.get("publish")
     test_outcome = _test_evidence_outcome(
         evidence,
         draft_semantic_hash,
         connection_binding_hash,
+        profile=profile,
     )
     published_hash = (
         record.get("publishedComponentHash") or record.get("componentHash")
@@ -2274,11 +2427,12 @@ def _publish_result(
         status = Status.FAILED.value
         result = "Publish needs remediation; automatic unpublish is unavailable."
     return _result(
-        "SN-DA-HRSD-PUBLISH-001",
+        profile.cid("PUBLISH"),
         status,
-        "ServiceNow HRSD agent publish status",
+        f"{profile.product} agent publish status",
         result,
         "Review Copilot Studio publish details and republish only after explicit confirmation.",
+        profile=profile,
     )
 
 
@@ -2290,12 +2444,15 @@ def _test_result(
     portal_check: CheckResult,
     credential_check: CheckResult,
     agent_connection_check: CheckResult,
+    *,
+    profile: CheckProfile,
 ) -> CheckResult:
     prerequisite = _test_prerequisite_gate(
         topics_check,
         portal_check,
         credential_check,
         agent_connection_check,
+        profile=profile,
     )
     if prerequisite is not None:
         return prerequisite
@@ -2303,6 +2460,7 @@ def _test_result(
         evidence,
         draft_semantic_hash,
         connection_binding_hash,
+        profile=profile,
     )
     if outcome == "stale":
         status = Status.NOT_CONFIGURED.value
@@ -2318,16 +2476,17 @@ def _test_result(
         )
     elif outcome == "pass":
         status = Status.MANUAL.value
-        result = "Maker recorded a passing HRSD Test pane result."
+        result = f"Maker recorded a passing {profile.family} Test pane result."
     else:
         status = Status.FAILED.value
-        result = "Maker recorded a failing HRSD Test pane result."
+        result = f"Maker recorded a failing {profile.family} Test pane result."
     return _result(
-        "SN-DA-HRSD-TEST-001",
+        profile.cid("TEST"),
         status,
-        "ServiceNow HRSD Test pane result",
+        f"{profile.product} Test pane result",
         result,
-        "Run a low-side-effect HRSD prompt in the Test pane and record the current result.",
+        f"Run a low-side-effect {profile.family} prompt in the Test pane and record the current result.",
+        profile=profile,
     )
 
 
@@ -2335,6 +2494,8 @@ def _test_evidence_outcome(
     evidence: dict[str, Any],
     draft_semantic_hash: str,
     connection_binding_hash: str | None,
+    *,
+    profile: CheckProfile,
 ) -> str:
     """Return stale, invalid, pass, or fail for current bounded Test evidence."""
     record = evidence.get("test")
@@ -2348,7 +2509,7 @@ def _test_evidence_outcome(
     ):
         return "stale"
     if (
-        record.get("promptCategory") != _TEST_PROMPT_CATEGORY
+        record.get("promptCategory") != profile.test_prompt_category
         or "prompt" in record
         or "details" in record
     ):
@@ -2378,6 +2539,8 @@ def _test_prerequisite_gate(
     portal_check: CheckResult,
     credential_check: CheckResult,
     agent_connection_check: CheckResult,
+    *,
+    profile: CheckProfile,
 ) -> CheckResult | None:
     prerequisites = (
         ("credential", credential_check, {Status.PASSED.value}),
@@ -2408,14 +2571,15 @@ def _test_prerequisite_gate(
             else Status.NOT_CONFIGURED.value
         )
         return _result(
-            "SN-DA-HRSD-TEST-001",
+            profile.cid("TEST"),
             status,
-            "ServiceNow HRSD Test pane result",
+            f"{profile.product} Test pane result",
             (
                 f"Current {label} prerequisite is {check.status}: "
                 f"{check.result}"
             ),
             check.remediation,
             format_recovery=False,
+            profile=profile,
         )
     return None

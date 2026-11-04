@@ -501,3 +501,106 @@ def test_profile_results_match_pre_refactor_golden(
         assert [_row_hash(row) for row in rows] == expected[name], name
         for row in rows:
             assert golden["rows"][_row_hash(row)] == row
+
+
+_RETIRED_GLOBALS = (
+    "HR_SCHEMA_NAME",
+    "PROVIDER_KEY",
+    "_CATEGORY",
+    "_ENTRA_PREFIX",
+    "_TEST_PROMPT_CATEGORY",
+)
+
+
+def _module_snapshot() -> dict[str, Any]:
+    return {
+        name: copy.deepcopy(value)
+        for name, value in vars(shared).items()
+        if not name.startswith("__")
+        and name != "annotations"
+        and not callable(value)
+        and not isinstance(value, type(shared))
+    }
+
+
+def _prepare(profile_key: str, root: Path, target: str | None = None) -> Any:
+    fixture = _profile_fixture(profile_key)
+    components = fixture["components"]()
+    root.mkdir(parents=True, exist_ok=True)
+    fixture["write_state"](root, components)
+    return fixture, _scenario_runner(fixture, components, target)
+
+
+def test_it_run_does_not_mutate_module_globals_or_runner_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    it_target = "SN-DA-ITSM-TOPICS-001"
+    fixture, runner = _prepare("itsm", tmp_path, it_target)
+    before = _module_snapshot()
+    observed: list[tuple[dict[str, Any], Any]] = []
+    original_load = shared._load_state
+
+    def watching_load(*args: Any, **kwargs: Any) -> Any:
+        observed.append((_module_snapshot(), runner.checkpoint_target))
+        return original_load(*args, **kwargs)
+
+    monkeypatch.setattr(shared, "_load_state", watching_load)
+    results = fixture["run"](runner)
+
+    assert observed
+    assert all(
+        snapshot == before and target == it_target
+        for snapshot, target in observed
+    )
+    assert _module_snapshot() == before
+    assert runner.checkpoint_target == it_target
+    assert [result.checkpoint_id for result in results] == [it_target]
+    for name in _RETIRED_GLOBALS:
+        assert not hasattr(shared, name)
+
+
+def test_hr_results_identical_after_it_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def hr_rows(name: str) -> list[dict[str, Any]]:
+        fixture, runner = _prepare("hrsd", tmp_path / name)
+        monkeypatch.chdir(tmp_path / name)
+        return [_row(result) for result in fixture["run"](runner)]
+
+    def it_rows() -> list[dict[str, Any]]:
+        fixture, runner = _prepare("itsm", tmp_path / "it")
+        monkeypatch.chdir(tmp_path / "it")
+        return [_row(result) for result in fixture["run"](runner)]
+
+    first = hr_rows("hr1")
+    middle = it_rows()
+    second = hr_rows("hr2")
+
+    assert first == second
+    assert all(row["checkpoint_id"].startswith("SN-DA-HRSD") for row in first)
+    assert all(
+        row["checkpoint_id"].startswith("SN-DA-ITSM") for row in middle
+    )
+    assert "SN-DA-ITSM-PLUGIN-001" not in {
+        row["checkpoint_id"] for row in middle
+    }
+
+
+def test_it_output_does_not_rewrite_foreign_hr_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    fixture, runner = _prepare("itsm", tmp_path)
+    foreign = "upstream said HR case HRSD agent unavailable"
+    runner.agentbuilder = SimpleNamespace(
+        fetch_components=_raise(RuntimeError(foreign))
+    )
+    text = json.dumps([_row(result) for result in fixture["run"](runner)])
+
+    assert foreign in text
