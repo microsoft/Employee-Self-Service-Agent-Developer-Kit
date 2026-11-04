@@ -14,6 +14,11 @@ immediately follow its entry point; do not first probe setup metadata, show the
 setup-required Message block, or finish the request because metadata is absent.
 The selected entry point owns any metadata checks and missing-state handling.
 
+- If the user typed `/agent-basics` or asked to rename an ESS agent or change its
+  name, icon or logo, follow `src/skills/agent-basics/SKILL.md`. This includes
+  name/logo edit intent within `/landing-page`. That skill owns selected-target
+  setup recovery and supports materialized authoring before runtime readiness.
+  Do not require publication, `titleId` or `connect_ready` for this route.
 - If the user typed `/connect` or `/connect-workday`, or explicitly asked to
   **connect Workday**, proceed with `src/skills/connect/SKILL.md` even when
   setup is missing. For `/connect workday`, retain `workday` as the selected
@@ -487,7 +492,8 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | Debug Workday ISU errors                                                                                | `src/skills/troubleshoot/SKILL.md`                                                            |
 | Back up or save hybrid Workday HCM template configs                                                     | `src/skills/backup-template-configs/SKILL.md`                                                 |
 | Restore or re-apply hybrid Workday HCM template configs                                                 | `src/skills/restore-template-configs/SKILL.md`                                                |
-| View or configure ESS landing-page branding, quick links, starter prompts, insight cards, name, or icon | `src/skills/landing-page-config/SKILL.md`                                                     |
+| Rename an ESS agent or change its name, icon or logo                                                    | `src/skills/agent-basics/SKILL.md`                                                            |
+| Configure ESS landing-page branding/content or read its name/icon fields                               | `src/skills/landing-page-config/SKILL.md`                                                     |
 | Invoke any tool from the `ess-landing-page-config` MCP server                                           | `src/skills/landing-page-config/SKILL.md`                                                     |
 
 **Trigger phrases for connect:** "connect Workday", "set up Workday".
@@ -504,11 +510,12 @@ JSON format", "something went wrong with Workday".
 
 **Landing-page configuration invocation:** Before invoking ANY tool from the
 `ess-landing-page-config` MCP server, read and follow
-`src/skills/landing-page-config/SKILL.md`. This applies whether the user asks
-to configure the whole landing page or mentions branding, accent colors, quick
-links, starter prompts, Stay Up to Date, Quick Access, the agent name, or the
-agent icon, or asks what any landing-page setting controls for employees. Do
-not call an AgentConfiguration MCP tool from a generic flow.
+`src/skills/landing-page-config/SKILL.md`. This applies to configuring the whole
+landing page, branding, accent colors, quick links, starter prompts, Stay Up to
+Date, Quick Access, reading its name/icon fields, or explaining its settings.
+Name/logo edits instead follow `src/skills/agent-basics/SKILL.md`, before
+landing-page setup or MCP checks. Do not call an AgentConfiguration MCP tool
+from a generic flow.
 
 **FlightCheck results rendering:** When presenting `/flightcheck` results (Step 3
 of `src/skills/flightcheck/SKILL.md`), read `results.json` from the executed run's

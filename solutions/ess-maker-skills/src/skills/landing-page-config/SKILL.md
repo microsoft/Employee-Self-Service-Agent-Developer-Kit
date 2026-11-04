@@ -10,6 +10,13 @@ Orchestrate landing-page configuration through the AgentConfiguration MCP
 server. Guide the maker through complete, safe section updates without relying
 only on individual tool descriptions.
 
+For an agent name, icon or logo **edit**, hand off immediately to
+`src/skills/agent-basics/SKILL.md`, preserving the requested target and values.
+Do this before landing-page setup, `titleId`, or MCP availability checks.
+Agent Basics owns the selected native authoring path and approval; this
+server's name/icon fields remain read-only. For mixed requests, complete each
+owning skill's separate review/save flow; do not claim they save atomically.
+
 ## Setup-state check
 
 For every request that reads or configures a tenant's landing page, read
