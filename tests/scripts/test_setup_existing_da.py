@@ -37,6 +37,7 @@ AGENT_URL = (
 )
 
 
+
 def _normalize_object_model_keys(value: Any) -> Any:
     if isinstance(value, dict):
         if value.get("$kind") == "Message":
@@ -232,6 +233,7 @@ class FakeClient:
         include_collection_schema: bool = True,
         published_config_available: bool = True,
         changeset: dict[str, Any] | None = None,
+        authenticated_account: str | None = None,
     ) -> None:
         self.agent_name = agent_name
         self.agent_id = agent_id
@@ -242,6 +244,7 @@ class FakeClient:
         self.include_agent_schema = include_agent_schema
         self.include_collection_schema = include_collection_schema
         self.published_config_available = published_config_available
+        self.authenticated_account = authenticated_account
         self.changeset = changeset or _changeset(
             agent_id=agent_id,
             schema_name=schema_name,
@@ -469,6 +472,8 @@ def test_production_and_preview_hosts_resolve_to_prod_ring(host: str) -> None:
     assert target["agentId"] == AGENT_ID
     assert target["ring"] == "prod"
     assert target["agentSelection"] == "copilot-studio-url"
+    assert target["source"] == "copilot-studio-url"
+
 
 
 def test_target_rejects_conflicting_ring() -> None:
@@ -625,7 +630,11 @@ def test_print_exception_includes_type_and_notes(
 
 
 def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
-    result = _attach(FakeClient(), tmp_path)
+    account = "maker@example.test"
+    result = _attach(
+        FakeClient(authenticated_account=account),
+        tmp_path,
+    )
     agent_root = _agent_root(tmp_path)
 
     assert result["status"] == "created"
@@ -665,6 +674,8 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     )
     assert config["setup"] == "complete"
     assert config["ring"] == "test"
+    assert config["tenantId"] == TENANT_ID
+    assert config["account"] == account
     assert config["agent"]["botId"] == AGENT_ID
     assert "environmentName" not in config
     assert "environmentDisplayName" not in config
@@ -673,6 +684,11 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     setup_state = _agent_setup_state(tmp_path)
     assert canonical_state["schema_version"] == 4
     assert canonical_state["environment"]["id"] == ENVIRONMENT_ID
+    assert canonical_state["environment"]["account"] == account
+    assert "authoring_ready" not in setup_state
+    assert not setup_existing_da.is_authoring_ready(
+        setup_state["steps"], setup_state["workspace"]
+    )
     assert (
         canonical_state["environment"]["display_name"]
         == ENVIRONMENT_DISPLAY_NAME
@@ -789,7 +805,15 @@ def test_same_environment_agents_keep_independent_state_and_folders(
     canonical = _setup_state(tmp_path)
     assert set(canonical["agents"]) == {AGENT_ID, OTHER_AGENT_ID}
     assert canonical["agents"][AGENT_ID] == first_ready
+    assert setup_existing_da.is_authoring_ready(
+        canonical["agents"][AGENT_ID]["steps"],
+        canonical["agents"][AGENT_ID]["workspace"],
+    )
     assert canonical["agents"][AGENT_ID]["connect_ready"] is True
+    assert not setup_existing_da.is_authoring_ready(
+        canonical["agents"][OTHER_AGENT_ID]["steps"],
+        canonical["agents"][OTHER_AGENT_ID]["workspace"],
+    )
     assert canonical["agents"][OTHER_AGENT_ID]["connect_ready"] is False
     second_slug = canonical["agents"][OTHER_AGENT_ID]["agent"]["workspace_slug"]
     assert second_slug == "employee-self-service-hr-00000000"
@@ -1326,6 +1350,9 @@ def test_flightcheck_maintenance_completes_setup(tmp_path: Path) -> None:
     loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
     assert loaded is not None
     loaded_agent = loaded["agents"][AGENT_ID]
+    assert setup_existing_da.is_authoring_ready(
+        loaded_agent["steps"], loaded_agent["workspace"]
+    )
     assert loaded_agent["connect_ready"] is True
     assert loaded_agent["completed_at"]
     assert loaded_agent["steps"]["SETUP-02.1"]["checkpoint"] == "DA-AGENT-001"
@@ -1603,6 +1630,132 @@ def test_product_registry_resolves_exact_it_requirement() -> None:
         catalog_name="Employee Self-Service",
         agent_schema_name="gptagent_copilotforemployeeselfservicecore",
     )["productKey"] == "employee-self-service-hub"
+
+
+def test_authoring_ready_allows_incomplete_runtime_readiness(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "DA-AGENT-001",
+        "Passed",
+    )
+    result = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="DA-AGENT-001",
+        results_path=results_path,
+    )
+
+    assert result["authoringReady"] is True
+    assert result["connectReady"] is False
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+    assert loaded is not None
+    agent_state = loaded["agents"][AGENT_ID]
+    assert setup_existing_da.is_authoring_ready(
+        agent_state["steps"], agent_state["workspace"]
+    )
+    assert agent_state["steps"]["SETUP-05"]["state"] == "done"
+    assert agent_state["steps"]["SETUP-05"]["mode"] == "skipped"
+    assert agent_state["steps"]["SETUP-02.2"]["state"] == "done"
+    assert agent_state["steps"]["SETUP-02.2"]["mode"] == "skipped"
+
+
+MAIN_V4_AGENT_FIELDS = {
+    "setup_source",
+    "agent",
+    "workspace",
+    "steps",
+    "active_step",
+    "connect_ready",
+    "open_issues",
+    "created_at",
+    "updated_at",
+    "completed_at",
+}
+
+
+def test_written_state_matches_main_v4_agent_shape(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert persisted["schema_version"] == 4
+    assert setup_existing_da.CANONICAL_SETUP_SCHEMA_VERSION == 4
+    for agent_state in persisted["agents"].values():
+        assert set(agent_state) == MAIN_V4_AGENT_FIELDS
+    assert setup_existing_da._load_canonical_setup_state(tmp_path) == persisted
+
+
+def test_main_shaped_v4_state_loads_and_validates_unchanged(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    before = state_path.read_text(encoding="utf-8")
+    state = json.loads(before)
+    assert set(state["agents"][AGENT_ID]) == MAIN_V4_AGENT_FIELDS
+
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+
+    assert loaded == state
+    assert state_path.read_text(encoding="utf-8") == before
+
+
+def test_loader_still_rejects_unknown_agent_fields_like_main(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["agents"][AGENT_ID]["authoring_ready"] = True
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(setup_existing_da.ExistingDASetupError, match="malformed"):
+        setup_existing_da._load_canonical_setup_state(tmp_path)
+
+
+def _steps(done: tuple[str, ...]) -> dict[str, dict[str, str]]:
+    return {
+        step_id: {"state": "done" if step_id in done else "pending"}
+        for step_id in setup_existing_da.SETUP_STEP_ORDER
+    }
+
+
+_WORKSPACE = {"folder": "agents/a", "agent_path": "agents/a/agent.mcs.yml"}
+
+
+def test_authoring_readiness_is_derived_from_steps_and_workspace() -> None:
+    five = setup_existing_da.AUTHORING_READY_STEPS
+    assert set(five) == {
+        "SETUP-01",
+        "SETUP-02.1",
+        "SETUP-03",
+        "SETUP-04",
+        "SETUP-07",
+    }
+
+    # Ready even though SETUP-05/06 are still pending.
+    steps = _steps(five)
+    assert steps["SETUP-05"]["state"] == "pending"
+    assert steps["SETUP-06"]["state"] == "pending"
+    assert setup_existing_da.is_authoring_ready(steps, _WORKSPACE) is True
+
+    for missing in five:
+        remaining = tuple(step for step in five if step != missing)
+        assert (
+            setup_existing_da.is_authoring_ready(_steps(remaining), _WORKSPACE)
+            is False
+        )
+    assert setup_existing_da.is_authoring_ready(steps, {}) is False
+    assert (
+        setup_existing_da.is_authoring_ready(steps, {"folder": "agents/a"})
+        is False
+    )
+    assert setup_existing_da.is_authoring_ready(None, _WORKSPACE) is False
+    assert setup_existing_da.is_authoring_ready(steps, None) is False
 
 
 def test_connect_ready_rejects_incomplete_steps(tmp_path: Path) -> None:
@@ -2217,7 +2370,11 @@ def test_list_environments_emits_visible_non_dataverse_targets(
     monkeypatch.setattr(
         setup_existing_da,
         "_authentication_from_args",
-        lambda _args, _ring: ("token", TENANT_ID),
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
     )
     monkeypatch.setattr(
         setup_existing_da,
@@ -2258,6 +2415,7 @@ def test_list_environments_emits_visible_non_dataverse_targets(
     assert result == {
         "tenantId": TENANT_ID,
         "ring": "test",
+        "account": "test.user@example.test",
         "evidencePath": str(evidence_path.resolve()),
         "environments": [
             {
@@ -2294,7 +2452,11 @@ def test_list_environments_preserves_empty_result(
     monkeypatch.setattr(
         setup_existing_da,
         "_authentication_from_args",
-        lambda _args, _ring: ("token", TENANT_ID),
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
     )
     monkeypatch.setattr(
         setup_existing_da,
@@ -2329,7 +2491,11 @@ def test_list_environments_preserves_multiple_guid_service_ids(
     monkeypatch.setattr(
         setup_existing_da,
         "_authentication_from_args",
-        lambda _args, _ring: ("token", TENANT_ID),
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
     )
     monkeypatch.setattr(
         setup_existing_da,
@@ -2381,7 +2547,11 @@ def test_list_environments_preserves_authorization_failure(
     monkeypatch.setattr(
         setup_existing_da,
         "_authentication_from_args",
-        lambda _args, _ring: ("token", TENANT_ID),
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
     )
     response = SimpleNamespace(
         json=lambda: {"error": {"code": "AuthorizationFailed"}},
@@ -2620,16 +2790,20 @@ def test_authentication_uses_workspace_cache_and_account_hint(
         cache_path: Path,
         force_account_selection: bool,
         account_hint: str,
-    ) -> tuple[str, str]:
+            return_account_identity: bool,
+            require_account_identity: bool,
+        ) -> tuple[str, str, str]:
         observed.update(
             {
                 "ring": ring,
                 "cache_path": cache_path,
                 "force_account_selection": force_account_selection,
                 "account_hint": account_hint,
+                "return_account_identity": return_account_identity,
+                "require_account_identity": require_account_identity,
             }
         )
-        return "token", TENANT_ID
+        return "token", TENANT_ID, account_hint
 
     monkeypatch.setattr(
         setup_existing_da,
@@ -2646,12 +2820,15 @@ def test_authentication_uses_workspace_cache_and_account_hint(
     assert setup_existing_da._authentication_from_args(args, "test") == (
         "token",
         TENANT_ID,
+        "test.user@example.test",
     )
     assert observed == {
         "ring": "test",
         "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
         "force_account_selection": False,
         "account_hint": "test.user@example.test",
+        "return_account_identity": True,
+        "require_account_identity": True,
     }
 
 
@@ -2668,7 +2845,9 @@ def test_list_agents_authentication_uses_read_only_inventory_scopes(
         cache_path: Path,
         force_account_selection: bool,
         account_hint: str,
-    ) -> tuple[str, str]:
+            return_account_identity: bool,
+            require_account_identity: bool,
+        ) -> tuple[str, str, str]:
         observed.update(
             {
                 "ring": ring,
@@ -2676,9 +2855,11 @@ def test_list_agents_authentication_uses_read_only_inventory_scopes(
                 "cache_path": cache_path,
                 "force_account_selection": force_account_selection,
                 "account_hint": account_hint,
+                "return_account_identity": return_account_identity,
+                "require_account_identity": require_account_identity,
             }
         )
-        return "token", TENANT_ID
+        return "token", TENANT_ID, account_hint
 
     monkeypatch.setattr(
         setup_existing_da,
@@ -2696,6 +2877,7 @@ def test_list_agents_authentication_uses_read_only_inventory_scopes(
     assert setup_existing_da._authentication_from_args(args, "test") == (
         "token",
         TENANT_ID,
+        "test.user@example.test",
     )
     assert observed == {
         "ring": "test",
@@ -2703,7 +2885,36 @@ def test_list_agents_authentication_uses_read_only_inventory_scopes(
         "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
         "force_account_selection": False,
         "account_hint": "test.user@example.test",
+        "return_account_identity": True,
+        "require_account_identity": True,
     }
+
+
+def test_list_agents_authentication_rejects_unknown_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def authenticate_inventory(*_args, **_kwargs):
+        return "token", TENANT_ID, None
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "authenticate_agent_inventory",
+        authenticate_inventory,
+    )
+    args = SimpleNamespace(
+        command="list-agents",
+        tenant_id=TENANT_ID,
+        select_account=False,
+        account=None,
+        kit_root=tmp_path,
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="could not verify the selected Microsoft account",
+    ):
+        setup_existing_da._authentication_from_args(args, "test")
 
 
 def test_cached_accounts_command_reads_workspace_cache(

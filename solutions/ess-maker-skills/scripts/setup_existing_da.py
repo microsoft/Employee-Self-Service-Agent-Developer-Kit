@@ -65,6 +65,13 @@ SETUP_STEP_ORDER = (
     "SETUP-06",
     "SETUP-07",
 )
+AUTHORING_READY_STEPS = (
+    "SETUP-01",
+    "SETUP-02.1",
+    "SETUP-03",
+    "SETUP-04",
+    "SETUP-07",
+)
 SETUP_STEP_NOTES = {
     "SETUP-01": (
         "Records locked environment identity, endpoint, and DA foundation "
@@ -590,11 +597,31 @@ def _validate_canonical_agent_state(
             )
 
 
+def is_authoring_ready(
+    steps: Any,
+    workspace: Any,
+) -> bool:
+    """Read-only derived readiness; never persisted in setup state."""
+    if not isinstance(steps, dict) or not isinstance(workspace, dict):
+        return False
+    return (
+        all(
+            isinstance(steps.get(step_id), dict)
+            and steps[step_id].get("state") == "done"
+            for step_id in AUTHORING_READY_STEPS
+        )
+        and bool(workspace.get("folder"))
+        and bool(workspace.get("agent_path"))
+    )
+
+
 def _canonical_environment_matches_connection(
     state: dict[str, Any],
     connection: dict[str, Any],
 ) -> bool:
     environment = state["environment"]
+    recorded_account = str(environment.get("account") or "").strip()
+    connection_account = str(connection.get("account") or "").strip()
     return (
         environment.get("id") == connection["environment"]["id"]
         and environment.get("tenant_id")
@@ -604,6 +631,11 @@ def _canonical_environment_matches_connection(
         and environment.get("ring") == connection["environment"]["ring"]
         and environment.get("api_version")
         == connection["environment"]["apiVersion"]
+        and (
+            not recorded_account
+            or not connection_account
+            or recorded_account.casefold() == connection_account.casefold()
+        )
     )
 
 
@@ -877,6 +909,11 @@ def _new_canonical_setup_state(
             ],
             "ring": connection["environment"]["ring"],
             "api_version": connection["environment"]["apiVersion"],
+            **(
+                {"account": connection["account"]}
+                if connection.get("account")
+                else {}
+            ),
         },
         "agents": {},
         "created_at": now,
@@ -898,6 +935,8 @@ def _store_canonical_agent_state(
             "This workspace already targets another Power Platform "
             "environment. Create and open a new workspace for that environment."
         )
+    if connection.get("account") and not updated["environment"].get("account"):
+        updated["environment"]["account"] = connection["account"]
     if connection["environment"].get("displayName"):
         updated["environment"]["display_name"] = connection["environment"][
             "displayName"
@@ -1167,6 +1206,10 @@ def maintain_setup_flightcheck(
         "evidenceStatuses": sorted(statuses),
         "failureCauses": list(
             agent_state["steps"][step_id].get("failure_causes", [])
+        ),
+        "authoringReady": is_authoring_ready(
+            agent_state["steps"],
+            agent_state["workspace"],
         ),
         "mode": agent_state["steps"][step_id].get("mode"),
         "connectReady": agent_state["connect_ready"],
@@ -1513,6 +1556,9 @@ def validate_existing_dev_connection(
         if isinstance(managed_properties, dict)
         else False
     )
+    authenticated_account = str(
+        getattr(client, "authenticated_account", "") or ""
+    ).strip()
     normalized_environment_display_name = str(
         environment_display_name or ""
     ).strip()
@@ -1546,6 +1592,11 @@ def validate_existing_dev_connection(
         },
         "selectedBy": selection_source or "direct-id",
         "verifiedAt": _utc_now(),
+        **(
+            {"account": authenticated_account}
+            if authenticated_account
+            else {}
+        ),
     }
 
 
@@ -1991,9 +2042,11 @@ def _write_config(
     *,
     agent_entry: dict[str, Any],
     environment_id: str,
+    tenant_id: str,
     host: str,
     ring: str,
     api_version: str,
+    account: str | None,
     component_counts: Counter[str],
 ) -> None:
     existing = _load_config(config_path)
@@ -2023,6 +2076,7 @@ def _write_config(
         "setup": "complete",
         "releaseLine": "da",
         "environmentId": environment_id,
+        "tenantId": tenant_id,
         "powerPlatformApiEndpoint": host,
         "ring": ring,
         "agentBuilderApiVersion": api_version,
@@ -2038,6 +2092,8 @@ def _write_config(
             component_counts.get("TestCaseComponent", 0)
         ),
     }
+    if account:
+        config["account"] = account
     config_path.parent.mkdir(parents=True, exist_ok=True)
     handle, temporary = tempfile.mkstemp(
         prefix=f"{config_path.name}.",
@@ -2156,6 +2212,14 @@ def select_local_agent(
         "agentName": str(selected.get("name") or normalized_agent_id),
         "activeAgent": slug,
         "workspaceFolder": selected.get("folder"),
+        "authoringReady": (
+            is_authoring_ready(
+                setup_state.get("steps"),
+                setup_state.get("workspace"),
+            )
+            if isinstance(setup_state, dict)
+            else None
+        ),
         "connectReady": (
             setup_state.get("connect_ready")
             if isinstance(setup_state, dict)
@@ -2520,9 +2584,11 @@ def attach_existing_dev(
             kit_root / ".local" / "config.json",
             agent_entry=agent_entry,
             environment_id=normalized_environment_id,
+            tenant_id=connection["environment"]["tenantId"],
             host=client.host,
             ring=client.ring,
             api_version=client.api_version,
+            account=connection.get("account"),
             component_counts=component_counts,
         )
     except Exception as exc:
@@ -2578,6 +2644,10 @@ def attach_existing_dev(
         "connectionStatus": "workspace-ready",
         "workspace": workspace,
         "setupState": CANONICAL_SETUP_STATE.as_posix(),
+        "authoringReady": is_authoring_ready(
+            canonical_agent["steps"],
+            canonical_agent["workspace"],
+        ),
         "connectReady": canonical_agent["connect_ready"],
     }
     if cleanup_warnings:
@@ -2863,48 +2933,61 @@ def _client_from_args(
         if args.host
         else derive_environment_host(environment_id, ring)
     )
-    token, tenant_id = _authentication_from_args(args, ring)
-    return AgentBuilderClient(
+    token, tenant_id, account = _authentication_from_args(args, ring)
+    client = AgentBuilderClient(
         host,
         token,
         ring=ring,
         tenant_id=tenant_id,
         api_version=args.api_version,
     )
+    client.authenticated_account = account
+    return client
 
 
 def _authentication_from_args(
     args: argparse.Namespace,
     ring: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, str | None]:
     account = getattr(args, "account", None)
     kit_root = args.kit_root.resolve()
     cache_path = kit_root / ".local" / ".agentbuilder_token_cache.bin"
     if getattr(args, "command", None) == "list-agents":
-        return authenticate_agent_inventory(
+        token, tenant_id, authenticated_account = authenticate_agent_inventory(
             ring,
             tenant_id=args.tenant_id,
             cache_path=cache_path,
             force_account_selection=args.select_account,
             account_hint=account,
+            return_account_identity=True,
+            require_account_identity=True,
         )
-    if args.tenant_id:
-        token = authenticate(
+    elif args.tenant_id:
+        token, authenticated_account = authenticate(
             args.tenant_id,
             ring,
             cache_path=cache_path,
             force_account_selection=args.select_account,
             account_hint=account,
+            return_account_identity=True,
+            require_account_identity=True,
         )
         tenant_id = args.tenant_id
     else:
-        token, tenant_id = authenticate_selected_tenant(
+        token, tenant_id, authenticated_account = authenticate_selected_tenant(
             ring,
             cache_path=cache_path,
             force_account_selection=args.select_account,
             account_hint=account,
+            return_account_identity=True,
+            require_account_identity=True,
         )
-    return token, tenant_id
+    if not authenticated_account:
+        raise ExistingDASetupError(
+            "AgentBuilder authentication could not verify the selected "
+            "Microsoft account."
+        )
+    return token, tenant_id, authenticated_account
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2935,7 +3018,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if args.command == "list-environments":
-            token, tenant_id = _authentication_from_args(args, args.ring)
+            token, tenant_id, account = _authentication_from_args(
+                args,
+                args.ring,
+            )
             environments = list_environments(
                 token,
                 args.ring,
@@ -2950,6 +3036,7 @@ def main(argv: list[str] | None = None) -> int:
             result = {
                 "tenantId": tenant_id,
                 "ring": args.ring,
+                "account": account,
                 "environments": summarize_environments(environments),
                 "evidencePath": str(evidence_path),
             }

@@ -195,6 +195,14 @@ For **Help me decide** on the multiple-account surface, follow the shared contra
 
 Retain a confirmed cached sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, `setup_alm_import.py`, and `reconcile_setup_agent.py` command in this invocation. Never infer a corp account.
 
+Every authenticated setup command must return and verify the actual non-secret
+sign-in name. A login hint is not identity proof. When the returned account is
+missing or differs from `{SETUP_ACCOUNT}`, stop with the exact authentication
+error instead of continuing under an unknown account. Successful workspace
+attachment persists the verified account with the canonical environment and
+operational config so `/connect` and its FlightChecks can reuse and reverify
+that identity without silently switching accounts.
+
 Pass `--preferred-username "{SETUP_ACCOUNT}"` to every setup-owned `flightcheck/cli.py` command, including retries and rechecks. Use the current `{SETUP_ACCOUNT}` after any account change.
 
 When no cached account exists, or the maker selects **Use a different user** or **Use the Microsoft account picker**, omit `--account` and append `--select-account` only to the first read-only command that can authenticate. Parse `DA_AGENTBUILDER_AUTH_JSON:` from that command's output, retain its non-empty `account` as `{SETUP_ACCOUNT}`, and use `--account "{SETUP_ACCOUNT}"` for every later command in this invocation. The picker establishes the identity once; later commands reuse its cached token and sign-in name.
@@ -207,7 +215,11 @@ maker explicitly named, follow the corresponding recovery under **Microsoft
 authorization** in `permission-guidance.md` before retaining an account or
 using the read-only operation result.
 
-If the first authenticated command succeeds but does not return an account identity, run `setup_existing_da.py cached-accounts` again. Retain its sole account when exactly one is present. When no single identity can be established, state that setup could not retain the selected sign-in and rerun the Microsoft account picker before continuing.
+If the first authenticated command does not return an account identity, do not
+use cached-account inventory as proof of who authenticated. Preserve the exact
+identity-verification error and offer one normal Microsoft account-picker
+retry. Continue only after the token result returns the actual non-secret
+account identity.
 
 Run this local operation once after the first authenticated account is established as `{SETUP_ACCOUNT}`, before the next setup operation:
 

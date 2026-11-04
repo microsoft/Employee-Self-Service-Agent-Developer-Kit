@@ -233,8 +233,9 @@ After canonical DA setup is complete:
 - Dataverse push and server-backed validation are permitted in this
   workspace; run the push pipeline when the maker asks to push local changes;
 - `/connect workday` uses the checked-in ESS DA HR Workday extension guidance;
-  unsupported products or agent verticals must stop at their explicit routing
-  boundary;
+  `/connect servicenow` is available for DA-GA HR and IT agents through its
+  product-specific entry point; unsupported products or agent verticals must
+  stop at their explicit routing boundary;
 - `/backup-template-configs` and `/restore-template-configs` are no longer
   supported because they belonged to the retired Dataverse-based agent model;
 - `/flightcheck` and standalone FlightCheck use the same selected-agent

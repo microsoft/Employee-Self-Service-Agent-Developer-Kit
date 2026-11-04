@@ -678,12 +678,11 @@ def test_public_setup_does_not_configure_mcp() -> None:
     assert "materialize-defaults" not in prompt
 
 
-def test_global_and_command_gates_require_canonical_da_completion() -> None:
+def test_global_and_command_gates_require_canonical_da_foundation() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
 
     assert "`schema_version`" in instructions
     assert "equal to `4`" in instructions
-    assert "`agents` entry matching `.local/config.json`" in instructions
     assert "`connect_ready` equal to `true`" in instructions
     assert '`status` equal to `"complete"`' not in instructions
 
@@ -692,7 +691,6 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
         "create.prompt.md",
         "delete.prompt.md",
         "evaluate.prompt.md",
-        "push.prompt.md",
         "restore-template-configs.prompt.md",
         "review.prompt.md",
         "run.prompt.md",
@@ -718,7 +716,19 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
         ), path
 
     connect_prompt = (_PROMPTS / "connect.prompt.md").read_text(encoding="utf-8")
+    servicenow_entry = (
+        _PROMPTS.parents[1]
+        / "src"
+        / "skills"
+        / "connect"
+        / "servicenow"
+        / "entry.md"
+    ).read_text(encoding="utf-8")
+    assert ".local/setup/config.json" in servicenow_entry
+    assert "authoring-ready gate" in " ".join(servicenow_entry.split())
+    assert "sync-authoring-readiness" not in servicenow_entry
     assert "schema_version: 4" in connect_prompt
+    assert "`connect_ready: true`" in connect_prompt
     assert 'steps.SETUP-07.state: "done"' in connect_prompt
     assert "Do not require\n`connect_ready: true`" in connect_prompt
     assert "workspace evidence" in connect_prompt
@@ -1479,11 +1489,22 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         "append `--select-account` only to the first read-only command that can authenticate"
     ) in normalized_foundation
     assert "Parse `DA_AGENTBUILDER_AUTH_JSON:`" in foundation
+    assert "A login hint is not identity proof" in foundation
+    assert "do not use cached-account inventory as proof" in (
+        normalized_foundation
+    )
+    assert "persists the verified account" in normalized_foundation
+    assert "`/connect` and its FlightChecks can reuse and reverify" in (
+        foundation
+    )
     assert (
         "later commands reuse its cached token and sign-in name"
         in normalized_foundation
     )
-    assert "setup_existing_da.py cached-accounts` again" in foundation
+    assert "setup_existing_da.py cached-accounts` again" not in foundation
+    assert "offer one normal Microsoft account-picker retry" in (
+        normalized_foundation
+    )
     assert "Do you have a test tenant user?" not in foundation
     assert "does not prove that the maker holds a particular administrator role" in (
         normalized_foundation
