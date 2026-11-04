@@ -24,6 +24,7 @@ CORE_DIR = (
 sys.path.insert(0, str(CORE_DIR))
 
 import _tenant_context  # noqa: E402
+import auth  # noqa: E402
 
 
 TENANT_ID = "00000000-0000-0000-0000-000000001111"
@@ -43,9 +44,10 @@ def config_path(tmp_path, monkeypatch) -> Path:
 
 
 def test_config_path_is_anchored_to_the_maker_workspace() -> None:
-    assert (
-        _tenant_context._CONFIG_PATH == CORE_DIR.parents[2] / ".local" / "config.json"
-    )
+    # The MCP isolation fixture redirects _CONFIG_PATH; the root and imported
+    # auth module must still be anchored to this checkout, not a sibling one.
+    assert _tenant_context._SOLUTION_ROOT == CORE_DIR.parents[2]
+    assert Path(auth.__file__).resolve() == CORE_DIR.parents[2] / "scripts" / "auth.py"
 
 
 def test_discovers_the_configured_environment_from_any_working_directory(
