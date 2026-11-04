@@ -1298,7 +1298,10 @@ def _run_single_checkpoint(args, *, compact_stream=None):
         print(f"ERROR: Unable to resolve the profile target: {e}")
         sys.exit(1)
 
-    _run_da_selection_if_applicable(args, config)
+    # ServiceNow lifecycle checkpoints are owned by the Connect lifecycle
+    # registry, not the selected-DA inventory planner.
+    if service_now_profile is None:
+        _run_da_selection_if_applicable(args, config)
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
     if plan.requires_dataverse_endpoint and not env_url:
         print("ERROR: No dataverseEndpoint in .local/config.json.")

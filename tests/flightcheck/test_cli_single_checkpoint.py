@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -2136,3 +2137,155 @@ class TestCheckpointAdkConnector:
             cli._run_single_checkpoint(_args("ENV-001", tmp_path, no_telemetry=False))
         assert captured["run_kwargs"]["connector"] == ""
         assert captured["result_kwargs"]["connector"] == ""
+
+
+_CONNECT_SKILLS = (
+    Path(__file__).resolve().parents[2]
+    / "solutions"
+    / "ess-maker-skills"
+    / "src"
+    / "skills"
+    / "connect"
+)
+
+
+def _lifecycle_checkpoint_ids(profile: str) -> tuple[str, ...]:
+    contract = (_CONNECT_SKILLS / f"servicenow-da-{profile}" / "contract.json").read_text(
+        encoding="utf-8"
+    )
+    return tuple(
+        sorted(set(re.findall(rf"SN-DA-{profile.upper()}-[A-Z0-9-]+-\d{{3}}", contract)))
+    )
+
+
+_SERVICENOW_LIFECYCLE_TARGETS = tuple(
+    (profile, target)
+    for profile in ("hrsd", "itsm")
+    for target in _lifecycle_checkpoint_ids(profile)
+)
+
+
+def test_servicenow_lifecycle_targets_cover_both_profiles() -> None:
+    targets = {target for _profile, target in _SERVICENOW_LIFECYCLE_TARGETS}
+    assert "SN-DA-HRSD-ADMIN-PREFLIGHT-001" in targets
+    assert "SN-DA-ITSM-ADMIN-PREFLIGHT-001" in targets
+    assert "SN-DA-ITSM-PLUGIN-001" not in targets
+    assert len(targets) >= 19
+
+
+@pytest.mark.parametrize(("profile", "target"), _SERVICENOW_LIFECYCLE_TARGETS)
+def test_servicenow_lifecycle_checkpoint_bypasses_da_planner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    profile: str,
+    target: str,
+) -> None:
+    slug = f"{profile}-agent"
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / "config.json").write_text(
+        json.dumps(
+            {
+                "tenantId": "935884d7-bdee-469b-a461-fcc530a3ac83",
+                "environmentId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                "activeAgent": slug,
+                "agents": [
+                    {
+                        "slug": slug,
+                        "botId": "cccccccc-dddd-4eee-8fff-111111111111",
+                        "schemaName": "gptagent_copilotforemployeeselfservice"
+                        + ("hr" if profile == "hrsd" else "it"),
+                        "releaseLine": "da",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    scopes = []
+    to_contract = cli.compact_checkpoint_result_to_dict
+
+    def _record_scope(result, **kwargs):
+        scopes.append(result.scope)
+        return to_contract(result, **kwargs)
+
+    monkeypatch.setattr(cli, "compact_checkpoint_result_to_dict", _record_scope)
+    monkeypatch.setattr(cli, "_print_prioritized_summary", lambda *a, **k: None)
+    manual_row = _row(target, Status.MANUAL.value)
+    monkeypatch.setattr(
+        registry,
+        "transitive_requirements",
+        lambda _target: type(
+            "_Plan",
+            (),
+            {
+                "clients": frozenset(),
+                "requires_config": False,
+                "requires_dataverse_endpoint": False,
+                "ordered_fns": [("Fake", lambda _runner: [manual_row])],
+            },
+        )(),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        cli._run_compact_checkpoint(
+            _args(
+                target,
+                tmp_path,
+                agent_slug=slug,
+                compact_result=True,
+                invocation_id="11111111-2222-4333-8444-555555555555",
+                quiet_auth=True,
+            )
+        )
+
+    assert exc.value.code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schemaVersion"] == "flightcheck.lifecycle-checkpoint.v1"
+    assert payload["target"] == target
+    assert payload["kind"] == "checkpoint-result"
+    assert payload["invocation"]["id"] == "11111111-2222-4333-8444-555555555555"
+    assert payload["identity"]["agentSlug"] == slug
+    assert scopes == [f"checkpoint:{target}"]
+
+
+def test_servicenow_inventory_checkpoint_still_uses_da_planner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flightcheck import maker_diagnostics
+
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / "config.json").write_text(
+        json.dumps(
+            {
+                "activeAgent": "hr-agent",
+                "agents": [
+                    {
+                        "slug": "hr-agent",
+                        "botId": "cccccccc-dddd-4eee-8fff-111111111111",
+                        "schemaName": "gptagent_copilotforemployeeselfservicehr",
+                        "releaseLine": "da",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _planner(*_args, **_kwargs):
+        raise ValueError("planner reached")
+
+    monkeypatch.setattr(maker_diagnostics, "run_maker_diagnostics", _planner)
+    monkeypatch.chdir(tmp_path)
+    args = _args("SN-DA-AUTH-001", tmp_path, agent_slug="hr-agent")
+    args.profile = None
+    args.runtime_reachability = False
+    args.alm_import_probe = False
+
+    with pytest.raises(SystemExit) as exc:
+        cli._run_single_checkpoint(args)
+
+    assert exc.value.code == 2
