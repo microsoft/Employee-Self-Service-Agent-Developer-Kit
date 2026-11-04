@@ -1,6 +1,8 @@
 # ServiceNow Knowledge: configuration walkthrough
 
 Use this as the executable conversation guide, one current step at a time.
+Exceptions: collect `test-article` and `test-kb` together; present both denied-reader
+checks as one optional, recommended action as described below.
 Step IDs match the controller's `nextStep.id`. Refer to the saved target, tenant,
 instance, query, flow and previously recorded values instead of asking again.
 The user performs privileged actions; the assistant records their observed
@@ -23,7 +25,8 @@ heading. Act means configure after approval, or inspect/retrieve/test for a
 read-only step. Reuse correct existing setup; guide approved creation or targeted
 correction when needed. Ask for the required observation after the action, not
 an upfront matching questionnaire. Approval or execution alone never passes
-verification. The automatic assessment-date bookkeeping is not a user-facing step.
+verification. Automatic assessment-date and acceptance-time bookkeeping are not
+user-facing steps.
 
 When a configurable item may already exist, precede Act / Verify with a short
 existence check: exact navigation, identifying value and **Yes / No / I can't
@@ -408,8 +411,10 @@ them automatically or treat their completion as read proof.
 
 **Act:** inspect the ordinary readers' source-to-Entra mapping.
 
-Inspect the known allowed and denied ordinary readers privately in ServiceNow
-and Entra, including the approved custom mapping formula if used. If incorrect,
+Inspect the known allowed ordinary reader privately in ServiceNow and Entra,
+including the approved custom mapping formula if used. A denied reader is not
+required here; verify that reader's mapping later if the optional denied-reader
+comparison is selected. If incorrect,
 explain the targeted correction and obtain approval before changing it.
 
 **Verify:** verify their ServiceNow email resolves to the intended Entra UPN or
@@ -750,19 +755,27 @@ features or unresolved custom dependencies require owner review, not a pass.
 In **Custom setup > Users**, select **Only people with access to this data source**.
 For reuse, do not repeat the change.
 
-**Verify:** inspect the actual saved selection. Never choose Everyone to solve a
-reader denial. Rollout audience is a separate setting and cannot replace this.
+**Verify:** inspect the actual saved selection. **Everyone** here grants source
+access; it is not organization-wide rollout. Organization-wide rollout is supported
+while preserving ServiceNow permissions. Explain both rollout options next.
 
 ## audience
 
 **Owner:** Microsoft 365 AI administrator.
-**Record:** `organization-wide` or deliberately approved `selected-users`.
+**Record:** `organization-wide` or `selected-users`, as chosen by the user.
 
 **Act:** configure or reuse the approved rollout audience.
 
-In **Setup**, leave **Rollout to limited audience** off for the requested
-organization-wide availability. For a deliberate limited rollout, enable it
-and select the intended supported users/groups.
+Before changing **Setup > Rollout to limited audience**, explain both options:
+
+- **Organization-wide:** leave the toggle off to make the connection available
+  across the organization; each person still needs ServiceNow source access.
+- **Selected users/groups:** turn the toggle on and select the intended supported
+  users/groups for a limited rollout; they still need ServiceNow source access.
+
+Ask which applies to this deployment before configuring it. Do not assume a
+default or carry over another deployment's choice. If the user already explicitly
+chose for this deployment, reuse that choice without asking again.
 
 **Verify:** reopen/review the actual audience setting.
 
@@ -843,7 +856,8 @@ button or claim token/sample-fetch telemetry the portal did not show.
 If still processing, stop at this step and resume later; don't record Ready or
 spin in an endless polling loop. Indexed item and reader checks follow separately.
 Complete those checks before opening ESS: select the article/KB, verify Indexed
-and compare allowed/denied access in ServiceNow and the index. Only then attach
+and compare allowed access in ServiceNow and the index. Offer the grouped optional
+denied-reader comparison or explicit Skip. Only then attach
 the named source in ESS and test its answer/citation.
 On failure, retain the recorded connection name and saved setup, guide the specific
 provider/claim/role/network correction in chat, and recheck this same connection.
@@ -853,15 +867,29 @@ Do not reset it to a new draft or automatically retry Create.
 
 **Owner:** maker with source owner. **Record:** actual article number, e.g. `KB0000012`.
 
-**Act:** select a representative article and ordinary allowed/denied readers.
+**Act:** select a representative article and an ordinary allowed reader.
 
-Choose an indexed article in the approved scope with one known allowed and one
-known denied ordinary reader. Avoid administrator, KB-owner or contributor
+Choose an indexed article in the approved scope with one known allowed ordinary
+reader. Finding a denied reader is optional and happens in the later recommended
+denied-reader action, not as a prerequisite to choosing an article.
+Avoid administrator, KB-owner or contributor
 exceptions that would invalidate the permission comparison. No article body,
 reader identity or sensitive prompt is stored.
 
 **Verify:** check the article is in the approved scope and record its actual number,
 not its sys_id or title.
+
+When both article and KB details are pending, show the selection instructions
+above and the KB-reference lookup below together, then ask **one form with two
+fields**: **Test article number** and **Knowledge Base sys_id**. Explain that the
+second field is the referenced KB's 32-character lowercase sys_id, not the
+article's sys_id. Do not submit a separate article-only question first.
+After the grouped answer, record `test-article`, refresh status, then record
+`test-kb` for that same article using the saved connection name and scope.
+Retain the separate validators and prerequisite checks; a missing or invalid
+field is not confirmed. On resume, reuse valid saved details and ask only for
+the missing or corrected field. If no suitable allowed-reader test article exists,
+pause here; absence of a denied reader does not block article selection.
 
 ## test-kb
 
@@ -917,23 +945,49 @@ be Allowed. A source allow alone doesn't prove indexed identity/permission acces
 
 ## denied-native
 
-**Owner:** ordinary denied reader with source owner. **Record:** `confirmed`.
+**Owner:** maker/source owner and Microsoft 365 administrator.
+**Record:** grouped `denied-reader` result, `confirmed` or `skipped`.
 
-**Act:** attempt access to the exact article as the chosen ordinary denied reader
-in ServiceNow, using their actual session or supported native permission diagnostics.
+**Optional, recommended: verify denied-user access**
 
-**Verify:** confirm the denial, not that the reader signed in. If native access
-is unexpectedly allowed, fix the test fixture/source policy with its owner;
-do not claim parity using an administrator bypass.
+Present this and `denied-indexed` as one action, not two questionnaires. Explain
+that it checks whether a user denied by ServiceNow is also denied by the index.
+Offer **Run recommended access check** and **Skip** without a preselected answer.
+On Skip, record `confirm --step denied-reader --value skipped` with the saved
+connection name and target reference. This atomically skips both internal checks;
+continue setup with the returned warning. Do not label skipped checks as passed.
+
+**Act:** for Run, show the complete walkthrough together:
+
+1. Ask the user to find an ordinary employee who cannot access the selected
+   article in ServiceNow. Establish that denial using the employee's actual
+   session or supported source diagnostics with the source owner; signing in
+   alone is not evidence. Do not substitute an administrator or integration user.
+2. Use that employee's mapped Microsoft Entra identifier, such as their UPN,
+   privately in the indexed **Check user access** lookup below. Do not save the
+   employee identifier in progress, an acceptance file or committed records.
+3. Check the same article/KB in the saved connection and verify **Denied**.
+   Ask for one combined result, not separate native/indexed confirmation forms.
+   Record `confirm --step denied-reader --value confirmed` only when both the
+   source denial and indexed denial are actually established.
+
+**Verify:** establish both source and indexed denial before recording a pass.
+If no suitable denied reader is available, offer Skip for the whole comparison.
+If source or indexed access is unexpectedly allowed, report the failed comparison
+with grouped value `unverified` and pause for owner review. An observed failure
+cannot be cleared by Skip; correct and rerun the comparison.
 
 ## denied-indexed
 
-**Owner:** Microsoft 365 administrator. **Record:** `confirmed`.
+This is the indexed portion of the single optional, recommended action above,
+not another user-facing question. Existing verified native results may be reused;
+on a partial legacy resume, guide only the missing indexed observation.
 
-**Act:** run the indexed access check for the same denied reader and article.
+**Owner:** Microsoft 365 administrator.
 
-Use **Check user access** on the same indexed article for that same mapped denied
-reader.
+**Act:** use **Check user access** on the same indexed article for that same mapped denied
+reader. Confirm the selected article number and KB sys_id in the saved connection
+before entering the identifier.
 
 **Verify:** it must be Denied. Unexpected indexed access blocks acceptance; investigate
 identity, criteria completeness, HR-scoped rows, property reads and crawl freshness.
@@ -943,7 +997,8 @@ Never change Users to Everyone or remove criteria to make the test pass.
 
 **Owner:** maker. **Record:** `confirmed`.
 
-**Act:** after indexed-content and allowed/denied permission verification,
+**Act:** after indexed-content and allowed/denied permission verification
+(or explicit skip of the optional denied-reader comparison),
 attach or reuse the exact Knowledge connection in the selected Dev agent.
 
 Open the exact selected native ESS HR/IT Development agent in the supported
@@ -980,24 +1035,47 @@ available, leave this check unverified and explain the limitation.
 
 **Act:** ask the selected native Dev agent a question answered by the test article.
 
-In the selected native ESS Dev test experience, ask a non-sensitive question
-answered by the chosen article.
+In the selected native ESS Dev test experience, have the same allowed employee
+use a detailed, non-sensitive prompt describing the article's topic, the actual
+task or problem, and the instructions they need. Do not test only with an article
+number or a vague keyword. Show this template with the saved article number;
+the user fills the private topic/scenario details in ESS:
+
+> I need help with [specific task/problem covered by the selected article].
+> My situation is [relevant non-sensitive context]. Explain the prerequisites,
+> detailed steps and any limitations described in ServiceNow article
+> [saved article number] about [article topic/title]. Base the answer on that
+> article and include citations linking to the supporting article.
 
 **Verify:** verify a relevant answer and matching article
-citation from the isolated source. Open the citation and verify the intended
-portal destination. Merely returning a link or finding a different connector's
+citation from the isolated source. Review the response against the selected
+article privately, not just whether an answer appeared. Open its supporting
+citations and verify they point to the correct article number, Knowledge Base
+and intended ServiceNow portal destination. A relevant answer without a correct
+supporting article citation does not pass. Merely returning a link or finding a different connector's
 copy doesn't pass. Do not persist sensitive prompts or article text.
 
 ## observation-time
 
-**Owner:** maker. **Record:** actual ISO-8601 observation timestamp with timezone.
+**Owner:** controller bookkeeping. **Record:** automatic UTC observation timestamp.
 
-**Act:** record when the acceptance observations were actually completed.
+**Automatic bookkeeping, not a normal user question.**
 
-**Verify:** check that the actual timestamp includes a timezone and is not a future
-time or a timestamp inferred from an earlier unrelated deployment. With every
-preceding check confirmed, the controller assembles scoped maker acceptance.
+Do not ask the user to enter a date, time or timezone. After the last required
+acceptance result is confirmed (with the optional denied-reader comparison
+confirmed or explicitly skipped), the controller records the completion time
+automatically from the latest recorded acceptance checkpoint and assembles scoped
+maker acceptance. This records when the observation was confirmed, not remote
+telemetry or an independently measured test-execution time.
+
+Existing observation times remain unchanged on resume. Older completed checks
+missing only this timestamp are finalized by `start` using their recorded
+completion evidence, not the current resume time. Failed or pending checks do
+not receive a completion timestamp. Explicit historical corrections remain
+supported; they are not a normal question.
 `guided-validated` covers only these recorded representative cases.
+`guided-complete-with-warnings` means setup observations are complete but the
+denied-reader comparison was skipped; it does not establish denied-user parity.
 Current FlightCheck indexing/ACL boundaries remain Manual, not Passed.
 
 ## References and execution limits

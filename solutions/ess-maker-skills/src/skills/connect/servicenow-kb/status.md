@@ -11,6 +11,18 @@ has completed. Never display an error as Ready or deferred access as verified.
 revalidation, not a sibling-agent fallback. `guided-validated` is limited to
 recorded administrator confirmations and representative maker-tested cases,
 not published readiness or universal access coverage.
+`guided-complete-with-warnings` means the optional, recommended denied-reader
+comparison was explicitly skipped. Report it as not tested, not verified parity.
+Keep its warning visible after completion. For either pending denied-reader
+checkpoint, present one combined Run/Skip action; reuse existing verified results
+and ask only for missing observations on partial resume. The grouped
+`confirm --step denied-reader` records both results atomically. An observed
+failure still blocks and cannot be dismissed with Skip. Never persist the reader's
+identifier; use it privately for the source/index access check.
+Acceptance observation time is automatic bookkeeping, not a user question.
+Existing times remain unchanged. If old progress has only `observation-time`
+pending, resume with the existing-scope `start` command to finalize from the
+recorded acceptance checkpoint times, not from the current resume time.
 
 Continue one step at a time through [configuration.md](configuration.md), recording
 observed values directly with `confirm`. Do not route missing confirmations into
@@ -74,7 +86,7 @@ against the same connection rather than recreating it.
 
 Finish index verification before moving to ESS: test article/KB, Indexed status
 and native/indexed allowed/denied permission comparisons precede source attachment.
-If indexing or permissions are pending or failed, pause there instead of switching
+If required indexing or permissions are pending or failed, pause there instead of switching
 to ESS. Then attach/reuse the named connection, isolate it and test the answer/citation.
 Older journeys may already have attachment/isolation observations from the previous
 order. Retain their history and resume the earliest pending index check; do not

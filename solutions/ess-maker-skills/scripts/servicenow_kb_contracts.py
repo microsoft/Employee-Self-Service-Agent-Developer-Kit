@@ -219,8 +219,9 @@ M365_FIELDS = {
     ),
     "Audience": (
         "Connector rollout settings",
-        "Record organization-wide or selected-users. Organization-wide availability "
-        "does not grant access beyond ServiceNow permissions.",
+        "Explain organization-wide (limited-audience toggle off) and selected-users "
+        "(toggle on); ask which applies, without assuming a default. Reuse an explicit "
+        "choice for this deployment. Both preserve ServiceNow source permissions.",
         "organization-wide or selected-users",
     ),
     "Connection ready": (
@@ -491,6 +492,9 @@ def read_handoff(path, owner: str, scope: dict[str, Any]) -> dict[str, str]:
     return {label: values[label] for label in fields}
 
 
+DENIED_READER_FIELDS = ("deniedNative", "deniedIndexed")
+
+
 def validate_reader_value(label: str, value: str, scope: dict[str, Any]) -> None:
     if label == "articleNumber":
         if not re.fullmatch(r"KB[0-9]+", value):
@@ -518,6 +522,8 @@ def validate_reader_value(label: str, value: str, scope: dict[str, Any]) -> None
             raise KnowledgeConnectError(
                 "observedAt: include a timezone and no future observation."
             )
+    elif label in DENIED_READER_FIELDS and value == "skipped":
+        return
     elif value != "confirmed":
         raise KnowledgeConnectError(
             f"{label}: the requested case remains unverified or failed."
@@ -561,4 +567,10 @@ def validate_acceptance(
         )
     for key in expected - {"targetReference", connection_field}:
         validate_reader_value(key, result[key], scope)
+    if any(result[key] == "skipped" for key in DENIED_READER_FIELDS) and not all(
+        result[key] == "skipped" for key in DENIED_READER_FIELDS
+    ):
+        raise KnowledgeConnectError(
+            "Skip the whole denied-reader comparison, not an individual result."
+        )
     return result

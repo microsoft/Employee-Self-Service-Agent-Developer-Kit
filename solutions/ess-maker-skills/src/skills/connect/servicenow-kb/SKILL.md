@@ -33,6 +33,18 @@ for. Show necessary security guidance only at the affected action. Do not repeat
 it around the walkthrough or suggest the assistant performed a manual change.
 Ask one concise result question after the walkthrough; never infer completion
 from approval, existence or an incomplete review.
+Collect the test article number and its Knowledge Base sys_id in one form with
+two fields when both are pending, after showing both lookup instructions.
+Record `test-article` then `test-kb` separately, refreshing status between them;
+keep their existing validation and connection/scope guards. On resume ask only
+for missing or corrected details, not valid saved answers.
+Present the source/indexed denied-reader comparison as one **Optional,
+recommended** action with **Run recommended access check** and **Skip**.
+Guide finding a source-denied ordinary user and using their mapped Entra identifier
+privately in Check user access. Do not store that identifier. One combined result
+uses `confirm --step denied-reader` with `confirmed`, `skipped` or `unverified`;
+this records both internal outcomes atomically. Skip is not a pass and cannot
+clear a reported failure. Do not require a denied reader when selecting the article.
 
 ## Target and scope
 
@@ -184,8 +196,12 @@ python scripts\servicenow_kb_connect.py confirm --step "<nextStep.id>" --value "
 ```
 
 Use `confirmed` only for the passing check defined by that step. Connection name,
-required source IDs, audience,
-tested article/KB and observation time use actual values. Do not ask for an
+required source IDs, audience and tested article/KB use actual values.
+Do not ask for an acceptance observation time or timezone: the controller
+automatically records UTC when required acceptance checks finish. Existing
+observation times remain unchanged; `start` finalizes older completed checks
+missing only the time from their recorded evidence, not the current resume time.
+Do not ask for an
 assessment completion date after the current review: confirming `scope-assessment`
 automatically records its UTC date. Existing historical assessment dates remain
 unchanged; the date step is only for an explicit legacy-date correction.
@@ -237,10 +253,13 @@ The Microsoft 365 AI administrator creates or reuses the **ServiceNow Knowledge
 gallery connection**, confirms its actual connection name, instance,
 Federated Auth, query and selected flow. Advanced uses the assessed API namespace.
 
-Default to **organization-wide availability with source permissions preserved**:
-Users must remain **Only people with access to this data source**. The admin
-may deliberately select `selected-users` for limited rollout. Never use
-Everyone to resolve a denied reader. Copilot Chat/Search visibility is not a
+Explain both rollout options and ask the user to choose: **organization-wide**
+(limited-audience toggle off) or **selected users/groups** (toggle on).
+Neither is a forced default; reuse an explicit choice for this deployment.
+Both preserve source permissions: Users remains
+**Only people with access to this data source**.
+**Everyone** in Users grants source access and is not the
+organization-wide rollout setting. Copilot Chat/Search visibility is not a
 completion requirement for an ESS-only deployment. Network escalation is
 conditional on an observed block. Optional Advanced `user_changes` and auditing
 remain outside this MVP; do not enable incremental identity sync without them.
@@ -249,7 +268,8 @@ remain outside this MVP; do not enable incremental identity sync without them.
 
 Finish connector/index verification before opening ESS: review processing/errors,
 select the test article/KB, confirm Indexed and compare native ServiceNow access
-with indexed allowed/denied permissions. Missing, failed or pending checks pause
+with indexed allowed permissions. Offer the grouped optional denied-reader
+comparison or Skip. Missing, failed or pending required checks pause
 here; ESS attachment is not an indexing workaround.
 
 The maker opens the exact selected native HR/IT Dev agent, confirms its current
@@ -262,7 +282,11 @@ manual at their indexing/ACL boundaries; a Manual result is not Passed.
 Use the already verified article, KB and allowed/denied readers for the
 **same article and exact connection**. The allowed reader must
 also obtain a relevant ESS answer and matching article citation. Isolate this
-source so an overlapping connector cannot supply the result. A citation URL
+source so an overlapping connector cannot supply the result. Guide a detailed,
+article-specific question describing the topic, scenario and requested steps,
+then inspect the answer and open supporting citations to the correct article/KB.
+A bare article number or a returned link alone is not an answer/citation test.
+A citation URL
 alone cannot distinguish two connections indexing the same article.
 
 The walkthrough saves the tested article and KB, attachment, indexing, isolated
@@ -270,7 +294,11 @@ source, four native/indexed reader outcomes, answer/citation and actual observat
 time as individual steps. No manually prepared acceptance file is required.
 Each `confirmed` attests the described observation: denied readers **were
 denied**, not granted. Do not derive these from API existence or schema creation.
-Only completing all required observations records maker acceptance.
+Only completing all required observations and confirming or explicitly skipping
+the optional denied-reader comparison records maker acceptance.
+Skipped outcomes remain `skipped`, never fabricated `confirmed` results.
+`guided-complete-with-warnings` reports completion with denied-user parity untested;
+show the persistent warning on resume and completion.
 
 `guided-validated` means recorded administrator confirmations and the tested
 reader/article cases only. It does not prove universal ACL parity, all-KB

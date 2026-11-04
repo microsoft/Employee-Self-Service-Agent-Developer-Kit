@@ -24,6 +24,91 @@ def test_knowledge_registration_and_alias_are_separate_from_actions():
         assert (providers / "servicenow-kb" / knowledge[key]).is_file()
 
 
+def test_rollout_explains_both_options_and_requests_the_users_choice():
+    provider = SOLUTION / "src" / "skills" / "connect" / "servicenow-kb"
+    walkthrough = (provider / "configuration.md").read_text(encoding="utf-8")
+    audience = walkthrough.split("\n## audience\n", 1)[1].split("\n## ", 1)[0]
+    assert "**Organization-wide:** leave the toggle off" in audience
+    assert "**Selected users/groups:** turn the toggle on" in audience
+    assert "Ask which applies to this deployment before configuring it" in audience
+    assert "Do not assume a\ndefault" in audience
+    assert "still need ServiceNow source access" in audience
+    skill = (provider / "SKILL.md").read_text(encoding="utf-8")
+    assert "Default to **organization-wide" not in skill
+    assert "Explain both rollout options and ask the user to choose" in skill
+    assert "is not the\norganization-wide rollout setting" in skill
+
+
+def test_article_and_knowledge_base_are_collected_in_one_form():
+    provider = SOLUTION / "src" / "skills" / "connect" / "servicenow-kb"
+    walkthrough = (provider / "configuration.md").read_text(encoding="utf-8")
+    article = walkthrough.split("\n## test-article\n", 1)[1].split("\n## test-kb\n", 1)[
+        0
+    ]
+    assert "one form with two\nfields" in article
+    assert "**Test article number** and **Knowledge Base sys_id**" in article
+    assert "not the\narticle's sys_id" in article
+    assert "Do not submit a separate article-only question first" in article
+    assert "record `test-article`, refresh status, then record\n`test-kb`" in article
+    assert "a missing or invalid\nfield is not confirmed" in article
+    assert "ask only for\nthe missing or corrected field" in article
+    skill = (provider / "SKILL.md").read_text(encoding="utf-8")
+    assert "in one form with\ntwo fields when both are pending" in skill
+
+
+def test_denied_reader_is_one_optional_action_with_explicit_skip():
+    provider = SOLUTION / "src" / "skills" / "connect" / "servicenow-kb"
+    walkthrough = (provider / "configuration.md").read_text(encoding="utf-8")
+    article = walkthrough.split("\n## test-article\n", 1)[1].split("\n## test-kb\n", 1)[
+        0
+    ]
+    assert "Finding a denied reader is optional" in article
+    denied = walkthrough.split("\n## denied-native\n", 1)[1].split(
+        "\n## source-attached\n", 1
+    )[0]
+    assert "**Optional, recommended: verify denied-user access**" in denied
+    assert "**Run recommended access check** and **Skip**" in denied
+    assert "one action, not two questionnaires" in denied
+    assert "mapped Microsoft Entra identifier" in denied
+    assert "Do not save the\n   employee identifier" in denied
+    assert "atomically skips both internal checks" in denied
+    assert "failure\ncannot be cleared by Skip" in denied
+    assert "not another user-facing question" in denied
+    status = (provider / "status.md").read_text(encoding="utf-8")
+    assert "`guided-complete-with-warnings`" in status
+    assert "not tested, not verified parity" in status
+
+
+def test_ess_answer_check_uses_a_detailed_prompt_and_verifies_article_citations():
+    walkthrough = (
+        SOLUTION / "src" / "skills" / "connect" / "servicenow-kb" / "configuration.md"
+    ).read_text(encoding="utf-8")
+    answer = walkthrough.split("\n## answer-citation\n", 1)[1].split("\n## ", 1)[0]
+    assert "detailed, non-sensitive prompt" in answer
+    assert "[specific task/problem covered by the selected article]" in answer
+    assert "[saved article number]" in answer
+    assert "Review the response against the selected\narticle privately" in answer
+    assert "Open its supporting\ncitations" in answer
+    assert "correct article number, Knowledge Base" in answer
+    assert "without a correct\nsupporting article citation does not pass" in answer
+
+
+def test_acceptance_time_is_bookkeeping_not_a_user_question():
+    provider = SOLUTION / "src" / "skills" / "connect" / "servicenow-kb"
+    walkthrough = (provider / "configuration.md").read_text(encoding="utf-8")
+    observation = walkthrough.split("\n## observation-time\n", 1)[1].split("\n## ", 1)[
+        0
+    ]
+    assert "Do not ask the user to enter a date, time or timezone" in observation
+    assert "latest recorded acceptance checkpoint" in observation
+    assert "Existing observation times remain unchanged" in observation
+    assert (
+        "Failed or pending checks do\nnot receive a completion timestamp" in observation
+    )
+    skill = (provider / "SKILL.md").read_text(encoding="utf-8")
+    assert "Do not ask for an acceptance observation time or timezone" in skill
+
+
 def test_alias_routes_before_setup_and_is_publicly_discoverable():
     prompt = (
         SOLUTION / ".github" / "prompts" / "connect-servicenow-kb.prompt.md"
@@ -136,7 +221,7 @@ def test_every_user_facing_step_uses_act_then_verify_without_bypassing_approval(
             section = walkthrough.split(f"\n## {step['id']}\n", 1)[1].split("\n## ", 1)[
                 0
             ]
-            if step["id"] == "assessment-date":
+            if step["id"] in {"assessment-date", "observation-time"}:
                 assert (
                     "**Automatic bookkeeping, not a normal user question.**" in section
                 )

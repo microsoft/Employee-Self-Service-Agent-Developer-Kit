@@ -17,6 +17,7 @@ from typing import Any
 from flightcheck.agent_scope import active_agent, validate_agent_slug
 from servicenow_kb_contracts import (
     COMMON_FIELDS,
+    DENIED_READER_FIELDS,
     PROPERTY_ACCESS_UNRESOLVED,
     KnowledgeConnectError,
     configuration_steps,
@@ -202,6 +203,24 @@ def next_step(state: dict[str, Any]) -> dict[str, Any] | None:
 
 def summary(state: dict[str, Any]) -> dict[str, Any]:
     warnings = []
+    denied_skipped = any(
+        state.get("checkpoints", {})
+        .get(step["id"], {})
+        .get("value", values(state, "validation").get(step["field"]))
+        == "skipped"
+        for step in configuration_steps(state["scope"])
+        if step["field"] in DENIED_READER_FIELDS
+    )
+    if denied_skipped:
+        warnings.append(
+            {
+                "step": "denied-reader",
+                "status": "skipped",
+                "message": "The optional, recommended denied-reader comparison was "
+                "skipped. Denied-user source/index permission parity is not tested. "
+                "Continuing setup or a successful ESS answer does not verify it.",
+            }
+        )
     property_access = values(state, "servicenow").get("Permission property reads")
     if property_access in PROPERTY_ACCESS_UNRESOLVED:
         warnings.append(
@@ -241,7 +260,9 @@ def summary(state: dict[str, Any]) -> dict[str, Any]:
         bool(values(state, "validation")) and not state["issues"] and pending is None
     )
     return {
-        "status": "guided-validated"
+        "status": "guided-complete-with-warnings"
+        if complete and denied_skipped
+        else "guided-validated"
         if complete
         else "blocked"
         if state["issues"]
@@ -252,6 +273,7 @@ def summary(state: dict[str, Any]) -> dict[str, Any]:
         "nextStep": pending,
         "state": state,
         "evidenceBoundary": "Recorded administrator confirmations and tested reader/article cases; "
+        "skipped checks are not verified permission parity; "
         "not universal coverage, deployed employee readiness or a revocation SLA.",
     }
 
@@ -529,6 +551,54 @@ def record(state: dict[str, Any], owner: str, answers: dict[str, str]) -> None:
     }
 
 
+def complete_guided_validation(state: dict[str, Any]) -> None:
+    steps = configuration_steps(state["scope"])
+    if state["issues"] or any(
+        not step_complete(state, step)
+        for step in steps
+        if step["id"] != "observation-time"
+    ):
+        return
+    validation_steps = [step for step in steps if step["owner"] == "validation"]
+    observation = next(
+        step for step in validation_steps if step["id"] == "observation-time"
+    )
+    if not step_complete(state, observation):
+        timestamp = max(
+            (
+                state["checkpoints"][step["id"]]["recordedAt"]
+                for step in validation_steps
+                if step["id"] != "observation-time"
+            ),
+            key=lambda stamp: datetime.fromisoformat(stamp.replace("Z", "+00:00")),
+        )
+        timestamp = (
+            datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            .astimezone(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        state["checkpoints"]["observation-time"] = {
+            "kind": "maker-tested",
+            "recordedAt": timestamp,
+            "value": timestamp,
+        }
+    if not values(state, "validation"):
+        evidence = {
+            step["field"]: state["checkpoints"][step["id"]]["value"]
+            for step in validation_steps
+        }
+        evidence.update(
+            targetReference=target_reference(state["scope"]),
+            connectionName=values(state, "m365")["Connection name"],
+        )
+        record(
+            state,
+            "validation",
+            validate_acceptance(evidence, state["scope"], evidence["connectionName"]),
+        )
+
+
 def start(
     root: Path, *, instance: str, query: str, flow: str, hr_content: bool | None = None
 ) -> dict[str, Any]:
@@ -591,6 +661,7 @@ def start(
                 clear_checkpoints(state, "validation")
             state["scope"] = scope
             state["issues"].clear()
+        complete_guided_validation(state)
     return summary(state)
 
 
@@ -663,7 +734,15 @@ def confirm(
                 "Confirmation belongs to a different target or scope; refresh status."
             )
         steps = configuration_steps(state["scope"])
-        step = next((item for item in steps if item["id"] == step_id), None)
+        grouped_denied = step_id == "denied-reader"
+        step = next(
+            (
+                item
+                for item in steps
+                if item["id"] == ("denied-native" if grouped_denied else step_id)
+            ),
+            None,
+        )
         if step is None:
             raise KnowledgeConnectError(
                 "Choose a configuration step in the selected flow."
@@ -682,6 +761,16 @@ def confirm(
             raise KnowledgeConnectError(
                 "Complete the preceding configuration steps first."
             )
+        if value == "skipped":
+            if not grouped_denied:
+                raise KnowledgeConnectError(
+                    "Use the grouped denied-reader action to skip the whole comparison."
+                )
+            if state["issues"].get("validation"):
+                raise KnowledgeConnectError(
+                    "Resolve the reported validation failure before skipping; "
+                    "a skip cannot clear an observed access failure."
+                )
         if (
             step_id == "property-reads"
             and value == "proceed-without-access"
@@ -696,13 +785,13 @@ def confirm(
             accepted = validate_step_answer(step, value, state["scope"])
         except KnowledgeConnectError as exc:
             reset_guided_from(state, step)
-            error = str(exc)
+            error = f"denied-reader: {exc}" if grouped_denied else str(exc)
             field = "validation" if step["owner"] == "validation" else step["field"]
             state["issues"][step["owner"]] = {field: error}
         else:
             previous = (
                 state["checkpoints"]
-                .get(step_id, {})
+                .get(step["id"], {})
                 .get("value", values(state, step["owner"]).get(step["field"]))
                 if step["checkpoint"]
                 else values(state, step["owner"]).get(step["field"])
@@ -715,13 +804,23 @@ def confirm(
             if previous is not None and previous != accepted and not property_decision:
                 reset_guided_from(state, step)
             if step["checkpoint"]:
-                state["checkpoints"][step_id] = {
+                checkpoint = {
                     "kind": "maker-tested"
                     if step["owner"] == "validation"
                     else "admin-confirmed",
                     "recordedAt": now(),
                     "value": accepted,
                 }
+                if grouped_denied:
+                    for item in steps:
+                        if (
+                            item["field"] in DENIED_READER_FIELDS
+                            and state["checkpoints"].get(item["id"], {}).get("value")
+                            != accepted
+                        ):
+                            state["checkpoints"][item["id"]] = dict(checkpoint)
+                else:
+                    state["checkpoints"][step["id"]] = checkpoint
                 if step_id == "connection-ready":
                     record(
                         state,
@@ -744,32 +843,21 @@ def confirm(
                     state["issues"].get("servicenow", {}).pop("Assessment date", None)
             field = "validation" if step["owner"] == "validation" else step["field"]
             issues = state["issues"].get(step["owner"], {})
-            issues.pop(field, None)
+            denied_failure = step["owner"] == "validation" and any(
+                issues.get(field, "").startswith(f"{label}:")
+                for label in (*DENIED_READER_FIELDS, "denied-reader")
+            )
+            if (
+                not denied_failure
+                or grouped_denied
+                or issues[field].startswith(f"{step['field']}:")
+            ):
+                issues.pop(field, None)
             if step_id == "connection-name":
                 issues.pop("Connection ID", None)
             if not issues:
                 state["issues"].pop(step["owner"], None)
-            validation_steps = [item for item in steps if item["owner"] == "validation"]
-            if (
-                step["owner"] == "validation"
-                and all(step_complete(state, item) for item in validation_steps)
-                and not values(state, "validation")
-            ):
-                evidence = {
-                    item["field"]: state["checkpoints"][item["id"]]["value"]
-                    for item in validation_steps
-                }
-                evidence.update(
-                    targetReference=reference,
-                    connectionName=values(state, "m365")["Connection name"],
-                )
-                record(
-                    state,
-                    "validation",
-                    validate_acceptance(
-                        evidence, state["scope"], evidence["connectionName"]
-                    ),
-                )
+            complete_guided_validation(state)
     return {"accepted": error is None, "stepError": error, **summary(state)}
 
 
@@ -823,6 +911,15 @@ def import_handoff(root: Path, owner: str, path: Path) -> dict[str, Any]:
 def accept(root: Path, evidence: dict[str, Any]) -> dict[str, Any]:
     with transaction(root) as state:
         require_current(state, root)
+        if (
+            isinstance(evidence, dict)
+            and any(evidence.get(field) == "skipped" for field in DENIED_READER_FIELDS)
+            and state["issues"].get("validation")
+        ):
+            raise KnowledgeConnectError(
+                "Resolve the reported validation failure before skipping; "
+                "a skip cannot clear an observed access failure."
+            )
         if values(state, "servicenow").get("Permission property reads") in (
             PROPERTY_ACCESS_UNRESOLVED - {"proceed-without-access"}
         ):

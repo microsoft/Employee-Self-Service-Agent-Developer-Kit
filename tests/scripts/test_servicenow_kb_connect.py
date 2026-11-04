@@ -176,6 +176,214 @@ def walk_guided(root, result, *, stop=None):
 
 
 @pytest.mark.parametrize("flow", ["simple", "advanced"])
+def test_acceptance_time_is_automatic_and_preserved_on_resume(root, monkeypatch, flow):
+    timestamp = "2000-01-02T03:04:05Z"
+    monkeypatch.setattr(connect, "now", lambda: timestamp)
+    pending = walk_guided(root, begin(root, flow), stop="answer-citation")
+    assert "observation-time" not in pending["state"]["checkpoints"]
+    finished = connect.confirm(
+        root,
+        "answer-citation",
+        "confirmed",
+        pending["targetReference"],
+        connect.values(pending["state"], "m365")["Connection name"],
+    )
+    assert finished["status"] == "guided-validated"
+    assert finished["nextStep"] is None
+    observation = finished["state"]["checkpoints"]["observation-time"]
+    assert observation["value"] == observation["recordedAt"] == timestamp
+    assert connect.values(finished["state"], "validation")["observedAt"] == timestamp
+    monkeypatch.setattr(connect, "now", lambda: "2001-01-02T03:04:05Z")
+    resumed = begin(root, flow)
+    assert resumed["state"]["checkpoints"]["observation-time"] == observation
+    assert (
+        resumed["state"]["evidence"]["validation"]
+        == (finished["state"]["evidence"]["validation"])
+    )
+
+
+@pytest.mark.parametrize("flow", ["simple", "advanced"])
+def test_legacy_missing_acceptance_time_uses_recorded_completion_not_resume_time(
+    root, monkeypatch, flow
+):
+    with monkeypatch.context() as legacy:
+        legacy.setattr(connect, "complete_guided_validation", lambda state: None)
+        legacy.setattr(connect, "now", lambda: "2000-01-02T03:04:05-08:00")
+        pending = walk_guided(root, begin(root, flow), stop="observation-time")
+    assert pending["nextStep"]["id"] == "observation-time"
+    monkeypatch.setattr(connect, "now", lambda: "2001-01-02T03:04:05Z")
+    resumed = begin(root, flow)
+    assert resumed["status"] == "guided-validated"
+    assert resumed["nextStep"] is None
+    assert connect.values(resumed["state"], "validation")["observedAt"] == (
+        "2000-01-02T11:04:05Z"
+    )
+    for step, checkpoint in pending["state"]["checkpoints"].items():
+        assert resumed["state"]["checkpoints"][step] == checkpoint
+
+
+def test_failed_acceptance_does_not_gain_automatic_completion_time(root):
+    result = walk_guided(root, begin(root), stop="answer-citation")
+    failed = connect.confirm(
+        root,
+        "answer-citation",
+        "unverified",
+        result["targetReference"],
+        connect.values(result["state"], "m365")["Connection name"],
+    )
+    assert not failed["accepted"]
+    assert "observation-time" not in failed["state"]["checkpoints"]
+    assert not connect.values(failed["state"], "validation")
+    resumed = begin(root)
+    assert resumed["nextStep"]["id"] == "answer-citation"
+    assert "observation-time" not in resumed["state"]["checkpoints"]
+
+
+@pytest.mark.parametrize("flow", ["simple", "advanced"])
+@pytest.mark.parametrize("outcome", ["confirmed", "skipped"])
+def test_grouped_denied_reader_action_records_both_outcomes_and_resumes(
+    root, flow, outcome
+):
+    result = walk_guided(root, begin(root, flow), stop="denied-native")
+    result = connect.confirm(
+        root,
+        "denied-reader",
+        outcome,
+        result["targetReference"],
+        connect.values(result["state"], "m365")["Connection name"],
+    )
+    assert result["accepted"]
+    assert result["nextStep"]["id"] == "source-attached"
+    checkpoints = result["state"]["checkpoints"]
+    assert "denied-reader" not in checkpoints
+    assert checkpoints["denied-native"] == checkpoints["denied-indexed"]
+    assert checkpoints["denied-native"]["value"] == outcome
+    saved = begin(root, flow)
+    assert saved["state"]["checkpoints"] == checkpoints
+    finished = walk_guided(root, saved)
+    assert finished["status"] == (
+        "guided-complete-with-warnings" if outcome == "skipped" else "guided-validated"
+    )
+    evidence = connect.values(finished["state"], "validation")
+    assert evidence["deniedNative"] == evidence["deniedIndexed"] == outcome
+    warnings = [
+        item
+        for item in begin(root, flow)["warnings"]
+        if item["step"] == "denied-reader"
+    ]
+    assert bool(warnings) == (outcome == "skipped")
+    if outcome == "skipped":
+        assert warnings[0]["status"] == "skipped"
+        assert "not tested" in warnings[0]["message"]
+        retested = connect.confirm(
+            root,
+            "denied-reader",
+            "confirmed",
+            finished["targetReference"],
+            connect.values(finished["state"], "m365")["Connection name"],
+        )
+        assert retested["nextStep"]["id"] == "source-attached"
+        assert not retested["warnings"]
+        assert walk_guided(root, retested)["status"] == "guided-validated"
+
+
+@pytest.mark.parametrize("flow", ["simple", "advanced"])
+def test_grouped_denied_failure_cannot_be_bypassed_by_skip(root, flow):
+    result = walk_guided(root, begin(root, flow), stop="denied-native")
+    name = connect.values(result["state"], "m365")["Connection name"]
+    failed = connect.confirm(
+        root, "denied-reader", "unverified", result["targetReference"], name
+    )
+    assert not failed["accepted"]
+    assert failed["status"] == "blocked"
+    assert failed["nextStep"]["id"] == "denied-native"
+    assert "denied-indexed" not in failed["state"]["checkpoints"]
+    for step in ("allowed-indexed", "denied-native"):
+        rechecked = connect.confirm(
+            root, step, "confirmed", result["targetReference"], name
+        )
+        assert rechecked["status"] == "blocked"
+    before = (root / connect.CONFIG_PATH).read_bytes()
+    with pytest.raises(
+        contracts.KnowledgeConnectError, match="reported validation failure"
+    ):
+        connect.confirm(
+            root, "denied-reader", "skipped", result["targetReference"], name
+        )
+    assert (root / connect.CONFIG_PATH).read_bytes() == before
+    skipped = acceptance(failed["state"])
+    skipped.update(deniedNative="skipped", deniedIndexed="skipped")
+    with pytest.raises(
+        contracts.KnowledgeConnectError, match="reported validation failure"
+    ):
+        connect.accept(root, skipped)
+    assert (root / connect.CONFIG_PATH).read_bytes() == before
+    recovered = connect.confirm(
+        root, "denied-reader", "confirmed", result["targetReference"], name
+    )
+    assert recovered["accepted"]
+    assert walk_guided(root, recovered)["status"] == "guided-validated"
+
+
+def test_optional_denied_action_keeps_scope_order_and_other_checks_required(root):
+    result = walk_guided(root, begin(root), stop="allowed-indexed")
+    name = connect.values(result["state"], "m365")["Connection name"]
+    before = (root / connect.CONFIG_PATH).read_bytes()
+    with pytest.raises(contracts.KnowledgeConnectError, match="preceding"):
+        connect.confirm(
+            root, "denied-reader", "skipped", result["targetReference"], name
+        )
+    with pytest.raises(contracts.KnowledgeConnectError, match="grouped denied-reader"):
+        connect.confirm(
+            root, "allowed-indexed", "skipped", result["targetReference"], name
+        )
+    assert (root / connect.CONFIG_PATH).read_bytes() == before
+    result = walk_guided(root, result, stop="denied-native")
+    before = (root / connect.CONFIG_PATH).read_bytes()
+    with pytest.raises(contracts.KnowledgeConnectError, match="different target"):
+        connect.confirm(root, "denied-reader", "skipped", "stale-target", name)
+    with pytest.raises(contracts.KnowledgeConnectError, match="connection name"):
+        connect.confirm(
+            root,
+            "denied-reader",
+            "skipped",
+            result["targetReference"],
+            "Other connection",
+        )
+    with pytest.raises(contracts.KnowledgeConnectError, match="grouped denied-reader"):
+        connect.confirm(
+            root, "denied-native", "skipped", result["targetReference"], name
+        )
+    assert (root / connect.CONFIG_PATH).read_bytes() == before
+    evidence = acceptance(result["state"])
+    evidence["deniedNative"] = "skipped"
+    with pytest.raises(contracts.KnowledgeConnectError, match="whole denied-reader"):
+        contracts.validate_acceptance(evidence, result["state"]["scope"], name)
+
+
+@pytest.mark.parametrize("flow", ["simple", "advanced"])
+def test_grouped_action_reuses_partial_legacy_denied_progress(root, flow):
+    partial = walk_guided(root, begin(root, flow), stop="denied-indexed")
+    resumed = begin(root, flow)
+    assert resumed["state"]["checkpoints"] == partial["state"]["checkpoints"]
+    assert resumed["nextStep"]["id"] == "denied-indexed"
+    result = connect.confirm(
+        root,
+        "denied-reader",
+        "confirmed",
+        resumed["targetReference"],
+        connect.values(resumed["state"], "m365")["Connection name"],
+    )
+    assert result["accepted"]
+    assert result["nextStep"]["id"] == "source-attached"
+    assert (
+        result["state"]["checkpoints"]["denied-native"]
+        == (partial["state"]["checkpoints"]["denied-native"])
+    )
+    assert walk_guided(root, result)["status"] == "guided-validated"
+
+
+@pytest.mark.parametrize("flow", ["simple", "advanced"])
 def test_guided_configuration_and_reader_cases_complete_without_workbooks(root, flow):
     result = walk_guided(
         root, connect.start(root, instance=INSTANCE, query=QUERY, flow=flow)

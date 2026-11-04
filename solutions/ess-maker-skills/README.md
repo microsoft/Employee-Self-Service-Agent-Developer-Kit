@@ -323,7 +323,10 @@ rather than requiring recreation.
 
 Administrators configure the source and gallery connector; the maker attaches
 the exact Knowledge source and records representative allowed/denied reader
-parity plus an ESS answer/citation. The controller performs no remote writes or
+parity plus an ESS answer/citation. The denied-reader comparison is one optional,
+recommended Run/Skip action; skipped checks remain visibly untested. Acceptance
+time is recorded automatically, without a date/time question.
+The controller performs no remote writes or
 reads and does not deploy a Power Platform solution, flows, or extensions.
 Organization-wide availability retains source permissions; a limited audience
 is also supported. Copilot Chat/Search visibility is optional for ESS-only use.

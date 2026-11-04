@@ -57,9 +57,14 @@ connector.
    Ready, Indexed, reader permission and an ESS answer/citation are independent
    observations. Schedules are not guaranteed revocation times.
 6. Finish indexed-article verification and native/indexed allowed/denied access
-   checks before opening ESS. Pending or failed index checks pause setup.
+   checks before opening ESS. The denied-reader comparison is one optional,
+   recommended action: Run or explicitly Skip both outcomes, with a persistent
+   not-tested warning. Finding a denied user is not an article-selection gate.
+   Observed access failures still block and cannot be cleared with Skip.
+   Pending or failed required index checks pause setup.
    Then attach/reuse the named connection in the selected ESS Dev agent, isolate
-   that source and verify the answer/citation using the same tested article.
+   that source and verify the answer/citation using a detailed article-specific
+   prompt. Review the response and open supporting citations to the same article/KB.
 
 ## Simple branch
 
