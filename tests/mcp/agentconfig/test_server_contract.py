@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import ast
 import json
 from pathlib import Path
 import sys
@@ -40,20 +39,10 @@ with warnings.catch_warnings():
 
 
 def _tool_functions() -> dict[str, list[str]]:
-    module = ast.parse(SERVER_PATH.read_text(encoding="utf-8"))
-    tools: dict[str, list[str]] = {}
-    for node in module.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        is_tool = any(
-            isinstance(decorator, ast.Call)
-            and isinstance(decorator.func, ast.Attribute)
-            and decorator.func.attr == "tool"
-            for decorator in node.decorator_list
-        )
-        if is_tool:
-            tools[node.name] = [argument.arg for argument in node.args.args]
-    return tools
+    return {
+        tool.name: list(tool.inputSchema["properties"])
+        for tool in asyncio.run(agentconfig_server.mcp.list_tools())
+    }
 
 
 def test_server_exposes_the_skill_tool_contract() -> None:

@@ -58,6 +58,8 @@ def test_widget_origin_uses_production_fallback() -> None:
 
 
 class _FakeClient:
+    tenant_id = "00000000-0000-0000-0000-000000001111"
+
     def __init__(self) -> None:
         self.open_calls: list[str] = []
 
@@ -99,6 +101,8 @@ class _FakeClient:
 
 
 class _NoIconClient:
+    tenant_id = "00000000-0000-0000-0000-000000001111"
+
     async def view_agent_icon(self, title_id: str) -> dict[str, Any]:
         return {"titleId": title_id, "name": "ESS HR", "icon": None}
 
