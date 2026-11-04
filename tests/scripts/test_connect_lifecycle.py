@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from connect_lifecycle import LifecycleDecisionError, decide_next_step, main
+from connect_lifecycle import (
+    LifecycleDecisionError,
+    decide_next_step,
+    main,
+    state_integrity_digest,
+)
 
 
 _SOLUTION = (
@@ -669,6 +674,45 @@ def test_identity_mismatch_fails_closed(tmp_path: Path) -> None:
             provider="servicenow-da-itsm",
             agent_slug="employee-self-service-it",
         )
+
+
+def test_tampered_state_returns_stop_tampered(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    state_path = (
+        tmp_path
+        / ".local/connect/servicenow-da-itsm/agents/"
+        "employee-self-service-it/lifecycle.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["stateIntegrity"] = state_integrity_digest(state)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    kwargs = {
+        "provider": "servicenow-da-itsm",
+        "agent_slug": "employee-self-service-it",
+        "verified_phases": frozenset({"preflight"}),
+    }
+
+    assert decide_next_step(tmp_path, **kwargs)["decision"] != "stop-tampered"
+
+    state["checkpointResults"] = {"SN-DA-ITSM-OIDC-001": "Passed"}
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    result = decide_next_step(tmp_path, **kwargs)
+
+    assert result["decision"] == "stop-tampered"
+    assert "re-run /connect" in result["message"]
+    assert "Do not edit it by hand" in result["message"]
+
+
+def test_state_without_integrity_hash_keeps_loading(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+
+    result = decide_next_step(
+        tmp_path,
+        provider="servicenow-da-itsm",
+        agent_slug="employee-self-service-it",
+    )
+
+    assert result["decision"] != "stop-tampered"
 
 
 def test_cli_emits_structured_next_action(

@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import re
 from pathlib import Path
@@ -16,8 +18,48 @@ _SAFE_PROVIDER = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _SAFE_SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
+STATE_INTEGRITY_KEY = "stateIntegrity"
+_INTEGRITY_EXCLUDED_KEYS = frozenset({STATE_INTEGRITY_KEY, "updatedAt"})
+STATE_TAMPERED_MESSAGE = (
+    "lifecycle.json was modified outside the Connect controller, so its "
+    "recorded results cannot be trusted. Do not edit it by hand and do not "
+    "continue from its contents. Tell the maker, who must approve resetting "
+    "this agent's lifecycle state by deleting the file, then re-run /connect "
+    "so every phase is recorded through the controller commands."
+)
+
+
 class LifecycleDecisionError(RuntimeError):
     """Raised when contract/state identity cannot be trusted."""
+
+
+def state_integrity_digest(state: dict[str, Any]) -> str:
+    payload = {
+        key: value
+        for key, value in state.items()
+        if key not in _INTEGRITY_EXCLUDED_KEYS
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def state_integrity_mismatch(state: dict[str, Any]) -> bool:
+    """Return True when a recorded integrity hash no longer matches.
+
+    State written before the hash existed carries no value and is accepted.
+    """
+    recorded = state.get(STATE_INTEGRITY_KEY)
+    if recorded is None:
+        return False
+    return not (
+        isinstance(recorded, str)
+        and hmac.compare_digest(recorded, state_integrity_digest(state))
+    )
 
 
 def _load_object(path: Path, label: str) -> dict[str, Any]:
@@ -113,6 +155,16 @@ def decide_next_step(
         raise LifecycleDecisionError("Lifecycle provider identity does not match.")
     if state.get("agentSlug") != agent_slug:
         raise LifecycleDecisionError("Lifecycle agent identity does not match.")
+    if state_integrity_mismatch(state):
+        return {
+            "schemaVersion": "connect.lifecycle-next.v1",
+            "decision": "stop-tampered",
+            "provider": provider,
+            "agentSlug": agent_slug,
+            "contractRevision": revision,
+            "stateExists": True,
+            "message": STATE_TAMPERED_MESSAGE,
+        }
 
     if state.get("attested") is not True or state.get(
         "acceptedContractRevision"

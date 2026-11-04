@@ -101,6 +101,8 @@ def test_servicenow_connect_entry_files_carry_hard_rules() -> None:
     assert "emit `renderBlock.text` verbatim" in runner
     assert "never bare `python`" in runner
     assert "**Provider-recorded results.**" in runner
+    assert "- `stop-tampered` —" in runner
+    assert "`agentRules` array" in runner
     assert "record-checkpoint-results --phase {PHASE_ID}" in runner
     for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
         contract = json.loads(

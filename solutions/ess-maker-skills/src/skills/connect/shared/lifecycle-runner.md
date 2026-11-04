@@ -497,6 +497,16 @@ Controller decisions:
   only the exact returned `actionDoc`.
 - `run-checkpoints` — set `currentPhase` from the result and continue directly
   to L.4b.
+- `stop-tampered` — the provider state file carries a controller integrity
+  hash that no longer matches (it was edited by hand). Show the returned
+  `message` to the maker as an assistant message and stop; do not continue from
+  the file's contents. Only the maker may approve deleting that agent's
+  `lifecycle.json`; then re-run /connect so every phase is recorded through the
+  controller commands.
+
+Provider controller JSON may also carry an `agentRules` array. Follow it: use
+the /setup launcher, show `renderBlock.text` as an assistant message before any
+other tool call, and never edit `lifecycle.json` by hand.
 
 After an action or checkpoint updates state and returns to L.3, rerun the
 controller. Never reuse a prior decision after state changed.

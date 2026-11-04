@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import connect_lifecycle
 import connect_servicenow_da as snow
 
 
@@ -82,6 +83,25 @@ def _disable_real_servicenow_telemetry(
         "emit_servicenow_lifecycle_event",
         lambda _state, _event: None,
     )
+
+
+@pytest.fixture(autouse=True)
+def _disable_tamper_check_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Most tests hand-write lifecycle fixtures; tamper tests opt back in."""
+    monkeypatch.setattr(snow, "state_integrity_mismatch", lambda _state: False)
+
+
+@pytest.fixture
+def tamper_check_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        snow, "state_integrity_mismatch", connect_lifecycle.state_integrity_mismatch
+    )
+
+
+def _cli_output_without_rules(capsys: pytest.CaptureFixture[str]) -> dict:
+    output = json.loads(capsys.readouterr().out)
+    output.pop("agentRules", None)
+    return output
 
 
 def _context() -> dict:
@@ -12600,7 +12620,7 @@ def test_resume_handoff_cli_preserves_business_group_answer_context(
     monkeypatch.setattr(snow, "resume_handoff", fake_resume)
 
     assert snow.main(["resume-handoff"]) == 0
-    assert json.loads(capsys.readouterr().out) == {
+    assert _cli_output_without_rules(capsys) == {
         "rolesAvailable": None,
         "group": None,
         "context": None,
@@ -12616,7 +12636,7 @@ def test_resume_handoff_cli_preserves_business_group_answer_context(
             "a" * 64,
         ]
     ) == 0
-    assert json.loads(capsys.readouterr().out) == {
+    assert _cli_output_without_rules(capsys) == {
         "rolesAvailable": True,
         "group": "maker-configuration",
         "context": "a" * 64,
@@ -12632,7 +12652,7 @@ def test_resume_handoff_cli_preserves_business_group_answer_context(
             "a" * 64,
         ]
     ) == 0
-    assert json.loads(capsys.readouterr().out) == {
+    assert _cli_output_without_rules(capsys) == {
         "rolesAvailable": False,
         "group": "maker-configuration",
         "context": "a" * 64,
@@ -15125,6 +15145,107 @@ def test_record_checkpoint_results_cli_round_trip(
     assert code == 0
     assert output["outcome"] == "done"
     assert output["resumeArguments"] == ["--verified-phase", "preflight"]
+
+
+def test_every_command_output_carries_agent_rules(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    context, _, _ = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    monkeypatch.setattr(snow, "load_context", lambda **_kwargs: context)
+
+    assert snow.main(
+        [
+            "--provider",
+            "servicenow-da-hrsd",
+            "--agent-slug",
+            "employee-self-service-hr",
+            "record-checkpoint-results",
+            "--phase",
+            "preflight",
+            "--result",
+            "SN-DA-HRSD-ADMIN-PREFLIGHT-001=Passed",
+        ]
+    ) == 0
+    output = json.loads(capsys.readouterr().out)
+    rules = " ".join(output["agentRules"])
+    assert len(output["agentRules"]) <= 5
+    assert "py -3" in rules
+    assert "renderBlock.text" in rules
+    assert "lifecycle.json by hand" in rules
+    assert "*> $null" in rules
+    assert "lifecycle-runner.md" in rules
+    assert next(iter(output)) == "agentRules"
+
+    assert snow.main(
+        [
+            "--provider",
+            "servicenow-da-hrsd",
+            "--agent-slug",
+            "employee-self-service-hr",
+            "record-checkpoint-results",
+            "--phase",
+            "preflight",
+            "--result",
+            "NOT-A-RESULT",
+        ]
+    ) == 1
+    error = json.loads(capsys.readouterr().out)
+    assert error["status"] == "error"
+    assert error["agentRules"] == output["agentRules"]
+
+
+def test_agent_rules_put_render_block_first_and_skip_adapt_question() -> None:
+    result = {"decision": "x", "renderBlock": {"text": "T"}, "progress": {}}
+
+    ordered = snow._with_agent_rules(result, "resume-handoff")
+
+    assert list(ordered)[:3] == ["renderBlock", "agentRules", "decision"]
+    assert snow._with_agent_rules(result, "adapt-question") is result
+
+
+def test_new_state_write_records_integrity_and_tamper_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tamper_check_enabled: None,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    _record_phase(context, profile, "preflight", "Passed")
+    state_path = tmp_path / snow._lifecycle_state_path(context)
+    raw = json.loads(state_path.read_text(encoding="utf-8"))
+    assert len(raw["stateIntegrity"]) == 64
+
+    with snow.product_profile_context(profile):
+        assert snow._load_lifecycle_state(context)["phases"]["preflight"]
+
+    raw["checkpointResults"] = {"SN-DA-HRSD-OIDC-001": "Passed"}
+    state_path.write_text(json.dumps(raw), encoding="utf-8")
+    with snow.product_profile_context(profile):
+        with pytest.raises(snow.ServiceNowConnectError) as excinfo:
+            snow._load_lifecycle_state(context)
+    assert excinfo.value.details == {"decision": "stop-tampered"}
+    assert "Do not edit it by hand" in str(excinfo.value)
+
+
+def test_state_without_integrity_hash_still_loads_and_is_restamped(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tamper_check_enabled: None,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    state_path = tmp_path / snow._lifecycle_state_path(context)
+    raw = json.loads(state_path.read_text(encoding="utf-8"))
+    raw.pop("stateIntegrity")
+    state_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    result = _record_phase(context, profile, "preflight", "Passed")
+
+    assert result["outcome"] == "done"
+    restamped = json.loads(state_path.read_text(encoding="utf-8"))
+    assert connect_lifecycle.state_integrity_digest(restamped) == (
+        restamped["stateIntegrity"]
+    )
 
 
 def test_resume_handoff_render_block_is_one_ready_to_emit_message(

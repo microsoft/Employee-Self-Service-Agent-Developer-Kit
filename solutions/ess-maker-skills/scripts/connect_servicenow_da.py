@@ -24,7 +24,13 @@ from urllib.parse import quote, urlparse
 
 import requests
 
-from connect_lifecycle import decide_next_step
+from connect_lifecycle import (
+    STATE_INTEGRITY_KEY,
+    STATE_TAMPERED_MESSAGE,
+    decide_next_step,
+    state_integrity_digest,
+    state_integrity_mismatch,
+)
 from agentbuilder import (
     AgentBuilderClient,
     AgentBuilderError,
@@ -5118,6 +5124,11 @@ def _load_lifecycle_state(
     path = _lifecycle_state_path(context)
     if path.exists():
         state = _load_json(path)
+        if state_integrity_mismatch(state):
+            raise ServiceNowConnectError(
+                STATE_TAMPERED_MESSAGE,
+                details={"decision": "stop-tampered"},
+            )
         version = state.get("schemaVersion")
         if not isinstance(version, int) or isinstance(version, bool):
             raise ServiceNowConnectError(
@@ -5264,6 +5275,7 @@ def _write_lifecycle_state(
             state["updatedAt"] = existing.get("updatedAt")
             return
     state["updatedAt"] = timestamp
+    state[STATE_INTEGRITY_KEY] = state_integrity_digest(state)
     _write_json_atomic(path, state)
     for event in events:
         try:
@@ -12101,6 +12113,41 @@ def _command_error_recovery(
     )
 
 
+AGENT_RULES = (
+    "Run every command with the /setup launcher (py -3 on Windows), never "
+    "bare `python`.",
+    "Emit renderBlock.text (or the plan, checklist or recovery message this "
+    "output returns) as an assistant message before any other tool call; "
+    "terminal output is not shown to the maker.",
+    "Never edit lifecycle.json by hand; record results with "
+    "record-checkpoint-results or the matching record-* command.",
+    "Never hide command output (no `*> $null`, no `| Out-Null`); read the "
+    "full JSON.",
+    "If you have not read src/skills/connect/shared/lifecycle-runner.md in "
+    "this chat, read it now.",
+)
+
+
+def _with_agent_rules(
+    result: Any,
+    command: str | None = None,
+) -> Any:
+    """Prepend rules so continued chats see them in every command output.
+
+    `adapt-question` output is passed to `ask_user` unchanged.
+    """
+    if not isinstance(result, dict) or command == "adapt-question":
+        return result
+    ordered: dict[str, Any] = {}
+    if "renderBlock" in result:
+        ordered["renderBlock"] = result["renderBlock"]
+    ordered["agentRules"] = list(AGENT_RULES)
+    for key, value in result.items():
+        if key not in ordered:
+            ordered[key] = value
+    return ordered
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     context: dict[str, Any] | None = None
@@ -12395,9 +12442,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         if details:
             error["details"] = details
-        print(json.dumps(error, indent=2))
+        print(json.dumps(_with_agent_rules(error), indent=2))
         return 1
-    print(json.dumps(result, indent=2))
+    print(json.dumps(_with_agent_rules(result, args.command), indent=2))
     return 0
 
 
