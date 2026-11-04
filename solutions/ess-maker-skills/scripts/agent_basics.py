@@ -265,22 +265,22 @@ def _logo(bot: dict[str, Any]) -> tuple[bytes, bytes]:
     return color, outline
 
 
-def _check_retained_logo(bot: dict[str, Any]) -> None:
-    if "iconBase64" in bot and bot["iconBase64"] is None:
-        return
+def _retained_logo_issue(bot: dict[str, Any]) -> str | None:
+    if "iconBase64" not in bot:
+        return "The current color icon was not returned by the service."
+    if bot["iconBase64"] is None:
+        return None
     try:
         _png(_decode(bot.get("iconBase64")), size=192)
         outline = _teams(bot).get("outlineIcon")
         if not isinstance(outline, str) or not outline:
-            raise AgentBasicsError("An existing outline is required.")
-    except AgentBasicsError as exc:
-        raise AgentBasicsError(
-            "Name-only saving is blocked because this service can normalize "
-            "the existing icon during a full-entity update. No write was made. "
-            "A field-scoped service fix is needed for an independent rename "
-            "of this state, or the maker may explicitly request and review "
-            "a combined name/logo change. ADK will not resize or replace it."
-        ) from exc
+            return "The existing outline is missing."
+    except AgentBasicsError:
+        return (
+            "The existing color icon or application metadata could not be "
+            "confirmed as safe from service-side icon processing."
+        )
+    return None
 
 
 def read_state(
@@ -385,14 +385,18 @@ def prepare(
             _png(value) if value else b"" for value in current_logo
         ):
             changes["logo"] = desired["logo"]
-    if "name" in changes and "logo" not in changes:
-        _check_retained_logo(bot)
+    icon_processing_risk = (
+        _retained_logo_issue(bot)
+        if "name" in changes and "logo" not in changes
+        else None
+    )
     review_id = _digest(
         {
             "target": resolved_target,
             "state": state,
             "desired": desired,
             "sources": source,
+            "serviceIconProcessingRisk": icon_processing_risk,
         }
     )
     return {
@@ -404,6 +408,7 @@ def prepare(
         "sources": source,
         "currentLogo": current_logo,
         "logoError": logo_error,
+        "serviceIconProcessingRisk": icon_processing_risk,
     }
 
 
@@ -434,7 +439,23 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
             "logoSources": plan["sources"],
         },
         "changedProperties": list(plan["changes"]),
-        "retained": "All unrequested properties, instructions, schema, product and workspace identity.",
+        "serviceIconProcessingRisk": plan["serviceIconProcessingRisk"],
+        "serviceIconProcessingWarning": (
+            "The existing save API may resize or re-encode the color icon and "
+            "clear outlineIcon and colorIcon, even though ADK sends the existing "
+            "logo fields unchanged. Approve this possible side effect separately "
+            "before saving. No replacement images are required. Read-back will "
+            "verify the rename and report any logo changes."
+            if plan["serviceIconProcessingRisk"]
+            else None
+        ),
+        "retained": (
+            "Unrequested fields are sent unchanged, but existing-logo preservation "
+            "cannot be guaranteed; review serviceIconProcessingWarning. "
+            "Instructions, schema, product and workspace identity must be retained."
+            if plan["serviceIconProcessingRisk"]
+            else "All unrequested properties, instructions, schema, product and workspace identity."
+        ),
         "localArtifacts": "No agent files or setup display labels changed.",
         "publication": "Not performed; approval and employee visibility are unverified.",
     }
@@ -488,6 +509,25 @@ def _preserved(
     )
 
 
+def _changed_logo_fields(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    previous_teams, current_teams = _teams(before), _teams(after)
+    missing = object()
+    return [
+        path
+        for path, previous, current in (
+            ("iconBase64", before, after),
+            (
+                "teamsAppInformation.teams.outlineIcon",
+                previous_teams,
+                current_teams,
+            ),
+            ("teamsAppInformation.teams.colorIcon", previous_teams, current_teams),
+        )
+        if previous.get(path.rsplit(".", 1)[-1], missing)
+        != current.get(path.rsplit(".", 1)[-1], missing)
+    ]
+
+
 def disable_writes(root: Path, *, pending: bool = False) -> None:
     path = root / (WRITE_PENDING_FILE if pending else WRITE_STOP_FILE)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -531,6 +571,7 @@ def save(
     *,
     current_target: dict[str, str],
     root: Path,
+    accept_service_icon_processing: bool = False,
 ) -> dict[str, Any]:
     """Save a freshly prepared plan; the CLI always prepares again after approval."""
     reviewed_target = {
@@ -548,8 +589,22 @@ def save(
         return {"status": "no_change", "properties": {}, "writeAttempted": False}
     _require_writes_enabled(root)
     bot = copy.deepcopy(plan["state"]["bot"])
-    if "logo" not in changes:
-        _check_retained_logo(bot)
+    icon_processing_risk = (
+        _retained_logo_issue(bot)
+        if "name" in changes and "logo" not in changes
+        else None
+    )
+    if icon_processing_risk != plan["serviceIconProcessingRisk"]:
+        return {
+            "status": "review_again",
+            "reason": "The reviewed icon-processing risk changed; no write.",
+        }
+    if icon_processing_risk and not accept_service_icon_processing:
+        return {
+            "status": "review_again",
+            "reason": "Explicit approval of possible service-side icon processing is required; no write.",
+            "serviceIconProcessingRisk": icon_processing_risk,
+        }
     if "name" in changes:
         bot["displayName"] = changes["name"]
     if "logo" in changes:
@@ -645,6 +700,14 @@ def save(
         preserved = _preserved(plan["state"], after, changes)
     except AgentBasicsError:
         preserved = False
+    logo_preservation = "not_applicable"
+    changed_logo_fields = None
+    if "logo" not in changes:
+        try:
+            changed_logo_fields = _changed_logo_fields(plan["state"]["bot"], observed)
+            logo_preservation = "changed" if changed_logo_fields else "confirmed"
+        except AgentBasicsError:
+            logo_preservation = "unverified"
     writes_disabled = not (
         preserved and all(value in {"saved", "failed"} for value in results.values())
     )
@@ -659,6 +722,8 @@ def save(
         "target": plan["target"],
         "properties": results,
         "preservation": "confirmed" if preserved else "unverified",
+        "logoPreservation": logo_preservation,
+        "changedLogoFields": changed_logo_fields,
         "httpStatus": status_code,
         "transportIssue": transport_issue,
         "requestId": request_id,
@@ -700,10 +765,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--approval", help="Exact reviewId explicitly approved by the maker."
     )
+    parser.add_argument(
+        "--accept-service-icon-processing",
+        action="store_true",
+        help="For save only, confirm separate maker approval of the reviewed icon-processing risk.",
+    )
     parser.add_argument("--account")
     parser.add_argument("--select-account", action="store_true")
     args = parser.parse_args(argv)
     root = Path.cwd()
+    if args.accept_service_icon_processing and args.action != "save":
+        parser.error("--accept-service-icon-processing is only valid for save")
     if args.action == "cleanup" and not args.approval:
         parser.error("cleanup requires --approval REVIEW_ID")
     if args.action in ("view", "resume-writes", "disable-writes") and any(
@@ -755,6 +827,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.approval,
                 current_target=selected_target(root),
                 root=root,
+                accept_service_icon_processing=args.accept_service_icon_processing,
             )
         elif args.action == "resume-writes":
             if args.approval != plan["reviewId"] or selected_target(root) != target:

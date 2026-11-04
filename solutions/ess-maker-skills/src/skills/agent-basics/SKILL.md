@@ -76,13 +76,19 @@ independent native authoring mapping; do not claim to save it.
 An unread or invalid property must not be written. Explain what needs correcting
 and allow an independent valid/readable property to proceed in a separate
 preview, only with the maker's agreement. Never silently drop a combined request.
-For a name-only save, the helper additionally requires proof that the service
-will leave the existing logo alone: a confirmed null color icon, or a decodable
-192x192 color icon with a nonempty existing outline. Otherwise the full-entity
-endpoint can resize or clear unrequested assets, so ADK stops before writing.
-Do not silently expand the rename into a logo update. An independent rename
-of that state needs a field-scoped service fix; a combined change is allowed
-only when the maker explicitly requests and approves valid logo assets.
+Name-only saves use the existing metadata PUT, with the fetched logo fields
+unchanged. A confirmed null color icon, or a decodable 192x192 color icon with
+a nonempty outline, meets the inspected service's icon-preservation condition.
+Other existing states return `serviceIconProcessingRisk` and
+`serviceIconProcessingWarning` in the review instead of blocking the preview.
+The existing service may resize/re-encode the color icon and clear the outline
+and `colorIcon` fields. This is a risk, not proof that the deployed service
+will change this agent's logo. Do not promise unchanged branding.
+Do not require replacement images or a new/modified API just to rename.
+Proceed only after separate, explicit approval of that possible service-side
+processing as described below; otherwise keep the current state without writing.
+ADK itself does not resize or replace the logo. Explicit logo/combined edits
+still require review of valid supplied assets.
 
 ## Preview and explicit approval
 
@@ -126,9 +132,22 @@ equivalent structured question tool. A dismissed question is not approval.
 If the target, property or desired value is ambiguous, use that control to
 clarify it before preparing a proposal.
 
+If `serviceIconProcessingRisk` is present, also show its reason and the full
+`serviceIconProcessingWarning` before offering approval. Explain that the name
+can be submitted without new images, but preserving the current logo is not
+guaranteed. Show available current icon previews; label any unavailable asset
+honestly. Use a separate structured choice, initially unselected:
+**Accept possible service-side icon processing** or **Keep current**.
+The initial rename request and ordinary **Approve** do not provide this extra
+consent. Only if the maker accepts the risk and approves this same review,
+add `--accept-service-icon-processing` to the save command. If the maker
+declines, cancels or dismisses either question, clean up and make no write.
+Keep this consent bound to the reviewed target, proposal, snapshot and risk;
+any new review requires approval again.
+
 The `reviewId` binds target, workspace selection, service snapshot, requested
-values and exact source bytes. Do not compute or alter it. On **Approve**,
-rerun the exact proposal with `save --approval REVIEW_ID`:
+values, icon-processing risk and exact source bytes. Do not compute or alter it.
+On **Approve**, rerun the exact proposal with `save --approval REVIEW_ID`:
 
 ```text
 python scripts/agent_basics.py save --name "People Support" --approval REVIEW_ID
@@ -153,6 +172,13 @@ On **Edit proposal**, clean up first, then validate/preview the edited proposal.
 - Report each requested property's `saved`, `failed` or `unverified` result.
   If `preservation` is unverified, the operation remains unfinished, even when
   a requested value was observed. Do not roll back or proceed with more writes.
+- For name-only saves, also report `logoPreservation` and any
+  `changedLogoFields`. If the name is confirmed saved but logo fields changed,
+  say **the rename was saved, but the service also changed the existing icon**.
+  Do not call the rename failed or unchanged, claim full preservation, infer
+  a visual change from bytes alone, repeat the rename, or silently accept the
+  icon changes. Further writes remain stopped pending reviewed recovery,
+  even when the maker accepted the pre-save risk.
 - A pending-write marker is created before the PUT and retained after an
   uncertain result, preservation mismatch or interrupted process. A verified
   safe result releases it. `writesDisabled: true` means stop and follow the

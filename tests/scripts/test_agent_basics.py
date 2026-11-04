@@ -383,7 +383,9 @@ def test_unrequested_mutation_is_not_reported_complete(client, field, tmp_path):
     "state",
     ["small_color", "missing_outline", "missing_color", "invalid_color", "no_teams"],
 )
-def test_name_only_blocks_service_icon_normalization_before_write(client, state):
+def test_name_only_reviews_service_icon_processing_without_requiring_new_images(
+    client, state, tmp_path
+):
     bot = client.state["bot"]
     if state == "small_color":
         bot["iconBase64"] = encoded(png(128))
@@ -396,24 +398,111 @@ def test_name_only_blocks_service_icon_normalization_before_write(client, state)
     else:
         bot["teamsAppInformation"] = None
     before = copy.deepcopy(client.state)
-    with pytest.raises(basics.AgentBasicsError, match="can normalize"):
-        basics.prepare(client, TARGET, name="People Support")
+    plan = basics.prepare(client, TARGET, name="People Support")
+    review = basics.review_output(plan, tmp_path)
+    assert review["status"] == "review"
+    assert review["changedProperties"] == ["name"]
+    assert review["serviceIconProcessingRisk"]
+    assert "clear outlineIcon and colorIcon" in review["serviceIconProcessingWarning"]
+    assert (
+        "No replacement images are required" in review["serviceIconProcessingWarning"]
+    )
+    assert "cannot be guaranteed" in review["retained"]
+    assert review["proposed"]["logoSources"] == {}
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "review_again"
+    assert "Explicit approval" in result["reason"]
     assert client.state == before
     assert not client.writes
+    assert not basics._writes_disabled(tmp_path)
     # Current-state review and keeping the existing name still require no write.
     assert not basics.prepare(client, TARGET)["changes"]
     assert not basics.prepare(client, TARGET, name=bot["displayName"])["changes"]
 
 
-def test_retained_icon_is_checked_again_at_write(client, tmp_path):
+def test_changed_icon_risk_requires_fresh_review_even_with_risk_consent(
+    client, tmp_path
+):
     plan = basics.prepare(client, TARGET, name="People Support")
     plan["state"]["bot"]["teamsAppInformation"]["teams"]["outlineIcon"] = ""
-    with pytest.raises(basics.AgentBasicsError, match="can normalize"):
-        basics.save(
-            client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
-        )
+    result = basics.save(
+        client,
+        plan,
+        plan["reviewId"],
+        current_target=TARGET,
+        root=tmp_path,
+        accept_service_icon_processing=True,
+    )
+    assert result["status"] == "review_again"
+    assert "risk changed" in result["reason"]
     assert not client.writes
     assert not basics._writes_disabled(tmp_path)
+
+
+@pytest.mark.parametrize("normalizes", [False, True])
+def test_reviewed_risky_rename_uses_existing_logo_and_reports_actual_preservation(
+    client, tmp_path, normalizes
+):
+    client.state["bot"]["iconBase64"] = encoded(png(128))
+    before = copy.deepcopy(client.state)
+
+    def normalize(state):
+        state["bot"]["iconBase64"] = encoded(png(192))
+        teams = state["bot"]["teamsAppInformation"]["teams"]
+        teams["outlineIcon"] = ""
+        teams["colorIcon"] = ""
+
+    if normalizes:
+        client.mutate = normalize
+    plan = basics.prepare(client, TARGET, name="ESS HR Nov-3")
+    result = basics.save(
+        client,
+        plan,
+        plan["reviewId"],
+        current_target=TARGET,
+        root=tmp_path,
+        accept_service_icon_processing=True,
+    )
+    assert len(client.writes) == 1
+    written = copy.deepcopy(client.writes[0])
+    assert written.pop("displayName") == "ESS HR Nov-3"
+    expected = copy.deepcopy(before["bot"])
+    expected.pop("displayName")
+    assert written == expected
+    assert result["properties"] == {"name": "saved"}
+    assert client.state["bot"]["displayName"] == "ESS HR Nov-3"
+    assert result["status"] == ("unfinished" if normalizes else "saved")
+    assert result["preservation"] == ("unverified" if normalizes else "confirmed")
+    assert result["logoPreservation"] == ("changed" if normalizes else "confirmed")
+    assert result["changedLogoFields"] == (
+        [
+            "iconBase64",
+            "teamsAppInformation.teams.outlineIcon",
+            "teamsAppInformation.teams.colorIcon",
+        ]
+        if normalizes
+        else []
+    )
+    assert basics._writes_disabled(tmp_path) is normalizes
+    assert client.state["bot"]["configuration"] == before["bot"]["configuration"]
+    assert client.state["botComponentChanges"] == before["botComponentChanges"]
+
+
+def test_icon_risk_consent_cannot_replace_rename_approval(client, tmp_path):
+    client.state["bot"]["teamsAppInformation"]["teams"]["outlineIcon"] = ""
+    plan = basics.prepare(client, TARGET, name="ESS HR Nov-3")
+    result = basics.save(
+        client,
+        plan,
+        "not approved",
+        current_target=TARGET,
+        root=tmp_path,
+        accept_service_icon_processing=True,
+    )
+    assert result["status"] == "review_again"
+    assert not client.writes
 
 
 def test_confirmed_null_icon_can_be_retained_by_name_only_save(client, tmp_path):
@@ -724,6 +813,51 @@ def test_cli_refreshes_after_approval_and_never_renames_local_files(
     assert not (
         cli / basics.PREVIEW_DIRECTORY / f"{refreshed['reviewId']}-color.png"
     ).exists()
+
+
+def test_cli_risky_rename_requires_separate_consent_and_no_new_logo(
+    cli, client, capsys
+):
+    client.state["bot"]["teamsAppInformation"]["teams"]["outlineIcon"] = ""
+    before = copy.deepcopy(client.state["bot"])
+    assert basics.main(["preview", "--name", "ESS HR Nov-3"]) == 0
+    preview = result_json(capsys)
+    assert preview["serviceIconProcessingWarning"]
+    assert not client.writes
+    command = ["save", "--name", "ESS HR Nov-3", "--approval", preview["reviewId"]]
+    assert basics.main(command) == 2
+    assert result_json(capsys)["status"] == "review_again"
+    assert not client.writes
+    assert basics.main(command + ["--accept-service-icon-processing"]) == 0
+    saved = result_json(capsys)
+    assert saved["properties"] == {"name": "saved"}
+    assert saved["logoPreservation"] == "confirmed"
+    assert len(client.writes) == 1
+    assert client.writes[0]["iconBase64"] == before["iconBase64"]
+    assert client.writes[0]["teamsAppInformation"] == before["teamsAppInformation"]
+
+
+def test_cli_new_review_invalidates_icon_risk_consent(cli, client, capsys):
+    client.state["bot"]["teamsAppInformation"]["teams"]["outlineIcon"] = ""
+    assert basics.main(["preview", "--name", "ESS HR Nov-3"]) == 0
+    preview = result_json(capsys)
+    client.state["bot"]["iconBase64"] = encoded(png(128))
+    client.state["bot"]["version"] += 1
+    assert (
+        basics.main(
+            [
+                "save",
+                "--name",
+                "ESS HR Nov-3",
+                "--approval",
+                preview["reviewId"],
+                "--accept-service-icon-processing",
+            ]
+        )
+        == 2
+    )
+    assert result_json(capsys)["status"] == "review_again"
+    assert not client.writes
 
 
 def test_cleanup_failure_does_not_mask_persisted_result(cli, capsys, monkeypatch):
