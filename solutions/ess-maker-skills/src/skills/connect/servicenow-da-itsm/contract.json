@@ -4,6 +4,7 @@
   "displayName": "ServiceNow ITSM",
   "profile": "itsm",
   "checkpointResultMode": "compact-stdout-v1",
+  "checkpointRecording": "provider-command-v1",
   "attestedRoleScope": "lifecycle",
   "planRoles": [
     "ESS Maker / Agent Developer",

@@ -51,6 +51,18 @@ HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 IT_SCHEMA_NAME = "gptagent_copilotforemployeeselfserviceit"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 LIFECYCLE_SCHEMA_VERSION = 12
+CHECKPOINT_RESULT_STATUSES = frozenset(
+    {
+        "Passed",
+        "Failed",
+        "Blocked",
+        "Warning",
+        "NotConfigured",
+        "Skipped",
+        "Error",
+        "Manual",
+    }
+)
 ADMIN_SETUP_SCHEMA_VERSION = 4
 AUTH_MODE = "entraIDUserLogin"
 LEGACY_ENTRA_CHECKPOINT_SUFFIXES = (
@@ -10422,6 +10434,45 @@ def _shared_reuse_before_availability(
     return handoff, False
 
 
+def _resume_render_block(
+    progress: dict[str, Any],
+    transport: dict[str, Any],
+    *,
+    group_changed: bool,
+) -> dict[str, Any]:
+    availability = transport["businessGroupAvailability"]
+    current_phase = progress.get("currentPhase")
+    final_text = progress.get("finalText")
+    if isinstance(final_text, str) and final_text:
+        kind = "final"
+        parts = [final_text]
+    else:
+        plan = (
+            progress.get("mode") == "fresh"
+            or group_changed
+            or availability["gateRequired"]
+        )
+        kind = "plan" if plan else "progress"
+        parts = [
+            str(
+                transport["ordinaryReply"]["text"]
+                if plan
+                else progress["checklistText"]
+            )
+        ]
+        if isinstance(current_phase, dict) and not availability["gateRequired"]:
+            parts.append(str(current_phase["startText"]))
+    return {
+        "kind": kind,
+        "text": "\n\n".join(parts),
+        "instruction": (
+            "Emit `text` verbatim as your very next assistant message, "
+            "before any other tool call. Terminal or tool output does not "
+            "count as showing it."
+        ),
+    }
+
+
 def resume_handoff(
     context: dict[str, Any],
     *,
@@ -10430,6 +10481,7 @@ def resume_handoff(
     roles_available: bool | None = None,
     availability_group_id: str | None = None,
     availability_context_sha256: str | None = None,
+    group_changed: bool = False,
 ) -> dict[str, Any]:
     root = Path(context["root"])
     contract = _load_json(root / CONTRACT_PATH)
@@ -10491,10 +10543,14 @@ def resume_handoff(
         "lifecycle": decision,
         "progress": progress,
         "transport": transport,
+        "renderBlock": _resume_render_block(
+            progress,
+            transport,
+            group_changed=group_changed,
+        ),
     }
     if (
-        isinstance(pre_action_handoff, dict)
-        and pre_action_handoff.get("decision")
+        isinstance(pre_action_handoff, dict)        and pre_action_handoff.get("decision")
         in {"question-required", "source-selection-required"}
     ):
         result["status"] = "shared-identity-reuse-required"
@@ -10519,6 +10575,7 @@ def resume_handoff(
             context,
             executed_actions=executed_actions,
             verified_phases=verified_phases,
+            group_changed=True,
         )
     result["businessGroupAvailabilityAccepted"] = False
     pending_input = _pending_preflight_input(state, decision)
@@ -10593,6 +10650,11 @@ def resume_handoff(
             )
         result["checkpoints"] = {
             "decision": "run-exact-commands",
+            "interpreterNote": (
+                "Replace the leading `python` with the launcher selected "
+                "during /setup (for example `py -3`); never run bare "
+                "`python` unless setup selected it."
+            ),
             "commands": commands,
         }
     return result
@@ -10740,6 +10802,220 @@ def _completed_contract_phase_ids(
         if isinstance(phase_contract.get("id"), str)
         and _phase_contract_complete(state, phase_contract)
     )
+
+
+def _resolved_manual_evidence(
+    state: dict[str, Any],
+    phase_contract: dict[str, Any],
+) -> dict[str, Any]:
+    phase_id = str(phase_contract.get("id") or "")
+    config = phase_contract["manualAcknowledgementEvidence"]
+    record_path = str(config.get("path") or "").replace("{phaseId}", phase_id)
+    object_path = str(config.get("evidenceObjectPath") or "")
+    evidence_path = ".".join(part for part in (record_path, object_path) if part)
+    evidence = _state_dot_value(state, evidence_path, phase_id=phase_id)
+    evidence = evidence if isinstance(evidence, dict) else {}
+    bindings = {}
+    for binding in config.get("bindings") or []:
+        key = str(binding.get("evidencePath") or "")
+        bindings[key] = _state_dot_value(evidence, key, phase_id=phase_id)
+    return {
+        "source": "matching-action-evidence",
+        "evidencePath": evidence_path,
+        "evidenceKind": evidence.get("kind"),
+        "evidenceRecordedAt": evidence.get("recordedAt"),
+        "bindings": bindings,
+    }
+
+
+def _parse_checkpoint_result_args(values: list[str]) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for value in values:
+        checkpoint_id, separator, status = value.partition("=")
+        checkpoint_id = checkpoint_id.strip()
+        status = status.strip()
+        if not separator or not checkpoint_id or not status:
+            raise ServiceNowConnectError(
+                f"Checkpoint result {value!r} must be CHECKPOINT_ID=Status."
+            )
+        if status not in CHECKPOINT_RESULT_STATUSES:
+            raise ServiceNowConnectError(
+                f"Checkpoint {checkpoint_id} has unknown status {status!r}."
+            )
+        if checkpoint_id in parsed:
+            raise ServiceNowConnectError(
+                f"Checkpoint {checkpoint_id} was supplied more than once."
+            )
+        parsed[checkpoint_id] = status
+    return parsed
+
+
+def record_checkpoint_results(
+    context: dict[str, Any],
+    *,
+    phase_id: str,
+    results: list[str],
+    maker_acknowledged: list[str] | None = None,
+) -> dict[str, Any]:
+    """Persist validated checkpoint outcomes for one lifecycle phase.
+
+    This is the only supported writer for ``phases.{id}.checkpointResults``
+    and ``checkpointAcknowledgements``; callers never edit lifecycle state.
+    """
+    root = Path(context["root"])
+    contract = _load_json(root / CONTRACT_PATH)
+    if not _lifecycle_state_path(context).exists():
+        raise ServiceNowConnectError(
+            "No lifecycle state exists. Run resume-handoff first."
+        )
+    state = _load_lifecycle_state(context)
+    revision = contract.get("contractRevision")
+    if (
+        state.get("attested") is not True
+        or state.get("acceptedContractRevision") != revision
+    ):
+        raise ServiceNowConnectError(
+            "The lifecycle plan is not accepted for the current contract "
+            "revision. Run resume-handoff first."
+        )
+    phases = contract.get("phases")
+    phases = phases if isinstance(phases, list) else []
+    phase_contract = next(
+        (
+            item
+            for item in phases
+            if isinstance(item, dict) and item.get("id") == phase_id
+        ),
+        None,
+    )
+    if phase_contract is None:
+        raise ServiceNowConnectError(
+            f"Phase {phase_id!r} is not in the lifecycle contract."
+        )
+    state_phases = state.get("phases")
+    if not isinstance(state_phases, dict) or not isinstance(
+        state_phases.get(phase_id), dict
+    ):
+        raise ServiceNowConnectError(
+            f"Lifecycle state has no phase {phase_id!r}."
+        )
+    for earlier in phases:
+        if earlier is phase_contract:
+            break
+        earlier_state = state_phases.get(earlier.get("id"))
+        if (
+            not isinstance(earlier_state, dict)
+            or earlier_state.get("status") != "done"
+        ):
+            raise ServiceNowConnectError(
+                f"Phase {earlier.get('id')!r} must be done before "
+                f"recording {phase_id!r}."
+            )
+    parsed = _parse_checkpoint_result_args(results)
+    targets = phase_contract.get("checkpoints") or []
+    for checkpoint_id in parsed:
+        if not any(
+            checkpoint_id.startswith(target[:-1])
+            if target.endswith("*")
+            else checkpoint_id == target
+            for target in targets
+        ):
+            raise ServiceNowConnectError(
+                f"Checkpoint {checkpoint_id} does not belong to phase "
+                f"{phase_id!r}."
+            )
+    if not _checkpoint_targets_present(phase_contract, parsed):
+        raise ServiceNowConnectError(
+            f"Phase {phase_id!r} requires results for: "
+            + ", ".join(str(target) for target in targets)
+            + "."
+        )
+    acknowledged = list(dict.fromkeys(maker_acknowledged or []))
+    for checkpoint_id in acknowledged:
+        if parsed.get(checkpoint_id) not in {"Manual", "Warning"}:
+            raise ServiceNowConnectError(
+                f"Checkpoint {checkpoint_id} is not a Manual or Warning "
+                "result and cannot be acknowledged."
+            )
+
+    phase_state = state_phases[phase_id]
+    previous_acks = phase_state.get("checkpointAcknowledgements")
+    previous_acks = previous_acks if isinstance(previous_acks, dict) else {}
+    phase_state["checkpointResults"] = dict(parsed)
+    allowed = phase_contract.get("completionStatuses") or ["Passed"]
+    now = _utc_now()
+    reasons: list[str] = []
+    acknowledgements: dict[str, Any] = {}
+    if any(status in {"Failed", "Error", "Blocked"} for status in parsed.values()):
+        outcome = "blocked"
+    else:
+        outcome = "done"
+        evidence_current = _manual_evidence_current(state, phase_contract)
+        for checkpoint_id, status in parsed.items():
+            if status not in allowed:
+                outcome = "in-progress"
+                reasons.append(
+                    f"{checkpoint_id} is {status}, which does not complete "
+                    "this phase."
+                )
+            elif status == "Manual":
+                if evidence_current:
+                    acknowledgements[checkpoint_id] = {
+                        "status": status,
+                        "acknowledgedAt": now,
+                        **_resolved_manual_evidence(state, phase_contract),
+                    }
+                else:
+                    outcome = "in-progress"
+                    reasons.append(
+                        f"{checkpoint_id} is Manual and no current "
+                        "provider evidence is recorded for this phase."
+                    )
+            elif status == "Warning":
+                if checkpoint_id in acknowledged:
+                    acknowledgements[checkpoint_id] = {
+                        "status": status,
+                        "acknowledgedAt": now,
+                        "source": "maker-confirmation",
+                    }
+                else:
+                    outcome = "in-progress"
+                    reasons.append(
+                        f"{checkpoint_id} is Warning and needs the "
+                        "maker's explicit confirmation."
+                    )
+    for checkpoint_id, status in parsed.items():
+        previous = previous_acks.get(checkpoint_id)
+        if (
+            checkpoint_id not in acknowledgements
+            and isinstance(previous, dict)
+            and previous.get("status") == status
+            and outcome != "blocked"
+        ):
+            acknowledgements[checkpoint_id] = previous
+    phase_state["checkpointAcknowledgements"] = acknowledgements
+    phase_state["status"] = outcome
+    if outcome == "done":
+        phase_state["lastVerifiedAt"] = now
+    else:
+        phase_state.pop("lastVerifiedAt", None)
+    _write_lifecycle_state(context, state)
+    result: dict[str, Any] = {
+        "schemaVersion": "servicenow.checkpoint-recording.v1",
+        "status": "recorded",
+        "provider": ACTIVE_PROFILE.provider_key,
+        "profile": ACTIVE_PROFILE.key,
+        "agentSlug": _agent_slug(context),
+        "phase": phase_id,
+        "outcome": outcome,
+        "checkpointResults": dict(parsed),
+        "acknowledged": sorted(acknowledgements),
+        "reasons": reasons,
+        "resumeArguments": (
+            ["--verified-phase", phase_id] if outcome == "done" else []
+        ),
+    }
+    return result
 
 
 def _recovery_handoff(
@@ -11397,6 +11673,30 @@ def build_parser() -> argparse.ArgumentParser:
             "Current business-group context hash returned by resume-handoff."
         ),
     )
+    record_results_parser = subparsers.add_parser(
+        "record-checkpoint-results",
+        help=(
+            "Record validated checkpoint outcomes for one lifecycle phase. "
+            "The only supported way to persist phase completion; never edit "
+            "lifecycle.json by hand."
+        ),
+    )
+    record_results_parser.add_argument("--phase", required=True)
+    record_results_parser.add_argument(
+        "--result",
+        action="append",
+        default=[],
+        required=True,
+        metavar="CHECKPOINT_ID=STATUS",
+        help="Validated checkpoint status; repeat once per emitted row.",
+    )
+    record_results_parser.add_argument(
+        "--maker-acknowledged",
+        action="append",
+        default=[],
+        metavar="CHECKPOINT_ID",
+        help="Checkpoint whose Warning the maker explicitly confirmed.",
+    )
     portal_parser = subparsers.add_parser(
         "set-portal-url",
         help=(
@@ -12000,6 +12300,13 @@ def main(argv: list[str] | None = None) -> int:
                     args.availability_context_sha256
                 ),
             )
+        elif args.command == "record-checkpoint-results":
+            result = record_checkpoint_results(
+                context,
+                phase_id=args.phase,
+                results=list(args.result),
+                maker_acknowledged=list(args.maker_acknowledged),
+            )
         elif args.command == "set-portal-url":
             result = set_portal_url(
                 context,
@@ -12067,6 +12374,7 @@ def main(argv: list[str] | None = None) -> int:
             "record-topic-choice",
             "topic-action-handoff",
             "resume-handoff",
+            "record-checkpoint-results",
             "set-portal-url",
             "record-test",
             "migrate-state",

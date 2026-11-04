@@ -14723,3 +14723,487 @@ def test_servicenow_connect_assets_have_no_retired_identity_file_route() -> None
     assert not list(
         (skills / "connect" / "shared" / "templates").glob("servicenow-*")
     )
+
+
+def _recording_setup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+) -> tuple[dict, dict, str]:
+    product = snow.PRODUCT_PROFILES[profile]
+    slug = (
+        "employee-self-service-hr" if profile == "hrsd" else "employee-self-service-it"
+    )
+    context = _profile_context(
+        profile,
+        agent_id=AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=slug,
+    )
+    context["root"] = tmp_path
+    source_contract = (
+        snow.SOLUTION_ROOT
+        / "src"
+        / "skills"
+        / "connect"
+        / product.provider_key
+        / "contract.json"
+    )
+    contract = json.loads(source_contract.read_text(encoding="utf-8"))
+    target = tmp_path / product.contract_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(contract), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, _components())
+        state["attested"] = True
+        state["attestedAt"] = "2026-10-29T00:00:00Z"
+        state["acceptedContractRevision"] = contract["contractRevision"]
+        state["phases"] = {
+            phase["id"]: {"status": "pending", "checkpointResults": {}}
+            for phase in contract["phases"]
+        }
+        snow._write_lifecycle_state(context, state)
+    return context, contract, profile
+
+
+def _satisfy_manual_evidence(
+    state: dict,
+    phase_contract: dict,
+) -> None:
+    config = phase_contract["manualAcknowledgementEvidence"]
+    phase_id = phase_contract["id"]
+    record = {"status": config["acceptedRecordStatuses"][0]}
+    evidence = {
+        "kind": config["requiredEvidenceKind"],
+        "recordedAt": "2026-10-29T01:00:00Z",
+        **config.get("requiredValues", {}),
+    }
+    for binding in config.get("bindings", []):
+        value = snow._state_dot_value(
+            state,
+            binding["statePath"],
+            phase_id=phase_id,
+        )
+        if value in {None, ""}:
+            value = f"bound-{binding['statePath']}"
+            node = state
+            parts = binding["statePath"].split(".")
+            for part in parts[:-1]:
+                node = node.setdefault(part, {})
+            node[parts[-1]] = value
+        node = evidence
+        parts = binding["evidencePath"].split(".")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = value
+    path = config["path"].replace("{phaseId}", phase_id).split(".")
+    if config["evidenceObjectPath"]:
+        record[config["evidenceObjectPath"]] = evidence
+    else:
+        record.update(evidence)
+    node = state
+    for part in path[:-1]:
+        node = node.setdefault(part, {})
+    node[path[-1]] = record
+
+
+def _record_phase(
+    context: dict,
+    profile: str,
+    phase: str,
+    *statuses: str,
+    ack: list[str] | None = None,
+) -> dict:
+    with snow.product_profile_context(profile):
+        contract = json.loads(
+            (context["root"] / snow.CONTRACT_PATH).read_text(encoding="utf-8")
+        )
+        phase_contract = next(
+            item for item in contract["phases"] if item["id"] == phase
+        )
+        return snow.record_checkpoint_results(
+            context,
+            phase_id=phase,
+            results=[
+                f"{target}={status}"
+                for target, status in zip(
+                    phase_contract["checkpoints"], statuses, strict=True
+                )
+            ],
+            maker_acknowledged=ack,
+        )
+
+
+def _recorded_phase(context: dict, profile: str, phase: str) -> dict:
+    with snow.product_profile_context(profile):
+        state = snow._load_lifecycle_state(context)
+    return state["phases"][phase]
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_record_checkpoint_results_walks_every_phase_without_hand_edits(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    context, contract, _ = _recording_setup(monkeypatch, tmp_path, profile)
+    assert contract["checkpointRecording"] == "provider-command-v1"
+    for phase_contract in contract["phases"]:
+        phase = phase_contract["id"]
+        status = (phase_contract.get("completionStatuses") or ["Passed"])[0]
+        if status == "Manual":
+            with snow.product_profile_context(profile):
+                state = snow._load_lifecycle_state(context)
+                _satisfy_manual_evidence(state, phase_contract)
+                snow._write_lifecycle_state(context, state)
+        result = _record_phase(
+            context,
+            profile,
+            phase,
+            *[status for _ in phase_contract["checkpoints"]],
+        )
+        assert result["schemaVersion"] == "servicenow.checkpoint-recording.v1"
+        assert result["outcome"] == "done", result["reasons"]
+        assert result["resumeArguments"] == ["--verified-phase", phase]
+        recorded = _recorded_phase(context, profile, phase)
+        assert recorded["status"] == "done"
+        assert recorded["lastVerifiedAt"]
+        if status == "Manual":
+            acknowledgement = next(
+                iter(recorded["checkpointAcknowledgements"].values())
+            )
+            assert acknowledgement["source"] == "matching-action-evidence"
+            assert acknowledgement["evidenceKind"]
+    with snow.product_profile_context(profile):
+        state = snow._load_lifecycle_state(context)
+        completed = snow._completed_contract_phase_ids(
+            state,
+            contract["phases"],
+        )
+    assert completed == {phase["id"] for phase in contract["phases"]}
+
+
+@pytest.mark.parametrize("failed", ["Failed", "Error", "Blocked"])
+def test_record_checkpoint_results_blocks_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failed: str,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+
+    result = _record_phase(context, profile, "preflight", failed)
+
+    assert result["outcome"] == "blocked"
+    assert result["resumeArguments"] == []
+    assert _recorded_phase(context, profile, "preflight")["status"] == "blocked"
+
+
+def test_record_checkpoint_results_keeps_phase_open_for_non_completing_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+
+    result = _record_phase(context, profile, "preflight", "NotConfigured")
+
+    assert result["outcome"] == "in-progress"
+    assert "NotConfigured" in result["reasons"][0]
+    recorded = _recorded_phase(context, profile, "preflight")
+    assert recorded["status"] == "in-progress"
+    assert "lastVerifiedAt" not in recorded
+
+
+def test_record_checkpoint_results_requires_current_evidence_for_manual(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    _record_phase(context, profile, "preflight", "Passed")
+
+    result = _record_phase(
+        context,
+        profile,
+        "plugin-prerequisites",
+        "Manual",
+    )
+
+    assert result["outcome"] == "in-progress"
+    assert "no current provider evidence" in result["reasons"][0]
+    recorded = _recorded_phase(context, profile, "plugin-prerequisites")
+    assert recorded["status"] == "in-progress"
+    assert recorded["checkpointAcknowledgements"] == {}
+
+
+def test_record_checkpoint_results_accepts_reused_admin_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, contract, profile = _recording_setup(
+        monkeypatch,
+        tmp_path,
+        "hrsd",
+    )
+    _record_phase(context, profile, "preflight", "Passed")
+    phase_contract = next(
+        item for item in contract["phases"] if item["id"] == "plugin-prerequisites"
+    )
+    with snow.product_profile_context(profile):
+        state = snow._load_lifecycle_state(context)
+        _satisfy_manual_evidence(state, phase_contract)
+        state["adminSetup"]["phaseHandoffs"]["plugin-prerequisites"]["status"] = (
+            "reused"
+        )
+        snow._write_lifecycle_state(context, state)
+
+    result = _record_phase(
+        context,
+        profile,
+        "plugin-prerequisites",
+        "Manual",
+    )
+
+    assert result["outcome"] == "done"
+    assert result["acknowledged"] == ["SN-DA-HRSD-PLUGIN-001"]
+
+
+def test_record_checkpoint_results_requires_explicit_warning_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, contract, profile = _recording_setup(
+        monkeypatch,
+        tmp_path,
+        "hrsd",
+    )
+    contract["phases"][0]["completionStatuses"] = ["Passed", "Warning"]
+    with snow.product_profile_context(profile):
+        (tmp_path / snow.CONTRACT_PATH).write_text(
+            json.dumps(contract),
+            encoding="utf-8",
+        )
+
+    unconfirmed = _record_phase(context, profile, "preflight", "Warning")
+    confirmed = _record_phase(
+        context,
+        profile,
+        "preflight",
+        "Warning",
+        ack=["SN-DA-HRSD-ADMIN-PREFLIGHT-001"],
+    )
+
+    assert unconfirmed["outcome"] == "in-progress"
+    assert confirmed["outcome"] == "done"
+    acknowledgement = _recorded_phase(context, profile, "preflight")[
+        "checkpointAcknowledgements"
+    ]["SN-DA-HRSD-ADMIN-PREFLIGHT-001"]
+    assert acknowledgement["source"] == "maker-confirmation"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        (
+            {"phase_id": "nope", "results": ["X=Passed"]},
+            "not in the lifecycle contract",
+        ),
+        (
+            {
+                "phase_id": "preflight",
+                "results": ["SN-DA-HRSD-TOPICS-001=Passed"],
+            },
+            "does not belong",
+        ),
+        (
+            {
+                "phase_id": "preflight",
+                "results": ["SN-DA-HRSD-ADMIN-PREFLIGHT-001=Great"],
+            },
+            "unknown status",
+        ),
+        (
+            {
+                "phase_id": "preflight",
+                "results": [
+                    "SN-DA-HRSD-ADMIN-PREFLIGHT-001=Passed",
+                    "SN-DA-HRSD-ADMIN-PREFLIGHT-001=Passed",
+                ],
+            },
+            "more than once",
+        ),
+        (
+            {"phase_id": "preflight", "results": ["no-separator"]},
+            "CHECKPOINT_ID=Status",
+        ),
+        (
+            {
+                "phase_id": "preflight",
+                "results": ["SN-DA-HRSD-ADMIN-PREFLIGHT-001=Passed"],
+                "maker_acknowledged": ["SN-DA-HRSD-ADMIN-PREFLIGHT-001"],
+            },
+            "cannot be acknowledged",
+        ),
+        (
+            {
+                "phase_id": "credential",
+                "results": ["SN-DA-HRSD-CREDENTIAL-001=Passed"],
+            },
+            "must be done before",
+        ),
+    ],
+)
+def test_record_checkpoint_results_rejects_invalid_input(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    kwargs: dict,
+    message: str,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    state_path = snow._lifecycle_state_path(context)
+    with snow.product_profile_context(profile):
+        before = (tmp_path / state_path).read_bytes()
+        with pytest.raises(snow.ServiceNowConnectError, match=message):
+            snow.record_checkpoint_results(context, **kwargs)
+        assert (tmp_path / state_path).read_bytes() == before
+
+
+def test_record_checkpoint_results_requires_accepted_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    with snow.product_profile_context(profile):
+        state = snow._load_lifecycle_state(context)
+        state["acceptedContractRevision"] = 1
+        snow._write_lifecycle_state(context, state)
+        with pytest.raises(snow.ServiceNowConnectError, match="not accepted"):
+            snow.record_checkpoint_results(
+                context,
+                phase_id="preflight",
+                results=["SN-DA-HRSD-ADMIN-PREFLIGHT-001=Passed"],
+            )
+
+
+def test_record_checkpoint_results_loads_state_without_acknowledgements(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    state_path = tmp_path / snow._lifecycle_state_path(context)
+    raw = json.loads(state_path.read_text(encoding="utf-8"))
+    for phase in raw["phases"].values():
+        phase.pop("checkpointAcknowledgements", None)
+    state_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    result = _record_phase(context, profile, "preflight", "Passed")
+
+    assert result["outcome"] == "done"
+
+
+def test_record_checkpoint_results_cli_round_trip(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    context, _, _ = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    monkeypatch.setattr(snow, "load_context", lambda **_kwargs: context)
+
+    code = snow.main(
+        [
+            "--provider",
+            "servicenow-da-hrsd",
+            "--agent-slug",
+            "employee-self-service-hr",
+            "record-checkpoint-results",
+            "--phase",
+            "preflight",
+            "--result",
+            "SN-DA-HRSD-ADMIN-PREFLIGHT-001=Passed",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert output["outcome"] == "done"
+    assert output["resumeArguments"] == ["--verified-phase", "preflight"]
+
+
+def test_resume_handoff_render_block_is_one_ready_to_emit_message(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(profile):
+        state = snow._load_lifecycle_state(context)
+        state["adminSetup"]["preflight"]["instanceName"] = "dev184242"
+        state["adminSetup"]["preflight"]["discovery"] = {
+            "instanceInputRequired": False,
+        }
+        snow._write_lifecycle_state(context, state)
+        result = snow.resume_handoff(
+            context,
+            executed_actions=frozenset({"preflight"}),
+        )
+
+    block = result["renderBlock"]
+    assert block["kind"] == "progress"
+    assert result["progress"]["checklistText"] in block["text"]
+    assert block["text"].endswith(result["progress"]["currentPhase"]["startText"])
+    assert "assistant message" in block["instruction"]
+    assert "Replace the leading `python`" in (result["checkpoints"]["interpreterNote"])
+
+
+@pytest.mark.parametrize(
+    ("progress", "group_changed", "gate", "kind", "expected"),
+    [
+        (
+            {"mode": "fresh", "checklistText": "C"},
+            False,
+            False,
+            "plan",
+            "PLAN\n\nSTART",
+        ),
+        (
+            {"mode": "resume", "checklistText": "C"},
+            True,
+            False,
+            "plan",
+            "PLAN\n\nSTART",
+        ),
+        ({"mode": "resume", "checklistText": "C"}, False, True, "plan", "PLAN"),
+        (
+            {"mode": "resume", "checklistText": "C"},
+            False,
+            False,
+            "progress",
+            "C\n\nSTART",
+        ),
+        (
+            {"mode": "resume", "checklistText": "C", "finalText": "DONE"},
+            False,
+            False,
+            "final",
+            "DONE",
+        ),
+    ],
+)
+def test_resume_render_block_kinds(
+    progress: dict,
+    group_changed: bool,
+    gate: bool,
+    kind: str,
+    expected: str,
+) -> None:
+    progress = {**progress, "currentPhase": {"startText": "START"}}
+    transport = {
+        "businessGroupAvailability": {"gateRequired": gate},
+        "ordinaryReply": {"text": "PLAN"},
+    }
+
+    block = snow._resume_render_block(
+        progress,
+        transport,
+        group_changed=group_changed,
+    )
+
+    assert block["kind"] == kind
+    assert block["text"] == expected
