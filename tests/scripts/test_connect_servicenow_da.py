@@ -2314,6 +2314,150 @@ def test_agentbuilder_client_uses_setup_account_hint(
     assert observed["account_hint"] == "maker@example.test"
 
 
+def _pin_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **kw):
+    _write_foundation_context(
+        tmp_path,
+        canonical_account="setup@example.test",
+        operational_account="setup@example.test",
+    )
+    monkeypatch.chdir(tmp_path)
+    return snow.load_context(tmp_path, **kw)
+
+
+def _seed_sealed_lifecycle(context: dict, **extra: object) -> Path:
+    path = snow._lifecycle_state_path(context)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state = {"schemaVersion": snow.LIFECYCLE_SCHEMA_VERSION, **extra}
+    state[snow.STATE_INTEGRITY_KEY] = snow.state_integrity_digest(state)
+    path.write_text(json.dumps(state), encoding="utf-8")
+    return path
+
+
+def _fake_signed_in(monkeypatch: pytest.MonkeyPatch, account: str) -> list:
+    calls: list[dict[str, object]] = []
+
+    def fake_authenticate(*_args, **kwargs):
+        calls.append(kwargs)
+        hint = kwargs.get("account_hint")
+        if hint and hint.casefold() != account.casefold():
+            raise snow.AgentBuilderAccountMismatch(
+                "different account", actual_account=account
+            )
+        return "token", account
+
+    monkeypatch.setattr(snow, "authenticate", fake_authenticate)
+    return calls
+
+
+def test_connect_pins_first_verified_maker_account(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tamper_check_enabled: None,
+) -> None:
+    context = _pin_context(tmp_path, monkeypatch)
+    path = _seed_sealed_lifecycle(context)
+    setup_before = {
+        name: (tmp_path / name).read_bytes()
+        for name in (snow.SETUP_STATE, snow.ACTIVE_CONFIG)
+    }
+    assert context["account"] == "setup@example.test"
+    assert context["accountPin"] is None
+    _fake_signed_in(monkeypatch, "Setup@Example.test")
+
+    assert snow._agentbuilder_token(context) == "token"
+
+    state = json.loads(path.read_text(encoding="utf-8"))
+    assert state["makerAccount"] == {"username": "Setup@Example.test"}
+    assert not snow.state_integrity_mismatch(state)
+    for name, content in setup_before.items():
+        assert (tmp_path / name).read_bytes() == content
+
+
+def test_connect_uses_pinned_account_and_stops_on_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context = _pin_context(tmp_path, monkeypatch)
+    _seed_sealed_lifecycle(context, makerAccount={"username": "Pin@Example.test"})
+
+    context = snow.load_context(tmp_path)
+
+    assert context["accountPin"] == "Pin@Example.test"
+    assert context["account"] == "Pin@Example.test"
+    calls = _fake_signed_in(monkeypatch, "pin@example.test")
+    assert snow._agentbuilder_token(context) == "token"
+    assert calls[0]["account_hint"] == "Pin@Example.test"
+    assert calls[0]["require_account_identity"] is True
+
+    _fake_signed_in(monkeypatch, "other@example.test")
+    with pytest.raises(snow.ServiceNowConnectError, match="pinned to the Maker"):
+        snow._agentbuilder_token(context)
+
+
+def test_connect_explicit_maker_username_overrides_pin_and_repins(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context = _pin_context(tmp_path, monkeypatch)
+    path = _seed_sealed_lifecycle(context, makerAccount={"username": "old@example.test"})
+
+    context = snow.load_context(tmp_path, maker_username="new@example.test")
+
+    assert context["accountPin"] == "old@example.test"
+    assert context["account"] == "new@example.test"
+    _fake_signed_in(monkeypatch, "new@example.test")
+    snow._agentbuilder_token(context)
+    state = json.loads(path.read_text(encoding="utf-8"))
+    assert state["makerAccount"] == {"username": "new@example.test"}
+
+
+def test_connect_legacy_lifecycle_without_pin_loads_and_pins_on_first_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context = _pin_context(tmp_path, monkeypatch)
+    path = _seed_sealed_lifecycle(context)
+
+    assert snow._recorded_maker_account(context) is None
+    _fake_signed_in(monkeypatch, "setup@example.test")
+    snow._agentbuilder_token(context)
+
+    assert snow._recorded_maker_account(context) == "setup@example.test"
+    assert snow._load_json(path)["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
+
+
+def test_connect_account_pin_ignores_tampered_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tamper_check_enabled: None,
+) -> None:
+    context = _pin_context(tmp_path, monkeypatch)
+    path = _seed_sealed_lifecycle(context, makerAccount={"username": "pin@example.test"})
+    state = json.loads(path.read_text(encoding="utf-8"))
+    state["makerAccount"] = {"username": "forged@example.test"}
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    assert snow._recorded_maker_account(context) is None
+
+
+def test_connect_pins_account_when_lifecycle_state_is_first_written(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context = _pin_context(tmp_path, monkeypatch)
+    _fake_signed_in(monkeypatch, "setup@example.test")
+
+    snow._agentbuilder_token(context)
+    state = snow._load_lifecycle_state(context)
+    snow._write_lifecycle_state(context, state)
+
+    path = snow._lifecycle_state_path(context)
+    assert snow._load_json(path)["makerAccount"] == {
+        "username": "setup@example.test"
+    }
+    assert snow._recorded_maker_account(context) == "setup@example.test"
+
+
 def test_load_context_rejects_incomplete_foundation_step(
     tmp_path: Path,
 ) -> None:

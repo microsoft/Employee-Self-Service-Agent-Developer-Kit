@@ -60,6 +60,14 @@ class AgentBuilderError(RuntimeError):
     """Raised when an AgentBuilder operation cannot complete safely."""
 
 
+class AgentBuilderAccountMismatch(AgentBuilderError):
+    """Raised when sign-in used a different account than the one required."""
+
+    def __init__(self, message: str, *, actual_account: str | None = None):
+        super().__init__(message)
+        self.actual_account = actual_account
+
+
 class AgentBuilderHTTPError(AgentBuilderError):
     """Raised for an unsuccessful AgentBuilder HTTP response."""
 
@@ -650,9 +658,10 @@ def _acquire_token(
             account_hint
             and account_name.casefold() != account_hint.strip().casefold()
         ):
-            raise AgentBuilderError(
+            raise AgentBuilderAccountMismatch(
                 "AgentBuilder authenticated a different account than the "
-                "requested setup account."
+                "requested setup account.",
+                actual_account=account_name,
             )
     if cache.has_state_changed:
         _persist_token_cache(cache, cache_path)

@@ -32,6 +32,7 @@ from connect_lifecycle import (
     state_integrity_mismatch,
 )
 from agentbuilder import (
+    AgentBuilderAccountMismatch,
     AgentBuilderClient,
     AgentBuilderError,
     AgentBuilderHTTPError,
@@ -2894,7 +2895,11 @@ def _agent_choice(
     }
 
 
-def list_agent_choices(root: Path = Path(".")) -> dict[str, Any]:
+def list_agent_choices(
+    root: Path = Path("."),
+    *,
+    maker_username: str | None = None,
+) -> dict[str, Any]:
     setup = _load_json(root / SETUP_STATE)
     config = _load_json(root / ACTIVE_CONFIG)
     if setup.get("schema_version") != SETUP_SCHEMA_VERSION:
@@ -2910,7 +2915,8 @@ def list_agent_choices(root: Path = Path(".")) -> dict[str, Any]:
         raise ServiceNowConnectError("Canonical setup state has no agent map.")
     if not isinstance(operational_agents, list):
         raise ServiceNowConnectError("Operational setup config has no agent list.")
-    account = _validate_discovery_binding(environment, config)
+    setup_account = _validate_discovery_binding(environment, config)
+    account = str(maker_username or "").strip() or setup_account
     client = _agentbuilder_client(
         {"environment": environment, "account": account}
     )
@@ -3295,6 +3301,7 @@ def load_context(
     *,
     agent_id: str | None = None,
     agent_slug: str | None = None,
+    maker_username: str | None = None,
 ) -> dict[str, Any]:
     setup = _load_json(root / SETUP_STATE)
     if setup.get("schema_version") != SETUP_SCHEMA_VERSION:
@@ -3414,7 +3421,7 @@ def load_context(
     if not isinstance(relative_snapshot, str) or not relative_snapshot:
         raise ServiceNowConnectError("The active agent has no component snapshot path.")
     snapshot_path = root / Path(relative_snapshot)
-    return {
+    context: dict[str, Any] = {
         "root": root,
         "setup": setup,
         "agentSetup": canonical,
@@ -3426,6 +3433,11 @@ def load_context(
         "profile": ACTIVE_PROFILE,
         "snapshotPath": snapshot_path,
     }
+    explicit_account = str(maker_username or "").strip() or None
+    pinned_account = _recorded_maker_account(context)
+    context["accountPin"] = pinned_account
+    context["account"] = explicit_account or pinned_account or preferred_account
+    return context
 
 
 def _walk(value: Any):
@@ -4198,15 +4210,93 @@ def _agentbuilder_token(
     *,
     force_account_selection: bool = False,
 ) -> str:
-    environment = context["environment"]
-    return authenticate(
-        environment["tenant_id"],
-        environment["ring"],
-        cache_path=TOKEN_CACHE,
+    return _authenticate_maker(
+        context,
         force_account_selection=force_account_selection,
-        account_hint=context.get("account"),
-        require_account_identity=True,
     )
+
+
+MAKER_ACCOUNT_KEY = "makerAccount"
+
+
+def _maker_account_from_state(state: Any) -> str | None:
+    record = state.get(MAKER_ACCOUNT_KEY) if isinstance(state, dict) else None
+    username = record.get("username") if isinstance(record, dict) else None
+    return username.strip() or None if isinstance(username, str) else None
+
+
+def _recorded_maker_account(context: dict[str, Any]) -> str | None:
+    """Read the Maker account pinned in this agent's Connect state."""
+    path = _lifecycle_state_path(context)
+    if not path.is_file():
+        return None
+    try:
+        state = _load_json(path)
+    except ServiceNowConnectError:
+        return None
+    if state_integrity_mismatch(state):
+        return None
+    return _maker_account_from_state(state)
+
+
+def _authenticate_maker(
+    context: dict[str, Any],
+    *,
+    force_account_selection: bool = False,
+    scopes: tuple[str, ...] | None = None,
+) -> str:
+    environment = context["environment"]
+    extra: dict[str, Any] = {} if scopes is None else {"scopes": scopes}
+    try:
+        result = authenticate(
+            environment["tenant_id"],
+            environment["ring"],
+            cache_path=TOKEN_CACHE,
+            force_account_selection=force_account_selection,
+            account_hint=context.get("account"),
+            require_account_identity=True,
+            return_account_identity=True,
+            **extra,
+        )
+    except AgentBuilderAccountMismatch as exc:
+        pinned = context.get("accountPin")
+        expected = context.get("account")
+        if pinned and expected and pinned.casefold() == expected.casefold():
+            raise ServiceNowConnectError(
+                "This ServiceNow Connect run is pinned to the Maker account "
+                f"{pinned}, but sign-in used a different account. Sign in "
+                "again with the pinned account.",
+                details={"decision": "stop-account-mismatch"},
+            ) from exc
+        raise
+    token, account = result if isinstance(result, tuple) else (result, None)
+    _record_verified_maker_account(context, account)
+    return token
+
+
+def _record_verified_maker_account(
+    context: dict[str, Any],
+    account: str | None,
+) -> None:
+    """Pin the verified Maker account in Connect's own lifecycle state."""
+    if not account or not isinstance(context.get("agent"), dict):
+        return
+    context["verifiedAccount"] = account
+    path = _lifecycle_state_path(context)
+    if not path.is_file():
+        return
+    try:
+        state = _load_json(path)
+    except ServiceNowConnectError:
+        return
+    if state_integrity_mismatch(state):
+        return
+    recorded = _maker_account_from_state(state)
+    if recorded and recorded.casefold() == account.casefold():
+        return
+    state[MAKER_ACCOUNT_KEY] = {"username": account}
+    state[STATE_INTEGRITY_KEY] = state_integrity_digest(state)
+    _write_json_atomic(path, state)
 
 
 def _connectivity_client(
@@ -4215,13 +4305,9 @@ def _connectivity_client(
     force_account_selection: bool = False,
 ) -> ConnectivityClient:
     environment = context["environment"]
-    token = authenticate(
-        environment["tenant_id"],
-        environment["ring"],
-        cache_path=TOKEN_CACHE,
+    token = _authenticate_maker(
+        context,
         force_account_selection=force_account_selection,
-        account_hint=context.get("account"),
-        require_account_identity=True,
         scopes=tuple(connectivity_scopes(environment["ring"])),
     )
     return ConnectivityClient(
@@ -5270,6 +5356,14 @@ def _write_lifecycle_state(
 ) -> None:
     path = _lifecycle_state_path(context)
     existing = _load_json(path) if path.exists() else None
+    verified_account = context.get("verifiedAccount")
+    if verified_account:
+        recorded_account = _maker_account_from_state(state)
+        if (
+            not recorded_account
+            or recorded_account.casefold() != verified_account.casefold()
+        ):
+            state[MAKER_ACCOUNT_KEY] = {"username": verified_account}
     timestamp = _utc_now()
     events = _prepare_lifecycle_telemetry(
         context,
@@ -11473,6 +11567,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=HRSD_PROFILE.provider_key,
         help="ServiceNow lifecycle provider for the selected ESS agent.",
     )
+    parser.add_argument(
+        "--maker-username",
+        default=None,
+        help=(
+            "Maker account (UPN) for this run. Overrides the account pinned "
+            "in this agent's Connect state."
+        ),
+    )
     target = parser.add_mutually_exclusive_group()
     target.add_argument(
         "--agent-id",
@@ -12283,21 +12385,26 @@ def main(argv: list[str] | None = None) -> int:
                 )
             result = adapt_question_to_ask_user(parsed_question)
         elif args.command == "list-agents":
-            result = list_agent_choices()
+            result = (
+                list_agent_choices(maker_username=args.maker_username)
+                if args.maker_username
+                else list_agent_choices()
+            )
         elif args.command == "agent-chooser":
             result = agent_chooser_handoff(
                 selection_key=args.selection_key,
                 agent_link=args.agent_link,
             )
         else:
-            context = (
-                load_context()
-                if args.agent_id is None and args.agent_slug is None
-                else load_context(
-                    agent_id=args.agent_id,
-                    agent_slug=args.agent_slug,
-                )
-            )
+            context_kwargs: dict[str, Any] = {}
+            if args.agent_id is not None or args.agent_slug is not None:
+                context_kwargs = {
+                    "agent_id": args.agent_id,
+                    "agent_slug": args.agent_slug,
+                }
+            if args.maker_username:
+                context_kwargs["maker_username"] = args.maker_username
+            context = load_context(**context_kwargs)
         if args.command == "inspect":
             result = inspect(context, offline=args.offline)
         elif args.command == "inspect-portal-url":
