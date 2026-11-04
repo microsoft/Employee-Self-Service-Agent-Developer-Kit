@@ -32,6 +32,13 @@ The selected entry point owns any metadata checks and missing-state handling.
   `connect_ready: true`; Workday connections may be the remaining runtime
   readiness blocker. A missing `.local` directory or a `Path does not exist`
   result is expected unprepared state, not a terminal Connect failure.
+- If the user typed `/connect-servicenow-kb`, `/connect servicenow-kb`,
+  or explicitly asked to **connect ServiceNow Knowledge**, proceed with
+  `src/skills/connect/SKILL.md` with `servicenow-kb` selected before checking
+  setup. This separate provider supports native ESS HR or IT Development,
+  guided Simple/Advanced and Federated Auth. Its entry point owns automatic
+  workspace preparation; do not require `connect_ready: true` or change the
+  unavailable transactional `servicenow` provider.
 - If the user typed `/setup` or explicitly asked to run setup, proceed with
   setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
 - If the user typed `/planner` or asked to **plan a rollout / plan an ESS
@@ -469,6 +476,7 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | Run common ESS foundation setup (`/setup`)                                                              | `src/skills/foundation-setup/SKILL.md`                                                        |
 | Provision/connect Workday for the active ESS HR agent (`/connect workday` or `/connect-workday`)        | `src/skills/connect/SKILL.md`                                                                 |
 | Connect to Workday                                                                                      | `src/skills/connect/SKILL.md`                                                                 |
+| Connect ServiceNow Knowledge (`/connect servicenow-kb` or `/connect-servicenow-kb`)                        | `src/skills/connect/SKILL.md`                                                                 |
 | Create a topic                                                                                          | Stop: topic creation is not yet available; do not read a topic-authoring skill or write files |
 | Create a workflow                                                                                       | `src/skills/workflows/create/SKILL.md`                                                        |
 | Update/modify a topic                                                                                   | Stop: topic updates are not yet available; do not read a topic-authoring skill or write files |
@@ -490,7 +498,8 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | View or configure ESS landing-page branding, quick links, starter prompts, insight cards, name, or icon | `src/skills/landing-page-config/SKILL.md`                                                     |
 | Invoke any tool from the `ess-landing-page-config` MCP server                                           | `src/skills/landing-page-config/SKILL.md`                                                     |
 
-**Trigger phrases for connect:** "connect Workday", "set up Workday".
+**Trigger phrases for connect:** "connect Workday", "set up Workday",
+"connect ServiceNow Knowledge", "set up ServiceNow Knowledge".
 
 **Trigger phrases for troubleshooting:** "Workday error", "ISU not working",
 "invalid_client", "invalid username or password", "SOAP failure", "maker works

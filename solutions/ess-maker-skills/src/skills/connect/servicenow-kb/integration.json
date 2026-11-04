@@ -1,0 +1,9 @@
+{
+  "id": "servicenow-kb",
+  "displayName": "ServiceNow Knowledge",
+  "description": "Guided Simple or Advanced indexed knowledge setup for native ESS HR/IT Development",
+  "aliases": ["connect-servicenow-kb"],
+  "availability": "available",
+  "entryDoc": "entry.md",
+  "statusDoc": "status.md"
+}

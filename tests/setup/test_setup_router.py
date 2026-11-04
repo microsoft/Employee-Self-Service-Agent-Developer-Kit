@@ -178,7 +178,11 @@ def test_connect_menus_and_callers_use_the_guided_boundary() -> None:
     triggers = instructions.split("**Trigger phrases for connect:**", 1)[1].split(
         "**Trigger phrases for troubleshooting:**", 1
     )[0]
-    assert "servicenow" not in triggers.casefold()
+    snow_triggers = {
+        phrase.casefold() for phrase in re.findall(r'"([^"]+)"', triggers)
+        if "servicenow" in phrase.casefold()
+    }
+    assert snow_triggers == {"connect servicenow knowledge", "set up servicenow knowledge"}
     assert "Wait for the user and try again" in route
     assert "Never fall back to a provider automatically" in route
 
@@ -237,7 +241,7 @@ def test_flightcheck_and_docs_keep_servicenow_setup_manual() -> None:
     assert "Missing Workday connection" in fixes and "Missing Workday/ServiceNow" not in fixes
     readme = (_SOLUTION / "README.md").read_text(encoding="utf-8")
     assert _SERVICENOW_MESSAGE in " ".join(readme.split())
-    assert "/connect servicenow" not in readme
+    assert not re.search(r"/connect servicenow(?!-kb)\b", readme)
 
 
 def test_retired_setup_is_removed_without_removing_foundation() -> None:

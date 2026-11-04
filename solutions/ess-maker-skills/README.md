@@ -268,6 +268,7 @@ This toolkit does NOT:
 
 Run `/connect` to choose an available integration, or start Workday directly
 with `/connect workday` or `/connect-workday`.
+For indexed Knowledge, use `/connect servicenow-kb` or `/connect-servicenow-kb`.
 
 ### Workday (HCM / Payroll / Absence)
 
@@ -310,6 +311,29 @@ administrator details. Custom-engine Workday guidance is maintained on
 ### ServiceNow (HRSD / ITSM)
 
 Guided ServiceNow setup is not yet available in ADK. You can configure the ServiceNow connection manually in Copilot Studio or contact admin.
+
+### ServiceNow Knowledge (indexed connector)
+
+`/connect-servicenow-kb` supports **native ESS HR or IT, Development only**,
+with guided **Simple and Advanced** permissions and **Federated Auth**.
+It prepares the selected workspace if needed, walks through ServiceNow and
+Microsoft 365 configuration one step at a time without Excel handoffs, preserves healthy answers and
+resumes missing work. Existing gallery connections use the same confirmations
+rather than requiring recreation.
+
+Administrators configure the source and gallery connector; the maker attaches
+the exact Knowledge source and records representative allowed/denied reader
+parity plus an ESS answer/citation. The controller performs no remote writes or
+reads and does not deploy a Power Platform solution, flows, or extensions.
+Organization-wide availability retains source permissions; a limited audience
+is also supported. Copilot Chat/Search visibility is optional for ESS-only use.
+
+Progress stays in `.local/connect/servicenow-kb/config.json`, without credentials,
+employee exports or article content. Completion is limited to recorded cases,
+not universal ACL coverage, a revocation SLA or published readiness. Test/Prod,
+promotion and publishing are outside this first MVP. See the
+[guided lifecycle](src/skills/connect/servicenow-kb/SKILL.md).
+The transactional `servicenow` provider remains unavailable.
 
 ### Developer integration tools
 
@@ -375,6 +399,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | `/landing-page` | Configure landing-page branding and content |
 | `/connect` | Choose an available integration |
 | `/connect-workday` | Connect the ESS HR agent to Workday |
+| `/connect-servicenow-kb` | Guide ESS HR or IT Development through ServiceNow Knowledge setup |
 | `/create` | Create a topic, workflow, or evaluation test set locally |
 | `/update` | Update a topic, workflow, or evaluation test set locally |
 | `/delete` | Report that DA-GA deletion is not yet available |

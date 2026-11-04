@@ -15,6 +15,7 @@ Here's what I can help you with:
 |---------|-------------|
 | `/landing-page` | Configure the branding and content employees see when they open the ESS agent |
 | `/connect-workday` | Connect the active ESS HR agent to Workday |
+| `/connect-servicenow-kb` | Guide ESS HR or IT Development through ServiceNow Knowledge setup |
 | `/connect` | Choose an available integration |
 | `/create` | Create a workflow or evaluation test set locally |
 | `/update` | Update a workflow or evaluation test set locally |
