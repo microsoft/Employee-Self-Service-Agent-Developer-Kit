@@ -29,6 +29,33 @@ def test_test_and_prod_realm_surface_is_not_advertised() -> None:
         assert parked_command not in chooser
 
 
+def test_connect_reuses_setup_python_launcher_without_creating_environment() -> None:
+    prompt = " ".join(
+        (_SOLUTION / ".github" / "prompts" / "connect.prompt.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    runner = " ".join(
+        (
+            _SOLUTION
+            / "src"
+            / "skills"
+            / "connect"
+            / "shared"
+            / "lifecycle-runner.md"
+        )
+        .read_text(encoding="utf-8")
+        .split()
+    )
+
+    assert "**Python runtime.**" in prompt
+    assert "`configurePythonEnvironment`" in prompt
+    assert "reuse that exact launcher" in prompt
+    assert prompt.index("**Python runtime.**") < prompt.index("python scripts/")
+    assert "**Python runtime:**" in runner
+    assert "never create an environment" in runner
+
+
 def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     prompt = (
         _SOLUTION / ".github" / "prompts" / "connect.prompt.md"

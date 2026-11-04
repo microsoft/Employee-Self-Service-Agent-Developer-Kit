@@ -8,6 +8,11 @@ integration-specific logic. Adding a new provider never requires changing this
 file when its needs fit the documented contract; shared backward-compatible
 contract evolution belongs here rather than in provider-specific branches.
 
+**Python runtime:** every command below that shows `python` runs with the
+launcher selected during setup; follow the "Python runtime" rule in
+`.github/prompts/connect.prompt.md` and never create an environment or install
+packages from Connect.
+
 Every **Message** block is the exact text to show the user after rendering its
 declared placeholders. Do not rephrase, add commentary, or tell the user what
 tools you are calling or what files you are reading. Never surface a checkpoint

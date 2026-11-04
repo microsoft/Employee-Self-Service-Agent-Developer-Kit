@@ -5,6 +5,15 @@ description: "Connect Workday or another supported integration"
 
 # Connect
 
+**Python runtime.** Setup already prepared this workspace's Python runtime.
+Do not invoke `configurePythonEnvironment`, **Create Environment**, or any
+package-install tool, and do not create a new `.venv`. Use the launcher
+selected during setup (Windows: `py -3`, `python3`, then `python`;
+macOS or Linux: `python3`, then `python`), reuse that exact launcher for every
+command, and substitute it wherever a command shows `python`. If the launcher
+cannot import the kit's dependencies, stop and tell the maker to rerun
+`/setup`; do not repair the runtime from Connect.
+
 **Entry routing comes first.** Missing setup does not stop integration selection.
 Read `src/skills/connect/SKILL.md`, retain any selected integration and target,
 and apply provider availability before following that provider's entry point.
