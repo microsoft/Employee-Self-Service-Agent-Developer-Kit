@@ -121,7 +121,6 @@ Build `{READINESS_ISSUES}` as follows:
 3. Map each step to its maker-facing label:
    - `SETUP-01` — **Target environment**
    - `SETUP-02.1` — **Agent access**
-   - `SETUP-02.2` — **Environment capacity**
    - `SETUP-03` — **Editable Dev agent**
    - `SETUP-05` — **Connections**
    - `SETUP-06` — **Agent content**

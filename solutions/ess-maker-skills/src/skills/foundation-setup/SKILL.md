@@ -175,7 +175,7 @@ The checklist is a view, not another state model. It tracks local workspace setu
 - `connectionStatus: workspace-ready` with canonical workspace evidence and `SETUP-07` in state `done` completes local workspace materialization, independently of `connectReady`;
 - reviewing the factual completion report completes the handoff stage in the conversation and does not write another readiness marker.
 
-Before canonical setup begins, mark the first unresolved checklist stage with 🔄 and leave later stages marked ⬜. Mark a checklist stage ⛔ only when the operation named by that stage is itself blocked, and preserve its failure causes in the response. A blocked capacity, connection, or content FlightCheck belongs in the runtime-readiness table and does not change an already completed checklist marker. Do not mark a stage complete from a skipped internal setup record.
+Before canonical setup begins, mark the first unresolved checklist stage with 🔄 and leave later stages marked ⬜. Mark a checklist stage ⛔ only when the operation named by that stage is itself blocked, and preserve its failure causes in the response. A blocked access, connection, or content FlightCheck belongs in the runtime-readiness table and does not change an already completed checklist marker. Do not mark a stage complete from a skipped internal setup record.
 
 ## Choose the sign-in account
 
@@ -525,7 +525,7 @@ Then end the request.
 
 Replace `{FINAL_RUNTIME_READINESS_BLOCK}` with the complete `### Runtime
 readiness` block already rendered in the final handoff during this invocation.
-Reuse that block verbatim, including the five rows, statuses, evidence summaries,
+Reuse that block verbatim, including the four rows, statuses, evidence summaries,
 observation times, and Overall verdict. Do not regenerate the table from
 placeholders or read state again.
 

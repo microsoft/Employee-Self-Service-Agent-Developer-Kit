@@ -373,10 +373,29 @@ def _write_flightcheck_results(
         }
         for index, status in enumerate(statuses, start=1)
     ]
+    state = _setup_state(root)
+    agent = state["agents"][agent_id]["agent"]
+    context = {
+        "agentId": agent_id,
+        "environmentId": state["environment"]["id"],
+        "agentSlug": agent["workspace_slug"],
+        "agentSchemaName": agent["schema_name"],
+        "tenantId": state["environment"]["tenant_id"],
+        "serviceRing": state["environment"]["ring"],
+        "realm": agent.get("realm"),
+    }
     path.write_text(
         json.dumps(
             {
-                "scope": f"checkpoint:{checkpoint}",
+                "schema_version": "flightcheck.result.v2",
+                "scope": "checkpoint",
+                "coverage": {"requested": [checkpoint]},
+                "validation_context": context,
+                "requested_validation_context": {
+                    **context,
+                    "tenantId": "",
+                    "realm": "",
+                },
                 "failed": sum(status == "Failed" for status in statuses),
                 "errors": sum(status == "Error" for status in statuses),
                 "results": rows,
@@ -398,7 +417,6 @@ def _write_flightcheck_results(
 def _complete_setup_flightchecks(root: Path) -> None:
     for checkpoint, statuses in (
         ("DA-AGENT-001", ("Passed",)),
-        ("ENV-CAPACITY-001", ("Passed",)),
         ("DA-CONTENT-001", ("Passed",)),
     ):
         setup_existing_da.maintain_setup_flightcheck(
@@ -667,9 +685,13 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     assert setup_state["steps"]["SETUP-01"]["mode"] == "automated"
     assert setup_state["steps"]["SETUP-03"]["mode"] == "automated"
     assert setup_state["steps"]["SETUP-07"]["mode"] == "automated"
-    for step_id in ("SETUP-02.1", "SETUP-02.2", "SETUP-06"):
+    for step_id in ("SETUP-02.1", "SETUP-06"):
         assert setup_state["steps"][step_id]["state"] == "pending"
         assert setup_state["steps"][step_id]["mode"] is None
+    assert setup_state["steps"]["SETUP-02.2"]["state"] == "done"
+    assert setup_state["steps"]["SETUP-02.2"]["mode"] == "skipped"
+    assert setup_state["steps"]["SETUP-02.2"]["checkpoint"] is None
+    assert "was not verified" in setup_state["steps"]["SETUP-02.2"]["note"]
     assert setup_state["steps"]["SETUP-05"]["state"] == "done"
     assert setup_state["steps"]["SETUP-05"]["mode"] == "skipped"
     assert "declares no foundation connection requirement" in (
@@ -1307,16 +1329,95 @@ def test_flightcheck_maintenance_completes_setup(tmp_path: Path) -> None:
     assert loaded_agent["connect_ready"] is True
     assert loaded_agent["completed_at"]
     assert loaded_agent["steps"]["SETUP-02.1"]["checkpoint"] == "DA-AGENT-001"
-    assert (
-        loaded_agent["steps"]["SETUP-02.2"]["checkpoint"]
-        == "ENV-CAPACITY-001"
-    )
+    assert loaded_agent["steps"]["SETUP-02.2"]["mode"] == "skipped"
+    assert loaded_agent["steps"]["SETUP-02.2"]["checkpoint"] is None
     assert loaded_agent["steps"]["SETUP-05"]["checkpoint"] is None
     assert loaded_agent["steps"]["SETUP-05"]["mode"] == "skipped"
     assert (
         loaded_agent["steps"]["SETUP-06"]["checkpoint"]
         == "DA-CONTENT-001"
     )
+
+
+@pytest.mark.parametrize(
+    "fields,value,message",
+    [
+        (("schema_version",), "flightcheck.result.v1", "Unsupported setup FlightCheck report format"),
+        (("scope",), "checkpoint:DA-AGENT-001", "Unsupported setup FlightCheck report format"),
+        (("scope",), "full", "Unsupported setup FlightCheck report format"),
+        (("scope",), "profile", "Unsupported setup FlightCheck report format"),
+        (("coverage", "requested"), ["DA-CONTENT-001"], "did not request DA-AGENT-001"),
+        (("coverage", "requested"), "DA-AGENT-001", "invalid coverage.requested"),
+        (("validation_context", "agentId"), OTHER_AGENT_ID, "validation_context.agentId"),
+        (("validation_context", "environmentId"), OTHER_AGENT_ID, "validation_context.environmentId"),
+        (("validation_context", "agentId"), "", "agentId is required"),
+        (("validation_context", "serviceRing"), "prod", "validation_context.serviceRing"),
+        (("validation_context", "realm"), "prod", "validation_context.realm"),
+        (("requested_validation_context", "agentId"), OTHER_AGENT_ID, "requested_validation_context.agentId"),
+        (("requested_validation_context", "tenantId"), OTHER_AGENT_ID, "requested_validation_context.tenantId"),
+    ],
+)
+def test_flightcheck_rejects_unrelated_or_obsolete_reports_without_writes(
+    tmp_path: Path,
+    fields: tuple[str, ...],
+    value: Any,
+    message: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    path = _write_flightcheck_results(tmp_path, "DA-AGENT-001", "Passed")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    container = payload
+    for field in fields[:-1]:
+        container = container[field]
+    container[fields[-1]] = value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    before = state_path.read_bytes()
+    report_before = path.read_bytes()
+    modified_before = path.stat().st_mtime_ns
+
+    with pytest.raises(setup_existing_da.ExistingDASetupError, match=message):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            agent_id=AGENT_ID,
+            checkpoint="DA-AGENT-001",
+            results_path=path,
+        )
+
+    assert state_path.read_bytes() == before
+    assert path.read_bytes() == report_before
+    assert path.stat().st_mtime_ns == modified_before
+
+
+@pytest.mark.parametrize(
+    "status", ["Failed", "Error", "Manual", "Blocked", "Skipped", "Warning", "NotConfigured"],
+)
+def test_flightcheck_records_unresolved_results_without_verified_target(
+    tmp_path: Path,
+    status: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    path = _write_flightcheck_results(tmp_path, "DA-AGENT-001", status)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["validation_context"]["targetVerified"] = False
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    step_started = datetime.fromisoformat(
+        _agent_setup_state(tmp_path)["steps"]["SETUP-02.1"]["updated_at"]
+    ).timestamp()
+    fresh_time = max(path.stat().st_mtime, step_started + 1)
+    os.utime(path, (fresh_time, fresh_time))
+
+    result = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="DA-AGENT-001",
+        results_path=path,
+    )
+
+    assert result["state"] == "blocked"
+    assert result["evidenceStatuses"] == [status]
+    assert result["connectReady"] is False
+    assert _agent_setup_state(tmp_path)["steps"]["SETUP-02.1"]["mode"] is None
 
 
 def test_setup_rerun_requires_fresh_flightcheck_evidence(
@@ -2406,187 +2507,105 @@ def test_maintain_flightcheck_command_accepts_connection_family(
     assert '"state": "done"' in output
 
 
-def test_capacity_manual_result_requires_explicit_administrator_skip(
+def test_capacity_is_not_a_supported_setup_flightcheck(
     tmp_path: Path,
 ) -> None:
     _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "ENV-CAPACITY-001",
-        "Manual",
-    )
-
-    blocked = setup_existing_da.maintain_setup_flightcheck(
-        tmp_path,
-        agent_id=AGENT_ID,
-        checkpoint="ENV-CAPACITY-001",
-        results_path=results_path,
-    )
-
-    assert blocked["state"] == "blocked"
-    assert blocked["evidenceStatuses"] == ["Manual"]
-    assert blocked["mode"] is None
-
-
-def test_capacity_warning_requires_explicit_administrator_skip(
-    tmp_path: Path,
-) -> None:
-    _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "ENV-CAPACITY-001",
-        "Warning",
-    )
-
-    result = setup_existing_da.maintain_setup_flightcheck(
-        tmp_path,
-        agent_id=AGENT_ID,
-        checkpoint="ENV-CAPACITY-001",
-        results_path=results_path,
-    )
-
-    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
-    assert result["state"] == "blocked"
-    assert result["mode"] is None
-    assert result["evidenceStatuses"] == ["Warning"]
-    assert result["failureCauses"] == [
-        "ENV-CAPACITY-001 returned Warning"
-    ]
-    assert step["state"] == "blocked"
-
-
-@pytest.mark.parametrize("status", ["Warning", "Manual"])
-def test_capacity_first_result_accepts_administrator_attested_skip(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    status: str,
-) -> None:
-    _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "ENV-CAPACITY-001",
-        status,
-    )
-    original_evidence = results_path.read_bytes()
-    assert _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]["state"] == "pending"
-
-    exit_code = setup_existing_da.main(
-        [
-            "maintain-flightcheck",
-            "--checkpoint",
-            "ENV-CAPACITY-001",
-            "--agent-id",
-            AGENT_ID,
-            "--results",
-            str(results_path),
-            "--administrator-attested-skip",
-            "--kit-root",
-            str(tmp_path),
-        ]
-    )
-
-    assert exit_code == 0
-    output = capsys.readouterr().out
-    assert '"state": "done"' in output
-    assert '"mode": "administrator-attested-skip"' in output
-    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
-    assert step["state"] == "done"
-    assert step["mode"] == "administrator-attested-skip"
-    assert "A Power Platform administrator was present" in step["note"]
-    assert "consented to override" in step["note"]
-    assert "did not verify" in step["note"]
-    assert results_path.read_bytes() == original_evidence
-
-
-def test_capacity_warning_skip_requires_fresh_evidence(
-    tmp_path: Path,
-) -> None:
-    _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "ENV-CAPACITY-001",
-        "Warning",
-    )
-    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
-    stale_time = datetime.fromisoformat(step["updated_at"]).timestamp() - 1
-    os.utime(results_path, (stale_time, stale_time))
     state_before = (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes()
 
     with pytest.raises(
         setup_existing_da.ExistingDASetupError,
-        match="predate the current setup maintenance run",
+        match="Unsupported setup FlightCheck checkpoint: ENV-CAPACITY-001",
     ):
         setup_existing_da.maintain_setup_flightcheck(
             tmp_path,
             agent_id=AGENT_ID,
             checkpoint="ENV-CAPACITY-001",
-            results_path=results_path,
-            administrator_attested_skip=True,
+            results_path=tmp_path / "ENV-CAPACITY-001.json",
         )
     assert (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes() == state_before
 
 
-@pytest.mark.parametrize("status", ["Warning", "Manual"])
-@pytest.mark.parametrize("counter", ["failed", "errors"])
-def test_capacity_skip_rejects_untrustworthy_run_totals(
+@pytest.mark.parametrize("state", ["pending", "in-progress", "blocked"])
+def test_resume_skips_unfinished_capacity_without_bypassing_other_checks(
     tmp_path: Path,
-    status: str,
-    counter: str,
+    state: str,
 ) -> None:
     _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "ENV-CAPACITY-001",
-        status,
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    canonical = _setup_state(tmp_path)
+    agent = canonical["agents"][AGENT_ID]
+    agent["steps"]["SETUP-02.2"] = setup_existing_da._step_record(
+        state,
+        checkpoint="ENV-CAPACITY-001",
+        failure_causes=["Capacity could not be verified"] if state == "blocked" else [],
+        recorded_at=agent["created_at"],
     )
-    evidence = json.loads(results_path.read_text(encoding="utf-8"))
-    evidence[counter] = 1
-    results_path.write_text(json.dumps(evidence), encoding="utf-8")
-    state_before = (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes()
+    state_path.write_text(json.dumps(canonical), encoding="utf-8")
 
-    with pytest.raises(
-        setup_existing_da.ExistingDASetupError,
-        match="requires a current Manual or Warning",
-    ):
-        setup_existing_da.maintain_setup_flightcheck(
-            tmp_path,
-            agent_id=AGENT_ID,
-            checkpoint="ENV-CAPACITY-001",
-            results_path=results_path,
-            administrator_attested_skip=True,
-        )
-    assert (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes() == state_before
+    result = _attach(FakeClient(), tmp_path)
+    loaded = _agent_setup_state(tmp_path)
+    capacity = loaded["steps"]["SETUP-02.2"]
+
+    assert capacity["state"] == "done"
+    assert capacity["mode"] == "skipped"
+    assert capacity["checkpoint"] is None
+    assert capacity["failure_causes"] == []
+    assert "was not verified" in capacity["note"]
+    assert result["connectReady"] is False
+    assert loaded["active_step"] == "SETUP-02.1"
+    assert loaded["steps"]["SETUP-02.1"]["state"] == "pending"
+    assert loaded["steps"]["SETUP-06"]["state"] == "pending"
+
+    _complete_setup_flightchecks(tmp_path)
+    assert _agent_setup_state(tmp_path)["connect_ready"] is True
 
 
-@pytest.mark.parametrize(
-    ("checkpoint", "status"),
-    [
-        ("ENV-CAPACITY-001", "Failed"),
-        ("ENV-CAPACITY-001", "Error"),
-        ("ENV-CAPACITY-001", "Passed"),
-        ("DA-AGENT-001", "Manual"),
-    ],
-)
-def test_administrator_attested_skip_rejects_unsupported_evidence(
+@pytest.mark.parametrize("mode", ["automated", "administrator-attested-skip"])
+def test_resume_preserves_completed_capacity_history_and_report(
     tmp_path: Path,
-    checkpoint: str,
-    status: str,
+    mode: str,
 ) -> None:
     _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        checkpoint,
-        status,
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    canonical = _setup_state(tmp_path)
+    agent = canonical["agents"][AGENT_ID]
+    historical_capacity = setup_existing_da._step_record(
+        "done",
+        mode=mode,
+        note="Historical capacity observation or administrator attestation.",
+        checkpoint="ENV-CAPACITY-001",
+        recorded_at=agent["created_at"],
     )
+    agent["steps"]["SETUP-02.2"] = historical_capacity
+    state_path.write_text(json.dumps(canonical), encoding="utf-8")
+    report_path = (
+        tmp_path / ".local" / "setup" / "agents" / AGENT_ID
+        / "flightcheck" / "ENV-CAPACITY-001" / "results.json"
+    )
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text(
+        json.dumps({
+            "scope": "checkpoint:ENV-CAPACITY-001",
+            "results": [{
+                "checkpoint_id": "ENV-CAPACITY-001",
+                "status": "Passed" if mode == "automated" else "Manual",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    original_report = report_path.read_bytes()
+    original_mtime = report_path.stat().st_mtime_ns
 
-    with pytest.raises(setup_existing_da.ExistingDASetupError):
-        setup_existing_da.maintain_setup_flightcheck(
-            tmp_path,
-            agent_id=AGENT_ID,
-            checkpoint=checkpoint,
-            results_path=results_path,
-            administrator_attested_skip=True,
-        )
+    _attach(FakeClient(), tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+
+    assert loaded is not None
+    assert loaded["agents"][AGENT_ID]["connect_ready"] is True
+    assert loaded["agents"][AGENT_ID]["steps"]["SETUP-02.2"] == historical_capacity
+    assert report_path.read_bytes() == original_report
+    assert report_path.stat().st_mtime_ns == original_mtime
 
 
 def test_authentication_uses_workspace_cache_and_account_hint(

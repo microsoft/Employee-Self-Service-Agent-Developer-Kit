@@ -25,7 +25,7 @@ DA `full` inspects exactly the selected agent, regardless of whether Dataverse
 is configured. `scripts/flightcheck/da_inventory.csv` attaches DA metadata to
 the existing `REGISTRY`; it is the runtime coverage/disposition inventory, not
 a second executor or a dependency on private planning documents. Its 168
-identities comprise 85 executable definitions, 32 replacements, 25
+identities comprise 84 executable definitions, 32 replacements, 26
 legacy implementation definitions, two explicitly excluded assertions,
 11 detail/family selectors, 10 guards and three
 deferred ALM checks. These are definition counts, not 168 executed checks or
@@ -48,7 +48,8 @@ The comprehensive selection includes:
 | ENV-001 / ENV-003 / DA-ENV-LINK-001 | Exact environment identity, observed environment type and declared Dataverse linkage (optional for native-only agents); service ring is distinct from environment type |
 | ENV-002 | Linked Dataverse provisioning state, when exposed by the supported environment read. Database type alone never proves successful provisioning |
 | PRE-001/002/003/006/008/009 / AUTH-001/002/004 | Tenant SKU inventory, active role membership, exact Graph organization, Conditional Access enforcement-state inventory and a small user sample. These do not prove intended-user licensing, effective access, synchronization or require elevating the maker |
-| PRE-004 / ENV-CAPACITY-001 / PRE-005 | Exact environment message-capacity observation and linked billing policies, subscription state and returned cost-budget records; effective capacity and spending sufficiency remain separate comparisons |
+| PRE-004 | Manual comparison of expected published audience and usage with the environment capacity and billing route |
+| PRE-005 | Exact environment linked billing policies, subscription state and returned cost-budget records; effective capacity and spending sufficiency remain separate comparisons |
 | ENV-008 / INFRA-006 | Effective environment DLP policy inventory and classification of the selected agent's actual connector dependencies |
 | DA-TOPIC-001 | Selected cloud conversation activation inventory; unknown status is unverified, inactive is not a defect |
 | DA-AUTH-001 / DA-INSTRUCTIONS-001 | Observed native sign-in settings and nonempty instructions in the captured template format, not employee sign-in or response quality |
