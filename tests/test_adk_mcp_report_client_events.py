@@ -99,7 +99,7 @@ def test_authenticated_client_initializes_telemetry_identity(monkeypatch):
         ),
     )
 
-    assert isinstance(server.get_client(), FakeClient)
+    assert isinstance(asyncio.run(server.get_client()), FakeClient)
     assert captured == {
         "tenant_id": FakeClient.tenant_id,
         "local_dir": server.SOLUTION_LOCAL_DIR,

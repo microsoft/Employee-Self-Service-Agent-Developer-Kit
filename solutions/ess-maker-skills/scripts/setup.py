@@ -573,7 +573,9 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
 
     Supports multiple agents: maintains an `agents` array with all discovered
     agents, `activeAgent` pointing to the current slug, and a backward-compat
-    `agent` field that mirrors the active agent.
+    `agent` field that mirrors the active agent. Records each agent's Dataverse
+    endpoint and preserves the previous active agent's legacy binding before
+    switching environments.
     """
     # Load existing config to preserve other agents and connections
     local_dir = ".local"
@@ -587,8 +589,30 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
             existing = {}
 
     bot_id = agent_info["botId"]
-    existing_agents = existing.get("agents", [])
+    existing_agents = [dict(entry) for entry in existing.get("agents", [])]
     legacy_active_agent = existing.get("agent", {})
+    previous_active = legacy_active_agent
+    active_slug = existing.get("activeAgent")
+    if not previous_active.get("botId"):
+        candidates = (
+            [entry for entry in existing_agents if entry.get("slug") == active_slug]
+            if active_slug is not None else existing_agents
+        )
+        previous_active = candidates[0] if len(candidates) == 1 else {}
+    previous_bot_id = previous_active.get("botId")
+    if previous_bot_id:
+        if not any(entry.get("botId") == previous_bot_id for entry in existing_agents):
+            existing_agents.append(dict(previous_active))
+        previous_endpoint = previous_active.get("dataverseEndpoint")
+        if previous_endpoint is None and active_slug in (None, previous_active.get("slug")):
+            previous_endpoint = existing.get("dataverseEndpoint")
+        if previous_endpoint is not None:
+            for entry in existing_agents:
+                if (
+                    entry.get("botId") == previous_bot_id
+                    and entry.get("dataverseEndpoint") is None
+                ):
+                    entry["dataverseEndpoint"] = previous_endpoint
     existing_agent = next(
         (
             entry for entry in existing_agents
@@ -606,6 +630,7 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         "isManaged": agent_info["managed"],
         "slug": slug,
         "folder": output_dir.replace("\\", "/"),
+        "dataverseEndpoint": agent_info["url"],
     })
     # Detect schema migration. write_config always stamps the current
     # EXPECTED_CONFIG_VERSION; if the existing file was on an older

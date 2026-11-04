@@ -20,6 +20,7 @@ import shlex
 import subprocess
 import sys
 from typing import Any
+from uuid import UUID
 import warnings
 
 from jsonschema import ValidationError, validate
@@ -29,9 +30,14 @@ from pydantic_settings.exceptions import IncompleteFieldDefinitionWarning
 REPO_ROOT = Path(__file__).parents[3]
 SOLUTION_ROOT = REPO_ROOT / "solutions" / "ess-maker-skills"
 SKILL_PATH = SOLUTION_ROOT / "src" / "skills" / "landing-page-config" / "SKILL.md"
+TITLE_RESOLUTION_REFERENCE = (
+    SOLUTION_ROOT / "src" / "skills" / "shared" / "agent-title-resolution.md"
+)
 SERVER_DIR = SOLUTION_ROOT / "src" / "mcp" / "agentconfig_landing_page"
 TITLE_ID = "eval-title-hr"
 OTHER_TITLE_ID = "eval-title-it"
+BOT_ID = "00000000-0000-4000-8000-000000001111"
+OTHER_BOT_ID = "00000000-0000-4000-8000-000000002222"
 DEFAULT_MODEL = "gpt-5.4"
 MAX_CALLS = 24
 TURN_TIMEOUT = 120
@@ -150,6 +156,9 @@ class FakeLandingPage:
     read_count: int = 0
     limit_exceeded: bool = False
     contract_by_name: dict[str, ToolContract] = field(default_factory=dict)
+    title_resolution_reference: str = field(
+        default_factory=lambda: TITLE_RESOLUTION_REFERENCE.read_text(encoding="utf-8")
+    )
 
     def invoke(self, name: str, arguments: dict[str, Any]) -> RecordedCall:
         if len(self.calls) >= MAX_CALLS:
@@ -165,17 +174,22 @@ class FakeLandingPage:
             if path == ".local/config.json":
                 result = {
                     "setup": "complete",
+                    "dataverseEndpoint": "https://evaluation.crm.dynamics.com",
                     "activeAgent": "evaluation-hr",
                     "agent": {
                         "name": "Evaluation HR Agent",
                         "titleId": TITLE_ID,
-                        "botId": "eval-bot-hr",
+                        "botId": BOT_ID,
                         "schemaName": "msdyn_copilotforemployeeselfservicehr",
                         "slug": "evaluation-hr",
                         "folder": "workspace/agents/evaluation-hr",
                     },
                 }
                 return self._record(name, arguments, json.dumps(result))
+            if path == "src/skills/shared/agent-title-resolution.md":
+                return self._record(
+                    name, arguments, self.title_resolution_reference
+                )
             if path in self.artifacts and self.read_mode != "unreadable":
                 return self._record(name, arguments, self.artifacts[path])
             return self._record(name, arguments, {"error": "File cannot be read."}, True)
@@ -206,6 +220,21 @@ class FakeLandingPage:
                 for title_id, config in self.configs.items()
             ]
             return self._record(name, arguments, {"value": result})
+
+        if name == "resolve_agent_title_id":
+            try:
+                bot_id = str(UUID(arguments["botId"]))
+            except ValueError:
+                return self._record(name, arguments, {"error": "Invalid botId."}, True)
+            title = {BOT_ID: TITLE_ID, OTHER_BOT_ID: OTHER_TITLE_ID}.get(bot_id)
+            if title is None:
+                return self._record(
+                    name, arguments, {"error": "Configured agent not found."}, True
+                )
+            return self._record(
+                name, arguments,
+                {"botId": bot_id, "titleId": title, "lobTitleId": None},
+            )
 
         title_id = arguments["titleId"]
         if name == "create_agent_config":
@@ -310,6 +339,8 @@ def session_options(model: str, tools: list[Any], available_tools: Any, director
                 "The supplied landing-page tools belong to the ess-landing-page-config "
                 "MCP server. read_file reads workspace files and tool-result files. "
                 "Respond to the maker normally.\n\n"
+                + TITLE_RESOLUTION_REFERENCE.read_text(encoding="utf-8")
+                + "\n\n"
                 + SKILL_PATH.read_text(encoding="utf-8")
             ),
         },
@@ -456,6 +487,9 @@ async def run_eval(
                 {
                     "model": model,
                     "skill_sha256": hashlib.sha256(SKILL_PATH.read_bytes()).hexdigest(),
+                    "shared_title_resolution_sha256": hashlib.sha256(
+                        TITLE_RESOLUTION_REFERENCE.read_bytes()
+                    ).hexdigest(),
                     "tool_names": [contract.name for contract in contracts],
                     "turns": [turn.prompt for turn in turns],
                     "context": context,
