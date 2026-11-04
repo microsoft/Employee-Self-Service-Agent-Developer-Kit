@@ -67,6 +67,8 @@ This command is mandatory on every `/connect servicenow` invocation. Do not
 reuse previously read lifecycle instructions or manually infer the next phase
 from `actionApplied`, phase status, or earlier conversation context.
 
+**STOP — render before acting.** After every `resume-handoff`, your very next assistant message — before any other tool call — must contain `transport.ordinaryReply.text` verbatim (first run or group change) or `progress.checklistText` (transitions), and `progress.currentPhase.startText` before each action or checkpoint. Never summarize it or write "render the plan" instead.
+
 Immediately before consuming the result, read the current
 `src/skills/connect/shared/lifecycle-runner.md`. The executable decision routes
 the shared runner; it does not replace L.2 live re-verification, L.4a role and

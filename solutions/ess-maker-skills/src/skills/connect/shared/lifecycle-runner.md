@@ -73,6 +73,8 @@ adapter envelope; the active host currently has a known defect that exposes
 and accepts custom enum answers because its schema has no freeform-control
 field. Do not patch the host or invent a business reject/re-ask flow here.
 
+**STOP — render before acting.** After every `resume-handoff`, your very next assistant message — before any other tool call — must contain `transport.ordinaryReply.text` verbatim (first run or group change) or `progress.checklistText` (transitions), and `progress.currentPhase.startText` before each action or checkpoint. Never summarize it or write "render the plan" instead.
+
 For DA ServiceNow, render the controller's
 `transport.ordinaryReply.text` as an ordinary agent response. It contains the
 automatic preflight plus the complete HR or IT collaboration groups, one

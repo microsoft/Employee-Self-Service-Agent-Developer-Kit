@@ -56,6 +56,27 @@ def test_connect_reuses_setup_python_launcher_without_creating_environment() -> 
     assert "never create an environment" in runner
 
 
+def test_servicenow_connect_entry_files_gate_progress_rendering() -> None:
+    skills = _SOLUTION / "src" / "skills" / "connect"
+    gated_files = (
+        _SOLUTION / ".github" / "prompts" / "connect.prompt.md",
+        skills / "servicenow" / "entry.md",
+        skills / "servicenow-da-hrsd" / "SKILL.md",
+        skills / "servicenow-da-itsm" / "SKILL.md",
+        skills / "shared" / "lifecycle-runner.md",
+    )
+    for path in gated_files:
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "**STOP — render before acting.**" in text, path.name
+        assert (
+            "your very next assistant message — before any other tool call — "
+            "must contain `transport.ordinaryReply.text` verbatim"
+        ) in text, path.name
+        assert "`progress.checklistText`" in text, path.name
+        assert "`progress.currentPhase.startText`" in text, path.name
+        assert 'write "render the plan" instead' in text, path.name
+
+
 def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     prompt = (
         _SOLUTION / ".github" / "prompts" / "connect.prompt.md"

@@ -30,5 +30,7 @@ prepared HR and IT agents for this workspace, accepts one pasted Copilot Studio
 link, returns a typed `/setup` handoff for an agent that is new to this
 workspace, and dispatches to the selected HR or IT Dev lifecycle.
 
+**STOP — render before acting.** After every `resume-handoff`, your very next assistant message — before any other tool call — must contain `transport.ordinaryReply.text` verbatim (first run or group change) or `progress.checklistText` (transitions), and `progress.currentPhase.startText` before each action or checkpoint. Never summarize it or write "render the plan" instead. This overrides the Message-block silence rule above.
+
 Do not use the legacy `step*.md` files in this directory, and do not run
 `list-agents` or scan the environment before the chooser returns a selection.
