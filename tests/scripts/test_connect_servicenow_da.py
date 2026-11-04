@@ -17,6 +17,7 @@ import pytest
 
 import connect_lifecycle
 import connect_servicenow_da as snow
+from setup_existing_da import AUTHORING_READY_STEPS
 
 
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
@@ -1376,7 +1377,6 @@ def _write_foundation_context(
                 },
                 "agents": {
                     AGENT_ID: {
-                        "authoring_ready": True,
                         "connect_ready": False,
                         "agent": {
                             "id": AGENT_ID,
@@ -2321,7 +2321,6 @@ def test_load_context_rejects_incomplete_foundation_step(
     setup_path = tmp_path / snow.SETUP_STATE
     setup = json.loads(setup_path.read_text(encoding="utf-8"))
     setup["agents"][AGENT_ID]["steps"]["SETUP-03"]["state"] = "blocked"
-    setup["agents"][AGENT_ID]["authoring_ready"] = False
     setup_path.write_text(json.dumps(setup), encoding="utf-8")
 
     with pytest.raises(
@@ -11304,7 +11303,6 @@ def _seed_it_setup(
                 },
                 "agents": {
                     AGENT_ID: {
-                        "authoring_ready": True,
                         "setup_source": "existing-dev",
                         "agent": {
                             "id": AGENT_ID,
@@ -11319,6 +11317,10 @@ def _seed_it_setup(
                         "workspace": {
                             "folder": "workspace/agents/employee-self-service-it",
                             "agent_path": "agent.mcs.yml",
+                        },
+                        "steps": {
+                            step_id: {"state": "done"}
+                            for step_id in AUTHORING_READY_STEPS
                         },
                     }
                 },
@@ -14208,7 +14210,7 @@ def test_load_context_accepts_canonical_unenrolled_authoring(
         context = snow.load_context(tmp_path, agent_id=AGENT_ID)
 
     assert context["agent"]["alm"] == {"isEnrolled": False}
-    assert context["agentSetup"]["authoring_ready"] is True
+    assert "authoring_ready" not in context["agentSetup"]
 
 
 def test_list_agents_shows_unconfigured_live_it_agent(

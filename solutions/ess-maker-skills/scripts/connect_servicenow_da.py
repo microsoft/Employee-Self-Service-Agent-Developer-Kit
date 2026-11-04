@@ -2724,7 +2724,7 @@ def _canonical_profile_and_readiness(
         profile is not None
         and str(agent.get("id") or "").casefold() == agent_id.casefold()
         and _canonical_local_authoring_ready(canonical, agent)
-        and canonical.get("authoring_ready") is True
+        and _canonical_authoring_ready(canonical)
         and isinstance(workspace, dict)
         and bool(workspace.get("folder"))
         and bool(workspace.get("agent_path"))
@@ -2733,6 +2733,16 @@ def _canonical_profile_and_readiness(
         and bool(operational.get("agentBuilderChangeSetPath"))
     )
     return profile, ready
+
+
+def _canonical_authoring_ready(canonical: dict[str, Any]) -> bool:
+    try:
+        from setup_existing_da import is_authoring_ready
+    except ImportError as exc:  # pragma: no cover - installation failure
+        raise ServiceNowConnectError(
+            "The /setup readiness helper is unavailable."
+        ) from exc
+    return is_authoring_ready(canonical.get("steps"), canonical.get("workspace"))
 
 
 def _canonical_local_authoring_ready(
@@ -3386,7 +3396,7 @@ def load_context(
         raise ServiceNowConnectError(
             f"This provider supports only {ACTIVE_PROFILE.agent_display_name}."
         )
-    if canonical.get("authoring_ready") is not True:
+    if not _canonical_authoring_ready(canonical):
         raise ServiceNowConnectError(
             "DA foundation setup is not ready for authoring."
         )

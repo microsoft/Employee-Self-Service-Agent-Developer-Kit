@@ -9,9 +9,9 @@ file when its needs fit the documented contract; shared backward-compatible
 contract evolution belongs here rather than in provider-specific branches.
 
 **Python runtime:** every command below that shows `python` runs with the
-launcher selected during setup; follow the "Python runtime" rule in
-`.github/prompts/connect.prompt.md` and never create an environment or install
-packages from Connect.
+launcher selected during setup (`py -3`, `python3`, then `python` on Windows;
+`python3`, then `python` elsewhere); reuse that exact launcher and never create
+an environment or install packages from Connect.
 
 Every **Message** block is the exact text to show the user after rendering its
 declared placeholders. Do not rephrase, add commentary, or tell the user what

@@ -31,7 +31,7 @@ def test_test_and_prod_realm_surface_is_not_advertised() -> None:
 
 def test_connect_reuses_setup_python_launcher_without_creating_environment() -> None:
     prompt = " ".join(
-        (_SOLUTION / ".github" / "prompts" / "connect.prompt.md")
+        (_SOLUTION / "src" / "skills" / "connect" / "servicenow" / "entry.md")
         .read_text(encoding="utf-8")
         .split()
     )
@@ -59,7 +59,6 @@ def test_connect_reuses_setup_python_launcher_without_creating_environment() -> 
 def test_servicenow_connect_entry_files_gate_progress_rendering() -> None:
     skills = _SOLUTION / "src" / "skills" / "connect"
     gated_files = (
-        _SOLUTION / ".github" / "prompts" / "connect.prompt.md",
         skills / "servicenow" / "entry.md",
         skills / "servicenow-da-hrsd" / "SKILL.md",
         skills / "servicenow-da-itsm" / "SKILL.md",
@@ -96,7 +95,7 @@ def test_servicenow_connect_docs_suppress_flightcheck_health_table() -> None:
         .split()
     )
     prompt = " ".join(
-        (_SOLUTION / ".github" / "prompts" / "connect.prompt.md")
+        (_SOLUTION / "src" / "skills" / "connect" / "servicenow" / "entry.md")
         .read_text(encoding="utf-8")
         .split()
     )
@@ -110,7 +109,6 @@ def test_servicenow_connect_docs_suppress_flightcheck_health_table() -> None:
 
     skills = _SOLUTION / "src" / "skills" / "connect"
     entry_files = (
-        _SOLUTION / ".github" / "prompts" / "connect.prompt.md",
         skills / "servicenow" / "entry.md",
         skills / "servicenow-da-hrsd" / "SKILL.md",
         skills / "servicenow-da-itsm" / "SKILL.md",
@@ -144,9 +142,42 @@ def test_servicenow_connect_docs_suppress_flightcheck_health_table() -> None:
         assert contract["checkpointRecording"] == "provider-command-v1"
 
 
+def test_connect_prompt_keeps_only_a_servicenow_routing_line() -> None:
+    prompt_path = _SOLUTION / ".github" / "prompts" / "connect.prompt.md"
+    lines = prompt_path.read_text(encoding="utf-8").splitlines()
+    servicenow_lines = [line for line in lines if "servicenow" in line.casefold()]
+
+    assert len(servicenow_lines) == 1
+    routing = servicenow_lines[0]
+    assert "src/skills/connect/servicenow/entry.md" in routing
+    assert "read first" in routing.casefold()
+    assert "before any action" in routing
+    assert lines.index(routing) < next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("**Entry routing comes first.**")
+    )
+    text = "\n".join(lines)
+    for moved in (
+        "resume-handoff",
+        "renderBlock",
+        "record-checkpoint-results",
+        "lifecycle.json",
+        "adapt-question",
+        "STOP",
+        "Hard rules",
+        "Python runtime",
+    ):
+        assert moved not in text, moved
+    assert len(lines) <= 62
+
+
 def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
-    prompt = (
+    prompt_file = (
         _SOLUTION / ".github" / "prompts" / "connect.prompt.md"
+    ).read_text(encoding="utf-8")
+    prompt = (
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow" / "entry.md"
     ).read_text(encoding="utf-8")
     router = (
         _SOLUTION / "src" / "skills" / "connect" / "SKILL.md"
@@ -160,16 +191,18 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
         / "lifecycle-runner.md"
     ).read_text(encoding="utf-8")
 
-    assert "src/skills/connect/SKILL.md" in prompt
+    assert "src/skills/connect/SKILL.md" in prompt_file
+    assert "Extension setup is not yet available" not in prompt_file
     assert "Extension setup is not yet available" not in prompt
     normalized_prompt = " ".join(prompt.split())
-    assert "`authoring_ready: true`" in prompt
+    assert "authoring-ready gate" in normalized_prompt
+    assert "never a stored field" in normalized_prompt
     assert "ignores `connect_ready`" in normalized_prompt
     assert (
         "do not gate ServiceNow on `.local/config.json.activeAgent`"
         in normalized_prompt
     )
-    assert "sync-authoring-readiness" in prompt
+    assert "sync-authoring-readiness" not in prompt
     assert "agent-chooser" in prompt
     assert "Waiting for maker input" in prompt
     assert "never require the maker to invoke" in prompt
@@ -263,7 +296,8 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "does not depend on `.local/config.json.activeAgent`" in (
         normalized_entry
     )
-    assert "sync-authoring-readiness" in entry
+    assert "sync-authoring-readiness" not in entry
+    assert "never a stored field" in normalized_entry
     assert "do not emit it again here" in normalized_entry
     assert "emit_capability.py" not in entry
     assert "src/skills/connect/servicenow-da-hrsd/SKILL.md" in chooser

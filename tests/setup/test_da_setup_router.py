@@ -725,11 +725,19 @@ def test_global_and_command_gates_require_canonical_da_foundation() -> None:
         ), path
 
     connect_prompt = (_PROMPTS / "connect.prompt.md").read_text(encoding="utf-8")
-    assert ".local/setup/config.json" in connect_prompt
+    servicenow_entry = (
+        _PROMPTS.parents[1]
+        / "src"
+        / "skills"
+        / "connect"
+        / "servicenow"
+        / "entry.md"
+    ).read_text(encoding="utf-8")
+    assert ".local/setup/config.json" in servicenow_entry
+    assert "authoring-ready gate" in " ".join(servicenow_entry.split())
+    assert "sync-authoring-readiness" not in servicenow_entry
     assert "schema_version: 4" in connect_prompt
-    assert "`authoring_ready: true`" in connect_prompt
-    assert "sync-authoring-readiness --kit-root ." in connect_prompt
-    assert "`connect_ready`" in connect_prompt
+    assert "`connect_ready: true`" in connect_prompt
     assert 'steps.SETUP-07.state: "done"' in connect_prompt
     assert "Do not require\n`connect_ready: true`" in connect_prompt
     assert "workspace evidence" in connect_prompt

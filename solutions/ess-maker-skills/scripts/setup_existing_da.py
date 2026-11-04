@@ -471,7 +471,6 @@ def _load_canonical_setup_state(
         raise ExistingDASetupError(
             "Canonical DA setup state is incomplete or malformed."
         )
-    _normalize_authoring_ready_markers(state)
     for agent_id, agent_state in state["agents"].items():
         _validate_canonical_agent_state(agent_id, agent_state)
     return state
@@ -487,7 +486,6 @@ def _validate_canonical_agent_state(
         "workspace",
         "steps",
         "active_step",
-        "authoring_ready",
         "connect_ready",
         "open_issues",
         "created_at",
@@ -575,18 +573,6 @@ def _validate_canonical_agent_state(
             "active step."
         )
     connect_ready = agent_state.get("connect_ready")
-    authoring_ready = agent_state.get("authoring_ready")
-    expected_authoring_ready = _is_authoring_ready(steps, workspace)
-    if not isinstance(authoring_ready, bool):
-        raise ExistingDASetupError(
-            f"Canonical DA setup state for agent {agent_id} has an invalid "
-            "authoring-ready marker."
-        )
-    if authoring_ready != expected_authoring_ready:
-        raise ExistingDASetupError(
-            "Canonical DA authoring readiness does not match its foundation "
-            "step and workspace results."
-        )
     all_steps_done = all(
         steps[step_id].get("state") == "done"
         for step_id in SETUP_STEP_ORDER
@@ -618,10 +604,13 @@ def _validate_canonical_agent_state(
             )
 
 
-def _is_authoring_ready(
-    steps: dict[str, Any],
-    workspace: dict[str, Any],
+def is_authoring_ready(
+    steps: Any,
+    workspace: Any,
 ) -> bool:
+    """Read-only derived readiness; never persisted in setup state."""
+    if not isinstance(steps, dict) or not isinstance(workspace, dict):
+        return False
     return (
         all(
             isinstance(steps.get(step_id), dict)
@@ -631,28 +620,6 @@ def _is_authoring_ready(
         and bool(workspace.get("folder"))
         and bool(workspace.get("agent_path"))
     )
-
-
-def _normalize_authoring_ready_markers(state: dict[str, Any]) -> bool:
-    changed = False
-    agents = state.get("agents")
-    if not isinstance(agents, dict):
-        return changed
-    for agent_state in agents.values():
-        if (
-            not isinstance(agent_state, dict)
-            or "authoring_ready" in agent_state
-        ):
-            continue
-        steps = agent_state.get("steps")
-        workspace = agent_state.get("workspace")
-        if isinstance(steps, dict) and isinstance(workspace, dict):
-            agent_state["authoring_ready"] = _is_authoring_ready(
-                steps,
-                workspace,
-            )
-            changed = True
-    return changed
 
 
 def _canonical_environment_matches_connection(
@@ -918,10 +885,6 @@ def _build_canonical_setup_progress(
         "workspace": existing.get("workspace", {}) if existing else {},
         "steps": steps,
         "active_step": _next_setup_step(steps),
-        "authoring_ready": _is_authoring_ready(
-            steps,
-            existing.get("workspace", {}) if existing else {},
-        ),
         "connect_ready": False,
         "open_issues": list(existing.get("open_issues", [])) if existing else [],
         "created_at": existing.get("created_at", now) if existing else now,
@@ -988,22 +951,6 @@ def _store_canonical_agent_state(
     updated["updated_at"] = _utc_now()
     _write_json(kit_root / CANONICAL_SETUP_STATE, updated)
     return updated
-
-
-def sync_authoring_readiness(kit_root: Path) -> dict[str, Any]:
-    state = _load_canonical_setup_state(kit_root)
-    if state is None:
-        raise ExistingDASetupError(
-            "Canonical DA setup state is unavailable. Run /setup first."
-        )
-    _write_json(kit_root / CANONICAL_SETUP_STATE, state)
-    return {
-        "schemaVersion": state["schema_version"],
-        "agents": {
-            agent_id: agent_state["authoring_ready"]
-            for agent_id, agent_state in state["agents"].items()
-        },
-    }
 
 
 def _matching_flightcheck_rows(
@@ -1212,10 +1159,6 @@ def maintain_setup_flightcheck(
         )
 
     agent_state["active_step"] = _next_setup_step(agent_state["steps"])
-    agent_state["authoring_ready"] = _is_authoring_ready(
-        agent_state["steps"],
-        agent_state["workspace"],
-    )
     agent_state["connect_ready"] = all(
         agent_state["steps"][candidate]["state"] == "done"
         for candidate in SETUP_STEP_ORDER
@@ -1233,7 +1176,10 @@ def maintain_setup_flightcheck(
         "failureCauses": list(
             agent_state["steps"][step_id].get("failure_causes", [])
         ),
-        "authoringReady": agent_state["authoring_ready"],
+        "authoringReady": is_authoring_ready(
+            agent_state["steps"],
+            agent_state["workspace"],
+        ),
         "mode": agent_state["steps"][step_id].get("mode"),
         "connectReady": agent_state["connect_ready"],
         "activeStep": agent_state["active_step"],
@@ -1280,7 +1226,6 @@ def _record_canonical_setup_blocked(
         recorded_at=now,
     )
     agent_state["active_step"] = _next_setup_step(agent_state["steps"])
-    agent_state["authoring_ready"] = False
     agent_state["connect_ready"] = False
     agent_state["updated_at"] = now
     agent_state["completed_at"] = None
@@ -1369,10 +1314,6 @@ def _record_canonical_setup_ready(
         mode="automated",
         note=SETUP_STEP_NOTES["SETUP-07"],
         recorded_at=now,
-    )
-    agent_state["authoring_ready"] = _is_authoring_ready(
-        agent_state["steps"],
-        agent_state["workspace"],
     )
     agent_state["connect_ready"] = all(
         agent_state["steps"][step_id]["state"] == "done"
@@ -2256,7 +2197,10 @@ def select_local_agent(
         "activeAgent": slug,
         "workspaceFolder": selected.get("folder"),
         "authoringReady": (
-            setup_state.get("authoring_ready")
+            is_authoring_ready(
+                setup_state.get("steps"),
+                setup_state.get("workspace"),
+            )
             if isinstance(setup_state, dict)
             else None
         ),
@@ -2684,7 +2628,10 @@ def attach_existing_dev(
         "connectionStatus": "workspace-ready",
         "workspace": workspace,
         "setupState": CANONICAL_SETUP_STATE.as_posix(),
-        "authoringReady": canonical_agent["authoring_ready"],
+        "authoringReady": is_authoring_ready(
+            canonical_agent["steps"],
+            canonical_agent["workspace"],
+        ),
         "connectReady": canonical_agent["connect_ready"],
     }
     if cleanup_warnings:
@@ -2866,15 +2813,6 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     maintain_flightcheck.add_argument(
-        "--kit-root",
-        type=Path,
-        default=Path.cwd(),
-    )
-    sync_readiness = commands.add_parser(
-        "sync-authoring-readiness",
-        help="Persist the derived authoring-ready marker in canonical state.",
-    )
-    sync_readiness.add_argument(
         "--kit-root",
         type=Path,
         default=Path.cwd(),
@@ -3147,13 +3085,6 @@ def main(argv: list[str] | None = None) -> int:
                 f"{json.dumps(result, ensure_ascii=True)}"
             )
             return 0 if result["state"] == "done" else 1
-        if args.command == "sync-authoring-readiness":
-            result = sync_authoring_readiness(args.kit_root.resolve())
-            print(
-                "DA_AUTHORING_READINESS_JSON:"
-                f"{json.dumps(result, ensure_ascii=True)}"
-            )
-            return 0
         if args.command == "select-agent":
             result = select_local_agent(
                 args.kit_root.resolve(),
