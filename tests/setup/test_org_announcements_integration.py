@@ -61,6 +61,25 @@ def test_prompt_routes_to_the_setup_gated_skill() -> None:
     assert "mcp_config.py materialize-defaults" in skill
 
 
+def test_solution_entry_point_uses_the_configured_bot_title_resolver() -> None:
+    instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
+    invocation = instructions.split("**Org Announcements invocation:**", 1)[1]
+    invocation = " ".join(invocation.split("\n\n", 1)[0].split())
+
+    assert "`ess-org-announcements` MCP server" in invocation
+    assert "src/skills/org-announcements/SKILL.md" in invocation
+    assert "src/skills/shared/agent-title-resolution.md" in invocation
+    assert "explicit/cached-ID precedence" in invocation
+    assert "this provider's read-only `resolve_agent_title_id`" in invocation
+    assert "selected configured `botId`" in invocation
+    assert "shared Regular/LOB selection" in invocation
+    assert "GUID-bound verified per-agent persistence" in invocation
+    assert "Do not use tenant-wide discovery or agent-name search" in invocation
+    assert "do not start or call the landing-page server for announcement discovery" in invocation
+    assert "list_agent_configs" not in invocation
+    assert "search_agents" not in invocation
+
+
 def test_skill_preserves_agent_scope_and_read_only_opening() -> None:
     skill = _normalized(_SKILL)
 
