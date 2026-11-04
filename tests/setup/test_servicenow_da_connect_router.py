@@ -121,7 +121,10 @@ def test_servicenow_connect_docs_suppress_flightcheck_health_table() -> None:
         assert "emit `renderBlock.text` verbatim as an assistant message" in text, path.name
         assert "Never edit `lifecycle.json` by hand" in text, path.name
         assert "`record-checkpoint-results`" in text, path.name
-        assert "`/setup` launcher (`py -3`), never bare `python`" in text, path.name
+        assert (
+            "launcher resolved by `/setup` (`py -3`, `python3`, then `python`), "
+            "never assuming bare `python`"
+        ) in text, path.name
 
     runner = " ".join(
         (skills / "shared" / "lifecycle-runner.md")
@@ -129,7 +132,7 @@ def test_servicenow_connect_docs_suppress_flightcheck_health_table() -> None:
         .split()
     )
     assert "emit `renderBlock.text` verbatim" in runner
-    assert "never bare `python`" in runner
+    assert "never assuming bare `python`" in runner
     assert "**Provider-recorded results.**" in runner
     assert "- `stop-tampered` —" in runner
     assert "`agentRules` array" in runner

@@ -638,14 +638,18 @@ def _acquire_token(
         result,
         selected_account,
     )
-    if account_hint or require_account_identity:
+    # Strict identity verification is opt-in so existing callers keep
+    # treating account_hint as a sign-in preference only.
+    if require_account_identity:
         if not account_name:
             raise AgentBuilderError(
                 "AgentBuilder authentication could not verify the actual "
                 "signed-in account identity."
             )
-    if account_hint:
-        if account_name.casefold() != account_hint.strip().casefold():
+        if (
+            account_hint
+            and account_name.casefold() != account_hint.strip().casefold()
+        ):
             raise AgentBuilderError(
                 "AgentBuilder authenticated a different account than the "
                 "requested setup account."
@@ -743,6 +747,7 @@ def authenticate_flightcheck_dependency(
         scopes=(scope,),
         emit_account_identity=False,
         return_account_identity=True,
+        require_account_identity=True,
     )
     if not account or account.casefold() != account_hint.casefold():
         raise AgentBuilderError("Dependency authentication selected a different or unverifiable account.")
@@ -802,6 +807,7 @@ def authenticate_flightcheck(
     allow_write: bool = False,
     emit_account_identity: bool = True,
     return_account_identity: bool = False,
+    require_account_identity: bool = False,
 ) -> tuple[str, str] | tuple[str, str, str | None]:
     """Acquire a least-privilege token for native AgentBuilder FlightCheck."""
     scopes = flightcheck_scopes(
@@ -818,6 +824,7 @@ def authenticate_flightcheck(
         scopes=scopes,
         emit_account_identity=emit_account_identity,
         return_account_identity=return_account_identity,
+        require_account_identity=require_account_identity,
     )
     if return_account_identity:
         token, account_name = acquired

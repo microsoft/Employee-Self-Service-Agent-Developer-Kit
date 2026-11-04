@@ -2280,6 +2280,7 @@ def test_account_hint_rejects_different_interactive_account(
             "prod",
             cache_path=tmp_path / "token-cache.bin",
             account_hint="test.user@example.test",
+            require_account_identity=True,
         )
 
 
@@ -2312,6 +2313,7 @@ def test_account_hint_rejects_unverifiable_interactive_account(
             "prod",
             cache_path=tmp_path / "token-cache.bin",
             account_hint="test.user@example.test",
+            require_account_identity=True,
         )
 
 
@@ -2361,6 +2363,106 @@ def test_required_account_identity_fails_before_cache_persistence(
     assert persisted is False
 
 
+def _interactive_app(monkeypatch, result):
+    class FakeApp:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_accounts(self):
+            return []
+
+        def acquire_token_interactive(self, **_kwargs):
+            return dict(result)
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+
+_OTHER_ACCOUNT = {
+    "access_token": "test-token",
+    "id_token_claims": {"preferred_username": "other.user@example.test"},
+}
+_NO_IDENTITY = {"access_token": "test-token"}
+
+
+@pytest.mark.parametrize("result", [_OTHER_ACCOUNT, _NO_IDENTITY])
+def test_account_hint_stays_a_preference_by_default(
+    tmp_path,
+    monkeypatch,
+    result,
+) -> None:
+    _interactive_app(monkeypatch, result)
+
+    token = agentbuilder.authenticate(
+        "00000000-0000-4000-8000-000000009999",
+        "prod",
+        cache_path=tmp_path / "token-cache.bin",
+        account_hint="test.user@example.test",
+    )
+
+    assert token == "test-token"
+
+
+@pytest.mark.parametrize(
+    ("result", "message"),
+    [
+        (_OTHER_ACCOUNT, "different account"),
+        (_NO_IDENTITY, "could not verify"),
+    ],
+)
+def test_opt_in_account_verification_rejects_mismatch_or_unverifiable(
+    tmp_path,
+    monkeypatch,
+    result,
+    message,
+) -> None:
+    _interactive_app(monkeypatch, result)
+
+    with pytest.raises(agentbuilder.AgentBuilderError, match=message):
+        agentbuilder.authenticate_flightcheck(
+            "prod",
+            cache_path=tmp_path / "token-cache.bin",
+            account_hint="test.user@example.test",
+            require_account_identity=True,
+        )
+
+
+@pytest.mark.parametrize("result", [_OTHER_ACCOUNT, _NO_IDENTITY])
+def test_non_opt_in_callers_keep_lenient_account_hint(
+    tmp_path,
+    monkeypatch,
+    result,
+) -> None:
+    _interactive_app(monkeypatch, result)
+
+    for call in (
+        lambda: agentbuilder.authenticate_flightcheck(
+            "prod",
+            cache_path=tmp_path / "token-cache.bin",
+            account_hint="test.user@example.test",
+        ),
+        lambda: agentbuilder.authenticate_selected_tenant(
+            "prod",
+            cache_path=tmp_path / "token-cache.bin",
+            account_hint="test.user@example.test",
+        ),
+        lambda: agentbuilder.authenticate_agent_inventory(
+            "prod",
+            cache_path=tmp_path / "token-cache.bin",
+            account_hint="test.user@example.test",
+        ),
+    ):
+        try:
+            call()
+        except agentbuilder.AgentBuilderError as exc:
+            # The test tokens are not JWTs, so tenant extraction may fail; the
+            # account check itself must not be what rejects them.
+            assert "account" not in str(exc).lower()
+
+
 def test_interactive_fallback_reports_interactive_account_not_stale_cache(
     tmp_path,
     monkeypatch,
@@ -2407,6 +2509,7 @@ def test_interactive_fallback_reports_interactive_account_not_stale_cache(
             account_hint="cached@example.test",
             emit_account_identity=False,
             return_account_identity=True,
+            require_account_identity=True,
         )
 
 
@@ -2451,6 +2554,7 @@ def test_interactive_fallback_without_identity_does_not_use_stale_cache(
             account_hint="cached@example.test",
             emit_account_identity=False,
             return_account_identity=True,
+            require_account_identity=True,
         )
 
 

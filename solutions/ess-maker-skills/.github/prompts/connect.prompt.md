@@ -69,7 +69,7 @@ from `actionApplied`, phase status, or earlier conversation context.
 
 **STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead.
 
-**Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the `/setup` launcher (`py -3`), never bare `python`.
+**Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
 
 Immediately before consuming the result, read the current
 `src/skills/connect/shared/lifecycle-runner.md`. The executable decision routes
@@ -149,7 +149,7 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   `question-required`, require the supported
   `header`/`question`/`options`/`allowFreeformInput` canonical shape, pass it
   through `adapt-question`, call `ask_user` with the generated arguments
-  verbatim, and wait. After Daphne answers, continue the matching branch in
+  verbatim, and wait. After the maker answers, continue the matching branch in
   the already
   loaded action document; do not call the handoff again or ask twice;
 - add `--executed-action` only after an action returns `applied` or `recorded`.

@@ -203,7 +203,7 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
             _ACTIONS / "admin-preflight.md",
             (
                 "For {AGENT_DISPLAY_NAME}",
-                "`https://dev184242.service-now.com`",
+                "`https://<your-instance>.service-now.com`",
                 "ask your ServiceNow administrator",
                 "public ServiceNow HTTPS root URL",
                 "portal or module path",

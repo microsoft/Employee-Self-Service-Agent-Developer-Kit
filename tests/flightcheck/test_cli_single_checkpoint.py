@@ -1043,7 +1043,7 @@ class TestHermeticRun:
             "preferred_username": "maker@example.com",
         }
 
-    def test_configured_setup_account_is_reused_and_verified_for_graph(
+    def test_configured_setup_account_does_not_enable_verification(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -1099,10 +1099,10 @@ class TestHermeticRun:
         assert exc.value.code == 0
         assert observed == {
             "tenant_id": "00000000-0000-0000-0000-000000001111",
-            "preferred_username": "maker@example.com",
+            "preferred_username": None,
         }
 
-    def test_configured_setup_account_mismatch_blocks_checkpoint(
+    def test_explicit_preferred_username_mismatch_blocks_checkpoint(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -1160,8 +1160,11 @@ class TestHermeticRun:
         monkeypatch.setattr(cli, "GraphClient", _Graph)
         monkeypatch.chdir(tmp_path)
 
+        args = _args("FAKE-001", tmp_path)
+        args.preferred_username = "maker@example.com"
+
         with pytest.raises(SystemExit) as exc:
-            cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
+            cli._run_single_checkpoint(args)
 
         assert exc.value.code == 1
 

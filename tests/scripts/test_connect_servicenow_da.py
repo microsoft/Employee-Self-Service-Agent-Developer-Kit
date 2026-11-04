@@ -4346,7 +4346,7 @@ def test_preflight_requires_maker_confirmation_for_single_candidate(
     assert manual["allowFreeformInput"] is True
     assert "Employee Self-Service (HR)" in manual["question"]
     assert ENVIRONMENT_ID in manual["question"]
-    assert "`https://dev184242.service-now.com`" in manual["question"]
+    assert "`https://<your-instance>.service-now.com`" in manual["question"]
     assert "ask your ServiceNow administrator" in manual["question"]
     assert "/sp" in manual["question"]
     assert "password" in manual["question"]
@@ -4424,7 +4424,7 @@ def test_preflight_requests_only_missing_instance_url(
     assert "employee-self-service-hr" in manual_body
     assert ENVIRONMENT_ID in manual_body
     assert "Dev realm" in manual_body
-    assert "`https://dev184242.service-now.com`" in manual_body
+    assert "`https://<your-instance>.service-now.com`" in manual_body
     assert "public ServiceNow HTTPS root URL" in manual_body
     assert "portal or module path" in manual_body
     assert "credential" in manual_body
@@ -4479,7 +4479,7 @@ def test_preflight_multiple_candidates_are_independent_normal_choices(
     assert slug in question["question"]
     assert "**Problem**" not in question["question"]
     assert manual["header"] == "ServiceNow instance URL"
-    assert "`https://dev184242.service-now.com`" in manual["question"]
+    assert "`https://<your-instance>.service-now.com`" in manual["question"]
 
 
 def test_preflight_keeps_confirmed_instance_when_new_connection_appears(
@@ -15153,7 +15153,7 @@ def test_every_command_output_carries_agent_rules(
     output = json.loads(capsys.readouterr().out)
     rules = " ".join(output["agentRules"])
     assert len(output["agentRules"]) <= 5
-    assert "py -3" in rules
+    assert "launcher resolved by /setup" in rules
     assert "renderBlock.text" in rules
     assert "lifecycle.json by hand" in rules
     assert "*> $null" in rules

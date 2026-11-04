@@ -4195,6 +4195,7 @@ def _agentbuilder_token(
         cache_path=TOKEN_CACHE,
         force_account_selection=force_account_selection,
         account_hint=context.get("account"),
+        require_account_identity=True,
     )
 
 
@@ -4210,6 +4211,7 @@ def _connectivity_client(
         cache_path=TOKEN_CACHE,
         force_account_selection=force_account_selection,
         account_hint=context.get("account"),
+        require_account_identity=True,
         scopes=tuple(connectivity_scopes(environment["ring"])),
     )
     return ConnectivityClient(
@@ -5562,7 +5564,7 @@ def _preflight_instance_question(
         "question": (
             f"For {agent_label} in environment `{environment_id}` and "
             f"{realm} realm, enter the intended public ServiceNow HTTPS root "
-            "URL.\n\nExample: `https://dev184242.service-now.com`\n\n"
+            "URL.\n\nExample: `https://<your-instance>.service-now.com`\n\n"
             "Use only the instance root (`https://<instance>.service-now.com`). "
             "Do not enter a portal or module path such as `/sp`, `/esc`, or "
             "`/now/...`. Do not enter a username, password, credential, token, "
@@ -10738,6 +10740,8 @@ def resume_handoff(
                 str(context["environment"]["ring"]),
                 "--no-telemetry",
             ]
+            if context.get("account"):
+                argv.extend(["--preferred-username", str(context["account"])])
             commands.append(
                 {
                     "target": target,
@@ -10756,9 +10760,9 @@ def resume_handoff(
         result["checkpoints"] = {
             "decision": "run-exact-commands",
             "interpreterNote": (
-                "Replace the leading `python` with the launcher selected "
-                "during /setup (for example `py -3`); never run bare "
-                "`python` unless setup selected it."
+                "Replace the leading `python` with the launcher resolved "
+                "by /setup (`py -3`, `python3`, then `python`); never "
+                "assume bare `python`."
             ),
             "commands": commands,
         }
@@ -12212,8 +12216,8 @@ def _command_error_recovery(
 
 
 AGENT_RULES = (
-    "Run every command with the /setup launcher (py -3 on Windows), never "
-    "bare `python`.",
+    "Run every command with the launcher resolved by /setup (py -3, "
+    "python3, then python), never assuming bare `python`.",
     "Emit renderBlock.text verbatim (the grouped phases view), or the "
     "ordinaryReply/recovery text a guide output returns, as an assistant "
     "message before any other tool call; never write your own checklist or "

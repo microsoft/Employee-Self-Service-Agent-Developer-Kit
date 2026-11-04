@@ -75,7 +75,7 @@ field. Do not patch the host or invent a business reject/re-ask flow here.
 
 **STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead.
 
-When the controller returns `renderBlock`, emit `renderBlock.text` verbatim as that assistant message; printing it from a terminal or tool call does not count. Run every command with the launcher selected during `/setup` (for example `py -3`), never bare `python`. When the contract sets `checkpointRecording: "provider-command-v1"`, never edit `lifecycle.json` by hand; use the controller commands.
+When the controller returns `renderBlock`, emit `renderBlock.text` verbatim as that assistant message; printing it from a terminal or tool call does not count. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`. When the contract sets `checkpointRecording: "provider-command-v1"`, never edit `lifecycle.json` by hand; use the controller commands.
 
 For DA ServiceNow, render the controller's
 `renderBlock.text` as an ordinary agent response. It is the grouped phases view:
@@ -503,7 +503,7 @@ Controller decisions:
   controller commands.
 
 Provider controller JSON may also carry an `agentRules` array. Follow it: use
-the /setup launcher, show `renderBlock.text` as an assistant message before any
+the launcher resolved by /setup, show `renderBlock.text` as an assistant message before any
 other tool call, and never edit `lifecycle.json` by hand.
 
 After an action or checkpoint updates state and returns to L.3, rerun the

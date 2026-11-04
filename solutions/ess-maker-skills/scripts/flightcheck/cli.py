@@ -1351,9 +1351,7 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     alm_import_target = None
     connectivity = None
     preferred_username = str(
-        getattr(args, "preferred_username", "")
-        or config.get("account")
-        or ""
+        getattr(args, "preferred_username", "") or ""
     ).strip() or None
     canonical_username = preferred_username
     account_verification_required = (
@@ -1601,6 +1599,7 @@ def _run_single_checkpoint(args, *, compact_stream=None):
                 allow_write=bool(getattr(args, "alm_import_probe", False)),
                 emit_account_identity=False,
                 return_account_identity=True,
+                require_account_identity=service_now_profile is not None,
             )
             (
                 native_token,
