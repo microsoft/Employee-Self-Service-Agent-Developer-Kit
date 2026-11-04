@@ -69,6 +69,8 @@ from `actionApplied`, phase status, or earlier conversation context.
 
 **STOP — render before acting.** After every `resume-handoff`, your very next assistant message — before any other tool call — must contain `transport.ordinaryReply.text` verbatim (first run or group change) or `progress.checklistText` (transitions), and `progress.currentPhase.startText` before each action or checkpoint. Never summarize it or write "render the plan" instead.
 
+**Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the `/setup` launcher (`py -3`), never bare `python`.
+
 Immediately before consuming the result, read the current
 `src/skills/connect/shared/lifecycle-runner.md`. The executable decision routes
 the shared runner; it does not replace L.2 live re-verification, L.4a role and

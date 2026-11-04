@@ -77,6 +77,38 @@ def test_servicenow_connect_entry_files_gate_progress_rendering() -> None:
         assert 'write "render the plan" instead' in text, path.name
 
 
+def test_servicenow_connect_entry_files_carry_hard_rules() -> None:
+    skills = _SOLUTION / "src" / "skills" / "connect"
+    entry_files = (
+        _SOLUTION / ".github" / "prompts" / "connect.prompt.md",
+        skills / "servicenow" / "entry.md",
+        skills / "servicenow-da-hrsd" / "SKILL.md",
+        skills / "servicenow-da-itsm" / "SKILL.md",
+    )
+    for path in entry_files:
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "**Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action." in text, path.name
+        assert "emit `renderBlock.text` verbatim as an assistant message" in text, path.name
+        assert "Never edit `lifecycle.json` by hand" in text, path.name
+        assert "`record-checkpoint-results`" in text, path.name
+        assert "`/setup` launcher (`py -3`), never bare `python`" in text, path.name
+
+    runner = " ".join(
+        (skills / "shared" / "lifecycle-runner.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "emit `renderBlock.text` verbatim" in runner
+    assert "never bare `python`" in runner
+    assert "**Provider-recorded results.**" in runner
+    assert "record-checkpoint-results --phase {PHASE_ID}" in runner
+    for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
+        contract = json.loads(
+            (skills / provider / "contract.json").read_text(encoding="utf-8")
+        )
+        assert contract["checkpointRecording"] == "provider-command-v1"
+
+
 def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     prompt = (
         _SOLUTION / ".github" / "prompts" / "connect.prompt.md"

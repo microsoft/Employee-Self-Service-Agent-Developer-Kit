@@ -75,6 +75,8 @@ field. Do not patch the host or invent a business reject/re-ask flow here.
 
 **STOP — render before acting.** After every `resume-handoff`, your very next assistant message — before any other tool call — must contain `transport.ordinaryReply.text` verbatim (first run or group change) or `progress.checklistText` (transitions), and `progress.currentPhase.startText` before each action or checkpoint. Never summarize it or write "render the plan" instead.
 
+When the controller returns `renderBlock`, emit `renderBlock.text` verbatim as that assistant message; printing it from a terminal or tool call does not count. Run every command with the launcher selected during `/setup` (for example `py -3`), never bare `python`. When the contract sets `checkpointRecording: "provider-command-v1"`, never edit `lifecycle.json` by hand; use the controller commands.
+
 For DA ServiceNow, render the controller's
 `transport.ordinaryReply.text` as an ordinary agent response. It contains the
 automatic preflight plus the complete HR or IT collaboration groups, one
@@ -771,6 +773,22 @@ Other providers retain their existing remediation format.
 Aggregate the phase's outcome using the phase's `completionStatuses`
 (default `["Passed"]`) and the status rules in
 `lifecycle-contract-schema.md`:
+
+**Provider-recorded results.** When the contract sets
+`checkpointRecording: "provider-command-v1"` (ServiceNow), do not hand-write
+phase state. Pass the validated compact rows to the controller, including the
+reuse path after `record-shared-reuse` and the Test-phase Maker acknowledgement
+after `record-test`:
+
+```text
+python scripts/connect_servicenow_da.py --provider {PROVIDER} --agent-slug {AGENT_SLUG} record-checkpoint-results --phase {PHASE_ID} --result {CHECKPOINT_ID}={Status} [--result ...] [--maker-acknowledged {CHECKPOINT_ID}]
+```
+
+It validates ids, status, phase order and evidence, writes `status`,
+`lastVerifiedAt`, `checkpointResults` and `checkpointAcknowledgements`, and
+returns `outcome` (`done`, `in-progress` or `blocked`) plus `resumeArguments`.
+Pass `resumeArguments` to the next `resume-handoff`. The hand-write bullets
+below apply only to providers without this flag.
 
 - **All checkpoints "count toward done"** (after any needed attestation for
   `Manual`/`Warning` results — ask the same style of yes/no confirmation

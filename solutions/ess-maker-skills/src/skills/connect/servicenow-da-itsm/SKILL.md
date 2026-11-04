@@ -81,6 +81,8 @@ Never jump directly from a result to another checkpoint or infer that
 `actionApplied` skips an incomplete provider action.
 **STOP — render before acting.** After every `resume-handoff`, your very next assistant message — before any other tool call — must contain `transport.ordinaryReply.text` verbatim (first run or group change) or `progress.checklistText` (transitions), and `progress.currentPhase.startText` before each action or checkpoint. Never summarize it or write "render the plan" instead.
 
+**Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the `/setup` launcher (`py -3`), never bare `python`.
+
 Render the ServiceNow `resume-handoff.progress` checklist and current-step
 updates exactly as the shared runner specifies; do not suppress them under
 the ordinary Message-block silence rule.
