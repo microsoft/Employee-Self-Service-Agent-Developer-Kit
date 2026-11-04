@@ -46,22 +46,6 @@ defined maker interaction.
 
 Choice lists define the standard maker-facing UX for the current decision. Render the listed choices in the documented order with their labels unchanged and initially unselected.
 
-### Unavailable-user and automated-answer guard
-
-Every setup choice requires the maker's submitted option. If a question result,
-form value, or host-generated reply contains `The user is not available to
-respond`, `Work autonomously and make good decisions`, `Choose a pragmatic
-option`, or an equivalent unavailable-user placeholder, treat the question as
-unanswered. Keep the current setup stage pending and stop before the selected
-account, ALM enrollment/skip, create/import, reset, replacement, or other
-consequential branch.
-
-`autoReply: true`, `answeredExternally: true`, command approval, tool approval,
-keyboard focus, and a visually highlighted option are not maker consent. Never
-translate them into **Continue**, **Skip enrollment**, or another product
-choice. Resume only after the maker submits one of the current question's
-documented choices.
-
 The choice list is not an exhaustive recovery contract. If the maker instead types another recovery action in chat, treat that message as current intent and compose the available bounded operations when the requested action can be performed. Preserve existing evidence, obtain the existing confirmation for consequential mutations, and let authoritative service operations validate remote state. Do not reject a recovery solely because it is absent from the presented choices. When the typed intent is ambiguous, explain what must be resolved and present the standard choices again.
 
 Typed intent may select only a documented setup route or bounded read-only recovery. It never authorizes an unlisted mutation or replaces an explicit confirmation required before create, import, replacement, reset, cleanup, or another consequential action.
@@ -336,17 +320,9 @@ need guidance finding the setting.
   `{PYTHON} -c "import sys; print(sys.executable)"`, one terminal command at a
   time: `py -3`, `python3`, then `python` on Windows; `python3`, then `python`
   on macOS or Linux.
-- Select the first invocation that succeeds and reuse that exact launcher for
-  dependency validation and every later setup command.
-- Perform dependency validation and recovery with the explicit terminal
-  commands in `.github/prompts/setup.prompt.md`. Treat generic VS Code
-  environment creation as outside this flow: do not invoke
-  `configurePythonEnvironment`, **Create Environment**, or create a new
-  `.venv`. Those paths can scan unrelated workspace requirement files and do
-  not apply the kit's Windows ARM64 binary guardrails.
+- Reuse the first invocation that succeeds throughout setup.
 - If needed, check active virtual environments, common local installation
-  paths, and repository-supported repair commands only after the selected
-  launcher fails the setup prompt's bounded dependency check or recovery.
+  paths, and repository-supported repair commands.
 - When local recovery options appear exhausted, explain the external action
   needed and offer to perform it.
 

@@ -539,10 +539,6 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     foundation = _FOUNDATION.read_text(encoding="utf-8")
     normalized_prompt = " ".join(prompt.split())
     normalized_foundation = " ".join(foundation.split())
-    version_check = (
-        "{PYTHON} -m pip install --dry-run --no-index "
-        "--disable-pip-version-check -r scripts/requirements.txt"
-    )
     runtime_message = """**Message:**
 
 **Setup command approvals**
@@ -576,7 +572,7 @@ need guidance finding the setting.
 > result and I'll continue setup from this step."""
 
     assert prompt.index("Read `src/skills/foundation-setup/SKILL.md` first") < (
-        prompt.index(version_check)
+        prompt.index("{PYTHON} -m pip install")
     )
     assert runtime_message in foundation
     assert foundation.index(runtime_message) < foundation.index(
@@ -622,11 +618,6 @@ need guidance finding the setting.
     assert "`python3`, then `python` on macOS or Linux" in normalized_foundation
     assert "check each candidate with" in normalized_foundation
     assert "one terminal command at a time" in normalized_foundation
-    assert "reuse that exact launcher" in normalized_foundation
-    assert "`configurePythonEnvironment`" in foundation
-    assert "**Create Environment**" in foundation
-    assert "create a new `.venv`" in normalized_foundation
-    assert "explicit terminal commands" in normalized_foundation
     assert "active virtual environments, common local installation paths" in (
         normalized_foundation
     )
@@ -955,12 +946,10 @@ def test_native_setup_skills_pass_resolved_target_fields() -> None:
     prod_to_dev = _DA_PROD_TO_DEV.read_text(encoding="utf-8")
     mos = _DA_MOS_STARTER.read_text(encoding="utf-8")
     environment_target = _DA_ENVIRONMENT_TARGET.read_text(encoding="utf-8")
-    normalized_environment_target = " ".join(environment_target.split())
 
-    for text in (existing, imported, prod_to_dev, mos):
+    for text in (foundation, existing, imported, prod_to_dev, mos):
         assert "--target-url" not in text
         assert "--source-url" not in text
-    assert '--target-url "{SUPPLIED_TARGET}"' in environment_target
 
     for text in (foundation, existing, imported, mos):
         assert '--environment-id "{ENVIRONMENT_ID}"' in text
@@ -980,18 +969,6 @@ def test_native_setup_skills_pass_resolved_target_fields() -> None:
         assert "da-environment-target.md" in normalized_text
     assert "recognized Copilot Studio hostname" in environment_target
     assert "copilotstudio.preview.microsoft.com" in environment_target
-    assert "setup_existing_da.py resolve-target" in environment_target
-    assert "before the first account selection" in normalized_environment_target
-    assert "--require-agent" not in environment_target
-    assert "An environment-only URL is valid" in environment_target
-    assert "`ringSource: legacy-default`" in environment_target
-    assert (
-        "never pass `preview` as a service ring"
-        in normalized_environment_target
-    )
-    assert "Do not construct `--ring` from a hostname word" in (
-        normalized_environment_target
-    )
 
 
 def test_empty_setup_offers_recorded_agent_without_requesting_url() -> None:
@@ -1202,11 +1179,6 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     normalized_environment_target = " ".join(environment_target.split())
     reference = _MOS_STARTER_REFERENCE.read_text(encoding="utf-8")
     existing_dev = _DA_EXISTING_DEV.read_text(encoding="utf-8")
-    setup_prompt = (
-        _SOLUTION / ".github" / "prompts" / "setup.prompt.md"
-    ).read_text(encoding="utf-8")
-    enrollment = _ALM_ENROLLMENT.read_text(encoding="utf-8")
-    normalized_enrollment = " ".join(enrollment.split())
 
     assert "src/reference/mos-starter-package.md" in text
     assert "src/skills/foundation-setup/da-environment-target.md" in text
@@ -1522,21 +1494,6 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         normalized_foundation
     )
     assert "persists the verified account" in normalized_foundation
-    assert "Unavailable-user and automated-answer guard" in foundation
-    assert "The user is not available to respond" in normalized_foundation
-    assert "Work autonomously and make good decisions" in normalized_foundation
-    assert "Choose a pragmatic option" in normalized_foundation
-    assert "`autoReply: true`" in foundation
-    assert "`answeredExternally: true`" in foundation
-    assert "are not maker consent" in normalized_foundation
-    assert "Never translate them into **Continue**, **Skip enrollment**" in (
-        normalized_foundation
-    )
-    assert (
-        "Apply its unavailable-user and automated-answer guard"
-        in setup_prompt
-    )
-    assert "perform no enrollment or attachment" in normalized_enrollment
     assert "`/connect` and its FlightChecks can reuse and reverify" in (
         foundation
     )

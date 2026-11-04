@@ -357,13 +357,6 @@ def resolve_da_target(
             "Supplied target and --ring identify different service rings."
         )
     resolved["ring"] = ring or derived_ring or "prod"
-    resolved["ringSource"] = (
-        "explicit"
-        if ring
-        else "recognized-target"
-        if derived_ring
-        else "legacy-default"
-    )
     if resolved_agent := (explicit_agent or derived_agent):
         resolved["agentId"] = resolved_agent
         if derived_agent:
@@ -702,7 +695,7 @@ def _remove_directory(path: Path, label: str) -> str | None:
     if not path.exists():
         return None
     try:
-        shutil.rmtree(_extended_length_path(path))
+        shutil.rmtree(path)
     except OSError as exc:
         return f"{label} cleanup failed ({type(exc).__name__}: {exc})"
     return None
@@ -1995,24 +1988,9 @@ def _create_baseline(destination: Path) -> None:
             continue
         target = baseline / child.name
         if child.is_dir():
-            shutil.copytree(
-                _extended_length_path(child),
-                _extended_length_path(target),
-            )
+            shutil.copytree(child, target)
         else:
-            shutil.copy2(
-                _extended_length_path(child),
-                _extended_length_path(target),
-            )
-
-
-def _extended_length_path(path: Path) -> str:
-    resolved = str(path.resolve())
-    if os.name != "nt" or resolved.startswith("\\\\?\\"):
-        return resolved
-    if resolved.startswith("\\\\"):
-        return "\\\\?\\UNC\\" + resolved[2:]
-    return "\\\\?\\" + resolved
+            shutil.copy2(child, target)
 
 
 def _load_config(config_path: Path) -> dict[str, Any]:
@@ -2487,7 +2465,7 @@ def attach_existing_dev(
                 )
                 baseline = destination / ".baseline"
                 if baseline.exists():
-                    shutil.rmtree(_extended_length_path(baseline))
+                    shutil.rmtree(baseline)
                 restore_from(str(destination), str(temporary))
                 cleanup_failure = _remove_directory(
                     temporary,
@@ -2762,21 +2740,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="List cached AgentBuilder sign-in names without authenticating.",
     )
     cached_accounts.add_argument("--kit-root", type=Path, default=Path.cwd())
-    resolve_target = commands.add_parser(
-        "resolve-target",
-        help=(
-            "Resolve environment, agent, and supported service ring from "
-            "target text without authenticating."
-        ),
-    )
-    resolve_target.add_argument("--target-url")
-    resolve_target.add_argument("--environment-id")
-    resolve_target.add_argument("--agent-id")
-    resolve_target.add_argument(
-        "--ring",
-        choices=("prod", "preprod", "test"),
-    )
-    resolve_target.add_argument("--require-agent", action="store_true")
     seed_shared_cache = commands.add_parser(
         "seed-shared-cache",
         help="Copy the AgentBuilder cache to a missing shared cache. No sign-in.",
@@ -3010,19 +2973,6 @@ def main(argv: list[str] | None = None) -> int:
             result = {"accounts": cached_account_names(cache_path)}
             print(
                 "DA_AGENTBUILDER_ACCOUNTS_JSON:"
-                f"{json.dumps(result, ensure_ascii=True)}"
-            )
-            return 0
-        if args.command == "resolve-target":
-            result = resolve_da_target(
-                target_url=args.target_url,
-                environment_id=args.environment_id,
-                agent_id=args.agent_id,
-                ring=args.ring,
-                require_agent=args.require_agent,
-            )
-            print(
-                "DA_TARGET_JSON:"
                 f"{json.dumps(result, ensure_ascii=True)}"
             )
             return 0

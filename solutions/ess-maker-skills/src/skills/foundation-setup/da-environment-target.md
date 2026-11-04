@@ -6,27 +6,6 @@ Use this shared path to resolve the Power Platform environment for DA foundation
 
 ## Resolve the service ring
 
-When the request supplies target text or a Copilot Studio URL, resolve it
-before the first account selection, authentication, or environment listing:
-
-```text
-python scripts/setup_existing_da.py resolve-target \
-  --target-url "{SUPPLIED_TARGET}"
-```
-
-Parse `DA_TARGET_JSON:` and retain its exact `environmentId`, `agentId`,
-`source`, `ring`, and `ringSource`. This command is local-only and does not
-authenticate. An environment-only URL is valid; require an agent only in the
-later direct-agent branch.
-
-- For `ringSource: recognized-target` or `ringSource: explicit`, use its
-  `ring` in every later command.
-- For `ringSource: legacy-default`, the returned `prod` value is the default
-  ring because neither the target nor the request identified another ring.
-
-Do not construct `--ring` from a hostname word, and never pass `preview` as a
-service ring; the supported API rings are `prod`, `preprod`, and `test`.
-
 Resolve the ring in this order: a recognized Copilot Studio hostname, supplied target context, an explicit current-request instruction, then `prod`. Map `copilotstudio.microsoft.com` and `copilotstudio.preview.microsoft.com` to `prod`, and infer `test` or `preprod` when the supplied URL explicitly identifies either ring. When earlier evidence does not identify the ring, honor an explicit request to run setup in the Preview, `preprod`/Pre-production, or `test`/Test ring. Otherwise use `prod`. Do not show a ring-selection question or infer an internal ring from an environment name or uncertainty.
 
 Retain `{COPILOT_STUDIO_ORIGIN}`, `{POWER_PLATFORM_ADMIN_ORIGIN}`, and `{POWER_APPS_ORIGIN}` with the ring evidence. An explicit Preview URL or request keeps `RING: prod` but uses `https://copilotstudio.preview.microsoft.com`, `https://admin.preview.powerplatform.microsoft.com`, and `https://make.preview.powerapps.com`. A production target or the implicit `prod` default uses `https://copilotstudio.microsoft.com`, `https://admin.powerplatform.microsoft.com`, and `https://make.powerapps.com`. `preprod` uses `https://copilotstudio.preprod.microsoft.com`, `https://admin.preprod.powerplatform.microsoft.com`, and `https://make.preprod.powerapps.com`. `test` uses `https://copilotstudio.test.microsoft.com`, `https://admin.test.powerplatform.microsoft.com`, and `https://make.test.powerapps.com`. Every later ring-aware portal link must use these retained origins rather than reconstructing an origin from `{RING}` alone.
