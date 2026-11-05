@@ -1,0 +1,24 @@
+{
+  "capabilities": [
+    {
+      "name": "GraphConnectors",
+      "connections": [
+        {
+          "connection_id": "ServiceNowKB2608130006"
+        }
+      ]
+    },
+    {
+      "name": "OneDriveAndSharePoint",
+      "items_by_sharepoint_ids": [
+        {
+          "site_id": "4140ea21-9b2b-4cd3-ae2e-43bb75b84a1f",
+          "web_id": "f969716d-0b79-4cef-b19c-11bb5ae2f3f7"
+        }
+      ],
+      "x-high_value_index_properties": {
+        "use_high_value_index": true
+      }
+    }
+  ]
+}

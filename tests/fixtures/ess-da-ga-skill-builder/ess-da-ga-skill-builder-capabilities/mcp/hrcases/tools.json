@@ -1,0 +1,136 @@
+{
+  "tools": [
+    {
+      "name": "hr__get_cases",
+      "description": "Shows the signed-in employee's own HR cases in a widget, with filters for state and subject.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed"
+            ]
+          },
+          "subject": {
+            "type": "string"
+          },
+          "number": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://widget/cases.html"
+        }
+      }
+    },
+    {
+      "name": "hr__create_case_form",
+      "description": "Opens a form to create an HR case. The form looks up HR services itself; prefill what the user said.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "hr_service": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": false
+      },
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://widget/case-form.html"
+        }
+      }
+    },
+    {
+      "name": "hr__update_case",
+      "description": "Updates the employee's own open HR case. Use work_note to add a note.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sys_id": {
+            "type": "string"
+          },
+          "work_note": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sys_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false
+      }
+    },
+    {
+      "name": "hr__attach_file",
+      "description": "Attaches a file to an HR case. Called by the case widget only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sys_id": {
+            "type": "string"
+          },
+          "file_name": {
+            "type": "string"
+          },
+          "content_base64": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sys_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false
+      },
+      "_meta": {
+        "ui": {
+          "visibility": [
+            "app"
+          ]
+        }
+      }
+    },
+    {
+      "name": "hr__delete_case",
+      "description": "Deletes a draft HR case.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sys_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sys_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true
+      }
+    }
+  ]
+}
