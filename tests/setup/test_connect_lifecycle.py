@@ -317,7 +317,7 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
         "**Values to use**",
         "**Action**",
         "**Success**",
-        "**Recheck and resume**",
+        "**Check again and resume**",
     ):
         assert heading in runner
     assert "first execution, completed-phase re-verification, and resume" in (

@@ -1231,7 +1231,7 @@ def identity_direct_handoff(
                     "askUserArguments"
                 ],
                 "unavailableReply": (
-                    f"Please loop in the {group['role']} for "
+                    f"Please involve your {group['role']} for "
                     f"{group['label']}, then answer the same question again."
                     "\n\nNo business group, lifecycle phase, evidence, "
                     "attestation, or accepted contract revision has advanced."
@@ -9516,15 +9516,15 @@ def _phase_customer_label(
     contract_label: str,
 ) -> str:
     labels = {
-        "preflight": "Check existing setup",
+        "preflight": "Review the current setup",
         "plugin-prerequisites": "Confirm HR ServiceNow prerequisite",
-        "entra-registration": "Confirm Entra identity options",
+        "entra-registration": "Confirm the Microsoft Entra identity details",
         "servicenow-oidc": "Confirm ServiceNow user mapping",
         "credential": "Check ServiceNow connection",
-        "topics": "Prepare agent topics",
+        "topics": "Turn on the ServiceNow topics",
         "portal-url": "Set employee portal URL",
-        "agent-connection": "Connect this agent",
-        "test": "Test ServiceNow",
+        "agent-connection": "Connect this agent to ServiceNow",
+        "test": "Test a ServiceNow request",
         "publish": "Publish agent",
     }
     return labels.get(phase_id, contract_label)
@@ -9678,7 +9678,7 @@ def _build_phase_progress(
     headline = (
         f"Resuming {display_name} connection."
         if has_prior_progress
-        else f"Starting {display_name} connection."
+        else f"Starting the {display_name} connection."
     )
 
     def render_grouped(
@@ -9740,8 +9740,8 @@ def _build_phase_progress(
             "groupedErrorText": render_grouped(
                 current_status=("❌", "Needs attention")
             ),
-            "waitingText": f"Waiting — {label}: your input is needed.",
-            "needsAttentionText": f"Needs attention — {label}.",
+            "waitingText": f"Waiting — {label}: please provide the requested information to continue.",
+            "needsAttentionText": f"{label} needs your review before setup can continue.",
         }
     return progress
 
@@ -9950,12 +9950,12 @@ def _business_group_availability_question(
 ) -> dict[str, Any]:
     copy_by_group = {
         "hr-prerequisite": {
-            "question": "Is the ServiceNow admin available now?",
+            "question": "Is your ServiceNow administrator available to complete this step?",
             "yes": "Yes, the ServiceNow admin is available now",
             "no": "No, I need to bring the ServiceNow admin in",
         },
         "entra-identity": {
-            "question": "Is the Entra admin available now?",
+            "question": "Is your Microsoft Entra administrator available to complete this step?",
             "yes": "Yes, the Entra admin is available now",
             "no": "No, I need to bring the Entra admin in",
         },
@@ -9973,7 +9973,7 @@ def _business_group_availability_question(
             ),
         },
         "maker-configuration": {
-            "question": "Is the Maker available now?",
+            "question": "Are you available to complete this step?",
             "yes": "Yes, the Maker is available now",
             "no": "No, I need to bring the Maker in",
         },
@@ -10353,7 +10353,7 @@ def _business_group_transport(
             "available": roles_available,
             "stateChanged": False,
             "unavailableReply": (
-                f"Please loop in the {current_group['role']} for "
+                f"Please involve your {current_group['role']} for "
                 f"{current_group['label']}, then answer the same question "
                 "again.\n\nNo business group, lifecycle phase, evidence, "
                 "attestation, or accepted contract revision has advanced."
@@ -10584,6 +10584,12 @@ _RENDER_INSTRUCTION = (
 )
 
 
+_WAITING_RESUME_NOTE = (
+    "Progress is saved. Run `/connect servicenow` again when you are ready "
+    "to continue."
+)
+
+
 def _resume_render_block(
     progress: dict[str, Any],
     transport: dict[str, Any],
@@ -10601,7 +10607,11 @@ def _resume_render_block(
         parts = [final_text]
     elif waiting and isinstance(current, dict):
         kind = "waiting"
-        parts = [str(current["groupedWaitingText"]), str(current["waitingText"])]
+        parts = [
+            str(current["groupedWaitingText"]),
+            str(current["waitingText"]),
+            _WAITING_RESUME_NOTE,
+        ]
     elif (
         isinstance(current, dict)
         and isinstance(current_item, dict)
@@ -10665,7 +10675,11 @@ def _checkpoint_render_block(
         parts = [current["groupedErrorText"], current["needsAttentionText"]]
     else:
         kind = "waiting"
-        parts = [current["groupedWaitingText"], current["waitingText"]]
+        parts = [
+            current["groupedWaitingText"],
+            current["waitingText"],
+            _WAITING_RESUME_NOTE,
+        ]
     return {
         "kind": kind,
         "text": "\n\n".join(parts),
@@ -11246,7 +11260,7 @@ def _recovery_handoff(
         f"**Values to use**\n{values}\n\n"
         f"**Action**\n{action}\n\n"
         f"**Success**\n{success}\n\n"
-        f"**Recheck and resume**\n{recheck}"
+        f"**Check again and resume**\n{recheck}"
     )
     return {
         "problem": problem,
