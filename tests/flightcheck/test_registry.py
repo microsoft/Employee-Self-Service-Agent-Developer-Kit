@@ -12,6 +12,9 @@ feature relies on.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from flightcheck import registry
@@ -20,6 +23,9 @@ from flightcheck.runner import Priority, Role
 from flightcheck.checks.workday import run_workday_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
+from flightcheck.checks.servicenow_da_hrsd import (
+    run_servicenow_da_hrsd_checks,
+)
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
@@ -230,6 +236,91 @@ class TestTransitiveRequirements:
         assert [label for label, _ in connections.ordered_fns] == [
             "Native Agent"
         ]
+
+    def test_servicenow_entra_setup_runs_one_registered_category(self):
+        setup_id = "SN-DA-HRSD-ENTRA-SETUP-001"
+        assert registry.resolve(setup_id).key == setup_id
+        plan = registry.transitive_requirements(setup_id)
+        assert plan.clients == frozenset({registry.AGENTBUILDER})
+        assert plan.ordered_fns == [
+            ("ServiceNow DA HRSD", run_servicenow_da_hrsd_checks)
+        ]
+        for retired_id in (
+            "SN-DA-HRSD-ENTRA-APP-001",
+            "SN-DA-HRSD-ENTRA-CLAIMS-001",
+            "SN-DA-HRSD-ENTRA-SCOPE-001",
+            "SN-DA-HRSD-ENTRA-PREAUTH-001",
+        ):
+            assert registry.resolve(retired_id) is None
+
+    def test_servicenow_hrsd_checkpoints_use_native_read_clients(self):
+        package = registry.transitive_requirements("SN-DA-HRSD-PKG-001")
+        assert package.clients == frozenset({registry.AGENTBUILDER})
+        assert package.requires_dataverse_endpoint is False
+        assert package.ordered_fns == [
+            ("ServiceNow DA HRSD", run_servicenow_da_hrsd_checks)
+        ]
+
+        entra = registry.transitive_requirements(
+            "SN-DA-HRSD-ENTRA-SETUP-001"
+        )
+        assert entra.clients == frozenset({registry.AGENTBUILDER})
+        assert entra.requires_dataverse_endpoint is False
+
+        test = registry.transitive_requirements("SN-DA-HRSD-TEST-001")
+        assert test.clients == frozenset(
+            {registry.AGENTBUILDER, registry.CONNECTIVITY}
+        )
+        assert test.requires_dataverse_endpoint is False
+        assert [label for label, _ in test.ordered_fns] == [
+            "ServiceNow DA HRSD"
+        ]
+        assert registry.resolve("SN-DA-HRSD-PARAMETER-SHARING-001") is None
+        portal = registry.resolve("SN-DA-HRSD-PORTAL-001")
+        assert portal is not None
+        assert portal.clients == frozenset({registry.AGENTBUILDER})
+        assert portal.prereqs == ("SN-DA-HRSD-TOPICS-001",)
+        assert registry.resolve(
+            "SN-DA-HRSD-AGENT-CONNECTION-001"
+        ).prereqs == (
+            "SN-DA-HRSD-CREDENTIAL-001",
+            "SN-DA-HRSD-PORTAL-001",
+        )
+        assert registry.resolve("SN-DA-HRSD-TEST-001").prereqs == (
+            "SN-DA-HRSD-TOPICS-001",
+            "SN-DA-HRSD-AGENT-CONNECTION-001",
+        )
+
+        preflight = registry.transitive_requirements(
+            "SN-DA-HRSD-ADMIN-PREFLIGHT-001"
+        )
+        assert preflight.clients == frozenset({registry.AGENTBUILDER})
+
+    def test_servicenow_realm_deployment_checkpoints_are_not_registered(self):
+        assert registry.resolve("SN-DA-DEPLOYMENT-001") is None
+        assert registry.resolve("SN-DA-HRSD-DEPLOYMENT-001") is None
+        assert registry.resolve("SN-DA-ITSM-DEPLOYMENT-001") is None
+
+    def test_servicenow_graph_removal_does_not_change_workday_graph(self):
+        for profile in ("HRSD", "ITSM"):
+            plan = registry.transitive_requirements(
+                f"SN-DA-{profile}-ENTRA-SETUP-001"
+            )
+            assert plan.clients == frozenset({registry.AGENTBUILDER})
+            assert registry.GRAPH not in plan.clients
+
+        workday = registry.transitive_requirements("WD-CONN-102")
+        assert registry.GRAPH in workday.clients
+
+    def test_prerequisite_client_pruning_is_servicenow_opt_in(self):
+        servicenow = registry.resolve("SN-DA-HRSD-TEST-001")
+        workday = registry.resolve("WD-RUN-001")
+
+        assert servicenow.inherit_prereq_clients is False
+        assert workday.inherit_prereq_clients is True
+        assert registry.PP_ADMIN in registry.transitive_requirements(
+            "WD-RUN-001"
+        ).clients
 
     def test_ess_soln_uses_agentbuilder_without_dataverse(self):
         spec = registry.resolve("ESS-SOLN-001")
@@ -492,3 +583,66 @@ class TestDaProfilesExcludeCeaSolutionGate:
         # Removing it from the DA profiles must not deregister the check;
         # the CEA/legacy paths still resolve and target it.
         assert registry.resolve("ESS-SOLN-001") is not None
+
+
+_CONNECT_SKILLS = (
+    Path(__file__).resolve().parents[2]
+    / "solutions"
+    / "ess-maker-skills"
+    / "src"
+    / "skills"
+    / "connect"
+)
+# Registered SN-DA-* checkpoints that no contract references, with the reason.
+_UNREFERENCED_SN_DA_ALLOWLIST: dict[str, str] = {
+    key: "Shared DA registry check used outside Connect contracts."
+    for key in ("SN-DA-AUTH-001", "SN-DA-TOPIC-001", "SN-DA-PORTAL-001")
+}
+
+
+def _contract_checkpoints(contract: dict) -> set[str]:
+    referenced = {contract["detect"]["checkpoint"]}
+    for phase in contract["phases"]:
+        referenced.update(phase.get("checkpoints", []))
+    return referenced
+
+
+class TestServiceNowDaRegistryMatchesContracts:
+    def test_every_sn_da_checkpoint_is_referenced_by_a_contract(self):
+        referenced: set[str] = set()
+        for contract_path in _CONNECT_SKILLS.glob("servicenow-da-*/contract.json"):
+            contract = json.loads(contract_path.read_text(encoding="utf-8"))
+            pending = list(_contract_checkpoints(contract))
+            while pending:
+                key = pending.pop()
+                if key in referenced:
+                    continue
+                referenced.add(key)
+                spec = registry.resolve(key)
+                assert spec is not None, key
+                pending.extend(spec.prereqs)
+        registered = {
+            spec.key
+            for spec in registry.list_checkpoints()
+            if spec.key.startswith("SN-DA-")
+        }
+
+        assert registered
+        assert registered - referenced - set(_UNREFERENCED_SN_DA_ALLOWLIST) == set()
+
+    def test_publish_checkpoint_is_not_registered(self):
+        keys = {spec.key for spec in registry.list_checkpoints()}
+
+        assert not {key for key in keys if "PUBLISH" in key}
+        assert registry.resolve("SN-DA-HRSD-PUBLISH-001") is None
+        assert registry.resolve("SN-DA-ITSM-PUBLISH-001") is None
+
+    def test_list_checkpoints_output_omits_publish(self, capsys):
+        from flightcheck.cli import _print_checkpoint_list
+
+        _print_checkpoint_list()
+        output = capsys.readouterr().out
+
+        assert "SN-DA-HRSD-PKG-001" in output
+        assert "SN-DA-ITSM-PKG-001" in output
+        assert "PUBLISH" not in output

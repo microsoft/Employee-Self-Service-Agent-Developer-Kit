@@ -309,7 +309,15 @@ administrator details. Custom-engine Workday guidance is maintained on
 
 ### ServiceNow (HRSD / ITSM)
 
-Guided ServiceNow setup is not yet available in ADK. You can configure the ServiceNow connection manually in Copilot Studio or contact admin.
+Run `/connect servicenow` to connect an ESS DA HR (HRSD) or ESS DA IT (ITSM)
+Development agent. Connect shows the supported ServiceNow agents, lets you pick
+one or paste its Copilot Studio link, and resumes the saved progress for the
+selected agent. Settings without a reliable DA-scoped API require explicit
+maker or administrator confirmation. These items are reported as human-verified
+("Confirmed by the administrator", "Confirmed by the Maker") rather than as
+passing Connect checks.
+
+Connecting ServiceNow does not publish the agent.
 
 ### Developer integration tools
 
@@ -464,6 +472,12 @@ capabilities are used and where they fail, so we can improve the product. It is
   `other`, or `unknown` — so raw branch names (which could otherwise carry
   personal / customer labels) are never emitted.
 - Scrubbed, non-sensitive **error categories** when something fails.
+- Bounded **Connect lifecycle transitions** for instrumented providers:
+  connector, lifecycle event, broad phase, outcome, duration, retry/resume
+  counts, blocker category, bounded remediation/checkpoint ID, correlation ID,
+  and agent ID. ServiceNow HRSD/ITSM project their persisted phase transitions
+  through the same fail-open event and transport as Workday; nested
+  FlightCheck checkpoints remain excluded from lifecycle capability counts.
 - During **installation**, the one-shot installers (which run before Python is
   available) emit the same kind of event natively from PowerShell/bash: an
   install **start**, **per-step** progress, and a **completion**
@@ -477,6 +491,8 @@ capabilities are used and where they fail, so we can improve the product. It is
 
 - No developer, user, or account identifier (no AAD OID, email, or name).
 - No agent content, prompts, credentials, file contents, or personal data.
+- No Connect tokens, employee values, prompt/response text, instance URLs,
+  workbook content, connection secrets, or full lifecycle-state documents.
 
 **How to opt out**
 
