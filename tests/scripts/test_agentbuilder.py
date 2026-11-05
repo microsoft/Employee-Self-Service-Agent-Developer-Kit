@@ -193,6 +193,71 @@ def _non_auth_headers(call: dict[str, Any]) -> dict[str, str]:
     return headers
 
 
+def test_m365_publish_status_is_the_exact_read_only_studio_route() -> None:
+    session = FakeSession([FakeResponse({"titleId": "lob-title"})])
+    client = agentbuilder.AgentBuilderClient(
+        HOST, "fake-token", ring="test",
+        tenant_id="00000000-0000-4000-8000-000000003333",
+        api_version="unrelated-client-version", session=session,
+    )
+    assert client.get_m365_publish_status(AGENT_ID.replace("-", "")) == {
+        "titleId": "lob-title",
+    }
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert (call["method"], call["url"]) == (
+        "GET", f"{HOST}/copilotstudio/agents/{AGENT_ID}/channels/m365/publish",
+    )
+    assert call["params"] == {"api-version": "2024-10-01"}
+    assert _non_auth_headers(call) == {
+        "Accept": "application/json",
+        "x-ms-client-name": "CopilotStudio",
+        "X-CCI-CdsBotId": AGENT_ID,
+    }
+    assert call["allow_redirects"] is False
+    assert call["timeout"] == 120
+    assert "json" not in call and "realm" not in call["params"]
+
+
+@pytest.mark.parametrize("status", [302, 401, 403, 404, 500])
+def test_m365_publish_status_never_turns_http_failure_into_empty_status(status) -> None:
+    session = FakeSession([FakeResponse({"titleId": "untrusted-title"}, status)])
+    client = agentbuilder.AgentBuilderClient(
+        HOST, "fake-token", ring="test",
+        tenant_id="00000000-0000-4000-8000-000000003333", session=session,
+    )
+    with pytest.raises(agentbuilder.AgentBuilderHTTPError) as caught:
+        client.get_m365_publish_status(AGENT_ID)
+    assert caught.value.status_code == status
+    assert len(session.calls) == 1
+
+
+@pytest.mark.parametrize("body", [None, [], "not-an-object"])
+def test_m365_publish_status_requires_an_object(body) -> None:
+    client = agentbuilder.AgentBuilderClient(
+        HOST, "fake-token", ring="test",
+        tenant_id="00000000-0000-4000-8000-000000003333",
+        session=FakeSession([FakeResponse(body)]),
+    )
+    with pytest.raises(agentbuilder.AgentBuilderError, match="invalid shape"):
+        client.get_m365_publish_status(AGENT_ID)
+
+
+def test_native_inventory_scopes_and_environment_identity_helpers() -> None:
+    assert agentbuilder.environment_id_from_host(HOST, "test") == ENVIRONMENT_ID
+    assert agentbuilder.agent_inventory_read_scopes("preprod") == (
+        "https://api.preprod.powerplatform.com/CopilotStudio.MakerOperations.Read",
+        "https://api.preprod.powerplatform.com/CopilotStudio.MinimalBot.Read",
+    )
+    for bad_host in (
+        "https://unbound.environment.api.test.powerplatform.com",
+        HOST.replace("0111.", "011g."),
+        f"{HOST}/unexpected-path",
+    ):
+        with pytest.raises(ValueError):
+            agentbuilder.environment_id_from_host(bad_host, "test")
+
+
 def test_host_derivation_probes_primary_split_first() -> None:
     attempted: list[str] = []
 
