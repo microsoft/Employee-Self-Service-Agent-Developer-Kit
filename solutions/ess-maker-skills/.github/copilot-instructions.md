@@ -14,11 +14,6 @@ immediately follow its entry point; do not first probe setup metadata, show the
 setup-required Message block, or finish the request because metadata is absent.
 The selected entry point owns any metadata checks and missing-state handling.
 
-- If the user typed `/agent-basics` or asked to rename an ESS agent or change its
-  name, icon or logo, follow `src/skills/agent-basics/SKILL.md`. This includes
-  name/logo edit intent within `/landing-page`. That skill owns selected-target
-  setup recovery and supports materialized authoring before runtime readiness.
-  Do not require publication, `titleId` or `connect_ready` for this route.
 - If the user typed `/connect` or `/connect-workday`, or explicitly asked to
   **connect Workday**, proceed with `src/skills/connect/SKILL.md` even when
   setup is missing. For `/connect workday`, retain `workday` as the selected
@@ -63,6 +58,10 @@ The selected entry point owns any metadata checks and missing-state handling.
 Only when no setup-independent route above matches, use your file-reading tool
 to try to read `.local/setup/config.json` and resolve `.local/config.json`.
 Absent files mean setup is missing; they do not change the request's intent.
+
+This gate applies to `/agent-basics` and natural-language name/logo edits,
+including edits requested through `/landing-page`. Follow
+`src/skills/agent-basics/SKILL.md` only after canonical setup is ready.
 
 DA setup is ready only when `.local/setup/config.json` has `schema_version`
 equal to `4` and its `agents` entry matching `.local/config.json`'s
@@ -513,9 +512,9 @@ JSON format", "something went wrong with Workday".
 `src/skills/landing-page-config/SKILL.md`. This applies to configuring the whole
 landing page, branding, accent colors, quick links, starter prompts, Stay Up to
 Date, Quick Access, reading its name/icon fields, or explaining its settings.
-Name/logo edits instead follow `src/skills/agent-basics/SKILL.md`, before
-landing-page setup or MCP checks. Do not call an AgentConfiguration MCP tool
-from a generic flow.
+After the shared completed-setup gate, name/logo edits instead follow
+`src/skills/agent-basics/SKILL.md`, without requiring landing-page `titleId`
+or MCP checks. Do not call an AgentConfiguration MCP tool from a generic flow.
 
 **FlightCheck results rendering:** When presenting `/flightcheck` results (Step 3
 of `src/skills/flightcheck/SKILL.md`), read `results.json` from the executed run's

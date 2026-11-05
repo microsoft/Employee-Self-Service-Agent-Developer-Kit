@@ -139,10 +139,8 @@ def client():
 @pytest.fixture
 def logos(tmp_path):
     color = tmp_path / "color.png"
-    outline = tmp_path / "outline.png"
     color.write_bytes(png(192, color="red"))
-    outline.write_bytes(png(32, outline=True))
-    return {"logo": str(color), "outline": str(outline)}
+    return {"logo": str(color)}
 
 
 @pytest.mark.parametrize(
@@ -178,7 +176,7 @@ def test_color_png_content_validation(data):
         basics._png(data, size=192)
 
 
-def test_animated_and_invalid_outline_pngs():
+def test_animated_png_is_rejected():
     stream = io.BytesIO()
     Image.new("RGBA", (192, 192), "red").save(
         stream,
@@ -188,10 +186,6 @@ def test_animated_and_invalid_outline_pngs():
     )
     with pytest.raises(basics.AgentBasicsError):
         basics._png(stream.getvalue(), size=192)
-    for data in (png(32), png(32, color="white"), png(32, color=(0, 0, 0, 0))):
-        with pytest.raises(basics.AgentBasicsError):
-            basics._png(data, size=32, outline=True)
-    assert basics._png(png(32, outline=True), size=32, outline=True)
 
 
 @pytest.mark.parametrize("properties", ["name", "logo", "both"])
@@ -357,22 +351,30 @@ def test_partial_success_retry_omits_confirmed_name(client, logos, tmp_path):
     assert len(client.writes) == 1
 
 
-@pytest.mark.parametrize("field", ["instructions", "components", "logo"])
-def test_unrequested_mutation_is_not_reported_complete(client, field, tmp_path):
+@pytest.mark.parametrize(
+    "field", ["instructions", "components", "accent_color", "application_metadata"]
+)
+@pytest.mark.parametrize("operation", ["name", "logo"])
+def test_unrequested_mutation_is_not_reported_complete(
+    client, logos, field, tmp_path, operation
+):
     def mutate(state):
         if field == "instructions":
             state["bot"]["configuration"]["instructions"] = "Unexpected"
         elif field == "components":
             state["botComponentChanges"] = []
+        elif field == "accent_color":
+            state["bot"]["teamsAppInformation"]["teams"]["accentColor"] = "#00ff00"
         else:
-            state["bot"]["iconBase64"] = encoded(png(192, color="green"))
+            state["bot"]["teamsAppInformation"]["other"] = "Unexpected"
 
     client.mutate = mutate
-    plan = basics.prepare(client, TARGET, name="New Name")
+    proposal = {"name": "New Name"} if operation == "name" else logos
+    plan = basics.prepare(client, TARGET, **proposal)
     result = basics.save(
         client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
     )
-    assert result["properties"]["name"] == "saved"
+    assert result["properties"][operation] == "saved"
     assert result["preservation"] == "unverified"
     assert result["status"] == "unfinished"
     assert result["writesDisabled"] is True
@@ -381,10 +383,18 @@ def test_unrequested_mutation_is_not_reported_complete(client, field, tmp_path):
 
 @pytest.mark.parametrize(
     "state",
-    ["small_color", "missing_outline", "missing_color", "invalid_color", "no_teams"],
+    [
+        "small_color",
+        "missing_outline",
+        "missing_color",
+        "invalid_color",
+        "invalid_outline",
+        "no_teams",
+        "malformed_teams",
+    ],
 )
-def test_name_only_reviews_service_icon_processing_without_requiring_new_images(
-    client, state, tmp_path
+def test_name_only_does_not_inspect_or_request_images(
+    client, state, tmp_path, monkeypatch
 ):
     bot = client.state["bot"]
     if state == "small_color":
@@ -395,62 +405,57 @@ def test_name_only_reviews_service_icon_processing_without_requiring_new_images(
         del bot["iconBase64"]
     elif state == "invalid_color":
         bot["iconBase64"] = "invalid"
-    else:
+    elif state == "invalid_outline":
+        bot["teamsAppInformation"]["teams"]["outlineIcon"] = "invalid"
+    elif state == "no_teams":
         bot["teamsAppInformation"] = None
+    else:
+        bot["teamsAppInformation"]["teams"] = "malformed"
+
+    def unexpected_logo_read(*args):
+        pytest.fail("A rename must not inspect images")
+
+    monkeypatch.setattr(basics, "_logo", unexpected_logo_read)
     before = copy.deepcopy(client.state)
     plan = basics.prepare(client, TARGET, name="People Support")
     review = basics.review_output(plan, tmp_path)
     assert review["status"] == "review"
     assert review["changedProperties"] == ["name"]
-    assert review["serviceIconProcessingRisk"]
-    assert "clear outlineIcon and colorIcon" in review["serviceIconProcessingWarning"]
-    assert (
-        "No replacement images are required" in review["serviceIconProcessingWarning"]
-    )
-    assert "cannot be guaranteed" in review["retained"]
+    assert review["current"] == {"name": "Employee Support"}
+    assert "serviceIconProcessingRisk" not in review
+    assert "serviceIconProcessingWarning" not in review
     assert review["proposed"]["logoSources"] == {}
+    assert not (tmp_path / basics.PREVIEW_DIRECTORY).exists()
     result = basics.save(
         client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
     )
-    assert result["status"] == "review_again"
-    assert "Explicit approval" in result["reason"]
-    assert client.state == before
-    assert not client.writes
+    assert result["status"] == "saved"
+    assert result["properties"] == {"name": "saved"}
+    expected = copy.deepcopy(before["bot"])
+    expected["displayName"] = "People Support"
+    assert client.writes == [expected]
     assert not basics._writes_disabled(tmp_path)
-    # Current-state review and keeping the existing name still require no write.
-    assert not basics.prepare(client, TARGET)["changes"]
-    assert not basics.prepare(client, TARGET, name=bot["displayName"])["changes"]
+    assert not basics.prepare(client, TARGET, name="People Support")["changes"]
 
 
-def test_changed_icon_risk_requires_fresh_review_even_with_risk_consent(
-    client, tmp_path
-):
-    plan = basics.prepare(client, TARGET, name="People Support")
-    plan["state"]["bot"]["teamsAppInformation"]["teams"]["outlineIcon"] = ""
-    result = basics.save(
-        client,
-        plan,
-        plan["reviewId"],
-        current_target=TARGET,
-        root=tmp_path,
-        accept_service_icon_processing=True,
-    )
-    assert result["status"] == "review_again"
-    assert "risk changed" in result["reason"]
-    assert not client.writes
-    assert not basics._writes_disabled(tmp_path)
-
-
+@pytest.mark.parametrize("application", ["existing", None, {"teams": None}])
 @pytest.mark.parametrize("normalizes", [False, True])
-def test_reviewed_risky_rename_uses_existing_logo_and_reports_actual_preservation(
-    client, tmp_path, normalizes
+def test_rename_sends_existing_logo_and_ignores_service_image_normalization(
+    client, tmp_path, normalizes, application
 ):
     client.state["bot"]["iconBase64"] = encoded(png(128))
+    if application != "existing":
+        client.state["bot"]["teamsAppInformation"] = application
     before = copy.deepcopy(client.state)
 
     def normalize(state):
         state["bot"]["iconBase64"] = encoded(png(192))
-        teams = state["bot"]["teamsAppInformation"]["teams"]
+        application = state["bot"].setdefault("teamsAppInformation", {})
+        if application is None:
+            application = state["bot"]["teamsAppInformation"] = {}
+        teams = application.get("teams")
+        if teams is None:
+            teams = application["teams"] = {}
         teams["outlineIcon"] = ""
         teams["colorIcon"] = ""
 
@@ -463,7 +468,6 @@ def test_reviewed_risky_rename_uses_existing_logo_and_reports_actual_preservatio
         plan["reviewId"],
         current_target=TARGET,
         root=tmp_path,
-        accept_service_icon_processing=True,
     )
     assert len(client.writes) == 1
     written = copy.deepcopy(client.writes[0])
@@ -473,24 +477,17 @@ def test_reviewed_risky_rename_uses_existing_logo_and_reports_actual_preservatio
     assert written == expected
     assert result["properties"] == {"name": "saved"}
     assert client.state["bot"]["displayName"] == "ESS HR Nov-3"
-    assert result["status"] == ("unfinished" if normalizes else "saved")
-    assert result["preservation"] == ("unverified" if normalizes else "confirmed")
-    assert result["logoPreservation"] == ("changed" if normalizes else "confirmed")
-    assert result["changedLogoFields"] == (
-        [
-            "iconBase64",
-            "teamsAppInformation.teams.outlineIcon",
-            "teamsAppInformation.teams.colorIcon",
-        ]
-        if normalizes
-        else []
-    )
-    assert basics._writes_disabled(tmp_path) is normalizes
+    assert result["status"] == "saved"
+    assert result["preservation"] == "confirmed"
+    assert "logoPreservation" not in result
+    assert "changedLogoFields" not in result
+    assert result["writesDisabled"] is False
+    assert not basics._writes_disabled(tmp_path)
     assert client.state["bot"]["configuration"] == before["bot"]["configuration"]
     assert client.state["botComponentChanges"] == before["botComponentChanges"]
 
 
-def test_icon_risk_consent_cannot_replace_rename_approval(client, tmp_path):
+def test_rename_with_missing_outline_still_requires_name_approval(client, tmp_path):
     client.state["bot"]["teamsAppInformation"]["teams"]["outlineIcon"] = ""
     plan = basics.prepare(client, TARGET, name="ESS HR Nov-3")
     result = basics.save(
@@ -499,7 +496,6 @@ def test_icon_risk_consent_cannot_replace_rename_approval(client, tmp_path):
         "not approved",
         current_target=TARGET,
         root=tmp_path,
-        accept_service_icon_processing=True,
     )
     assert result["status"] == "review_again"
     assert not client.writes
@@ -531,54 +527,161 @@ def test_explicit_combined_change_can_replace_readable_nonconforming_icons(
     assert client.writes[0]["iconBase64"] == encoded(Path(logos["logo"]).read_bytes())
 
 
-@pytest.mark.parametrize("asset", ["logo", "outline"])
-def test_single_uploaded_asset_retains_other_valid_current_asset(
-    client, logos, tmp_path, asset
+@pytest.mark.parametrize("outline", ["", None, "invalid", "missing"])
+def test_source_logo_upload_does_not_require_a_stored_outline(
+    client, logos, tmp_path, outline
 ):
-    image = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
-    image.putpixel((0, 0), (255, 255, 255, 255))
-    image.save(logos["outline"])
+    teams = client.state["bot"]["teamsAppInformation"]["teams"]
+    if outline == "missing":
+        del teams["outlineIcon"]
+    else:
+        teams["outlineIcon"] = outline
     before = copy.deepcopy(client.state["bot"])
-    plan = basics.prepare(client, TARGET, **{asset: logos[asset]})
-    assert set(plan["sources"]) == {"color" if asset == "logo" else "outline"}
+    plan = basics.prepare(client, TARGET, **logos)
+    review = basics.review_output(plan, tmp_path)
+    assert review["current"]["logo"] == "confirmed"
+    assert Path(review["current"]["colorPreview"]).read_bytes() == png(192)
+    assert set(plan["sources"]) == {"color"}
     result = basics.save(
         client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
     )
     assert result["status"] == "saved"
-    if asset == "logo":
-        assert (
-            client.state["bot"]["teamsAppInformation"] == before["teamsAppInformation"]
-        )
-    else:
-        assert client.state["bot"]["iconBase64"] == before["iconBase64"]
+    assert result["properties"] == {"logo": "saved"}
+    assert client.state["bot"]["displayName"] == before["displayName"]
+    assert client.writes[0]["teamsAppInformation"] == before["teamsAppInformation"]
+    assert client.writes[0]["iconBase64"] == encoded(Path(logos["logo"]).read_bytes())
 
 
-@pytest.mark.parametrize("asset", ["logo", "outline"])
-def test_single_asset_requires_a_valid_retained_counterpart(client, logos, asset):
-    if asset == "logo":
-        client.state["bot"]["teamsAppInformation"]["teams"]["outlineIcon"] = ""
-        missing = "outline"
-    else:
-        client.state["bot"]["iconBase64"] = None
-        missing = "color"
-    with pytest.raises(basics.AgentBasicsError, match=f"Supply a valid {missing} PNG"):
-        basics.prepare(client, TARGET, **{asset: logos[asset]})
+@pytest.mark.parametrize("combined", [False, True])
+@pytest.mark.parametrize(
+    "application",
+    [None, {"teams": None}, {"teams": {"outlineIcon": "", "colorIcon": "legacy"}}],
+)
+def test_logo_readback_accepts_reencoding_and_platform_derived_fields(
+    client, logos, tmp_path, combined, application
+):
+    client.state["bot"]["teamsAppInformation"] = copy.deepcopy(application)
+    before = copy.deepcopy(client.state)
+    source = Path(logos["logo"]).read_bytes()
+
+    def normalize(state):
+        stream = io.BytesIO()
+        with Image.open(io.BytesIO(source)) as image:
+            image.save(stream, format="PNG", compress_level=0)
+        state["bot"]["iconBase64"] = encoded(stream.getvalue())
+        application = state["bot"].get("teamsAppInformation")
+        if application is None:
+            application = state["bot"]["teamsAppInformation"] = {}
+        teams = application.get("teams")
+        if teams is None:
+            teams = application["teams"] = {}
+        teams.update(outlineIcon="", colorIcon="")
+
+    client.mutate = normalize
+    kwargs = {**logos, **({"name": "People Support"} if combined else {})}
+    plan = basics.prepare(client, TARGET, **kwargs)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    expected = copy.deepcopy(before["bot"])
+    expected["iconBase64"] = encoded(source)
+    if combined:
+        expected["displayName"] = "People Support"
+    assert client.writes == [expected]
+    assert client.state["bot"]["iconBase64"] != encoded(source)
+    assert result["status"] == "saved"
+    assert result["properties"] == (
+        {"name": "saved", "logo": "saved"} if combined else {"logo": "saved"}
+    )
+    assert result["preservation"] == "confirmed"
+    assert result["writesDisabled"] is False
+    assert not basics._writes_disabled(tmp_path)
+    assert client.state["bot"]["configuration"] == before["bot"]["configuration"]
+    assert client.state["botComponentChanges"] == before["botComponentChanges"]
+
+
+def test_logo_only_does_not_confirm_unrequested_name_change(client, logos, tmp_path):
+    client.mutate = lambda state: state["bot"].update(displayName="Unexpected rename")
+    plan = basics.prepare(client, TARGET, **logos)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["properties"] == {"logo": "saved"}
+    assert result["preservation"] == "unverified"
+    assert result["status"] == "unfinished"
+    assert result["writesDisabled"] is True
+
+
+@pytest.mark.parametrize(
+    "observed",
+    [None, "invalid", encoded(png(191, color="red")), encoded(png(192, color="green"))],
+    ids=["absent", "unreadable", "wrong-dimensions", "wrong-pixels"],
+)
+def test_logo_readback_does_not_confirm_a_mismatched_source(
+    client, logos, tmp_path, observed
+):
+    client.mutate = lambda state: state["bot"].update(iconBase64=observed)
+    plan = basics.prepare(client, TARGET, **logos)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["properties"] == {"logo": "unverified"}
+    assert result["status"] == "unfinished"
+    assert result["writesDisabled"] is True
+    assert len(client.writes) == 1
+
+
+def test_identical_source_pixels_are_a_noop_despite_png_encoding(
+    client, logos, tmp_path
+):
+    with Image.open(io.BytesIO(png(192))) as image:
+        image.save(logos["logo"], format="PNG", compress_level=0)
+    assert (
+        encoded(Path(logos["logo"]).read_bytes()) != client.state["bot"]["iconBase64"]
+    )
+    plan = basics.prepare(client, TARGET, **logos)
+    assert not plan["changes"]
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "no_change"
+    assert result["writeAttempted"] is False
     assert not client.writes
 
 
-def test_unreadable_outline_allows_name_but_not_logo_edit(client, logos, tmp_path):
-    client.state["bot"]["teamsAppInformation"]["teams"]["outlineIcon"] = "invalid"
-    name_plan = basics.prepare(client, TARGET, name="New Name")
-    assert name_plan["logoError"]
-    with pytest.raises(basics.AgentBasicsError, match="base64"):
+def test_confirmed_absent_source_can_receive_first_logo(client, logos, tmp_path):
+    client.state["bot"]["iconBase64"] = None
+    plan = basics.prepare(client, TARGET, **logos)
+    review = basics.review_output(plan, tmp_path)
+    assert review["current"]["logo"] == "none"
+    assert "colorPreview" not in review["current"]
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "saved"
+    assert result["properties"] == {"logo": "saved"}
+
+
+@pytest.mark.parametrize("source", ["missing", "invalid_base64", "invalid_png"])
+def test_unreadable_source_blocks_logo_edit_but_not_rename(
+    client, logos, tmp_path, source
+):
+    if source == "missing":
+        del client.state["bot"]["iconBase64"]
+    else:
+        client.state["bot"]["iconBase64"] = (
+            "invalid" if source == "invalid_base64" else encoded(b"not an image")
+        )
+    with pytest.raises(basics.AgentBasicsError):
         basics.prepare(client, TARGET, **logos)
+    assert not client.writes
+    name_plan = basics.prepare(client, TARGET, name="New Name")
+    assert name_plan["currentLogo"] is None
+    assert name_plan["logoError"] is None
     result = basics.save(
         client, name_plan, name_plan["reviewId"], current_target=TARGET, root=tmp_path
     )
     assert result["status"] == "saved"
-    assert (
-        client.state["bot"]["teamsAppInformation"]["teams"]["outlineIcon"] == "invalid"
-    )
 
 
 def test_unreadable_name_allows_logo_but_not_name_edit(client, logos, tmp_path):
@@ -594,7 +697,7 @@ def test_unreadable_name_allows_logo_but_not_name_edit(client, logos, tmp_path):
 
 
 @pytest.mark.parametrize("application", [None, {}, {"teams": None}])
-def test_first_outline_and_nullable_application_state(
+def test_source_logo_preserves_nullable_application_state(
     client, logos, application, tmp_path
 ):
     client.state["bot"]["teamsAppInformation"] = application
@@ -603,6 +706,7 @@ def test_first_outline_and_nullable_application_state(
         client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
     )
     assert result["status"] == "saved"
+    assert client.writes[0]["teamsAppInformation"] == application
 
 
 def test_malformed_postsave_application_keeps_property_results(client, logos, tmp_path):
@@ -611,7 +715,7 @@ def test_malformed_postsave_application_keeps_property_results(client, logos, tm
     result = basics.save(
         client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
     )
-    assert result["properties"] == {"name": "saved", "logo": "unverified"}
+    assert result["properties"] == {"name": "saved", "logo": "saved"}
     assert result["preservation"] == "unverified"
 
 
@@ -728,8 +832,20 @@ def workspace(tmp_path):
                     "folder": str(folder.relative_to(tmp_path)),
                     "agent_path": "agent.mcs.yml",
                 },
-                "steps": {"SETUP-07": {"state": "done"}},
-                "connect_ready": False,
+                "steps": {
+                    step: {"state": "done"}
+                    for step in (
+                        "SETUP-01",
+                        "SETUP-02.1",
+                        "SETUP-02.2",
+                        "SETUP-03",
+                        "SETUP-04",
+                        "SETUP-05",
+                        "SETUP-06",
+                        "SETUP-07",
+                    )
+                },
+                "connect_ready": True,
             }
         },
     }
@@ -739,7 +855,7 @@ def workspace(tmp_path):
     return tmp_path
 
 
-def test_canonical_target_without_runtime_readiness(workspace):
+def test_canonical_target_after_completed_setup(workspace):
     target = basics.selected_target(workspace)
     assert target["agent_id"] == AGENT_ID
     assert target["schema_name"] == SCHEMA
@@ -773,6 +889,48 @@ def cli(monkeypatch, workspace, client):
 def result_json(capsys):
     output = capsys.readouterr().out
     return json.loads(output.split("_JSON:", 1)[1])
+
+
+@pytest.mark.parametrize(
+    ("action", "readiness"),
+    [("view", False), ("preview", None), ("preview", "true"), ("save", False)],
+)
+def test_cli_blocks_incomplete_setup_before_service_access(
+    cli, client, capsys, monkeypatch, action, readiness
+):
+    command = [action]
+    if action != "view":
+        command.extend(["--name", "People Support"])
+    if action == "save":
+        assert basics.main(["preview", "--name", "People Support"]) == 0
+        command.extend(["--approval", result_json(capsys)["reviewId"]])
+
+    path = cli / ".local" / "setup" / "config.json"
+    state = json.loads(path.read_text())
+    selected = state["agents"][AGENT_ID]
+    other = copy.deepcopy(selected)
+    other["agent"].update(id=TARGET["tenant_id"], workspace_slug="other")
+    state["agents"][TARGET["tenant_id"]] = other
+    selected["steps"]["SETUP-06"]["state"] = "pending"
+    if readiness is None:
+        selected.pop("connect_ready")
+    else:
+        selected["connect_ready"] = readiness
+    path.write_text(json.dumps(state))
+    config_path = cli / ".local" / "config.json"
+    config = json.loads(config_path.read_text())
+    config["setup"] = "complete"
+    config_path.write_text(json.dumps(config))
+
+    def unexpected_auth(*args, **kwargs):
+        pytest.fail("Incomplete setup must stop before authentication.")
+
+    monkeypatch.setattr(basics, "authenticate", unexpected_auth)
+    assert basics.main(command) == 2
+    result = result_json(capsys)
+    assert result["status"] == "blocked"
+    assert "Complete /setup" in result["message"]
+    assert not client.writes
 
 
 def test_cli_refreshes_after_approval_and_never_renames_local_files(
@@ -815,29 +973,28 @@ def test_cli_refreshes_after_approval_and_never_renames_local_files(
     ).exists()
 
 
-def test_cli_risky_rename_requires_separate_consent_and_no_new_logo(
-    cli, client, capsys
-):
+def test_cli_rename_saves_without_image_consent_or_new_logo(cli, client, capsys):
     client.state["bot"]["teamsAppInformation"]["teams"]["outlineIcon"] = ""
     before = copy.deepcopy(client.state["bot"])
     assert basics.main(["preview", "--name", "ESS HR Nov-3"]) == 0
     preview = result_json(capsys)
-    assert preview["serviceIconProcessingWarning"]
+    assert preview["current"] == {"name": "Employee Support"}
+    assert "serviceIconProcessingWarning" not in preview
     assert not client.writes
     command = ["save", "--name", "ESS HR Nov-3", "--approval", preview["reviewId"]]
-    assert basics.main(command) == 2
-    assert result_json(capsys)["status"] == "review_again"
-    assert not client.writes
-    assert basics.main(command + ["--accept-service-icon-processing"]) == 0
+    assert basics.main(command) == 0
     saved = result_json(capsys)
     assert saved["properties"] == {"name": "saved"}
-    assert saved["logoPreservation"] == "confirmed"
+    assert saved["status"] == "saved"
+    assert "logoPreservation" not in saved
     assert len(client.writes) == 1
     assert client.writes[0]["iconBase64"] == before["iconBase64"]
     assert client.writes[0]["teamsAppInformation"] == before["teamsAppInformation"]
 
 
-def test_cli_new_review_invalidates_icon_risk_consent(cli, client, capsys):
+def test_cli_entity_revision_change_still_requires_fresh_rename_approval(
+    cli, client, capsys
+):
     client.state["bot"]["teamsAppInformation"]["teams"]["outlineIcon"] = ""
     assert basics.main(["preview", "--name", "ESS HR Nov-3"]) == 0
     preview = result_json(capsys)
@@ -851,12 +1008,59 @@ def test_cli_new_review_invalidates_icon_risk_consent(cli, client, capsys):
                 "ESS HR Nov-3",
                 "--approval",
                 preview["reviewId"],
-                "--accept-service-icon-processing",
             ]
         )
         == 2
     )
     assert result_json(capsys)["status"] == "review_again"
+    assert not client.writes
+
+
+@pytest.mark.parametrize("operation", ["logo", "both"])
+def test_cli_source_logo_save_without_outline_or_image_consent(
+    cli, client, logos, capsys, operation
+):
+    teams = client.state["bot"]["teamsAppInformation"]["teams"]
+    teams["outlineIcon"] = ""
+    client.mutate = lambda state: state["bot"]["teamsAppInformation"]["teams"].update(
+        outlineIcon="", colorIcon=""
+    )
+    source = Path(logos["logo"]).read_bytes()
+    proposal = ["--logo", logos["logo"]]
+    if operation == "both":
+        proposal += ["--name", "People Support"]
+    assert basics.main(["preview", *proposal]) == 0
+    review = result_json(capsys)
+    assert set(review["proposed"]["logoSources"]) == {"color"}
+    assert Path(review["current"]["colorPreview"]).read_bytes() == png(192)
+    assert not client.writes
+    assert basics.main(["save", *proposal, "--approval", review["reviewId"]]) == 0
+    saved = result_json(capsys)
+    assert saved["status"] == "saved"
+    assert saved["properties"]["logo"] == "saved"
+    assert saved["writesDisabled"] is False
+    assert saved["publication"] == "Not performed for this change."
+    assert len(client.writes) == 1
+    assert Path(logos["logo"]).read_bytes() == source
+    assert not Path(review["current"]["colorPreview"]).exists()
+
+
+@pytest.mark.parametrize(
+    "proposal", [[], ["--name", "People Support"], ["--logo", "color.png"]]
+)
+def test_cli_unsupported_outline_blocks_entire_request_before_service_access(
+    cli, client, capsys, monkeypatch, proposal
+):
+    def unexpected_auth(*args, **kwargs):
+        pytest.fail("Unsupported outline requests must stop before service access")
+
+    monkeypatch.setattr(basics, "authenticate", unexpected_auth)
+    with pytest.raises(SystemExit) as exc:
+        basics.main(["preview", *proposal, "--outline", "outline.png"])
+    assert exc.value.code == 2
+    assert (
+        "Independent outline customization is not supported" in capsys.readouterr().err
+    )
     assert not client.writes
 
 

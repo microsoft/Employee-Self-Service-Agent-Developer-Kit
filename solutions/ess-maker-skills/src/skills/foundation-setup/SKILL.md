@@ -438,12 +438,12 @@ The final handoff is the detailed setup report. Branch on the final
 `DA_SETUP_FLIGHTCHECK_JSON:` result before presenting another choice.
 
 When setup was entered for an explicit Agent Basics request and the selected
-canonical workspace is materialized (`schema_version: 4`, matching
-`activeAgent`/`agent.workspace_slug`, workspace evidence and `SETUP-07` done),
-render the detailed report and return to `src/skills/agent-basics/SKILL.md`
-before the terminal setup choices. Preserve any outstanding runtime-readiness
-issues; do not mark setup complete or require runtime connections for metadata
-authoring. Agent Basics still verifies the live target and permissions.
+canonical agent's final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady`
+equal to `true`, render the detailed report and return to
+`src/skills/agent-basics/SKILL.md` before the terminal setup choices. Preserve
+the original target and requested values. Agent Basics rechecks completed
+setup, the live target and permissions. If readiness is false or absent, use
+the incomplete-setup handoff below; do not start Agent Basics.
 
 When `connectReady` is false or absent, setup is not complete. Keep the
 runtime-readiness table and every applicable owning remediation, recheck, and

@@ -12,9 +12,10 @@ only on individual tool descriptions.
 
 For an agent name, icon or logo **edit**, hand off immediately to
 `src/skills/agent-basics/SKILL.md`, preserving the requested target and values.
-Do this before landing-page setup, `titleId`, or MCP availability checks.
-Agent Basics owns the selected native authoring path and approval; this
-server's name/icon fields remain read-only. For mixed requests, complete each
+Agent Basics requires completed canonical setup; this handoff does not bypass
+the shared setup gate. Do not require landing-page `titleId` or MCP availability
+for those native authoring edits. Agent Basics owns that path and approval;
+this server's name/icon fields remain read-only. For mixed requests, complete each
 owning skill's separate review/save flow; do not claim they save atomically.
 
 ## Setup-state check

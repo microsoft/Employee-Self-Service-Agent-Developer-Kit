@@ -95,6 +95,11 @@ def selected_target(root: Path) -> dict[str, str]:
     if len(matches) != 1:
         raise AgentBasicsError("The selected canonical workspace is not unique.")
     selected = matches[0]
+    if selected.get("connect_ready") is not True:
+        raise AgentBasicsError(
+            "Setup is incomplete for the selected agent. Complete /setup before "
+            "viewing or changing its name or logo. No write was attempted."
+        )
     agent = selected["agent"]
     local_agent = config.get("agent")
     workspace = selected.get("workspace")
@@ -151,7 +156,7 @@ def validate_name(value: str) -> str:
     return value
 
 
-def _png(data: bytes, *, size: int | None = None, outline: bool = False) -> bytes:
+def _png(data: bytes, *, size: int | None = None) -> bytes:
     if not data or len(data) > MAX_IMAGE_BYTES:
         raise AgentBasicsError(
             "ADK requires a nonempty PNG within its 1 MiB local preview budget. "
@@ -178,23 +183,6 @@ def _png(data: bytes, *, size: int | None = None, outline: bool = False) -> byte
                 image.load()
                 rgba = image.convert("RGBA")
                 pixels = rgba.tobytes()
-                if outline:
-                    values = list(
-                        zip(pixels[::4], pixels[1::4], pixels[2::4], pixels[3::4])
-                    )
-                    if not any(alpha == 0 for _, _, _, alpha in values) or any(
-                        (red, green, blue) != (255, 255, 255)
-                        for red, green, blue, alpha in values
-                        if alpha
-                    ):
-                        raise AgentBasicsError(
-                            "The 32x32 outline PNG must have a transparent "
-                            "background and a nonempty white outline."
-                        )
-                    if not any(alpha for _, _, _, alpha in values):
-                        raise AgentBasicsError(
-                            "The outline PNG cannot be entirely transparent."
-                        )
                 return (
                     image.width.to_bytes(4, "big")
                     + image.height.to_bytes(4, "big")
@@ -213,14 +201,14 @@ def _png(data: bytes, *, size: int | None = None, outline: bool = False) -> byte
         ) from exc
 
 
-def _image_file(path: str, *, size: int, outline: bool = False) -> tuple[str, bytes]:
+def _image_file(path: str, *, size: int) -> tuple[str, bytes]:
     source = Path(path).expanduser().resolve()
     try:
         with source.open("rb") as stream:
             data = stream.read(MAX_IMAGE_BYTES + 1)
     except OSError as exc:
         raise AgentBasicsError("The selected local PNG cannot be read.") from exc
-    _png(data, size=size, outline=outline)
+    _png(data, size=size)
     return str(source), data
 
 
@@ -237,50 +225,15 @@ def _decode(value: Any) -> bytes:
         raise AgentBasicsError("The saved icon is not valid base64.") from exc
 
 
-def _teams(bot: dict[str, Any]) -> dict[str, Any]:
-    application = bot.get("teamsAppInformation")
-    if application is None:
-        return {}
-    if not isinstance(application, dict):
-        raise AgentBasicsError("The saved application icon settings are unreadable.")
-    teams = application.get("teams")
-    if teams is None:
-        return {}
-    if not isinstance(teams, dict):
-        raise AgentBasicsError("The saved application icon settings are unreadable.")
-    return teams
-
-
-def _logo(bot: dict[str, Any]) -> tuple[bytes, bytes]:
+def _logo(bot: dict[str, Any]) -> bytes:
     if "iconBase64" not in bot:
         raise AgentBasicsError(
             "The current logo was not returned; logo editing is unavailable."
         )
     color = _decode(bot["iconBase64"])
-    outline = _decode(_teams(bot).get("outlineIcon", ""))
     if color:
         _png(color)
-    if outline:
-        _png(outline, size=32)
-    return color, outline
-
-
-def _retained_logo_issue(bot: dict[str, Any]) -> str | None:
-    if "iconBase64" not in bot:
-        return "The current color icon was not returned by the service."
-    if bot["iconBase64"] is None:
-        return None
-    try:
-        _png(_decode(bot.get("iconBase64")), size=192)
-        outline = _teams(bot).get("outlineIcon")
-        if not isinstance(outline, str) or not outline:
-            return "The existing outline is missing."
-    except AgentBasicsError:
-        return (
-            "The existing color icon or application metadata could not be "
-            "confirmed as safe from service-side icon processing."
-        )
-    return None
+    return color
 
 
 def read_state(
@@ -335,68 +288,46 @@ def prepare(
     *,
     name: str | None = None,
     logo: str | None = None,
-    outline: str | None = None,
 ) -> dict[str, Any]:
     source: dict[str, str] = {}
     desired: dict[str, Any] = {}
     if name is not None:
         desired["displayName"] = validate_name(name)
-    supplied: dict[str, bytes] = {}
-    if logo:
+    supplied = None
+    if logo is not None:
         source["color"], color = _image_file(logo, size=192)
-        supplied["color"] = color
-    if outline:
-        source["outline"], outline_data = _image_file(outline, size=32, outline=True)
-        supplied["outline"] = outline_data
+        supplied = color
     state, resolved_target = read_state(client, target)
     bot = state["bot"]
     readable_name = isinstance(bot.get("displayName"), str)
+    current_logo = None
     logo_error = None
-    try:
-        current_logo = _logo(bot)
-    except AgentBasicsError as exc:
-        current_logo = None
-        logo_error = str(exc)
+    if name is None or supplied is not None:
+        try:
+            current_logo = _logo(bot)
+        except AgentBasicsError as exc:
+            logo_error = str(exc)
     if "displayName" in desired and not readable_name:
         raise AgentBasicsError(
             "The current name is unreadable; name editing is unavailable."
         )
-    if supplied and current_logo is None:
+    if supplied is not None and current_logo is None:
         raise AgentBasicsError(logo_error)
-    if supplied:
-        assets = []
-        for label, current, size in zip(("color", "outline"), current_logo, (192, 32)):
-            data = supplied.get(label, current)
-            try:
-                _png(data, size=size, outline=label == "outline")
-            except AgentBasicsError as exc:
-                raise AgentBasicsError(
-                    f"Supply a valid {label} PNG; the existing asset cannot "
-                    "be retained for this logo change."
-                ) from exc
-            assets.append(base64.b64encode(data).decode("ascii"))
-        desired["logo"] = tuple(assets)
+    if supplied is not None:
+        desired["logo"] = base64.b64encode(supplied).decode("ascii")
     changes = {}
     if "displayName" in desired and desired["displayName"] != bot["displayName"]:
         changes["name"] = desired["displayName"]
     if "logo" in desired:
-        desired_logo = tuple(_decode(value) for value in desired["logo"])
-        if tuple(_png(value) if value else b"" for value in desired_logo) != tuple(
-            _png(value) if value else b"" for value in current_logo
-        ):
+        desired_logo = _decode(desired["logo"])
+        if _png(desired_logo) != (_png(current_logo) if current_logo else b""):
             changes["logo"] = desired["logo"]
-    icon_processing_risk = (
-        _retained_logo_issue(bot)
-        if "name" in changes and "logo" not in changes
-        else None
-    )
     review_id = _digest(
         {
             "target": resolved_target,
             "state": state,
             "desired": desired,
             "sources": source,
-            "serviceIconProcessingRisk": icon_processing_risk,
         }
     )
     return {
@@ -408,7 +339,6 @@ def prepare(
         "sources": source,
         "currentLogo": current_logo,
         "logoError": logo_error,
-        "serviceIconProcessingRisk": icon_processing_risk,
     }
 
 
@@ -418,17 +348,22 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
         "name": bot.get("displayName")
         if isinstance(bot.get("displayName"), str)
         else None,
-        "logo": "unavailable" if plan["currentLogo"] is None else "confirmed",
-        "logoIssue": plan["logoError"],
     }
+    if "displayName" not in plan["desired"] or plan["sources"]:
+        current["logo"] = (
+            "unavailable"
+            if plan["currentLogo"] is None
+            else "confirmed"
+            if plan["currentLogo"]
+            else "none"
+        )
+        current["logoIssue"] = plan["logoError"]
     if plan["currentLogo"]:
         directory = root / PREVIEW_DIRECTORY
         directory.mkdir(parents=True, exist_ok=True)
-        for label, data in zip(("color", "outline"), plan["currentLogo"]):
-            if data:
-                path = directory / f"{plan['reviewId']}-{label}.png"
-                path.write_bytes(data)
-                current[f"{label}Preview"] = str(path.resolve())
+        path = directory / f"{plan['reviewId']}-color.png"
+        path.write_bytes(plan["currentLogo"])
+        current["colorPreview"] = str(path.resolve())
     return {
         "status": "review" if plan["changes"] else "no_change",
         "reviewId": plan["reviewId"],
@@ -439,23 +374,7 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
             "logoSources": plan["sources"],
         },
         "changedProperties": list(plan["changes"]),
-        "serviceIconProcessingRisk": plan["serviceIconProcessingRisk"],
-        "serviceIconProcessingWarning": (
-            "The existing save API may resize or re-encode the color icon and "
-            "clear outlineIcon and colorIcon, even though ADK sends the existing "
-            "logo fields unchanged. Approve this possible side effect separately "
-            "before saving. No replacement images are required. Read-back will "
-            "verify the rename and report any logo changes."
-            if plan["serviceIconProcessingRisk"]
-            else None
-        ),
-        "retained": (
-            "Unrequested fields are sent unchanged, but existing-logo preservation "
-            "cannot be guaranteed; review serviceIconProcessingWarning. "
-            "Instructions, schema, product and workspace identity must be retained."
-            if plan["serviceIconProcessingRisk"]
-            else "All unrequested properties, instructions, schema, product and workspace identity."
-        ),
+        "retained": "Instructions, unrequested non-image settings, schema, product and workspace identity.",
         "localArtifacts": "No agent files or setup display labels changed.",
         "publication": "Not performed; approval and employee visibility are unverified.",
     }
@@ -491,12 +410,15 @@ def _preserved(
             item.pop(field, None)
         if "name" in changes:
             item.pop("displayName", None)
-        if "logo" in changes:
+        if "name" in changes or "logo" in changes:
+            # The platform owns source-icon normalization and derived icon fields.
             item.pop("iconBase64", None)
-            teams = _teams(item)
-            teams.pop("outlineIcon", None)
             application = item.get("teamsAppInformation")
             if isinstance(application, dict):
+                teams = application.get("teams")
+                if isinstance(teams, dict):
+                    teams.pop("outlineIcon", None)
+                    teams.pop("colorIcon", None)
                 if application.get("teams") in ({}, None):
                     application.pop("teams", None)
                 if not application:
@@ -507,25 +429,6 @@ def _preserved(
         previous == current
         and before["botComponentChanges"] == after["botComponentChanges"]
     )
-
-
-def _changed_logo_fields(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
-    previous_teams, current_teams = _teams(before), _teams(after)
-    missing = object()
-    return [
-        path
-        for path, previous, current in (
-            ("iconBase64", before, after),
-            (
-                "teamsAppInformation.teams.outlineIcon",
-                previous_teams,
-                current_teams,
-            ),
-            ("teamsAppInformation.teams.colorIcon", previous_teams, current_teams),
-        )
-        if previous.get(path.rsplit(".", 1)[-1], missing)
-        != current.get(path.rsplit(".", 1)[-1], missing)
-    ]
 
 
 def disable_writes(root: Path, *, pending: bool = False) -> None:
@@ -571,7 +474,6 @@ def save(
     *,
     current_target: dict[str, str],
     root: Path,
-    accept_service_icon_processing: bool = False,
 ) -> dict[str, Any]:
     """Save a freshly prepared plan; the CLI always prepares again after approval."""
     reviewed_target = {
@@ -589,32 +491,10 @@ def save(
         return {"status": "no_change", "properties": {}, "writeAttempted": False}
     _require_writes_enabled(root)
     bot = copy.deepcopy(plan["state"]["bot"])
-    icon_processing_risk = (
-        _retained_logo_issue(bot)
-        if "name" in changes and "logo" not in changes
-        else None
-    )
-    if icon_processing_risk != plan["serviceIconProcessingRisk"]:
-        return {
-            "status": "review_again",
-            "reason": "The reviewed icon-processing risk changed; no write.",
-        }
-    if icon_processing_risk and not accept_service_icon_processing:
-        return {
-            "status": "review_again",
-            "reason": "Explicit approval of possible service-side icon processing is required; no write.",
-            "serviceIconProcessingRisk": icon_processing_risk,
-        }
     if "name" in changes:
         bot["displayName"] = changes["name"]
     if "logo" in changes:
-        bot["iconBase64"] = changes["logo"][0]
-        if bot.get("teamsAppInformation") is None:
-            bot["teamsAppInformation"] = {}
-        application = bot["teamsAppInformation"]
-        if application.get("teams") is None:
-            application["teams"] = {}
-        application["teams"]["outlineIcon"] = changes["logo"][1]
+        bot["iconBase64"] = changes["logo"]
 
     # BotEntity.version is enforced by CreateBotEntityTransaction, independently
     # of component changeToken. Never strip it or retry this PUT automatically.
@@ -686,10 +566,8 @@ def save(
     if "logo" in changes:
         try:
             actual_logo = _logo(observed)
-            expected_logo = tuple(_decode(value) for value in changes["logo"])
-            same = tuple(
-                _png(value) if value else b"" for value in actual_logo
-            ) == tuple(_png(value) for value in expected_logo)
+            expected_logo = _decode(changes["logo"])
+            same = (_png(actual_logo) if actual_logo else b"") == _png(expected_logo)
         except AgentBasicsError:
             same = False
         if later_revision and same:
@@ -700,14 +578,6 @@ def save(
         preserved = _preserved(plan["state"], after, changes)
     except AgentBasicsError:
         preserved = False
-    logo_preservation = "not_applicable"
-    changed_logo_fields = None
-    if "logo" not in changes:
-        try:
-            changed_logo_fields = _changed_logo_fields(plan["state"]["bot"], observed)
-            logo_preservation = "changed" if changed_logo_fields else "confirmed"
-        except AgentBasicsError:
-            logo_preservation = "unverified"
     writes_disabled = not (
         preserved and all(value in {"saved", "failed"} for value in results.values())
     )
@@ -722,8 +592,6 @@ def save(
         "target": plan["target"],
         "properties": results,
         "preservation": "confirmed" if preserved else "unverified",
-        "logoPreservation": logo_preservation,
-        "changedLogoFields": changed_logo_fields,
         "httpStatus": status_code,
         "transportIssue": transport_issue,
         "requestId": request_id,
@@ -760,22 +628,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--name")
     parser.add_argument("--logo", help="Local 192x192 color PNG, at most 1 MiB.")
     parser.add_argument(
-        "--outline", help="Local 32x32 white/transparent PNG, at most 1 MiB."
+        "--outline",
+        help="Unsupported: the platform derives outlines from the --logo source.",
     )
     parser.add_argument(
         "--approval", help="Exact reviewId explicitly approved by the maker."
-    )
-    parser.add_argument(
-        "--accept-service-icon-processing",
-        action="store_true",
-        help="For save only, confirm separate maker approval of the reviewed icon-processing risk.",
     )
     parser.add_argument("--account")
     parser.add_argument("--select-account", action="store_true")
     args = parser.parse_args(argv)
     root = Path.cwd()
-    if args.accept_service_icon_processing and args.action != "save":
-        parser.error("--accept-service-icon-processing is only valid for save")
+    if args.outline is not None:
+        parser.error(
+            "Independent outline customization is not supported. Use --logo "
+            "for the source image; the platform derives its outline. "
+            "No write was attempted."
+        )
     if args.action == "cleanup" and not args.approval:
         parser.error("cleanup requires --approval REVIEW_ID")
     if args.action in ("view", "resume-writes", "disable-writes") and any(
@@ -817,9 +685,7 @@ def main(argv: list[str] | None = None) -> int:
             tenant_id=target["tenant_id"],
             api_version=target["api_version"],
         )
-        plan = prepare(
-            client, target, name=args.name, logo=args.logo, outline=args.outline
-        )
+        plan = prepare(client, target, name=args.name, logo=args.logo)
         if args.action == "save":
             result = save(
                 client,
@@ -827,7 +693,6 @@ def main(argv: list[str] | None = None) -> int:
                 args.approval,
                 current_target=selected_target(root),
                 root=root,
-                accept_service_icon_processing=args.accept_service_icon_processing,
             )
         elif args.action == "resume-writes":
             if args.approval != plan["reviewId"] or selected_target(root) != target:

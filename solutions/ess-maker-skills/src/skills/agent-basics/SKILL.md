@@ -9,21 +9,35 @@ description: >-
 
 # Agent Basics
 
-Follow the selected-agent setup and explicit preview/approval procedure used by
-other authoring skills. Use `scripts/agent_basics.py` for all service operations;
+Completed setup is mandatory for `/agent-basics`, natural-language name/logo
+edits, and landing-page handoffs. Apply the shared completed-setup gate in
+`.github/copilot-instructions.md` before viewing current values, collecting
+proposed changes, or running authoring commands.
+
+Use `scripts/agent_basics.py` for all service operations;
 do not write raw HTTP, local branding replacements, or AgentConfiguration
 name/icon update payloads. Instructions are outside this skill's scope.
 
 ## Target and scope
 
-- Read `.local/config.json` and resolve its `activeAgent` against canonical
-  `.local/setup/config.json` schema v4. Never select by mutable displayName,
-  landing-page `titleId`, or an inferred filename.
-- If setup has not established/materialized the intended target, follow
-  `src/skills/foundation-setup/SKILL.md`, retain the original request, then return
-  here. Do not require runtime connections, publication or `connect_ready`.
+- Read `.local/config.json` and canonical `.local/setup/config.json`.
+  Require canonical `schema_version: 4` and `connect_ready: true` for the
+  agent whose `agent.workspace_slug` matches `activeAgent`. Missing or
+  incomplete setup uses the shared setup-required message and stops.
+  Materialization alone is not completed setup. Do not change readiness
+  markers or treat local `setup: "complete"` as canonical readiness.
+  Unreadable or malformed files require supported state recovery; do not
+  guess replacement metadata.
+- Resolve `activeAgent` against canonical schema v4 `agent.workspace_slug`.
+  Require the expected local config version and native DA classification,
+  matching `botId`/`id` and `schemaName`/`schema_name`, canonical workspace
+  evidence, and `steps.SETUP-07.state: "done"`; the recorded workspace folder
+  and `agent_path` must exist. The helper validates these prerequisites again.
+  Never select by mutable displayName, landing-page `titleId`, or an inferred
+  filename. A page title or link label is not a verified bot ID.
 - A maker-supplied target different from the active target requires the existing
-  setup target-selection flow first. Never silently substitute an agent.
+  setup target-selection flow first. Recheck completed setup for that target
+  before continuing. Never silently substitute an agent.
 - The helper checks live native identity, exact ESS product registry membership,
   and, for ALM, both the selected card and explicit Dev configuration. Test and
   Prod cannot be edited. These are quality gates in the same environment.
@@ -39,6 +53,11 @@ name/icon update payloads. Instructions are outside this skill's scope.
 
 ## Read and validate
 
+For a bare `/agent-basics`, use a structured question to offer **View current
+name/logo**, **Change name**, **Change logo**, and **Change both**, initially
+unselected. Preserve any operation already supplied by the maker or caller;
+do not ask them to choose it again.
+
 For a current-state-only request:
 
 ```text
@@ -47,10 +66,13 @@ python scripts/agent_basics.py view
 
 Consume `AGENT_BASICS_RESULT_JSON:`. Report only returned current values; an
 unavailable name or logo is not a default value. Use the host image-viewing tool
-on returned `current.colorPreview` and, when present, `current.outlinePreview`.
+on returned `current.colorPreview`. A returned `current.logo: "none"` confirms
+that the source icon is absent; it is not a read failure or a template default.
 After displaying them, clean up that review's copies as described below.
 
-Before collecting a change, state the selected manifest-compatible profile.
+Before collecting a change, state the selected manifest-compatible profile
+for the requested properties only. A rename requires only the name limits,
+not image requirements or a logo preview.
 The maker supplied the Microsoft 365 app manifest v1.30
 [name](https://learn.microsoft.com/en-us/microsoft-365/extensibility/schema/root-name?view=m365-app-1.30)
 and [icon](https://learn.microsoft.com/en-us/microsoft-365/extensibility/schema/root-icons?view=m365-app-1.30)
@@ -60,35 +82,35 @@ not proof that AgentBuilder enforces the same limits on native authoring.
 | Property | Input |
 |---|---|
 | displayName | Nonblank, at most 30 Unicode characters; whitespace is preserved, not trimmed |
-| Color logo | Local, fully decodable single-frame PNG, exactly 192x192 |
-| Outline logo | Local, fully decodable single-frame PNG, exactly 32x32, transparent background and nonempty white artwork |
+| Logo source | Local, fully decodable single-frame PNG, exactly 192x192; saved as `BotEntity.iconBase64` |
+| Derived icons | Owned by the platform; independent outline and 32x32 color-asset customization are not supported |
 | Local preview safeguards | At most 1 MiB per PNG and one frame, so ADK can bound local resource use and show the complete static proposal; neither is an asserted native service limit |
 
+If the target or requested value is ambiguous or missing, use a separate
+structured clarification with free-form input for a new `displayName` or
+agent URL before preparing a proposal. Do not invent a name, use a page title
+as the replacement name, or use the closed save-approval choices to collect
+these inputs.
+
 Use the maker's exact values. Do not trim, truncate, crop, resize, convert,
-generate an outline, or fetch arbitrary remote URLs. Color and outline assets
-may be supplied separately: the helper retains the other current asset only
-if it meets the selected profile. Show that retained asset as part of the
-proposed logo and label it unchanged. If it cannot be retained, collect its
-explicit replacement or let the maker keep the current logo/cancel; never
-generate it. The manifest's optional 32x32 color asset has no established
-independent native authoring mapping; do not claim to save it.
+generate an outline, or fetch arbitrary remote URLs. A logo edit changes only
+the source image in `BotEntity.iconBase64`; no outline upload is required, even
+when the stored outline is empty or absent. The platform derives card/package
+icons from that source. Do not offer or promise an independently customized
+published outline. If the maker requests an outline-only edit or supplies one
+alongside another change, explain that it is unsupported and make no write.
+Collect a revised supported proposal instead of silently dropping the outline.
 
 An unread or invalid property must not be written. Explain what needs correcting
 and allow an independent valid/readable property to proceed in a separate
 preview, only with the maker's agreement. Never silently drop a combined request.
 Name-only saves use the existing metadata PUT, with the fetched logo fields
-unchanged. A confirmed null color icon, or a decodable 192x192 color icon with
-a nonempty outline, meets the inspected service's icon-preservation condition.
-Other existing states return `serviceIconProcessingRisk` and
-`serviceIconProcessingWarning` in the review instead of blocking the preview.
-The existing service may resize/re-encode the color icon and clear the outline
-and `colorIcon` fields. This is a risk, not proof that the deployed service
-will change this agent's logo. Do not promise unchanged branding.
-Do not require replacement images or a new/modified API just to rename.
-Proceed only after separate, explicit approval of that possible service-side
-processing as described below; otherwise keep the current state without writing.
-ADK itself does not resize or replace the logo. Explicit logo/combined edits
-still require review of valid supplied assets.
+unchanged. Do not inspect or preview images, collect image inputs, discuss
+service-side image processing, or ask for image-processing consent for a rename.
+The platform owns icon normalization and derived image fields; these are not
+part of rename validation or recovery. ADK itself does not resize or replace
+the logo. Explicit logo/combined edits still require review of valid supplied
+assets, but never a separate image-processing question.
 
 ## Preview and explicit approval
 
@@ -98,8 +120,7 @@ local paths using the host shell's argument-escaping rules:
 ```text
 python scripts/agent_basics.py preview --name "People Support"
 python scripts/agent_basics.py preview --logo "C:\branding\color.png"
-python scripts/agent_basics.py preview --logo "C:\branding\color.png" --outline "C:\branding\outline.png"
-python scripts/agent_basics.py preview --name "People Support" --logo "C:\branding\color.png" --outline "C:\branding\outline.png"
+python scripts/agent_basics.py preview --name "People Support" --logo "C:\branding\color.png"
 ```
 
 Read `AGENT_BASICS_RESULT_JSON:` rather than inferring success from exit code.
@@ -107,15 +128,18 @@ If `writesDisabled` is true, keep this review read-only and use **Stop and
 reviewed recovery**; do not offer ordinary save approval.
 Show the selected product, tenant/environment, stable bot ID and authoring
 quality gate, actual current and proposed requested values, and retained
-properties. The displayName is not the ESS product identity.
+non-image settings. For rename-only requests, show only the current and proposed
+name; do not make a logo-preservation guarantee.
+The displayName is not the ESS product identity.
 Quote displayName values with JSON escaping where needed so whitespace or
 nonprinting characters are not hidden in the current/proposed review.
 
 For logo requests, display **every supplied source file** using the host
-image-viewing tool, alongside the returned current previews. For a retained
-asset, use its current preview as the unchanged proposed asset. Explain which is
-the color and which is the outline asset, including dimensions and a concise
-text description for accessibility. Paths, filenames and hashes alone are not
+image-viewing tool, alongside the returned current source preview. When the
+current source is confirmed absent, label it as no current logo rather than
+inventing an image. Show dimensions and a concise text description for
+accessibility. This reviews the authoring source, not a rendered package or
+proof of employee-visible branding. Paths, filenames and hashes alone are not
 an image preview. If the host cannot render an image, stop the logo write and
 explain; name-only may proceed with separate consent.
 
@@ -124,36 +148,21 @@ Use the host's structured question control with **Approve**, **Edit proposal**,
 generic yes, a digest, or a previous target's approval as approval of a new
 review. Keyboard navigation must work; announce validation/conflict messages
 in text, not color alone. Obtain approval only after the target, complete
-proposed values and actual images have been presented.
+proposed values and, for logo requests only, actual images have been presented.
 
 In VS Code, use `vscode_askQuestions` with `allowFreeformInput: false` and
 those four choices, initially unselected. In other supported hosts, use the
 equivalent structured question tool. A dismissed question is not approval.
-If the target, property or desired value is ambiguous, use that control to
-clarify it before preparing a proposal.
-
-If `serviceIconProcessingRisk` is present, also show its reason and the full
-`serviceIconProcessingWarning` before offering approval. Explain that the name
-can be submitted without new images, but preserving the current logo is not
-guaranteed. Show available current icon previews; label any unavailable asset
-honestly. Use a separate structured choice, initially unselected:
-**Accept possible service-side icon processing** or **Keep current**.
-The initial rename request and ordinary **Approve** do not provide this extra
-consent. Only if the maker accepts the risk and approves this same review,
-add `--accept-service-icon-processing` to the save command. If the maker
-declines, cancels or dismisses either question, clean up and make no write.
-Keep this consent bound to the reviewed target, proposal, snapshot and risk;
-any new review requires approval again.
 
 The `reviewId` binds target, workspace selection, service snapshot, requested
-values, icon-processing risk and exact source bytes. Do not compute or alter it.
+values and exact supplied source bytes. Do not compute or alter it.
 On **Approve**, rerun the exact proposal with `save --approval REVIEW_ID`:
 
 ```text
 python scripts/agent_basics.py save --name "People Support" --approval REVIEW_ID
 ```
 
-Retain `--logo` and `--outline` too for an approved logo/combined request.
+Retain `--logo` too for an approved logo/combined request.
 The helper re-reads identity, permissions and state, compares the reviewed
 digest and uses the fetched `BotEntity.version` in one protected metadata PUT.
 It preserves the fetched entity and sends no component changes. It never
@@ -167,18 +176,22 @@ On **Edit proposal**, clean up first, then validate/preview the edited proposal.
 ## Results and uncertain recovery
 
 - `saved` means authoritative read-back at a newer entity revision confirmed
-  every requested property and preservation of unrequested metadata/components,
-  including instructions. Local files or HTTP acknowledgment are not proof.
+  every requested property and preservation of unrequested non-image
+  metadata/components, including instructions. Local files or HTTP
+  acknowledgment are not proof.
 - Report each requested property's `saved`, `failed` or `unverified` result.
   If `preservation` is unverified, the operation remains unfinished, even when
   a requested value was observed. Do not roll back or proceed with more writes.
-- For name-only saves, also report `logoPreservation` and any
-  `changedLogoFields`. If the name is confirmed saved but logo fields changed,
-  say **the rename was saved, but the service also changed the existing icon**.
-  Do not call the rename failed or unchanged, claim full preservation, infer
-  a visual change from bytes alone, repeat the rename, or silently accept the
-  icon changes. Further writes remain stopped pending reviewed recovery,
-  even when the maker accepted the pre-save risk.
+- A logo is `saved` only when read-back confirms the approved source image's
+  dimensions and decoded pixels at a newer revision. PNG re-encoding and
+  platform-owned derived icon fields are not independent requested changes;
+  empty/missing stored outlines do not invalidate the source save. A changed
+  or unreadable source remains unverified. Name, instructions and all other
+  unrequested non-image settings must still be preserved.
+- For name-only saves, report the name result without image-processing
+  warnings, logo-preservation results or image-related recovery. Service-owned
+  image normalization does not invalidate a verified rename or stop further
+  writes. Do not claim that image preservation was checked.
 - A pending-write marker is created before the PUT and retained after an
   uncertain result, preservation mismatch or interrupted process. A verified
   safe result releases it. `writesDisabled: true` means stop and follow the
