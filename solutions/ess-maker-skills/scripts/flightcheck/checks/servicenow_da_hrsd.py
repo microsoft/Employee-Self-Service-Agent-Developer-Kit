@@ -362,7 +362,7 @@ def _actionable_remediation(
         f"**Values to use**\n{guidance['values']}\n\n"
         f"**Action**\n{retry}\n\n"
         f"**Success**\n{guidance['success']}\n\n"
-        f"**Recheck and resume**\nRerun only the current "
+        f"**Check again and resume**\nRerun only the current "
         f"{guidance['step']} check. When it passes, resume at this step; "
         "dependent later steps remain pending and are rechecked in order."
     )
