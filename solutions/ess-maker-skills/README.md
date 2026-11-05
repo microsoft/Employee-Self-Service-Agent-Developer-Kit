@@ -71,15 +71,60 @@ Describe the announcement in chat and the kit opens a pre-filled editor for
 you to review — nothing is saved until you publish or save a draft in that
 editor.
 
-Org Announcements are **scoped to the authenticated tenant and selected
-agent's `titleId`**, not shared across agents. The current 100 limit and latest
-50 archive window apply per tenant-and-agent pair. There is no cross-agent or
-legacy tenant-only API fallback. Within the selected agent, `audience: []`
-applies no additional Security Group filtering, so the announcement reaches
-everyone who uses that agent. The title is resolved using `list_agent_configs`
-and `search_agents` on the `ess-org-announcements` provider. Discovery shares
-neutral Python code with the landing-page provider, but does not require its MCP
-process or initialize its configuration.
+Org Announcements are **scoped to the authenticated tenant and selected agent
+registration's title ID**, not shared across agents or distinct registrations.
+The current 100 limit and latest 50 archive window apply per
+tenant-and-registration pair. Within that registration, `audience: []` applies
+no additional Security Group filtering. There is no cross-agent or legacy
+tenant-only API fallback.
+
+**LOB means line-of-business.** Regular and LOB are separate Microsoft 365 app
+registrations of the same bot, not different agents or audience groups.
+Announcements and landing-page settings belong to the chosen registration;
+changes for one do not automatically apply to the other. Choose the registration
+your intended users use to open the agent, without guessing its deployment
+channel from the label.
+
+Both feature MCP providers expose read-only `resolve_agent_title_id(botId)`
+through `src/mcp/agentconfig_core/agent_title_resolution.py`. Native DA discovery
+binds the exact bot, environment, ring and tenant from `.local/config.json` and
+the locked `.local/setup/config.json`; no Dataverse endpoint is required.
+It validates `GET /copilotstudio/minimalBots/api/{botId}?api-version=2024-10-01`,
+then reads the regular ID from `bot.teamsAppInformation.microsoft365.titleId`
+using the existing component fetch:
+`POST /copilotstudio/minimalBots/api/{botId}/components?api-version=2022-03-01-preview`
+with `{}`. LOB requires a separate read:
+`GET /copilotstudio/agents/{botId}/channels/m365/publish?api-version=2024-10-01`,
+with `X-CCI-CdsBotId` set to the exact bot. Its plain `titleId` maps to canonical
+`lobTitleId`; components alone do not expose that DA registration. No realm or
+channel-root probe is added, and `/publish` is never called with POST.
+This Studio frontend route was confirmed by prior read-only probes, not a
+public documented contract.
+
+The resolver always returns both registration keys (`null` when unavailable)
+and requires at least one valid title. HTTP 404 remains an explicit error, not
+proof that a registration is absent or a reason to switch backend. Null/non-object
+publish status or a missing `titleId` field is malformed; an explicit null/blank
+title means unavailable. These fail-closed failure policies are offline-tested,
+not live-established. Authentication, authorization, malformed metadata and
+network failures never become empty discovery or registration substitutions.
+
+Both skills follow `src/skills/shared/agent-title-resolution.md`. The verified
+pair is retained per agent and active mirror under `registrationTitleIds`;
+the legacy scalar `titleId` remains the selected scope. Explicit, verified or
+compatible cached selections take precedence. Only when no selection exists
+and both IDs are distinct does the skill ask which registration to configure.
+A missing requested registration never silently falls back. Setup preserves
+the pair and scalar only for the same bot and environment.
+
+Metadata discovery reuses the authoring MSAL cache for the same tenant/account
+and requests ring-global MinimalBot.Read and MakerOperations.Read scopes.
+Earlier successful probes also had previously granted ReadWrite permissions,
+so minimum endpoint permissions have not been established. Power Platform and
+Substrate use separate resource tokens. Browser sign-in is bounded to 300
+seconds; cancelled lookups remain tracked until their worker finishes.
+Neither feature requires the other's MCP process, searches by agent name,
+derives IDs from apps/share links, or initializes configuration during discovery.
 
 Announcement authoring requires the Org Announcements feature to be enabled
 for your tenant, and audience search requires the `Directory.Read.All`

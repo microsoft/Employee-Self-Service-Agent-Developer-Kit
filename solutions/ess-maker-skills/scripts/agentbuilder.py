@@ -26,6 +26,7 @@ from urllib3.util.retry import Retry
 CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 DEFAULT_API_VERSION = "2024-10-01"
 NATIVE_ALM_API_VERSION = "2022-03-01-preview"
+M365_PUBLISH_STATUS_API_VERSION = "2024-10-01"
 COPILOT_STUDIO_CLIENT_NAME = "CopilotStudio"
 DEFAULT_TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 DEV_REALM = 0
@@ -118,6 +119,25 @@ def validate_environment_host(host: str, ring: str) -> str:
     return f"https://{hostname}"
 
 
+def environment_id_from_host(host: str, ring: str) -> str:
+    """Return the canonical environment GUID encoded in a PPAPI host."""
+    validated = validate_environment_host(host, ring)
+    hostname = urlparse(validated).hostname or ""
+    suffix = str(RING_CONFIG[ring]["host_suffix"]).casefold()
+    prefix = hostname[: -(len(suffix) + 1)]
+    labels = prefix.split(".")
+    compact = "".join(labels)
+    if (
+        len(labels) != 2
+        or len(compact) != 32
+        or any(char not in "0123456789abcdef" for char in compact)
+    ):
+        raise ValueError(
+            "AgentBuilder host does not encode a valid environment ID."
+        )
+    return str(uuid.UUID(hex=compact))
+
+
 def derive_environment_host(
     environment_id: str,
     ring: str,
@@ -160,6 +180,22 @@ def minimal_bot_read_scope(ring: str) -> str:
     if config is None:
         raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
     return f"{config['audience']}/CopilotStudio.MinimalBot.Read"
+
+
+def maker_operations_read_scope(ring: str) -> str:
+    """Return the read-only MakerOperations scope for a supported ring."""
+    config = RING_CONFIG.get(ring)
+    if config is None:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    return f"{config['audience']}/CopilotStudio.MakerOperations.Read"
+
+
+def agent_inventory_read_scopes(ring: str) -> tuple[str, ...]:
+    """Return the scopes requested for native agent metadata discovery."""
+    return (
+        maker_operations_read_scope(ring),
+        minimal_bot_read_scope(ring),
+    )
 
 
 def connectivity_read_scopes(ring: str) -> tuple[str]:
@@ -885,6 +921,35 @@ class AgentBuilderClient:
         )
         if not isinstance(body, dict):
             raise AgentBuilderError("Component fetch returned an invalid shape.")
+        return body
+
+    def get_m365_publish_status(self, agent_id: str) -> dict[str, Any]:
+        """Read M365 channel status; its titleId identifies the LOB registration.
+
+        This is the Studio fetchM365PublishStatus route, verified by read-only
+        probes, not a public API contract. Never POST this publication route.
+        """
+        agent_id = str(uuid.UUID(agent_id))
+        response = self.session.request(
+            "GET",
+            f"{self.host}/copilotstudio/agents/{agent_id}/channels/m365/publish",
+            params={"api-version": M365_PUBLISH_STATUS_API_VERSION},
+            headers={**self.headers, "X-CCI-CdsBotId": agent_id},
+            timeout=120,
+            allow_redirects=False,
+        )
+        if not 200 <= response.status_code < 300:
+            _response_error(response, "M365 publish status")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AgentBuilderError(
+                "M365 publish status returned a non-JSON response."
+            ) from exc
+        if not isinstance(body, dict):
+            raise AgentBuilderError(
+                "M365 publish status returned an invalid shape."
+            )
         return body
 
     def update_bot_entity(

@@ -16,14 +16,14 @@ never claim a save the tools did not return.
 
 ## Tenant-and-agent scope
 
-Org Announcements belong to **one deployed ESS agent in the authenticated
+Org Announcements belong to **one deployed ESS agent registration in the authenticated
 tenant**, selected by its required `titleId`. They are not shared across every
-agent. `titleId` is an agent identifier, not an author permission, a Dataverse
+agent or distinct registrations. `titleId` is a registration scope, not an author permission, a
 `botId`, or a Graph audience group. Tenant identity comes only from the
 authoring sign-in; never supply `tenantId` to a tool.
 
 The 100-current-item limit and latest-50 archived window apply separately to
-each tenant-and-agent pair. There is no migration, cross-agent sharing, or
+each tenant-and-registration pair. There is no migration, cross-agent sharing, or
 legacy tenant-only API fallback. An empty audience applies no additional
 Security Group filtering and reaches everyone who uses the selected agent.
 Tell the maker which selected agent they are managing:
@@ -96,39 +96,35 @@ stop.
 
 ## Resolve the target
 
-Reuse the setup configuration already loaded. Do not guess an identifier or
-use announcement content to decide which agent owns it.
+Read and follow `src/skills/shared/agent-title-resolution.md` with MCP provider
+`ess-org-announcements`. It owns local selection, explicit/cached-ID precedence,
+regular/LOB discovery and choice, and strict GUID-bound persistence. A verified
+target can be reused for this conversation; do not force `get_agent_config`
+before each opener.
 
-1. Select the active agent from the backward-compatible `agent` object. For
-   another configured agent, match an `agents` entry by `slug`, `botId`, or
-   unambiguous `name`.
-2. Use the maker's explicit `titleId`, otherwise the selected entry's stored
-   `titleId`. A verified target can be reused for this conversation; do not
-   force `get_agent_config` before each opener.
-3. If the title is missing, use this provider's read-only discovery tools:
-   `list_agent_configs`, then `search_agents` with a distinctive agent-name
-   substring when the list has no unambiguous match. These discover deployed,
-   tenant-visible agents; a `botId` is never a substitute for `titleId`.
-   Both tools belong to `ess-org-announcements`. No landing-page MCP process
-   is needed; follow this skill's availability check if they are unavailable.
-4. Ask the maker to choose among ambiguous candidates. If no candidate matches,
-   stop and ask them to confirm the agent name and have the published agent
-   approved and deployed to the organization. Never fall back to tenant-wide
-   announcements.
-5. Persist a discovered, verified `titleId` using the existing local-agent
-   convention: reread the complete config, find the selected `agents` entry by
-   `botId` then `slug` (name only if unambiguous), and change only its `titleId`.
-   If the active agent exists only as `agent`, copy that complete object into
-   `agents` first. Also update `agent.titleId` when the target matches
-   `activeAgent` or the active object's botId/slug. Preserve all other fields
-   and agents. Reread to verify both copies before calling another tool.
-   With no matching local entry, use the discovered title for this request
-   without fabricating a partial local agent.
+Use this provider's read-only `resolve_agent_title_id` with the selected
+configured `botId` when discovery is needed. It reads the exact DA bot's native
+components and M365 publish status, returning both `titleId` and `lobTitleId`,
+with JSON `null` for an unavailable registration. Do not use
+`list_agent_configs`, `search_agents`, or any name-search fallback.
 
-Discovery does **not** initialize landing-page configuration. Never call
-`create_agent_config` or `update_agent_config` as part of this flow, including
-when a target was found only through search. No landing-page existence check
-or creation is needed to open announcements.
+Persist the canonical pair under the selected entry's `registrationTitleIds`
+and its active mirror. Preserve the scalar `titleId` as the selected scope;
+choosing LOB does not overwrite the pair's regular identity. Complete the
+shared persistence gate and any required **Regular registration** or **LOB
+registration** choice before opening announcements. **LOB means line-of-business**:
+the two registrations belong to the same bot but have separate configuration
+scopes. Explain that distinction before asking which registration the maker's
+intended users use; do not guess a deployment channel from the labels.
+When a requested registration is unavailable, stop; never use the other
+registration silently. Missing both is `RegistrationRequired`; authentication,
+malformed-response and API failures are explicit errors, not empty discovery.
+
+No landing-page MCP process is needed; follow this skill's availability check
+if this provider's tools are unavailable. Discovery does **not** initialize
+landing-page configuration. Never call `create_agent_config` or
+`update_agent_config` as part of this flow. No landing-page existence check or
+creation is needed to open announcements.
 
 ## Hard rules
 

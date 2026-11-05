@@ -25,6 +25,9 @@ _MENU = _SOLUTION / ".github" / "prompts" / "menu.prompt.md"
 _PROMPT = _SOLUTION / ".github" / "prompts" / "org-announcements.prompt.md"
 _FOUNDATION = _SOLUTION / "src" / "skills" / "foundation-setup" / "SKILL.md"
 _SKILL = _SOLUTION / "src" / "skills" / "org-announcements" / "SKILL.md"
+_SHARED_TITLE_REFERENCE = (
+    _SOLUTION / "src" / "skills" / "shared" / "agent-title-resolution.md"
+)
 _MCP_DEFAULTS = _SOLUTION / ".vscode" / "mcp.defaults.json"
 _SCRIPT_REQUIREMENTS = _SOLUTION / "scripts" / "requirements.txt"
 _FEATURE_REQUIREMENTS = (
@@ -61,7 +64,7 @@ def test_prompt_routes_to_the_setup_gated_skill() -> None:
 def test_skill_preserves_agent_scope_and_read_only_opening() -> None:
     skill = _normalized(_SKILL)
 
-    assert "one deployed ESS agent in the authenticated tenant" in skill
+    assert "one deployed ESS agent registration in the authenticated tenant" in skill
     assert "required `titleId`" in skill
     assert "100-current-item limit and latest-50 archived window" in skill
     assert "never supply `tenantId` to a tool" in skill
@@ -85,10 +88,60 @@ def test_skill_preserves_priority_audience_and_discovery_contracts() -> None:
         "create editor." in skill
     )
     assert "omit `suggestedDraft.audience`" in skill
-    assert "`list_agent_configs`, then `search_agents`" in skill
-    assert "Both tools belong to `ess-org-announcements`" in skill
+    assert "`resolve_agent_title_id`" in skill
+    assert "Do not use `list_agent_configs`, `search_agents`" in skill
     assert "Never call `create_agent_config` or `update_agent_config`" in skill
     assert "ess-landing-page-config" not in skill
+
+
+def test_shared_title_guidance_preserves_cache_selection_and_strict_persistence():
+    shared = _normalized(_SHARED_TITLE_REFERENCE)
+    landing = _normalized(
+        _SOLUTION / "src" / "skills" / "landing-page-config" / "SKILL.md"
+    )
+    announcements = _normalized(_SKILL)
+    for skill in (landing, announcements):
+        assert "src/skills/shared/agent-title-resolution.md" in skill
+    for phrase in (
+        "stored selected `titleId`",
+        "An explicit Regular/LOB request takes precedence",
+        "Never treat a pasted pair of metadata values as an implicit selection",
+        "If both IDs are available and different",
+        "If both fields contain the same ID",
+        "Never silently fall back to the other registration",
+        "normalizing both identifiers as GUIDs",
+        "Require exactly one match",
+        "If active markers conflict",
+        "Preserve all other fields and agents",
+        "Write valid JSON and reread to verify",
+        "An explicitly chosen `lobTitleId` is passed as the opener's `titleId`",
+        "Do not rewrite canonical setup state",
+    ):
+        assert phrase in shared
+    assert "pair's regular identity" in announcements
+    assert "Discovery does not establish that a landing-page configuration exists" in landing
+
+
+def test_shared_title_guidance_pins_native_sources_and_explains_the_choice():
+    shared = _normalized(_SHARED_TITLE_REFERENCE)
+    for phrase in (
+        "bot.teamsAppInformation.microsoft365.titleId",
+        "channels/m365/publish?api-version=2024-10-01",
+        "supplies the canonical `lobTitleId`, not the regular title",
+        "Never POST `/publish`",
+        "HTTP 404 as `NotFound`",
+        "offline-tested, not live-established",
+        "minimum endpoint permissions have not been established",
+        "expand **LOB** as **line-of-business**",
+        "two Microsoft 365 app registrations of the same agent",
+        "changes for one are not automatically applied to the other",
+        "Do not guess a deployment or distribution channel from the labels or IDs",
+        "does not require another question when an explicit, verified, or compatible cached selection",
+        "limited to 300 seconds",
+        "leaves its lookup tracked until its worker finishes",
+    ):
+        assert phrase in shared
+    assert "**LOB means line-of-business.**" in _normalized(_SOLUTION / "README.md")
 
 
 def test_announcements_are_registered_across_current_entry_points() -> None:
