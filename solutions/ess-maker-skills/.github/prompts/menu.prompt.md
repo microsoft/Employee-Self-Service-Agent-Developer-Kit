@@ -28,6 +28,7 @@ Here's what I can help you with:
 | `/push` | Show native DA-GA deployment availability |
 | `/backup-template-configs` | Back up hybrid Workday reference-data template configs |
 | `/restore-template-configs` | Restore hybrid Workday reference-data template configs |
+| `/import-oss` | Dry-run and install missing Workday OSS topics through an authenticated Copilot Studio browser session |
 | `/troubleshoot` | Show DA-GA integration troubleshooting availability |
 
 Tip: Switch to **Plan** mode (type `/plan`) if you'd like to brainstorm or discuss changes before making them.
