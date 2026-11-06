@@ -49,7 +49,6 @@ from tenant_inventory_discovery.config import (  # noqa: E402
     is_loopback_url,
 )
 from tenant_inventory_discovery.errors import (  # noqa: E402
-    InventoryApiError,
     NonRetryableApiError,
     ThrottledError,
 )
