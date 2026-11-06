@@ -48,6 +48,10 @@
     PowerShell modules from the Microsoft Store). Default is the direct install
     path, which works on any GA winget without that opt-in.
 
+.PARAMETER FlightCheckScope
+    Validation scope for -FlightCheckOnly. Prompts with no default when
+    interactive; unattended runs must supply this or FLIGHTCHECK_SCOPE.
+
 .PARAMETER FlightCheckOnly
     Install only the minimal toolchain needed to run FlightCheck (Python + Git +
     pip dependencies). Skips VS Code, extensions, and the full maker kit setup.
@@ -94,12 +98,67 @@ param(
     [switch] $SkipLaunch,
     [switch] $UseDsc,
     [switch] $FlightCheckOnly,
+    [string] $FlightCheckScope = $env:FLIGHTCHECK_SCOPE,
     [ValidateSet('prod', 'preprod', 'test')]
     [string] $Ring = 'prod',
     [ValidateSet('maker', 'developer', 'prompt', 'lite', 'standard')]
     [string] $InstallMode = 'prompt',
     [switch] $SkipMakerProfile
 )
+
+function Resolve-FlightCheckScope {
+    param(
+        [string] $Scope,
+        [bool] $Interactive = (
+            [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and
+            -not ([Environment]::GetCommandLineArgs() -match '^-NonI(nteractive)?$')
+        )
+    )
+    # Keep this preflight self-contained: bootstrap runs it before downloading.
+    # Scope names mirror cli.py, not its separate litmus profiles.
+    $scopes = [ordered]@{
+        full = 'All applicable validation categories'
+        prerequisites = 'Prerequisite access and setup'
+        infrastructure = 'Infrastructure and connectivity'
+        environment = 'Power Platform environment'
+        solution = 'Installed solution configuration'
+        authentication = 'Authentication configuration'
+        entraapp = 'Microsoft Entra application'
+        workdaytenant = 'Workday tenant configuration'
+        external = 'External system configuration'
+        workday = 'External system and Workday checks'
+        workdayextension = 'Workday checks and extension'
+        workdayda = 'Workday declarative-agent package'
+        topics = 'Workday topics'
+        graphconnector = 'External system and Graph connector knowledge'
+        handoff = 'Agent handoff topics'
+        servicenow = 'External system and ServiceNow checks'
+        local = 'Local agent files'
+        publishing = 'Agent publishing'
+        licensing = 'Licensing'
+        cloudpolicy = 'Cloud policies'
+    }
+    $instructions = 'Specify -FlightCheckScope <scope> or set FLIGHTCHECK_SCOPE. Full requires explicit selection.'
+    if ([string]::IsNullOrWhiteSpace($Scope)) {
+        if (-not $Interactive -or $env:CI -or $env:TF_BUILD -or $env:GITHUB_ACTIONS) {
+            throw "FlightCheck scope is required for unattended installation. $instructions Allowed: $($scopes.Keys -join ', ')."
+        }
+        Write-Host 'Choose a FlightCheck scope (no default):'
+        foreach ($name in $scopes.Keys) { Write-Host "  $name - $($scopes[$name])" }
+        try { $Scope = Read-Host 'Enter a scope name' } catch {
+            throw "FlightCheck scope input is unavailable. $instructions"
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($Scope) -or -not $scopes.Contains($Scope.Trim().ToLowerInvariant())) {
+        throw "A valid FlightCheck scope is required; empty input does not select Full. $instructions Allowed: $($scopes.Keys -join ', ')."
+    }
+    return $Scope.Trim().ToLowerInvariant()
+}
+
+# Require intent before toolchain installation, config writes, or telemetry.
+if ($FlightCheckOnly) {
+    $FlightCheckScope = Resolve-FlightCheckScope -Scope $FlightCheckScope
+}
 
 # Back-compat: -SkipMakerProfile forces developer mode even when
 # -InstallMode is passed. This preserves the old behaviour where the
@@ -1575,18 +1634,18 @@ if ($FlightCheckOnly) {
             $ErrorActionPreference = 'Continue'
             # Discovery, saved configuration, and the first check use the same ring.
             if ($pythonExe -eq 'py -3.12') {
-                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
+                & py -3.12 scripts/flightcheck/cli.py --scope $FlightCheckScope --invocation-source installer --select-targets always --ring $Ring
             } elseif ($pythonExe -eq 'py -3') {
-                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
+                & py -3 scripts/flightcheck/cli.py --scope $FlightCheckScope --invocation-source installer --select-targets always --ring $Ring
             } else {
-                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
+                & $pythonExe scripts/flightcheck/cli.py --scope $FlightCheckScope --invocation-source installer --select-targets always --ring $Ring
             }
             $ErrorActionPreference = $prevEAP
         } finally { Pop-Location }
     } else {
         Write-Warn2 'Python not found. Open a new terminal and run:'
         Write-Warn2 "  cd $workspace"
-        Write-Warn2 "  python scripts/flightcheck/cli.py --scope full --select-targets always --ring $Ring"
+        Write-Warn2 "  python scripts/flightcheck/cli.py --scope $FlightCheckScope --select-targets always --ring $Ring"
     }
     # Record the FlightCheck-only install as a success HERE, before the early
     # return below. This branch returns from inside the top-level try well
