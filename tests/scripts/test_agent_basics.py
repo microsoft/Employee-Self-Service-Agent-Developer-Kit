@@ -2006,6 +2006,46 @@ def test_explicit_disable_survives_safe_inflight_save_and_allows_readonly_review
     assert len(client.writes) == 1
 
 
+@pytest.mark.parametrize("quality_gate", ["test", "prod"])
+def test_promoted_recovery_requires_fresh_same_gate_review_without_service_write(
+    cli, monkeypatch, capsys, quality_gate
+):
+    family = QualityClient()
+    agent = family.gates[quality_gate]
+    before = {gate: copy.deepcopy(value.state) for gate, value in family.gates.items()}
+    monkeypatch.setattr(basics, "AgentBuilderClient", lambda *args, **kwargs: family)
+    basics.disable_writes(cli, pending=True)
+    options = ["--quality-gate", quality_gate]
+
+    assert basics.main(["view", *options]) == 0
+    recovery = result_json(capsys)
+    assert recovery["writesDisabled"] is True
+    assert recovery["target"]["qualityGate"] == quality_gate
+    assert basics.main(["resume-writes", "--approval", recovery["reviewId"]]) == 2
+    assert result_json(capsys)["status"] == "review_again"
+    assert basics._writes_disabled(cli)
+
+    agent.state["bot"]["version"] += 1
+    assert basics.main(["resume-writes", *options, "--approval", recovery["reviewId"]]) == 2
+    assert result_json(capsys)["status"] == "review_again"
+    assert basics._writes_disabled(cli)
+
+    assert basics.main(["view", *options]) == 0
+    recovery = result_json(capsys)
+    assert basics.main(["resume-writes", *options, "--approval", recovery["reviewId"]]) == 0
+    resumed = result_json(capsys)
+    assert resumed["status"] == "writes_resumed"
+    assert resumed["writeAttempted"] is False
+    assert not basics._writes_disabled(cli)
+    assert family.configuration_requests == []
+    for gate, value in family.gates.items():
+        expected = before[gate]
+        if gate == quality_gate:
+            expected["bot"]["version"] += 1
+        assert value.state == expected
+        assert not value.writes
+
+
 def test_cannot_create_pending_marker_means_no_service_write(
     cli, client, capsys, monkeypatch
 ):

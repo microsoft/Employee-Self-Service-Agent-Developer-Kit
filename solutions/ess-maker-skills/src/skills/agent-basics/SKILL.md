@@ -2,7 +2,8 @@
 name: agent-basics
 description: >-
   Read or customize a selected ESS agent's displayName and logo in ADK.
-  Use for rename agent, change agent name, upload logo, change agent icon, and
+  Use for rename agent, change agent name or display name, rename a Test or
+  Prod quality-gate agent, upload logo, change agent icon, and
   independent or combined name/logo changes. Saves name/logo settings only;
   never publishes, deploys to Test, promotes to Prod or submits for approval.
 ---
@@ -55,6 +56,11 @@ name/icon update payloads. Instructions are outside this skill's scope.
 - A Test/Prod request containing a logo, including a combined name/logo
   request, is blocked without writing either property. Explain that logos
   must be authored in Dev; obtain a separate name-only proposal for Test/Prod.
+- Restricted configuration authoring or unavailable Test/Prod UI does not
+  prohibit the supported name-only Configure operation. Do not ask the maker
+  to enable broader authoring or open Test/Prod to confirm a name already
+  verified through APIs. A local recovery stop is separate from those
+  restrictions and still requires reviewed resumption.
 - Legacy DA-preview and custom-engine agents retain the existing compatible-kit
   handoff. Unknown products, unresolved identity and denied access are distinct
   failures; none permits a write. Do not offer a manual edit as successful ADK
@@ -66,6 +72,15 @@ name/icon update payloads. Instructions are outside this skill's scope.
   customization perform no service write.
 
 ## Read and validate
+
+Natural-language "agent name", "display name" and "displayName" requests are
+the same name-change operation; the single display label does not change
+intent recognition. "Rename the test quality gate agent" already selects
+Change name and Test, including in a new chat. After the completed-setup gate,
+if the replacement is missing, ask only for the new display name using the
+structured free-form input below; do not show the operation menu or ask for
+the gate again. Do not replace the request with a generic help response.
+Reuse completed saved setup; never infer the new name from another chat.
 
 For a bare `/agent-basics`, use a structured question to offer **View current
 name/logo**, **Change name**, **Change logo**, and **Change both**, initially
@@ -282,6 +297,13 @@ On **Edit proposal**, clean up first, then validate/preview the edited proposal.
 
 ### Stop and reviewed recovery
 
+Explain the recovery as a local stop after an uncertain verification, not a
+Test/Prod authoring restriction or a requirement for the maker to inspect
+unrelated settings. Use authorized APIs for the current-state review.
+Publication, approval/audience and employee visibility may remain explicitly
+unverified; establishing them is not a prerequisite for a name-only recovery
+that does not publish or promote.
+
 A wrong-target write, unauthorized write, silent overwrite, changed instructions
 or unrequested settings, or false completion stops further validation writes on
 the affected path. The helper automatically stops its workspace after an
@@ -300,17 +322,31 @@ affected; do not route around the stop.
    `view` to establish actual authoring state. Establish publication/approval
    state through the supported observations or named human destinations below;
    keep unsupported observations explicitly unverified.
-2. Record the affected validation attempt using scrubbed evidence, inform
-   participants through the agreed study channel and involve the assigned
-   engineering owner. Resolve the cause and review the intended corrective
-   action before any more writes. Do not restore instructions through this skill.
+2. Have the responsible maintainer review the issue and intended corrective
+   action before any more writes. For an affected validation study, also record
+   the attempt using scrubbed evidence, inform participants through the agreed
+   study channel and involve its assigned engineering owner. Do not require
+   a study channel or participants for an ordinary maker operation.
+   Do not restore instructions through this skill.
+   The maintainer's review must distinguish a corrected verification defect
+   from confirmed unauthorized or unwanted changes. If historical before/after
+   evidence is unavailable, do not claim that the earlier operation was
+   preserved. The owner may explicitly accept the current API-verified state
+   as the baseline for future writes; this does not retrospectively verify the
+   earlier operation. Do not silently accept that baseline or ask the maker
+   to prove historical preservation through the UI.
 3. Only after the owner has cleared the path, show a fresh `view` result and
    obtain explicit structured approval **to resume writes**, distinct from
    approval of any name/logo change. Pass that view's exact `reviewId`:
 
    ```text
    python scripts/agent_basics.py resume-writes --approval REVIEW_ID
+   python scripts/agent_basics.py resume-writes --quality-gate test --approval REVIEW_ID
    ```
+
+   Retain the exact `--quality-gate` from the fresh `view` for resumption,
+   including Prod. A Test/Prod view's approval must not be submitted with the
+   default Dev gate. Never use a rename preview's digest as recovery approval.
 
 4. Resumption rechecks the target and current state and performs no service
    write. A changed snapshot requires a new review. Afterwards prepare and
