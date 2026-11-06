@@ -1,13 +1,14 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Tests that setup preserves a title ID discovered by landing-page tools."""
+"""Tests that setup preserves selected-target metadata."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
+import pytest
 import setup
 
 
@@ -127,3 +128,35 @@ def test_write_config_omits_unresolved_title_id(
     config = _write_config(tmp_path, _agent_info())
 
     assert "titleId" not in config["agent"]
+
+
+@pytest.mark.parametrize("ring", ["prod", "preprod", "test"])
+@pytest.mark.parametrize(
+    ("existing_endpoint", "preserve"),
+    [
+        ("https://environment.example.invalid", True),
+        ("https://ENVIRONMENT.example.invalid/", True),
+        ("https://other.example.invalid", False),
+        (None, False),
+        ("", False),
+    ],
+)
+def test_write_config_preserves_ring_only_for_same_environment(
+    tmp_path, monkeypatch, ring, existing_endpoint, preserve,
+):
+    monkeypatch.chdir(tmp_path)
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / "config.json").write_text(
+        json.dumps({"dataverseEndpoint": existing_endpoint, "ring": ring}),
+        encoding="utf-8",
+    )
+
+    config = _write_config(
+        tmp_path, _agent_info(url="https://environment.example.invalid"),
+    )
+
+    if preserve:
+        assert config["ring"] == ring
+    else:
+        assert "ring" not in config

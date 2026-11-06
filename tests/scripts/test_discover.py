@@ -45,6 +45,68 @@ def _make_environments(count: int = 3, include_no_dataverse: bool = False):
 class TestListEnvironments:
     """Tests for list_environments.get_dataverse_environments()."""
 
+    @pytest.mark.parametrize("ring", ["preprod", "test"])
+    @patch("list_environments.PowerPlatformClient")
+    @patch("list_environments.PPAdminClient")
+    def test_nonprod_inventory_never_uses_production_admin_client(
+        self, admin_cls, platform_cls, ring, monkeypatch, capsys,
+    ):
+        import discover
+
+        platform_cls.return_value.list_environments_for_user.return_value = [
+            {"id": "env-1", "displayName": "Selected ring", "url": "https://org.crmtest.dynamics.com/"},
+            {"id": "env-2", "displayName": "No Dataverse", "url": None, "domainName": None},
+        ]
+        monkeypatch.setattr("sys.argv", ["discover.py", "--list-environments", "--ring", ring])
+
+        discover.main()
+
+        admin_cls.assert_not_called()
+        platform_cls.assert_called_once_with("organizations", ring=ring)
+        platform_cls.return_value.authenticate.assert_called_once_with()
+        output = capsys.readouterr().out
+        payload = json.loads(next(
+            line.removeprefix("ENVIRONMENT_LIST_JSON:")
+            for line in output.splitlines() if line.startswith("ENVIRONMENT_LIST_JSON:")
+        ))
+        assert len(payload) == 1
+        assert payload[0]["id"] == "env-1"
+        assert payload[0]["instanceUrl"] == "https://org.crmtest.dynamics.com"
+        assert "1 environment(s) without Dataverse were excluded" in output
+
+    @pytest.mark.parametrize("failure", ["auth", "throttled", "permissions"])
+    @patch("list_environments.PowerPlatformClient")
+    def test_nonprod_discovery_errors_are_explicit(self, platform_cls, failure, capsys):
+        from requests import RequestException
+        import list_environments
+
+        client = platform_cls.return_value
+        if failure == "auth":
+            client.authenticate.side_effect = RuntimeError("authentication denied")
+        elif failure == "throttled":
+            client.list_environments_for_user.side_effect = RequestException("HTTP 429")
+        else:
+            client.list_environments_for_user.return_value = {"_error": "insufficient_permissions"}
+
+        with pytest.raises(SystemExit) as error:
+            list_environments.get_dataverse_environments(ring="test")
+
+        assert error.value.code == 1
+        assert "ERROR:" in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        ("domain", "expected"),
+        [(None, ""), ("org-short", ""), ("org.crmtest.dynamics.com", "https://org.crmtest.dynamics.com")],
+    )
+    def test_normalization_does_not_invent_dataverse_hostname(self, domain, expected):
+        import list_environments
+
+        normalized = list_environments.parse_user_environments(
+            [{"id": "env-1", "url": None, "domainName": domain}]
+        )
+
+        assert normalized[0]["instanceUrl"] == expected
+
     @patch("list_environments.PPAdminClient")
     def test_returns_only_dataverse_linked_environments(self, mock_cls):
         """Environments without instanceUrl are excluded."""
