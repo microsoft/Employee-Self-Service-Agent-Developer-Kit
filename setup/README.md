@@ -1,6 +1,6 @@
 # ESS ADK — One-Shot Installer
 
-A single command that installs everything needed for the ESS Maker Kit: VS Code, Python 3.12, Git, GitHub CLI, the .NET runtime, NuGet, Copilot extensions, pip dependencies, and clones the repo.
+A single command that installs everything needed for the ESS Maker Kit: VS Code, Python 3.12, Git, the .NET runtime, NuGet, Copilot extensions, pip dependencies, and clones the repo. It also attempts to install the optional GitHub CLI used by automated `/evaluate` scoring.
 
 **Windows** (PowerShell):
 
@@ -28,6 +28,8 @@ The full Maker and Developer experiences use two independent authentication stag
 You may see more than one Microsoft account-selection or consent window because setup and FlightCheck call multiple Microsoft services. These prompts are separate from GitHub Copilot authentication.
 
 Cloning the public repository and installing VS Code do not normally require GitHub authentication. A private fork or branch may require GitHub or GitHub CLI authentication, and Codespaces requires a GitHub account because it is a GitHub-hosted service.
+
+GitHub CLI installation is best-effort. On Windows, the installer requests the portable user-scope package so it does not require administrator elevation. On macOS, a Homebrew failure is reported without stopping setup. `/setup` and `/connect workday` do not require GitHub CLI; automated `/evaluate` scoring does.
 
 **FlightCheck-only mode does not require VS Code, GitHub, or GitHub Copilot.** It still opens the Microsoft sign-in required to inspect the selected Power Platform environment and its services.
 
@@ -196,7 +198,7 @@ The installer provisions the following dependencies. Users do not need to instal
 |------|---------|---------|:-----------------:|
 | Python | 3.12 | Runtime for FlightCheck and maker scripts | ✅ |
 | Git | Latest | Clone the repo, version control | ✅ |
-| GitHub CLI (`gh`) | Latest | Device-code auth flow for private repo clone | ❌ |
+| GitHub CLI (`gh`) | Latest | Optional: authentication for automated `/evaluate` scoring and private GitHub operations | ❌ |
 | VS Code | Latest | Editor and Copilot host | ❌ |
 | PowerShell 7 | Latest | Script execution (Windows only) | ❌ |
 | .NET runtime | 10 | Runtime for Microsoft Object Model serialization | ❌ |

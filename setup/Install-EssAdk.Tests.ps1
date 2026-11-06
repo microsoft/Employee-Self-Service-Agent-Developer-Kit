@@ -159,6 +159,32 @@ Test 'known VS Code path fallback exists' {
     }
 }
 
+Test 'Windows installer requests user scope for Git and GitHub CLI' {
+    $gitPackages = [regex]::Matches($src, "@\{\s*Id\s*=\s*'Git\.Git'[^}]+Scope\s*=\s*'user'\s*\}")
+    if ($gitPackages.Count -ne 2) {
+        throw "Both full and FlightCheck-only Git packages must request user scope; found $($gitPackages.Count)"
+    }
+    if ($src -notmatch '(?s)\$ghWingetArgs\s*=\s*@\(.*?''GitHub\.cli''.*?''--scope'',\s*''user''') {
+        throw 'GitHub CLI must request the portable user-scope winget package'
+    }
+}
+
+Test 'Windows GitHub CLI failure is non-blocking and explains the evaluate limitation' {
+    $ghSection = ($src -split 'if \(-not \$FlightCheckOnly\) \{\s*\r?\n\s*\$gh = Get-Command gh')[1] -split 'if \(-not \$FlightCheckOnly\) \{' | Select-Object -First 1
+    if (-not $ghSection) {
+        throw 'Could not find the optional GitHub CLI install section'
+    }
+    if ($ghSection -match 'throw') {
+        throw 'GitHub CLI installation must not terminate the installer'
+    }
+    if ($ghSection -notmatch '/setup and /connect workday can continue') {
+        throw 'GitHub CLI warning must identify unaffected commands'
+    }
+    if ($ghSection -notmatch 'Automated /evaluate scoring requires GitHub CLI') {
+        throw 'GitHub CLI warning must explain the automated evaluation limitation'
+    }
+}
+
 Test 'shared code CLI resolver is used in extension install section' {
     $extensionSection = ($src -split '# 4\. VS Code extensions')[1] -split '# 5\. Clone repo' | Select-Object -First 1
     if (-not $extensionSection) { throw 'Could not find section 4' }
@@ -446,6 +472,32 @@ Test 'bash emitter still guards out the legacy lite installer (macOS scope uncha
 Write-Host "`nmacOS installer + bootstrap telemetry wiring:" -ForegroundColor Cyan
 
 $macInstaller = Get-Content (Join-Path $PSScriptRoot 'install-ess-adk.sh') -Raw
+$wingetConfig = Get-Content (Join-Path $PSScriptRoot 'ess-adk-setup.winget.yaml') -Raw
+
+Test 'winget DSC config leaves optional GitHub CLI to the non-blocking installer step' {
+    if ($wingetConfig -match 'GitHub\.cli') {
+        throw 'GitHub CLI must not remain a required DSC resource'
+    }
+}
+
+Test 'macOS GitHub CLI failure is non-blocking and explains the evaluate limitation' {
+    if ($macInstaller -notmatch 'install_optional_cli_tool\s+"gh"\s+"gh"\s+"GitHub CLI"') {
+        throw 'macOS installer must use the optional CLI installer for GitHub CLI'
+    }
+    $optionalSection = ($macInstaller -split 'install_optional_cli_tool\(\) \{')[1] -split '# Core tools' | Select-Object -First 1
+    if (-not $optionalSection) {
+        throw 'Could not find macOS optional CLI installer'
+    }
+    if ($optionalSection -match 'exit 1') {
+        throw 'Optional GitHub CLI installation must not terminate the macOS installer'
+    }
+    if ($optionalSection -notmatch '/setup and /connect workday can continue') {
+        throw 'macOS GitHub CLI warning must identify unaffected commands'
+    }
+    if ($optionalSection -notmatch 'Automated /evaluate scoring requires GitHub CLI') {
+        throw 'macOS GitHub CLI warning must explain the automated evaluation limitation'
+    }
+}
 
 Test 'install-ess-adk.sh sources the emitter and initializes telemetry' {
     if ($macInstaller -notmatch 'ESS_INSTALL_TELEMETRY_LIB') { throw 'lib lookup missing' }
