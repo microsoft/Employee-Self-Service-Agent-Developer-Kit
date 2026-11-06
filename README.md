@@ -60,7 +60,7 @@ The kit's slash-commands (`/setup`, `/flightcheck`, etc.) **only appear when you
 
 6. **Open Copilot Chat.** Click the chat icon in the left sidebar (or press `Ctrl+Alt+I`).
 
-7. **Type `/setup`** and press Enter. The kit will guide you from there.
+7. **Type `/setup`** and press Enter. On first run, choose **Plan your ESS rollout** or **Set up the environment now**. To start planning directly, type `/planner` instead.
 
 ### "I opened the wrong folder — now what?"
 
@@ -71,11 +71,19 @@ If you typed `/setup` and nothing happened, you probably opened the top-level re
 
 To fix it: `File` → `Open Folder...` again, this time double-click into `solutions`, click on `ess-maker-skills` once to select it, then click `Select Folder`.
 
+## Plan an ESS rollout
+
+Run `/planner` in the `solutions/ess-maker-skills` workspace to turn your employee scenarios into a grounded rollout plan: systems to connect, dependency-ordered tasks, responsible roles, owners, and success criteria. Planning can start **before an ESS environment or agent exists**; unknown systems and owners remain pending decisions.
+
+The draft is saved locally until you explicitly share it. Activate the shared plan when it is ready for execution, use `/roles` to attest who holds each rollout role, and ask `/planner what am I assigned?` to see your work. Role attestation records rollout responsibilities; it does not grant Entra or Power Platform permissions.
+
+See [ESS rollout planning](solutions/ess-maker-skills/README.md#ess-rollout-planning) for examples, plan storage, shared-service requirements, and the handoff to environment setup.
+
 ## Solutions
 
 | Folder | What it does | How to use |
 |---|---|---|
-| [`solutions/ess-maker-skills/`](solutions/ess-maker-skills/) | Customize your ESS agent using GitHub Copilot in VS Code — no deep platform knowledge required. | Open the folder in VS Code, then type `/setup` in Copilot Chat. |
+| [`solutions/ess-maker-skills/`](solutions/ess-maker-skills/) | Plan ESS rollouts, coordinate owners, and customize your agent using GitHub Copilot in VS Code. | Open the folder in VS Code, then type `/setup` or `/planner` in Copilot Chat. |
 | `solutions/ess-flightcheck/` *(planned — see [#69](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/issues/69))* | Validate your ESS deployment readiness. Runs licensing, identity, integration, and configuration checks against your live environment. | Open the folder in VS Code and type `/flightcheck` in Copilot Chat — or run `python cli.py --scope full` standalone (no LLM needed). |
 
 Additional solutions will be added under `solutions/` over time.
@@ -89,7 +97,7 @@ Reference content used directly by customers — topic YAMLs, template-config XM
 ```
 .github/                Repo-level CI, CodeQL, Dependabot, issue templates, labels
 solutions/
-  ess-maker-skills/     Maker kit — customize your ESS agent in VS Code with Copilot
+  ess-maker-skills/     Maker kit — plan rollouts and customize ESS in VS Code with Copilot
   ess-flightcheck/      (planned) Standalone deployment-readiness validator
 samples/                Reference topics, template configs, evaluation test sets (peer to solutions/)
 LICENSE                 MIT
