@@ -97,10 +97,20 @@ class Client:
             },
             "botComponentChanges": [
                 {
-                    "component": {"instructions": "Preserve these too"},
+                    "$kind": "BotComponentUpdate",
+                    "component": {
+                        "$kind": "GptComponent",
+                        "id": "00000000-0000-4000-8000-000000006666",
+                        "schemaName": f"{schema}.gpt.default",
+                        "displayName": "Employee Support",
+                        "instructions": "Preserve these too",
+                        "description": "Preserve description",
+                        "metadata": {"instructions": "Preserve GPT instructions"},
+                    },
                     "operation": "unchanged",
                 },
             ],
+            "changeToken": "current-component-token",
         }
         self.card = {"botId": agent_id, "realm": realm}
         self.configuration = {
@@ -116,6 +126,11 @@ class Client:
         self.timeout = False
         self.apply = True
         self.mutate = None
+        self.host = TARGET["host"]
+        self.api_version = TARGET["api_version"]
+        self.headers = {"Accept": "application/json"}
+        self.session = SimpleNamespace(request=self.update_components)
+        self.component_writes = []
 
     def get_agent(self, agent_id):
         assert agent_id == self.agent_id
@@ -132,15 +147,37 @@ class Client:
         return copy.deepcopy(self.state)
 
     def update_bot_entity(self, agent_id, bot):
+        return self._update(agent_id, bot)
+
+    def update_components(self, method, url, **kwargs):
+        assert method == "PUT"
+        assert url == f"{self.host}/copilotstudio/minimalBots/api/{self.agent_id}/components"
+        assert kwargs["params"] == {"api-version": basics.NATIVE_ALM_API_VERSION}
+        assert kwargs["allow_redirects"] is False
+        body = kwargs["json"]
+        assert len(body["botComponentChanges"]) == 1
+        update = body["botComponentChanges"][0]
+        assert update["$kind"] == "BotComponentUpdate"
+        self.component_writes.append(copy.deepcopy(body))
+        return self._update(
+            self.agent_id, body["bot"], update["component"], body["changeToken"]
+        )
+
+    def _update(self, agent_id, bot, component=None, change_token=None):
         assert agent_id == self.agent_id
         self.writes.append(copy.deepcopy(bot))
         if self.apply and self.status == 200:
             # Mirrors CreateBotEntityTransaction's version precondition/increment.
-            if bot["version"] != self.state["bot"]["version"]:
+            if bot["version"] != self.state["bot"]["version"] or (
+                change_token is not None and change_token != self.state["changeToken"]
+            ):
                 self.status = 409
             else:
                 self.state["bot"] = copy.deepcopy(bot)
                 self.state["bot"]["version"] += 1
+                if component is not None:
+                    assert component["id"] == self.state["botComponentChanges"][0]["component"]["id"]
+                    self.state["botComponentChanges"][0]["component"] = copy.deepcopy(component)
         if self.mutate:
             self.mutate(self.state)
         if self.fail_after_write:
@@ -177,7 +214,7 @@ class QualityClient:
         self.host = TARGET["host"]
         self.api_version = TARGET["api_version"]
         self.headers = {"Accept": "application/json"}
-        self.session = SimpleNamespace(request=self.configure)
+        self.session = SimpleNamespace(request=self.request)
         self.configuration_requests = []
         self.realms = {
             "routeRealm": 0,
@@ -199,7 +236,16 @@ class QualityClient:
 
     def get_realm_configuration(self, agent_id, realm):
         assert self.agents[agent_id].card["realm"] == realm
-        return copy.deepcopy(self.agents[agent_id].configuration)
+        agent = self.agents[agent_id]
+        configuration = copy.deepcopy(agent.configuration)
+        if (
+            isinstance(configuration.get("values"), dict)
+            and agent.state["bot"]["displayName"]
+            == agent.state["botComponentChanges"][0]["component"]["displayName"]
+        ):
+            # Read-config strips the now-redundant independent name binding.
+            configuration["values"].pop("gptDisplayName", None)
+        return configuration
 
     def fetch_components(self, agent_id):
         return self.agents[agent_id].fetch_components(agent_id)
@@ -207,6 +253,11 @@ class QualityClient:
     def update_bot_entity(self, agent_id, bot):
         assert agent_id == AGENT_ID, "Promoted realms cannot use the metadata PUT."
         return self.agents[agent_id].update_bot_entity(agent_id, bot)
+
+    def request(self, method, url, **kwargs):
+        if method == "PUT":
+            return self.gates["dev"].update_components(method, url, **kwargs)
+        return self.configure(method, url, **kwargs)
 
     def configure(self, method, url, **kwargs):
         self.configuration_requests.append((method, url, copy.deepcopy(kwargs)))
@@ -222,9 +273,11 @@ class QualityClient:
         assert url == f"{self.host}/copilotstudio/minimalBots/alm/{agent.agent_id}/configure"
         bot = copy.deepcopy(agent.state["bot"])
         bot["displayName"] = body["values"]["botName"]
+        component = copy.deepcopy(agent.state["botComponentChanges"][0]["component"])
+        component["displayName"] = body["values"].get("gptDisplayName", body["values"]["botName"])
         if agent.apply and agent.status == 200:
             agent.configuration["values"] = copy.deepcopy(body["values"])
-        return agent.update_bot_entity(agent.agent_id, bot)
+        return agent._update(agent.agent_id, bot, component)
 
 
 @pytest.fixture
@@ -371,8 +424,11 @@ def test_save_preserves_full_entity_and_components(client, logos, properties, tm
     assert written["configuration"] == before["bot"]["configuration"]
     assert written["futureField"] == before["bot"]["futureField"]
     assert written["teamsAppInformation"]["teams"]["colorIcon"] == "retained"
-    assert client.state["botComponentChanges"] == before["botComponentChanges"]
     assert plan["state"] == before
+    expected_components = copy.deepcopy(before["botComponentChanges"])
+    if "name" in kwargs:
+        expected_components[0]["component"]["displayName"] = kwargs["name"]
+    assert client.state["botComponentChanges"] == expected_components
     assert result["publication"] == "Not performed for this change."
     assert result["employeeVisibility"] == "Unverified for this change."
 
@@ -536,9 +592,10 @@ def test_unrequested_mutation_is_not_reported_complete(
     result = basics.save(
         client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
     )
-    assert result["properties"][operation] == "saved"
+    missing_chat = operation == "name" and field == "components"
+    assert result["properties"][operation] == ("unverified" if missing_chat else "saved")
     assert result["preservation"] == "unverified"
-    assert result["status"] == "unfinished"
+    assert result["status"] == ("unverified" if missing_chat else "unfinished")
     assert result["writesDisabled"] is True
     assert basics._writes_disabled(tmp_path)
 
@@ -583,7 +640,9 @@ def test_name_only_does_not_inspect_or_request_images(
     review = basics.review_output(plan, tmp_path)
     assert review["status"] == "review"
     assert review["changedProperties"] == ["name"]
-    assert review["current"] == {"name": "Employee Support"}
+    assert review["current"] == {
+        "name": "Employee Support", "chatName": "Employee Support"
+    }
     assert "serviceIconProcessingRisk" not in review
     assert "serviceIconProcessingWarning" not in review
     assert review["proposed"]["logoSources"] == {}
@@ -646,7 +705,9 @@ def test_rename_sends_existing_logo_and_ignores_service_image_normalization(
     assert result["writesDisabled"] is False
     assert not basics._writes_disabled(tmp_path)
     assert client.state["bot"]["configuration"] == before["bot"]["configuration"]
-    assert client.state["botComponentChanges"] == before["botComponentChanges"]
+    expected_components = copy.deepcopy(before["botComponentChanges"])
+    expected_components[0]["component"]["displayName"] = "ESS HR Nov-3"
+    assert client.state["botComponentChanges"] == expected_components
 
 
 def test_rename_with_missing_outline_still_requires_name_approval(client, tmp_path):
@@ -759,7 +820,10 @@ def test_logo_readback_accepts_reencoding_and_platform_derived_fields(
     assert result["writesDisabled"] is False
     assert not basics._writes_disabled(tmp_path)
     assert client.state["bot"]["configuration"] == before["bot"]["configuration"]
-    assert client.state["botComponentChanges"] == before["botComponentChanges"]
+    expected_components = copy.deepcopy(before["botComponentChanges"])
+    if combined:
+        expected_components[0]["component"]["displayName"] = "People Support"
+    assert client.state["botComponentChanges"] == expected_components
 
 
 def test_logo_only_does_not_confirm_unrequested_name_change(client, logos, tmp_path):
@@ -1088,6 +1152,7 @@ def test_cli_name_changes_are_independent_per_quality_gate(
         expected = before[gate]
         if gate == quality_gate:
             expected["bot"]["displayName"] = f"Support {quality_gate}"
+            expected["botComponentChanges"][0]["component"]["displayName"] = f"Support {quality_gate}"
             expected["bot"]["version"] += 1
         assert agent.state == expected
         assert len(agent.writes) == (1 if gate == quality_gate else 0)
@@ -1114,6 +1179,187 @@ def test_each_quality_gate_keeps_its_own_name(tmp_path):
     assert {
         gate: agent.state["bot"]["displayName"] for gate, agent in family.gates.items()
     } == names
+
+
+@pytest.mark.parametrize("quality_gate", ["dev", "test", "prod"])
+def test_rename_repairs_chat_when_agent_name_already_matches(tmp_path, quality_gate):
+    family = QualityClient()
+    agent = family.gates[quality_gate]
+    name = "People Support"
+    agent.state["bot"]["displayName"] = name
+    agent.configuration["values"].update(
+        botName=name, gptDisplayName="Employee Support"
+    )
+    before = copy.deepcopy(agent.state)
+    plan = basics.prepare(family, TARGET, name=name, quality_gate=quality_gate)
+    assert plan["changes"] == {"name": name}
+    review = basics.review_output(plan, tmp_path)
+    assert review["current"] == {"name": name, "chatName": "Employee Support"}
+    assert review["proposed"]["chatName"] == name
+    assert not any(other.writes for other in family.gates.values())
+    result = basics.save(
+        family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "saved"
+    expected = copy.deepcopy(before["botComponentChanges"][0]["component"])
+    expected["displayName"] = name
+    assert agent.state["botComponentChanges"][0]["component"] == expected
+    assert agent.state["bot"]["displayName"] == name
+    assert agent.state["bot"]["iconBase64"] == before["bot"]["iconBase64"]
+    assert not basics._writes_disabled(tmp_path)
+    if quality_gate == "dev":
+        payload = agent.component_writes[0]
+        assert payload["changeToken"] == before["changeToken"]
+        assert payload["bot"]["version"] == before["bot"]["version"]
+        assert payload["botComponentChanges"] == [
+            {"$kind": "BotComponentUpdate", "component": expected}
+        ]
+    else:
+        values = family.configuration_requests[0][2]["json"]["values"]
+        assert values["botName"] == values["gptDisplayName"] == name
+        assert "gptDisplayName" not in family.get_realm_configuration(
+            agent.agent_id, basics.QUALITY_GATES[quality_gate]
+        )["values"]
+    assert not basics.prepare(
+        family, TARGET, name=name, quality_gate=quality_gate
+    )["changes"]
+    assert all(
+        not other.writes for gate, other in family.gates.items() if gate != quality_gate
+    )
+
+
+def test_rename_keeps_already_correct_chat_name_without_component_write(client, tmp_path):
+    client.state["botComponentChanges"][0]["component"]["displayName"] = "People Support"
+    client.state.pop("changeToken")
+    plan = basics.prepare(client, TARGET, name="People Support")
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "saved"
+    assert not client.component_writes
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing", "ambiguous", "name", "id", "schema"]
+)
+def test_rename_requires_verified_chat_component(client, fault):
+    component = client.state["botComponentChanges"][0]["component"]
+    if fault == "missing":
+        client.state["botComponentChanges"] = []
+    elif fault == "ambiguous":
+        client.state["botComponentChanges"].append(
+            copy.deepcopy(client.state["botComponentChanges"][0])
+        )
+    elif fault == "name":
+        component["displayName"] = None
+    elif fault == "id":
+        component["id"] = "not-a-guid"
+    else:
+        component["schemaName"] = ""
+    with pytest.raises((basics.AgentBasicsError, ExistingDASetupError)):
+        basics.prepare(client, TARGET, name="People Support")
+    assert not client.writes
+
+
+@pytest.mark.parametrize("token", [None, "", " ", {}, True])
+def test_chat_rename_requires_component_concurrency_token(client, token):
+    client.state["changeToken"] = token
+    with pytest.raises(basics.AgentBasicsError, match="component change token"):
+        basics.prepare(client, TARGET, name="People Support")
+    assert not client.writes
+
+
+def test_chat_component_write_conflict_requires_new_review(client, tmp_path):
+    plan = basics.prepare(client, TARGET, name="People Support")
+    client.state["changeToken"] = "concurrently-edited-components"
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "review_again"
+    assert len(client.component_writes) == 1
+    assert client.state["bot"]["displayName"] == "Employee Support"
+    assert not basics._writes_disabled(tmp_path)
+
+
+@pytest.mark.parametrize("binding", [None, "Unrelated chat"])
+def test_promoted_rename_blocks_missing_or_inconsistent_chat_binding(tmp_path, binding):
+    family = QualityClient()
+    agent = family.gates["test"]
+    agent.state["botComponentChanges"][0]["component"]["displayName"] = "Stale chat"
+    if binding is not None:
+        agent.configuration["values"]["gptDisplayName"] = binding
+    with pytest.raises(basics.AgentBasicsError, match="ALM name binding disagree"):
+        basics.prepare(family, TARGET, name="People Support", quality_gate="test")
+    assert not agent.writes
+    assert not family.configuration_requests
+
+
+@pytest.mark.parametrize("unchanged", ["agent", "chat"])
+def test_rename_cannot_report_saved_when_only_one_name_matches(client, tmp_path, unchanged):
+    old_name = client.state["bot"]["displayName"]
+
+    def partial(state):
+        target = (
+            state["bot"] if unchanged == "agent"
+            else state["botComponentChanges"][0]["component"]
+        )
+        target["displayName"] = old_name
+
+    client.mutate = partial
+    plan = basics.prepare(client, TARGET, name="People Support")
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["properties"]["name"] == "unverified"
+    assert result["status"] == "unfinished"
+    assert result["writesDisabled"] is True
+
+
+@pytest.mark.parametrize("field", ["instructions", "description", "schemaName", "id"])
+def test_chat_rename_preserves_every_unrequested_gpt_field(client, tmp_path, field):
+    def mutate(state):
+        component = state["botComponentChanges"][0]["component"]
+        if field == "instructions":
+            component["metadata"]["instructions"] = "Unexpected instructions"
+        elif field == "id":
+            component["id"] = "00000000-0000-4000-8000-000000007777"
+        else:
+            component[field] = "Unexpected value"
+
+    client.mutate = mutate
+    plan = basics.prepare(client, TARGET, name="People Support")
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["properties"]["name"] == "saved"
+    assert result["preservation"] == "unverified"
+    assert result["status"] == "unfinished"
+    assert result["writesDisabled"] is True
+
+
+def test_chat_rename_accepts_server_owned_gpt_revision_fields(client, tmp_path):
+    client.state["botComponentChanges"][0]["component"]["version"] = 2
+    client.mutate = lambda state: state["botComponentChanges"][0]["component"].update(
+        version=3, auditInfo={"modified": "server"}
+    )
+    plan = basics.prepare(client, TARGET, name="People Support")
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "saved"
+    assert result["preservation"] == "confirmed"
+
+
+def test_logo_only_never_changes_or_requires_a_readable_chat_name(client, logos, tmp_path):
+    client.state["botComponentChanges"][0]["component"]["displayName"] = None
+    before = copy.deepcopy(client.state["botComponentChanges"])
+    plan = basics.prepare(client, TARGET, **logos)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "saved"
+    assert client.state["botComponentChanges"] == before
+    assert not client.component_writes
 
 
 @pytest.mark.parametrize("quality_gate", ["test", "prod"])
@@ -1521,7 +1767,9 @@ def test_cli_rename_saves_without_image_consent_or_new_logo(cli, client, capsys)
     before = copy.deepcopy(client.state["bot"])
     assert basics.main(["preview", "--name", "ESS HR Nov-3"]) == 0
     preview = result_json(capsys)
-    assert preview["current"] == {"name": "Employee Support"}
+    assert preview["current"] == {
+        "name": "Employee Support", "chatName": "Employee Support"
+    }
     assert "serviceIconProcessingWarning" not in preview
     assert not client.writes
     command = ["save", "--name", "ESS HR Nov-3", "--approval", preview["reviewId"]]

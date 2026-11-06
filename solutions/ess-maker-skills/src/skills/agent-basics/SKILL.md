@@ -42,7 +42,9 @@ name/icon update payloads. Instructions are outside this skill's scope.
   and, for ALM, both the selected Dev card and explicit Dev configuration.
   Logo changes are Dev-authored only. Name-only changes may target Dev, Test
   or Prod, with an independent name for each quality gate. Never copy a name
-  change to another gate automatically.
+  change to another gate automatically. A rename synchronizes the selected
+  gate's agent title (`BotEntity.displayName`) and GPT/chat name
+  (`GptComponent.displayName`) to the maker's exact requested name.
 - Use `--quality-gate dev|test|prod` to view or rename a quality gate; Dev is
   the default. Preserve a gate explicitly requested by the maker and show it
   before approval. Test/Prod targets are discovered from the selected Dev
@@ -122,10 +124,16 @@ Collect a revised supported proposal instead of silently dropping the outline.
 An unread or invalid property must not be written. Explain what needs correcting
 and allow an independent valid/readable property to proceed in a separate
 preview, only with the maker's agreement. Never silently drop a combined request.
-Dev name-only saves use the existing metadata PUT, with the fetched logo fields
-unchanged. Test/Prod name-only saves use the supported ALM Configure API and
-change only the `botName` value in the selected realm's complete current values
-map. Flow/connection overrides are not submitted. Missing or inconsistent
+Dev renames update both names in one PUT when the GPT/chat name needs changing,
+using the fetched bot revision and component change token. Only the GPT
+component's displayName changes; its description, instructions and all other
+unrequested fields are retained. If the chat name already matches, use the
+existing metadata-only PUT. Both paths submit the fetched logo fields unchanged.
+Test/Prod name-only saves use the supported ALM Configure API and change
+`botName`, plus `gptDisplayName` when that independent binding already exists,
+in the selected realm's complete current values map. When the GPT name shares
+`botName`, do not invent a separate binding. Flow/connection overrides are not
+submitted. Missing or inconsistent
 bindings block the operation; never fall back to a components PUT on Test/Prod.
 Do not inspect or preview images, collect image inputs, discuss
 service-side image processing, or ask for image-processing consent for a rename.
@@ -171,8 +179,11 @@ If `writesDisabled` is true, keep this review read-only and use **Stop and
 reviewed recovery**; do not offer ordinary save approval.
 Show the selected product, tenant/environment, stable bot ID and authoring
 quality gate, actual current and proposed requested values, and retained
-non-image settings. For rename-only requests, show only the current and proposed
-name; do not make a logo-preservation guarantee.
+non-image settings. For rename-only requests, show the current agent title and
+chat name, including any mismatch, and the proposed name for both; do not make
+a logo-preservation guarantee. Requesting the already-current agent title
+still repairs a stale chat name after approval. It is a no-op only when both
+names already match the request.
 For Test/Prod, also show the returned concurrency limitation: configuration is
 refreshed before writing and verified afterwards, but ALM Configure has no
 client-revision precondition. Do not promise the Dev metadata PUT's protection
@@ -215,8 +226,9 @@ Retain the exact `--quality-gate` from the approved proposal. Approval for one
 gate does not approve any other gate; each gate-specific name needs its own
 preview and approval. The operation does not publish or promote to apply names.
 The helper re-reads identity, permissions and state and compares the reviewed
-digest. Dev uses the fetched `BotEntity.version` in one protected metadata PUT,
-preserving the entity and sending no component changes. Test/Prod refresh
+digest. Dev uses the fetched `BotEntity.version` in one protected PUT and
+includes the fetched `changeToken` and only the GPT name update when needed.
+Logo-only saves send no component changes. Test/Prod refresh
 their configuration again and make one ALM Configure POST, preserving all
 unrequested values. Both paths verify the same gate afterwards and never
 publish. Do not bypass the checks or retry either write yourself.
@@ -231,7 +243,11 @@ On **Edit proposal**, clean up first, then validate/preview the edited proposal.
 - `saved` means authoritative read-back at a newer entity revision confirmed
   every requested property and preservation of unrequested non-image
   metadata/components, including instructions. Local files or HTTP
-  acknowledgment are not proof.
+  acknowledgment are not proof. A rename is saved only when both the agent
+  title and GPT/chat name match the approved name. One matching name is not
+  successful completion. Server-owned revision/audit fields on the renamed
+  GPT component and removal of a now-redundant ALM name binding are allowed;
+  unrequested component content must remain unchanged.
 - Report each requested property's `saved`, `failed` or `unverified` result.
   If `preservation` is unverified, the operation remains unfinished, even when
   a requested value was observed. Do not roll back or proceed with more writes.
@@ -245,7 +261,7 @@ On **Edit proposal**, clean up first, then validate/preview the edited proposal.
   warnings, logo-preservation results or image-related recovery. Service-owned
   image normalization does not invalidate a verified rename or stop further
   writes. Do not claim that image preservation was checked.
-- A pending-write marker is created before the PUT and retained after an
+- A pending-write marker is created before the service write and retained after an
   uncertain result, preservation mismatch or interrupted process. A verified
   safe result releases it. `writesDisabled: true` means stop and follow the
   recovery procedure below; do not bypass it by changing targets or using HTTP.

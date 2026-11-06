@@ -25,6 +25,7 @@ from PIL import Image, UnidentifiedImageError
 
 from adk_telemetry import emit_capability_use
 from agentbuilder import (
+    NATIVE_ALM_API_VERSION,
     REALM_NAMES,
     AgentBuilderClient,
     AgentBuilderError,
@@ -415,6 +416,38 @@ def read_state(
     }
 
 
+def _gpt_component(state: dict[str, Any]) -> dict[str, Any]:
+    components = [
+        change["component"]
+        for change in state["botComponentChanges"]
+        if isinstance(change, dict)
+        and isinstance(change.get("component"), dict)
+        and change["component"].get("$kind") == "GptComponent"
+    ]
+    if len(components) != 1:
+        raise AgentBasicsError(
+            "Exactly one GPT component is required to verify the chat name."
+        )
+    component = components[0]
+    _normalize_guid(str(component.get("id") or ""), "GPT component ID")
+    if (
+        not isinstance(component.get("schemaName"), str)
+        or not component["schemaName"].strip()
+    ):
+        raise AgentBasicsError("The GPT component schema is unreadable.")
+    if not isinstance(component.get("displayName"), str):
+        raise AgentBasicsError("The current chat name is unreadable; rename is unavailable.")
+    configuration = state.get("_realmConfiguration")
+    if configuration is not None:
+        values = configuration["values"]
+        binding = "gptDisplayName" if "gptDisplayName" in values else "botName"
+        if values[binding] != component["displayName"]:
+            raise AgentBasicsError(
+                "The chat name and ALM name binding disagree; refresh before renaming."
+            )
+    return component
+
+
 def prepare(
     client: AgentBuilderClient,
     target: dict[str, str],
@@ -449,12 +482,28 @@ def prepare(
         raise AgentBasicsError(
             "The current name is unreadable; name editing is unavailable."
         )
+    gpt = _gpt_component(state) if name is not None else None
+    if (
+        gpt is not None
+        and quality_gate == "dev"
+        and gpt["displayName"] != desired["displayName"]
+        and (
+            not isinstance(state.get("changeToken"), str)
+            or not state["changeToken"].strip()
+        )
+    ):
+        raise AgentBasicsError(
+            "A component change token is required for a protected chat-name update."
+        )
     if supplied is not None and current_logo is None:
         raise AgentBasicsError(logo_error)
     if supplied is not None:
         desired["logo"] = base64.b64encode(supplied).decode("ascii")
     changes = {}
-    if "displayName" in desired and desired["displayName"] != bot["displayName"]:
+    if gpt is not None and (
+        desired["displayName"] != bot["displayName"]
+        or desired["displayName"] != gpt["displayName"]
+    ):
         changes["name"] = desired["displayName"]
     if "logo" in desired:
         desired_logo = _decode(desired["logo"])
@@ -489,6 +538,8 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
         if isinstance(bot.get("displayName"), str)
         else None,
     }
+    if "displayName" in plan["desired"]:
+        current["chatName"] = _gpt_component(plan["state"])["displayName"]
     if "displayName" not in plan["desired"] or plan["sources"]:
         current["logo"] = (
             "unavailable"
@@ -512,6 +563,11 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
         "current": current,
         "proposed": {
             "name": plan["desired"].get("displayName"),
+            **(
+                {"chatName": plan["desired"]["displayName"]}
+                if "displayName" in plan["desired"]
+                else {}
+            ),
             "logoSources": plan["sources"],
         },
         "changedProperties": list(plan["changes"]),
@@ -522,7 +578,10 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
             "ALM configuration is refreshed before writing and verified afterwards; "
             "the API does not accept a client revision precondition."
             if promoted
-            else "BotEntity.version protects the metadata save."
+            else (
+                "BotEntity.version protects the save; GPT name updates also "
+                "use the fetched component changeToken."
+            )
         ),
     }
 
@@ -572,14 +631,26 @@ def _preserved(
                     item.pop("teamsAppInformation")
             elif application is None:
                 item.pop("teamsAppInformation", None)
+    previous_components = copy.deepcopy(before["botComponentChanges"])
+    current_components = copy.deepcopy(after["botComponentChanges"])
+    if "name" in changes:
+        for state, components in (
+            (before, previous_components),
+            (after, current_components),
+        ):
+            gpt = _gpt_component({**state, "botComponentChanges": components})
+            for field in ("displayName", *_SERVER_FIELDS):
+                gpt.pop(field, None)
     previous_config = copy.deepcopy(before.get("_realmConfiguration"))
     current_config = copy.deepcopy(after.get("_realmConfiguration"))
     if previous_config is not None and current_config is not None and "name" in changes:
         previous_config["values"].pop("botName", None)
         current_config["values"].pop("botName", None)
+        previous_config["values"].pop("gptDisplayName", None)
+        current_config["values"].pop("gptDisplayName", None)
     return (
         previous == current
-        and before["botComponentChanges"] == after["botComponentChanges"]
+        and previous_components == current_components
         and previous_config == current_config
     )
 
@@ -641,8 +712,10 @@ def save(
         raise AgentBasicsError("Logo changes are Dev-only; no write was attempted.")
     _require_writes_enabled(root)
     bot = copy.deepcopy(plan["state"]["bot"])
+    gpt = None
     if "name" in changes:
         bot["displayName"] = changes["name"]
+        gpt = _gpt_component(plan["state"])
     if "logo" in changes:
         bot["iconBase64"] = changes["logo"]
 
@@ -674,6 +747,8 @@ def save(
         if promoted:
             values = copy.deepcopy(plan["state"]["_realmConfiguration"]["values"])
             values["botName"] = changes["name"]
+            if "gptDisplayName" in values:
+                values["gptDisplayName"] = changes["name"]
             response = client.session.request(
                 "POST",
                 f"{client.host}/copilotstudio/minimalBots/alm/{plan['target']['agent_id']}/configure",
@@ -682,6 +757,24 @@ def save(
                 json={
                     "realm": REALM_NAMES[QUALITY_GATES[plan["requestedQualityGate"]]],
                     "values": values,
+                },
+                timeout=SAVE_TIMEOUT_SECONDS,
+                allow_redirects=False,
+            )
+        elif gpt is not None and gpt["displayName"] != changes["name"]:
+            updated_gpt = copy.deepcopy(gpt)
+            updated_gpt["displayName"] = changes["name"]
+            response = client.session.request(
+                "PUT",
+                f"{client.host}/copilotstudio/minimalBots/api/{plan['target']['agent_id']}/components",
+                params={"api-version": NATIVE_ALM_API_VERSION},
+                headers={**client.headers, "Content-Type": "application/json"},
+                json={
+                    "bot": bot,
+                    "changeToken": plan["state"]["changeToken"],
+                    "botComponentChanges": [
+                        {"$kind": "BotComponentUpdate", "component": updated_gpt}
+                    ],
                 },
                 timeout=SAVE_TIMEOUT_SECONDS,
                 allow_redirects=False,
@@ -717,6 +810,7 @@ def save(
         )
         if observed_target != plan["target"]:
             raise AgentBasicsError("The quality-gate target changed during save verification.")
+        observed_gpt = _gpt_component(after) if "name" in changes else None
     except (
         AgentBuilderError,
         AgentBasicsError,
@@ -742,10 +836,19 @@ def save(
     # A cached pre-save read does not prove that an uncertain write failed.
     # Confirm completion only from a later persisted entity revision.
     later_revision = observed["version"] > plan["state"]["bot"]["version"]
-    if "name" in changes:
-        if later_revision and observed.get("displayName") == changes["name"]:
+    if gpt is not None and observed_gpt is not None:
+        if (
+            later_revision
+            and observed.get("displayName") == changes["name"]
+            and observed_gpt["displayName"] == changes["name"]
+        ):
             results["name"] = "saved"
-        elif status_code is not None and 400 <= status_code < 500:
+        elif (
+            status_code is not None
+            and 400 <= status_code < 500
+            and observed.get("displayName") == plan["state"]["bot"].get("displayName")
+            and observed_gpt["displayName"] == gpt["displayName"]
+        ):
             results["name"] = "failed"
     if "logo" in changes:
         try:
