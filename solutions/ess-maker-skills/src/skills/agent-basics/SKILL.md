@@ -179,11 +179,14 @@ If `writesDisabled` is true, keep this review read-only and use **Stop and
 reviewed recovery**; do not offer ordinary save approval.
 Show the selected product, tenant/environment, stable bot ID and authoring
 quality gate, actual current and proposed requested values, and retained
-non-image settings. For rename-only requests, show the current agent title and
-chat name, including any mismatch, and the proposed name for both; do not make
-a logo-preservation guarantee. Requesting the already-current agent title
-still repairs a stale chat name after approval. It is a no-op only when both
-names already match the request.
+non-image settings. Present a single **Display name** with its current and
+proposed value. Do not show separate agent-title/chat-name fields or explain
+their internal distinction to the maker, including in completion messages.
+For rename-only requests, do not make a logo-preservation guarantee.
+Synchronization and verification of the underlying names remain internal.
+Requesting the already-current display name can still require synchronization
+after approval; follow the helper's `review` or `no_change` result rather than
+assuming an identical displayed value is a no-op.
 For Test/Prod, also show the returned concurrency limitation: configuration is
 refreshed before writing and verified afterwards, but ALM Configure has no
 client-revision precondition. Do not promise the Dev metadata PUT's protection
@@ -246,8 +249,12 @@ On **Edit proposal**, clean up first, then validate/preview the edited proposal.
   acknowledgment are not proof. A rename is saved only when both the agent
   title and GPT/chat name match the approved name. One matching name is not
   successful completion. Server-owned revision/audit fields on the renamed
-  GPT component and removal of a now-redundant ALM name binding are allowed;
-  unrequested component content must remain unchanged.
+  GPT component and removal of a now-redundant ALM name binding are allowed.
+  Test/Prod Configure rematerializes every component, so server-owned
+  `version`/`auditInfo` changes on those components are also allowed. Component
+  IDs, schemas, names other than the requested display name, instructions and
+  all other unrequested content must remain unchanged. This does not clear an
+  existing preservation stop or retrospectively verify an earlier operation.
 - Report each requested property's `saved`, `failed` or `unverified` result.
   If `preservation` is unverified, the operation remains unfinished, even when
   a requested value was observed. Do not roll back or proceed with more writes.

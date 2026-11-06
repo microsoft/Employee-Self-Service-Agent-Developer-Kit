@@ -640,9 +640,8 @@ def test_name_only_does_not_inspect_or_request_images(
     review = basics.review_output(plan, tmp_path)
     assert review["status"] == "review"
     assert review["changedProperties"] == ["name"]
-    assert review["current"] == {
-        "name": "Employee Support", "chatName": "Employee Support"
-    }
+    assert review["current"] == {"name": "Employee Support"}
+    assert review["proposed"] == {"name": "People Support", "logoSources": {}}
     assert "serviceIconProcessingRisk" not in review
     assert "serviceIconProcessingWarning" not in review
     assert review["proposed"]["logoSources"] == {}
@@ -1194,8 +1193,9 @@ def test_rename_repairs_chat_when_agent_name_already_matches(tmp_path, quality_g
     plan = basics.prepare(family, TARGET, name=name, quality_gate=quality_gate)
     assert plan["changes"] == {"name": name}
     review = basics.review_output(plan, tmp_path)
-    assert review["current"] == {"name": name, "chatName": "Employee Support"}
-    assert review["proposed"]["chatName"] == name
+    assert review["current"] == {"name": name}
+    assert review["proposed"] == {"name": name, "logoSources": {}}
+    assert "GPT" not in review["concurrencyProtection"]
     assert not any(other.writes for other in family.gates.values())
     result = basics.save(
         family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
@@ -1348,6 +1348,59 @@ def test_chat_rename_accepts_server_owned_gpt_revision_fields(client, tmp_path):
     )
     assert result["status"] == "saved"
     assert result["preservation"] == "confirmed"
+
+
+@pytest.mark.parametrize("quality_gate", ["dev", "test", "prod"])
+@pytest.mark.parametrize("mutation", ["none", "description", "id", "added", "removed"])
+def test_configure_component_revisions_do_not_hide_content_changes(
+    tmp_path, quality_gate, mutation
+):
+    family = QualityClient()
+    agent = family.gates[quality_gate]
+    agent.state["botComponentChanges"][0]["component"]["version"] = 2
+    agent.state["botComponentChanges"].append({
+        "$kind": "BotComponentUpdate",
+        "component": {
+            "$kind": "DialogComponent",
+            "id": "00000000-0000-4000-8000-000000008888",
+            "schemaName": f"{SCHEMA}.RetainedTopic",
+            "displayName": "Retained topic",
+            "description": "Retained topic content",
+            "version": 4,
+            "auditInfo": {"modified": "before"},
+        },
+    })
+
+    def materialize(state):
+        # Configure emits updates for every component, not only the name.
+        for change in state["botComponentChanges"]:
+            component = change["component"]
+            component["version"] += 1
+            component["auditInfo"] = {"modified": "server"}
+        other = state["botComponentChanges"][1]["component"]
+        if mutation == "description":
+            other["description"] = "Unexpected content"
+        elif mutation == "id":
+            other["id"] = "00000000-0000-4000-8000-000000009999"
+        elif mutation == "added":
+            added = copy.deepcopy(state["botComponentChanges"][1])
+            added["component"]["id"] = "00000000-0000-4000-8000-000000009999"
+            added["component"]["schemaName"] = f"{SCHEMA}.UnexpectedTopic"
+            state["botComponentChanges"].append(added)
+        elif mutation == "removed":
+            state["botComponentChanges"].pop()
+
+    agent.mutate = materialize
+    plan = basics.prepare(family, TARGET, name="People Support", quality_gate=quality_gate)
+    result = basics.save(
+        family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    preserved = quality_gate != "dev" and mutation == "none"
+    assert result["properties"]["name"] == "saved"
+    assert result["preservation"] == ("confirmed" if preserved else "unverified")
+    assert result["status"] == ("saved" if preserved else "unfinished")
+    assert result["writesDisabled"] is not preserved
+    assert basics._writes_disabled(tmp_path) is not preserved
 
 
 def test_logo_only_never_changes_or_requires_a_readable_chat_name(client, logos, tmp_path):
@@ -1767,9 +1820,8 @@ def test_cli_rename_saves_without_image_consent_or_new_logo(cli, client, capsys)
     before = copy.deepcopy(client.state["bot"])
     assert basics.main(["preview", "--name", "ESS HR Nov-3"]) == 0
     preview = result_json(capsys)
-    assert preview["current"] == {
-        "name": "Employee Support", "chatName": "Employee Support"
-    }
+    assert preview["current"] == {"name": "Employee Support"}
+    assert preview["proposed"] == {"name": "ESS HR Nov-3", "logoSources": {}}
     assert "serviceIconProcessingWarning" not in preview
     assert not client.writes
     command = ["save", "--name", "ESS HR Nov-3", "--approval", preview["reviewId"]]

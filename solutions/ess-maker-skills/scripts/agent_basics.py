@@ -538,8 +538,6 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
         if isinstance(bot.get("displayName"), str)
         else None,
     }
-    if "displayName" in plan["desired"]:
-        current["chatName"] = _gpt_component(plan["state"])["displayName"]
     if "displayName" not in plan["desired"] or plan["sources"]:
         current["logo"] = (
             "unavailable"
@@ -563,11 +561,6 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
         "current": current,
         "proposed": {
             "name": plan["desired"].get("displayName"),
-            **(
-                {"chatName": plan["desired"]["displayName"]}
-                if "displayName" in plan["desired"]
-                else {}
-            ),
             "logoSources": plan["sources"],
         },
         "changedProperties": list(plan["changes"]),
@@ -578,10 +571,7 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
             "ALM configuration is refreshed before writing and verified afterwards; "
             "the API does not accept a client revision precondition."
             if promoted
-            else (
-                "BotEntity.version protects the save; GPT name updates also "
-                "use the fetched component changeToken."
-            )
+            else "Revision checks protect the save."
         ),
     }
 
@@ -641,6 +631,13 @@ def _preserved(
             gpt = _gpt_component({**state, "botComponentChanges": components})
             for field in ("displayName", *_SERVER_FIELDS):
                 gpt.pop(field, None)
+            if state.get("_realmConfiguration") is not None:
+                # Configure rematerializes every component, bumping server revisions.
+                for change in components:
+                    component = change.get("component") if isinstance(change, dict) else None
+                    if isinstance(component, dict):
+                        for field in _SERVER_FIELDS:
+                            component.pop(field, None)
     previous_config = copy.deepcopy(before.get("_realmConfiguration"))
     current_config = copy.deepcopy(after.get("_realmConfiguration"))
     if previous_config is not None and current_config is not None and "name" in changes:
