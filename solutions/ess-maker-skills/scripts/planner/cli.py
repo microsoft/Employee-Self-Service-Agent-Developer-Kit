@@ -1360,6 +1360,28 @@ def main(argv: list[str] | None = None) -> int:
     _configure_io()
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Anonymous capability telemetry, emitted here — right after argparse
+    # succeeds, so `--help` and bad arguments don't count — rather than at the
+    # end. The "Capability Usage by Type" donut measures that a maker *used*
+    # /planner, not whether the command happened to succeed; gating the emit on
+    # a clean exit would silently undercount precisely the runs worth looking
+    # into.
+    #
+    # Every CLI call counts: one /planner conversation runs this CLI many times,
+    # and the `setup-status` / `capture-discover` calls made by /setup,
+    # onboarding and /discover count as planner usage too. This is the ONLY
+    # planner emit — SKILL.md has no scripts/emit_capability.py step, because
+    # emit_capability_use() does not dedupe and the two would double-count.
+    try:
+        import adk_telemetry
+
+        # block=True: short-lived CLI process, emit synchronously so the event
+        # isn't dropped when the interpreter exits and kills a daemon thread.
+        adk_telemetry.emit_capability_use("planner", block=True)
+    except Exception:  # noqa: BLE001 — telemetry must never break the flow
+        pass
+
     try:
         return args.func(args)
     except PlanInvalidError as exc:

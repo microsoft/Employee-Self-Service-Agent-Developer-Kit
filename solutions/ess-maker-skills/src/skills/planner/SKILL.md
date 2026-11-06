@@ -442,3 +442,10 @@ the **ESS scenario plan** Markdown as an editable file — they can revise it di
 or say what to change, and you reconcile it back into the plan
 (`src/skills/planner/edit.md`). (To resume a plan that already exists, see **First**
 above — don't restart the interview.)
+
+## Telemetry
+
+**Do not add a `scripts/emit_capability.py planner` step to this skill or its
+sub-flows.** `scripts/planner/cli.py` already emits the `planner` capability
+in-process on every call. `emit_capability_use()` does not dedupe, so a shim step
+on top of that would double-count `/planner` on the Capability Usage dashboard.

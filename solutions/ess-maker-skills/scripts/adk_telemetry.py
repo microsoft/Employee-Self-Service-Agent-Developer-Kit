@@ -119,6 +119,9 @@ EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
 #   restore_template_configs-> Workday template-config restore
 #   publishing              -> push / deploy to Copilot Studio
 #   flightcheck             -> pre-deployment readiness check
+#   planner                 -> /planner ESS rollout plan authoring + tracking
+#                              (emitted per scripts/planner/cli.py call, so one
+#                              /planner conversation counts several times)
 ADK_CAPABILITIES = (
     "setup",
     "connect",
@@ -136,6 +139,7 @@ ADK_CAPABILITIES = (
     "restore_template_configs",
     "publishing",
     "flightcheck",
+    "planner",
 )
 _CAPABILITY_SET = frozenset(ADK_CAPABILITIES)
 
