@@ -198,6 +198,7 @@ _CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 #   publishing              -> publish so pushed changes go live in runtime
 #   flightcheck             -> pre-deployment readiness check
 ADK_CAPABILITIES = (
+    "agent_basics",
     "setup",
     "connect",
     "topic_create",

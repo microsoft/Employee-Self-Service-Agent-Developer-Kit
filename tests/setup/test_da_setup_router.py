@@ -868,6 +868,7 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert "Classify the supplied agent first" in normalized
 
     assert set(_PATH_RE.findall(text)) == {
+        "src/skills/agent-basics/SKILL.md",
         "src/skills/foundation-setup/da-alm-import.md",
         "src/skills/foundation-setup/da-environment-target.md",
         "src/skills/foundation-setup/da-existing-dev.md",

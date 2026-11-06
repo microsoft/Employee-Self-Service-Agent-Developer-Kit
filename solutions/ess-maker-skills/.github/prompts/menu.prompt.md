@@ -13,6 +13,7 @@ Here's what I can help you with:
 
 | Command | What it does |
 |---------|-------------|
+| `/agent-basics` | View or change the selected ESS agent's name and logo in authoring; does not publish |
 | `/landing-page` | Configure the branding and content employees see when they open the ESS agent |
 | `/connect-workday` | Connect the active ESS HR agent to Workday |
 | `/connect` | Choose an available integration |
