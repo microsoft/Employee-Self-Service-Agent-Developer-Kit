@@ -12,6 +12,7 @@ import copy
 import hashlib
 import io
 import json
+import multiprocessing
 import re
 import sys
 import time
@@ -24,6 +25,7 @@ from PIL import Image, UnidentifiedImageError
 
 from adk_telemetry import emit_capability_use
 from agentbuilder import (
+    REALM_NAMES,
     AgentBuilderClient,
     AgentBuilderError,
     AgentBuilderHTTPError,
@@ -36,11 +38,15 @@ from setup_existing_da import (
     ExistingDASetupError,
     _confirm_direct_native_authoring_identity,
     _confirm_dev,
+    _normalize_guid,
+    _realm_name,
     _validate_changeset_identity,
 )
 
-# A local resource budget, not an asserted AgentBuilder service limit.
-MAX_IMAGE_BYTES = 1024 * 1024
+QUALITY_GATES = {name.casefold(): realm for realm, name in REALM_NAMES.items()}
+READ_TIMEOUT_SECONDS = 120
+SAVE_TIMEOUT_SECONDS = 180
+PROGRESS_INTERVAL_SECONDS = 15
 PREVIEW_DIRECTORY = Path(".local/agent-basics-preview")
 WRITE_STOP_FILE = Path(".local/agent-basics-writes.disabled")
 WRITE_PENDING_FILE = Path(".local/agent-basics-write.pending")
@@ -51,6 +57,14 @@ _PREVIEW_FILE = re.compile(r"[0-9a-f]{64}-(color|outline)\.png")
 
 class AgentBasicsError(RuntimeError):
     """A branding request cannot safely continue."""
+
+
+def _progress(stage: str, **details: Any) -> None:
+    print(
+        "AGENT_BASICS_PROGRESS_JSON:" + json.dumps({"stage": stage, **details}),
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _digest(value: Any) -> str:
@@ -85,6 +99,19 @@ def selected_target(root: Path) -> dict[str, str]:
     if state.get("schema_version") != 4:
         raise AgentBasicsError("Canonical native setup must be schema version 4.")
     context = _native_context(state, config)
+    canonical_account = str(state["environment"].get("account") or "").strip()
+    operational_account = str(config.get("account") or "").strip()
+    if (
+        canonical_account
+        and operational_account
+        and canonical_account.casefold() != operational_account.casefold()
+    ):
+        raise AgentBasicsError(
+            "Canonical setup and workspace configuration identify different "
+            "Microsoft accounts. Resume /setup; no write was attempted."
+        )
+    if canonical_account or operational_account:
+        context["account"] = canonical_account or operational_account
     matches = [
         entry
         for entry in state["agents"].values()
@@ -157,19 +184,14 @@ def validate_name(value: str) -> str:
 
 
 def _png(data: bytes, *, size: int | None = None) -> bytes:
-    if not data or len(data) > MAX_IMAGE_BYTES:
-        raise AgentBasicsError(
-            "ADK requires a nonempty PNG within its 1 MiB local preview budget. "
-            "This is not an AgentBuilder service limit."
-        )
+    if not data:
+        raise AgentBasicsError("Supply a nonempty PNG.")
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(data)) as image:
-                if image.format != "PNG" or image.n_frames != 1:
-                    raise AgentBasicsError(
-                        "Supply a single-frame PNG, not a converted file."
-                    )
+                if image.format != "PNG":
+                    raise AgentBasicsError("Supply a PNG.")
                 if size is not None and image.size != (size, size):
                     raise AgentBasicsError(
                         f"PNG dimensions must be exactly {size}x{size}."
@@ -180,6 +202,30 @@ def _png(data: bytes, *, size: int | None = None) -> bytes:
                     )
                 image.verify()
             with Image.open(io.BytesIO(data)) as image:
+                if image.n_frames > 1:
+                    fingerprint = hashlib.sha256()
+                    fingerprint.update(
+                        _digest(
+                            {
+                                "frames": image.n_frames,
+                                "loop": image.info.get("loop"),
+                                "defaultImage": image.info.get("default_image", False),
+                            }
+                        ).encode("ascii")
+                    )
+                    for index in range(image.n_frames):
+                        image.seek(index)
+                        image.load()
+                        fingerprint.update(
+                            _digest(
+                                {
+                                    "size": image.size,
+                                    "duration": image.info.get("duration"),
+                                }
+                            ).encode("ascii")
+                        )
+                        fingerprint.update(image.convert("RGBA").tobytes())
+                    return fingerprint.digest()
                 image.load()
                 rgba = image.convert("RGBA")
                 pixels = rgba.tobytes()
@@ -204,8 +250,7 @@ def _png(data: bytes, *, size: int | None = None) -> bytes:
 def _image_file(path: str, *, size: int) -> tuple[str, bytes]:
     source = Path(path).expanduser().resolve()
     try:
-        with source.open("rb") as stream:
-            data = stream.read(MAX_IMAGE_BYTES + 1)
+        data = source.read_bytes()
     except OSError as exc:
         raise AgentBasicsError("The selected local PNG cannot be read.") from exc
     _png(data, size=size)
@@ -215,10 +260,8 @@ def _image_file(path: str, *, size: int) -> tuple[str, bytes]:
 def _decode(value: Any) -> bytes:
     if value is None:
         return b""
-    if not isinstance(value, str) or len(value) > 4 * ((MAX_IMAGE_BYTES + 2) // 3):
-        raise AgentBasicsError(
-            "The saved icon is unreadable or exceeds the preview budget."
-        )
+    if not isinstance(value, str):
+        raise AgentBasicsError("The saved icon is unreadable.")
     try:
         return base64.b64decode(value, validate=True)
     except (ValueError, binascii.Error) as exc:
@@ -236,36 +279,123 @@ def _logo(bot: dict[str, Any]) -> bytes:
     return color
 
 
+def _promoted_target(
+    client: AgentBuilderClient,
+    target: dict[str, str],
+    quality_gate: str,
+    family_id: str,
+) -> tuple[str, str, dict[str, Any]]:
+    _progress("checking_quality_gate", qualityGate=quality_gate)
+    realms = client.get_realms(target["agent_id"])
+    if not isinstance(realms, dict) or _realm_name(realms.get("routeRealm")) != "dev":
+        raise AgentBasicsError("Quality-gate discovery did not identify the Dev source.")
+    siblings = realms.get("siblingRealms")
+    if not isinstance(siblings, list):
+        raise AgentBasicsError("Quality-gate discovery did not return sibling agents.")
+    matches = [
+        sibling
+        for sibling in siblings
+        if isinstance(sibling, dict)
+        and _realm_name(sibling.get("realm")) == quality_gate
+    ]
+    if len(matches) != 1:
+        raise AgentBasicsError(
+            f"The {quality_gate} quality-gate target is missing or ambiguous."
+        )
+    agent_id = _normalize_guid(
+        str(matches[0].get("botId") or ""), "Quality-gate agent ID"
+    )
+    if agent_id.casefold() == target["agent_id"].casefold():
+        raise AgentBasicsError("A promoted quality gate cannot use the Dev agent ID.")
+    card = client.get_agent(agent_id)
+    if not isinstance(card, dict):
+        raise AgentBasicsError("The quality-gate agent identity is unreadable.")
+    enrolled, realm = _confirm_direct_native_authoring_identity(agent_id, card)
+    if not enrolled or realm != quality_gate:
+        raise AgentBasicsError("The discovered agent does not match the requested gate.")
+    configuration = client.get_realm_configuration(agent_id, QUALITY_GATES[quality_gate])
+    if not isinstance(configuration, dict):
+        raise AgentBasicsError("The quality-gate configuration is unreadable.")
+    if _realm_name(configuration.get("realm")) != quality_gate:
+        raise AgentBasicsError("The configuration identifies a different quality gate.")
+    configured_id = _normalize_guid(
+        str(configuration.get("cdsBotId") or ""), "Configured quality-gate agent ID"
+    )
+    if configured_id.casefold() != agent_id.casefold():
+        raise AgentBasicsError("The quality-gate configuration identifies another agent.")
+    configured_family = str(configuration.get("grsRepositoryId") or "").strip()
+    if configured_family.casefold() != family_id.casefold():
+        raise AgentBasicsError("The quality-gate agent belongs to another ALM family.")
+    schema = str(
+        configuration.get("schemaName") or card.get("schemaName") or ""
+    ).strip()
+    source_schema = target["schema_name"].casefold()
+    if schema.casefold() not in {source_schema, f"{source_schema}_{quality_gate}"}:
+        raise AgentBasicsError("The quality-gate schema does not match the selected ESS agent.")
+    values = configuration.get("values")
+    if not isinstance(values, dict) or not all(
+        isinstance(key, str) and (value is None or isinstance(value, str))
+        for key, value in values.items()
+    ):
+        raise AgentBasicsError("The quality-gate configuration values are unreadable.")
+    if not isinstance(values.get("botName"), str):
+        raise AgentBasicsError("The quality-gate botName binding is unavailable.")
+    return agent_id, schema, configuration
+
+
 def read_state(
     client: AgentBuilderClient,
     target: dict[str, str],
+    *,
+    quality_gate: str = "dev",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    if quality_gate not in QUALITY_GATES:
+        raise AgentBasicsError("Select the dev, test, or prod quality gate.")
     agent_id = target["agent_id"]
+    expected_schema = target["schema_name"]
+    family_id = ""
+    realm_configuration = None
+    _progress("checking_agent")
     card = client.get_agent(agent_id)
     if not isinstance(card, dict):
         raise AgentBasicsError("The live agent identity is unreadable.")
     enrolled, realm = _confirm_direct_native_authoring_identity(agent_id, card)
     if enrolled:
+        _progress("checking_dev_target")
         configuration = client.get_dev_configuration(agent_id)
         if not isinstance(configuration, dict):
             raise AgentBasicsError("The live Dev configuration is unreadable.")
-        schema, _, realm = _confirm_dev(agent_id, card, configuration)
+        schema, family_id, realm = _confirm_dev(agent_id, card, configuration)
         if schema.casefold() != target["schema_name"].casefold():
             raise AgentBasicsError("Dev configuration and selected schema disagree.")
+    if quality_gate != "dev":
+        if not enrolled:
+            raise AgentBasicsError("Test and Prod require an ALM-enrolled Dev source.")
+        agent_id, expected_schema, realm_configuration = _promoted_target(
+            client, target, quality_gate, family_id
+        )
+        realm = quality_gate
+    _progress("reading_current_settings")
     changeset = client.fetch_components(agent_id)
     if not isinstance(changeset, dict):
         raise AgentBasicsError("The live authoring state is unreadable.")
     schema = _validate_changeset_identity(
         changeset,
         agent_id,
-        expected_schema_name=target["schema_name"],
+        expected_schema_name=expected_schema,
     )
-    product = resolve_product_setup(agent_schema_name=schema)
+    product = resolve_product_setup(agent_schema_name=target["schema_name"])
     if not product:
         raise AgentBasicsError(
             "This schema is not a supported ESS product. No write is allowed."
         )
     bot = changeset["bot"]
+    if realm_configuration is not None:
+        if realm_configuration["values"]["botName"] != bot.get("displayName"):
+            raise AgentBasicsError(
+                "The quality-gate name and configuration changed during read; refresh."
+            )
+        changeset["_realmConfiguration"] = realm_configuration
     version = bot.get("version")
     if type(version) is not int or version < 1:
         raise AgentBasicsError(
@@ -277,6 +407,9 @@ def read_state(
         )
     return changeset, {
         **target,
+        "agent_id": agent_id,
+        "schema_name": schema,
+        **({"alm_family_id": family_id} if enrolled else {}),
         "product": product["productKey"],
         "qualityGate": realm if enrolled else "unenrolled authoring",
     }
@@ -288,7 +421,12 @@ def prepare(
     *,
     name: str | None = None,
     logo: str | None = None,
+    quality_gate: str = "dev",
 ) -> dict[str, Any]:
+    if logo is not None and quality_gate != "dev":
+        raise AgentBasicsError(
+            "Logo changes are Dev-only. Request a separate name-only change for Test or Prod."
+        )
     source: dict[str, str] = {}
     desired: dict[str, Any] = {}
     if name is not None:
@@ -297,7 +435,7 @@ def prepare(
     if logo is not None:
         source["color"], color = _image_file(logo, size=192)
         supplied = color
-    state, resolved_target = read_state(client, target)
+    state, resolved_target = read_state(client, target, quality_gate=quality_gate)
     bot = state["bot"]
     readable_name = isinstance(bot.get("displayName"), str)
     current_logo = None
@@ -332,6 +470,8 @@ def prepare(
     )
     return {
         "reviewId": review_id,
+        "selection": dict(target),
+        "requestedQualityGate": quality_gate,
         "target": resolved_target,
         "state": state,
         "desired": desired,
@@ -364,6 +504,7 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
         path = directory / f"{plan['reviewId']}-color.png"
         path.write_bytes(plan["currentLogo"])
         current["colorPreview"] = str(path.resolve())
+    promoted = plan["requestedQualityGate"] != "dev"
     return {
         "status": "review" if plan["changes"] else "no_change",
         "reviewId": plan["reviewId"],
@@ -377,6 +518,12 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
         "retained": "Instructions, unrequested non-image settings, schema, product and workspace identity.",
         "localArtifacts": "No agent files or setup display labels changed.",
         "publication": "Not performed; approval and employee visibility are unverified.",
+        "concurrencyProtection": (
+            "ALM configuration is refreshed before writing and verified afterwards; "
+            "the API does not accept a client revision precondition."
+            if promoted
+            else "BotEntity.version protects the metadata save."
+        ),
     }
 
 
@@ -425,9 +572,15 @@ def _preserved(
                     item.pop("teamsAppInformation")
             elif application is None:
                 item.pop("teamsAppInformation", None)
+    previous_config = copy.deepcopy(before.get("_realmConfiguration"))
+    current_config = copy.deepcopy(after.get("_realmConfiguration"))
+    if previous_config is not None and current_config is not None and "name" in changes:
+        previous_config["values"].pop("botName", None)
+        current_config["values"].pop("botName", None)
     return (
         previous == current
         and before["botComponentChanges"] == after["botComponentChanges"]
+        and previous_config == current_config
     )
 
 
@@ -476,12 +629,7 @@ def save(
     root: Path,
 ) -> dict[str, Any]:
     """Save a freshly prepared plan; the CLI always prepares again after approval."""
-    reviewed_target = {
-        key: value
-        for key, value in plan["target"].items()
-        if key not in {"product", "qualityGate"}
-    }
-    if approval != plan["reviewId"] or current_target != reviewed_target:
+    if approval != plan["reviewId"] or current_target != plan["selection"]:
         return {
             "status": "review_again",
             "reason": "Target, proposal or reviewed state changed; no write.",
@@ -489,6 +637,8 @@ def save(
     changes = plan["changes"]
     if not changes:
         return {"status": "no_change", "properties": {}, "writeAttempted": False}
+    if "logo" in changes and plan["requestedQualityGate"] != "dev":
+        raise AgentBasicsError("Logo changes are Dev-only; no write was attempted.")
     _require_writes_enabled(root)
     bot = copy.deepcopy(plan["state"]["bot"])
     if "name" in changes:
@@ -496,8 +646,20 @@ def save(
     if "logo" in changes:
         bot["iconBase64"] = changes["logo"]
 
-    # BotEntity.version is enforced by CreateBotEntityTransaction, independently
-    # of component changeToken. Never strip it or retry this PUT automatically.
+    promoted = plan["requestedQualityGate"] != "dev"
+    if promoted:
+        _progress("refreshing_quality_gate_configuration")
+        refreshed, refreshed_target = read_state(
+            client, current_target, quality_gate=plan["requestedQualityGate"]
+        )
+        if refreshed != plan["state"] or refreshed_target != plan["target"]:
+            return {
+                "status": "review_again",
+                "reason": "Quality-gate configuration changed; refresh and review again.",
+                "writeAttempted": False,
+            }
+    # Dev uses the fetched entity revision. Promoted realms require Configure,
+    # whose full-replacement values map has no caller-supplied revision field.
     status_code = None
     request_id = None
     transport_issue = False
@@ -508,7 +670,24 @@ def save(
             "Another save or validation stop disabled writes; no write was attempted."
         ) from exc
     try:
-        response = client.update_bot_entity(plan["target"]["agent_id"], bot)
+        _progress("saving_approved_changes")
+        if promoted:
+            values = copy.deepcopy(plan["state"]["_realmConfiguration"]["values"])
+            values["botName"] = changes["name"]
+            response = client.session.request(
+                "POST",
+                f"{client.host}/copilotstudio/minimalBots/alm/{plan['target']['agent_id']}/configure",
+                params={"api-version": client.api_version},
+                headers={**client.headers, "Content-Type": "application/json"},
+                json={
+                    "realm": REALM_NAMES[QUALITY_GATES[plan["requestedQualityGate"]]],
+                    "values": values,
+                },
+                timeout=SAVE_TIMEOUT_SECONDS,
+                allow_redirects=False,
+            )
+        else:
+            response = client.update_bot_entity(plan["target"]["agent_id"], bot)
         status_code = response.status_code
         request_id = next(
             (
@@ -524,7 +703,7 @@ def save(
         write_stop_issue = _release_pending_write(root)
         return {
             "status": "review_again",
-            "reason": "Protected metadata save conflicted; refresh and review again.",
+            "reason": "Save conflicted; refresh and review again.",
             "httpStatus": status_code,
             "requestId": request_id,
             "writesDisabled": _writes_disabled(root),
@@ -532,7 +711,12 @@ def save(
         }
     results = {field: "unverified" for field in changes}
     try:
-        after, _ = read_state(client, current_target)
+        _progress("verifying_saved_changes")
+        after, observed_target = read_state(
+            client, current_target, quality_gate=plan["requestedQualityGate"]
+        )
+        if observed_target != plan["target"]:
+            raise AgentBasicsError("The quality-gate target changed during save verification.")
     except (
         AgentBuilderError,
         AgentBasicsError,
@@ -626,7 +810,14 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--name")
-    parser.add_argument("--logo", help="Local 192x192 color PNG, at most 1 MiB.")
+    parser.add_argument("--logo", help="Local 192x192 color PNG.")
+    parser.add_argument(
+        "--quality-gate",
+        type=str.casefold,
+        choices=tuple(QUALITY_GATES),
+        default="dev",
+        help="Gate to view or rename; logo changes are Dev-only. Default: dev.",
+    )
     parser.add_argument(
         "--outline",
         help="Unsupported: the platform derives outlines from the --logo source.",
@@ -638,6 +829,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--select-account", action="store_true")
     args = parser.parse_args(argv)
     root = Path.cwd()
+    if args.logo is not None and args.quality_gate != "dev":
+        parser.error(
+            "Logo changes are Dev-only. Test and Prod accept name-only changes. "
+            "No write was attempted."
+        )
     if args.outline is not None:
         parser.error(
             "Independent outline customization is not supported. Use --logo "
@@ -672,11 +868,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "save":
             _require_writes_enabled(root)
         target = selected_target(root)
+        account_hint = args.account or (
+            None if args.select_account else target.get("account")
+        )
+        _progress("authenticating", message="Complete sign-in if a browser opens.")
         token = authenticate(
             target["tenant_id"],
             target["ring"],
-            account_hint=args.account,
+            account_hint=account_hint,
             force_account_selection=args.select_account,
+            require_account_identity=bool(account_hint),
         )
         client = AgentBuilderClient(
             target["host"],
@@ -685,7 +886,13 @@ def main(argv: list[str] | None = None) -> int:
             tenant_id=target["tenant_id"],
             api_version=target["api_version"],
         )
-        plan = prepare(client, target, name=args.name, logo=args.logo)
+        plan = prepare(
+            client,
+            target,
+            name=args.name,
+            logo=args.logo,
+            quality_gate=args.quality_gate,
+        )
         if args.action == "save":
             result = save(
                 client,
@@ -749,7 +956,7 @@ def main(argv: list[str] | None = None) -> int:
                     "ADK could not remove this review's temporary icon copies. "
                     "Run cleanup again; the reported service outcome is unchanged."
                 )
-    print(prefix + json.dumps(result, ensure_ascii=True))
+    print(prefix + json.dumps(result, ensure_ascii=True), flush=True)
     return (
         0
         if result["status"] in ("review", "saved", "no_change", "writes_resumed")
@@ -759,5 +966,68 @@ def main(argv: list[str] | None = None) -> int:
     )
 
 
+def _command_worker(argv: list[str]) -> None:
+    sys.exit(main(argv))
+
+
+def run_cli(argv: list[str] | None = None) -> int:
+    """Bound the entire command, including authentication and HTTP retry waits."""
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    action = arguments[0] if arguments else ""
+    timeout = SAVE_TIMEOUT_SECONDS if action == "save" else READ_TIMEOUT_SECONDS
+    process = multiprocessing.get_context("spawn").Process(
+        target=_command_worker, args=(arguments,)
+    )
+    started = time.monotonic()
+    reason = "Timeout"
+    try:
+        process.start()
+        while process.is_alive():
+            remaining = timeout - (time.monotonic() - started)
+            if remaining <= 0:
+                break
+            process.join(timeout=min(PROGRESS_INTERVAL_SECONDS, remaining))
+            if process.is_alive() and time.monotonic() - started < timeout:
+                _progress("waiting", elapsedSeconds=int(time.monotonic() - started))
+        if not process.is_alive():
+            return process.exitcode
+    except KeyboardInterrupt:
+        reason = "Cancelled"
+    finally:
+        # A timed-out worker must not continue reading or saving after reporting.
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join()
+        process.close()
+    uncertain = action == "save"
+    result = {
+        "status": "unverified" if uncertain else "blocked",
+        "errorType": reason,
+        "elapsedSeconds": int(time.monotonic() - started),
+        "message": (
+            "The command was stopped. The save outcome is unverified; read the "
+            "actual saved state and complete reviewed recovery before retrying."
+            if uncertain
+            else "The command was stopped before completion. No save was attempted. "
+            "Check sign-in and the connection before preparing a fresh preview."
+        ),
+        "writesDisabled": _writes_disabled(Path.cwd()),
+    }
+    if uncertain:
+        result["preservation"] = "unverified"
+        result["properties"] = {
+            field: "unverified"
+            for field, option in (("name", "--name"), ("logo", "--logo"))
+            if any(arg == option or arg.startswith(option + "=") for arg in arguments)
+        }
+    else:
+        result["writeAttempted"] = False
+    print("AGENT_BASICS_ERROR_JSON:" + json.dumps(result), flush=True)
+    return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_cli())

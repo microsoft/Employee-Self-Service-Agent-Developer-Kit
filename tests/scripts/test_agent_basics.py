@@ -13,13 +13,16 @@ import base64
 import copy
 import io
 import json
+import multiprocessing
 import os
 import time
+import zlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import requests
-from PIL import Image
+from PIL import Image, PngImagePlugin
 
 import agent_basics as basics
 from agentbuilder import AgentBuilderHTTPError
@@ -38,6 +41,11 @@ TARGET = {
     "workspace_slug": "ess",
     "workspace_fingerprint": "selected-workspace",
 }
+QUALITY_IDS = {
+    "dev": AGENT_ID,
+    "test": "00000000-0000-4000-8000-000000004444",
+    "prod": "00000000-0000-4000-8000-000000005555",
+}
 
 
 def png(size: int, *, outline: bool = False, color="blue", format="PNG") -> bytes:
@@ -49,18 +57,32 @@ def png(size: int, *, outline: bool = False, color="blue", format="PNG") -> byte
     return stream.getvalue()
 
 
+def animated_png(*, second_color="blue", duration=100, loop=0) -> bytes:
+    stream = io.BytesIO()
+    Image.new("RGBA", (192, 192), "red").save(
+        stream,
+        format="PNG",
+        save_all=True,
+        append_images=[Image.new("RGBA", (192, 192), second_color)],
+        duration=duration,
+        loop=loop,
+    )
+    return stream.getvalue()
+
+
 def encoded(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
 class Client:
-    def __init__(self):
+    def __init__(self, agent_id=AGENT_ID, *, realm=0, schema=SCHEMA):
+        self.agent_id = agent_id
         self.state = {
             "bot": {
                 "$kind": "BotEntity",
                 "version": 4,
-                "cdsBotId": AGENT_ID,
-                "schemaName": SCHEMA,
+                "cdsBotId": agent_id,
+                "schemaName": schema,
                 "displayName": "Employee Support",
                 "iconBase64": encoded(png(192)),
                 "teamsAppInformation": {
@@ -80,12 +102,12 @@ class Client:
                 },
             ],
         }
-        self.card = {"botId": AGENT_ID, "realm": 0}
+        self.card = {"botId": agent_id, "realm": realm}
         self.configuration = {
-            "cdsBotId": AGENT_ID,
-            "schemaName": SCHEMA,
+            "cdsBotId": agent_id,
+            "schemaName": schema,
             "grsRepositoryId": "stable-family",
-            "realm": 0,
+            "realm": realm,
         }
         self.status = 200
         self.writes = []
@@ -96,21 +118,21 @@ class Client:
         self.mutate = None
 
     def get_agent(self, agent_id):
-        assert agent_id == AGENT_ID
+        assert agent_id == self.agent_id
         if self.fail_reads:
             raise AgentBuilderHTTPError("read", 403, request_id="read-request")
         return copy.deepcopy(self.card)
 
     def get_dev_configuration(self, agent_id):
-        assert agent_id == AGENT_ID
+        assert agent_id == self.agent_id
         return copy.deepcopy(self.configuration)
 
     def fetch_components(self, agent_id):
-        assert agent_id == AGENT_ID
+        assert agent_id == self.agent_id
         return copy.deepcopy(self.state)
 
     def update_bot_entity(self, agent_id, bot):
-        assert agent_id == AGENT_ID
+        assert agent_id == self.agent_id
         self.writes.append(copy.deepcopy(bot))
         if self.apply and self.status == 200:
             # Mirrors CreateBotEntityTransaction's version precondition/increment.
@@ -129,6 +151,80 @@ class Client:
         response.status_code = self.status
         response.headers["x-ms-request-id"] = "save-request"
         return response
+
+
+class QualityClient:
+    def __init__(self):
+        self.gates = {
+            gate: Client(
+                QUALITY_IDS[gate],
+                realm=realm,
+                schema=SCHEMA if gate == "dev" else f"{SCHEMA}_{gate}",
+            )
+            for gate, realm in basics.QUALITY_GATES.items()
+        }
+        self.agents = {agent.agent_id: agent for agent in self.gates.values()}
+        for agent in self.gates.values():
+            agent.configuration.update(
+                values={
+                    "botName": agent.state["bot"]["displayName"],
+                    "region": "retained",
+                    "optional": None,
+                },
+                flows={"workflow": "retained"},
+                connections={"connector": {"connectionId": "retained"}},
+            )
+        self.host = TARGET["host"]
+        self.api_version = TARGET["api_version"]
+        self.headers = {"Accept": "application/json"}
+        self.session = SimpleNamespace(request=self.configure)
+        self.configuration_requests = []
+        self.realms = {
+            "routeRealm": 0,
+            "siblingRealms": [
+                {"botId": QUALITY_IDS[gate], "realm": realm}
+                for gate, realm in basics.QUALITY_GATES.items()
+            ],
+        }
+
+    def get_realms(self, agent_id):
+        assert agent_id == AGENT_ID
+        return copy.deepcopy(self.realms)
+
+    def get_agent(self, agent_id):
+        return self.agents[agent_id].get_agent(agent_id)
+
+    def get_dev_configuration(self, agent_id):
+        return self.agents[agent_id].get_dev_configuration(agent_id)
+
+    def get_realm_configuration(self, agent_id, realm):
+        assert self.agents[agent_id].card["realm"] == realm
+        return copy.deepcopy(self.agents[agent_id].configuration)
+
+    def fetch_components(self, agent_id):
+        return self.agents[agent_id].fetch_components(agent_id)
+
+    def update_bot_entity(self, agent_id, bot):
+        assert agent_id == AGENT_ID, "Promoted realms cannot use the metadata PUT."
+        return self.agents[agent_id].update_bot_entity(agent_id, bot)
+
+    def configure(self, method, url, **kwargs):
+        self.configuration_requests.append((method, url, copy.deepcopy(kwargs)))
+        assert method == "POST"
+        assert kwargs["allow_redirects"] is False
+        assert kwargs["params"] == {"api-version": self.api_version}
+        assert kwargs["timeout"] == basics.SAVE_TIMEOUT_SECONDS
+        body = kwargs["json"]
+        assert set(body) == {"realm", "values"}
+        gate = body["realm"].casefold()
+        assert gate in {"test", "prod"}
+        agent = self.gates[gate]
+        assert url == f"{self.host}/copilotstudio/minimalBots/alm/{agent.agent_id}/configure"
+        bot = copy.deepcopy(agent.state["bot"])
+        bot["displayName"] = body["values"]["botName"]
+        if agent.apply and agent.status == 200:
+            agent.configuration["values"] = copy.deepcopy(body["values"])
+        return agent.update_bot_entity(agent.agent_id, bot)
 
 
 @pytest.fixture
@@ -167,25 +263,91 @@ def test_valid_names_are_not_transformed(value):
         png(191),
         png(192, format="BMP"),
         png(192)[:-20],
-        b"x" * (basics.MAX_IMAGE_BYTES + 1),
     ],
-    ids=["not-png", "dimensions", "bmp", "truncated", "oversize"],
+    ids=["not-png", "dimensions", "bmp", "truncated"],
 )
 def test_color_png_content_validation(data):
     with pytest.raises(basics.AgentBasicsError):
         basics._png(data, size=192)
 
 
-def test_animated_png_is_rejected():
+def test_valid_png_over_one_mib_is_saved_without_conversion(client, tmp_path):
+    metadata = PngImagePlugin.PngInfo()
+    metadata.add_text("Description", "x" * (1024 * 1024))
     stream = io.BytesIO()
     Image.new("RGBA", (192, 192), "red").save(
-        stream,
-        format="PNG",
-        save_all=True,
-        append_images=[Image.new("RGBA", (192, 192), "blue")],
+        stream, format="PNG", pnginfo=metadata
     )
-    with pytest.raises(basics.AgentBasicsError):
-        basics._png(stream.getvalue(), size=192)
+    data = stream.getvalue()
+    assert len(data) > 1024 * 1024
+    source = tmp_path / "large.png"
+    source.write_bytes(data)
+
+    plan = basics.prepare(client, TARGET, logo=str(source))
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+
+    assert result["status"] == "saved"
+    assert client.writes[0]["iconBase64"] == encoded(data)
+    assert not basics.prepare(client, TARGET, logo=str(source))["changes"]
+
+
+def test_animated_png_is_saved_without_conversion(client, tmp_path):
+    data = animated_png()
+    source = tmp_path / "animated.png"
+    source.write_bytes(data)
+    plan = basics.prepare(client, TARGET, logo=str(source))
+
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+
+    assert result["status"] == "saved"
+    assert client.writes[0]["iconBase64"] == encoded(data)
+    assert not basics.prepare(client, TARGET, logo=str(source))["changes"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"second_color": "green"}, {"duration": 200}, {"loop": 1}],
+    ids=["later-frame", "timing", "loop"],
+)
+def test_animation_changes_are_compared_and_verified(client, tmp_path, change):
+    original = encoded(animated_png())
+    client.state["bot"]["iconBase64"] = original
+    source = tmp_path / "animated.png"
+    source.write_bytes(animated_png(**change))
+    plan = basics.prepare(client, TARGET, logo=str(source))
+    assert list(plan["changes"]) == ["logo"]
+
+    def discard_animation_change(state):
+        state["bot"]["iconBase64"] = original
+
+    client.mutate = discard_animation_change
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+
+    assert result["properties"]["logo"] == "unverified"
+    assert result["writesDisabled"] is True
+
+
+def test_corrupt_later_png_frame_is_rejected():
+    data = animated_png()
+    offset = data.index(b"fdAT")
+    length = int.from_bytes(data[offset - 4:offset], "big")
+    payload = data[offset + 4:offset + 8] + b"invalid compressed frame"
+    chunk = b"fdAT" + payload
+    corrupted = (
+        data[:offset - 4]
+        + len(payload).to_bytes(4, "big")
+        + chunk
+        + zlib.crc32(chunk).to_bytes(4, "big")
+        + data[offset + length + 8:]
+    )
+    with pytest.raises(basics.AgentBasicsError, match="fully decoded"):
+        basics._png(corrupted, size=192)
 
 
 @pytest.mark.parametrize("properties", ["name", "logo", "both"])
@@ -878,6 +1040,20 @@ def test_target_disagreement_and_legacy_no_write(workspace):
         basics.selected_target(workspace)
 
 
+def test_configured_account_disagreement_blocks_before_signin(workspace):
+    path = workspace / ".local" / "config.json"
+    config = json.loads(path.read_text())
+    config["account"] = "other@example.test"
+    path.write_text(json.dumps(config))
+    path = workspace / ".local" / "setup" / "config.json"
+    state = json.loads(path.read_text())
+    state["environment"]["account"] = "maker@example.test"
+    path.write_text(json.dumps(state))
+
+    with pytest.raises(basics.AgentBasicsError, match="different Microsoft accounts"):
+        basics.selected_target(workspace)
+
+
 @pytest.fixture
 def cli(monkeypatch, workspace, client):
     monkeypatch.chdir(workspace)
@@ -889,6 +1065,373 @@ def cli(monkeypatch, workspace, client):
 def result_json(capsys):
     output = capsys.readouterr().out
     return json.loads(output.split("_JSON:", 1)[1])
+
+
+@pytest.mark.parametrize("quality_gate", ["dev", "test", "prod"])
+def test_cli_name_changes_are_independent_per_quality_gate(
+    cli, monkeypatch, capsys, quality_gate
+):
+    family = QualityClient()
+    before = {gate: copy.deepcopy(agent.state) for gate, agent in family.gates.items()}
+    monkeypatch.setattr(basics, "AgentBuilderClient", lambda *args, **kwargs: family)
+    options = ["--name", f"Support {quality_gate}", "--quality-gate", quality_gate]
+
+    assert basics.main(["preview", *options]) == 0
+    preview = result_json(capsys)
+    assert preview["target"]["agent_id"] == QUALITY_IDS[quality_gate]
+    assert preview["target"]["qualityGate"] == quality_gate
+    assert preview["changedProperties"] == ["name"]
+    assert basics.main(["save", *options, "--approval", preview["reviewId"]]) == 0
+    assert result_json(capsys)["status"] == "saved"
+
+    for gate, agent in family.gates.items():
+        expected = before[gate]
+        if gate == quality_gate:
+            expected["bot"]["displayName"] = f"Support {quality_gate}"
+            expected["bot"]["version"] += 1
+        assert agent.state == expected
+        assert len(agent.writes) == (1 if gate == quality_gate else 0)
+    if quality_gate == "dev":
+        assert family.configuration_requests == []
+    else:
+        assert len(family.configuration_requests) == 1
+        assert family.configuration_requests[0][2]["json"]["values"] == {
+            "botName": f"Support {quality_gate}",
+            "region": "retained",
+            "optional": None,
+        }
+
+
+def test_each_quality_gate_keeps_its_own_name(tmp_path):
+    family = QualityClient()
+    names = {"dev": "Support Development", "test": "Support Validation", "prod": "Support"}
+    for gate, name in names.items():
+        plan = basics.prepare(family, TARGET, name=name, quality_gate=gate)
+        result = basics.save(
+            family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+        )
+        assert result["status"] == "saved"
+    assert {
+        gate: agent.state["bot"]["displayName"] for gate, agent in family.gates.items()
+    } == names
+
+
+@pytest.mark.parametrize("quality_gate", ["test", "prod"])
+def test_promoted_view_is_read_only(cli, monkeypatch, capsys, quality_gate):
+    family = QualityClient()
+    monkeypatch.setattr(basics, "AgentBuilderClient", lambda *args, **kwargs: family)
+    assert basics.main(["view", "--quality-gate", quality_gate]) == 0
+    result = result_json(capsys)
+    assert result["target"]["agent_id"] == QUALITY_IDS[quality_gate]
+    assert not family.configuration_requests
+    assert not any(agent.writes for agent in family.gates.values())
+
+
+@pytest.mark.parametrize("quality_gate", ["test", "prod"])
+def test_unenrolled_source_cannot_guess_promoted_target(client, quality_gate):
+    client.card.pop("realm")
+    with pytest.raises(basics.AgentBasicsError, match="ALM-enrolled Dev source"):
+        basics.prepare(client, TARGET, name="Support", quality_gate=quality_gate)
+    assert not client.writes
+
+
+@pytest.mark.parametrize("quality_gate", ["test", "prod"])
+@pytest.mark.parametrize("combined", [False, True], ids=["logo-only", "name-and-logo"])
+def test_non_dev_logo_requests_are_blocked_before_signin(
+    cli, monkeypatch, logos, capsys, quality_gate, combined
+):
+    family = QualityClient()
+
+    def unexpected_signin(*args, **kwargs):
+        pytest.fail("A prohibited logo request must not authenticate.")
+
+    monkeypatch.setattr(basics, "authenticate", unexpected_signin)
+    options = ["--logo", logos["logo"], "--quality-gate", quality_gate]
+    if combined:
+        options += ["--name", "Gate Support"]
+    with pytest.raises(SystemExit) as exc:
+        basics.main(["preview", *options])
+    assert exc.value.code == 2
+    assert "Logo changes are Dev-only" in capsys.readouterr().err
+    with pytest.raises(basics.AgentBasicsError, match="Logo changes are Dev-only"):
+        basics.prepare(
+            family,
+            TARGET,
+            logo=logos["logo"],
+            name="Gate Support" if combined else None,
+            quality_gate=quality_gate,
+        )
+    assert not any(agent.writes for agent in family.gates.values())
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["missing", "ambiguous", "card-realm", "config-realm", "agent-id", "family", "schema"],
+)
+def test_promoted_name_target_requires_verified_quality_identity(fault):
+    family = QualityClient()
+    promoted = family.gates["test"]
+    if fault == "missing":
+        family.realms["siblingRealms"] = []
+    elif fault == "ambiguous":
+        family.realms["siblingRealms"].append(
+            {"botId": QUALITY_IDS["test"], "realm": 1}
+        )
+    elif fault == "card-realm":
+        promoted.card["realm"] = 2
+    elif fault == "config-realm":
+        promoted.configuration["realm"] = 2
+    elif fault == "agent-id":
+        promoted.configuration["cdsBotId"] = QUALITY_IDS["prod"]
+    elif fault == "family":
+        promoted.configuration["grsRepositoryId"] = "another-family"
+    else:
+        promoted.configuration["schemaName"] = "unrelated-agent"
+
+    with pytest.raises((basics.AgentBasicsError, ExistingDASetupError)):
+        basics.prepare(family, TARGET, name="Test Support", quality_gate="test")
+    assert not any(agent.writes for agent in family.gates.values())
+
+
+@pytest.mark.parametrize("change", ["quality-gate", "alm-family"])
+def test_name_approval_cannot_cross_quality_gate_or_family(tmp_path, change):
+    family = QualityClient()
+    reviewed = basics.prepare(
+        family, TARGET, name="Gate Support", quality_gate="test"
+    )
+    quality_gate = "test"
+    if change == "quality-gate":
+        quality_gate = "prod"
+    else:
+        for agent in family.gates.values():
+            agent.configuration["grsRepositoryId"] = "another-family"
+    current = basics.prepare(
+        family, TARGET, name="Gate Support", quality_gate=quality_gate
+    )
+    result = basics.save(
+        family, current, reviewed["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "review_again"
+    assert not any(agent.writes for agent in family.gates.values())
+
+
+def test_name_save_rechecks_quality_target_after_writing(tmp_path):
+    family = QualityClient()
+    plan = basics.prepare(
+        family, TARGET, name="Test Support", quality_gate="test"
+    )
+
+    def move_family(state):
+        for agent in family.gates.values():
+            agent.configuration["grsRepositoryId"] = "another-family"
+
+    family.gates["test"].mutate = move_family
+    result = basics.save(
+        family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "unverified"
+    assert result["writesDisabled"] is True
+    assert len(family.gates["test"].writes) == 1
+    assert not family.gates["dev"].writes
+    assert not family.gates["prod"].writes
+
+
+def test_name_only_plan_cannot_be_used_to_write_non_dev_logo(tmp_path, logos):
+    family = QualityClient()
+    plan = basics.prepare(
+        family, TARGET, name="Test Support", quality_gate="test"
+    )
+    plan["changes"]["logo"] = encoded(Path(logos["logo"]).read_bytes())
+    with pytest.raises(basics.AgentBasicsError, match="Logo changes are Dev-only"):
+        basics.save(
+            family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+        )
+    assert not any(agent.writes for agent in family.gates.values())
+
+
+@pytest.mark.parametrize(
+    "values",
+    [None, [], {"botName": 5}, {"other": "name"}, {"botName": "Inconsistent name"}],
+)
+def test_promoted_name_requires_readable_config_bindings(values):
+    family = QualityClient()
+    family.gates["test"].configuration["values"] = values
+    with pytest.raises(basics.AgentBasicsError):
+        basics.prepare(family, TARGET, name="Test Support", quality_gate="test")
+    assert not family.configuration_requests
+
+
+def test_promoted_name_refreshes_config_before_writing(tmp_path):
+    family = QualityClient()
+    plan = basics.prepare(family, TARGET, name="Test Support", quality_gate="test")
+    family.gates["test"].configuration["values"]["region"] = "concurrent edit"
+    result = basics.save(
+        family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "review_again"
+    assert result["writeAttempted"] is False
+    assert not family.configuration_requests
+    assert not basics._writes_disabled(tmp_path)
+
+
+def test_promoted_name_config_readback_must_preserve_other_bindings(tmp_path):
+    family = QualityClient()
+    plan = basics.prepare(family, TARGET, name="Test Support", quality_gate="test")
+    family.gates["test"].mutate = lambda state: family.gates["test"].configuration[
+        "values"
+    ].update(region="unexpected change")
+    result = basics.save(
+        family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["properties"]["name"] == "saved"
+    assert result["preservation"] == "unverified"
+    assert result["writesDisabled"] is True
+    assert len(family.configuration_requests) == 1
+
+
+@pytest.mark.parametrize("status", [403, 409, 500])
+def test_promoted_name_surfaces_config_denials_and_conflicts(tmp_path, status):
+    family = QualityClient()
+    family.gates["test"].status = status
+    plan = basics.prepare(family, TARGET, name="Test Support", quality_gate="test")
+    result = basics.save(
+        family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["httpStatus"] == status
+    assert result["requestId"] == "save-request"
+    assert result["status"] == ("review_again" if status == 409 else "unfinished")
+    assert len(family.configuration_requests) == 1
+    assert not family.gates["dev"].writes
+    assert not family.gates["prod"].writes
+
+
+@pytest.mark.parametrize(
+    ("options", "expected_account", "force_selection"),
+    [
+        ([], "maker@example.test", False),
+        (["--account", "other@example.test"], "other@example.test", False),
+        (["--select-account"], None, True),
+    ],
+)
+def test_preview_and_save_reuse_setup_account_unless_explicitly_switched(
+    cli, monkeypatch, capsys, options, expected_account, force_selection
+):
+    path = cli / ".local" / "setup" / "config.json"
+    state = json.loads(path.read_text())
+    state["environment"]["account"] = "maker@example.test"
+    path.write_text(json.dumps(state))
+    observed = []
+
+    def authenticate(*args, **kwargs):
+        observed.append(kwargs)
+        return "fake-token"
+
+    monkeypatch.setattr(basics, "authenticate", authenticate)
+    assert basics.main(["preview", "--name", "People Support", *options]) == 0
+    review_id = result_json(capsys)["reviewId"]
+    assert basics.main(
+        ["save", "--name", "People Support", "--approval", review_id, *options]
+    ) == 0
+    assert result_json(capsys)["status"] == "saved"
+    assert observed == [
+        {
+            "account_hint": expected_account,
+            "force_account_selection": force_selection,
+            "require_account_identity": bool(expected_account),
+        }
+    ] * 2
+
+
+def _stalled_command(argv):
+    time.sleep(30)
+
+
+def test_preview_deadline_stops_the_worker(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(basics, "_command_worker", _stalled_command)
+    monkeypatch.setattr(basics, "READ_TIMEOUT_SECONDS", 0.2)
+    children_before = {child.pid for child in multiprocessing.active_children()}
+    started = time.monotonic()
+
+    assert basics.run_cli(["preview", "--name", "People Support"]) == 2
+
+    result = result_json(capsys)
+    assert result["status"] == "blocked"
+    assert result["errorType"] == "Timeout"
+    assert result["writeAttempted"] is False
+    assert "No save was attempted" in result["message"]
+    assert time.monotonic() - started < 10
+    assert {child.pid for child in multiprocessing.active_children()} == children_before
+    assert not (tmp_path / basics.WRITE_PENDING_FILE).exists()
+
+
+@pytest.mark.parametrize("cancelled", [False, True], ids=["timeout", "cancel"])
+def test_interrupted_save_stops_worker_and_retains_recovery(
+    monkeypatch, tmp_path, capsys, cancelled
+):
+    monkeypatch.chdir(tmp_path)
+    basics.disable_writes(tmp_path, pending=True)
+    elapsed = [0]
+    monkeypatch.setattr(basics.time, "monotonic", lambda: elapsed[0])
+
+    class Process:
+        running = False
+        terminated = False
+        closed = False
+        exitcode = None
+
+        def start(self):
+            self.running = True
+
+        def is_alive(self):
+            return self.running
+
+        def join(self, timeout=None):
+            if self.running:
+                elapsed[0] += timeout
+                if cancelled:
+                    raise KeyboardInterrupt
+
+        def terminate(self):
+            self.terminated = True
+            self.running = False
+
+        def close(self):
+            self.closed = True
+
+    process = Process()
+    monkeypatch.setattr(
+        basics.multiprocessing,
+        "get_context",
+        lambda mode: SimpleNamespace(Process=lambda **kwargs: process),
+    )
+    assert basics.run_cli(["save", "--name", "People Support", "--logo", "logo.png"]) == 2
+
+    result = result_json(capsys)
+    assert process.terminated and process.closed
+    assert result["status"] == "unverified"
+    assert result["errorType"] == ("Cancelled" if cancelled else "Timeout")
+    assert result["properties"] == {"name": "unverified", "logo": "unverified"}
+    assert result["preservation"] == "unverified"
+    assert result["writesDisabled"] is True
+    assert "actual saved state" in result["message"]
+    assert (tmp_path / basics.WRITE_PENDING_FILE).is_file()
+    if not cancelled:
+        assert elapsed[0] == basics.SAVE_TIMEOUT_SECONDS
+
+
+def test_cli_reports_authentication_stage_before_waiting(cli, monkeypatch, capsys):
+    def stalled_authentication(*args, **kwargs):
+        progress = capsys.readouterr().err
+        assert '"stage": "authenticating"' in progress
+        assert "Complete sign-in" in progress
+        raise requests.Timeout("private service response")
+
+    monkeypatch.setattr(basics, "authenticate", stalled_authentication)
+    assert basics.main(["preview", "--name", "People Support"]) == 2
+    result = result_json(capsys)
+    assert result["status"] == "blocked"
+    assert "private service response" not in result["message"]
 
 
 @pytest.mark.parametrize(

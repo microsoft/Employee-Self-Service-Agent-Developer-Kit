@@ -3,7 +3,7 @@ name: agent-basics
 description: >-
   Read or customize a selected ESS agent's displayName and logo in ADK.
   Use for rename agent, change agent name, upload logo, change agent icon, and
-  independent or combined name/logo changes. Saves authoring metadata only;
+  independent or combined name/logo changes. Saves name/logo settings only;
   never publishes, deploys to Test, promotes to Prod or submits for approval.
 ---
 
@@ -39,15 +39,27 @@ name/icon update payloads. Instructions are outside this skill's scope.
   setup target-selection flow first. Recheck completed setup for that target
   before continuing. Never silently substitute an agent.
 - The helper checks live native identity, exact ESS product registry membership,
-  and, for ALM, both the selected card and explicit Dev configuration. Test and
-  Prod cannot be edited. These are quality gates in the same environment.
+  and, for ALM, both the selected Dev card and explicit Dev configuration.
+  Logo changes are Dev-authored only. Name-only changes may target Dev, Test
+  or Prod, with an independent name for each quality gate. Never copy a name
+  change to another gate automatically.
+- Use `--quality-gate dev|test|prod` to view or rename a quality gate; Dev is
+  the default. Preserve a gate explicitly requested by the maker and show it
+  before approval. Test/Prod targets are discovered from the selected Dev
+  agent's ALM siblings, then checked against the direct card, explicit realm
+  configuration, ALM-family ID, schema and fetched component identity. Never
+  infer a sibling from its name or schema suffix alone, change the selected
+  workspace, or silently fall back to Dev when a gate is unavailable.
+- A Test/Prod request containing a logo, including a combined name/logo
+  request, is blocked without writing either property. Explain that logos
+  must be authored in Dev; obtain a separate name-only proposal for Test/Prod.
 - Legacy DA-preview and custom-engine agents retain the existing compatible-kit
   handoff. Unknown products, unresolved identity and denied access are distinct
   failures; none permits a write. Do not offer a manual edit as successful ADK
   completion. This implementation authors native ESS Hub, HR and IT only:
   compatible-kit routing is not evidence that legacy authoring is implemented
   or validated. Do not add a speculative Dataverse fallback.
-- Name and logo may be changed independently or together. Keeping current
+- In Dev, name and logo may be changed independently or together. Keeping current
   settings, identical decoded images, cancellation and optional setup
   customization perform no service write.
 
@@ -82,9 +94,15 @@ not proof that AgentBuilder enforces the same limits on native authoring.
 | Property | Input |
 |---|---|
 | displayName | Nonblank, at most 30 Unicode characters; whitespace is preserved, not trimmed |
-| Logo source | Local, fully decodable single-frame PNG, exactly 192x192; saved as `BotEntity.iconBase64` |
+| Logo source | Local, fully decodable PNG, exactly 192x192; saved as `BotEntity.iconBase64` |
 | Derived icons | Owned by the platform; independent outline and 32x32 color-asset customization are not supported |
-| Local preview safeguards | At most 1 MiB per PNG and one frame, so ADK can bound local resource use and show the complete static proposal; neither is an asserted native service limit |
+
+Do not impose a file-byte limit or single-frame restriction that the referenced
+document does not state. Preserve the source bytes for multi-frame PNGs;
+validation and save verification account for every frame and animation timing.
+A still-image preview alone does not show the complete animation. Native
+service acceptance and preservation must still be established by the returned
+save and readback results, not assumed from local validation.
 
 If the target or requested value is ambiguous or missing, use a separate
 structured clarification with free-form input for a new `displayName` or
@@ -104,8 +122,12 @@ Collect a revised supported proposal instead of silently dropping the outline.
 An unread or invalid property must not be written. Explain what needs correcting
 and allow an independent valid/readable property to proceed in a separate
 preview, only with the maker's agreement. Never silently drop a combined request.
-Name-only saves use the existing metadata PUT, with the fetched logo fields
-unchanged. Do not inspect or preview images, collect image inputs, discuss
+Dev name-only saves use the existing metadata PUT, with the fetched logo fields
+unchanged. Test/Prod name-only saves use the supported ALM Configure API and
+change only the `botName` value in the selected realm's complete current values
+map. Flow/connection overrides are not submitted. Missing or inconsistent
+bindings block the operation; never fall back to a components PUT on Test/Prod.
+Do not inspect or preview images, collect image inputs, discuss
 service-side image processing, or ask for image-processing consent for a rename.
 The platform owns icon normalization and derived image fields; these are not
 part of rename validation or recovery. ADK itself does not resize or replace
@@ -119,17 +141,42 @@ local paths using the host shell's argument-escaping rules:
 
 ```text
 python scripts/agent_basics.py preview --name "People Support"
+python scripts/agent_basics.py preview --name "People Support Test" --quality-gate test
+python scripts/agent_basics.py preview --name "People Support" --quality-gate prod
 python scripts/agent_basics.py preview --logo "C:\branding\color.png"
 python scripts/agent_basics.py preview --name "People Support" --logo "C:\branding\color.png"
 ```
 
 Read `AGENT_BASICS_RESULT_JSON:` rather than inferring success from exit code.
+Reuse the setup-selected account and cached sign-in for preview and save.
+The command passes the setup-selected account to the existing shared
+authentication helper, which tries silent authentication when the cached
+account is unambiguous. Do not add
+`--select-account`, clear token caches, or ask the maker to sign in again
+merely because a new stage or command starts. Use `--select-account` only
+when the maker explicitly requests switching accounts. A missing or
+unusable cached sign-in or a service-required reauthentication can still
+require an interactive sign-in; never bypass that requirement.
+The command emits flushed `AGENT_BASICS_PROGRESS_JSON:` stage updates and
+15-second waiting updates. These are progress only, not verification or success.
+It stops its worker after two minutes for reads/previews or three minutes for a
+save, including sign-in and service retries. On a timeout, report the last stage
+and the returned diagnostic rather than waiting indefinitely. Do not start a
+second command while the first is running. If the maker cancels the chat, stop
+the running command before continuing; chat cancellation alone may leave it alive.
+An interrupted save is unverified: preserve the pending-write marker and follow
+reviewed recovery, never automatically retry it. A stopped preview made no save;
+a fresh preview can reuse the maker's inputs, but still requires new approval.
 If `writesDisabled` is true, keep this review read-only and use **Stop and
 reviewed recovery**; do not offer ordinary save approval.
 Show the selected product, tenant/environment, stable bot ID and authoring
 quality gate, actual current and proposed requested values, and retained
 non-image settings. For rename-only requests, show only the current and proposed
 name; do not make a logo-preservation guarantee.
+For Test/Prod, also show the returned concurrency limitation: configuration is
+refreshed before writing and verified afterwards, but ALM Configure has no
+client-revision precondition. Do not promise the Dev metadata PUT's protection
+against edits racing between that refresh and the service's own read.
 The displayName is not the ESS product identity.
 Quote displayName values with JSON escaping where needed so whitespace or
 nonprinting characters are not hidden in the current/proposed review.
@@ -154,8 +201,9 @@ In VS Code, use `vscode_askQuestions` with `allowFreeformInput: false` and
 those four choices, initially unselected. In other supported hosts, use the
 equivalent structured question tool. A dismissed question is not approval.
 
-The `reviewId` binds target, workspace selection, service snapshot, requested
-values and exact supplied source bytes. Do not compute or alter it.
+The `reviewId` binds target, quality gate, ALM family, workspace selection,
+service snapshot, requested values and exact supplied source bytes. Do not
+compute or alter it.
 On **Approve**, rerun the exact proposal with `save --approval REVIEW_ID`:
 
 ```text
@@ -163,10 +211,15 @@ python scripts/agent_basics.py save --name "People Support" --approval REVIEW_ID
 ```
 
 Retain `--logo` too for an approved logo/combined request.
-The helper re-reads identity, permissions and state, compares the reviewed
-digest and uses the fetched `BotEntity.version` in one protected metadata PUT.
-It preserves the fetched entity and sends no component changes. It never
-publishes. Do not bypass its checks or retry a PUT yourself.
+Retain the exact `--quality-gate` from the approved proposal. Approval for one
+gate does not approve any other gate; each gate-specific name needs its own
+preview and approval. The operation does not publish or promote to apply names.
+The helper re-reads identity, permissions and state and compares the reviewed
+digest. Dev uses the fetched `BotEntity.version` in one protected metadata PUT,
+preserving the entity and sending no component changes. Test/Prod refresh
+their configuration again and make one ALM Configure POST, preserving all
+unrequested values. Both paths verify the same gate afterwards and never
+publish. Do not bypass the checks or retry either write yourself.
 
 On `review_again`, the prior approval is invalid: clean up the old review,
 run a new preview, show refreshed state and require explicit approval again.
@@ -296,6 +349,11 @@ Service implementation evidence inspected at BotDesigner revision
 `TransactionHelpers.CreateBotEntityTransaction`'s exact entity-version conflict
 check. `TeamsManifestImageHelper.FixTeamsIconsIfRequired` retains a 192x192
 color icon with an explicit outline rather than generating one.
+For Test/Prod names, the inspected `AlmController.ConfigureAsync` and
+`AlmConfigureService.ConfigureExistingAgentAsync` provide the supported
+environment-specific `botName` path; components updates otherwise reject
+promoted-realm content changes. A successful live configuration update is not
+proof that a later deployment or publication preserves or exposes the name.
 Source inspection is not live tenant certification. Before release, complete
 the spec's EH-1 through EH-4 evidence per supported build/family: input/access
 denials, metadata races before refresh and at write, instruction preservation,
