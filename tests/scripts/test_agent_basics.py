@@ -966,15 +966,11 @@ def test_unenrolled_native_authoring_and_registry_identity(client):
 
 @pytest.mark.parametrize(
     "mutation",
-    ["card", "dev_id", "dev_schema", "fetched_id", "schema", "version", "components"],
+    ["card", "fetched_id", "schema", "version", "components"],
 )
 def test_identity_and_preservation_preconditions(client, mutation):
     if mutation == "card":
         client.card["botId"] = TARGET["tenant_id"]
-    elif mutation == "dev_id":
-        client.configuration["cdsBotId"] = TARGET["tenant_id"]
-    elif mutation == "dev_schema":
-        client.configuration["schemaName"] = "different"
     elif mutation == "fetched_id":
         client.state["bot"]["cdsBotId"] = TARGET["tenant_id"]
     elif mutation == "schema":
@@ -986,6 +982,69 @@ def test_identity_and_preservation_preconditions(client, mutation):
     with pytest.raises((basics.AgentBasicsError, ExistingDASetupError)):
         basics.prepare(client, TARGET, name="New Name")
     assert not client.writes
+
+
+@pytest.mark.parametrize("operation", ["name", "logo", "both"])
+def test_unpublished_enrolled_dev_branding_does_not_require_published_config(
+    client, logos, tmp_path, monkeypatch, operation
+):
+    def unpublished(*args):
+        raise AgentBuilderHTTPError("Dev realm configuration", 404)
+
+    monkeypatch.setattr(client, "get_dev_configuration", unpublished)
+    proposal = {}
+    if operation in ("name", "both"):
+        proposal["name"] = "People Support"
+    if operation in ("logo", "both"):
+        proposal.update(logos)
+    plan = basics.prepare(client, TARGET, **proposal)
+    assert plan["target"]["qualityGate"] == "dev"
+    assert not client.writes
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "saved"
+    assert result["preservation"] == "confirmed"
+    assert not result["writesDisabled"]
+    assert len(client.writes) == 1
+
+
+@pytest.mark.parametrize("quality_gate", ["test", "prod"])
+@pytest.mark.parametrize("status", [403, 404])
+def test_promoted_rename_still_requires_readable_published_dev_config(
+    monkeypatch, quality_gate, status
+):
+    family = QualityClient()
+
+    def unavailable(*args):
+        raise AgentBuilderHTTPError("Dev realm configuration", status)
+
+    monkeypatch.setattr(family, "get_dev_configuration", unavailable)
+    with pytest.raises(AgentBuilderHTTPError) as exc:
+        basics.prepare(family, TARGET, name="Support", quality_gate=quality_gate)
+    assert exc.value.status_code == status
+    assert not family.configuration_requests
+    assert not any(agent.writes for agent in family.gates.values())
+
+
+@pytest.mark.parametrize("quality_gate", ["test", "prod"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("cdsBotId", TARGET["tenant_id"]),
+        ("schemaName", "different"),
+        ("grsRepositoryId", ""),
+    ],
+)
+def test_promoted_rename_still_validates_dev_configuration_identity(
+    quality_gate, field, value
+):
+    family = QualityClient()
+    family.gates["dev"].configuration[field] = value
+    with pytest.raises((basics.AgentBasicsError, ExistingDASetupError)):
+        basics.prepare(family, TARGET, name="Support", quality_gate=quality_gate)
+    assert not family.configuration_requests
+    assert not any(agent.writes for agent in family.gates.values())
 
 
 def test_previews_and_cleanup_never_change_maker_sources(client, logos, tmp_path):

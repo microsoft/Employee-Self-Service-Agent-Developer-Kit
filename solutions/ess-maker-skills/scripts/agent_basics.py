@@ -361,7 +361,13 @@ def read_state(
     if not isinstance(card, dict):
         raise AgentBasicsError("The live agent identity is unreadable.")
     enrolled, realm = _confirm_direct_native_authoring_identity(agent_id, card)
-    if enrolled:
+    if enrolled and realm != "dev":
+        raise ExistingDASetupError(
+            "The selected setup target is not the Dev authoring agent."
+        )
+    if quality_gate != "dev":
+        if not enrolled:
+            raise AgentBasicsError("Test and Prod require an ALM-enrolled Dev source.")
         _progress("checking_dev_target")
         configuration = client.get_dev_configuration(agent_id)
         if not isinstance(configuration, dict):
@@ -369,9 +375,6 @@ def read_state(
         schema, family_id, realm = _confirm_dev(agent_id, card, configuration)
         if schema.casefold() != target["schema_name"].casefold():
             raise AgentBasicsError("Dev configuration and selected schema disagree.")
-    if quality_gate != "dev":
-        if not enrolled:
-            raise AgentBasicsError("Test and Prod require an ALM-enrolled Dev source.")
         agent_id, expected_schema, realm_configuration = _promoted_target(
             client, target, quality_gate, family_id
         )
@@ -410,7 +413,7 @@ def read_state(
         **target,
         "agent_id": agent_id,
         "schema_name": schema,
-        **({"alm_family_id": family_id} if enrolled else {}),
+        **({"alm_family_id": family_id} if family_id else {}),
         "product": product["productKey"],
         "qualityGate": realm if enrolled else "unenrolled authoring",
     }

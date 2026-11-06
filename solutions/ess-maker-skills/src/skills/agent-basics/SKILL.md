@@ -40,7 +40,12 @@ name/icon update payloads. Instructions are outside this skill's scope.
   setup target-selection flow first. Recheck completed setup for that target
   before continuing. Never silently substitute an agent.
 - The helper checks live native identity, exact ESS product registry membership,
-  and, for ALM, both the selected Dev card and explicit Dev configuration.
+  the selected Dev card, fetched bot ID/schema, and entity revision.
+  Dev name/logo authoring does not require a published Dev configuration:
+  ALM enrollment is separate from publication, and the configuration API may
+  return 404 until a Dev configuration has been published. Do not publish the
+  agent just to enable a Dev preview or save. For Test/Prod, the helper still
+  requires explicit Dev configuration and ALM-family validation.
   Logo changes are Dev-authored only. Name-only changes may target Dev, Test
   or Prod, with an independent name for each quality gate. Never copy a name
   change to another gate automatically. A rename synchronizes the selected
