@@ -62,6 +62,7 @@ _WORKDAY = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
 _CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
 _INSTRUCTIONS = _SOLUTION / ".github" / "copilot-instructions.md"
 _SETUP_PROMPT = _SOLUTION / ".github" / "prompts" / "setup.prompt.md"
+_CLI_SETUP_SKILL = _SOLUTION / ".github" / "skills" / "setup" / "SKILL.md"
 _PATH_RE = re.compile(r"`(src/skills/[^`]+?\.md)`")
 
 
@@ -72,6 +73,16 @@ def test_public_setup_routes_to_foundation_module() -> None:
     assert "src/skills/foundation-setup/SKILL.md" in instructions
     assert "src/skills/foundation-setup/SKILL.md" in prompt
     assert "Do not route directly to `src/skills/onboarding/SKILL.md`" in prompt
+
+
+def test_cli_setup_skill_runs_the_same_foundation_flow() -> None:
+    """The CLI's "run setup" must reach the same entry as VS Code's `/setup`;
+    going straight to onboarding skips environment creation and ESS install."""
+
+    text = " ".join(_CLI_SETUP_SKILL.read_text(encoding="utf-8").split())
+
+    assert "src/skills/foundation-setup/SKILL.md" in text
+    assert "Do not route directly to `src/skills/onboarding/SKILL.md`" in text
 
 
 def test_first_run_gate_is_fre_aware_for_the_environment_owner() -> None:
