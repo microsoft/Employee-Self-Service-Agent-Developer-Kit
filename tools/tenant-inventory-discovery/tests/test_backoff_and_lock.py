@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 
@@ -163,3 +164,84 @@ def test_a_reclaim_leaves_no_temp_files_behind(tmp_path):
     lock.acquire("tenant-1", "R1")
     lock.acquire("tenant-1", "R2")
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_two_runs_reclaiming_one_expired_lock_produce_one_winner(tmp_path, monkeypatch):
+    """Reclaiming an expired lock must stay single-flight under contention.
+
+    The interleaving that breaks replace-then-read-back: both runs read the same expired
+    lock, then each replace lands after the other's read-back, so both see their own
+    token and both proceed. The barrier forces exactly that when both runs reach the
+    replace; with the read-decide-write guarded, the second never gets there.
+    """
+    FileRunLock(tmp_path, ttl_seconds=-1).acquire("tenant-1", "crashed")  # expired leftover
+    lock = FileRunLock(tmp_path, ttl_seconds=3600)
+    both_reading = threading.Barrier(2, timeout=0.5)
+    real_replace = os.replace
+
+    def contended_replace(src, dst):
+        if str(dst).endswith(".lock"):
+            try:
+                if both_reading.wait() == 0:
+                    time.sleep(0.2)  # land after the other contender's read-back
+            except threading.BrokenBarrierError:
+                pass  # serialized: the other contender never reached its replace
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", contended_replace)
+    won: list[str] = []
+    lost: list[str] = []
+
+    def attempt(token: str) -> None:
+        try:
+            lock.acquire("tenant-1", token)
+        except RunLockError:
+            lost.append(token)
+        else:
+            won.append(token)
+
+    threads = [threading.Thread(target=attempt, args=(t,)) for t in ("R1", "R2")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert len(won) == 1, f"expected exactly one winner, got {won}"
+    assert len(lost) == 1
+    holder = json.loads(next(tmp_path.glob("*.lock")).read_text(encoding="utf-8"))
+    assert holder["token"] == won[0]
+
+
+def test_a_lapsed_owner_cannot_release_its_successors_lock(tmp_path, monkeypatch):
+    """Release shares the guard, so it cannot interleave with a takeover in flight.
+
+    Unguarded, R1's release can read its own (expired) token just before R2 replaces
+    it, then delete R2's fresh lock. Guarded, R1 waits for the takeover -- giving up
+    with RunLockError when the guard is held too long, rather than hanging -- and a
+    release after the takeover sees R2's token and leaves the lock alone.
+    """
+    FileRunLock(tmp_path, ttl_seconds=-1).acquire("tenant-1", "R1")  # R1's lock lapsed
+    lock = FileRunLock(tmp_path, ttl_seconds=3600, guard_timeout_seconds=0.1)
+    mid_takeover, finish = threading.Event(), threading.Event()
+    real_replace = os.replace
+
+    def paused_replace(src, dst):
+        if str(dst).endswith(".lock"):
+            mid_takeover.set()
+            finish.wait(timeout=5)
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", paused_replace)
+    takeover = threading.Thread(target=lock.acquire, args=("tenant-1", "R2"))
+    takeover.start()
+    try:
+        assert mid_takeover.wait(timeout=5)
+        with pytest.raises(RunLockError):
+            lock.release("tenant-1", "R1")
+    finally:
+        finish.set()
+        takeover.join(timeout=5)
+
+    lock.release("tenant-1", "R1")  # no longer R1's, so a no-op
+    holder = json.loads(next(tmp_path.glob("*.lock")).read_text(encoding="utf-8"))
+    assert holder["token"] == "R2"
