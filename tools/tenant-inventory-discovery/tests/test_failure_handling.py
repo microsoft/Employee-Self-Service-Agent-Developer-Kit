@@ -21,6 +21,7 @@ from tenant_inventory_discovery.config import DiscoveryConfig
 from tenant_inventory_discovery.discovery_skill import DiscoverySkill
 from tenant_inventory_discovery.errors import PlatformError
 from tenant_inventory_discovery.models import Kind
+from tenant_inventory_discovery.platform_clients import Page
 from tenant_inventory_discovery.runner import DiscoveryRunner
 
 
@@ -75,21 +76,25 @@ class TestAPartialCrawlPreservesData:
     def test_a_mid_enumeration_failure_still_preserves_the_kind(self, inventory):
         """Failing on page two is the nastiest case: some rows were seen, not all."""
         DiscoverySkill(build_platform(), inventory).discover("t1")
+        before = inventory.active_keys()
 
         broken = build_platform()
-        calls = {"n": 0}
         original = broken.list_connections
 
         def flaky(env_id, page_size):
             for page in original(env_id, page_size):
-                calls["n"] += 1
-                yield page
+                # Non-final, so drain() asks for page two and hits the failure. A final
+                # page would end paging first, and the crawl would simply succeed.
+                yield Page(items=page.items, is_last=False)
                 raise PlatformError("token expired mid-page")
 
         broken.list_connections = flaky
-        DiscoverySkill(broken, inventory).discover("t1")
+        summary = DiscoverySkill(broken, inventory).discover("t1")
 
-        assert inventory.get(Kind.CONNECTION, f"{ENV_A}:c-1").state == "Active"
+        conn_reports = [s for s in summary.scopes if s.scope.kind is Kind.CONNECTION]
+        assert conn_reports
+        assert all(not r.complete and r.error for r in conn_reports)
+        assert inventory.active_keys() == before
 
 
 class TestACrashWritesNothing:
