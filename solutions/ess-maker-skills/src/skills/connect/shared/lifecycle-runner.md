@@ -782,7 +782,7 @@ For every non-completing ServiceNow row with status `Blocked`, `Error`,
 `Failed`, `NotConfigured`, or `Warning`, require the returned remediation to
 contain these literal headings: `**Problem**`, `**Category**`, `**Owner**`,
 `**Where**`, `**Values to use**`, `**Action**`, `**Success**`, and
-`**Recheck and resume**`. Render the whole remediation in the same visible
+`**Check again and resume**`. Render the whole remediation in the same visible
 row or question. If a heading is absent, stop as an execution-contract error
 rather than showing an incomplete generic handoff. This validation applies
 equally on first execution, completed-phase re-verification, and resume.

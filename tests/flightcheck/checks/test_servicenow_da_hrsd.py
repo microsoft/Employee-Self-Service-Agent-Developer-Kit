@@ -42,7 +42,7 @@ _RECOVERY_HEADINGS = (
     "**Values to use**",
     "**Action**",
     "**Success**",
-    "**Recheck and resume**",
+    "**Check again and resume**",
 )
 
 
