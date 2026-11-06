@@ -12,7 +12,6 @@ import pytest
 
 from planner.capture import detect_config_artifacts, read_config
 from planner.sync import to_remote_output
-from setup_state import JsonSetupStateRepository, SetupState, SetupWorkflow
 
 SOLUTION = Path(__file__).resolve().parents[3] / "solutions" / "ess-maker-skills"
 sys.path.insert(0, str(SOLUTION / "src" / "mcp" / "agentconfig_core"))
@@ -31,19 +30,12 @@ def _agent(**overrides):
     }
 
 
-@pytest.mark.parametrize("source", ["explicit", "foundation", "existing"])
+@pytest.mark.parametrize("source", ["explicit", "existing"])
 def test_setup_metadata_can_be_consumed_by_real_completion_validator(tmp_path, monkeypatch, source):
     monkeypatch.chdir(tmp_path)
     agent = _agent()
     if source == "explicit":
         agent["environmentId"] = "test-environment"
-    elif source == "foundation":
-        state = SetupState()
-        SetupWorkflow.set_scope(
-            state, environment_id="test-environment", environment_name="Test",
-            environment_type="Dev", tenant_endpoint=agent["url"],
-        )
-        JsonSetupStateRepository(tmp_path / ".local" / "setup" / "config.json").save(state)
     else:
         (tmp_path / ".local").mkdir()
         (tmp_path / ".local" / "config.json").write_text(json.dumps({

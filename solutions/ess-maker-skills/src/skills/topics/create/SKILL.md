@@ -2,6 +2,12 @@
 
 This skill guides the user through creating a new Copilot Studio topic.
 
+This skill is local-only. Do not create or modify Dataverse template
+configurations and skip every push, publish, or server-backed validation
+instruction. Finish by saying
+the local topic is ready and DA-GA deployment is not yet available. Do not
+offer to test the new topic because it is not deployed.
+
 ## Rules
 
 - Do NOT run terminal commands or scripts. Use built-in file reading and writing tools only.
@@ -243,14 +249,6 @@ let the maker decide; never refuse to proceed or treat a finding as a hard
 failure. Do NOT continue to 6.6 until the review has run and its report is
 displayed.
 
-**Exception — invoked by the Workday setup flow.** When this skill is being run
-as the P6.1 authoring delegation of
-`src/skills/setup/workday/create-new-topic.md`, **do NOT run this review sub-step
-at all**. The tenant reference IDs aren't wired yet at that point, so a review
-now would false-flag unresolved placeholders; the setup flow runs its one and
-only topic review after the wiring is verified (its S6.3). Run this review
-normally only when `/create` is invoked directly by the maker.
-
 1. Invoke the review by calling `runSubagent` (the VS Code Copilot Chat tool) —
    do not run its detectors yourself. Point the subagent to read
    `src/skills/topics/review/SKILL.md` as its first action, and tell it this is a
@@ -338,7 +336,8 @@ python scripts/validate.py "<flow name>"
 After the topic is pushed and verified:
 
 - "Want to define what 'correct' means for this topic? Run `evaluations/create` to author its evaluation cases — the customer-facing scenarios, including failure handling, the topic must satisfy."
-- "Want to check it works? I can drive **{TopicName}** now and exercise its happy path and failure handling."
+- Unless the workspace uses AgentBuilder, ask: "Want to check it works? I can drive **{TopicName}** now and exercise its happy path and failure handling."
   - On yes: read `src/skills/topics/test/SKILL.md` and run its debug-and-validate loop **scoped to {TopicName}** — you already know the component (you just created this topic), so **skip the "topic or workflow?" question**, and reuse the signed-in test-pane session if one is already open (only do the launch → sign-in handoff if no browser is ready). Build the probe set (failure paths first) for {TopicName} and drive it.
+- For AgentBuilder, say runtime testing is deferred because the local topic is not deployed.
 - "Would you like to create another topic?"
 - "Type `/menu` to see other options."

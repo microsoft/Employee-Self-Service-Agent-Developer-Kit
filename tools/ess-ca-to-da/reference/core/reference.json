@@ -1,0 +1,10 @@
+{
+  "vertical": "core",
+  "vendored_utc": "2026-09-18T20:07:43+00:00",
+  "ess_root": "C:\\ESSVivaCopilot\\sources\\dev",
+  "da_agent_folder": "gptagent_copilotforemployeeselfservicecore",
+  "template_version": "1.0.0",
+  "package_type": "templated",
+  "publisher": "microsoftfirstparty",
+  "baseline_components": 7
+}

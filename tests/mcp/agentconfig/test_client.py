@@ -180,7 +180,7 @@ def test_open_tools_select_the_production_server_fields(monkeypatch) -> None:
         "titleId,name,icon",
         "titleId,branding",
         "titleId,quickLinksConfig",
-        "titleId,pivots",
+        "titleId,schemaName,pivots",
     ]
 
 
@@ -220,10 +220,8 @@ def test_api_error_uses_top_level_code_message_and_http_status(monkeypatch) -> N
 
 def test_create_agent_config_retries_on_ambiguous_5xx(monkeypatch) -> None:
     # The landing-page creates carry no idempotency key, yet a titleId-keyed
-    # EmployeeAgents POST is convergent (same titleId => same row), so after the
-    # PR #251 retry inversion an unkeyed create defaults to retry-safe. This
-    # pins that a 503 is transparently retried rather than surfaced -- the
-    # pre-planner behaviour the neutral core must preserve.
+    # EmployeeAgents POST is convergent (same titleId => same row), so the call
+    # remains retry-safe when a transient gateway response is ambiguous.
     async def _no_sleep(_seconds: float) -> None:
         return None
 

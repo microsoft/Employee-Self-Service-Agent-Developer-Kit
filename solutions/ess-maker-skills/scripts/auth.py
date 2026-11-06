@@ -14,7 +14,7 @@ import re
 import sys
 import stat
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 try:
     import msal
@@ -169,7 +169,9 @@ def discover_tenant(env_url):
         verify=True,
     )
     auth_header = resp.headers.get("WWW-Authenticate", "")
-    match = re.search(r"login\.microsoftonline\.com/([^/]+)", auth_header)
+    match = re.search(
+        r"login\.microsoftonline\.com/([^/,\s\"?]+)", auth_header, re.IGNORECASE
+    )
     if match:
         return match.group(1)
     return "organizations"
@@ -194,7 +196,12 @@ def _dataverse_accepts_token(env_url, token):
     return resp.status_code != 401
 
 
-def authenticate(env_url):
+def authenticate(
+    env_url,
+    preferred_username=None,
+    *,
+    return_account_identity=False,
+):
     """Get a Dataverse access token via MSAL interactive browser auth.
 
     Uses a token cache so repeat runs within the same session don't re-prompt.
@@ -215,11 +222,23 @@ def authenticate(env_url):
         CLIENT_ID, authority=authority, token_cache=cache
     )
 
-    # Try silent first (cached token from previous run)
+    # Try silent first (cached token from previous run).
     accounts = app.get_accounts()
+    preferred = str(preferred_username or "").casefold()
+    selected_account = next(
+        (
+            account
+            for account in accounts
+            if str(account.get("username") or "").casefold() == preferred
+        ),
+        accounts[0] if accounts and not preferred else None,
+    )
     result = None
-    if accounts:
-        result = app.acquire_token_silent([scope], account=accounts[0])
+    authenticated_account = None
+    if selected_account:
+        result = app.acquire_token_silent([scope], account=selected_account)
+        if result and "access_token" in result:
+            authenticated_account = selected_account
 
     if (
         result
@@ -231,19 +250,24 @@ def authenticate(env_url):
             env_url,
             cache=cache,
             app=app,
-            account=accounts[0],
+            account=selected_account,
         )
         app = msal.PublicClientApplication(
             CLIENT_ID, authority=authority, token_cache=cache
         )
         result = None
+        authenticated_account = None
 
     if not result or "access_token" not in result:
         print(f"Opening browser for sign-in (tenant: {tenant})...")
         print("Please select the account that has access to this environment.")
-        result = app.acquire_token_interactive(
-            [scope], prompt="select_account"
+        interactive_options = (
+            {"login_hint": preferred_username}
+            if preferred_username
+            else {"prompt": "select_account"}
         )
+        result = app.acquire_token_interactive([scope], **interactive_options)
+        authenticated_account = None
 
     if "access_token" not in result:
         # Don't echo error_description - it can include tenant IDs and
@@ -257,6 +281,12 @@ def authenticate(env_url):
     # MSAL refresh tokens; default umask (0o644) would expose them to other
     # users on shared dev VMs.
     _persist_token_cache(cache, cache_path)
+    claims = result.get("id_token_claims", {}) or {}
+    authenticated_username = (
+        claims.get("preferred_username")
+        or claims.get("upn")
+        or (authenticated_account or {}).get("username")
+    )
 
     # Record the tenant + start a telemetry session. No developer identity is
     # collected; active-install counts dedupe on a random instance_id.
@@ -264,9 +294,7 @@ def authenticate(env_url):
     try:
         import adk_telemetry
 
-        claims = result.get("id_token_claims", {}) or {}
         tenant_id = claims.get("tid", "") or tenant
-        adk_telemetry.maybe_print_notice()
         # Resolve the tenant's display name via a SILENT-ONLY Graph token
         # BEFORE emitting adk.session.start, so the very first ADK event on a
         # fresh install carries tenant_name (instead of blank until FlightCheck
@@ -290,6 +318,8 @@ def authenticate(env_url):
     except Exception:  # noqa: BLE001 — telemetry must never break auth
         pass
 
+    if return_account_identity:
+        return result["access_token"], authenticated_username
     return result["access_token"]
 
 
@@ -418,10 +448,12 @@ def get_flow_token(env_url):
     return result["access_token"]
 
 
-def query_all(env_url, token, entity_set, select, filter_expr=None):
+def query_all(env_url, token, entity_set, select, filter_expr=None, *, strict_collection=False):
     """Query a Dataverse table with automatic @odata.nextLink pagination.
 
-    Returns all records across all pages.
+    Returns all records across all pages. With strict_collection, malformed
+    records, continuations and repeated pages raise ValueError rather than
+    admitting an incomplete inventory.
     """
     _validate_https_url(env_url)
     headers = {**HEADERS_BASE, "Authorization": f"Bearer {token}"}
@@ -430,6 +462,8 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
         url += f"&$filter={quote(filter_expr, safe='')}"
 
     all_records = []
+    collection_url = urlsplit(url)
+    seen_urls = set()
     page = 0
     _start = time.perf_counter()
     while url:
@@ -443,7 +477,33 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
             # api-error metrics alongside create/update/delete/get failures.
             _emit_api_call(entity_set, "read", _start, status=resp.status_code)
         raise_api_error(resp, resource_name=entity_set, operation="read")
-        data = resp.json()
+        try:
+            data = resp.json()
+            if strict_collection:
+                if (
+                    not isinstance(data, dict)
+                    or not isinstance(data.get("value"), list)
+                    or any(not isinstance(record, dict) for record in data["value"])
+                ):
+                    raise ValueError(f"{entity_set} returned an invalid collection.")
+                seen_urls.add(url)
+                next_link = data.get("@odata.nextLink")
+                if next_link is not None:
+                    if not isinstance(next_link, str) or not next_link.strip():
+                        raise ValueError(f"{entity_set} returned an invalid continuation.")
+                    continuation = urlsplit(next_link)
+                    if (
+                        continuation.scheme != "https"
+                        or continuation.netloc.casefold() != collection_url.netloc.casefold()
+                        or continuation.path != collection_url.path
+                        or continuation.fragment
+                    ):
+                        raise ValueError(f"{entity_set} returned an invalid continuation.")
+                    if next_link in seen_urls:
+                        raise ValueError(f"{entity_set} returned a repeated continuation.")
+        except ValueError as exc:
+            _emit_api_call(entity_set, "read", _start, error=exc)
+            raise
         records = data.get("value", [])
         all_records.extend(records)
         url = data.get("@odata.nextLink")
@@ -803,3 +863,36 @@ def load_config():
         )
         sys.exit(1)
     return cfg
+
+
+def is_connect_ready():
+    """Return readiness for the active locally configured DA agent."""
+    state_path = os.path.join(LOCAL_STATE_DIR, "setup", "config.json")
+    config_path = os.path.join(LOCAL_STATE_DIR, "config.json")
+    if not os.path.exists(state_path) or not os.path.exists(config_path):
+        return False
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            "ERROR: Could not read DA workspace state at "
+            f"{state_path} and {config_path}: "
+            f"{exc}. Run /setup again."
+        )
+        sys.exit(1)
+    if state.get("schema_version") != 4:
+        return False
+    agents = state.get("agents")
+    active_slug = config.get("activeAgent")
+    if not isinstance(agents, dict) or not isinstance(active_slug, str):
+        return False
+    return any(
+        isinstance(agent_state, dict)
+        and isinstance(agent_state.get("agent"), dict)
+        and agent_state["agent"].get("workspace_slug") == active_slug
+        and agent_state.get("connect_ready") is True
+        for agent_state in agents.values()
+    )

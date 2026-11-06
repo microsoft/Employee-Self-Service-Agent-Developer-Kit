@@ -88,6 +88,7 @@ def _make_runner(pp_admin):
         env_id="env-deeplinks",
         env_url="https://example.crm.dynamics.com",
         dv_token="fake-token",
+        ring="test",
     )
 
 

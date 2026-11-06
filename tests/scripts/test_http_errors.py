@@ -111,9 +111,8 @@ class TestApiErrorMessages:
         assert "version" in err._tip.lower()
 
     def test_401_message_includes_http_401(self) -> None:
-        # test_preferred_solution.py asserts ``"401" in r.result`` where
-        # r.result is ``str(AuthExpiredError)``. Pin that "401" stays in
-        # the friendly message so the assertion keeps holding.
+        # Callers surface this shared exception directly. Keep the HTTP
+        # status in the friendly message so the failure stays actionable.
         err = APIError(_fake_response(401))
         assert "401" in err._friendly_message
         assert "expired" in err._friendly_message.lower()
@@ -343,7 +342,7 @@ class TestAuthExpiredErrorSubclassing:
             raise AuthExpiredError()
 
     def test_default_message_includes_http_401(self) -> None:
-        # test_preferred_solution.py:369 asserts ``"401" in r.result``.
+        # Keep the HTTP status visible when callers surface the exception.
         from auth import AuthExpiredError
         err = AuthExpiredError()
         assert "401" in str(err)

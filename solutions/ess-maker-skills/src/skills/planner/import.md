@@ -207,25 +207,28 @@ adding — grouped by scenario, each with the role that owns it:
 > Want me to add these tasks?
 >
 > **Profile updates (Workday)**
-> - Connect Workday to the environment — several grounded, role-owned steps (SSO,
->   tenant config, pack + connect, firewall, first topic)
+> - Connect Workday to the ESS HR agent — several grounded, role-owned steps
+>   (readiness check, Microsoft Entra sign-in, Workday tenant configuration,
+>   connections and validation)
 > - Add profile-write governance sign-off — *Security / Privacy*
 
 Only on a **yes**, add each as a **real, grounded** task. Workday connect is
 multi-role — DON'T collapse it into one coarse "connect" task. Emit the attestable
-role-boundary rows from `setup/workday/tasks.md`; the interview already produced the
-environment + base agent, so skip the two foundation groups:
+role-boundary rows from the Workday planning reference
+(`src/skills/planner/systems/workday.md`); the interview already produced the
+environment + ESS HR agent, so skip the two foundation groups:
 
 ```
 python scripts/planner/cli.py setup-tasks --system workday --commands --skip-foundation
 ```
 
 Paste the printed `add-task` lines verbatim — they arrive already role-mapped and
-streamed: SSO (Cloud Application Administrator), tenant config (Workday
-administrator), pack + connect (Environment Maker), firewall allowlist (Network
-Administrator), first topic (Environment Maker). Then add the profile-write
-governance sign-off the checklist doesn't cover; its owner (Security / Privacy) isn't
-an attestable role, so leave it unassigned and let Phase 4 assign the person:
+streamed: readiness check (Environment Maker), Microsoft Entra sign-in (Cloud
+Application Administrator), Workday tenant configuration (Workday administrator),
+and connections, runtime, and validation (Environment Maker). Then add the
+profile-write governance sign-off the reference doesn't cover; its owner
+(Security / Privacy) isn't an attestable role, so leave it unassigned and let
+Phase 4 assign the person:
 
 ```
 python scripts/planner/cli.py add-task --id workday-profile-signoff --title "Profile-write governance sign-off" --description "Security/Privacy sign-off before enabling Workday profile writes" --consumes workdayConnection --produces workdayWriteSignoff

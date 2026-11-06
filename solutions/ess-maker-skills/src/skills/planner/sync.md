@@ -392,17 +392,16 @@ token, so:
   plain language ("you hold the Power Platform admin role") — **never ask "which
   role(s) do you hold?"**.
 - **Call out a first-run setup plainly.** If what comes back includes the caller's
-  **setup task** (the one that stands up the environment) ready to execute and no
-  environment is on the plan yet, that is their first step — they can stand up the
-  environment **either manually in Copilot Studio or by running `/setup`**, and
-  **`/setup` is the recommended, guided path**, so point them there **now** (their
-  first-run experience).
-  `task-brief --task <setupTaskId>` flags this as the first-run setup. When they
-  return having run it, capture what
-  it produced (`src/skills/planner/capture.md`); and if the ESS agent install was
-  blocked so `/setup` couldn't finish, still persist the environment they created
-  (same file → *When `/setup` is blocked before it records the environment*) so
-  the plan carries it for everyone, while the setup task stays open.
+  **setup task** (the one that produces the environment) ready to execute and no
+  environment is on the plan yet, that is their first step (their first-run
+  experience): create or choose the environment in the Power Platform admin
+  center **now**. `/setup` shows those steps but never creates an environment.
+  `task-brief --task <setupTaskId>` flags this as the first-run setup. Then pin
+  its verified environment ID (`src/skills/planner/capture.md` → *When the
+  environment exists before `/setup` records it*) so the plan carries it for
+  everyone, and each maker's `/setup` targets that environment. An
+  environment-only task can then complete; a combined task stays open until
+  `/setup` records the agent.
 - **On failure, walk the sign-in ladder at the top of this file** and nothing
   else: a 401 → one MCP restart + one retry → then local; any other failure, or
   an unreachable service → local. A rejected call is **never** a cue to start

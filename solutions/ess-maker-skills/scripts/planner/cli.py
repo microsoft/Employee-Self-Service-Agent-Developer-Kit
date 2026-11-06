@@ -631,9 +631,10 @@ def cmd_task_brief(args: argparse.Namespace) -> int:
         print(f"  Not ready to start — waiting on {brief['blockingReason']}")
     if brief.get("firstRunSetup"):
         print(
-            "  First-run setup: this plan needs its Power Platform environment "
-            "stood up. You can set it up manually in Copilot Studio, or run /setup "
-            "to decide or create it — running /setup is the recommended path."
+            "  First-run setup: this plan needs its Power Platform environment. "
+            "Create or choose it in the Power Platform admin center (/setup does "
+            "not create environments), then pin its environment ID to this task, "
+            "or run /setup into it and capture the result."
         )
     nudge = brief.get("kitSetup")
     if nudge:
@@ -714,8 +715,9 @@ def cmd_research(args: argparse.Namespace) -> int:
 
 
 def cmd_setup_tasks(args: argparse.Namespace) -> int:
-    """Emit the grounded, attestable-mapped Tasks a system's setup checklist
-    decomposes into (Phase 3, model.md). Read-only and plan-free — it never
+    """Emit the grounded, attestable-mapped Tasks a system's planning reference
+    (``src/skills/planner/systems/<system>.md``) decomposes into (Phase 3,
+    model.md). Read-only and plan-free — it never
     touches the plan; the skill runs it, reviews the rows, then feeds them to
     ``add-task``. Default output is JSON; ``--commands`` prints copy-paste
     ``add-task`` lines."""
@@ -806,11 +808,12 @@ def cmd_setup_status(args: argparse.Namespace) -> int:
 
     Serves two callers that must not parse ``plan.json`` themselves:
 
-    * the ``/setup`` skill's cross-persona **environment-reuse offer** — once the
-      admin's setup task has pinned ``primaryEnvironment``, every other maker's
-      First-Run ``/setup`` can offer that same environment instead of asking them
-      to pick one. ``/setup`` stays plan-*unaware*: it only reads this status and
-      never writes the plan.
+    * the ``/setup`` skill's **plan-environment hook** — once the Power Platform
+      admin's environment task has pinned ``primaryEnvironment``, every maker's
+      ``/setup`` targets that same ``environment.environmentId`` instead of asking
+      them to pick one, and offers "Plan my ESS rollout first" only while
+      ``hasPlan`` is false. ``/setup`` stays plan-*unaware*: it only reads this
+      status and never writes the plan.
     * the ``/planner`` reconcile **guard** — on resume / "what am I assigned?",
       the planner folds a finished FRE setup into the plan via
       ``capture-setup --complete`` ONLY while ``setupTaskOpen`` is true, so the
@@ -830,10 +833,11 @@ def cmd_setup_status(args: argparse.Namespace) -> int:
         env = plan.output("provisionedEnvironment")
     env_attrs = (env.get("attributes") or {}) if env else {}
     # An Environment artifact may carry only an environmentId and no org URL
-    # (e.g. a plan synced from the planner service). The /setup reuse path feeds
-    # this value straight into ENV_URL, so advertise the environment as reusable
-    # only when a non-empty URL is actually present — otherwise the offer would
-    # build requests against an empty endpoint.
+    # (e.g. a plan synced from the planner service, or captured from guided DA
+    # setup, which records no dataverseEndpoint). ``environmentPinned`` stays
+    # URL-based for callers that need an org endpoint; the /setup plan hook keys
+    # on ``environment.environmentId``, so an ID-only environment still targets
+    # the plan's environment.
     env_url = (env_attrs.get("environmentUrl") or "").strip()
     status = {
         "hasPlan": plan is not None,
@@ -1267,14 +1271,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "setup-tasks",
-        help="decompose a system's setup checklist into grounded, attestable tasks",
+        help="decompose a system's planning reference into grounded, attestable tasks",
     )
     p.add_argument("--system", default="workday",
-                   help="setup system whose checklist to decompose (default: workday)")
+                   help="system whose planning reference to decompose (default: workday)")
     p.add_argument("--skip-foundation", action="store_true",
                    help="drop the shared foundation groups (Power Platform environment + "
-                        "ESS base agent) already produced by the backbone 'Set up the "
-                        "environment' (/setup) task")
+                        "ESS HR agent) already produced by the backbone /setup task")
     p.add_argument("--commands", action="store_true",
                    help="print copy-paste add-task command lines instead of JSON")
     p.set_defaults(func=cmd_setup_tasks)
@@ -1369,9 +1372,9 @@ def main(argv: list[str] | None = None) -> int:
     # into.
     #
     # Every CLI call counts: one /planner conversation runs this CLI many times,
-    # and the `setup-status` / `capture-discover` calls made by /setup,
-    # onboarding and /discover count as planner usage too. This is the ONLY
-    # planner emit — SKILL.md has no scripts/emit_capability.py step, because
+    # and the `setup-status` / `capture-discover` calls made by /setup and
+    # /discover count as planner usage too. This is the ONLY planner emit —
+    # SKILL.md has no scripts/emit_capability.py step, because
     # emit_capability_use() does not dedupe and the two would double-count.
     try:
         import adk_telemetry

@@ -1,6 +1,5 @@
 {
   "git.openRepositoryInParentFolders": "never",
-  "workbench.startupEditor": "none",
   "chat.agent.thinkingStyle": "collapsed",
   "chat.agent.thinking.collapsedTools": "always",
   "chat.experimental.persistentProgress": "off",

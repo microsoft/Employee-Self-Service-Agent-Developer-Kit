@@ -1,0 +1,39 @@
+[project]
+name = "ess-ca-to-da"
+version = "0.1.0"
+description = "Migrate ESS Custom Engine Agent (Dataverse) customizations onto the ESS Declarative Agent (ALM package)."
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28.1",
+    "msal>=1.37.0",
+    "ruamel.yaml>=0.18.0",
+]
+
+[project.scripts]
+ess-ca-to-da = "essmig.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = "msal"
+ignore_missing_imports = true

@@ -59,7 +59,7 @@ class _FakePPAdmin:
 def _runner(pp_admin):
     return SimpleNamespace(
         pp_admin=pp_admin, env_id="env-guid",
-        env_url="https://example.crm.dynamics.com", dv_token="t",
+        env_url="https://example.crm.dynamics.com", dv_token="t", ring="test",
     )
 
 
@@ -110,3 +110,31 @@ def test_env_001_fails_on_api_error():
     assert env001.status == "Failed"
     assert "Unable to query environment" in env001.result
     assert "Power Platform Administrator role" in env001.remediation
+
+
+def test_missing_pp_admin_emits_deterministic_environment_rows():
+    results = _run(None)
+
+    env001 = _by_id(results, "ENV-001")
+    env002 = _by_id(results, "ENV-002")
+
+    assert env001.status == "Skipped"
+    assert env002.status == "Skipped"
+    assert "AttributeError" not in env001.result
+    assert "AttributeError" not in env002.result
+
+
+def test_profile_execution_does_not_duplicate_preferred_solution():
+    from flightcheck.checks.environment import (
+        run_environment_checks,
+        run_preferred_solution_check,
+    )
+
+    runner = _runner(_FakePPAdmin())
+    runner.execution_targets = ("ENV-001", "ENV-002", "ENV-009")
+
+    results = [
+        *run_environment_checks(runner),
+        *run_preferred_solution_check(runner),
+    ]
+    assert [row.checkpoint_id for row in results].count("ENV-009") == 1

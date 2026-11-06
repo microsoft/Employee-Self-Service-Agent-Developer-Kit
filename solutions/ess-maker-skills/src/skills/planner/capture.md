@@ -13,13 +13,13 @@ ways to fill a value:
 ## (a) Observe — read it from what the action changed
 
 Preferred for kit-skill Tasks that leave a signal. The canonical case is the
-setup hand-off: after `/setup` runs foundation setup and workspace binding,
-it **records ids + names into `.local/config.json`** — the environment it
-connected to (id/URL), the agent it clones into the workspace (`botId`,
-`schemaName`, name, folder/slug), and anything else the run wrote. It doesn't
-describe provisioning by itself; foundation setup owns that. `capture-setup` is **generic**: it diffs the whole
-`config.json` and pins **every** id + name (and any other artifact a skill
-recorded), not just a single value:
+setup hand-off: when `/setup` finishes creating or connecting the ESS agent, it
+**records ids + names into `.local/config.json`** — the environment it selected
+(its `environmentId`), the agent it creates or connects and brings into the
+workspace (`botId`, `schemaName`, name, folder/slug), and anything else the run
+wrote. `/setup` selects an environment but never creates one. `capture-setup` is
+**generic**: it diffs the whole `config.json` and pins **every** id + name (and
+any other artifact a skill recorded), not just a single value:
 
 ```
 python scripts/planner/cli.py capture-setup --complete
@@ -32,23 +32,24 @@ task's **declared output key**, including when `--task` is supplied; `--key` is 
 explicit override, not required for provisioning. `setup-status` reports the
 selected `setupTaskId` and `setupEnvironmentKey`. Do not relabel a provisioned
 environment as a completed workspace binding. **You (the
-planner) run this after `/setup` returns** — the setup/onboarding handoff returns
-control here; `setup.py` itself does not update the plan. Confirm the detected
+planner) run this after `/setup` returns** — the setup handoff returns control
+here; `/setup` itself never writes the plan. Confirm the detected
 values with the assignee and invoke
 `capture-setup` yourself (use `--dry-run` first to preview, then re-run to pin).
 
 This reads the current `.local/config.json` and prints **every** artifact it will
-pin from what changed — e.g. an `Environment` (the `environmentId` + URL), an
-`Agent` (the cloned agent's `botId`, `schemaName`, name, folder), and any other
+pin from what changed — e.g. an `Environment` (the `environmentId`, plus the URL
+when the config records one), an `Agent` (the recorded agent's `botId`,
+`schemaName`, name, folder), and any other
 id + name object a skill wrote (a `Connection`, an `EntraApp`, or an unknown
 shape captured as `Custom`). Local `Agent` and `EntraApp` artifacts are mapped to
 the supported remote `Custom` kind with `artifactType` metadata by the sync adapter.
 Known shapes get a nice kind/key; everything else is
 captured generically. Show the assignee the detected values and confirm before
 they're saved. `--complete` marks the Task done — **and every other plan task this
-run fully produced**: a single `/setup` run records the environment *and* clones
-the agent, so it also completes the base-agent task when the plan splits them (one
-run → one *or more* tasks closed). (Artifacts a skill writes
+run fully produced**: a single `/setup` run records the environment *and* the
+agent it creates or connects, so it also completes the agent task when the plan
+splits them (one run → one *or more* tasks closed). (Artifacts a skill writes
 *outside* `config.json` are handled by ask-mode `pin-output` or their own
 detectors — see below.)
 
@@ -128,10 +129,10 @@ and stop for reconciliation, never create duplicate tasks silently.
 
 ## Reconcile a first-run setup that already ran
 
-On a shared agent the Power Platform admin usually runs `/setup` as their
-**first-run experience** — before, or outside, any planner session. So by the
-time anyone engages the planner the environment can already exist in
-`.local/config.json` while the plan's setup task still reads **Not started**.
+Makers often run `/setup` as their **first-run experience** — before, or
+outside, any planner session. So by the time anyone engages the planner the
+environment (and agent) can already be recorded in `.local/config.json` while
+the plan's setup task still reads **Not started**.
 Fold that finished setup into the plan automatically — but **only once**. The
 guard is a read-only status probe:
 
@@ -143,11 +144,12 @@ It prints JSON: `setupTaskId` and `setupEnvironmentKey` (the selected task and i
 declared environment output), `setupTaskOpen` (that task isn't Completed),
 `environmentPinned` (a reusable environment **URL** is on the plan), and the
 pinned `environment`. When **`setupTaskOpen` is true** *and* `.local/config.json`
-shows setup finished — `setup` is `"complete"` with a `dataverseEndpoint`
-recorded, and a verified `environmentId` for that URL — the setup already ran but
-was never captured. `setup.py` persists an explicitly supplied ID, a matching
-existing ID, or the verified ID from locked foundation state. If it is missing,
-resolve the ID first; a URL alone is not a shareable Environment completion. Reconcile it:
+shows setup finished — `setup` is `"complete"` with a verified `environmentId`
+recorded — the setup already ran but was never captured. Guided setup records the
+`environmentId` and the agent identity without a `dataverseEndpoint`; when an
+older workspace config also records a `dataverseEndpoint`, the `environmentId`
+must belong to that URL. If the ID is missing, resolve it first; a URL alone is
+not a shareable Environment completion. Reconcile it:
 preview with `capture-setup --dry-run`, confirm the detected environment with the
 person, then pin + complete it:
 
@@ -155,7 +157,7 @@ person, then pin + complete it:
 python scripts/planner/cli.py capture-setup --complete
 ```
 
-That records the selected task's `setupEnvironmentKey` (and the cloned agent) and marks the setup
+That records the selected task's `setupEnvironmentKey` (and the recorded agent) and marks the setup
 task — plus every other task this run fully produced — Complete, so from now on
 everyone sees that environment on the plan. When **`setupTaskOpen` is false** (no
 setup task, or it's already Completed) there is nothing to reconcile — **skip
@@ -187,44 +189,48 @@ Use `capture-setup` for the environment (observed); use `pin-output` for
 connections / apps / suites an assignee created (asked). Confirm the values with
 the person before committing.
 
-### When `/setup` is blocked before it records the environment
+### When the environment exists before `/setup` records it
 
-`/setup` only writes the environment into `.local/config.json` once it finishes
-connecting to the deployed agent. If it's blocked **earlier** — most often because
-the ESS agent (the Marketplace declarative agent) isn't available for the tenant
-yet, so the install can't complete — nothing lands in `config.json`, so
-`capture-setup` has nothing to observe and the environment the maker **did**
-create would be lost from the plan. Don't let that happen. When the Power
-Platform admin tells you they created (or decided) the environment but setup
-couldn't finish, persist it from what they tell you via the **ask** path. Use the
-selected task's declared `setupEnvironmentKey`, initially **without** `--complete`:
+`/setup` never creates environments, and it writes `.local/config.json` only
+after it creates or connects the ESS agent. So the environment usually exists
+**before** anything lands in `config.json`: the Power Platform admin creates or
+chooses it in the Power Platform admin center before any maker runs `/setup`, or
+`/setup` stopped before its agent step. Either way `capture-setup` has nothing to
+observe, and the environment would be missing from the plan. Don't let that
+happen. When the Power Platform admin tells you the environment is ready, persist
+it from what they tell you via the **ask** path. Use the selected task's declared
+`setupEnvironmentKey`, initially **without** `--complete`:
 
 ```
 python scripts/planner/cli.py pin-output --task <setupTaskId> --key <setupEnvironmentKey> \
-  --kind Environment --attr environmentUrl=<org-url> --attr environmentId=<verified-guid> --source User
+  --kind Environment --attr environmentId=<verified-guid> --source User
 ```
 
-(`setupTaskId` and `setupEnvironmentKey` come from `setup-status`; confirm the
-environment URL with them first, or read both environment values from verified
-foundation state.) This saves the declared environment output
+(`setupTaskId` and `setupEnvironmentKey` come from `setup-status`. The
+environment ID is shown in the environment's details in the Power Platform admin
+center; confirm it with them first.) This saves the declared environment output
 **locally** as `pendingOutputs`, while the setup task stays **open**. It is not
 yet visible to other workspaces: the service has no partial-output write endpoint.
 For a **combined environment-and-agent task**, never pass `--complete` while the
 agent is still missing: the task's work isn't done. Keep it moving but unfinished:
 `python scripts/planner/cli.py set-state --task <setupTaskId> --state InProgress`.
-When the install is later unblocked and `/setup` finishes for real, the normal
-observed capture (`capture-setup --complete`) pins the cloned agent and closes the
-task.
+When a maker later runs `/setup` into that environment and it finishes, the
+normal observed capture (`capture-setup --complete`) pins the agent and closes
+the task.
 
-For a **provision-only task**, confirm that its own acceptance criteria and all
-declared outputs are satisfied. It can then be completed with `pin-output
---complete` under `provisionedEnvironment`, even before workspace config exists.
-Keep the separate installation and binding tasks open until their own work and
-prerequisites are satisfied; do not pin `primaryEnvironment` just to close them.
+For an **environment-only task** (a provision-only task under
+`provisionedEnvironment`, or the Power Platform admin's `primaryEnvironment` task
+when agent setup is its own task, as in the Workday reference), confirm that its
+own acceptance criteria and all declared outputs are satisfied: the environment
+exists and the maker has the Environment Maker role in it. It can then be
+completed with `pin-output --complete`, even before workspace config exists.
+Keep the separate agent setup and binding tasks open until their own work and
+prerequisites are satisfied; do not pin their outputs (such as a binding task's
+`primaryEnvironment`) just to close them.
 
-For new plans, split environment provisioning and agent installation at their
+For new plans, split the environment task and the agent setup task at their
 role/milestone boundary (`model.md`). A genuinely finished environment task can
-then be completed and shared while the agent-install task remains open. For an
+then be completed and shared while the agent setup task remains open. For an
 existing combined task, retain its partial output and explain the limitation;
 split it only with approval. Never fake completion to make metadata shareable.
 
@@ -244,15 +250,16 @@ Complete the upstream sync and read back its outputs before starting dependent
 work. A blocker naming **shared confirmation** is not a request to provision
 another environment. Already-finished offline work may still be captured locally;
 its pending status remains visible until reconciliation.
-So the Workday assignee is told "use env `<id>`, run `/connect`, then we'll pin
-the connection" — no re-discovery.
+So the Workday assignee is told "use env `<id>`, run `/connect-workday`, then we'll
+pin the connection" — no re-discovery.
 
 **Check this person's workspace, not just their role.** The environment id is a
-*plan* fact once the Power Platform admin's `/setup` pins `primaryEnvironment`,
-but each assignee's own kit still has to connect to that same environment before
-their task's skill will work. `task-brief` reads the current workspace config and
-suppresses the nudge when setup is complete for the plan's environment and recorded
-agent. Do not repeat `/setup` for the admin who just completed that binding.
+*plan* fact once the Power Platform admin's environment task pins
+`primaryEnvironment`, but each assignee's own kit still has to connect to that
+same environment before their task's skill will work. `task-brief` reads the
+current workspace config and suppresses the nudge when setup is complete for the
+plan's environment and recorded agent. Do not repeat `/setup` for a person whose
+workspace is already bound.
 For a ready task that needs the environment and an unbound workspace, it prints **"First
 connect your kit: run /setup and choose environment `<envId>`"**. So the
 Workday / topics / eval assignee is nudged to `/setup` into the *plan's*

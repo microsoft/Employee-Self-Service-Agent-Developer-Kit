@@ -1,0 +1,3015 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+import yaml
+
+import da_product_registry
+import setup_existing_da
+
+
+ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
+ENVIRONMENT_DISPLAY_NAME = "Contoso ESS Development"
+AGENT_ID = "00000000-0000-4000-8000-000000002222"
+OTHER_AGENT_ID = "00000000-0000-4000-8000-000000006666"
+TENANT_ID = "00000000-0000-4000-8000-000000009999"
+FAMILY_ID = "00000000-0000-4000-8000-000000003333"
+SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
+IT_SCHEMA_NAME = "gptagent_copilotforemployeeselfserviceit"
+HOST = (
+    "https://0000000000004000800000000000111."
+    "1.environment.api.test.powerplatform.com"
+)
+AGENT_URL = (
+    "https://copilotstudio.test.microsoft.com/environments/"
+    f"{ENVIRONMENT_ID}/bots/{AGENT_ID}/overview"
+)
+
+
+
+def _normalize_object_model_keys(value: Any) -> Any:
+    if isinstance(value, dict):
+        if value.get("$kind") == "Message":
+            return "\n".join(
+                "".join(
+                    segment.get("value", "")
+                    if segment.get("$kind") == "TextSegment"
+                    else f"{{{segment.get('expression', {}).get('variableReference', '')}}}"
+                    for segment in line.get("segments", [])
+                )
+                for line in value.get("text", [])
+            )
+        return {
+            key.removeprefix("$"): _normalize_object_model_keys(child)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_normalize_object_model_keys(child) for child in value]
+    return value
+
+
+def _convert_object_models(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for item in items:
+        value = item["objectModel"]
+        if value.get("$kind") == "UnsupportedDialog":
+            results.append(
+                {
+                    "key": item["key"],
+                    "success": False,
+                    "error": {"message": "unsupported dialog kind"},
+                }
+            )
+            continue
+        results.append(
+            {
+                "key": item["key"],
+                "success": True,
+                "yaml": yaml.safe_dump(
+                    _normalize_object_model_keys(value),
+                    sort_keys=False,
+                ),
+            }
+        )
+    return results
+
+
+@pytest.fixture(autouse=True)
+def _isolate_external_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_auth(*_args: Any, **_kwargs: Any) -> str:
+        raise AssertionError("Tests must stub Agent Builder authentication.")
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "object_models_to_yaml",
+        _convert_object_models,
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "validate_object_model_runtime",
+        lambda: None,
+    )
+    monkeypatch.setattr(setup_existing_da, "authenticate", reject_auth)
+    monkeypatch.setattr(
+        setup_existing_da,
+        "authenticate_selected_tenant",
+        reject_auth,
+    )
+
+
+def _dialog(*, kind: str = "AdaptiveDialog", message: str = "Hello") -> dict[str, Any]:
+    return {
+        "$kind": kind,
+        "beginDialog": {
+            "$kind": "OnRecognizedIntent",
+            "id": "main",
+            "actions": [
+                {
+                    "$kind": "SendActivity",
+                    "id": "reply",
+                    "activity": {
+                        "$kind": "Message",
+                        "text": [
+                            {
+                                "$kind": "TemplateLine",
+                                "segments": [
+                                    {
+                                        "$kind": "TextSegment",
+                                        "value": message,
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+
+
+def _changeset(
+    *,
+    dialog_kind: str = "AdaptiveDialog",
+    message: str = "Hello",
+    change_token: str = "opaque-token",
+    agent_id: str = AGENT_ID,
+    schema_name: str = SCHEMA_NAME,
+    display_name: str = "Employee Self-Service HR",
+) -> dict[str, Any]:
+    return {
+        "bot": {
+            "$kind": "BotEntity",
+            "cdsBotId": agent_id,
+            "schemaName": schema_name,
+            "displayName": display_name,
+        },
+        "changeToken": change_token,
+        "botComponentChanges": [
+            {
+                "$kind": "BotComponentInsert",
+                "component": {
+                    "$kind": "DialogComponent",
+                    "version": 3,
+                    "displayName": "Greeting",
+                    "id": "00000000-0000-4000-8000-000000004444",
+                    "parentBotId": agent_id,
+                    "schemaName": f"{schema_name}.topic.Greeting",
+                    "dialog": _dialog(kind=dialog_kind, message=message),
+                },
+            },
+            {
+                "$kind": "BotComponentInsert",
+                "component": {
+                    "$kind": "GlobalVariableComponent",
+                    "version": 1,
+                    "displayName": "Locale",
+                    "id": "00000000-0000-4000-8000-000000005555",
+                    "parentBotId": agent_id,
+                    "schemaName": f"{schema_name}.component.Locale",
+                    "variable": {
+                        "$kind": "GlobalVariable",
+                        "name": "Locale",
+                        "scope": "User",
+                    },
+                },
+            },
+            {
+                "$kind": "BotComponentInsert",
+                "component": {
+                    "$kind": "GptComponent",
+                    "version": 1,
+                    "displayName": display_name,
+                    "id": "00000000-0000-4000-8000-000000007777",
+                    "parentBotId": agent_id,
+                    "schemaName": f"{schema_name}.gpt.default",
+                    "metadata": {
+                        "$kind": "GptComponentMetadata",
+                        "instructions": "Help employees.",
+                    },
+                },
+            },
+            {
+                "$kind": "BotComponentInsert",
+                "component": {
+                    "$kind": "CloudFlowDefinitionComponent",
+                    "id": "00000000-0000-4000-8000-000000008888",
+                },
+            },
+        ],
+    }
+
+
+class FakeClient:
+    host = HOST
+    ring = "test"
+    tenant_id = TENANT_ID
+    api_version = "2024-10-01"
+
+    def __init__(
+        self,
+        *,
+        agent_name: str = "Employee Self-Service HR",
+        agent_id: str = AGENT_ID,
+        schema_name: str = SCHEMA_NAME,
+        agent_realm: str = "dev",
+        configuration_realm: str = "Dev",
+        configured_agent_id: str | None = None,
+        include_agent_schema: bool = True,
+        include_collection_schema: bool = True,
+        published_config_available: bool = True,
+        changeset: dict[str, Any] | None = None,
+        authenticated_account: str | None = None,
+    ) -> None:
+        self.agent_name = agent_name
+        self.agent_id = agent_id
+        self.schema_name = schema_name
+        self.agent_realm = agent_realm
+        self.configuration_realm = configuration_realm
+        self.configured_agent_id = configured_agent_id or agent_id
+        self.include_agent_schema = include_agent_schema
+        self.include_collection_schema = include_collection_schema
+        self.published_config_available = published_config_available
+        self.authenticated_account = authenticated_account
+        self.changeset = changeset or _changeset(
+            agent_id=agent_id,
+            schema_name=schema_name,
+        )
+        self.list_calls = 0
+        self.fetch_calls = 0
+        self.configuration_calls = 0
+
+    def list_agents(self) -> list[dict[str, Any]]:
+        self.list_calls += 1
+        dev_agent = {
+            "cdsBotId": self.agent_id,
+            "displayName": self.agent_name,
+        }
+        if self.include_collection_schema:
+            dev_agent["schemaName"] = self.schema_name
+        return [
+            dev_agent,
+            {
+                "cdsBotId": OTHER_AGENT_ID,
+                "displayName": "Production Agent",
+                "schemaName": "gptagent_production",
+            },
+        ]
+
+    def get_agent(self, agent_id: str) -> dict[str, Any]:
+        if agent_id != self.agent_id:
+            return {
+                "botId": OTHER_AGENT_ID,
+                "fullBotName": "Production Agent",
+                "realm": "prod",
+            }
+        agent = {
+            "botId": self.agent_id,
+            "fullBotName": self.agent_name,
+            "realm": self.agent_realm,
+            "managedProperties": {"isManaged": True},
+        }
+        if self.include_agent_schema:
+            agent["schemaName"] = self.schema_name
+        return agent
+
+    def get_dev_configuration(self, _agent_id: str) -> dict[str, Any]:
+        self.configuration_calls += 1
+        if not self.published_config_available:
+            raise setup_existing_da.ExistingDASetupError(
+                "The agent has no published Dev config. Publish the agent first."
+            )
+        return {
+            "realm": self.configuration_realm,
+            "cdsBotId": self.configured_agent_id,
+            "schemaName": self.schema_name,
+            "grsRepositoryId": FAMILY_ID,
+            "values": {"mustNotPersist": "sensitive-realm-value"},
+        }
+
+    def fetch_components(self, _agent_id: str) -> dict[str, Any]:
+        self.fetch_calls += 1
+        return self.changeset
+
+
+def _attach(
+    client: FakeClient,
+    root: Path,
+    *,
+    refresh: bool = False,
+    agent_id: str = AGENT_ID,
+) -> dict[str, Any]:
+    return setup_existing_da.attach_existing_dev(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        environment_display_name=ENVIRONMENT_DISPLAY_NAME,
+        agent_id=agent_id,
+        kit_root=root,
+        refresh=refresh,
+    )
+
+
+def _agent_root(root: Path) -> Path:
+    return root / "workspace" / "agents" / "employee-self-service-hr"
+
+
+def _setup_state(root: Path) -> dict[str, Any]:
+    return json.loads(
+        (root / setup_existing_da.CANONICAL_SETUP_STATE).read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+def _agent_setup_state(
+    root: Path,
+    agent_id: str = AGENT_ID,
+) -> dict[str, Any]:
+    return _setup_state(root)["agents"][agent_id]
+
+
+def _projection_failure_path(
+    root: Path,
+    agent_id: str = AGENT_ID,
+) -> Path:
+    return (
+        root
+        / ".local"
+        / "setup"
+        / "agents"
+        / agent_id
+        / "projection-failure.json"
+    )
+
+
+def _write_flightcheck_results(
+    root: Path,
+    checkpoint: str,
+    *statuses: str,
+    agent_id: str = AGENT_ID,
+) -> Path:
+    path = root / f"{checkpoint.replace('*', 'family')}.json"
+    prefix = checkpoint[:-1] if checkpoint.endswith("*") else checkpoint
+    rows = [
+        {
+            "checkpoint_id": (
+                f"{prefix}{index:03d}"
+                if checkpoint.endswith("*")
+                else checkpoint
+            ),
+            "status": status,
+            "result": f"{checkpoint} returned {status}",
+        }
+        for index, status in enumerate(statuses, start=1)
+    ]
+    state = _setup_state(root)
+    agent = state["agents"][agent_id]["agent"]
+    context = {
+        "agentId": agent_id,
+        "environmentId": state["environment"]["id"],
+        "agentSlug": agent["workspace_slug"],
+        "agentSchemaName": agent["schema_name"],
+        "tenantId": state["environment"]["tenant_id"],
+        "serviceRing": state["environment"]["ring"],
+        "realm": agent.get("realm"),
+    }
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "flightcheck.result.v2",
+                "scope": "checkpoint",
+                "coverage": {"requested": [checkpoint]},
+                "validation_context": context,
+                "requested_validation_context": {
+                    **context,
+                    "tenantId": "",
+                    "realm": "",
+                },
+                "failed": sum(status == "Failed" for status in statuses),
+                "errors": sum(status == "Error" for status in statuses),
+                "results": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+    step_id = setup_existing_da.SETUP_FLIGHTCHECK_STEPS[checkpoint]
+    step_updated_at = _setup_state(root)["agents"][agent_id]["steps"][step_id][
+        "updated_at"
+    ]
+    step_started = datetime.fromisoformat(step_updated_at).timestamp()
+    # Do not let host filesystem timestamp precision decide fixture freshness.
+    fresh_time = max(path.stat().st_mtime, step_started + 1)
+    os.utime(path, (fresh_time, fresh_time))
+    return path
+
+
+def _complete_setup_flightchecks(root: Path) -> None:
+    for checkpoint, statuses in (
+        ("DA-AGENT-001", ("Passed",)),
+        ("DA-CONTENT-001", ("Passed",)),
+    ):
+        setup_existing_da.maintain_setup_flightcheck(
+            root,
+            agent_id=AGENT_ID,
+            checkpoint=checkpoint,
+            results_path=_write_flightcheck_results(
+                root,
+                checkpoint,
+                *statuses,
+            ),
+        )
+
+
+def test_target_url_resolves_ids_and_ring() -> None:
+    target = setup_existing_da.resolve_da_target(
+        target_url=AGENT_URL,
+        environment_id=None,
+        agent_id=None,
+        ring=None,
+        require_agent=True,
+    )
+
+    assert target["environmentId"] == ENVIRONMENT_ID
+    assert target["agentId"] == AGENT_ID
+    assert target["ring"] == "test"
+    assert target["agentSelection"] == "copilot-studio-url"
+
+
+@pytest.mark.parametrize(
+    "host",
+    (
+        "copilotstudio.microsoft.com",
+        "copilotstudio.preview.microsoft.com",
+    ),
+)
+def test_production_and_preview_hosts_resolve_to_prod_ring(host: str) -> None:
+    target = setup_existing_da.resolve_da_target(
+        target_url=(
+            f"https://{host}/environments/{ENVIRONMENT_ID}/"
+            f"bots/{AGENT_ID}/overview"
+        ),
+        environment_id=None,
+        agent_id=None,
+        ring=None,
+        require_agent=True,
+    )
+
+    assert target["environmentId"] == ENVIRONMENT_ID
+    assert target["agentId"] == AGENT_ID
+    assert target["ring"] == "prod"
+    assert target["agentSelection"] == "copilot-studio-url"
+    assert target["source"] == "copilot-studio-url"
+
+
+
+def test_target_rejects_conflicting_ring() -> None:
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="different service rings",
+    ):
+        setup_existing_da.resolve_da_target(
+            target_url=AGENT_URL,
+            environment_id=None,
+            agent_id=None,
+            ring="prod",
+            require_agent=True,
+        )
+
+
+def test_validate_agent_is_direct_and_side_effect_free(tmp_path: Path) -> None:
+    client = FakeClient()
+
+    connection = setup_existing_da.validate_existing_dev_connection(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+    )
+
+    assert client.list_calls == 0
+    assert connection["environment"]["tenantId"] == TENANT_ID
+    assert connection["agent"] == {
+        "id": AGENT_ID,
+        "name": "Employee Self-Service HR",
+        "schemaName": SCHEMA_NAME,
+        "realm": "dev",
+        "alm": {"isEnrolled": True},
+        "almFamilyId": None,
+        "isManaged": True,
+        "workspaceSlug": "employee-self-service-hr",
+    }
+    assert connection["selectedBy"] == "direct-id"
+    assert client.configuration_calls == 0
+    assert client.fetch_calls == 1
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_validate_agent_can_require_explicit_alm_family() -> None:
+    client = FakeClient()
+
+    connection = setup_existing_da.validate_existing_dev_connection(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        require_alm_family=True,
+    )
+
+    assert connection["agent"]["almFamilyId"] == FAMILY_ID
+    assert client.configuration_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("client", "message"),
+    [
+        (FakeClient(configuration_realm="Prod"), "returned realm"),
+        (FakeClient(configured_agent_id=OTHER_AGENT_ID), "different agent"),
+        (
+            FakeClient(agent_realm="prod"),
+            "did not identify an ALM-enrolled Dev agent",
+        ),
+    ],
+)
+def test_validate_agent_rejects_wrong_identity_or_realm(
+    client: FakeClient,
+    message: str,
+) -> None:
+    with pytest.raises(setup_existing_da.ExistingDASetupError, match=message):
+        setup_existing_da.validate_existing_dev_connection(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+            require_alm_family=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "expected",
+    ["dev", "test", "prod"],
+)
+def test_inspect_agent_route_returns_service_realm(
+    expected: str,
+) -> None:
+    client = FakeClient(agent_realm=expected)
+    result = setup_existing_da.inspect_agent_route(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+    )
+
+    assert result["realm"] == expected
+    assert result["routeStatus"] == "resolved"
+    assert result["alm"] == {"isEnrolled": True}
+    assert result["agentId"] == AGENT_ID
+    assert result["tenantId"] == TENANT_ID
+
+
+def test_inspect_agent_route_does_not_require_dev_configuration() -> None:
+    client = FakeClient(published_config_available=False)
+    result = setup_existing_da.inspect_agent_route(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+    )
+
+    assert result["realm"] == "dev"
+    assert result["routeStatus"] == "resolved"
+    assert client.configuration_calls == 0
+
+
+def test_inspect_agent_route_classifies_unenrolled_agent() -> None:
+    client = FakeClient(agent_realm=None)
+
+    result = setup_existing_da.inspect_agent_route(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+    )
+
+    assert "realm" not in result
+    assert result["alm"] == {"isEnrolled": False}
+    assert result["routeStatus"] == "not-established"
+
+
+def test_inspect_agent_route_rejects_unknown_realm() -> None:
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="unrecognized ALM realm",
+    ):
+        setup_existing_da.inspect_agent_route(
+            FakeClient(agent_realm="staging"),
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+        )
+
+
+def test_print_exception_includes_type_and_notes(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    error = setup_existing_da.ExistingDASetupError("primary failure")
+    error.add_note("secondary failure")
+
+    setup_existing_da._print_exception(error)
+
+    assert capsys.readouterr().err.splitlines() == [
+        "ERROR: ExistingDASetupError: primary failure",
+        "NOTE: secondary failure",
+    ]
+
+
+def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
+    account = "maker@example.test"
+    result = _attach(
+        FakeClient(authenticated_account=account),
+        tmp_path,
+    )
+    agent_root = _agent_root(tmp_path)
+
+    assert result["status"] == "created"
+    assert "unprojectedDialogs" not in result
+    assert result["connectionStatus"] == "workspace-ready"
+    assert result["connectReady"] is False
+    assert result["projectionVersion"] == 2
+    assert result["topicCount"] == 1
+    assert result["variableCount"] == 1
+    assert (agent_root / "agent.mcs.yml").is_file()
+    assert (agent_root / "topics" / "Greeting.mcs.yml").is_file()
+    assert (agent_root / "variables" / "Locale.mcs.yml").is_file()
+    assert (agent_root / setup_existing_da.RAW_CHANGESET).is_file()
+    assert not (tmp_path / ".local" / "setup" / "da-connection.json").exists()
+    assert not (tmp_path / ".local" / "setup" / "da-components.json").exists()
+    metadata = json.loads(
+        (agent_root / setup_existing_da.ATTACH_METADATA).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "unprojectedDialogs" not in metadata
+    assert "Unavailable dialog components" not in (
+        agent_root / "snapshot.md"
+    ).read_text(encoding="utf-8")
+
+    component_map = json.loads(
+        (agent_root / ".component-map.json").read_text(encoding="utf-8")
+    )
+    assert set(component_map) == {
+        "agent.mcs.yml",
+        "topics/Greeting.mcs.yml",
+        "variables/Locale.mcs.yml",
+    }
+
+    config = json.loads(
+        (tmp_path / ".local" / "config.json").read_text(encoding="utf-8")
+    )
+    assert config["setup"] == "complete"
+    assert config["ring"] == "test"
+    assert config["tenantId"] == TENANT_ID
+    assert config["account"] == account
+    assert config["agent"]["botId"] == AGENT_ID
+    assert "environmentName" not in config
+    assert "environmentDisplayName" not in config
+
+    canonical_state = _setup_state(tmp_path)
+    setup_state = _agent_setup_state(tmp_path)
+    assert canonical_state["schema_version"] == 4
+    assert canonical_state["environment"]["id"] == ENVIRONMENT_ID
+    assert canonical_state["environment"]["account"] == account
+    assert "authoring_ready" not in setup_state
+    assert not setup_existing_da.is_authoring_ready(
+        setup_state["steps"], setup_state["workspace"]
+    )
+    assert (
+        canonical_state["environment"]["display_name"]
+        == ENVIRONMENT_DISPLAY_NAME
+    )
+    assert setup_state["connect_ready"] is False
+    assert setup_state["active_step"] == "SETUP-02.1"
+    assert set(setup_state["steps"]) == set(
+        setup_existing_da.SETUP_STEP_ORDER
+    )
+    assert setup_state["steps"]["SETUP-01"]["mode"] == "automated"
+    assert setup_state["steps"]["SETUP-03"]["mode"] == "automated"
+    assert setup_state["steps"]["SETUP-07"]["mode"] == "automated"
+    for step_id in ("SETUP-02.1", "SETUP-06"):
+        assert setup_state["steps"][step_id]["state"] == "pending"
+        assert setup_state["steps"][step_id]["mode"] is None
+    assert setup_state["steps"]["SETUP-02.2"]["state"] == "done"
+    assert setup_state["steps"]["SETUP-02.2"]["mode"] == "skipped"
+    assert setup_state["steps"]["SETUP-02.2"]["checkpoint"] is None
+    assert "was not verified" in setup_state["steps"]["SETUP-02.2"]["note"]
+    assert setup_state["steps"]["SETUP-05"]["state"] == "done"
+    assert setup_state["steps"]["SETUP-05"]["mode"] == "skipped"
+    assert "declares no foundation connection requirement" in (
+        setup_state["steps"]["SETUP-05"]["note"]
+    )
+    assert setup_state["steps"]["SETUP-04"]["mode"] == "skipped"
+    assert "does not apply" in setup_state["steps"]["SETUP-04"]["note"]
+    assert setup_state["workspace"]["agent_path"] == "agent.mcs.yml"
+    assert setup_state["workspace"]["variable_count"] == 1
+    assert setup_state["workspace"]["unprojected_component_kinds"] == {
+        "CloudFlowDefinitionComponent": 1
+    }
+
+
+def test_attach_enriches_canonical_environment_display_name(
+    tmp_path: Path,
+) -> None:
+    setup_existing_da.attach_existing_dev(
+        FakeClient(),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+    assert "display_name" not in _setup_state(tmp_path)["environment"]
+
+    setup_existing_da.attach_existing_dev(
+        FakeClient(),
+        environment_id=ENVIRONMENT_ID,
+        environment_display_name=ENVIRONMENT_DISPLAY_NAME,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+
+    assert (
+        _setup_state(tmp_path)["environment"]["display_name"]
+        == ENVIRONMENT_DISPLAY_NAME
+    )
+
+
+def test_attach_preserves_canonical_environment_display_name(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+
+    setup_existing_da.attach_existing_dev(
+        FakeClient(),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+
+    assert (
+        _setup_state(tmp_path)["environment"]["display_name"]
+        == ENVIRONMENT_DISPLAY_NAME
+    )
+
+
+def test_unregistered_product_preserves_registry_uncertainty(
+    tmp_path: Path,
+) -> None:
+    _attach(
+        FakeClient(
+            agent_name="Future Employee Agent",
+            schema_name="gptagent_futureemployeeagent",
+        ),
+        tmp_path,
+    )
+
+    connection_step = _agent_setup_state(tmp_path)["steps"]["SETUP-05"]
+    assert connection_step["state"] == "done"
+    assert connection_step["mode"] == "skipped"
+    assert connection_step["note"] == (
+        "This agent's product identity is not registered in the product "
+        "setup registry; no foundation connection requirement was applied."
+    )
+
+
+def test_same_environment_agents_keep_independent_state_and_folders(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    first_ready = _agent_setup_state(tmp_path)
+
+    _attach(
+        FakeClient(
+            agent_id=OTHER_AGENT_ID,
+            schema_name="gptagent_secondemployeeselfservice",
+            agent_name="Employee Self-Service HR",
+        ),
+        tmp_path,
+        agent_id=OTHER_AGENT_ID,
+    )
+
+    canonical = _setup_state(tmp_path)
+    assert set(canonical["agents"]) == {AGENT_ID, OTHER_AGENT_ID}
+    assert canonical["agents"][AGENT_ID] == first_ready
+    assert setup_existing_da.is_authoring_ready(
+        canonical["agents"][AGENT_ID]["steps"],
+        canonical["agents"][AGENT_ID]["workspace"],
+    )
+    assert canonical["agents"][AGENT_ID]["connect_ready"] is True
+    assert not setup_existing_da.is_authoring_ready(
+        canonical["agents"][OTHER_AGENT_ID]["steps"],
+        canonical["agents"][OTHER_AGENT_ID]["workspace"],
+    )
+    assert canonical["agents"][OTHER_AGENT_ID]["connect_ready"] is False
+    second_slug = canonical["agents"][OTHER_AGENT_ID]["agent"]["workspace_slug"]
+    assert second_slug == "employee-self-service-hr-00000000"
+    assert (
+        tmp_path
+        / "workspace"
+        / "agents"
+        / "employee-self-service-hr-00000000"
+        / "agent.mcs.yml"
+    ).is_file()
+
+    config = json.loads(
+        (tmp_path / ".local" / "config.json").read_text(encoding="utf-8")
+    )
+    assert len(config["agents"]) == 2
+    assert config["activeAgent"] == second_slug
+    assert config["agent"]["botId"] == OTHER_AGENT_ID
+
+
+def test_select_agent_changes_only_operational_active_agent(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    _attach(
+        FakeClient(
+            agent_id=OTHER_AGENT_ID,
+            schema_name="gptagent_secondemployeeselfservice",
+            agent_name="Employee Self-Service IT",
+        ),
+        tmp_path,
+        agent_id=OTHER_AGENT_ID,
+    )
+    canonical_before = _setup_state(tmp_path)
+
+    result = setup_existing_da.select_local_agent(
+        tmp_path,
+        agent_id=AGENT_ID,
+    )
+
+    config = json.loads(
+        (tmp_path / ".local" / "config.json").read_text(encoding="utf-8")
+    )
+    assert result["agentId"] == AGENT_ID
+    assert config["activeAgent"] == "employee-self-service-hr"
+    assert config["agent"]["botId"] == AGENT_ID
+    assert _setup_state(tmp_path) == canonical_before
+
+
+def test_attach_rejects_workspace_environment_mismatch(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    other_client = FakeClient(
+        agent_id=OTHER_AGENT_ID,
+        schema_name="gptagent_secondemployeeselfservice",
+    )
+    other_client.host = (
+        "https://00000000000040008000000000008888."
+        "1.environment.api.test.powerplatform.com"
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="another Power Platform environment",
+    ):
+        setup_existing_da.attach_existing_dev(
+            other_client,
+            environment_id="00000000-0000-4000-8000-000000008888",
+            agent_id=OTHER_AGENT_ID,
+            kit_root=tmp_path,
+        )
+
+    assert set(_setup_state(tmp_path)["agents"]) == {AGENT_ID}
+
+
+@pytest.mark.parametrize(
+    ("setup_source", "selection_source"),
+    (
+        ("existing-dev", "direct-id"),
+        ("alm-import", "alm-import-result"),
+        ("prod-to-dev", "prod-to-dev-result"),
+        ("mos-starter", "mos-starter-result"),
+    ),
+)
+def test_attach_materializes_without_published_config(
+    tmp_path: Path,
+    setup_source: str,
+    selection_source: str,
+) -> None:
+    client = FakeClient(
+        include_agent_schema=False,
+        published_config_available=False,
+    )
+
+    result = setup_existing_da.attach_existing_dev(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+        setup_source=setup_source,
+        selection_source=selection_source,
+        expected_schema_name=(
+            None if setup_source == "existing-dev" else SCHEMA_NAME
+        ),
+    )
+
+    assert result["connectionStatus"] == "workspace-ready"
+    assert client.configuration_calls == 0
+    assert client.fetch_calls == 1
+    metadata = json.loads(
+        (
+            _agent_root(tmp_path)
+            / setup_existing_da.ATTACH_METADATA
+        ).read_text(encoding="utf-8")
+    )
+    assert metadata["realm"] == "dev"
+    assert metadata["almFamilyId"] is None
+    assert metadata["setupSource"] == setup_source
+
+
+def test_existing_dev_attach_derives_schema_from_components(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient(include_agent_schema=False)
+
+    result = setup_existing_da.attach_existing_dev(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+
+    assert result["connectionStatus"] == "workspace-ready"
+    assert result["schemaName"] == SCHEMA_NAME
+    assert client.configuration_calls == 0
+    assert client.fetch_calls == 1
+
+
+def test_attach_allows_explicit_unenrolled_authoring(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient(
+        agent_realm=None,
+        include_agent_schema=False,
+    )
+
+    result = setup_existing_da.attach_existing_dev(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+        allow_unenrolled_authoring=True,
+    )
+
+    assert result["connectionStatus"] == "workspace-ready"
+    assert result["schemaName"] == SCHEMA_NAME
+    assert client.configuration_calls == 0
+    assert client.fetch_calls == 1
+    metadata = json.loads(
+        (
+            _agent_root(tmp_path)
+            / setup_existing_da.ATTACH_METADATA
+        ).read_text(encoding="utf-8")
+    )
+    assert "realm" not in metadata
+    assert metadata["alm"] == {"isEnrolled": False}
+    config = json.loads(
+        (tmp_path / ".local" / "config.json").read_text(encoding="utf-8")
+    )
+    assert "realm" not in config["agent"]
+    assert config["agent"]["alm"] == {"isEnrolled": False}
+    canonical = _agent_setup_state(tmp_path)
+    assert "realm" not in canonical["agent"]
+    assert canonical["agent"]["alm"] == {"isEnrolled": False}
+
+
+def test_unenrolled_authoring_rejects_direct_non_dev_realm(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient(
+        agent_realm="prod",
+        include_agent_schema=False,
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="already enrolled in ALM with realm 'prod'",
+    ):
+        setup_existing_da.attach_existing_dev(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+            kit_root=tmp_path,
+            allow_unenrolled_authoring=True,
+        )
+
+    assert client.fetch_calls == 0
+    assert not (tmp_path / "workspace").exists()
+
+
+def test_resolved_route_upgrades_unenrolled_authoring_state(
+    tmp_path: Path,
+) -> None:
+    setup_existing_da.attach_existing_dev(
+        FakeClient(agent_realm=None, include_agent_schema=False),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+        allow_unenrolled_authoring=True,
+    )
+
+    result = setup_existing_da.attach_existing_dev(
+        FakeClient(include_agent_schema=False),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+
+    assert result["status"] == "resumed"
+    assert result["realm"] == "dev"
+    assert result["alm"] == {"isEnrolled": True}
+    config = json.loads(
+        (tmp_path / ".local" / "config.json").read_text(encoding="utf-8")
+    )
+    assert config["agent"]["realm"] == "dev"
+    assert config["agent"]["alm"] == {"isEnrolled": True}
+    canonical = _agent_setup_state(tmp_path)
+    assert canonical["agent"]["realm"] == "dev"
+    assert canonical["agent"]["alm"] == {"isEnrolled": True}
+
+
+@pytest.mark.parametrize(
+    ("setup_source", "selection_source"),
+    (
+        ("alm-import", "alm-import-result"),
+        ("prod-to-dev", "prod-to-dev-result"),
+        ("mos-starter", "mos-starter-result"),
+    ),
+)
+def test_receipt_backed_attach_rejects_component_schema_mismatch(
+    tmp_path: Path,
+    setup_source: str,
+    selection_source: str,
+) -> None:
+    changeset = _changeset()
+    changeset["bot"]["schemaName"] = "gptagent_different"
+    client = FakeClient(include_agent_schema=False, changeset=changeset)
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="different schema",
+    ):
+        setup_existing_da.attach_existing_dev(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+            kit_root=tmp_path,
+            setup_source=setup_source,
+            selection_source=selection_source,
+            expected_schema_name=SCHEMA_NAME,
+        )
+
+    assert client.configuration_calls == 0
+    assert client.fetch_calls == 1
+    assert not (tmp_path / "workspace").exists()
+
+
+def test_alm_import_attach_rejects_direct_non_dev_realm(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient(
+        agent_realm="prod",
+        include_agent_schema=False,
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="did not identify an ALM-enrolled Dev agent",
+    ):
+        setup_existing_da.attach_existing_dev(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+            kit_root=tmp_path,
+            setup_source="alm-import",
+            selection_source="alm-import-result",
+            expected_schema_name=SCHEMA_NAME,
+        )
+
+    assert client.configuration_calls == 0
+    assert client.fetch_calls == 0
+    assert not (tmp_path / "workspace").exists()
+
+
+def test_publish_independent_attachment_does_not_invent_family_identity(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient(include_agent_schema=False)
+
+    setup_existing_da.attach_existing_dev(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+        setup_source="alm-import",
+        expected_schema_name=SCHEMA_NAME,
+    )
+
+    state = _agent_setup_state(tmp_path)
+    assert state["agent"]["alm_family_id"] is None
+    assert client.configuration_calls == 0
+
+
+def test_dialog_conversion_gap_preserves_evidence_without_ready_state(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="could not materialize all",
+    ):
+        _attach(
+            FakeClient(changeset=_changeset(dialog_kind="UnsupportedDialog")),
+            tmp_path,
+        )
+
+    evidence = json.loads(
+        _projection_failure_path(tmp_path).read_text(encoding="utf-8")
+    )
+    assert evidence["agentId"] == AGENT_ID
+    assert evidence["changeset"]["bot"]["cdsBotId"] == AGENT_ID
+    assert not _agent_root(tmp_path).exists()
+    assert not (tmp_path / ".local" / "config.json").exists()
+    setup_state = _agent_setup_state(tmp_path)
+    assert setup_state["connect_ready"] is False
+    assert setup_state["active_step"] == "SETUP-07"
+    assert setup_state["steps"]["SETUP-07"]["state"] == "blocked"
+    assert setup_state["steps"]["SETUP-07"]["failure_causes"]
+
+
+def test_projection_failure_preserves_cleanup_failure_as_secondary_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    original_rmtree = shutil.rmtree
+
+    def fail_temporary_cleanup(path: str | Path, *args: Any, **kwargs: Any) -> None:
+        candidate = Path(path)
+        if candidate.name.startswith(".employee-self-service-hr."):
+            raise OSError("cleanup denied")
+        original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        setup_existing_da.shutil,
+        "rmtree",
+        fail_temporary_cleanup,
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="could not materialize all",
+    ):
+        _attach(
+            FakeClient(changeset=_changeset(dialog_kind="UnsupportedDialog")),
+            tmp_path,
+        )
+
+    error = capsys.readouterr().err
+    assert "WARNING: Temporary workspace cleanup failed" in error
+    setup_state = _agent_setup_state(tmp_path)
+    failure_causes = setup_state["steps"]["SETUP-07"]["failure_causes"]
+    assert "could not materialize all" in failure_causes[0]
+    assert "Temporary workspace cleanup failed" in failure_causes[1]
+
+
+def test_projection_evidence_failure_does_not_replace_primary_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    original_write_json = setup_existing_da._write_json
+
+    def fail_projection_evidence(path: Path, value: Any) -> None:
+        if path.name == "projection-failure.json":
+            raise OSError("evidence write denied")
+        original_write_json(path, value)
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_write_json",
+        fail_projection_evidence,
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="could not materialize all",
+    ):
+        _attach(
+            FakeClient(changeset=_changeset(dialog_kind="UnsupportedDialog")),
+            tmp_path,
+        )
+
+    error = capsys.readouterr().err
+    assert "Projection-failure evidence persistence failed" in error
+    setup_state = _agent_setup_state(tmp_path)
+    assert "evidence write denied" in (
+        setup_state["steps"]["SETUP-07"]["failure_causes"][1]
+    )
+
+
+def test_blocked_state_failure_does_not_replace_primary_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_record_canonical_setup_blocked",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("state write denied")
+        ),
+    )
+    changeset = _changeset()
+    changeset["bot"]["cdsBotId"] = OTHER_AGENT_ID
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="different agent",
+    ):
+        setup_existing_da.attach_existing_dev(
+            FakeClient(changeset=changeset),
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+            kit_root=tmp_path,
+            expected_schema_name=SCHEMA_NAME,
+        )
+
+    assert "Canonical blocked-state persistence failed" in (
+        capsys.readouterr().err
+    )
+
+
+def test_config_failure_preserves_workspace_for_same_target_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_config(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("config write denied")
+
+    monkeypatch.setattr(setup_existing_da, "_write_config", fail_config)
+
+    with pytest.raises(OSError, match="config write denied"):
+        _attach(FakeClient(), tmp_path)
+
+    assert _agent_root(tmp_path).is_dir()
+    setup_state = _agent_setup_state(tmp_path)
+    assert setup_state["connect_ready"] is False
+    assert setup_state["steps"]["SETUP-07"]["state"] == "blocked"
+    assert "config write denied" in (
+        setup_state["steps"]["SETUP-07"]["failure_causes"][0]
+    )
+
+
+def test_stale_failure_evidence_cleanup_is_non_fatal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_path = _projection_failure_path(tmp_path)
+    evidence_path.parent.mkdir(parents=True)
+    evidence_path.write_text("{}", encoding="utf-8")
+    original_unlink = Path.unlink
+
+    def fail_evidence_cleanup(
+        path: Path,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        if path == evidence_path:
+            raise OSError("cleanup denied")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_evidence_cleanup)
+
+    result = _attach(FakeClient(), tmp_path)
+
+    assert result["connectReady"] is False
+    assert result["cleanupWarnings"] == [
+        "Projection-failure evidence cleanup failed "
+        "(OSError: cleanup denied)"
+    ]
+    assert evidence_path.is_file()
+    setup_state = _agent_setup_state(tmp_path)
+    assert setup_state["connect_ready"] is False
+
+
+def test_skipped_flightcheck_steps_reopen_on_attach(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    agent_state = state["agents"][AGENT_ID]
+    for step_id in setup_existing_da.SETUP_FLIGHTCHECK_STEPS.values():
+        agent_state["steps"][step_id] = setup_existing_da._step_record(
+            "done",
+            mode="skipped",
+            note="Checkpoint was skipped",
+            recorded_at=agent_state["created_at"],
+        )
+    agent_state["active_step"] = "SETUP-07"
+    agent_state["connect_ready"] = True
+    agent_state["completed_at"] = agent_state["created_at"]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    result = _attach(FakeClient(), tmp_path)
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+
+    assert loaded is not None
+    loaded_agent = loaded["agents"][AGENT_ID]
+    assert result["connectReady"] is False
+    for step_id in setup_existing_da.SETUP_FLIGHTCHECK_STEPS.values():
+        assert loaded_agent["steps"][step_id]["state"] == "pending"
+    assert loaded_agent["steps"]["SETUP-07"]["state"] == "done"
+    assert loaded_agent["active_step"] == "SETUP-02.1"
+    assert loaded_agent["connect_ready"] is False
+    assert loaded_agent["completed_at"] is None
+
+
+def test_flightcheck_maintenance_completes_setup(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+
+    _complete_setup_flightchecks(tmp_path)
+
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+    assert loaded is not None
+    loaded_agent = loaded["agents"][AGENT_ID]
+    assert setup_existing_da.is_authoring_ready(
+        loaded_agent["steps"], loaded_agent["workspace"]
+    )
+    assert loaded_agent["connect_ready"] is True
+    assert loaded_agent["completed_at"]
+    assert loaded_agent["steps"]["SETUP-02.1"]["checkpoint"] == "DA-AGENT-001"
+    assert loaded_agent["steps"]["SETUP-02.2"]["mode"] == "skipped"
+    assert loaded_agent["steps"]["SETUP-02.2"]["checkpoint"] is None
+    assert loaded_agent["steps"]["SETUP-05"]["checkpoint"] is None
+    assert loaded_agent["steps"]["SETUP-05"]["mode"] == "skipped"
+    assert (
+        loaded_agent["steps"]["SETUP-06"]["checkpoint"]
+        == "DA-CONTENT-001"
+    )
+
+
+@pytest.mark.parametrize(
+    "fields,value,message",
+    [
+        (("schema_version",), "flightcheck.result.v1", "Unsupported setup FlightCheck report format"),
+        (("scope",), "checkpoint:DA-AGENT-001", "Unsupported setup FlightCheck report format"),
+        (("scope",), "full", "Unsupported setup FlightCheck report format"),
+        (("scope",), "profile", "Unsupported setup FlightCheck report format"),
+        (("coverage", "requested"), ["DA-CONTENT-001"], "did not request DA-AGENT-001"),
+        (("coverage", "requested"), "DA-AGENT-001", "invalid coverage.requested"),
+        (("validation_context", "agentId"), OTHER_AGENT_ID, "validation_context.agentId"),
+        (("validation_context", "environmentId"), OTHER_AGENT_ID, "validation_context.environmentId"),
+        (("validation_context", "agentId"), "", "agentId is required"),
+        (("validation_context", "serviceRing"), "prod", "validation_context.serviceRing"),
+        (("validation_context", "realm"), "prod", "validation_context.realm"),
+        (("requested_validation_context", "agentId"), OTHER_AGENT_ID, "requested_validation_context.agentId"),
+        (("requested_validation_context", "tenantId"), OTHER_AGENT_ID, "requested_validation_context.tenantId"),
+    ],
+)
+def test_flightcheck_rejects_unrelated_or_obsolete_reports_without_writes(
+    tmp_path: Path,
+    fields: tuple[str, ...],
+    value: Any,
+    message: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    path = _write_flightcheck_results(tmp_path, "DA-AGENT-001", "Passed")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    container = payload
+    for field in fields[:-1]:
+        container = container[field]
+    container[fields[-1]] = value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    before = state_path.read_bytes()
+    report_before = path.read_bytes()
+    modified_before = path.stat().st_mtime_ns
+
+    with pytest.raises(setup_existing_da.ExistingDASetupError, match=message):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            agent_id=AGENT_ID,
+            checkpoint="DA-AGENT-001",
+            results_path=path,
+        )
+
+    assert state_path.read_bytes() == before
+    assert path.read_bytes() == report_before
+    assert path.stat().st_mtime_ns == modified_before
+
+
+@pytest.mark.parametrize(
+    "status", ["Failed", "Error", "Manual", "Blocked", "Skipped", "Warning", "NotConfigured"],
+)
+def test_flightcheck_records_unresolved_results_without_verified_target(
+    tmp_path: Path,
+    status: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    path = _write_flightcheck_results(tmp_path, "DA-AGENT-001", status)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["validation_context"]["targetVerified"] = False
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    step_started = datetime.fromisoformat(
+        _agent_setup_state(tmp_path)["steps"]["SETUP-02.1"]["updated_at"]
+    ).timestamp()
+    fresh_time = max(path.stat().st_mtime, step_started + 1)
+    os.utime(path, (fresh_time, fresh_time))
+
+    result = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="DA-AGENT-001",
+        results_path=path,
+    )
+
+    assert result["state"] == "blocked"
+    assert result["evidenceStatuses"] == [status]
+    assert result["connectReady"] is False
+    assert _agent_setup_state(tmp_path)["steps"]["SETUP-02.1"]["mode"] is None
+
+
+def test_setup_rerun_requires_fresh_flightcheck_evidence(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    stale_results = _write_flightcheck_results(
+        tmp_path,
+        "DA-AGENT-001",
+        "Passed",
+    )
+
+    rerun = _attach(FakeClient(), tmp_path)
+
+    assert rerun["connectReady"] is False
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+    assert loaded is not None
+    loaded_agent = loaded["agents"][AGENT_ID]
+    for step_id in setup_existing_da.SETUP_FLIGHTCHECK_STEPS.values():
+        assert loaded_agent["steps"][step_id]["state"] == "pending"
+    stale_time = (
+        datetime.fromisoformat(
+            loaded_agent["steps"]["SETUP-02.1"]["updated_at"]
+        ).timestamp()
+        - 1
+    )
+    os.utime(stale_results, (stale_time, stale_time))
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="predate the current setup maintenance run",
+    ):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            agent_id=AGENT_ID,
+            checkpoint="DA-AGENT-001",
+            results_path=stale_results,
+        )
+
+
+def test_broad_connection_diagnostic_is_not_a_setup_gate(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+
+    assert "DA-CONN-*" not in setup_existing_da.SETUP_FLIGHTCHECK_STEPS
+    setup_step = _agent_setup_state(tmp_path)["steps"]["SETUP-05"]
+    assert setup_step["state"] == "done"
+    assert setup_step["failure_causes"] == []
+
+
+def _write_required_connection_results(
+    root: Path,
+    *,
+    self_help_status: str,
+    service_now_status: str = "NotConfigured",
+) -> Path:
+    path = root / "DA-CONN-family.json"
+    rows = [
+        {
+            "checkpoint_id": "DA-CONN-001",
+            "status": "NotConfigured",
+            "description": "Native agent connection readiness",
+            "result": "Two logical references were observed.",
+        },
+        {
+            "checkpoint_id": "DA-CONN-002",
+            "status": self_help_status,
+            "description": "Native connection reference: shared_alchemy",
+            "result": f"Self-Help returned {self_help_status}.",
+        },
+        {
+            "checkpoint_id": "DA-CONN-003",
+            "status": service_now_status,
+            "description": "Native connection reference: shared_service-now",
+            "result": f"ServiceNow returned {service_now_status}.",
+        },
+    ]
+    path.write_text(
+        json.dumps(
+            {
+                "scope": "checkpoint:DA-CONN-*",
+                "failed": sum(
+                    row["status"] == "Failed" for row in rows
+                ),
+                "errors": sum(
+                    row["status"] == "Error" for row in rows
+                ),
+                "results": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+    step_started = datetime.fromisoformat(
+        _agent_setup_state(root)["steps"]["SETUP-05"]["updated_at"]
+    ).timestamp()
+    fresh_time = max(path.stat().st_mtime, step_started + 1)
+    os.utime(path, (fresh_time, fresh_time))
+    return path
+
+
+def test_registry_required_connection_conditionally_gates_setup(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient(
+        agent_name="Employee Self-Service IT",
+        schema_name=IT_SCHEMA_NAME,
+        changeset=_changeset(
+            schema_name=IT_SCHEMA_NAME,
+            display_name="Employee Self-Service IT",
+        ),
+    )
+    _attach(client, tmp_path)
+
+    requirement = _agent_setup_state(tmp_path)["steps"]["SETUP-05"][
+        "requirement"
+    ]
+    assert requirement == {
+        "productKey": "employee-self-service-it",
+        "matchedBy": ["agent-schema-name", "catalog-name"],
+        "displayName": "Microsoft 365 Self-Help",
+        "connectorApiName": "shared_alchemy",
+    }
+
+    blocked = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="DA-CONN-*",
+        results_path=_write_required_connection_results(
+            tmp_path,
+            self_help_status="NotConfigured",
+        ),
+    )
+
+    assert blocked["state"] == "blocked"
+    assert blocked["failureCauses"] == [
+        "Self-Help returned NotConfigured."
+    ]
+
+    ready = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="DA-CONN-*",
+        results_path=_write_required_connection_results(
+            tmp_path,
+            self_help_status="Passed",
+            service_now_status="Failed",
+        ),
+    )
+
+    assert ready["state"] == "done"
+    assert ready["evidenceStatuses"] == ["Passed"]
+    setup_step = _agent_setup_state(tmp_path)["steps"]["SETUP-05"]
+    assert setup_step["mode"] == "automated"
+    assert "Microsoft 365 Self-Help satisfies" in setup_step["note"]
+
+
+def test_product_registry_resolves_exact_it_requirement() -> None:
+    product = da_product_registry.resolve_product_setup(
+        agent_schema_name=IT_SCHEMA_NAME,
+    )
+
+    assert product is not None
+    assert product["productKey"] == "employee-self-service-it"
+    assert product["requiredConnection"] == {
+        "displayName": "Microsoft 365 Self-Help",
+        "connectorApiName": "shared_alchemy",
+    }
+    assert (
+        da_product_registry.resolve_product_setup(
+            catalog_name="Employee Self-Service (HR)",
+        )["requiredConnection"]
+        is None
+    )
+    assert (
+        da_product_registry.resolve_product_setup(
+            catalog_name="Unknown product",
+        )
+        is None
+    )
+    assert da_product_registry.resolve_product_setup(
+        catalog_name="Employee Self-Service",
+        agent_schema_name="gptagent_copilotforemployeeselfservicecore",
+    )["productKey"] == "employee-self-service-hub"
+
+
+def test_authoring_ready_allows_incomplete_runtime_readiness(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "DA-AGENT-001",
+        "Passed",
+    )
+    result = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="DA-AGENT-001",
+        results_path=results_path,
+    )
+
+    assert result["authoringReady"] is True
+    assert result["connectReady"] is False
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+    assert loaded is not None
+    agent_state = loaded["agents"][AGENT_ID]
+    assert setup_existing_da.is_authoring_ready(
+        agent_state["steps"], agent_state["workspace"]
+    )
+    assert agent_state["steps"]["SETUP-05"]["state"] == "done"
+    assert agent_state["steps"]["SETUP-05"]["mode"] == "skipped"
+    assert agent_state["steps"]["SETUP-02.2"]["state"] == "done"
+    assert agent_state["steps"]["SETUP-02.2"]["mode"] == "skipped"
+
+
+MAIN_V4_AGENT_FIELDS = {
+    "setup_source",
+    "agent",
+    "workspace",
+    "steps",
+    "active_step",
+    "connect_ready",
+    "open_issues",
+    "created_at",
+    "updated_at",
+    "completed_at",
+}
+
+
+def test_written_state_matches_main_v4_agent_shape(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert persisted["schema_version"] == 4
+    assert setup_existing_da.CANONICAL_SETUP_SCHEMA_VERSION == 4
+    for agent_state in persisted["agents"].values():
+        assert set(agent_state) == MAIN_V4_AGENT_FIELDS
+    assert setup_existing_da._load_canonical_setup_state(tmp_path) == persisted
+
+
+def test_main_shaped_v4_state_loads_and_validates_unchanged(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    before = state_path.read_text(encoding="utf-8")
+    state = json.loads(before)
+    assert set(state["agents"][AGENT_ID]) == MAIN_V4_AGENT_FIELDS
+
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+
+    assert loaded == state
+    assert state_path.read_text(encoding="utf-8") == before
+
+
+def test_loader_still_rejects_unknown_agent_fields_like_main(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["agents"][AGENT_ID]["authoring_ready"] = True
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(setup_existing_da.ExistingDASetupError, match="malformed"):
+        setup_existing_da._load_canonical_setup_state(tmp_path)
+
+
+def _steps(done: tuple[str, ...]) -> dict[str, dict[str, str]]:
+    return {
+        step_id: {"state": "done" if step_id in done else "pending"}
+        for step_id in setup_existing_da.SETUP_STEP_ORDER
+    }
+
+
+_WORKSPACE = {"folder": "agents/a", "agent_path": "agents/a/agent.mcs.yml"}
+
+
+def test_authoring_readiness_is_derived_from_steps_and_workspace() -> None:
+    five = setup_existing_da.AUTHORING_READY_STEPS
+    assert set(five) == {
+        "SETUP-01",
+        "SETUP-02.1",
+        "SETUP-03",
+        "SETUP-04",
+        "SETUP-07",
+    }
+
+    # Ready even though SETUP-05/06 are still pending.
+    steps = _steps(five)
+    assert steps["SETUP-05"]["state"] == "pending"
+    assert steps["SETUP-06"]["state"] == "pending"
+    assert setup_existing_da.is_authoring_ready(steps, _WORKSPACE) is True
+
+    for missing in five:
+        remaining = tuple(step for step in five if step != missing)
+        assert (
+            setup_existing_da.is_authoring_ready(_steps(remaining), _WORKSPACE)
+            is False
+        )
+    assert setup_existing_da.is_authoring_ready(steps, {}) is False
+    assert (
+        setup_existing_da.is_authoring_ready(steps, {"folder": "agents/a"})
+        is False
+    )
+    assert setup_existing_da.is_authoring_ready(None, _WORKSPACE) is False
+    assert setup_existing_da.is_authoring_ready(steps, None) is False
+
+
+def test_connect_ready_rejects_incomplete_steps(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    agent_state = state["agents"][AGENT_ID]
+    agent_state["steps"]["SETUP-02.1"] = setup_existing_da._step_record()
+    agent_state["active_step"] = "SETUP-02.1"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="readiness does not match",
+    ):
+        setup_existing_da._load_canonical_setup_state(tmp_path)
+
+
+def test_all_done_steps_require_connect_ready(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["agents"][AGENT_ID]["connect_ready"] = False
+    state["agents"][AGENT_ID]["completed_at"] = None
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="readiness does not match",
+    ):
+        setup_existing_da._load_canonical_setup_state(tmp_path)
+
+
+def test_attach_rejects_changeset_for_another_agent(tmp_path: Path) -> None:
+    changeset = _changeset()
+    changeset["bot"]["cdsBotId"] = OTHER_AGENT_ID
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="different agent",
+    ):
+        setup_existing_da.attach_existing_dev(
+            FakeClient(changeset=changeset),
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+            kit_root=tmp_path,
+            expected_schema_name=SCHEMA_NAME,
+        )
+
+    setup_state = _agent_setup_state(tmp_path)
+    assert setup_state["connect_ready"] is False
+    assert setup_state["steps"]["SETUP-07"]["state"] == "blocked"
+    assert "different agent" in (
+        setup_state["steps"]["SETUP-07"]["failure_causes"][0]
+    )
+
+
+def test_identical_rerun_preserves_local_edits(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+    topic = _agent_root(tmp_path) / "topics" / "Greeting.mcs.yml"
+    topic.write_text("kind: AdaptiveDialog\nlocal: true\n", encoding="utf-8")
+
+    result = _attach(FakeClient(agent_name="Renamed Agent"), tmp_path)
+
+    assert result["status"] == "resumed"
+    assert topic.read_text(encoding="utf-8") == (
+        "kind: AdaptiveDialog\nlocal: true\n"
+    )
+    assert result["workspace"]["folder"].endswith(
+        "employee-self-service-hr"
+    )
+
+
+def test_identical_rerun_removes_dead_projection_metadata(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    metadata_path = _agent_root(tmp_path) / setup_existing_da.ATTACH_METADATA
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["unprojectedDialogs"] = []
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = _attach(FakeClient(), tmp_path)
+
+    assert "unprojectedDialogs" not in result
+    persisted = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert "unprojectedDialogs" not in persisted
+
+
+@pytest.mark.parametrize(
+    "setup_source",
+    ("alm-import", "prod-to-dev", "mos-starter"),
+)
+def test_identical_rerun_preserves_strongest_provenance(
+    tmp_path: Path,
+    setup_source: str,
+) -> None:
+    setup_existing_da.attach_existing_dev(
+        FakeClient(),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+        setup_source=setup_source,
+    )
+
+    result = _attach(FakeClient(), tmp_path)
+    state = _agent_setup_state(tmp_path)
+
+    assert result["setupSource"] == setup_source
+    assert state["setup_source"] == setup_source
+
+
+def test_changed_remote_content_requires_explicit_refresh(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="explicit refresh",
+    ):
+        _attach(
+            FakeClient(changeset=_changeset(message="Remote change")),
+            tmp_path,
+        )
+
+
+def test_change_token_does_not_force_refresh(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+
+    result = _attach(
+        FakeClient(changeset=_changeset(change_token="new-token")),
+        tmp_path,
+    )
+
+    assert result["status"] == "resumed"
+
+
+def test_explicit_refresh_checkpoints_then_replaces_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    topic = _agent_root(tmp_path) / "topics" / "Greeting.mcs.yml"
+    topic.write_text("kind: AdaptiveDialog\nlocal: true\n", encoding="utf-8")
+    checkpointed: list[str] = []
+
+    def create_checkpoint(path: str, message: str) -> int:
+        checkpointed.extend([path, message])
+        return 7
+
+    def restore_from(destination: str, source: str) -> None:
+        shutil.rmtree(destination)
+        shutil.copytree(source, destination)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "checkpoint",
+        SimpleNamespace(
+            create_checkpoint=create_checkpoint,
+            restore_from=restore_from,
+        ),
+    )
+
+    result = _attach(
+        FakeClient(changeset=_changeset(message="Remote change")),
+        tmp_path,
+        refresh=True,
+    )
+
+    assert result["status"] == "refreshed"
+    assert result["checkpoint"] == 7
+    assert "Remote change" in topic.read_text(encoding="utf-8")
+    assert checkpointed[1] == "before DA setup refresh"
+
+
+def test_older_projection_requires_explicit_refresh(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+    metadata_path = _agent_root(tmp_path) / setup_existing_da.ATTACH_METADATA
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["projectionVersion"] = 1
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="older projection",
+    ):
+        _attach(FakeClient(), tmp_path)
+
+
+def test_attach_does_not_treat_operational_config_as_setup_completion(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / ".local" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "setup": "complete",
+                "transport": "agentbuilder",
+                "dataverseEndpoint": "https://old",
+                "agents": [
+                    {
+                        "name": "Old Agent",
+                        "botId": OTHER_AGENT_ID,
+                        "slug": "old-agent",
+                        "transport": "agentbuilder",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _attach(FakeClient(), tmp_path)
+
+    assert result["connectReady"] is False
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "transport" not in config
+    assert all("transport" not in agent for agent in config["agents"])
+
+
+@pytest.mark.parametrize(
+    ("inventory", "expected_exit_code"),
+    [
+        (
+            {
+                "minimalBots": {
+                    "response": [
+                        {
+                            "botId": AGENT_ID,
+                            "shortBotName": "Employee Self-Service HR",
+                            "customField": {"untouched": True},
+                        }
+                    ],
+                    "error": None,
+                },
+                "copilotStudioAgents": {
+                    "response": [
+                        {
+                            "Entities": [
+                                {
+                                    "cdsBotId": AGENT_ID,
+                                    "schemaName": SCHEMA_NAME,
+                                    "customField": ["untouched"],
+                                }
+                            ],
+                            "ContinuationToken": "next-page",
+                        }
+                    ],
+                    "error": None,
+                },
+            },
+            0,
+        ),
+        (
+            {
+                "minimalBots": {
+                    "response": None,
+                    "error": {
+                        "type": "AgentBuilderHTTPError",
+                        "message": "MinimalBots failed.",
+                        "httpStatus": 403,
+                    },
+                },
+                "copilotStudioAgents": {
+                    "response": [{"Entities": [], "ContinuationToken": ""}],
+                    "error": None,
+                },
+            },
+            0,
+        ),
+        (
+            {
+                "minimalBots": {"response": [], "error": None},
+                "copilotStudioAgents": {
+                    "response": None,
+                    "error": {
+                        "type": "AgentBuilderHTTPError",
+                        "message": "Agent collection failed.",
+                        "httpStatus": 500,
+                    },
+                },
+            },
+            0,
+        ),
+        (
+            {
+                "minimalBots": {"response": [], "error": None},
+                "copilotStudioAgents": {
+                    "response": [{"Entities": [], "ContinuationToken": ""}],
+                    "error": None,
+                },
+            },
+            0,
+        ),
+        (
+            {
+                "minimalBots": {
+                    "response": None,
+                    "error": {
+                        "type": "AgentBuilderHTTPError",
+                        "message": "MinimalBots failed.",
+                    },
+                },
+                "copilotStudioAgents": {
+                    "response": None,
+                    "error": {
+                        "type": "AgentBuilderHTTPError",
+                        "message": "Agent collection failed.",
+                    },
+                },
+            },
+            1,
+        ),
+    ],
+)
+def test_main_list_agents_preserves_raw_endpoint_results(
+    inventory: dict[str, Any],
+    expected_exit_code: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = SimpleNamespace(list_agent_inventory=lambda: inventory)
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args, **_kwargs: client,
+    )
+
+    result = setup_existing_da.main(
+        [
+            "list-agents",
+            "--environment-id",
+            ENVIRONMENT_ID,
+            "--ring",
+            "test",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == expected_exit_code
+    payload = json.loads(
+        capsys.readouterr().out.removeprefix("DA_AGENT_LIST_JSON:")
+    )
+    assert payload == {
+        "environmentId": ENVIRONMENT_ID,
+        **inventory,
+    }
+
+
+def test_main_validate_agent_writes_no_setup_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args, **_kwargs: FakeClient(),
+    )
+
+    result = setup_existing_da.main(
+        [
+            "validate-agent",
+            "--target-url",
+            AGENT_URL,
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 0
+    payload = json.loads(
+        capsys.readouterr().out.removeprefix("DA_AGENT_VALIDATION_JSON:")
+    )
+    assert payload["agentId"] == AGENT_ID
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_main_ensure_alm_emits_shared_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args, **_kwargs: FakeClient(),
+    )
+    observed: dict[str, Any] = {}
+
+    def ensure(_client: FakeClient, **kwargs: Any) -> dict[str, Any]:
+        observed.update(kwargs)
+        return {
+            "environmentId": kwargs["environment_id"],
+            "agentId": kwargs["agent_id"],
+            "outcome": "already-enabled",
+            "persistedValue": True,
+        }
+
+    monkeypatch.setattr(setup_existing_da, "ensure_alm", ensure)
+
+    result = setup_existing_da.main(
+        [
+            "ensure-alm",
+            "--target-url",
+            AGENT_URL,
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 0
+    assert observed == {
+        "environment_id": ENVIRONMENT_ID,
+        "agent_id": AGENT_ID,
+    }
+    payload = json.loads(
+        capsys.readouterr().out.removeprefix("DA_ALM_ENROLLMENT_JSON:")
+    )
+    assert payload["outcome"] == "already-enabled"
+    assert payload["persistedValue"] is True
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_main_attach_preflights_serializer_before_authentication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail_preflight() -> None:
+        raise setup_existing_da.ObjectModelConverterError(
+            "serializer unavailable"
+        )
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "validate_object_model_runtime",
+        fail_preflight,
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args, **_kwargs: pytest.fail("authentication should not run"),
+    )
+
+    result = setup_existing_da.main(
+        [
+            "attach",
+            "--target-url",
+            AGENT_URL,
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 1
+    error = capsys.readouterr().err
+    assert "before authentication or remote agent validation" in error
+    assert "serializer unavailable" in error
+
+
+@pytest.mark.parametrize(
+    ("setup_source", "selection_source"),
+    (
+        ("alm-import", "alm-import-result"),
+        ("prod-to-dev", "prod-to-dev-result"),
+        ("mos-starter", "mos-starter-result"),
+    ),
+)
+def test_main_attach_forwards_setup_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    setup_source: str,
+    selection_source: str,
+) -> None:
+    observed: dict[str, Any] = {}
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_require_object_model_dependencies",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args, **_kwargs: FakeClient(),
+    )
+
+    def attach(_client: FakeClient, **kwargs: Any) -> dict[str, Any]:
+        observed.update(kwargs)
+        return {"status": "created"}
+
+    monkeypatch.setattr(setup_existing_da, "attach_existing_dev", attach)
+
+    result = setup_existing_da.main(
+        [
+            "attach",
+            "--target-url",
+            AGENT_URL,
+            "--kit-root",
+            str(tmp_path),
+            "--setup-source",
+            setup_source,
+        ]
+        + (
+            ["--expected-schema-name", SCHEMA_NAME]
+            if setup_source in {"alm-import", "prod-to-dev", "mos-starter"}
+            else []
+        )
+    )
+
+    assert result == 0
+    assert observed["selection_source"] == selection_source
+    assert observed["setup_source"] == setup_source
+    assert observed["expected_schema_name"] == (
+        SCHEMA_NAME
+        if setup_source in {"alm-import", "prod-to-dev", "mos-starter"}
+        else None
+    )
+    assert observed["allow_unenrolled_authoring"] is False
+
+
+def test_main_attach_forwards_unenrolled_authoring_choice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_require_object_model_dependencies",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args, **_kwargs: FakeClient(),
+    )
+
+    def attach(_client: FakeClient, **kwargs: Any) -> dict[str, Any]:
+        observed.update(kwargs)
+        return {"status": "created"}
+
+    monkeypatch.setattr(setup_existing_da, "attach_existing_dev", attach)
+
+    result = setup_existing_da.main(
+        [
+            "attach",
+            "--target-url",
+            AGENT_URL,
+            "--kit-root",
+            str(tmp_path),
+            "--allow-unenrolled-authoring",
+        ]
+    )
+
+    assert result == 0
+    assert observed["allow_unenrolled_authoring"] is True
+
+
+def test_parser_exposes_only_composable_setup_operations() -> None:
+    parser = setup_existing_da.build_parser()
+    subparsers = next(
+        action
+        for action in parser._actions
+        if isinstance(action, setup_existing_da.argparse._SubParsersAction)
+    )
+
+    assert set(subparsers.choices) == {
+        "attach",
+        "cached-accounts",
+        "ensure-alm",
+        "inspect-agent",
+        "list-environments",
+        "list-agents",
+        "maintain-flightcheck",
+        "seed-shared-cache",
+        "select-agent",
+        "validate-agent",
+    }
+
+    parsed = parser.parse_args(
+        [
+            "inspect-agent",
+            "--target-url",
+            "https://copilotstudio.microsoft.com/environments/"
+            f"{ENVIRONMENT_ID}/agents/{AGENT_ID}",
+            "--account",
+            "test.user@example.test",
+        ]
+    )
+    assert parsed.account == "test.user@example.test"
+    inspect_help = " ".join(
+        subparsers.choices["inspect-agent"].format_help().split()
+    )
+    assert (
+        "Microsoft account sign-in name used to access the target Power "
+        "Platform environment"
+        in inspect_help
+    )
+    with pytest.raises(SystemExit):
+        parser.parse_args(["list-environments"])
+
+
+def test_list_environments_emits_visible_non_dataverse_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        lambda token, ring, *, api_version: [
+            {
+                "id": ENVIRONMENT_ID,
+                "displayName": "No Database Environment",
+                "type": "Sandbox",
+                "state": "Ready",
+                "geo": "unitedstates",
+                "url": "",
+                "futureServiceField": {"preserved": True},
+            }
+        ],
+    )
+
+    assert setup_existing_da.main(
+        [
+            "list-environments",
+            "--ring",
+            "test",
+            "--account",
+            "test.user@example.test",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+
+    result = json.loads(
+        capsys.readouterr().out.removeprefix(
+            "DA_ENVIRONMENT_LIST_JSON:"
+        )
+    )
+    evidence_path = (
+        tmp_path / ".local" / "setup" / "environment-list-test.json"
+    )
+    assert result == {
+        "tenantId": TENANT_ID,
+        "ring": "test",
+        "account": "test.user@example.test",
+        "evidencePath": str(evidence_path.resolve()),
+        "environments": [
+            {
+                "id": ENVIRONMENT_ID,
+                "name": "No Database Environment",
+                "type": "Sandbox",
+                "state": "Ready",
+                "region": "unitedstates",
+            }
+        ],
+    }
+    assert json.loads(evidence_path.read_text(encoding="utf-8")) == {
+        "tenantId": TENANT_ID,
+        "ring": "test",
+        "environments": [
+            {
+                "id": ENVIRONMENT_ID,
+                "displayName": "No Database Environment",
+                "type": "Sandbox",
+                "state": "Ready",
+                "geo": "unitedstates",
+                "url": "",
+                "futureServiceField": {"preserved": True},
+            }
+        ],
+    }
+
+
+def test_list_environments_preserves_empty_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        lambda token, ring, *, api_version: [],
+    )
+
+    assert setup_existing_da.main(
+        [
+            "list-environments",
+            "--ring",
+            "prod",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+    result = json.loads(
+        capsys.readouterr().out.removeprefix(
+            "DA_ENVIRONMENT_LIST_JSON:"
+        )
+    )
+    assert result["environments"] == []
+    assert result["ring"] == "prod"
+
+
+def test_list_environments_preserves_multiple_guid_service_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    service_id = "00000000-0000-4000-8000-000000004444"
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        lambda token, ring, *, api_version: [
+            {
+                "id": ENVIRONMENT_ID,
+                "displayName": "Standard Environment",
+                "type": "Sandbox",
+                "state": "Ready",
+            },
+            {
+                "id": service_id,
+                "displayName": "Service Environment",
+                "type": "Production",
+                "state": "Ready",
+            },
+        ],
+    )
+
+    assert setup_existing_da.main(
+        [
+            "list-environments",
+            "--ring",
+            "prod",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+    result = json.loads(
+        capsys.readouterr().out.removeprefix(
+            "DA_ENVIRONMENT_LIST_JSON:"
+        )
+    )
+
+    assert [item["id"] for item in result["environments"]] == [
+        service_id,
+        ENVIRONMENT_ID,
+    ]
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_list_environments_preserves_authorization_failure(
+    status_code: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
+    )
+    response = SimpleNamespace(
+        json=lambda: {"error": {"code": "AuthorizationFailed"}},
+        text="forbidden",
+    )
+
+    def deny_listing(
+        _token: str,
+        _ring: str,
+        *,
+        api_version: str,
+    ) -> list[dict[str, Any]]:
+        raise setup_existing_da.AgentBuilderHTTPError(
+            "Environment listing",
+            status_code,
+            error_code="AuthorizationFailed",
+            request_id="request-123",
+            response=response,
+        )
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        deny_listing,
+    )
+
+    assert setup_existing_da.main(
+        [
+            "list-environments",
+            "--ring",
+            "prod",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 1
+    captured = capsys.readouterr()
+    error_result = json.loads(
+        next(
+            line.removeprefix("DA_ENVIRONMENT_LIST_ERROR_JSON:")
+            for line in captured.out.splitlines()
+            if line.startswith("DA_ENVIRONMENT_LIST_ERROR_JSON:")
+        )
+    )
+    assert error_result == {
+        "statusCode": status_code,
+        "errorCode": "AuthorizationFailed",
+        "requestId": "request-123",
+        "authorizationFailure": True,
+    }
+    assert "DA_ENVIRONMENT_LIST_ERROR_RESPONSE_JSON:" in captured.out
+    assert "DA_ENVIRONMENT_LIST_JSON:" not in captured.out
+    assert f"HTTP {status_code}" in captured.err
+
+
+def test_maintain_flightcheck_command_updates_local_state(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "DA-AGENT-001",
+        "Passed",
+    )
+
+    exit_code = setup_existing_da.main(
+        [
+            "maintain-flightcheck",
+            "--checkpoint",
+            "DA-AGENT-001",
+            "--agent-id",
+            AGENT_ID,
+            "--results",
+            str(results_path),
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "DA_SETUP_FLIGHTCHECK_JSON:" in output
+    assert '"state": "done"' in output
+
+
+def test_maintain_flightcheck_command_accepts_connection_family(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = FakeClient(
+        agent_name="Employee Self-Service IT",
+        schema_name=IT_SCHEMA_NAME,
+        changeset=_changeset(
+            schema_name=IT_SCHEMA_NAME,
+            display_name="Employee Self-Service IT",
+        ),
+    )
+    _attach(client, tmp_path)
+    results_path = _write_required_connection_results(
+        tmp_path,
+        self_help_status="Passed",
+        service_now_status="NotConfigured",
+    )
+
+    exit_code = setup_existing_da.main(
+        [
+            "maintain-flightcheck",
+            "--checkpoint",
+            "DA-CONN-*",
+            "--agent-id",
+            AGENT_ID,
+            "--results",
+            str(results_path),
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "DA_SETUP_FLIGHTCHECK_JSON:" in output
+    assert '"step": "SETUP-05"' in output
+    assert '"state": "done"' in output
+
+
+def test_capacity_is_not_a_supported_setup_flightcheck(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_before = (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes()
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="Unsupported setup FlightCheck checkpoint: ENV-CAPACITY-001",
+    ):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            agent_id=AGENT_ID,
+            checkpoint="ENV-CAPACITY-001",
+            results_path=tmp_path / "ENV-CAPACITY-001.json",
+        )
+    assert (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes() == state_before
+
+
+@pytest.mark.parametrize("state", ["pending", "in-progress", "blocked"])
+def test_resume_skips_unfinished_capacity_without_bypassing_other_checks(
+    tmp_path: Path,
+    state: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    canonical = _setup_state(tmp_path)
+    agent = canonical["agents"][AGENT_ID]
+    agent["steps"]["SETUP-02.2"] = setup_existing_da._step_record(
+        state,
+        checkpoint="ENV-CAPACITY-001",
+        failure_causes=["Capacity could not be verified"] if state == "blocked" else [],
+        recorded_at=agent["created_at"],
+    )
+    state_path.write_text(json.dumps(canonical), encoding="utf-8")
+
+    result = _attach(FakeClient(), tmp_path)
+    loaded = _agent_setup_state(tmp_path)
+    capacity = loaded["steps"]["SETUP-02.2"]
+
+    assert capacity["state"] == "done"
+    assert capacity["mode"] == "skipped"
+    assert capacity["checkpoint"] is None
+    assert capacity["failure_causes"] == []
+    assert "was not verified" in capacity["note"]
+    assert result["connectReady"] is False
+    assert loaded["active_step"] == "SETUP-02.1"
+    assert loaded["steps"]["SETUP-02.1"]["state"] == "pending"
+    assert loaded["steps"]["SETUP-06"]["state"] == "pending"
+
+    _complete_setup_flightchecks(tmp_path)
+    assert _agent_setup_state(tmp_path)["connect_ready"] is True
+
+
+@pytest.mark.parametrize("mode", ["automated", "administrator-attested-skip"])
+def test_resume_preserves_completed_capacity_history_and_report(
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    canonical = _setup_state(tmp_path)
+    agent = canonical["agents"][AGENT_ID]
+    historical_capacity = setup_existing_da._step_record(
+        "done",
+        mode=mode,
+        note="Historical capacity observation or administrator attestation.",
+        checkpoint="ENV-CAPACITY-001",
+        recorded_at=agent["created_at"],
+    )
+    agent["steps"]["SETUP-02.2"] = historical_capacity
+    state_path.write_text(json.dumps(canonical), encoding="utf-8")
+    report_path = (
+        tmp_path / ".local" / "setup" / "agents" / AGENT_ID
+        / "flightcheck" / "ENV-CAPACITY-001" / "results.json"
+    )
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text(
+        json.dumps({
+            "scope": "checkpoint:ENV-CAPACITY-001",
+            "results": [{
+                "checkpoint_id": "ENV-CAPACITY-001",
+                "status": "Passed" if mode == "automated" else "Manual",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    original_report = report_path.read_bytes()
+    original_mtime = report_path.stat().st_mtime_ns
+
+    _attach(FakeClient(), tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+
+    assert loaded is not None
+    assert loaded["agents"][AGENT_ID]["connect_ready"] is True
+    assert loaded["agents"][AGENT_ID]["steps"]["SETUP-02.2"] == historical_capacity
+    assert report_path.read_bytes() == original_report
+    assert report_path.stat().st_mtime_ns == original_mtime
+
+
+def test_authentication_uses_workspace_cache_and_account_hint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    def authenticate_selected(
+        ring: str,
+        *,
+        cache_path: Path,
+        force_account_selection: bool,
+        account_hint: str,
+            return_account_identity: bool,
+            require_account_identity: bool,
+        ) -> tuple[str, str, str]:
+        observed.update(
+            {
+                "ring": ring,
+                "cache_path": cache_path,
+                "force_account_selection": force_account_selection,
+                "account_hint": account_hint,
+                "return_account_identity": return_account_identity,
+                "require_account_identity": require_account_identity,
+            }
+        )
+        return "token", TENANT_ID, account_hint
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "authenticate_selected_tenant",
+        authenticate_selected,
+    )
+    args = SimpleNamespace(
+        tenant_id=None,
+        select_account=False,
+        account="test.user@example.test",
+        kit_root=tmp_path,
+    )
+
+    assert setup_existing_da._authentication_from_args(args, "test") == (
+        "token",
+        TENANT_ID,
+        "test.user@example.test",
+    )
+    assert observed == {
+        "ring": "test",
+        "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
+        "force_account_selection": False,
+        "account_hint": "test.user@example.test",
+        "return_account_identity": True,
+        "require_account_identity": True,
+    }
+
+
+def test_list_agents_authentication_uses_read_only_inventory_scopes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    def authenticate_inventory(
+        ring: str,
+        *,
+        tenant_id: str | None,
+        cache_path: Path,
+        force_account_selection: bool,
+        account_hint: str,
+            return_account_identity: bool,
+            require_account_identity: bool,
+        ) -> tuple[str, str, str]:
+        observed.update(
+            {
+                "ring": ring,
+                "tenant_id": tenant_id,
+                "cache_path": cache_path,
+                "force_account_selection": force_account_selection,
+                "account_hint": account_hint,
+                "return_account_identity": return_account_identity,
+                "require_account_identity": require_account_identity,
+            }
+        )
+        return "token", TENANT_ID, account_hint
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "authenticate_agent_inventory",
+        authenticate_inventory,
+    )
+    args = SimpleNamespace(
+        command="list-agents",
+        tenant_id=TENANT_ID,
+        select_account=False,
+        account="test.user@example.test",
+        kit_root=tmp_path,
+    )
+
+    assert setup_existing_da._authentication_from_args(args, "test") == (
+        "token",
+        TENANT_ID,
+        "test.user@example.test",
+    )
+    assert observed == {
+        "ring": "test",
+        "tenant_id": TENANT_ID,
+        "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
+        "force_account_selection": False,
+        "account_hint": "test.user@example.test",
+        "return_account_identity": True,
+        "require_account_identity": True,
+    }
+
+
+def test_list_agents_authentication_rejects_unknown_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def authenticate_inventory(*_args, **_kwargs):
+        return "token", TENANT_ID, None
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "authenticate_agent_inventory",
+        authenticate_inventory,
+    )
+    args = SimpleNamespace(
+        command="list-agents",
+        tenant_id=TENANT_ID,
+        select_account=False,
+        account=None,
+        kit_root=tmp_path,
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="could not verify the selected Microsoft account",
+    ):
+        setup_existing_da._authentication_from_args(args, "test")
+
+
+def test_cached_accounts_command_reads_workspace_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed: dict[str, Path] = {}
+
+    def account_names(cache_path: Path) -> list[str]:
+        observed["cache_path"] = cache_path
+        return ["test.user@example.test"]
+
+    monkeypatch.setattr(setup_existing_da, "cached_account_names", account_names)
+
+    assert setup_existing_da.main(
+        ["cached-accounts", "--kit-root", str(tmp_path)]
+    ) == 0
+    output = capsys.readouterr().out
+
+    assert observed["cache_path"] == (
+        tmp_path / ".local" / ".agentbuilder_token_cache.bin"
+    )
+    assert json.loads(
+        output.removeprefix("DA_AGENTBUILDER_ACCOUNTS_JSON:")
+    ) == {"accounts": ["test.user@example.test"]}
+
+
+def test_seed_shared_cache_command_reports_bounded_local_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed: dict[str, Any] = {}
+    result = {"outcome": "already-exists", "sharedCache": "existing.bin"}
+
+    def seed(account: str, **kwargs: Any) -> dict[str, Any]:
+        observed.update(account=account, **kwargs)
+        return result
+
+    monkeypatch.setattr(setup_existing_da, "seed_shared_token_cache", seed)
+
+    assert setup_existing_da.main(
+        [
+            "seed-shared-cache",
+            "--account",
+            "maker@example.test",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+    assert observed == {
+        "account": "maker@example.test",
+        "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
+        "shared_cache_path": tmp_path / ".local" / ".token_cache.bin",
+    }
+    assert json.loads(
+        capsys.readouterr().out.removeprefix("DA_AUTH_CACHE_SEED_JSON:")
+    ) == result
+
+
+def test_seed_shared_cache_command_reports_failure_without_success_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def seed(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise PermissionError("cache publication denied")
+
+    monkeypatch.setattr(setup_existing_da, "seed_shared_token_cache", seed)
+
+    assert setup_existing_da.main(
+        [
+            "seed-shared-cache",
+            "--account",
+            "maker@example.test",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 1
+    captured = capsys.readouterr()
+    assert "PermissionError: cache publication denied" in captured.err
+    assert "DA_AUTH_CACHE_SEED_JSON:" not in captured.out
+
+
+def test_unknown_setup_state_uses_format_language(tmp_path: Path) -> None:
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps({"schema_version": 99}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="incompatible format",
+    ):
+        setup_existing_da._load_canonical_setup_state(tmp_path)

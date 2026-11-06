@@ -9,6 +9,7 @@
 !.devcontainer/
 .devcontainer/*
 !.devcontainer/devcontainer.json
+!.devcontainer/post-create.sh
 !.github/
 !.gitignore
 !.vscode/
@@ -18,6 +19,7 @@
 !tools/
 !docs/
 !README.md
+!REFERENCE.md
 !LICENSE
 !SECURITY.md
 !CONTRIBUTING.md

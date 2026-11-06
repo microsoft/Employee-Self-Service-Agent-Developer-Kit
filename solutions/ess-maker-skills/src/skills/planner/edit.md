@@ -159,7 +159,7 @@ affected area:
 
 - **A scenario/system came *into* scope, or a system was swapped *in*** — e.g.
   *"use SuccessFactors instead of Workday"*, *"also add IT ticketing"*. Emit that
-  system's **exhaustive** task set: its grounded checklist when one exists
+  system's **exhaustive** task set: its planning reference when one exists
   (`python scripts/planner/cli.py setup-tasks --system <sys> --commands`), otherwise
   the research-grounded, role-split set `model.md` prescribes. Wire each task into
   the `produces`/`consumes` ledger and tag it with the right `--stream`. Not one

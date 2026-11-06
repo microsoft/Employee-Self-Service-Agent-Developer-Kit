@@ -7,8 +7,6 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-export SKIP_MAKER_PROFILE="true"
-
 # Parse optional --branch / --source-base-url arguments
 BRANCH="main"
 SOURCE_BASE_URL=""

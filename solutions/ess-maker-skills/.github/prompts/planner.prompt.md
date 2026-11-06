@@ -26,13 +26,15 @@ The maker must have made an **explicit** planning or existing-plan request
 (`/planner`, "plan a rollout",
 "create a plan", "edit this plan", "assign owners", "record task completion",
 "share and activate the plan", "resume my plan") or
-chosen "Plan your ESS rollout" from the first-run setup gate — either way,
+chosen "Plan my ESS rollout first" when `/setup` offered it — either way,
 proceed with planning. On a brand-new tenant nothing is
 set up yet — planning is how the rollout is decided — so do not block on
 `.local/config.json` being `"complete"`. Read it if it exists (to reuse the
-environment/agent details), then proceed. The plan's first task is almost always
-**the Power Platform admin running `/setup`**, and the details that records
-back-propagate to the later tasks (connect, create, evals).
+environment/agent details), then proceed. The plan's first tasks are almost
+always **a Power Platform administrator creating the environment** in the Power
+Platform admin center, then **an Environment Maker running `/setup`** to create or
+connect that environment's ESS agent and bring it into the workspace; the details
+setup records back-propagate to the later tasks (connect, create, evals).
 
 **Complete the workspace bootstrap before any shared tool call.** Follow the
 canonical planner's **Gate** before whichever Planner flow runs first in this

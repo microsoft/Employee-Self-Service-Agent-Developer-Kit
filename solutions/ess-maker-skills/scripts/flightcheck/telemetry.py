@@ -98,7 +98,16 @@ EVENT_CHECK = "ESSMakerKit.FlightCheck.Check"
 
 # Bump when the emitted field set changes so dashboards can version-gate.
 # 1.1: added derived ``tenantClass`` (internal vs customer) — ADO 7558661.
-TELEMETRY_SCHEMA_VERSION = "1.1"
+# 1.2: added ``toolkitGitSha`` + ``toolkitGitBranch`` for precise
+#      upgrade-posture and CA-vs-DA attribution — ADO 7943642.
+# 1.3: added derived ``connector`` (workday|servicenow|"") on run + check —
+#      ADO 7943641.
+# 1.4: added ``agentType`` to check events plus profile/realm/blocking,
+#      severity, and automation dimensions — ADO 7955324.
+# 1.5: added ``blockReason`` to check + run events — splits the single
+#      Blocked verdict wedge by cause so admin-API authorization denials
+#      (HTTP 401/403, AADSTS*) are countable separately from other blocks.
+TELEMETRY_SCHEMA_VERSION = "1.5"
 
 # Short, fail-open timeout (connect, read) seconds. Telemetry runs at the
 # very end of a FlightCheck; we never want it to hang the CLI.
@@ -106,18 +115,68 @@ _POST_TIMEOUT = (3.05, 5)
 
 
 # --- Tenant classification (ADO 7558661) ----------------------------------
-# Report internal Microsoft dogfood/testing traffic separately from real
-# external customer usage. ``tenant_class`` is DERIVED from ``tenant_id`` — a
-# coarse, non-identifying bucket (strictly lower sensitivity than the raw
-# tenant GUID it is computed from). It is classified at EMIT time, not in the
-# Aria cube, because 1DS RTA cubes map an event property straight to a
-# dimension and cannot derive one dimension's value from another.
+# Report known non-customer traffic separately from external customer usage.
+# ``internal`` is the historical telemetry bucket name; it includes Microsoft
+# corporate/dogfood tenancy plus explicitly verified partner, self-service, and
+# demo test tenants. It does not assert that every listed tenant is
+# Microsoft-owned. ``tenant_class`` is DERIVED from ``tenant_id`` — a coarse,
+# non-identifying bucket (strictly lower sensitivity than the raw tenant GUID
+# it is computed from). It is classified at EMIT time, not in the Aria cube,
+# because 1DS RTA cubes map an event property straight to a dimension and
+# cannot derive one dimension's value from another.
 #
-# Seeded with the Microsoft corporate Entra tenant only. Additional internal /
-# dogfood tenants can be added WITHOUT a code change via the
-# ``ESS_ADK_INTERNAL_TENANTS`` env var (comma-separated GUIDs) — preferred over
-# growing a hard-coded list.
+# Seeded with the Microsoft corporate Entra tenant plus known non-customer
+# dogfood/test/demo tenants. Additional non-customer tenants can be added
+# WITHOUT a code change via the ``ESS_ADK_INTERNAL_TENANTS`` env var
+# (comma-separated GUIDs) — preferred for one-off / short-lived additions; the
+# hard-coded list is for well-known, long-lived tenancies with recorded
+# provenance.
 MICROSOFT_CORP_TENANT_ID = "72f988bf-86f1-41af-91ab-2d7cd011db47"
+# EmployeeHub dogfood tenant (team-owned; see PR #242 / customer-attribution
+# analysis).
+EMPLOYEEHUB_TENANT_ID = "935884d7-bdee-469b-a461-fcc530a3ac83"
+# ESS internal demo/test tenants surfaced by usage analysis. tenant_name
+# lookup during the auth path resolves these to ``Contoso`` and
+# ``Crontoso, Inc`` respectively; both are internal test tenancies.
+CONTOSO_INTERNAL_TENANT_ID = "ed667978-98e2-41a3-ad41-bafc8f728f02"
+CRONTOSO_INTERNAL_TENANT_ID = "99f9fd00-6145-4c3e-b3ba-d4c7e59470d8"
+# Cocreate test tenancy (``TESTTEST_Cocreate_06302026`` /
+# ``devtestcocreate0630.onmicrosoft.com``); internal dev/test only.
+COCREATE_TEST_TENANT_ID = "8d36aacf-bbb3-4388-ac14-8844210f377b"
+
+# These six tenants were identified in production external-usage investigations
+# by resolving their Entra display names through Microsoft Graph, then
+# explicitly designated by the telemetry owner as non-customer test/demo
+# traffic and excluded from the external dashboards. PR #458 is the durable
+# change record. Match exact IDs only; display-name patterns are not evidence.
+COPILOT_PARTNER_TEST_TENANT_ID = "142b48c2-943c-4d07-ad6b-b0eb5cd0e5f2"
+M365E5_PARTNER_TEST_TENANT_ID = "440d6412-bc8e-49a0-9913-9f8be786b89e"
+OFFICE365E5_SELF_SERVICE_TEST_TENANT_ID = "4636dd08-fdd9-4610-a443-762fb320fb4e"
+CONTOSOTPM_TEST_TENANT_ID = "6936469c-696e-4fe2-a0c8-dd16f54b1b45"
+CONTOSO_DEMO_TENANT_ID = "4345eb96-df8a-464a-9eb8-72253571a621"
+CONTOSO_DEMO_2_TENANT_ID = "2d5577b0-a83c-436c-9582-1c3bcd2ab0d3"
+
+KNOWN_NON_CUSTOMER_TEST_TENANT_IDS: tuple[str, ...] = (
+    COPILOT_PARTNER_TEST_TENANT_ID,
+    M365E5_PARTNER_TEST_TENANT_ID,
+    OFFICE365E5_SELF_SERVICE_TEST_TENANT_ID,
+    CONTOSOTPM_TEST_TENANT_ID,
+    CONTOSO_DEMO_TENANT_ID,
+    CONTOSO_DEMO_2_TENANT_ID,
+)
+
+# Well-known non-customer tenancies. Kept as a module-level constant so tests
+# and analytics tooling can enumerate the same set.
+_HARDCODED_INTERNAL_TENANT_IDS: frozenset[str] = frozenset(
+    {
+        MICROSOFT_CORP_TENANT_ID,
+        EMPLOYEEHUB_TENANT_ID,
+        CONTOSO_INTERNAL_TENANT_ID,
+        CRONTOSO_INTERNAL_TENANT_ID,
+        COCREATE_TEST_TENANT_ID,
+        *KNOWN_NON_CUSTOMER_TEST_TENANT_IDS,
+    }
+)
 
 TENANT_CLASS_INTERNAL = "internal"
 TENANT_CLASS_CUSTOMER = "customer"
@@ -136,7 +195,7 @@ _GUID_RE = re.compile(
 
 
 def _internal_tenant_ids() -> frozenset[str]:
-    """Allow-list of tenant GUIDs treated as internal Microsoft tenancy.
+    """Allow-list of tenant GUIDs treated as known non-customer tenancy.
 
     The env var is still consulted on every call (a cheap dict lookup), so a
     changed ``ESS_ADK_INTERNAL_TENANTS`` is honored without a restart, but the
@@ -150,7 +209,7 @@ def _internal_tenant_ids() -> frozenset[str]:
 @lru_cache(maxsize=8)
 def _parse_internal_tenant_ids(extra: str) -> frozenset[str]:
     """Parse the comma-separated allow-list, cached per distinct env value."""
-    ids = {MICROSOFT_CORP_TENANT_ID}
+    ids = set(_HARDCODED_INTERNAL_TENANT_IDS)
     ids.update(t.strip().lower() for t in extra.split(",") if t.strip())
     return frozenset(ids)
 
@@ -492,6 +551,264 @@ def get_adk_version() -> str:
     return "unknown"
 
 
+def _find_git_dir() -> str:
+    """Walk up from this file until a ``.git`` directory (or file) is
+    found. Returns the absolute path of the ``.git`` entry, or ``""`` if
+    no repo is found within a safe walk depth.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    cur = here
+    for _ in range(10):
+        candidate = os.path.join(cur, ".git")
+        if os.path.exists(candidate):
+            return candidate
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return ""
+
+
+# Bounded set of branch classifications emitted as toolkit_git_branch.
+# Anything outside this set (personal branches, fork names, customer
+# labels, aliases) collapses to "other" to avoid leaking free-form
+# identifiers per the privacy contract documented in CONTRIBUTING.md and
+# solutions/ess-maker-skills/README.md. Extend this set only after a
+# privacy review approves the new value(s).
+_ALLOWED_BRANCHES = frozenset({"main", "main-ca"})
+
+
+def _classify_branch(branch: str) -> str:
+    """Collapse an arbitrary branch string to one of the allowed values.
+
+    Returns one of: ``main``, ``main-ca``, ``detached``, ``other``,
+    ``unknown``. All personal / fork / topic branch names collapse to
+    ``other`` so branch names never appear in telemetry.
+    """
+    if not branch:
+        return "unknown"
+    if branch == "detached" or branch == "unknown":
+        return branch
+    if branch in _ALLOWED_BRANCHES:
+        return branch
+    return "other"
+
+
+def _is_short_sha(value: str) -> bool:
+    """True if ``value`` looks like a hex commit ID (>=7 chars, all hex)."""
+    if not value or len(value) < 7 or len(value) > 40:
+        return False
+    return all(c in "0123456789abcdef" for c in value)
+
+
+def _resolve_git_dirs(git_dir: str) -> tuple[str, str]:
+    """Return ``(gitdir, commondir)`` for a ``.git`` entry.
+
+    ``gitdir`` is the per-worktree administrative directory (holds
+    ``HEAD``); ``commondir`` is the shared directory that holds
+    ``refs/`` and ``packed-refs`` for real linked worktrees. For a
+    plain non-worktree checkout the two are identical.
+
+    Returns ``("", "")`` on any error so callers fail open.
+    """
+    try:
+        # ``.git`` may be a file for worktrees / submodules pointing at
+        # the real per-worktree gitdir via ``gitdir: <path>``.
+        if os.path.isfile(git_dir):
+            with open(git_dir, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            prefix = "gitdir:"
+            if not content.startswith(prefix):
+                return ("", "")
+            real = content[len(prefix):].strip()
+            if not os.path.isabs(real):
+                real = os.path.normpath(
+                    os.path.join(os.path.dirname(git_dir), real)
+                )
+            git_dir = real
+        # Linked worktrees drop a ``commondir`` file in the per-worktree
+        # gitdir pointing at the shared administrative directory (which
+        # holds refs/ and packed-refs). Plain checkouts have no
+        # ``commondir`` file, so gitdir IS commondir.
+        commondir = git_dir
+        commondir_file = os.path.join(git_dir, "commondir")
+        if os.path.exists(commondir_file):
+            with open(commondir_file, "r", encoding="utf-8") as f:
+                rel = f.read().strip()
+            if rel:
+                if not os.path.isabs(rel):
+                    rel = os.path.normpath(os.path.join(git_dir, rel))
+                commondir = rel
+        return (git_dir, commondir)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return ("", "")
+
+
+@lru_cache(maxsize=1)
+def get_toolkit_git_sha() -> str:
+    """Best-effort short git SHA of the ADK clone (System Metadata).
+
+    Precise upgrade-posture signal: ``adk_version`` (extension package.json
+    version) can lag the actual toolkit state — for example a hotfix on the
+    same extension version, or an install that was cloned before the version
+    bump landed. The short SHA lets dashboards distinguish "install is on
+    latest bits" from "install is on last-week's tree at the same version".
+
+    Order: ``ESS_ADK_GIT_SHA`` env override (used by CI to inject a known
+    build SHA) -> ``.git/HEAD`` + ref file read (no subprocess) -> ``"unknown"``.
+
+    Overrides go through the same canonicalization as repo-derived values
+    (lowercased, validated hex, truncated to 7 chars) so an env-injected
+    build SHA doesn't create a distinct telemetry bucket from the same
+    commit resolved via ``.git``.
+
+    Fail-open: any error (missing repo, malformed HEAD, unreadable file)
+    resolves to ``"unknown"`` so telemetry never blocks the CLI.
+    """
+    override = os.environ.get("ESS_ADK_GIT_SHA", "").strip().lower()
+    if override:
+        # Apply the same validation as repo-derived values so an
+        # env-injected build SHA and a git-resolved SHA land in the
+        # same telemetry bucket for the same commit.
+        return override[:7] if _is_short_sha(override) else "unknown"
+    git_dir = _find_git_dir()
+    if not git_dir:
+        return "unknown"
+    gitdir, commondir = _resolve_git_dirs(git_dir)
+    if not gitdir:
+        return "unknown"
+    try:
+        # HEAD is per-worktree — read it from gitdir. Refs and packed-refs
+        # live in the common directory for real linked worktrees, so read
+        # them from commondir.
+        head_path = os.path.join(gitdir, "HEAD")
+        if not os.path.exists(head_path):
+            return "unknown"
+        with open(head_path, "r", encoding="utf-8") as f:
+            head = f.read().strip()
+        if head.startswith("ref:"):
+            ref = head.split(":", 1)[1].strip()
+            # Resolve the ref file in the common directory; fall back to
+            # packed-refs if unpacked.
+            ref_path = os.path.join(commondir, ref)
+            if os.path.exists(ref_path):
+                with open(ref_path, "r", encoding="utf-8") as f:
+                    sha = f.read().strip()
+            else:
+                packed = os.path.join(commondir, "packed-refs")
+                if not os.path.exists(packed):
+                    return "unknown"
+                sha = ""
+                with open(packed, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.endswith(" " + ref):
+                            sha = line.split(" ", 1)[0].strip()
+                            break
+                if not sha:
+                    return "unknown"
+        else:
+            # Detached HEAD: HEAD contains the SHA directly.
+            sha = head
+        sha = sha.lower()
+        if not _is_short_sha(sha):
+            return "unknown"
+        return sha[:7]
+    except (OSError, ValueError, UnicodeDecodeError):
+        return "unknown"
+
+
+@lru_cache(maxsize=1)
+def get_toolkit_git_branch() -> str:
+    """Best-effort git branch classification of the ADK clone (System Metadata).
+
+    Returns one of a **bounded** set of strings so raw branch names —
+    which can carry aliases, personal names, customer labels, or other
+    free-form content — are never emitted:
+
+    * ``"main"``      — on the shipping DA branch (or an override says so)
+    * ``"main-ca"``   — on the shipping CA branch (used by ADO #7830949
+      for CA vs DA attribution)
+    * ``"detached"``  — HEAD points directly at a commit (no branch),
+      confirmed by a valid hex commit ID in HEAD
+    * ``"other"``     — on some other branch (topic / fork / customer
+      label); collapsed to a single bucket for privacy
+    * ``"unknown"``   — no repo, malformed HEAD, or any error
+
+    Order: ``ESS_ADK_GIT_BRANCH`` env override (also classified against
+    the bounded set) -> ``.git/HEAD`` ref parse -> ``"unknown"``.
+
+    Fail-open: any error resolves to ``"unknown"``.
+    """
+    override = os.environ.get("ESS_ADK_GIT_BRANCH", "").strip()
+    if override:
+        return _classify_branch(override)
+    git_dir = _find_git_dir()
+    if not git_dir:
+        return "unknown"
+    gitdir, _commondir = _resolve_git_dirs(git_dir)
+    if not gitdir:
+        return "unknown"
+    try:
+        head_path = os.path.join(gitdir, "HEAD")
+        if not os.path.exists(head_path):
+            return "unknown"
+        with open(head_path, "r", encoding="utf-8") as f:
+            head = f.read().strip()
+        if head.startswith("ref:"):
+            ref = head.split(":", 1)[1].strip()
+            # ``refs/heads/<branch>`` -> ``<branch>``. Anything else
+            # (tag ref, remote-tracking) falls through to unknown.
+            prefix = "refs/heads/"
+            if ref.startswith(prefix):
+                return _classify_branch(ref[len(prefix):])
+            return "unknown"
+        # No ``ref:`` prefix: HEAD contains a commit ID directly, IFF it
+        # actually parses as one. A malformed HEAD (empty, garbage,
+        # partial write) shouldn't masquerade as "detached HEAD" — that
+        # would emit ``branch=detached`` alongside ``sha=unknown``, which
+        # is a lie about the checkout state.
+        return "detached" if _is_short_sha(head.lower()) else "unknown"
+    except (OSError, ValueError, UnicodeDecodeError):
+        return "unknown"
+
+
+# --- Agent-type classification (ADO 7830949 / 7955324) --------------------
+AGENT_TYPE_CUSTOM = "custom_agent"
+AGENT_TYPE_DECLARATIVE = "declarative_agent"
+AGENT_TYPE_UNKNOWN = "unknown"
+AGENT_TYPES = frozenset({
+    AGENT_TYPE_CUSTOM,
+    AGENT_TYPE_DECLARATIVE,
+    AGENT_TYPE_UNKNOWN,
+})
+
+
+def classify_agent_type(git_branch: str) -> str:
+    """Map a bounded toolkit branch to the CA/DA telemetry taxonomy."""
+    if not git_branch:
+        return AGENT_TYPE_UNKNOWN
+    normalized = git_branch.strip().lower()
+    if normalized == "main-ca":
+        return AGENT_TYPE_CUSTOM
+    if normalized == "main":
+        return AGENT_TYPE_DECLARATIVE
+    return AGENT_TYPE_UNKNOWN
+
+
+def classify_flightcheck_agent_type(
+    git_branch: str,
+    invocation_source: str,
+) -> str:
+    """Classify ADK-invoked FlightCheck runs as DA unless shipped from CA."""
+    normalized_branch = str(git_branch or "").strip().lower()
+    if normalized_branch == "main-ca":
+        return AGENT_TYPE_CUSTOM
+    if str(invocation_source or "").strip().lower() == "adk":
+        return AGENT_TYPE_DECLARATIVE
+    return classify_agent_type(normalized_branch)
+
+
 def _build_event(name: str, ikey_envelope: str, data: dict[str, Any]) -> dict[str, Any]:
     """Build a minimal Common Schema 4.0 envelope.
 
@@ -543,8 +860,8 @@ def _post(ikey: str, events: list[dict[str, Any]]) -> int:
 # ``overall``: it splits the NOT_READY verdict into "a check couldn't even run"
 # (``errored`` — an unhandled exception inside a check, runner.py:135) vs.
 # "checks ran and reported failures" (``failed``). Precedence is errored ->
-# failed -> warnings -> ready so the donut surfaces checks that could not be
-# evaluated at all (the "why did FlightCheck fail to run" signal). We can NOT
+# failed -> blocked -> warnings -> ready so the donut surfaces checks that
+# could not be evaluated at all (the "why did FlightCheck fail to run" signal). We can NOT
 # attribute WHY a check errored (auth vs runtime vs network) — the exception
 # text is never emitted (EUII risk) — so the bucket is deliberately just
 # "errored", not "runtime error". Aria renders the raw value as the slice
@@ -552,21 +869,226 @@ def _post(ikey: str, events: list[dict[str, Any]]) -> int:
 RUN_OUTCOME_READY = "Ready"
 RUN_OUTCOME_WARNINGS = "Ready with warnings"
 RUN_OUTCOME_FAILED = "Failed"
+RUN_OUTCOME_BLOCKED = "Blocked"
 RUN_OUTCOME_ERRORED = "Blocked (check errored)"
+# BLOCKED is a distinct hard gate: an essential platform capability was
+# unavailable (release-blocking), not a check that failed its assertion or
+# crashed. Without this slice a blocked-only run fell through to
+# RUN_OUTCOME_READY, so the donut said "Ready" for a run the runner scored
+# NOT_READY with exit code 1 (ADO 7943641 carry-over).
+RUN_OUTCOME_BLOCKED = "Blocked (gate)"
+
+_DIAGNOSTIC_RUN_OUTCOMES = {
+    "SETUP_CHECKS_PASSED": "Setup checks passed",
+    "CHECKED_WITH_NOTES": "Checked with notes",
+    "SOME_CHECKS_UNVERIFIED": "Some checks could not run",
+    "ISSUES_FOUND": "Setup issues found",
+}
 
 
 def derive_run_outcome(run_result: Any) -> str:
-    """Bucket a run into a single verdict slice (errored > failed > warnings > ready)."""
+    """Bucket a run into a single verdict slice.
+
+    Diagnostic overalls describe inspection, not release readiness.
+    For readiness runs: errored > failed > blocked > warnings > ready. ``errored`` and
+    ``failed`` rank above ``blocked`` only to keep the pre-existing slice
+    ordering stable; all three are NOT_READY. ``blocked`` stays above
+    ``warnings`` because a blocked essential capability is a release gate while
+    warnings are advisory.
+    """
+    diagnostic_outcome = _DIAGNOSTIC_RUN_OUTCOMES.get(getattr(run_result, "overall", ""))
+    if diagnostic_outcome is not None:
+        return diagnostic_outcome
     errors = getattr(run_result, "errors", 0) or 0
     failed = getattr(run_result, "failed", 0) or 0
+    blocked = getattr(run_result, "blocked", 0) or 0
     warnings = getattr(run_result, "warnings", 0) or 0
     if errors > 0:
         return RUN_OUTCOME_ERRORED
     if failed > 0:
         return RUN_OUTCOME_FAILED
+    if blocked > 0:
+        return RUN_OUTCOME_BLOCKED
     if warnings > 0:
         return RUN_OUTCOME_WARNINGS
     return RUN_OUTCOME_READY
+
+
+# --- Block-reason attribution (ADO: split the Blocked wedge by cause) -------
+# A blocked CheckResult carries a bounded ``block_reason`` enum set by the
+# runner/checks at the block site. We re-validate it here against a
+# self-contained allow-list (telemetry.py never imports runner) and collapse
+# anything unknown to ``other`` so no free-form string ever reaches Aria,
+# mirroring the _ALLOWED_BRANCHES / _classify_branch privacy pattern above.
+#
+# Primary goal: make admin-API authorization denials (HTTP 401/403 or
+# AADSTS*) countable on their own, separate from "admin API unreachable"
+# (404 wrong-env, 5xx, timeout) and the non-auth block causes.
+BLOCK_REASON_ADMIN_API_AUTHORIZATION = "adminApiAuthorization"
+BLOCK_REASON_ADMIN_API_UNAVAILABLE = "adminApiUnavailable"
+BLOCK_REASON_CHECKPOINT_CONTRACT = "checkpointContract"
+BLOCK_REASON_PROFILE_CARDINALITY = "profileCardinality"
+BLOCK_REASON_EVIDENCE_AMBIGUOUS = "evidenceAmbiguous"
+BLOCK_REASON_OTHER = "other"
+
+# The CheckResult.status value for a blocked check (runner Status.BLOCKED.value).
+# Defined locally so telemetry.py stays decoupled from runner; kept distinct
+# from the RUN_OUTCOME_* donut labels, which are run-level verdicts.
+_CHECK_STATUS_BLOCKED = "Blocked"
+
+_ALLOWED_BLOCK_REASONS = frozenset({
+    BLOCK_REASON_ADMIN_API_AUTHORIZATION,
+    BLOCK_REASON_ADMIN_API_UNAVAILABLE,
+    BLOCK_REASON_CHECKPOINT_CONTRACT,
+    BLOCK_REASON_PROFILE_CARDINALITY,
+    BLOCK_REASON_EVIDENCE_AMBIGUOUS,
+    BLOCK_REASON_OTHER,
+})
+
+# Run-level roll-up precedence (highest first). A run can have several
+# blocked checks with different causes; we surface the most actionable one.
+# Authorization ranks first because it is the signal this split exists to
+# count; "other" is last so a known cause always wins over the fallback.
+_BLOCK_REASON_PRECEDENCE = (
+    BLOCK_REASON_ADMIN_API_AUTHORIZATION,
+    BLOCK_REASON_ADMIN_API_UNAVAILABLE,
+    BLOCK_REASON_CHECKPOINT_CONTRACT,
+    BLOCK_REASON_PROFILE_CARDINALITY,
+    BLOCK_REASON_EVIDENCE_AMBIGUOUS,
+    BLOCK_REASON_OTHER,
+)
+
+
+def derive_check_block_reason(check: Any) -> str:
+    """Bounded block-reason for a single check event.
+
+    Returns "" for any non-blocked check (``block_reason`` is only
+    meaningful when the status is Blocked). For a blocked check, returns the
+    check's ``block_reason`` if it is an allowed enum value, otherwise
+    ``other`` so no free-form string is ever emitted. A blocked check with an
+    empty ``block_reason`` (pre-change data) also collapses to ``other``.
+    """
+    status = getattr(check, "status", "")
+    if status != _CHECK_STATUS_BLOCKED:
+        return ""
+    reason = getattr(check, "block_reason", "") or ""
+    if reason in _ALLOWED_BLOCK_REASONS:
+        return reason
+    return BLOCK_REASON_OTHER
+
+
+def derive_run_block_reason(run_result: Any) -> str:
+    """Roll block reasons of all blocked checks up to one run-level value.
+
+    Returns "" when the run has no blocked checks. Otherwise returns the
+    highest-precedence block reason present across the blocked checks, so a
+    run that is auth-blocked anywhere is countable as such regardless of its
+    final verdict donut slice (a run can be Blocked-count>0 but overall
+    Failed/Errored).
+    """
+    present: set[str] = set()
+    for check in getattr(run_result, "results", []) or []:
+        reason = derive_check_block_reason(check)
+        if reason:
+            present.add(reason)
+    if not present:
+        return ""
+    for reason in _BLOCK_REASON_PRECEDENCE:
+        if reason in present:
+            return reason
+    return BLOCK_REASON_OTHER
+
+
+# --- Connector attribution (ADO 7943641) ----------------------------------
+# Derive a bounded ``connector`` value (workday | servicenow | "") from the
+# run scope (for the run event) and from the check's category (for each check
+# event) so Aria can split adoption / reliability by backend HR system
+# instead of collapsing everything under the FlightCheck-wide donut.
+#
+# Emitted at telemetry time (not stamped on the CheckResult in-process)
+# because 1DS RTA cubes cannot compute one dimension from another; the
+# derivation stays here alongside classify_tenant / derive_run_outcome.
+
+# Scopes explicitly bound to a single connector. "full" spans multiple
+# connectors -> "" (drill down via the check-level connector dimension).
+# Local / infra / auth / etc. are not connector-scoped.
+_WORKDAY_SCOPES = frozenset({
+    "workday", "workdaytenant", "workdayextension",
+    # Also connector-scoped for Workday even though the naming doesn't lead
+    # with the "workday" token: the "Workday DA" scope (workdayda) and the
+    # topic-authoring scope (topics, which SCOPE_MAP labels "Workday Topics")
+    # both exercise Workday paths exclusively. Missing these here left real
+    # Workday runs emitting connector="" (ADO 7943641 review).
+    "workdayda", "topics",
+})
+_SERVICENOW_SCOPES = frozenset({"servicenow"})
+
+# Leading connector tokens for the wrapped run scopes ("profile:<name>" and
+# "checkpoint:<id>") and for connector-led profile names / checkpoint IDs.
+# Profile runs pass scope="profile:workday-da:final" and checkpoint runs pass
+# scope="checkpoint:WD-CONN-012"; without unwrapping, every DA profile run and
+# every single-checkpoint run emitted connector="" (ADO 7943641 carry-over).
+_WORKDAY_LEAD_TOKENS = frozenset({"workday", "wd"})
+_SERVICENOW_LEAD_TOKENS = frozenset({"servicenow", "sn"})
+
+# Check categories from checks/*.py. Category strings are set at CheckResult
+# construction time (e.g. category="Workday", "Workday Tenant", "ServiceNow").
+# Match on the leading token so future subcategories ("Workday Workflows",
+# "Workday Extension", "ServiceNow HRSD") inherit the same attribution
+# without requiring a taxonomy edit here.
+_WORKDAY_CATEGORY_PREFIX = "workday"
+_SERVICENOW_CATEGORY_PREFIX = "servicenow"
+
+
+def derive_connector_from_scope(scope: str) -> str:
+    """Return "workday" / "servicenow" / "" for a FlightCheck ``--scope`` value.
+
+    "full" and other cross-connector scopes return "" (empty). The per-check
+    ``connector`` field carries the finer-grained attribution.
+    """
+    if not scope:
+        return ""
+    s = str(scope).strip().lower()
+    # Unwrap the single-purpose run prefixes so a "profile:" / "checkpoint:"
+    # run attributes the same as a bare "--scope <connector>" run.
+    if s.startswith("profile:"):
+        s = s[len("profile:"):]
+    elif s.startswith("checkpoint:"):
+        s = s[len("checkpoint:"):]
+    if s in _WORKDAY_SCOPES:
+        return "workday"
+    if s in _SERVICENOW_SCOPES:
+        return "servicenow"
+    # Connector-led profile names ("workday-da:final") and checkpoint IDs
+    # ("wd-conn-012") carry the connector in their leading token. Cross-connector
+    # or non-connector scopes ("full", "dv-conn-001", "env-001") fall through
+    # to "" and drill down via the per-check connector dimension.
+    lead = re.split(r"[-:]", s, maxsplit=1)[0]
+    if lead in _WORKDAY_LEAD_TOKENS:
+        return "workday"
+    if lead in _SERVICENOW_LEAD_TOKENS:
+        return "servicenow"
+    return ""
+
+
+def derive_connector_from_category(category: str) -> str:
+    """Return "workday" / "servicenow" / "" for a CheckResult ``category``.
+
+    Matches the leading token so "Workday", "Workday Tenant", "Workday
+    Extension", "Workday Workflows", "ServiceNow", "ServiceNow HRSD", etc.
+    all attribute correctly. Cross-cutting categories (Environment,
+    Authentication, Prerequisites, Local Files, Publishing, External
+    Systems, Licensing, Solution, Topics, Configuration) return "" — they
+    aren't scoped to a single backend.
+    """
+    if not category:
+        return ""
+    c = str(category).strip().lower()
+    if c.startswith(_WORKDAY_CATEGORY_PREFIX):
+        return "workday"
+    if c.startswith(_SERVICENOW_CATEGORY_PREFIX):
+        return "servicenow"
+    return ""
 
 
 def _run_data(
@@ -581,7 +1103,9 @@ def _run_data(
     agent_count: int,
     scope: str,
     invocation_source: str,
+    agent_type: str,
 ) -> dict[str, Any]:
+    validation_context = getattr(run_result, "validation_context", {}) or {}
     return {
         "schemaVersion": TELEMETRY_SCHEMA_VERSION,
         "env": env,
@@ -593,14 +1117,22 @@ def _run_data(
         "agentId": agent_id,         # OII
         "agentCount": agent_count,
         "adkVersion": get_adk_version(),
+        "toolkitGitSha": get_toolkit_git_sha(),
+        "toolkitGitBranch": get_toolkit_git_branch(),
+        "agentType": agent_type,
         "scope": scope,
+        "profile": getattr(run_result, "profile", ""),
+        "validationRealm": validation_context.get("realm", ""),
         "invocationSource": invocation_source,
+        "connector": derive_connector_from_scope(scope),  # derived: workday|servicenow|""
         "overall": getattr(run_result, "overall", ""),
         "runOutcome": derive_run_outcome(run_result),  # verdict donut split (errored|failed|warnings|ready)
+        "blockReason": derive_run_block_reason(run_result),  # bounded: splits the Blocked wedge by cause ("" when no blocked checks)
         "durationSecs": getattr(run_result, "duration_secs", 0),
         "total": getattr(run_result, "total", 0),
         "passed": getattr(run_result, "passed", 0),
         "failed": getattr(run_result, "failed", 0),
+        "blocked": getattr(run_result, "blocked", 0),
         "warnings": getattr(run_result, "warnings", 0),
         "notConfigured": getattr(run_result, "not_configured", 0),
         "manual": getattr(run_result, "manual", 0),
@@ -618,9 +1150,11 @@ def _check_data(
     run_id: str,
     instance_id: str,
     tenant_id: str,
+    agent_type: str,
     tenant_name: str = "",
 ) -> dict[str, Any]:
     # Identifiers + enums ONLY. Never `result` / `remediation` (EUII risk).
+    _category = getattr(check, "category", "")
     return {
         "schemaVersion": TELEMETRY_SCHEMA_VERSION,
         "env": env,
@@ -629,10 +1163,15 @@ def _check_data(
         "tenantId": tenant_id,
         "tenantClass": classify_tenant(tenant_id),
         "tenantName": tenant_name,
+        "agentType": agent_type,
         "checkpointId": getattr(check, "checkpoint_id", ""),
-        "category": getattr(check, "category", ""),
+        "category": _category,
+        "connector": derive_connector_from_category(_category),  # derived
         "priority": getattr(check, "priority", ""),
         "status": getattr(check, "status", ""),
+        "blockReason": derive_check_block_reason(check),  # bounded: cause when Blocked, "" otherwise
+        "severity": getattr(check, "severity", ""),
+        "automationType": getattr(check, "automation_type", ""),
         "roles": ", ".join(getattr(check, "roles", []) or []),
     }
 
@@ -653,6 +1192,10 @@ def build_events(
 ) -> list[dict[str, Any]]:
     """Build the run envelope + one envelope per check (testable, no IO)."""
     run_id = run_id or str(uuid.uuid4())
+    agent_type = classify_flightcheck_agent_type(
+        get_toolkit_git_branch(),
+        invocation_source,
+    )
     events = [
         _build_event(
             EVENT_RUN,
@@ -668,6 +1211,7 @@ def build_events(
                 agent_count=agent_count,
                 scope=scope,
                 invocation_source=invocation_source,
+                agent_type=agent_type,
             ),
         )
     ]
@@ -683,6 +1227,7 @@ def build_events(
                     instance_id=instance_id,
                     tenant_id=tenant_id,
                     tenant_name=tenant_name,
+                    agent_type=agent_type,
                 ),
             )
         )
@@ -754,6 +1299,9 @@ def selftest() -> int:
             "runId": str(uuid.uuid4()),
             "instanceId": get_instance_id(),
             "adkVersion": get_adk_version(),
+            "toolkitGitSha": get_toolkit_git_sha(),
+            "toolkitGitBranch": get_toolkit_git_branch(),
+            "agentType": classify_agent_type(get_toolkit_git_branch()),
         },
     )
     print(f"Posting selftest event to env='{env}' "

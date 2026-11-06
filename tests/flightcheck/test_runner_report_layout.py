@@ -31,6 +31,8 @@ from __future__ import annotations
 import json
 import re
 import sys
+from copy import deepcopy
+from html import escape
 from pathlib import Path
 
 import pytest
@@ -69,6 +71,33 @@ def _make_result(checkpoint_id, status, priority="High", category="Test"):
             else ""
         ),
     )
+
+
+@pytest.mark.parametrize("diagnostic_only", [False, True])
+@pytest.mark.parametrize("tags", [
+    [], ["Workday Litmus Test"], ["Customer alias", '<script>alert("tag")</script>'],
+])
+def test_check_defined_custom_tags_render_safely_and_round_trip(tmp_path, diagnostic_only, tags):
+    from flightcheck.runner import CheckResult, FlightCheckRunner, save_results
+
+    row = _make_result("CUSTOM-001", "Manual")
+    row.custom_tags = tags
+    runner = FlightCheckRunner()
+    runner.register("Test", lambda _: [row])
+    result = runner.run()
+    result.diagnostic_only = diagnostic_only
+    before = deepcopy(result)
+    save_results(result, str(tmp_path))
+
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert re.findall(r'<li class="custom-tag">(.*?)</li>', html) == [escape(tag) for tag in tags]
+    assert ('aria-label="Custom tags"' in html) is bool(tags)
+    assert '<script>alert("tag")</script>' not in html
+    payload = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+    assert payload["results"][0]["custom_tags"] == tags
+    assert payload["contract"]["results"][0]["customTags"] == tags
+    assert CheckResult(**payload["results"][0]) == row
+    assert result == before
 
 
 # ---------------------------------------------------------------------------
@@ -414,6 +443,45 @@ def test_category_section_open_when_actionable_collapsed_when_all_pass(
     assert " open" not in m.group(0), (
         "An all-passing category must NOT be open by default"
     )
+
+
+def test_category_section_open_and_flagged_when_only_blocked(tmp_path):
+    """A category whose only bad row is BLOCKED must behave like a
+    Failed-only category: the section opens by default and carries a
+    "fail" mini badge. BLOCKED forces overall NOT_READY, so hiding it
+    behind a collapsed, badge-less section would recreate the
+    release-gate-hidden-as-success failure mode."""
+    from flightcheck.runner import save_results
+
+    blocked_only = _build_run_with([
+        _make_result("B-1", "Blocked"),
+        _make_result("P-1", "Passed"),
+    ])
+    save_results(blocked_only, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert re.search(
+        r'<details class="sec" id="cat-test" open>', html
+    ), "A BLOCKED-only category must open by default"
+    assert '<span class="b fail">1 fail</span>' in html, (
+        "A BLOCKED row must count toward the category's fail mini badge"
+    )
+    # Synopsis tile for the category must paint red, not green/gray.
+    assert 'class="syn-tile red"' in html, (
+        "A BLOCKED-only category tile must be red"
+    )
+
+
+def test_category_color_treats_blocked_as_red():
+    """_category_color must rank BLOCKED with Failed/Error (red), so a
+    category containing only BLOCKED rows never paints green/gray."""
+    from flightcheck.runner import _category_color
+
+    assert _category_color([_make_result("B-1", "Blocked")]) == "red"
+    assert _category_color([
+        _make_result("B-1", "Blocked"),
+        _make_result("P-1", "Passed"),
+    ]) == "red"
 
 
 def test_empty_category_renders_friendly_note(tmp_path):

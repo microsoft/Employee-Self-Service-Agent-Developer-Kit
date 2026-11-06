@@ -5,13 +5,72 @@ description: "Type Enter to set up your ESS customization environment"
 
 # Setup
 
-Read `src/skills/foundation-setup/SKILL.md` and follow it.
+Read `src/skills/foundation-setup/SKILL.md` first. Follow its **Command runtime**
+instructions to establish a working Python invocation before running any Python
+command.
 
-The same entry handles clear natural-language requests to set up or install ESS;
-never require the maker to repeat the request as `/setup`. Preserve the assigned
-plan task and environment when handing off, and return to that task afterward.
+After reading the foundation skill, use its explicit progress render points.
+At the first interactive setup surface in a turn, write the complete
+maker-facing progress checklist below using the latest canonical setup state
+and results observed in that invocation. Use the exact ordinary Markdown shape
+defined in the foundation skill: one single-level bullet and one leading
+status emoji per stage. Begin every snapshot with:
 
-Do not route directly to `src/skills/onboarding/SKILL.md`. Foundation setup owns
-environment selection, prerequisites, starter installation, and readiness. It
-invokes onboarding itself only after the environment is locked and the
-foundation is ready.
+Here's your ESS agent setup:
+
+- {marker} Choose the starting point and target environment
+- {marker} Verify access and agent identity
+- {marker} Establish an editable Dev agent
+- {marker} Materialize the local workspace
+- {marker} Review the setup handoff
+
+Use ✅ for completed, 🔄 for the current stage, ⛔ for a blocked stage, and ⬜
+for pending. Every rendered update is a full snapshot containing all five
+stages in this order. Render it at the first interactive surface in a turn,
+when a marker changes, when a blocked state requires maker action, and in the
+final handoff. A sequence of setup operations that retains the same markers
+continues to its next render point without another progress snapshot.
+
+Run setup commands from the current ESS Maker Skills workspace folder.
+
+Using the resolved launcher in place of `{PYTHON}`, run:
+
+```powershell
+{PYTHON} -m pip install -r scripts/requirements.txt
+```
+
+When the current request or canonical local state already selects an exact
+agent, complete the foundation skill's account selection and product-line
+reconciliation now. If reconciliation stops this setup path, complete its
+kit-switch handoff and do not install or validate the Microsoft Object Model
+converter.
+
+Only after reconciliation allows DA-GA setup to continue, or when no exact
+agent has been selected yet, check the Microsoft Object Model converter
+dependencies:
+
+```powershell
+{PYTHON} -c "import sys;
+sys.path.insert(0, 'scripts');
+import agentbuilder_object_model as m;
+m.validate_object_model_runtime()"
+```
+
+If the check fails, run:
+
+```powershell
+{PYTHON} scripts/install_agentbuilder_object_model.py
+```
+
+Then rerun the check.
+
+After successful runtime, dependency, and converter checks, run the next setup
+operation. If an exact agent is selected later, complete product-line
+reconciliation before the next DA-GA-only operation. When a check requires
+maker action, state the observed failure and its single recovery action.
+
+For any command failure, follow the **Command runtime** recovery guidance.
+
+Do not route to Dataverse foundation or onboarding playbooks.
+Foundation setup owns DA-GA environment and editable Dev-agent selection,
+workspace materialization, and canonical setup completion.

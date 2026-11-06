@@ -1138,8 +1138,9 @@ class Plan:
         """Whether this task's assignee should run ``/setup`` to connect their own
         kit to the plan's environment before starting.
 
-        The Power Platform admin's setup task decides or creates the environment
-        and pins ``primaryEnvironment``. Every *other* task that **consumes**
+        The Power Platform admin's environment task creates or chooses the
+        environment in the Power Platform admin center and pins
+        ``primaryEnvironment``. Every *other* task that **consumes**
         `primaryEnvironment` runs against that same environment, but each
         assignee's local kit must be connected to it first (via ``/setup``) — a
         per-person step the pinned plan value can't do for them. So:
@@ -1177,19 +1178,20 @@ class Plan:
     def first_run_setup_pending(self, task_id: str) -> bool:
         """Whether this task is the plan's **first-run setup** still waiting to run.
 
-        True only for a ready ``/setup`` task (one that **produces**
+        True only for a ready environment task (one that **produces**
         `primaryEnvironment` or `provisionedEnvironment`) while it is not yet
         Completed **and no environment is pinned on the plan yet**. This is the
         deterministic first-run-experience (FRE) signal: when the Power Platform
-        admin asks "what are my tasks?" and
-        their setup task is still open with no environment decided, nudge them to
-        run ``/setup`` **now** (it decides or creates the environment the whole
-        plan runs on).
+        admin asks "what are my tasks?" and their environment task is still open
+        with no environment decided, nudge them to create or choose the
+        environment the whole plan runs on **now** — in the Power Platform admin
+        center, because ``/setup`` selects environments but never creates one —
+        and pin it.
 
         Returns ``False`` once an environment is pinned (the env decision is
-        already made — e.g. a setup that ran but was blocked before it could
-        finish still pins `primaryEnvironment`, so it is no longer *first* run) or
-        the task is Completed. This is the mirror image of :meth:`kit_setup_nudge`,
+        already made — e.g. the admin pinned the environment while its agent
+        setup is still pending, so it is no longer *first* run) or the task is
+        Completed. This is the mirror image of :meth:`kit_setup_nudge`,
         which nudges *other* personas to connect **after** the env exists; together
         they cover both sides of the environment handshake without overlapping.
         """

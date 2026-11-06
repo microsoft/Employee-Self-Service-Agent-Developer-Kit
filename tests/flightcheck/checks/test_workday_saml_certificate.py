@@ -624,6 +624,38 @@ class TestMalformedThumbprintIsNotFatal:
         assert "(malformed)" in r.result
 
 
+class TestPreferredThumbprintDisplay:
+    """The preferred SHA-1 thumbprint is authoritative for a single cert."""
+
+    @responses.activate
+    def test_single_cert_uses_preferred_sha1_when_custom_identifier_is_sha256(
+        self, runner: _MinimalRunner
+    ) -> None:
+        from flightcheck.checks.workday import _check_saml_certificate_health
+
+        sha256_identifier = base64.b64encode(b"\xAB" * 32).decode("ascii")
+        preferred = "905236D91F87B87FDD6AD3A832909751D7C403EA"
+        kc = g.key_credential(
+            key_id="cert-sha256-identifier",
+            custom_key_identifier=sha256_identifier,
+            end_date_time="2099-01-01T00:00:00Z",
+        )
+        sp = g.service_principal(
+            sp_id="sp-workday-preferred",
+            display_name="Workday Preferred",
+            key_credentials=[kc],
+            preferred_token_signing_key_thumbprint=preferred,
+        )
+        responses.add(**g.list_service_principals(service_principals=[sp]))
+
+        results = _check_saml_certificate_health(runner)
+        r = _result_by_id(results, "WD-CONN-102")
+
+        assert r.status == "Manual"
+        assert "90:52:36:D9:1F:87:B8:7F:DD:6A:D3:A8:32:90:97:51:D7:C4:03:EA" in r.result
+        assert "(malformed)" not in r.result
+
+
 # ───────────────────────────────────────────────────────────────────────
 
 
@@ -681,8 +713,7 @@ class TestSkippedFlavorStaysNonInteractive:
     """Regression: the WD-CONN-102 setup-flow freeze.
 
     A Graph-only single-checkpoint run — ``--checkpoint WD-CONN-102`` /
-    ``WD-CONN-010``, driven by skill-3
-    (src/skills/setup/workday/provision-workday-entra-app.md) — authenticates
+    ``WD-CONN-010`` — authenticates
     ONLY Microsoft Graph, so ``_check_package_flavor`` (WD-PKG-001) has no
     Dataverse token and sets ``runner._workday_package_flavor = "skipped"``.
 

@@ -61,6 +61,8 @@ directory before running anything.
 It authors a local, structured **Plan** for an ESS rollout: captures scenario and
 system intent first, grounds that scope on Microsoft Learn, emits atomic tasks
 with responsible roles and known or pending owners, and captures what each task produced. Its first task is
-usually the **Power Platform admin running `/setup`**; once that pins the
-environment, other personas are nudged to run `/setup` to connect their own kit to
-it. To run environment setup directly (not plan), use the **setup** skill.
+usually the **Power Platform admin creating or choosing the environment** in the
+Power Platform admin center (`/setup` never creates environments); once the plan
+pins it, each maker runs `/setup` into that environment to create or connect the
+ESS agent and bind their own workspace. To run setup directly (not plan), use the
+**setup** skill.

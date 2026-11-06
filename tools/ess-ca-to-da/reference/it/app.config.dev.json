@@ -1,0 +1,23 @@
+{
+  "formatVersion": "1.0",
+  "realm": "dev",
+  "values": {
+    "botName": "Employee Self-Service IT (Preview)",
+    "gptDisplayName": "Employee Self-Service IT (Preview)"
+  },
+  "connections": {
+    "gptagent_copilotforemployeeselfserviceit.shared_alchemy.shared-alchemy-8262076a-e778-450b-8a35-5ae815712319": {
+      "connectorId": "/providers/Microsoft.PowerApps/apis/shared_alchemy",
+      "connectionId": null
+    },
+    "gptagent_copilotforemployeeselfserviceit.3f7a2b1c-8d6e-4a5b-9c0d-2e3f4a5b6c7d.shared_service-now": {
+      "connectorId": "/providers/Microsoft.PowerApps/apis/shared_service-now",
+      "connectionId": null
+    }
+  },
+  "flows": {
+    "3164dae9-3a2b-5843-98dd-e62bb5123324": "3164dae9-3a2b-5843-98dd-e62bb5123324",
+    "eab2ffdb-27cb-588b-a640-c2693acce57e": "eab2ffdb-27cb-588b-a640-c2693acce57e"
+  },
+  "secrets": {}
+}

@@ -1,0 +1,1633 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""AgentBuilder authentication, host resolution, and API operations."""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import json
+import os
+import socket
+import sys
+import tempfile
+import uuid
+from pathlib import Path
+from typing import Any, Callable
+from urllib.parse import quote, urlparse
+
+import msal
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+
+CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
+DEFAULT_API_VERSION = "2024-10-01"
+NATIVE_ALM_API_VERSION = "2022-03-01-preview"
+COPILOT_STUDIO_CLIENT_NAME = "CopilotStudio"
+AGENT_LIST_CREATION_SOURCES = ("CopilotStudio", "AgentBuilder")
+DEFAULT_TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
+DEV_REALM = 0
+TEST_REALM = 1
+PROD_REALM = 2
+REALM_NAMES = {
+    DEV_REALM: "Dev",
+    TEST_REALM: "Test",
+    PROD_REALM: "Prod",
+}
+RING_CONFIG = {
+    "prod": {
+        "audience": "https://api.powerplatform.com",
+        "host_suffix": "environment.api.powerplatform.com",
+        "primary_split": 30,
+    },
+    "preprod": {
+        "audience": "https://api.preprod.powerplatform.com",
+        "host_suffix": "environment.api.preprod.powerplatform.com",
+        "primary_split": 31,
+    },
+    "test": {
+        "audience": "https://api.test.powerplatform.com",
+        "host_suffix": "environment.api.test.powerplatform.com",
+        "primary_split": 31,
+    },
+}
+
+
+class AgentBuilderError(RuntimeError):
+    """Raised when an AgentBuilder operation cannot complete safely."""
+
+
+class AgentBuilderAccountMismatch(AgentBuilderError):
+    """Raised when sign-in used a different account than the one required."""
+
+    def __init__(self, message: str, *, actual_account: str | None = None):
+        super().__init__(message)
+        self.actual_account = actual_account
+
+
+class AgentBuilderHTTPError(AgentBuilderError):
+    """Raised for an unsuccessful AgentBuilder HTTP response."""
+
+    def __init__(
+        self,
+        operation: str,
+        status_code: int,
+        *,
+        error_code: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        retry_after: str | None = None,
+        response: requests.Response | None = None,
+    ) -> None:
+        detail = f"{operation} failed with HTTP {status_code}"
+        if error_code:
+            detail += f" ({error_code})"
+        if status_code == 403:
+            detail += "; the signed-in account is not authorized"
+        if request_id:
+            detail += f" [request {request_id}]"
+        if correlation_id:
+            detail += f" [correlation {correlation_id}]"
+        if retry_after:
+            detail += f" [retry-after {retry_after}]"
+        super().__init__(detail)
+        self.status_code = status_code
+        self.error_code = error_code
+        self.request_id = request_id
+        self.correlation_id = correlation_id
+        self.retry_after = retry_after
+        self.response = response
+
+
+def normalize_environment_id(environment_id: str) -> str:
+    """Return a compact lowercase GUID suitable for a PPAPI hostname."""
+    try:
+        return uuid.UUID(environment_id).hex
+    except ValueError as exc:
+        raise ValueError("Environment ID must be a GUID.") from exc
+
+
+def validate_environment_host(host: str, ring: str) -> str:
+    """Validate an explicit PPAPI host before a delegated token is sent."""
+    config = RING_CONFIG.get(ring)
+    if config is None:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    parsed = urlparse(host)
+    hostname = (parsed.hostname or "").casefold()
+    suffix = str(config["host_suffix"]).casefold()
+    if (
+        parsed.scheme != "https"
+        or parsed.username
+        or parsed.password
+        or parsed.port not in (None, 443)
+        or parsed.path not in ("", "/")
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or not hostname.endswith(f".{suffix}")
+    ):
+        raise ValueError(
+            f"AgentBuilder host must be an HTTPS environment host for {ring}."
+        )
+    return f"https://{hostname}"
+
+
+def environment_id_from_host(host: str, ring: str) -> str:
+    """Return the canonical environment GUID encoded in a PPAPI host."""
+    validated = validate_environment_host(host, ring)
+    hostname = urlparse(validated).hostname or ""
+    suffix = str(RING_CONFIG[ring]["host_suffix"]).casefold()
+    prefix = hostname[: -(len(suffix) + 1)]
+    labels = prefix.split(".")
+    compact = "".join(labels)
+    if (
+        len(labels) != 2
+        or len(compact) != 32
+        or any(char not in "0123456789abcdef" for char in compact)
+    ):
+        raise ValueError(
+            "AgentBuilder host does not encode a valid environment ID."
+        )
+    return str(uuid.UUID(hex=compact))
+
+
+def derive_environment_host(
+    environment_id: str,
+    ring: str,
+    *,
+    resolver: Callable[..., Any] = socket.getaddrinfo,
+) -> str:
+    """Derive the environment-specific PPAPI host for a supported ring."""
+    config = RING_CONFIG.get(ring)
+    if config is None:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    compact = normalize_environment_id(environment_id)
+    primary = int(config["primary_split"])
+    splits = (primary, 31 if primary == 30 else 30)
+    suffix = str(config["host_suffix"])
+    for split in splits:
+        hostname = f"{compact[:split]}.{compact[split:]}.{suffix}"
+        try:
+            resolver(hostname, 443)
+            return f"https://{hostname}"
+        except socket.gaierror:
+            continue
+    hostname = f"{compact[:primary]}.{compact[primary:]}.{suffix}"
+    return f"https://{hostname}"
+
+
+def minimal_bot_scope(ring: str) -> str:
+    """Return the delegated AgentBuilder scope for a supported ring."""
+    config = RING_CONFIG.get(ring)
+    if config is None:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    return (
+        f"{config['audience']}/"
+        "CopilotStudio.MinimalBot.ReadWrite"
+    )
+
+
+def minimal_bot_read_scope(ring: str) -> str:
+    """Return the read-only delegated AgentBuilder scope for a supported ring."""
+    config = RING_CONFIG.get(ring)
+    if config is None:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    return f"{config['audience']}/CopilotStudio.MinimalBot.Read"
+
+
+def maker_operations_read_scope(ring: str) -> str:
+    """Return the read-only MakerOperations scope for a supported ring."""
+    config = RING_CONFIG.get(ring)
+    if config is None:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    return f"{config['audience']}/CopilotStudio.MakerOperations.Read"
+
+
+def agent_inventory_read_scopes(ring: str) -> tuple[str, ...]:
+    """Return the scopes needed to list and classify native agents."""
+    return (
+        maker_operations_read_scope(ring),
+        minimal_bot_read_scope(ring),
+    )
+
+
+def connectivity_read_scopes(ring: str) -> tuple[str]:
+    """Return the delegated scope for read-only connection inventory."""
+    config = RING_CONFIG.get(ring)
+    if config is None:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    audience = config["audience"]
+    return (f"{audience}/Connectivity.Connections.Read",)
+
+
+def flightcheck_scopes(
+    ring: str,
+    *,
+    allow_write: bool = False,
+    include_connectivity: bool = True,
+) -> tuple[str, ...]:
+    """Return least-privilege scopes for a native-agent FlightCheck run."""
+    minimal_bot = (
+        minimal_bot_scope(ring)
+        if allow_write
+        else minimal_bot_read_scope(ring)
+    )
+    if not include_connectivity:
+        return (minimal_bot,)
+    return (minimal_bot, *connectivity_read_scopes(ring))
+
+
+def flightcheck_read_scopes(ring: str) -> tuple[str, ...]:
+    """Return the read-only scopes used by native-agent FlightCheck."""
+    return flightcheck_scopes(ring)
+
+
+def _ring_api_host(ring: str) -> str:
+    config = RING_CONFIG.get(ring)
+    if config is None:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    return str(config["audience"])
+
+
+def ring_from_environment_host(host: str) -> str:
+    """Return the supported ring identified by an environment API host."""
+    parsed = urlparse(host)
+    hostname = (parsed.hostname or "").casefold()
+    matches = [
+        ring
+        for ring, config in RING_CONFIG.items()
+        if hostname.endswith(f".{str(config['host_suffix']).casefold()}")
+    ]
+    if (
+        parsed.scheme != "https"
+        or parsed.username
+        or parsed.password
+        or parsed.port not in (None, 443)
+        or parsed.path not in ("", "/")
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or len(matches) != 1
+    ):
+        raise ValueError(
+            "Power Platform API endpoint must be a supported HTTPS "
+            "environment host."
+        )
+    return matches[0]
+
+
+def _validate_environment_continuation(url: str, ring: str) -> str:
+    expected = urlparse(_ring_api_host(ring))
+    parsed = urlparse(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.username
+        or parsed.password
+        or parsed.port not in (None, 443)
+        or parsed.hostname != expected.hostname
+        or parsed.path != "/environmentmanagement/environments"
+        or parsed.fragment
+    ):
+        raise AgentBuilderError(
+            "Environment listing returned an unsafe continuation URL."
+        )
+    return url
+
+
+def list_environments(
+    token: str,
+    ring: str,
+    *,
+    api_version: str = DEFAULT_API_VERSION,
+    session: requests.Session | None = None,
+) -> list[dict[str, Any]]:
+    """List environments visible to an AgentBuilder identity in one ring."""
+    host = _ring_api_host(ring)
+    client = session or requests.Session()
+    if session is None:
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET", "HEAD", "OPTIONS"}),
+            respect_retry_after_header=True,
+        )
+        client.mount("https://", HTTPAdapter(max_retries=retry))
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "x-ms-client-name": COPILOT_STUDIO_CLIENT_NAME,
+    }
+    url = f"{host}/environmentmanagement/environments"
+    params: dict[str, str] | None = {"api-version": api_version}
+    environments: list[dict[str, Any]] = []
+    for _page in range(20):
+        response = client.request(
+            "GET",
+            url,
+            params=params,
+            headers=headers,
+            timeout=120,
+        )
+        if not response.ok:
+            _response_error(response, "Environment listing")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AgentBuilderError(
+                "Environment listing returned a non-JSON response."
+            ) from exc
+        values = body.get("value") if isinstance(body, dict) else None
+        if not isinstance(values, list) or not all(
+            isinstance(value, dict) for value in values
+        ):
+            raise AgentBuilderError(
+                "Environment listing returned an invalid shape."
+            )
+        environments.extend(values)
+        next_url = (
+            body.get("@odata.nextLink")
+            or body.get("@odata.nextlink")
+            or body.get("nextLink")
+        )
+        if not next_url:
+            return environments
+        if not isinstance(next_url, str):
+            raise AgentBuilderError(
+                "Environment listing returned an invalid continuation URL."
+            )
+        url = _validate_environment_continuation(next_url, ring)
+        params = None
+    raise AgentBuilderError("Environment listing exceeded 20 pages.")
+
+
+def _persist_token_cache(cache: msal.SerializableTokenCache, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(
+        prefix=f"{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        text=True,
+    )
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(cache.serialize())
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.chmod(temporary_path, 0o600)
+        except OSError:
+            pass
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+
+def _load_token_cache(path: Path) -> msal.SerializableTokenCache:
+    cache = msal.SerializableTokenCache()
+    if path.exists():
+        try:
+            cache.deserialize(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise AgentBuilderError(
+                f"AgentBuilder token cache is unreadable: {path}"
+            ) from exc
+    return cache
+
+
+def _account_identifiers(account: Any) -> list[str]:
+    if not isinstance(account, dict):
+        return []
+    return [
+        str(account[key]).strip()
+        for key in ("username", "local_account_id", "home_account_id")
+        if account.get(key) and str(account[key]).strip()
+    ]
+
+
+def _select_cached_account(
+    accounts: list[dict[str, Any]],
+    account_hint: str | None,
+) -> dict[str, Any] | None:
+    """Select an exact hinted account, or one unambiguous cached account."""
+    if account_hint:
+        wanted = account_hint.strip().casefold()
+        matches = [
+            account
+            for account in accounts
+            if any(
+                identifier.casefold() == wanted
+                for identifier in _account_identifiers(account)
+            )
+        ]
+        if len(matches) > 1:
+            return None
+        return matches[0] if matches else None
+    return accounts[0] if len(accounts) == 1 else None
+
+
+def _authenticated_account_name(
+    result: dict[str, Any],
+    selected_account: dict[str, Any] | None,
+) -> str | None:
+    """Return the sign-in name used for a successful token acquisition."""
+    selected_identifiers = _account_identifiers(selected_account)
+    if selected_identifiers:
+        return selected_identifiers[0]
+
+    claims = result.get("id_token_claims")
+    if isinstance(claims, dict):
+        for key in ("preferred_username", "upn", "email"):
+            value = str(claims.get(key) or "").strip()
+            if value:
+                return value
+
+    result_account = result.get("account")
+    result_identifiers = _account_identifiers(result_account)
+    if result_identifiers:
+        return result_identifiers[0]
+
+    return None
+
+
+def cached_account_names(
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+) -> list[str]:
+    """Return distinct cached sign-in names without acquiring a token."""
+    return _cached_account_names(_load_token_cache(cache_path))
+
+
+def _cached_account_names(cache: msal.SerializableTokenCache) -> list[str]:
+    names: dict[str, str] = {}
+    for account in cache.find(msal.TokenCache.CredentialType.ACCOUNT):
+        username = str(account.get("username") or "").strip()
+        if username:
+            names.setdefault(username.casefold(), username)
+    return sorted(names.values(), key=str.casefold)
+
+
+def seed_shared_token_cache(
+    account_hint: str,
+    *,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    shared_cache_path: Path = Path(".local/.token_cache.bin"),
+) -> dict[str, Any]:
+    """Copy a selected account's cache once, without auth or replacement."""
+    wanted = str(account_hint or "").strip()
+    if not wanted:
+        raise ValueError("Account sign-in name is required.")
+    existing = {
+        "outcome": "already-exists",
+        "sharedCache": str(shared_cache_path),
+    }
+    if os.path.lexists(shared_cache_path):
+        return existing
+
+    content = cache_path.read_bytes()
+    cache = msal.SerializableTokenCache()
+    cache.deserialize(content.decode("utf-8"))
+    account = next(
+        (
+            name
+            for name in _cached_account_names(cache)
+            if name.casefold() == wanted.casefold()
+        ),
+        None,
+    )
+    if account is None:
+        raise ValueError("Selected account is absent from the AgentBuilder cache.")
+
+    shared_cache_path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(
+        prefix=f"{shared_cache_path.name}.",
+        suffix=".tmp",
+        dir=shared_cache_path.parent,
+    )
+    temporary_path = Path(temporary)
+    failure: BaseException | None = None
+    copied = False
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            # Publish complete bytes without replacing a competing cache.
+            os.link(temporary_path, shared_cache_path)
+        except FileExistsError:
+            return existing
+        copied = True
+        return {
+            "outcome": "copied",
+            "account": account,
+            "sourceCache": str(cache_path),
+            "sharedCache": str(shared_cache_path),
+        }
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        try:
+            temporary_path.unlink()
+        except OSError as cleanup_error:
+            if failure is not None:
+                failure.add_note(
+                    f"Temporary cache cleanup failed: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            else:
+                if copied:
+                    cleanup_error.add_note(
+                        f"Shared cache was copied to {shared_cache_path} "
+                        "before temporary cache cleanup failed."
+                    )
+                raise
+
+
+def _interactive_token(
+    app: msal.PublicClientApplication,
+    scopes: list[str],
+    account_hint: str | None,
+    force_account_selection: bool,
+) -> dict[str, Any] | None:
+    arguments: dict[str, Any] = {"scopes": scopes}
+    if account_hint and not force_account_selection:
+        arguments["login_hint"] = account_hint
+    else:
+        arguments["prompt"] = "select_account"
+    return app.acquire_token_interactive(**arguments)
+
+
+def tenant_id_from_access_token(token: str) -> str:
+    """Return the issuing tenant ID from an AgentBuilder access token."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        return str(uuid.UUID(str(claims.get("tid") or "")))
+    except (
+        IndexError,
+        TypeError,
+        UnicodeDecodeError,
+        ValueError,
+        binascii.Error,
+        json.JSONDecodeError,
+    ) as exc:
+        raise AgentBuilderError(
+            "AgentBuilder authentication returned an unreadable tenant identity."
+        ) from exc
+
+
+def _acquire_token(
+    *,
+    authority: str,
+    ring: str,
+    cache_path: Path,
+    force_account_selection: bool,
+    account_hint: str | None,
+    scopes: tuple[str, ...] | None = None,
+    emit_account_identity: bool = True,
+    return_account_identity: bool = False,
+    require_account_identity: bool = False,
+) -> str | tuple[str, str | None]:
+    cache = _load_token_cache(cache_path)
+    app = msal.PublicClientApplication(
+        CLIENT_ID,
+        authority=authority,
+        token_cache=cache,
+    )
+    requested_scopes = list(scopes or (minimal_bot_scope(ring),))
+    selected_account = (
+        None
+        if force_account_selection
+        else _select_cached_account(app.get_accounts(), account_hint)
+    )
+    result = (
+        app.acquire_token_silent(requested_scopes, account=selected_account)
+        if selected_account is not None
+        else None
+    )
+    selected_identifiers = _account_identifiers(selected_account)
+    if selected_identifiers and emit_account_identity:
+        print(
+            "Using cached AgentBuilder account: "
+            f"{selected_identifiers[0]}",
+            file=sys.stderr,
+        )
+    if not result or "access_token" not in result:
+        result = _interactive_token(
+            app,
+            requested_scopes,
+            account_hint,
+            force_account_selection,
+        )
+        # The successful interactive account is not necessarily the cached
+        # account whose silent acquisition failed. Never let that stale cached
+        # identity satisfy preferred-account verification.
+        selected_account = None
+    token = result.get("access_token") if result else None
+    if not token:
+        error = result.get("error", "unknown_error") if result else "unknown_error"
+        description = (
+            str(result.get("error_description", "")).strip()
+            if result
+            else ""
+        )
+        detail = f": {description}" if description else ""
+        raise AgentBuilderError(
+            f"AgentBuilder authentication failed ({error}){detail}"
+        )
+    account_name = _authenticated_account_name(
+        result,
+        selected_account,
+    )
+    # Opt-in; other callers treat account_hint as a preference only.
+    if require_account_identity:
+        if not account_name:
+            raise AgentBuilderError(
+                "AgentBuilder authentication could not verify the actual "
+                "signed-in account identity."
+            )
+        if (
+            account_hint
+            and account_name.casefold() != account_hint.strip().casefold()
+        ):
+            raise AgentBuilderAccountMismatch(
+                "AgentBuilder authenticated a different account than the "
+                "requested setup account.",
+                actual_account=account_name,
+            )
+    if cache.has_state_changed:
+        _persist_token_cache(cache, cache_path)
+    if account_name and emit_account_identity:
+        print(
+            "DA_AGENTBUILDER_AUTH_JSON:"
+            f"{json.dumps({'account': account_name}, ensure_ascii=True)}"
+        )
+    if return_account_identity:
+        return token, account_name
+    return token
+
+
+def authenticate(
+    tenant_id: str,
+    ring: str,
+    *,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    force_account_selection: bool = False,
+    account_hint: str | None = None,
+    scopes: tuple[str, ...] | None = None,
+    return_account_identity: bool = False,
+    require_account_identity: bool = False,
+) -> str | tuple[str, str | None]:
+    """Acquire an ESS ADK delegated token without contacting Dataverse."""
+    try:
+        normalized_tenant = str(uuid.UUID(tenant_id))
+    except ValueError as exc:
+        raise ValueError("Tenant ID must be a GUID.") from exc
+
+    return _acquire_token(
+        authority=f"https://login.microsoftonline.com/{normalized_tenant}",
+        ring=ring,
+        cache_path=cache_path,
+        force_account_selection=force_account_selection,
+        account_hint=account_hint,
+        scopes=scopes,
+        return_account_identity=return_account_identity,
+        require_account_identity=require_account_identity,
+    )
+
+
+def authenticate_selected_tenant(
+    ring: str,
+    *,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    force_account_selection: bool = False,
+    account_hint: str | None = None,
+    return_account_identity: bool = False,
+    require_account_identity: bool = False,
+) -> tuple[str, str] | tuple[str, str, str | None]:
+    """Reuse or select an account and return its token and tenant."""
+    acquired = _acquire_token(
+        authority="https://login.microsoftonline.com/organizations",
+        ring=ring,
+        cache_path=cache_path,
+        force_account_selection=force_account_selection,
+        account_hint=account_hint,
+        return_account_identity=return_account_identity,
+        require_account_identity=require_account_identity,
+    )
+    if return_account_identity:
+        token, account_name = acquired
+        return token, tenant_id_from_access_token(token), account_name
+    token = acquired
+    return token, tenant_id_from_access_token(token)
+
+
+def authenticate_flightcheck_dependency(
+    scope: str,
+    *,
+    tenant_id: str,
+    ring: str,
+    account_hint: str,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+) -> str:
+    """Acquire one dependency-read audience for the already selected operator.
+
+    ENV-004 requests Flow or Dataverse access only after discovering an active
+    flow dependency. A different or unverifiable account must not satisfy that
+    dependency on behalf of the selected agent.
+    """
+    if not account_hint:
+        raise ValueError("Dependency reads require a verified account identity.")
+    tenant_id = str(uuid.UUID(tenant_id))
+    token, account = _acquire_token(
+        authority=f"https://login.microsoftonline.com/{tenant_id}",
+        ring=ring,
+        cache_path=cache_path,
+        force_account_selection=False,
+        account_hint=account_hint,
+        scopes=(scope,),
+        emit_account_identity=False,
+        return_account_identity=True,
+        require_account_identity=True,
+    )
+    if not account or account.casefold() != account_hint.casefold():
+        raise AgentBuilderError("Dependency authentication selected a different or unverifiable account.")
+    if tenant_id_from_access_token(token).casefold() != tenant_id.casefold():
+        raise AgentBuilderError("Dependency authentication selected a different tenant.")
+    return token
+
+
+def authenticate_agent_inventory(
+    ring: str,
+    *,
+    tenant_id: str | None = None,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    force_account_selection: bool = False,
+    account_hint: str | None = None,
+    return_account_identity: bool = False,
+    require_account_identity: bool = False,
+) -> tuple[str, str] | tuple[str, str, str | None]:
+    """Acquire read-only scopes for agent collection and direct inspection."""
+    if tenant_id:
+        try:
+            normalized_tenant = str(uuid.UUID(tenant_id))
+        except ValueError as exc:
+            raise ValueError("Tenant ID must be a GUID.") from exc
+        authority = f"https://login.microsoftonline.com/{normalized_tenant}"
+    else:
+        normalized_tenant = None
+        authority = "https://login.microsoftonline.com/organizations"
+    acquired = _acquire_token(
+        authority=authority,
+        ring=ring,
+        cache_path=cache_path,
+        force_account_selection=force_account_selection,
+        account_hint=account_hint,
+        scopes=agent_inventory_read_scopes(ring),
+        return_account_identity=return_account_identity,
+        require_account_identity=require_account_identity,
+    )
+    if return_account_identity:
+        token, account_name = acquired
+        return (
+            token,
+            normalized_tenant or tenant_id_from_access_token(token),
+            account_name,
+        )
+    token = acquired
+    return token, normalized_tenant or tenant_id_from_access_token(token)
+
+
+def authenticate_flightcheck(
+    ring: str,
+    *,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    force_account_selection: bool = False,
+    account_hint: str | None = None,
+    include_connectivity: bool = True,
+    allow_write: bool = False,
+    emit_account_identity: bool = True,
+    return_account_identity: bool = False,
+    require_account_identity: bool = False,
+) -> tuple[str, str] | tuple[str, str, str | None]:
+    """Acquire a least-privilege token for native AgentBuilder FlightCheck."""
+    scopes = flightcheck_scopes(
+        ring,
+        allow_write=allow_write,
+        include_connectivity=include_connectivity,
+    )
+    acquired = _acquire_token(
+        authority="https://login.microsoftonline.com/organizations",
+        ring=ring,
+        cache_path=cache_path,
+        force_account_selection=force_account_selection,
+        account_hint=account_hint,
+        scopes=scopes,
+        emit_account_identity=emit_account_identity,
+        return_account_identity=return_account_identity,
+        require_account_identity=require_account_identity,
+    )
+    if return_account_identity:
+        token, account_name = acquired
+        return token, tenant_id_from_access_token(token), account_name
+    token = acquired
+    return token, tenant_id_from_access_token(token)
+
+
+def _response_error(response: requests.Response, operation: str) -> None:
+    error_code = None
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict):
+        error = body.get("error") or body.get("Error") or body
+        if isinstance(error, dict):
+            candidate = error.get("code") or error.get("Code")
+            if isinstance(candidate, str):
+                error_code = candidate
+        elif isinstance(error, str):
+            error_code = error
+    request_id = next(
+        (
+            response.headers.get(name)
+            for name in (
+                "x-ms-service-request-id",
+                "x-ms-request-id",
+                "request-id",
+            )
+            if response.headers.get(name)
+        ),
+        None,
+    )
+    correlation_id = next(
+        (
+            response.headers.get(name)
+            for name in (
+                "x-ms-correlation-request-id",
+                "x-ms-correlation-id",
+                "correlation-id",
+            )
+            if response.headers.get(name)
+        ),
+        None,
+    )
+    retry_after = response.headers.get("Retry-After")
+    raise AgentBuilderHTTPError(
+        operation,
+        response.status_code,
+        error_code=error_code,
+        request_id=request_id,
+        correlation_id=correlation_id,
+        retry_after=retry_after,
+        response=response,
+    )
+
+
+class ConnectivityClient:
+    """Thin client for ring-native Power Platform connection inventory."""
+
+    def __init__(
+        self,
+        token: str,
+        *,
+        ring: str,
+        api_version: str = DEFAULT_API_VERSION,
+        environment_host: str | None = None,
+        session: requests.Session | None = None,
+    ) -> None:
+        self.host = _ring_api_host(ring)
+        self.environment_host = (
+            validate_environment_host(environment_host, ring)
+            if environment_host
+            else None
+        )
+        self.ring = ring
+        self.api_version = api_version
+        self.session = session or requests.Session()
+        self._single_attempt_session = (
+            self.session if session is not None else requests.Session()
+        )
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET", "HEAD", "OPTIONS"}),
+            respect_retry_after_header=True,
+        )
+        self.session.mount("https://", HTTPAdapter(max_retries=retry))
+        self.headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "x-ms-client-name": COPILOT_STUDIO_CLIENT_NAME,
+        }
+
+    def list_connections(self, environment_id: str) -> list[dict[str, Any]]:
+        """List physical connections visible to the signed-in maker."""
+        normalized_environment_id = str(uuid.UUID(environment_id))
+        response = self.session.request(
+            "GET",
+            (
+                f"{self.host}/connectivity/environments/"
+                f"{normalized_environment_id}/connections"
+            ),
+            params={"api-version": self.api_version},
+            headers=self.headers,
+            timeout=120,
+        )
+        if not response.ok:
+            _response_error(response, "Connection listing")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AgentBuilderError(
+                "Connection listing returned a non-JSON response."
+            ) from exc
+        values = body.get("value") if isinstance(body, dict) else None
+        if not isinstance(values, list) or not all(
+            isinstance(value, dict) for value in values
+        ):
+            raise AgentBuilderError(
+                "Connection listing returned an invalid shape."
+            )
+        return values
+
+    def list_connector_connections(
+        self,
+        environment_id: str,
+        connector_name: str,
+    ) -> list[dict[str, Any]]:
+        """List one connector's connections with one logical HTTP attempt."""
+        if not self.environment_host:
+            raise AgentBuilderError(
+                "Connector-scoped connection listing requires an environment host."
+            )
+        normalized_environment_id = str(uuid.UUID(environment_id))
+        normalized_connector_name = connector_name.strip()
+        if not normalized_connector_name:
+            raise ValueError("connector_name must not be empty")
+        response = self._single_attempt_session.request(
+            "GET",
+            (
+                f"{self.environment_host}/connectivity/connectors/"
+                f"{quote(normalized_connector_name, safe='')}/connections"
+            ),
+            params={
+                "api-version": "1",
+                "$filter": (
+                    f"environment eq '{normalized_environment_id}'"
+                ),
+            },
+            headers=self.headers,
+            timeout=120,
+        )
+        if not response.ok:
+            _response_error(response, "Connector-scoped connection listing")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AgentBuilderError(
+                "Connector-scoped connection listing returned a non-JSON response."
+            ) from exc
+        values = body.get("value") if isinstance(body, dict) else None
+        if not isinstance(values, list) or not all(
+            isinstance(value, dict) for value in values
+        ):
+            raise AgentBuilderError(
+                "Connector-scoped connection listing returned an invalid shape."
+            )
+        if body.get("nextLink") or body.get("@odata.nextLink"):
+            raise AgentBuilderError(
+                "Connector-scoped connection listing returned an unsupported "
+                "continuation page."
+            )
+        for value in values:
+            properties = value.get("properties")
+            properties = properties if isinstance(properties, dict) else {}
+            api_id = str(properties.get("apiId") or "")
+            if (
+                api_id
+                and api_id.rstrip("/").rsplit("/", 1)[-1].casefold()
+                != normalized_connector_name.casefold()
+            ):
+                raise AgentBuilderError(
+                    "Connector-scoped connection listing returned a different "
+                    "connector identity."
+                )
+            environment = properties.get("environment")
+            if environment:
+                if isinstance(environment, dict):
+                    raw_environment = str(
+                        environment.get("name")
+                        or environment.get("id")
+                        or ""
+                    )
+                else:
+                    raw_environment = str(environment)
+                raw_environment = raw_environment.rstrip("/").rsplit("/", 1)[-1]
+                try:
+                    returned_environment_id = str(uuid.UUID(raw_environment))
+                except ValueError as exc:
+                    raise AgentBuilderError(
+                        "Connector-scoped connection listing returned an "
+                        "invalid environment identity."
+                    ) from exc
+                if returned_environment_id != normalized_environment_id:
+                    raise AgentBuilderError(
+                        "Connector-scoped connection listing returned a "
+                        "different environment identity."
+                    )
+        return values
+
+
+class AgentBuilderClient:
+    """Thin client for the live-proven AgentBuilder API surface."""
+
+    def __init__(
+        self,
+        host: str,
+        token: str,
+        *,
+        ring: str,
+        tenant_id: str,
+        api_version: str = DEFAULT_API_VERSION,
+        session: requests.Session | None = None,
+    ) -> None:
+        self.host = validate_environment_host(host, ring)
+        self.ring = ring
+        try:
+            self.tenant_id = str(uuid.UUID(tenant_id))
+        except ValueError as exc:
+            raise ValueError("Tenant ID must be a GUID.") from exc
+        self.api_version = api_version
+        self.session = session or requests.Session()
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET", "HEAD", "OPTIONS"}),
+            respect_retry_after_header=True,
+        )
+        self.session.mount("https://", HTTPAdapter(max_retries=retry))
+        self.headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "x-ms-client-name": COPILOT_STUDIO_CLIENT_NAME,
+        }
+
+    def _json(
+        self,
+        method: str,
+        path: str,
+        operation: str,
+        *,
+        params: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+        timeout: int = 120,
+    ) -> Any:
+        request_params = {"api-version": self.api_version}
+        if params:
+            request_params.update(params)
+        request_headers = dict(self.headers)
+        if body is not None:
+            request_headers["Content-Type"] = "application/json"
+        response = self.session.request(
+            method,
+            f"{self.host}{path}",
+            params=request_params,
+            headers=request_headers,
+            json=body,
+            timeout=timeout,
+        )
+        if not response.ok:
+            _response_error(response, operation)
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise AgentBuilderError(
+                f"{operation} returned a non-JSON response."
+            ) from exc
+
+    def list_agent_pages(
+        self,
+        *,
+        max_pages: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return untouched MakerOperations agent-list response pages."""
+        if max_pages <= 0:
+            raise ValueError("Max pages must be a positive integer.")
+        pages: list[dict[str, Any]] = []
+        continuation: str | None = None
+        seen_continuations: set[str] = set()
+        for _page in range(max_pages):
+            params = (
+                {"continuationToken": continuation}
+                if continuation is not None
+                else None
+            )
+            body = self._json(
+                "GET",
+                "/copilotstudio/agents",
+                "Agent listing",
+                params=params,
+            )
+            if not isinstance(body, dict):
+                raise AgentBuilderError(
+                    "Agent listing returned an invalid shape."
+                )
+            pages.append(body)
+            if "Entities" not in body:
+                raise AgentBuilderError(
+                    "Agent listing omitted the Entities collection."
+                )
+            listed = body["Entities"]
+            if not isinstance(listed, list) or not all(
+                isinstance(item, dict) for item in listed
+            ):
+                raise AgentBuilderError(
+                    "Agent listing returned an invalid shape."
+                )
+            if "ContinuationToken" not in body:
+                raise AgentBuilderError(
+                    "Agent listing omitted the ContinuationToken."
+                )
+            next_continuation = body["ContinuationToken"]
+            if next_continuation == "":
+                return pages
+            if not isinstance(next_continuation, str):
+                raise AgentBuilderError(
+                    "Agent listing returned an invalid continuation token."
+                )
+            if next_continuation in seen_continuations:
+                raise AgentBuilderError(
+                    "Agent listing repeated a continuation token."
+                )
+            seen_continuations.add(next_continuation)
+            continuation = next_continuation
+        raise AgentBuilderError(
+            f"Agent listing exceeded {max_pages} pages."
+        )
+
+    def list_agents(
+        self,
+        *,
+        max_pages: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return the agent entities from every listing page."""
+        return [
+            agent
+            for page in self.list_agent_pages(max_pages=max_pages)
+            for agent in page["Entities"]
+        ]
+
+    def list_minimal_bots(
+        self,
+        *,
+        creation_sources: tuple[str, ...] = AGENT_LIST_CREATION_SOURCES,
+    ) -> list[dict[str, Any]]:
+        """Return the untouched MinimalBot cards for explicit creation sources."""
+        if not creation_sources:
+            raise ValueError("At least one creation source is required.")
+        body = self._json(
+            "GET",
+            "/copilotstudio/minimalBots/api",
+            "MinimalBot listing",
+            params={
+                "api-version": NATIVE_ALM_API_VERSION,
+                "creationSource": list(creation_sources),
+            },
+        )
+        if not isinstance(body, list) or not all(
+            isinstance(item, dict) for item in body
+        ):
+            raise AgentBuilderError(
+                "MinimalBot listing returned an invalid shape."
+            )
+        return body
+
+    def list_agent_inventory(
+        self,
+        *,
+        max_maker_operations_pages: int = 20,
+        creation_sources: tuple[str, ...] = AGENT_LIST_CREATION_SOURCES,
+    ) -> dict[str, Any]:
+        """Return both collection responses without merging or interpretation."""
+        def read_source(
+            operation: Callable[[], Any],
+        ) -> dict[str, Any]:
+            try:
+                return {"response": operation(), "error": None}
+            except (AgentBuilderError, requests.RequestException) as exc:
+                error: dict[str, Any] = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+                if isinstance(exc, AgentBuilderHTTPError):
+                    error["httpStatus"] = exc.status_code
+                    if exc.error_code is not None:
+                        error["errorCode"] = exc.error_code
+                    if exc.request_id is not None:
+                        error["requestId"] = exc.request_id
+                return {"response": None, "error": error}
+
+        return {
+            "minimalBots": read_source(
+                lambda: self.list_minimal_bots(
+                    creation_sources=creation_sources
+                )
+            ),
+            "copilotStudioAgents": read_source(
+                lambda: self.list_agent_pages(
+                    max_pages=max_maker_operations_pages
+                )
+            ),
+        }
+
+    def list_starter_packages(
+        self,
+        *,
+        page_size: int = 200,
+        max_pages: int = 20,
+    ) -> list[dict[str, Any]]:
+        """List AgentBuilder starter packages entitled to this identity.
+
+        Read-only and safe to call before any maker confirmation; it never
+        mutates the target environment. Live-proven GET route. Uses the
+        client's normal idempotent-GET retry policy; this method adds only
+        bounded pagination and strict response-shape validation on top of
+        it.
+        """
+        if page_size <= 0:
+            raise ValueError("Page size must be a positive integer.")
+        if max_pages <= 0:
+            raise ValueError("Max pages must be a positive integer.")
+        packages: list[dict[str, Any]] = []
+        continuation: str | None = None
+        for _page in range(max_pages):
+            params: dict[str, Any] = {"pageSize": page_size}
+            if continuation:
+                params["continuationToken"] = continuation
+            body = self._json(
+                "GET",
+                "/copilotstudio/minimalBots/agentStarterPackages",
+                "Starter package listing",
+                params=params,
+            )
+            if not isinstance(body, dict):
+                raise AgentBuilderError(
+                    "Starter package listing returned an invalid shape."
+                )
+            page_packages = body.get("packages")
+            if not isinstance(page_packages, list) or not all(
+                isinstance(item, dict) for item in page_packages
+            ):
+                raise AgentBuilderError(
+                    "Starter package listing returned an invalid shape."
+                )
+            packages.extend(page_packages)
+            continuation = body.get("continuationToken")
+            if not continuation:
+                return packages
+            if not isinstance(continuation, str):
+                raise AgentBuilderError(
+                    "Starter package listing returned an invalid "
+                    "continuation token."
+                )
+        raise AgentBuilderError(
+            f"Starter package listing exceeded {max_pages} pages."
+        )
+
+    def get_agent(self, agent_id: str) -> dict[str, Any]:
+        body = self._json(
+            "GET",
+            f"/copilotstudio/minimalBots/api/{agent_id}",
+            "Direct agent lookup",
+        )
+        if not isinstance(body, dict):
+            raise AgentBuilderError("Direct agent lookup returned an invalid shape.")
+        return body
+
+    def delete_agent(self, agent_id: str, *, timeout: int = 120) -> None:
+        """Delete one native agent by its MinimalBot (Dataverse bot) id.
+
+        Used only to clean up the throwaway agent that the PUB-002 import
+        probe creates, so the single mutating publishing check leaves no
+        residue in the target environment. Mirrors the live-proven
+        ``get_agent`` resource route (``/copilotstudio/minimalBots/api/{id}``)
+        with the DELETE verb. A 404 is treated as already-absent so a retried
+        cleanup is idempotent. Any other non-2xx raises, so the caller surfaces
+        the still-present agent id for manual removal instead of silently
+        orphaning it.
+        """
+        response = self.session.request(
+            "DELETE",
+            f"{self.host}/copilotstudio/minimalBots/api/{agent_id}",
+            params={"api-version": self.api_version},
+            headers=self.headers,
+            timeout=timeout,
+            allow_redirects=False,
+        )
+        if response.status_code == 404:
+            return
+        if not 200 <= response.status_code < 300:
+            _response_error(response, "Native agent delete")
+
+    def publish_agent(
+        self,
+        agent_id: str,
+        *,
+        timeout: int = 300,
+    ) -> dict[str, Any]:
+        """Publish one native agent through the MinimalBot API."""
+        response = self.session.request(
+            "POST",
+            f"{self.host}/copilotstudio/minimalBots/api/{agent_id}/publish",
+            params={"api-version": NATIVE_ALM_API_VERSION},
+            headers={**self.headers, "Content-Type": "application/json"},
+            json={},
+            timeout=timeout,
+            allow_redirects=False,
+        )
+        if not response.ok:
+            _response_error(response, "Native agent publish")
+        try:
+            body = response.json()
+        except ValueError:
+            if response.content:
+                raise AgentBuilderError(
+                    "Native agent publish returned a non-JSON response."
+                )
+            return {}
+        if body is None:
+            return {}
+        if not isinstance(body, dict):
+            raise AgentBuilderError(
+                "Native agent publish returned an invalid shape."
+            )
+        upper = body.get("ValidationPending")
+        lower = body.get("validationPending")
+        if (
+            upper is not None
+            and lower is not None
+            and upper is not lower
+            and upper != lower
+        ):
+            raise AgentBuilderError(
+                "Native agent publish returned conflicting "
+                "ValidationPending values."
+            )
+        if lower is None and upper is not None:
+            body["validationPending"] = upper
+        return body
+
+    def get_realms(self, agent_id: str) -> dict[str, Any]:
+        body = self._json(
+            "GET",
+            f"/copilotstudio/minimalBots/alm/{agent_id}/realms",
+            "Agent realm family",
+        )
+        if not isinstance(body, dict):
+            raise AgentBuilderError(
+                "Agent realm family returned an invalid shape."
+            )
+        return body
+
+    def get_realm_configuration(
+        self,
+        agent_id: str,
+        realm: int,
+    ) -> dict[str, Any]:
+        if type(realm) is not int or realm not in REALM_NAMES:
+            raise ValueError("Realm must be the numeric Dev, Test, or Prod value.")
+        operation = f"{REALM_NAMES[realm]} realm configuration"
+        body = self._json(
+            "GET",
+            f"/copilotstudio/minimalBots/alm/{agent_id}/configure",
+            operation,
+            params={"realm": realm},
+        )
+        if not isinstance(body, dict):
+            raise AgentBuilderError(f"{operation} returned an invalid shape.")
+        return body
+
+    def get_dev_configuration(self, agent_id: str) -> dict[str, Any]:
+        return self.get_realm_configuration(agent_id, DEV_REALM)
+
+    def fetch_components(self, agent_id: str) -> dict[str, Any]:
+        body = self._json(
+            "POST",
+            f"/copilotstudio/minimalBots/api/{agent_id}/components",
+            "Component fetch",
+            params={"api-version": NATIVE_ALM_API_VERSION},
+            body={},
+            timeout=180,
+        )
+        if not isinstance(body, dict):
+            raise AgentBuilderError("Component fetch returned an invalid shape.")
+        return body
+
+    def update_components(
+        self,
+        agent_id: str,
+        change_set: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Apply one caller-supplied MinimalBot component change set."""
+        if not isinstance(change_set, dict):
+            raise ValueError("Component change set must be a JSON object.")
+        body = self._json(
+            "PUT",
+            f"/copilotstudio/minimalBots/api/{agent_id}/components",
+            "Component update",
+            params={"api-version": NATIVE_ALM_API_VERSION},
+            body=change_set,
+            timeout=180,
+        )
+        if not isinstance(body, dict):
+            raise AgentBuilderError("Component update returned an invalid shape.")
+        return body
+
+    def update_bot_entity(
+        self,
+        agent_id: str,
+        bot: dict[str, Any],
+        *,
+        timeout: int = 300,
+    ) -> requests.Response:
+        """Replace one fetched BotEntity without changing bot components."""
+        if not isinstance(bot, dict):
+            raise ValueError("BotEntity must be an object.")
+        return self.session.request(
+            "PUT",
+            f"{self.host}/copilotstudio/minimalBots/api/{agent_id}/components",
+            params={"api-version": NATIVE_ALM_API_VERSION},
+            headers={**self.headers, "Content-Type": "application/json"},
+            json={"bot": bot, "botComponentChanges": []},
+            timeout=timeout,
+            allow_redirects=False,
+        )
+
+    def import_package(
+        self,
+        package_path: Path,
+        *,
+        replacement_schema_name: str | None = None,
+        timeout: int = 300,
+    ) -> dict[str, Any]:
+        """Import one package without replaying or exposing its response body."""
+        request_headers = {
+            "Authorization": self.headers["Authorization"],
+            "x-ms-client-name": COPILOT_STUDIO_CLIENT_NAME,
+        }
+        form = (
+            {"schemaName": replacement_schema_name}
+            if replacement_schema_name
+            else {}
+        )
+        with package_path.open("rb") as package:
+            response = self.session.request(
+                "POST",
+                f"{self.host}/copilotstudio/minimalBots/alm/import",
+                params={"api-version": NATIVE_ALM_API_VERSION},
+                headers=request_headers,
+                files={
+                    "package": (
+                        "package.zip",
+                        package,
+                        "application/zip",
+                    )
+                },
+                data=form,
+                timeout=timeout,
+                allow_redirects=False,
+            )
+        if not 200 <= response.status_code < 300:
+            _response_error(response, "Native ALM import")
+        try:
+            body = response.json()
+        except ValueError:
+            return {
+                "responseStatus": "invalid",
+                "reason": "non-json-response",
+            }
+        if not isinstance(body, dict):
+            return {
+                "responseStatus": "invalid",
+                "reason": "invalid-agent-identity",
+            }
+        try:
+            agent_id = str(uuid.UUID(str(body.get("cdsBotId") or "")))
+        except ValueError:
+            return {
+                "responseStatus": "invalid",
+                "reason": "invalid-agent-identity",
+            }
+        schema_name = body.get("schemaName")
+        if not isinstance(schema_name, str) or not schema_name.strip():
+            return {
+                "responseStatus": "invalid",
+                "reason": "invalid-agent-identity",
+            }
+        return {
+            "responseStatus": "valid",
+            "result": {
+                "cdsBotId": agent_id,
+                "schemaName": schema_name.strip(),
+            },
+        }
+
+    def export_package(
+        self,
+        agent_id: str,
+        destination: Path,
+        *,
+        timeout: int = 300,
+    ) -> None:
+        """Export one native package to a caller-owned path."""
+        request_headers = {
+            "Authorization": self.headers["Authorization"],
+            "x-ms-client-name": COPILOT_STUDIO_CLIENT_NAME,
+        }
+        response = self.session.request(
+            "POST",
+            f"{self.host}/copilotstudio/minimalBots/alm/{agent_id}/export",
+            params={"api-version": NATIVE_ALM_API_VERSION},
+            headers=request_headers,
+            timeout=timeout,
+            allow_redirects=False,
+            stream=True,
+        )
+        operation_error: BaseException | None = None
+        try:
+            if not 200 <= response.status_code < 300:
+                _response_error(response, "Native ALM export")
+            with destination.open("wb") as package:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        package.write(chunk)
+        except BaseException as exc:
+            operation_error = exc
+            raise
+        finally:
+            try:
+                response.close()
+            except Exception as close_error:
+                if operation_error is None:
+                    raise
+                operation_error.add_note(
+                    "Native ALM export response cleanup also failed: "
+                    f"{type(close_error).__name__}: {close_error}"
+                )
+
+    def create_agent_from_starter_package(
+        self,
+        package_id: str,
+        *,
+        timeout: int = 300,
+    ) -> requests.Response:
+        """Dispatch one create-only MOS starter package request.
+
+        The live-proven request is
+        ``POST /minimalBots/createFromStarterPackage`` with the exact package
+        ID in ``{"packageId": ...}``. The service returns HTTP 201 with the
+        new ``botId`` and ``sourcePackage`` identity.
+
+        Create-only: the caller supplies the exact maker-confirmed package
+        ID and this method never supplies a replacement schema or targets
+        an existing agent. Redirects are disabled and this POST is
+        intentionally excluded from the session's retry policy (mounted for
+        GET/HEAD/OPTIONS only), so a mutation is never replayed
+        automatically by the transport.
+
+        Returns the raw response instead of raising on a non-2xx status or
+        parsing its body: the caller owns near-verbatim, redacted evidence
+        rendering and the attempt-fuse disposition, and must not lose
+        response detail to a discarded exception.
+        """
+        if not isinstance(package_id, str) or not package_id.strip():
+            raise ValueError("Starter package ID must be a non-empty string.")
+        return self.session.request(
+            "POST",
+            f"{self.host}/copilotstudio/minimalBots/createFromStarterPackage",
+            params={"api-version": self.api_version},
+            headers={**self.headers, "Content-Type": "application/json"},
+            json={"packageId": package_id},
+            timeout=timeout,
+            allow_redirects=False,
+        )
+
+
+def canonical_json(value: Any) -> str:
+    """Serialize API state deterministically for hashes and local evidence."""
+    return json.dumps(
+        value,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )

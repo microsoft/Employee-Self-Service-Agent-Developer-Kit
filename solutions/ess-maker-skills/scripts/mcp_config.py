@@ -10,6 +10,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -22,6 +23,8 @@ DEFAULTS_PATH = Path(".vscode/mcp.defaults.json")
 CONFIG_PATH = Path(".vscode/mcp.json")
 STATE_PATH = Path(".local/mcp-defaults-state.json")
 DESCRIPTORS_PATH = Path("src/mcp")
+ENV_ARGUMENT = "--env"
+_ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class McpConfigError(ValueError):
@@ -338,7 +341,8 @@ def _normalize_parameter(value: str, specification: dict[str, Any]) -> str:
 
 def _render_runtime_values(value: Any) -> Any:
     if value == "{pythonExecutable}":
-        return str(Path(sys.executable).resolve())
+        # A venv's executable can be a symlink; its launch path selects the venv.
+        return os.path.abspath(sys.executable)
     if isinstance(value, list):
         return [_render_runtime_values(item) for item in value]
     if isinstance(value, dict):
@@ -349,10 +353,38 @@ def _render_runtime_values(value: Any) -> Any:
     return value
 
 
+def _parse_env_override(value: str) -> tuple[str, str]:
+    name, separator, environment_value = value.partition("=")
+    if not separator:
+        raise McpConfigError(
+            f"{ENV_ARGUMENT} expects NAME=VALUE, received: {value}"
+        )
+    if not _ENV_NAME_PATTERN.match(name):
+        raise McpConfigError(
+            f"{ENV_ARGUMENT} name must match [A-Za-z_][A-Za-z0-9_]*, "
+            f"received: {name}"
+        )
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in environment_value):
+        raise McpConfigError(
+            f"{ENV_ARGUMENT} value for '{name}' must not contain control characters."
+        )
+    return name, environment_value
+
+
+def _parse_env_overrides(values: Sequence[str]) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    for value in values:
+        name, environment_value = _parse_env_override(value)
+        if name in overrides:
+            raise McpConfigError(f"{ENV_ARGUMENT} name '{name}' was supplied twice.")
+        overrides[name] = environment_value
+    return overrides
+
+
 def _parse_descriptor_arguments(
     descriptor: dict[str, Any],
     arguments: Sequence[str],
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict[str, str]]:
     parameters = descriptor.get("parameters", {})
     if not isinstance(parameters, dict):
         raise McpConfigError(
@@ -372,18 +404,32 @@ def _parse_descriptor_arguments(
             raise McpConfigError(
                 f"{descriptor['_path']}: parameter '{name}' needs a '--' argument."
             )
+        if argument == ENV_ARGUMENT:
+            raise McpConfigError(
+                f"{descriptor['_path']}: parameter '{name}' must not claim the "
+                f"reserved '{ENV_ARGUMENT}' argument."
+            )
         parser.add_argument(
             argument,
             dest=name,
             required=bool(specification.get("required")),
         )
+    parser.add_argument(
+        ENV_ARGUMENT,
+        dest="_env",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="Set one environment variable on the rendered server definition.",
+    )
 
     parsed = vars(parser.parse_args(arguments))
-    return {
+    rendered = {
         name: _normalize_parameter(parsed[name], specification)
         for name, specification in parameters.items()
         if parsed[name] is not None
     }
+    return rendered, _parse_env_overrides(parsed["_env"])
 
 
 def _render_template(value: Any, parameters: dict[str, str]) -> Any:
@@ -420,10 +466,18 @@ def configure_server(
             f"{descriptor['_path']}: 'server' must be a JSON object."
         )
 
-    parameters = _parse_descriptor_arguments(descriptor, arguments)
+    parameters, env_overrides = _parse_descriptor_arguments(descriptor, arguments)
     rendered_server = _render_runtime_values(
         _render_template(server_template, parameters)
     )
+    if env_overrides:
+        environment = rendered_server.setdefault("env", {})
+        if not isinstance(environment, dict):
+            raise McpConfigError(
+                f"{descriptor['_path']}: 'server.env' must be a JSON object to "
+                f"accept {ENV_ARGUMENT} values."
+            )
+        environment.update(env_overrides)
     rendered_inputs = _render_template(descriptor.get("inputs", []), parameters)
     _validate_document(
         {"servers": {server_name: rendered_server}, "inputs": rendered_inputs},
@@ -481,7 +535,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Render and upsert one contextual server.",
     )
     configure_parser.add_argument("server")
-    configure_parser.add_argument("server_arguments", nargs=argparse.REMAINDER)
+    configure_parser.add_argument(
+        "server_arguments",
+        nargs=argparse.REMAINDER,
+        help=(
+            "Descriptor parameters, plus repeatable "
+            f"'{ENV_ARGUMENT} NAME=VALUE' environment overrides."
+        ),
+    )
     return parser
 
 

@@ -449,6 +449,10 @@ class TestScrubJsonKeys:
         # non-scrubbed sibling preserved
         assert out["createdBy"]["id"] == "abc"
 
+    def test_scrubs_opaque_change_token(self) -> None:
+        out = _scrub_json_keys({"changeToken": "eyJlbWJlZGRlZCI6InRlbmFudCJ9"})
+        assert out["changeToken"] == "REDACTED_CHANGE_TOKEN"
+
     def test_scrubs_in_list_of_records(self) -> None:
         payload = {"value": [{"displayName": "A"}, {"displayName": "B"}]}
         out = _scrub_json_keys(payload)

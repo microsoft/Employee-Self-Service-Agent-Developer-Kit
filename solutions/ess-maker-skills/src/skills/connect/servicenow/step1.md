@@ -167,50 +167,16 @@ pip install -r src/mcp/servicenow/requirements.txt
 
 If pip fails, show the error and suggest `python -m pip install ...` instead.
 
-Read `.vscode/mcp.json`. If it exists, parse it. If it doesn't exist,
-start with an empty `{ "servers": {} }` object.
+Configure the contextual ServiceNow MCP server:
 
-Add a `ServiceNow` entry to the `servers` object. **Keep all existing
-entries (like Dataverse) intact.**
-
-Also ensure the top-level `inputs` array contains the ServiceNow input
-definitions. If `inputs` doesn't exist yet, create it. If it exists,
-append to it (don't overwrite existing inputs like Dataverse ones).
-
-Write the merged result back to `.vscode/mcp.json`:
-
-```json
-{
-  "inputs": [
-    {
-      "id": "servicenowUsername",
-      "type": "promptString",
-      "description": "ServiceNow admin username",
-      "password": false
-    },
-    {
-      "id": "servicenowPassword",
-      "type": "promptString",
-      "description": "ServiceNow admin password",
-      "password": true
-    }
-  ],
-  "servers": {
-    "ServiceNow": {
-      "command": "python",
-      "args": ["server.py"],
-      "cwd": "${workspaceFolder}/src/mcp/servicenow",
-      "env": {
-        "SERVICENOW_INSTANCE_URL": "https://{INSTANCE_NAME}.service-now.com",
-        "SERVICENOW_USERNAME": "${input:servicenowUsername}",
-        "SERVICENOW_PASSWORD": "${input:servicenowPassword}"
-      }
-    }
-  }
-}
+```text
+python scripts/mcp_config.py configure servicenow --instance-url "https://{INSTANCE_NAME}.service-now.com"
 ```
 
-Replace `{INSTANCE_NAME}` with the actual instance name from step 1.1.
+Replace `{INSTANCE_NAME}` with the actual instance name from step 1.1. If
+configuration fails, show the exact error and stop. The command adds the
+ServiceNow credential inputs and preserves every other server, input, and
+top-level field in `.vscode/mcp.json`.
 
 ---
 

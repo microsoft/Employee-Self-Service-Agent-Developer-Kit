@@ -10,6 +10,7 @@ import binascii
 import html
 import json
 import os
+import sys
 from collections.abc import Awaitable, Callable
 from typing import Any, Optional
 from urllib.parse import urlsplit
@@ -19,10 +20,26 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 
 from client import AgentConfigApiError, AgentConfigClient
+from drafts import (
+    AccentColorDraft,
+    DraftModel,
+    QuickLinksDraft,
+    StarterPromptsDraft,
+)
+
+# Import the telemetry SDK from scripts/ when launched directly. MCP Apps
+# binds widget tool calls to the connection serving the widget resources, so
+# the telemetry bridge is registered on this server.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts"))
+
+import adk_telemetry  # type: ignore  # noqa: E402  # pylint: disable=import-error
 
 
 DEFAULT_WIDGET_ORIGIN = "https://workforceinsights.m365.cloud.microsoft"
 WIDGET_MIME_TYPE = "text/html;profile=mcp-app"
+SOLUTION_LOCAL_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", ".local")
+)
 
 ACCENT_COLOR_RESOURCE_URI = "ui://widget/accent-color/AccentColor.html"
 QUICK_LINKS_RESOURCE_URI = "ui://widget/quick-links/QuickLinks.html"
@@ -46,6 +63,12 @@ _DELETE_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=True,
     idempotentHint=True,
+    openWorldHint=False,
+)
+_REPORT_CLIENT_EVENTS_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
     openWorldHint=False,
 )
 
@@ -87,6 +110,11 @@ def _widget_tool_meta(resource_uri: str) -> dict[str, Any]:
 
 def _app_tool_meta() -> dict[str, Any]:
     return {"ui": {"visibility": ["model", "app"]}}
+
+
+def _app_only_tool_meta() -> dict[str, Any]:
+    """Callable by a widget on this connection, hidden from the model."""
+    return {"ui": {"visibility": ["app"]}}
 
 
 def _widget_resource_meta() -> dict[str, Any]:
@@ -137,6 +165,10 @@ def get_client() -> AgentConfigClient:
     global _client
     if _client is None:
         _client = AgentConfigClient()
+        adk_telemetry.initialize_tenant_identity(
+            _client.tenant_id,
+            local_dir=SOLUTION_LOCAL_DIR,
+        )
     return _client
 
 
@@ -204,11 +236,15 @@ async def _open_widget(
     request: Callable[[], Awaitable[dict[str, Any]]],
     *,
     success_message: str,
+    draft: DraftModel | None = None,
 ) -> CallToolResult:
     try:
         payload = await request()
     except (AgentConfigApiError, httpx.RequestError, ValueError) as error:
         return _widget_error_result(error)
+
+    if draft is not None:
+        payload = {**payload, "draft": draft.model_dump(mode="json")}
 
     return _structured_result(payload, success_message)
 
@@ -269,7 +305,11 @@ async def create_agent_config(titleId: str) -> str:
 
 @mcp.tool()
 async def get_agent_config(titleId: str) -> str:
-    """Get an employee agent's complete landing-page configuration."""
+    """Get an employee agent's complete landing-page configuration.
+
+    Insight-card settings expose only insightCardsConfig.isStayUpToDateEnabled.
+    Silently ignore isQuickAccessEnabled in responses; never mention it to the maker.
+    """
     return _format(await get_client().get_agent_config(titleId))
 
 
@@ -318,7 +358,12 @@ async def update_agent_config(
     titleId: str,
     config: dict[str, Any],
 ) -> CallToolResult:
-    """Apply the complete value of each provided configuration section."""
+    """Apply the complete value of each provided configuration section.
+
+    For insightCardsConfig, send only isStayUpToDateEnabled. Omit
+    isQuickAccessEnabled and silently ignore it in the response; never mention
+    it to the maker.
+    """
     try:
         result = await get_client().update_agent_config(titleId, config)
     except (AgentConfigApiError, httpx.RequestError, ValueError) as error:
@@ -348,11 +393,15 @@ async def delete_agent_config(titleId: str) -> CallToolResult:
     meta=_widget_tool_meta(ACCENT_COLOR_RESOURCE_URI),
     annotations=_READ_ONLY_ANNOTATIONS,
 )
-async def open_accent_color(titleId: str) -> CallToolResult:
-    """Open the accent-color widget with the current branding section."""
+async def open_accent_color(
+    titleId: str,
+    draft: AccentColorDraft | None = None,
+) -> CallToolResult:
+    """Open the accent-color widget with its baseline and optional proposal."""
     return await _open_widget(
         lambda: get_client().open_accent_color(titleId),
         success_message="Opened the accent-color editor.",
+        draft=draft,
     )
 
 
@@ -360,11 +409,15 @@ async def open_accent_color(titleId: str) -> CallToolResult:
     meta=_widget_tool_meta(QUICK_LINKS_RESOURCE_URI),
     annotations=_READ_ONLY_ANNOTATIONS,
 )
-async def open_quick_links(titleId: str) -> CallToolResult:
-    """Open the quick-links widget with the current section."""
+async def open_quick_links(
+    titleId: str,
+    draft: QuickLinksDraft | None = None,
+) -> CallToolResult:
+    """Open the quick-links widget with its baseline and optional proposal."""
     return await _open_widget(
         lambda: get_client().open_quick_links(titleId),
         success_message="Opened the quick-links editor.",
+        draft=draft,
     )
 
 
@@ -372,11 +425,70 @@ async def open_quick_links(titleId: str) -> CallToolResult:
     meta=_widget_tool_meta(STARTER_PROMPTS_RESOURCE_URI),
     annotations=_READ_ONLY_ANNOTATIONS,
 )
-async def open_starter_prompts(titleId: str) -> CallToolResult:
-    """Open the starter-prompts widget with the current pivots."""
+async def open_starter_prompts(
+    titleId: str,
+    draft: StarterPromptsDraft | None = None,
+) -> CallToolResult:
+    """Open the starter-prompts widget with its baseline and optional proposal."""
     return await _open_widget(
         lambda: get_client().open_starter_prompts(titleId),
         success_message="Opened the starter-prompts editor.",
+        draft=draft,
+    )
+
+
+@mcp.tool(
+    meta=_app_only_tool_meta(),
+    annotations=_REPORT_CLIENT_EVENTS_ANNOTATIONS,
+)
+async def report_client_events(
+    schemaVersion: Any = None,
+    batchId: Any = None,
+    mountId: Any = None,
+    appName: Any = None,
+    buildEnvironment: Any = None,
+    buildNumber: Any = None,
+    platform: Any = None,
+    userAgent: Any = None,
+    events: Any = None,
+    toolCallId: Any = None,
+) -> CallToolResult:
+    """Accept Vorpal client telemetry batches through the app-only bridge.
+
+    MCP Apps binds tool calls to the connection serving the widget resources,
+    so this bridge shares the landing-page server with those resources.
+
+    ``Any`` parameters route malformed values through the bridge validator,
+    which returns an explicit accepted/rejected verdict in ``structuredContent``.
+    Vorpal treats a missing ``status`` as transient and retries, so validation
+    failures must retain that result shape.
+    """
+    envelope: dict[str, Any] = {
+        "schemaVersion": schemaVersion,
+        "batchId": batchId,
+        "mountId": mountId,
+        "appName": appName,
+        "buildEnvironment": buildEnvironment,
+        "buildNumber": buildNumber,
+        "platform": platform,
+        "userAgent": userAgent,
+        "events": events,
+    }
+    if toolCallId is not None:
+        envelope["toolCallId"] = toolCallId
+
+    # The SDK owns validation, exception handling, and the contract-shaped verdict.
+    result = adk_telemetry.report_client_events(envelope)
+
+    message = (
+        f"Accepted {result['acceptedEventCount']} client telemetry event(s)."
+        if result.get("status") == "accepted"
+        else "Rejected the client telemetry batch."
+    )
+    return CallToolResult(
+        content=[TextContent(type="text", text=message)],
+        structuredContent=result,
+        isError=result.get("status") == "rejected",
     )
 
 

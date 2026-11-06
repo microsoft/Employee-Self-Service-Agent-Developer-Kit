@@ -24,7 +24,7 @@ each role they hold** — which naturally covers a person with more than one rol
    tasks, fold in a setup that already ran as a first-run experience: if
    `python scripts/planner/cli.py setup-status` reports `setupTaskOpen` **true**
    and `.local/config.json` shows setup complete, confirm the detected
-   environment and run `capture-setup --complete` so the admin's setup task (and
+   environment and run `capture-setup --complete` so the setup task (and
    anything else that run produced) shows Complete before you show the list
    (`src/skills/planner/capture.md` → *Reconcile a first-run setup that already
    ran*). If `setupTaskOpen` is **false**, there's nothing to reconcile —
@@ -74,7 +74,7 @@ each role they hold** — which naturally covers a person with more than one rol
 ## Before they start — connect their kit to the plan's environment
 
 A task after setup runs against the environment the Power Platform admin
-established (they run `/setup`, **decide or create** the environment, and the
+established (they create or choose it in the Power Platform admin center, and the
 planner pins its id as `primaryEnvironment`). Each *other* persona still has to
 connect their own kit to that same environment first. So when someone picks up a
 task, run `task-brief` and honour its nudge:
@@ -90,22 +90,22 @@ python scripts/planner/cli.py task-brief --task <T#>
   do their task. The CLI checks `.local/config.json` on every brief and omits
   this nudge when the workspace is already set up for that environment and
   recorded agent. Do not add `/setup` back merely because the task consumes an
-  environment; the admin may have just finished it.
-- **This person's own ready task IS the setup task** (it produces the environment
-  and none is pinned yet) → `task-brief` prints **"First-run setup…"**. This is
-  their first-run experience. Spell out that they can stand up the environment
-  **either manually in Copilot Studio or by running `/setup`** — and **recommend
-  `/setup`** as the easier, guided path. When they come back having run it,
-  capture what it produced (Phase 6);
-  and if the ESS agent install was blocked so `/setup` couldn't finish, still
-  persist the environment they created (`src/skills/planner/capture.md` → *When
-  `/setup` is blocked before it records the environment*), keeping the setup task
-  open.
+  environment; they may have just finished it.
+- **This person's own ready task IS the environment task** (it produces the
+  environment and none is pinned yet) → `task-brief` prints **"First-run
+  setup…"**. This is their first-run experience. Spell out that they create or
+  choose the environment in the Power Platform admin center (`/setup` selects
+  environments but never creates one), then pin its verified environment ID
+  (`src/skills/planner/capture.md` → *When the environment exists before
+  `/setup` records it*). An environment-only task completes once the environment
+  exists and the maker has the Environment Maker role in it; a combined task
+  stays open until `/setup` records the agent, and then you capture what it
+  produced (Phase 6).
 - **This task needs an environment that isn't pinned yet** (and this isn't their
-  setup task) → the admin's `/setup` task is the prerequisite. Don't nudge this
-  person to setup — name the missing input and who owns it. Tasks that do not
-  consume an environment, such as firewall preparation, can proceed when their
-  own prerequisites are met; do not invent an environment dependency for them.
+  environment task) → the admin's environment task is the prerequisite. Don't
+  nudge this person to setup — name the missing input and who owns it. Tasks that do not
+  consume an environment can proceed when their own prerequisites are met; do
+  not invent an environment dependency for them.
 
 Present the result in plain language — role headings with their tasks beneath —
 not as raw output.
@@ -134,11 +134,15 @@ do not ask them to type `/setup` again. Keep the original task and return to it
 after this person's workspace is bound.
 
 **Recognize foundation work even without a command in the description.**
-Environment provisioning/selection and ESS installation belong to `/setup`
-(`src/skills/foundation-setup/SKILL.md`). Use the task's purpose and its
+ESS agent creation or connection, environment selection, and workspace binding
+belong to `/setup` (`src/skills/foundation-setup/SKILL.md`). Creating the
+environment is a Power Platform admin step in the Power Platform admin center;
+`/setup` shows those steps but never creates one. Use the task's purpose and its
 `primaryEnvironment`, `provisionedEnvironment`, or `essAgent` outputs to identify
-that workflow. Continue `/setup` when foundation work is already under way,
-reusing the plan's existing environment rather than provisioning another one.
+that workflow: an environment-only task is created or chosen in the admin center
+and its ID pinned (`capture.md`), while `essAgent` work runs `/setup`.
+Continue `/setup` when foundation work is already under way, reusing the plan's
+existing environment rather than creating another one.
 In a status response, recommend this handoff without entering the skill; run it
 only when the person asks to start or continue.
 
@@ -149,8 +153,9 @@ only when the person asks to start or continue.
    are rich). Read that skill's `SKILL.md` and follow it; don't re-summarise its
    steps from memory. The skill *is* the how-to. (E.g. "create a topic" → `/create`.)
    When the skill finishes, you (the planner) capture its outputs (`capture.md`) —
-   and one run can close **more than one** task: a single `/setup` completes both
-   the environment task and the base-agent task when the plan splits them.
+   and one run can close **more than one** task: a single `/setup` run completes
+   both the environment task and the agent task when the plan splits them and the
+   environment isn't pinned yet.
    If the skill's handoff already captured this run, do not capture it again.
    Follow `status.md` → **Refresh after progress** for the same person's next
    action; never blindly advance to another role's task.

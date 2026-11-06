@@ -4,6 +4,9 @@ This skill guides the user through deleting a Power Automate cloud flow
 (workflow) from their Copilot Studio agent. Deleting means removing the
 workflow both locally AND from the live environment via push.
 
+Explain that DA-GA component deletion is not yet available in this release and
+stop before changing local files.
+
 ## CRITICAL — Local Files Are a Working Copy
 
 The files in `workspace/agents/{slug}/` are a **working copy** of what's deployed in

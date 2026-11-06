@@ -42,7 +42,7 @@ _CONFIG_NOISE_KEYS = {"setup"}
 # Which Task actions have an observe-mode detector today. Anything not listed
 # falls back to ask-mode (b). This is metadata the CLI/skill can surface.
 OBSERVE_DETECTORS: dict[str, str] = {
-    "onboarding": "config-artifacts",  # /setup -> every id+name in config.json
+    "setup": "config-artifacts",       # /setup -> every id+name in config.json
     "discover": "inventory-results",   # /discover -> tenantInventory summary from results.json
 }
 
@@ -86,14 +86,15 @@ def detect_environment(
     Returns a ``PlanArtifact`` when ``/setup`` bound/recorded an environment
     that wasn't reflected before (a new/changed ``dataverseEndpoint`` or
     ``environmentId``, or setup transitioning to ``"complete"``), else ``None``.
-    The workspace-binding stage of ``/setup`` records the environment selected
-    or provisioned by foundation setup and the installed agent.
+    ``/setup`` records the environment it selected (it never creates one) once
+    it finishes creating or connecting the agent.
 
     ``environmentId`` is a GUID assigned when the environment is created and is
-    stable thereafter; ``dataverseEndpoint`` is the org URL. ``setup.py`` keeps
-    the verified ID for that endpoint, including a matching locked foundation
-    environment. A URL without an ID is a partial local observation, not a
-    shareable Environment completion.
+    stable thereafter; ``dataverseEndpoint`` is the org URL. Guided DA setup
+    records only the ``environmentId``, so its environment is pinned without an
+    ``environmentUrl``; older workspace configs may also carry the endpoint. A
+    URL without an ID is a partial local observation, not a shareable
+    Environment completion.
     """
     endpoint = after.get("dataverseEndpoint")
     env_id = after.get("environmentId")

@@ -1,0 +1,99 @@
+{
+  "absent": {
+    "connectionReferenceChanges": []
+  },
+  "partial": {
+    "connectionReferenceChanges": [
+      {
+        "changeType": "Insert",
+        "connectionReference": {
+          "connectionReferenceLogicalName": "gptagent_mockemployeeselfservice.shared_workdaysoap",
+          "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+          "connectionId": null
+        }
+      }
+    ]
+  },
+  "legacy": {
+    "connectionReferenceChanges": [
+      {
+        "changeType": "Insert",
+        "connectionReference": {
+          "connectionReferenceLogicalName": "new_sharedworkdaysoap_ff0df",
+          "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+          "connectionId": "mock-legacy-obo"
+        }
+      },
+      {
+        "changeType": "Insert",
+        "connectionReference": {
+          "connectionReferenceLogicalName": "new_sharedworkdaysoap_generic",
+          "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+          "connectionId": "mock-legacy-generic-user"
+        }
+      },
+      {
+        "changeType": "Insert",
+        "connectionReference": {
+          "connectionReferenceLogicalName": "new_sharedworkdaysoap_context",
+          "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+          "connectionId": "mock-legacy-context-generic-user"
+        }
+      }
+    ]
+  },
+  "healthy": {
+    "connectionReferenceChanges": [
+      {
+        "changeType": "Insert",
+        "connectionReference": {
+          "connectionReferenceLogicalName": "new_sharedworkdaysoap_ff0df",
+          "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+          "connectionId": "mock-healthy-workday",
+          "sharedConnectionParameters": "{\"values\":{\"restBaseUri\":{\"value\":\"https://wd.example.com/ccx/api\"},\"tenantName\":{\"value\":\"mocktenant\"},\"token:ResourceUri\":{\"value\":\"https://wd.example.com\"},\"token:WorkdayTokenUri\":{\"value\":\"https://wd.example.com/ccx/oauth2/mocktenant/token\"},\"token:WorkdayClientId\":{\"value\":\"mock-client-id\"}}}"
+        }
+      }
+    ]
+  },
+  "degraded": {
+    "connectionReferenceChanges": [
+      {
+        "changeType": "Insert",
+        "connectionReference": {
+          "connectionReferenceLogicalName": "new_sharedworkdaysoap_ff0df",
+          "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+          "connectionId": "mock-degraded-workday",
+          "sharedConnectionParameters": "{\"values\":{}}"
+        }
+      }
+    ]
+  },
+  "invoker": {
+    "connectionReferenceChanges": [
+      {
+        "changeType": "Insert",
+        "connectionReference": {
+          "connectionReferenceLogicalName": "new_sharedworkdaysoap_ff0df",
+          "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+          "connectionId": "mock-invoker-workday",
+          "authenticationType": "OAuthUser",
+          "sharedConnectionParameters": "{\"values\":{\"restBaseUri\":{\"value\":\"https://wd.example.com/ccx/api\"},\"tenantName\":{\"value\":\"mocktenant\"}}}"
+        }
+      }
+    ]
+  },
+  "embedded": {
+    "connectionReferenceChanges": [
+      {
+        "changeType": "Insert",
+        "connectionReference": {
+          "connectionReferenceLogicalName": "new_sharedworkdaysoap_ff0df",
+          "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+          "connectionId": "mock-embedded-workday",
+          "authenticationType": "Raw",
+          "sharedConnectionParameters": "{\"values\":{\"restBaseUri\":{\"value\":\"https://wd.example.com/ccx/api\"},\"tenantName\":{\"value\":\"mocktenant\"}}}"
+        }
+      }
+    ]
+  }
+}

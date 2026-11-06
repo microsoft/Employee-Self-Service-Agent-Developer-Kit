@@ -61,6 +61,24 @@ def _fn_raising(message: str = "boom"):
 
 
 class TestTargetMatcherFiltering:
+    def test_runner_exposes_exact_checkpoint_target_to_provider(self) -> None:
+        captured = {}
+        runner = FlightCheckRunner(
+            scope="checkpoint:SN-DA-HRSD-TEST-001",
+            target_matcher=lambda cid: cid == "SN-DA-HRSD-TEST-001",
+            checkpoint_target="SN-DA-HRSD-TEST-001",
+        )
+
+        def _capture(current):
+            captured["target"] = current.checkpoint_target
+            return [_row("SN-DA-HRSD-TEST-001", "ServiceNow DA HRSD")]
+
+        runner.register("ServiceNow DA HRSD", _capture)
+
+        runner.run()
+
+        assert captured["target"] == "SN-DA-HRSD-TEST-001"
+
     def test_family_matcher_keeps_only_family_rows(self) -> None:
         runner = FlightCheckRunner(
             scope="checkpoint:WD-FLOW",
@@ -105,7 +123,7 @@ class TestErrSentinelRetention:
             scope="checkpoint:WD-FLOW-001",
             target_matcher=lambda cid: cid == "WD-FLOW-001",
         )
-        # A prerequisite/owner category that raises → "PRE-ERR" sentinel.
+        # A prerequisite/owner category that raises an execution-error sentinel.
         runner.register("Prerequisites", _fn_raising())
         runner.register(
             "Workday",
@@ -122,7 +140,7 @@ class TestErrSentinelRetention:
         # not match the target matcher.
         assert "WD-FLOW-001" in ids
         assert "WD-FLOW-002" not in ids
-        assert "PRE-ERR" in ids
+        assert "EXEC-001-PREREQUISITES-ERR" in ids
 
     def test_err_sentinel_shape_is_stable(self) -> None:
         runner = FlightCheckRunner(
@@ -136,7 +154,7 @@ class TestErrSentinelRetention:
         sentinels = [r for r in result.results if r.checkpoint_id.endswith("-ERR")]
         assert len(sentinels) == 1
         sentinel = sentinels[0]
-        assert sentinel.checkpoint_id == "PRE-ERR"  # category[:3].upper() + "-ERR"
+        assert sentinel.checkpoint_id == "EXEC-001-PREREQUISITES-ERR"
         assert sentinel.status == Status.ERROR.value
         assert sentinel.priority == Priority.HIGH.value
         assert sentinel.category == "Prerequisites"
@@ -144,11 +162,10 @@ class TestErrSentinelRetention:
         assert "kaboom" in sentinel.result
 
     def test_err_only_run_is_not_ready_but_not_failed(self) -> None:
-        """Pins the aggregation the CLI exit code depends on: a raised
-        category function counts as an ERROR (``RunResult.errors``), NOT a
-        FAILED (``RunResult.failed``). ``_run_single_checkpoint`` exits with
-        ``1 if result.failed > 0 else 0``, so an error-only run exits 0 while
-        still reporting NOT_READY in the summary/verdict."""
+        """A raised category function is an ERROR, not a FAILED result.
+
+        Both CLI modes treat either count as a nonzero exit.
+        """
         runner = FlightCheckRunner(
             scope="checkpoint:WD-FLOW-001",
             target_matcher=lambda cid: cid == "WD-FLOW-001",
@@ -187,4 +204,4 @@ class TestNoMatcherNoFilter:
         result = runner.run()
 
         ids = sorted(r.checkpoint_id for r in result.results)
-        assert ids == ["PRE-ERR", "WD-FLOW-001"]
+        assert ids == ["EXEC-001-PREREQUISITES-ERR", "WD-FLOW-001"]

@@ -3,9 +3,10 @@
 # ESS ADK — macOS One-Shot Installer
 #
 # Installs the full ESS Maker Kit toolchain on macOS:
-#   Homebrew, Python 3.12, Git, GitHub CLI, VS Code, Copilot extensions,
-#   pip dependencies, clones the repo, launches VS Code, and auto-requests
-#   /setup in Copilot Chat (requires VS Code 1.102+).
+#   Homebrew, Python 3.12, Git, GitHub CLI, VS Code, the .NET 10 runtime,
+#   NuGet, Copilot extensions, pip and Object Model dependencies, clones
+#   the repo, and launches VS Code. /setup is user-driven — run it yourself
+#   in Copilot Chat when ready (requires VS Code 1.102+).
 #
 # Usage (full maker kit):
 #   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
@@ -21,9 +22,143 @@ set -euo pipefail
 BRANCH="${ESS_ADK_BRANCH:-main}"
 INSTALL_ROOT="${ESS_ADK_INSTALL_ROOT:-$HOME/source}"
 FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
+# RING: prod | preprod | test. Forwarded to `flightcheck/cli.py --ring` in
+# FlightCheck-only mode. Defaults to prod (matches the BAP endpoint the
+# installer uses for environment discovery). PMs validating a non-prod
+# environment override via `RING=preprod` or `--ring preprod` on the
+# bootstrap-flightcheck-mac.sh one-liner.
+RING="${RING:-prod}"
+if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
+    case "$RING" in
+        prod|preprod|test) ;;
+        *)
+            echo "ERROR: RING must be prod, preprod, or test (got '$RING')" >&2
+            exit 2
+            ;;
+    esac
+fi
+# INSTALL_MODE: maker | developer | prompt (or legacy lite | standard).
+# 'maker'    (was 'lite')     - guided layout; /setup is user-driven
+# 'developer' (was 'standard') - default VS Code layout + README preview; /setup is user-driven
+# 'prompt'                    - ask the maker in the terminal (defaults to
+#                               maker under a non-interactive shell)
+# Legacy env var SKIP_MAKER_PROFILE=true is still accepted and, matching the
+# Windows -SkipMakerProfile switch's precedence, always coerces to
+# INSTALL_MODE=developer even when INSTALL_MODE is also set - so pinned CI
+# scripts on either platform get the same answer.
+INSTALL_MODE="${INSTALL_MODE:-}"
 SKIP_MAKER_PROFILE="${SKIP_MAKER_PROFILE:-false}"
+
+# Ask before closing VS Code so the new bundled extension and settings are
+# picked up by the fresh workspace launch. Declining leaves the existing
+# instance untouched.
+close_running_vscode() {
+    local running_pids
+    running_pids="$(pgrep -f '/Visual Studio Code.app/' 2>/dev/null || true)"
+    if [[ -z "$running_pids" ]]; then
+        return 0
+    fi
+
+    echo ""
+    warn "Visual Studio Code is running (PIDs: $(echo "$running_pids" | tr '\n' ' '))."
+    warn "Close/save any unsaved files before continuing."
+    if [[ -r /dev/tty ]]; then
+        read -r -p "VS Code needs to restart to launch the Maker workspace. Close all running VS Code instances now? [Y/N] " answer </dev/tty
+    else
+        read -r -p "VS Code needs to restart to launch the Maker workspace. Close all running VS Code instances now? [Y/N] " answer
+    fi
+    if [[ ! "$answer" =~ ^([Yy]|[Yy][Ee][Ss])$ ]]; then
+        warn "Leaving existing VS Code instances open. Launching the Maker workspace may require a manual VS Code restart."
+        return 0
+    fi
+
+    osascript -e 'tell application "Visual Studio Code" to quit' >/dev/null 2>&1 || true
+    for _ in {1..20}; do
+        if ! pgrep -f '/Visual Studio Code.app/' >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.25
+    done
+    warn "VS Code did not exit within 5 seconds; continuing with the existing process still running."
+}
+
+if [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
+    INSTALL_MODE="developer"
+fi
+if [[ -z "$INSTALL_MODE" ]]; then
+    INSTALL_MODE="prompt"
+fi
+# Coerce legacy names to the new canonical values so every downstream
+# reference works with maker|developer|prompt.
+if [[ "$INSTALL_MODE" == "lite" ]];     then INSTALL_MODE="maker"; fi
+if [[ "$INSTALL_MODE" == "standard" ]]; then INSTALL_MODE="developer"; fi
+case "$INSTALL_MODE" in
+    maker|developer|prompt) ;;
+    *)
+        echo "WARNING: unknown INSTALL_MODE '$INSTALL_MODE'; defaulting to prompt" >&2
+        INSTALL_MODE="prompt"
+        ;;
+esac
+
+# When the caller didn't pin a mode (the default one-liner path via
+# bootstrap-mac.sh), prompt the maker in the terminal for their preference.
+# Doing it here in the CLI, before we hand off to VS Code, makes the
+# choice deterministic: the answer is applied to essMaker.mode before
+# any editor UI appears, so there's no race with the theme picker or
+# GitHub Copilot sign-in that VS Code renders on first launch.
+#
+# FlightCheck-only mode skips VS Code entirely, so the maker/developer
+# choice has no effect there - suppress the prompt so the FlightCheck-only
+# path stays a single straight-through experience for customers who just
+# want the readiness check.
+if [[ "$FLIGHTCHECK_ONLY" == "true" && "$INSTALL_MODE" == "prompt" ]]; then
+    INSTALL_MODE="maker"
+fi
+if [[ "$INSTALL_MODE" == "prompt" ]]; then
+    if [[ -n "${CI:-}" || -n "${TF_BUILD:-}" || -n "${GITHUB_ACTIONS:-}" ]] || [[ ! -t 0 ]]; then
+        echo ""
+        echo "Non-interactive environment detected. Defaulting to Maker mode."
+        INSTALL_MODE="maker"
+    else
+        echo ""
+        echo "==> Choose your ESS Maker experience"
+        echo "  [1] Maker (recommended)"
+        echo "      Guided rail layout: a focused activity-bar rail with a"
+        echo "      Getting started walkthrough and a Customization task list."
+        echo "      Best if you want a focused HR/IT admin surface."
+        echo ""
+        echo "  [2] Developer"
+        echo "      Default VS Code layout with GitHub Copilot Chat in the"
+        echo "      side panel. Best if you plan to inspect or edit files"
+        echo "      directly."
+        echo ""
+        while true; do
+            printf "Enter 1 for Maker, 2 for Developer (default: 1): "
+            # Read from the terminal directly so this works even when the
+            # bootstrap piped install-ess-adk.sh through bash (stdin is the
+            # script, not the tty).
+            if [[ -r /dev/tty ]]; then
+                read -r answer </dev/tty || answer=""
+            else
+                read -r answer || answer=""
+            fi
+            answer="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+            case "$answer" in
+                ''|1|m|maker)
+                    INSTALL_MODE="maker"; break ;;
+                2|d|dev|developer)
+                    INSTALL_MODE="developer"; break ;;
+                *)
+                    echo "Please enter 1 or 2." ;;
+            esac
+        done
+        echo "  Selected: $INSTALL_MODE"
+        echo ""
+    fi
+fi
 REPO_URL="https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit.git"
 REPO_NAME="Employee-Self-Service-Agent-Developer-Kit"
+OBJECT_MODEL_INSTALLER_PATH="$INSTALL_ROOT/$REPO_NAME/solutions/ess-maker-skills/scripts/install_agentbuilder_object_model.py"
 CODE_CMD=""
 
 # ---------------------------------------------------------------------------
@@ -49,6 +184,7 @@ ess_step_key() {
         *Checking*)             echo preflight ;;
         *toolchain*|*Homebrew*) echo toolchain ;;
         *pip*)                  echo pip_dependencies ;;
+        *Object\ Model*)        echo object_model_dependencies ;;
         *Resolving\ Python*)    echo resolve_python ;;
         *Cloning*|*repository*) echo clone ;;
         *extension*)            echo vscode_extensions ;;
@@ -79,15 +215,20 @@ if ! declare -f ess_tel_init >/dev/null 2>&1; then
     ess_tel_complete() { :; }
 fi
 
-# Installer identity: flightcheck | adk (full, maker profile skipped) | lite.
+# Installer identity: flightcheck | adk (full, chosen mode carried by
+# INSTALL_MODE dimension) | lite (legacy back-compat when the caller pinned
+# SKIP_MAKER_PROFILE=false explicitly via the old bootstrap-lite-mac.sh).
 if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
     _ess_installer=flightcheck
-elif [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
-    _ess_installer=adk
+elif [[ "${ESS_TEL_INSTALLER_OVERRIDE:-}" != "" ]]; then
+    # Explicit override from the legacy bootstrap-lite-mac.sh so its events
+    # keep the pre-consolidation `lite` installer tag (the bash emitter still
+    # gates that identity out until macOS consolidation ships).
+    _ess_installer="$ESS_TEL_INSTALLER_OVERRIDE"
 else
-    _ess_installer=lite
+    _ess_installer=adk
 fi
-ess_tel_init "$_ess_installer" || true
+ess_tel_init "$_ess_installer" "$INSTALL_MODE" || true
 
 # Emit a completion event on any exit (success on 0, cancelled on Ctrl+C/term,
 # failure otherwise). The FlightCheck-only path records success explicitly
@@ -179,6 +320,38 @@ install_brew_cask() {
     fi
 }
 
+install_optional_brew_pkg() {
+    local pkg="$1"
+    local name="$2"
+    local follow_up="${3:-}"
+    if brew list "$pkg" &>/dev/null; then
+        ok "$name (already installed)"
+    elif brew install "$pkg"; then
+        ok "$name"
+    else
+        warn "Serialization support dependency '$name' was not installed."
+        warn "ESS ADK setup will continue."
+        warn "Install it later with: brew install $pkg"
+        if [[ -n "$follow_up" ]]; then
+            warn "Then install the serialization packages: $follow_up"
+        fi
+    fi
+}
+
+install_optional_brew_cask() {
+    local cask="$1"
+    local name="$2"
+    if brew list --cask "$cask" &>/dev/null; then
+        ok "$name (already installed)"
+    elif brew install --cask "$cask"; then
+        ok "$name"
+    else
+        warn "Serialization support dependency '$name' was not installed."
+        warn "ESS ADK setup will continue."
+        warn "Install it later with: brew install --cask $cask"
+    fi
+}
+
 # Core tools (always needed)
 install_brew_pkg "python@3.12" "Python 3.12"
 
@@ -193,6 +366,19 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     # Full maker kit tools
     install_brew_pkg "gh" "GitHub CLI"
     install_brew_cask "visual-studio-code" "Visual Studio Code" "/Applications/Visual Studio Code.app"
+    if command -v dotnet &>/dev/null && dotnet --list-runtimes 2>/dev/null | grep -q '^Microsoft\.NETCore\.App 10\.'; then
+        ok ".NET 10 Runtime (already installed)"
+    else
+        install_optional_brew_cask "dotnet-runtime" ".NET 10 Runtime"
+    fi
+    if command -v nuget &>/dev/null; then
+        ok "NuGet (already installed at $(command -v nuget))"
+    else
+        install_optional_brew_pkg \
+            "nuget" \
+            "NuGet" \
+            "$INSTALL_ROOT/$REPO_NAME/.venv/bin/python $OBJECT_MODEL_INSTALLER_PATH"
+    fi
 fi
 
 ok "Toolchain installed / verified"
@@ -243,10 +429,20 @@ if [[ -d "$REPO_PATH" && ! -d "$REPO_PATH/.git" ]]; then
 fi
 
 if [[ -d "$REPO_PATH/.git" ]]; then
-    ok "Repo already cloned at $REPO_PATH — pulling latest"
-    git -C "$REPO_PATH" fetch --quiet origin
-    git -C "$REPO_PATH" checkout "$BRANCH" 2>/dev/null || warn "git checkout $BRANCH failed. Continuing on current branch."
-    git -C "$REPO_PATH" pull --quiet origin "$BRANCH" 2>/dev/null || warn "git pull failed. Continuing with local copy."
+    ok "Repo already cloned at $REPO_PATH — refreshing requested ref"
+    git -C "$REPO_PATH" fetch --quiet --tags origin
+    if git -C "$REPO_PATH" checkout --quiet "$BRANCH"; then
+        if git -C "$REPO_PATH" show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+            git -C "$REPO_PATH" pull --quiet --ff-only origin "$BRANCH" ||
+                warn "git pull failed. Continuing with local copy."
+        elif git -C "$REPO_PATH" show-ref --verify --quiet "refs/tags/$BRANCH"; then
+            ok "Checked out pinned tag $BRANCH"
+        else
+            ok "Checked out pinned ref $BRANCH"
+        fi
+    else
+        warn "git checkout $BRANCH failed. Continuing on current ref."
+    fi
 else
     echo "    Cloning to $REPO_PATH..."
     mkdir -p "$INSTALL_ROOT"
@@ -272,6 +468,23 @@ else
     warn "requirements.txt not found at $REQUIREMENTS_FILE"
 fi
 
+if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
+    step "Installing Microsoft Object Model dependencies"
+    OBJECT_MODEL_INSTALLER="$REPO_PATH/solutions/ess-maker-skills/scripts/install_agentbuilder_object_model.py"
+    if [[ ! -f "$OBJECT_MODEL_INSTALLER" ]]; then
+        warn "Serialization support dependencies were not installed."
+        warn "ESS ADK setup will continue."
+        warn "The dependency installer was not found: $OBJECT_MODEL_INSTALLER"
+    elif "$VENV_PATH/bin/python" "$OBJECT_MODEL_INSTALLER"; then
+        ok "Microsoft Object Model dependencies installed"
+    else
+        warn "Serialization support dependencies were not installed."
+        warn "ESS ADK setup will continue."
+        warn "After resolving the reported NuGet issue, run:"
+        warn "  $VENV_PATH/bin/python $OBJECT_MODEL_INSTALLER"
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # 6. VS Code extensions (full install only)
 # ---------------------------------------------------------------------------
@@ -289,8 +502,6 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     if [[ -n "$CODE_CMD" ]]; then
         # Required extensions — skip if already present or built-in.
         # Recent VS Code (>=1.99) ships Copilot as a built-in extension.
-        # `--install-extension` may exit non-zero if the marketplace version
-        # is older than the bundled one. Check --list-extensions first.
         REQUIRED_EXTENSIONS=("GitHub.copilot" "GitHub.copilot-chat")
         INSTALLED_EXTENSIONS=$("$CODE_CMD" --list-extensions 2>/dev/null || true)
         for ext in "${REQUIRED_EXTENSIONS[@]}"; do
@@ -317,15 +528,12 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
             fi
         done
 
-        # ESS Maker Profile — installs in both modes. In lite mode it
-        # applies the chat-first layout; in standard mode it only handles
-        # /setup injection (no visual changes). The mode is communicated
-        # via essMaker.mode in VS Code's user settings.json.
-        if [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
-            MODE_LABEL="standard"
-        else
-            MODE_LABEL="lite"
-        fi
+        # ESS Maker Profile - installs in every mode. In maker mode it
+        # applies the guided layout; in developer mode it shows the rendered
+        # README preview (/setup is user-driven in both). By this point MODE_LABEL
+        # is always 'maker' or 'developer' - the CLI prompt at the top of
+        # the script resolves 'prompt' before we reach any install step.
+        MODE_LABEL="$INSTALL_MODE"
         step "Installing ESS Maker Profile ($MODE_LABEL mode)"
 
         MAKER_VSIX_DIR="$REPO_PATH/tools/ess-maker-profile/extension"
@@ -338,19 +546,20 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
         if [[ -z "$MAKER_VSIX" ]]; then
             warn "No ess-maker-profile-*.vsix found under $MAKER_VSIX_DIR. Skipping extension install."
         elif "$CODE_CMD" --install-extension "$MAKER_VSIX" --force 2>/dev/null; then
-            ok "ESS Maker Profile ($(basename "$MAKER_VSIX")) — $MODE_LABEL mode"
+            ok "ESS Maker Profile ($(basename "$MAKER_VSIX")) installed/refreshed — $MODE_LABEL mode"
         else
             warn "ESS Maker Profile install failed (non-fatal)"
         fi
 
         # Write the mode setting so the extension knows whether to apply
-        # the lite layout or inject /setup (standard mode).
+        # the guided maker layout or show the README preview (developer mode).
         SETTINGS_DIR="$HOME/Library/Application Support/Code/User"
         if [[ "$(uname)" != "Darwin" ]]; then
             SETTINGS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/Code/User"
         fi
         mkdir -p "$SETTINGS_DIR"
         SETTINGS_FILE="$SETTINGS_DIR/settings.json"
+        SETTINGS_MODE_VALUE="$MODE_LABEL"
         if [[ -f "$SETTINGS_FILE" ]]; then
             # Merge into existing settings using Python (available from step 2)
             python3 -c "
@@ -360,12 +569,12 @@ try:
         settings = json.load(f)
 except:
     settings = {}
-settings['essMaker.mode'] = '$MODE_LABEL'
+settings['essMaker.mode'] = '$SETTINGS_MODE_VALUE'
 with open('$SETTINGS_FILE', 'w') as f:
     json.dump(settings, f, indent=2)
 " 2>/dev/null || true
         else
-            echo "{\"essMaker.mode\": \"$MODE_LABEL\"}" > "$SETTINGS_FILE"
+            echo "{\"essMaker.mode\": \"$SETTINGS_MODE_VALUE\"}" > "$SETTINGS_FILE"
         fi
     else
         warn "VS Code 'code' CLI not found. Install extensions manually after launching VS Code."
@@ -428,7 +637,10 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
         echo ""
 
         ENV_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --list-environments 2>&1) || true
-        echo "$ENV_OUTPUT"
+        # Filter machine-parseable JSON dump lines that discover.py emits for
+        # programmatic consumers (skills parse these; a maker running the
+        # installer just sees an unreadable wall of JSON).
+        echo "$ENV_OUTPUT" | grep -Ev '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):' || true
 
         if echo "$ENV_OUTPUT" | grep -q "^ERROR:"; then
             err "Environment listing failed."
@@ -471,7 +683,7 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
         echo ""
 
         AGENT_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --url "$ENV_URL" 2>&1) && AGENT_EXIT=0 || AGENT_EXIT=$?
-        echo "$AGENT_OUTPUT"
+        echo "$AGENT_OUTPUT" | grep -Ev '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):' || true
 
         if [[ $AGENT_EXIT -ne 0 ]] || echo "$AGENT_OUTPUT" | grep -q "^ERROR:"; then
             warn "Agent discovery failed. Config will be created without a bot ID."
@@ -519,6 +731,7 @@ config = {
     'configVersion': 1,
     'setup': 'flightcheck-only',
     'dataverseEndpoint': sys.argv[1],
+    'ring': sys.argv[6],
     'flightCheckOnly': True,
     'agent': {
         'name': sys.argv[2],
@@ -538,11 +751,38 @@ config = {
     }] if sys.argv[3] else [],
     'activeAgent': 'flightcheck-only' if sys.argv[3] else ''
 }
-with open(sys.argv[6], 'w', encoding='utf-8') as f:
+with open(sys.argv[7], 'w', encoding='utf-8') as f:
     json.dump(config, f, indent=4)
-" "$ENV_URL" "$AGENT_NAME" "$BOT_ID" "$SCHEMA_NAME" "$IS_MANAGED" "$CONFIG_PATH"
+" "$ENV_URL" "$AGENT_NAME" "$BOT_ID" "$SCHEMA_NAME" "$IS_MANAGED" "$RING" "$CONFIG_PATH"
         ok "Created $CONFIG_PATH"
     fi
+
+    # Reuse the retained config's ring, infer it from a saved environment API
+    # endpoint, or migrate a legacy config with the requested/default ring.
+    # Print only the effective ring so command substitution remains bounded.
+    RING=$("$FLIGHTCHECK_PYTHON" -c "
+import json, sys
+path, requested = sys.argv[1:3]
+with open(path, encoding='utf-8') as f:
+    config = json.load(f)
+ring = str(config.get('ring') or '').strip().lower()
+endpoint = str(config.get('powerPlatformApiEndpoint') or '').strip().lower()
+if not ring:
+    if 'api.test.powerplatform.com' in endpoint:
+        ring = 'test'
+    elif 'api.preprod.powerplatform.com' in endpoint:
+        ring = 'preprod'
+    elif 'api.powerplatform.com' in endpoint:
+        ring = 'prod'
+if not ring:
+    ring = requested
+if ring not in {'prod', 'preprod', 'test'}:
+    raise SystemExit(f\"Unsupported Power Platform ring in existing config: {ring}\")
+config['ring'] = ring
+with open(path, 'w', encoding='utf-8') as f:
+    json.dump(config, f, indent=4)
+print(ring)
+" "$CONFIG_PATH" "$RING")
 
     # --- Read config values if they came from an existing file ---
     if [[ -z "$BOT_ID" && -f "$CONFIG_PATH" ]]; then
@@ -578,48 +818,89 @@ with open(sys.argv[6], 'w', encoding='utf-8') as f:
     # --- Run FlightCheck ---
     step "Running FlightCheck"
     ess_tel_complete success || true
-    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
+    # --ring <RING>: the FlightCheck-only installer discovers environments via
+    # BAP prod (api.bap.microsoft.com) by default, so we target the prod
+    # service ring unless the caller overrode RING (typically a PM validating
+    # a preprod/test environment). Persisting the ring supports later
+    # /flightcheck runs; forwarding it explicitly also covers this first run
+    # and older configs.
+    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring "$RING"
     exit $?
+fi
+
+WORKSPACE_PATH="$REPO_PATH/solutions/ess-maker-skills"
+
+# ---------------------------------------------------------------------------
+# 7b. Materialize ready-to-run MCP servers
+# ---------------------------------------------------------------------------
+if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
+    MCP_CONFIG_SCRIPT="$WORKSPACE_PATH/scripts/mcp_config.py"
+    MCP_CONFIG_PYTHON="$VENV_PATH/bin/python"
+    if [[ ! -x "$MCP_CONFIG_PYTHON" ]]; then
+        MCP_CONFIG_PYTHON="$PYTHON"
+    fi
+    if [[ -f "$MCP_CONFIG_SCRIPT" ]]; then
+        step "Configuring default MCP servers"
+        if "$MCP_CONFIG_PYTHON" "$MCP_CONFIG_SCRIPT" materialize-defaults; then
+            ok "Default MCP servers configured"
+        else
+            warn "Default MCP server configuration failed. /setup will try again."
+        fi
+    else
+        warn "MCP configuration script not found. /setup will try again."
+    fi
+fi
+
+# Close VS Code before relaunching so an old extension host cannot mask the
+# freshly installed guided profile.
+if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
+    close_running_vscode
 fi
 
 # ---------------------------------------------------------------------------
 # 8. Launch VS Code
 # ---------------------------------------------------------------------------
-WORKSPACE_PATH="$REPO_PATH/solutions/ess-maker-skills"
+print_authentication_guidance() {
+    echo -e "    ${YELLOW}When VS Code asks you to sign in to GitHub Copilot, use the GitHub account that has your Copilot access. This enables Copilot Chat, where you run /setup.${NC}"
+    echo -e "    ${YELLOW}When /setup connects your agent, a separate browser window may ask you to sign in with the Microsoft work account that can access the target Power Platform environment and agent. GitHub sign-in does not grant Power Platform access.${NC}"
+}
 
 if [[ -n "$CODE_CMD" ]]; then
-    # Launch strategy depends on mode:
-    # - Standard mode (SKIP_MAKER_PROFILE=true): use `code chat` to open
-    #   /setup in the sidebar panel (the standard chat experience).
-    # - Lite mode: just open the workspace. The ESS Maker Profile extension
-    #   handles layout + /setup injection after the welcome wizard closes.
-    if [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
-        step "Opening workspace in VS Code and requesting /setup in Copilot Chat"
-        if (cd "$WORKSPACE_PATH" && "$CODE_CMD" chat "/setup"); then
-            ok "Requested /setup in Copilot Chat at $WORKSPACE_PATH"
-            echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run.${NC}"
-            echo -e "    ${YELLOW}If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup.${NC}"
+    # Launch strategy: open the workspace in VS Code. The ESS Maker Profile
+    # extension reads essMaker.mode and applies the mode-specific layout
+    # (Maker: guided rail + walkthrough; Developer: rendered README preview).
+    # /setup is user-driven in both modes - neither the installer nor the
+    # extension runs it automatically.
+    # By this point INSTALL_MODE is always 'maker' or 'developer' - the CLI
+    # prompt at the top of the script resolves 'prompt' before we reach any
+    # launch code.
+    if [[ "$INSTALL_MODE" == "developer" ]]; then
+        step "Opening workspace in VS Code"
+        if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
+            ok "Launched VS Code at $WORKSPACE_PATH"
+            echo -e "    ${YELLOW}Developer mode opens the rendered README. When you're ready, open Copilot Chat and run /setup to connect an editable DA Dev agent.${NC}"
+            echo -e "    ${YELLOW}Review the VS Code workspace trust prompt before accepting it.${NC}"
         else
-            warn "'code chat' failed or is unsupported. Falling back to opening the workspace only."
-            warn "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
-            "$CODE_CMD" "$WORKSPACE_PATH" || warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
-            echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
+            warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
+            echo "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent."
         fi
     else
         step "Opening workspace in VS Code"
         if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
             ok "Launched VS Code at $WORKSPACE_PATH"
-            echo -e "    ${YELLOW}The ESS Maker Profile will run /setup in Copilot Chat after the welcome screen closes.${NC}"
-            echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace, accept the prompt.${NC}"
+            echo -e "    ${YELLOW}The ESS Maker Profile opens the guided Agent Developer Kit view. Click 'Start set up' in the Quick start panel (or the Tutorial) to run /setup in Copilot Chat.${NC}"
+            echo -e "    ${YELLOW}Review the VS Code workspace trust prompt before accepting it.${NC}"
         else
             warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
-            echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
+            echo "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent."
         fi
     fi
 else
     warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
-    echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
+    echo "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent."
 fi
+
+print_authentication_guidance
 
 echo ""
 echo -e "${GREEN}=== ESS Maker Kit ready! ===${NC}"

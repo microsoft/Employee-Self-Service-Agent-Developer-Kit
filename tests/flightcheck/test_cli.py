@@ -18,6 +18,7 @@ URIs. These tests pin that behavior so it doesn't regress.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -25,6 +26,129 @@ from unittest.mock import patch
 import pytest
 
 from flightcheck import cli
+
+
+def test_alm_import_probe_requires_explicit_target(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["cli.py", "--scope", "publishing", "--alm-import-probe"],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+
+
+def test_main_accepts_explicit_tenant_id_for_profile(monkeypatch) -> None:
+    tenant_id = "00000000-0000-0000-0000-000000001111"
+    captured = {}
+
+    def _run_profile(args):
+        captured["tenant_id"] = args.tenant_id
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli, "_run_profile", _run_profile)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "cli.py",
+            "--profile",
+            "workday-da:setup-readiness",
+            "--tenant-id",
+            tenant_id,
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert captured["tenant_id"] == tenant_id
+
+
+def test_create_alm_import_target_uses_separate_environment(monkeypatch) -> None:
+    created = []
+    monkeypatch.setattr(
+        cli,
+        "derive_environment_host",
+        lambda environment_id, ring: (
+            f"https://{environment_id}.{ring}.example.test"
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_environment_host",
+        lambda host, _ring: host,
+    )
+    monkeypatch.setattr(
+        cli,
+        "AgentBuilderClient",
+        lambda *args, **kwargs: created.append((args, kwargs)) or object(),
+    )
+    args = SimpleNamespace(
+        alm_import_probe=True,
+        alm_import_target_environment_id="target-env",
+    )
+
+    target = cli._create_alm_import_target(
+        args,
+        source_host="https://source.test.example",
+        token="token",
+        tenant_id="tenant",
+        ring="test",
+        api_version="2024-10-01",
+    )
+
+    assert target is not None
+    assert created == [
+        (
+            ("https://target-env.test.example.test", "token"),
+            {
+                "ring": "test",
+                "tenant_id": "tenant",
+                "api_version": "2024-10-01",
+            },
+        )
+    ]
+
+
+def test_create_alm_import_target_rejects_source_environment(monkeypatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "derive_environment_host",
+        lambda _environment_id, _ring: "https://source.example.test",
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_environment_host",
+        lambda host, _ring: host,
+    )
+    args = SimpleNamespace(
+        alm_import_probe=True,
+        alm_import_target_environment_id="source-env",
+    )
+
+    with pytest.raises(ValueError, match="different environment"):
+        cli._create_alm_import_target(
+            args,
+            source_host="https://source.example.test/",
+            token="token",
+            tenant_id="tenant",
+            ring="test",
+            api_version="2024-10-01",
+        )
+
+
+def test_workday_da_check_is_explicit_scope_only() -> None:
+    """An optional DA HR package must not fail unrelated full runs."""
+    assert cli.SCOPE_MAP["workdayda"] == [
+        ("Workday DA", cli.run_workday_da_package_check)
+    ]
+    assert (
+        "Workday DA",
+        cli.run_workday_da_package_check,
+    ) not in cli.FULL_SCOPE
 
 
 class TestOpenReportInBrowser:
@@ -114,7 +238,10 @@ class TestOpenReportInBrowser:
 
 
 class _FakeRunner:
+    last_instance = None
+
     def __init__(self, scope: str) -> None:
+        type(self).last_instance = self
         self.scope = scope
         self.registered = []
         self.config = None
@@ -124,6 +251,11 @@ class _FakeRunner:
         self.graph = None
         self.pp_admin = None
         self.pva = None
+        self.powerplatform = None
+        self.azure_arm = None
+        self.agentbuilder = None
+        self.connectivity = None
+        self.native_connector_filter = None
 
     def register(self, category, fn):
         self.registered.append((category, fn))
@@ -138,6 +270,7 @@ class _FakeRunner:
             manual=0,
             not_configured=0,
             skipped=0,
+            blocked=0,
             passed=0,
             total=0,
             duration_secs=0,
@@ -185,6 +318,426 @@ class TestInfrastructureScopeAuthGating:
         (local_dir / "config.json").write_text('{"agents":[]}', encoding="utf-8")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("sys.argv", ["cli.py", "--scope", "environment", "--no-open"])
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 1
+
+    def test_prerequisites_scope_fails_closed_without_ring(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        (local_dir / "config.json").write_text(
+            json.dumps({
+                "dataverseEndpoint": "https://contoso.crm.dynamics.com",
+                "agents": [],
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "sys.argv",
+            ["cli.py", "--scope", "prerequisites", "--no-open"],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 1
+        output = capsys.readouterr().out
+        assert "could not determine the Power Platform environment ring" in output
+        assert "--ring, configured ring, or powerPlatformApiEndpoint" in output
+
+
+class TestAgentBuilderLocalScope:
+    @pytest.mark.parametrize(
+        ("overall", "expected"),
+        [
+            ("SETUP_CHECKS_PASSED", "pass"),
+            ("CHECKED_WITH_NOTES", "partial"),
+            ("SOME_CHECKS_UNVERIFIED", "partial"),
+            ("ISSUES_FOUND", "fail"),
+        ],
+    )
+    def test_da_diagnostic_outcome_maps_to_adk_telemetry(
+        self,
+        overall: str,
+        expected: str,
+    ) -> None:
+        assert cli._adk_flightcheck_result(overall) == expected
+
+    @pytest.mark.parametrize(
+        ("mode", "target", "expected_scope", "connector"),
+        [
+            ("--scope", "local", "local", ""),
+            ("--scope", "full", "full", ""),
+            ("--scope", "workday", "workday", "workday"),
+            ("--scope", "servicenow", "servicenow", "servicenow"),
+            ("--checkpoint", "WD-RUN-001", "checkpoint:WD-RUN-001", "workday"),
+            ("--profile", "workday-da:setup-readiness", "profile:workday-da:setup-readiness", "workday"),
+        ],
+    )
+    @pytest.mark.parametrize("no_telemetry", [False, True])
+    def test_da_diagnostic_emits_both_telemetry_families(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+        mode: str,
+        target: str,
+        expected_scope: str,
+        connector: str,
+        no_telemetry: bool,
+    ) -> None:
+        import adk_telemetry as adk
+        from flightcheck import telemetry
+
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        tenant_id = "11111111-1111-1111-1111-111111111111"
+        agent_id = "22222222-2222-2222-2222-222222222222"
+        config = {
+            "releaseLine": "da",
+            "realm": "dev",
+            "activeAgent": "other-agent",
+            "agents": [
+                {
+                    "slug": "other-agent",
+                    "botId": "33333333-3333-3333-3333-333333333333",
+                    "releaseLine": "da",
+                },
+                {
+                    "slug": "mock-agent",
+                    "botId": agent_id,
+                    "releaseLine": "da",
+                }
+            ],
+        }
+        (local_dir / "config.json").write_text(
+            json.dumps(config),
+            encoding="utf-8",
+        )
+        result = _FakeRunner("local").run()
+        result.diagnostic_only = True
+        result.profile = target if mode == "--profile" else ""
+        result.overall = "READY" if result.profile else "SETUP_CHECKS_PASSED"
+        result.validation_context = {"tenantId": tenant_id}
+        if target != "local":
+            result.validation_context["agentId"] = agent_id
+        result.results = [
+            SimpleNamespace(category="Workday" if target == "full" else "Agent setup"),
+        ]
+        legacy_events = []
+        adk_events = []
+
+        def capture_post(_ikey, events):
+            legacy_events.extend(events)
+            return 204
+
+        def capture_adk(name, data, **_kwargs):
+            adk_events.append({"name": name, "data": data})
+            return {}
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "flightcheck.maker_diagnostics.run_maker_diagnostics",
+            lambda _args, _config: result,
+        )
+        monkeypatch.setattr(cli, "_print_prioritized_summary", lambda _result: None)
+        monkeypatch.setattr(cli, "save_results", lambda _result, _output: None)
+        monkeypatch.setattr(telemetry, "_post", capture_post)
+        monkeypatch.setattr(
+            telemetry, "resolve_ikey",
+            lambda: (telemetry.ARIA_IKEYS["dev"], "dev"),
+        )
+        monkeypatch.setattr(telemetry, "get_toolkit_git_branch", lambda: "other")
+        monkeypatch.setattr(adk, "_emit", capture_adk)
+        monkeypatch.setattr(adk, "get_session", lambda _surface: ("test-session", False))
+        monkeypatch.setattr(adk, "next_run_index", lambda _agent_id: 1)
+        monkeypatch.setattr(adk, "flush", lambda **_kwargs: None)
+        monkeypatch.setattr(
+            adk, "_IDENTITY", {"instance_id": "", "tenant_id": "", "tenant_name": ""},
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "cli.py",
+                mode,
+                target,
+                "--agent-slug",
+                "mock-agent",
+                "--invocation-source",
+                "adk",
+                "--no-open",
+            ] + (["--no-telemetry"] if no_telemetry else []),
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 0
+        if no_telemetry:
+            assert legacy_events == []
+            assert adk_events == []
+            return
+        assert len(legacy_events) == 2
+        run = legacy_events[0]["data"]
+        assert run["agentId"] == agent_id
+        assert run["tenantId"] == tenant_id
+        assert run["agentType"] == "declarative_agent"
+        assert run["invocationSource"] == "adk"
+        assert run["scope"] == expected_scope
+        assert run["connector"] == connector
+        assert {event["name"] for event in adk_events} == {
+            adk.EVENT_FLIGHTCHECK_RUN, adk.EVENT_FLIGHTCHECK_RESULT,
+        }
+        assert len(adk_events) == 2
+        for event in adk_events:
+            data = event["data"]
+            assert data["agent_id"] == agent_id
+            assert data["tenant_id"] == tenant_id
+            assert data["agent_type"] == "declarative_agent"
+            assert data["connector"] == connector
+            if event["name"] == adk.EVENT_FLIGHTCHECK_RESULT:
+                assert data["result"] == "pass"
+
+    def test_runs_without_dataverse_or_remote_authentication(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        (local_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "environmentId": "environment-id",
+                    "agents": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(cli, "FlightCheckRunner", _FakeRunner)
+        monkeypatch.setattr(
+            cli,
+            "_print_prioritized_summary",
+            lambda _result: None,
+        )
+        monkeypatch.setattr(cli, "save_results", lambda _result, _output: None)
+        for client_name in (
+            "GraphClient",
+            "PPAdminClient",
+            "PVAClient",
+            "PowerPlatformClient",
+            "AzureArmClient",
+        ):
+            monkeypatch.setattr(
+                cli,
+                client_name,
+                lambda *_args, _name=client_name, **_kwargs: (
+                    _ for _ in ()
+                ).throw(
+                    AssertionError(
+                        f"{_name} auth should be skipped"
+                    )
+                ),
+            )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "cli.py",
+                "--scope",
+                "local",
+                "--no-open",
+                "--no-telemetry",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 0
+
+
+class TestAgentBuilderNativeScopes:
+    @pytest.mark.parametrize(
+        (
+            "scope",
+            "expected_categories",
+            "expects_agent_clients",
+            "expects_capacity_client",
+            "expected_filter",
+        ),
+        [
+            ("environment", ["Environment"], False, True, None),
+            ("publishing", ["Publishing"], True, False, None),
+        ],
+    )
+    def test_native_no_dataverse_scope_uses_only_native_clients(
+        self,
+        scope: str,
+        expected_categories: list[str],
+        expects_agent_clients: bool,
+        expects_capacity_client: bool,
+        expected_filter: tuple[str, ...] | None,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        config = {
+            "releaseLine": "da",
+            "environmentId": "00000000-0000-4000-8000-000000001111",
+            "ring": "test",
+            "agent": {
+                "slug": "mock-agent",
+                "botId": "00000000-0000-4000-8000-000000002222",
+                "releaseLine": "da",
+            },
+            "activeAgent": "mock-agent",
+        }
+        if expects_agent_clients:
+            config["powerPlatformApiEndpoint"] = (
+                "https://0000000000004000800000000000111."
+                "1.environment.api.test.powerplatform.com"
+            )
+        (local_dir / "config.json").write_text(
+            json.dumps(config),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(cli, "FlightCheckRunner", _FakeRunner)
+        monkeypatch.setattr(
+            cli,
+            "_print_prioritized_summary",
+            lambda _result: None,
+        )
+        monkeypatch.setattr(cli, "save_results", lambda _result, _output: None)
+        monkeypatch.setattr(
+            cli,
+            "_resolve_target_selection",
+            lambda *_a, **_k: (_ for _ in ()).throw(
+                AssertionError("Legacy target selection should be skipped")
+            ),
+        )
+        for client_name in ("GraphClient", "PPAdminClient", "PVAClient", "AzureArmClient"):
+            monkeypatch.setattr(
+                cli,
+                client_name,
+                lambda *_a, _name=client_name, **_k: (
+                    _ for _ in ()
+                ).throw(AssertionError(f"{_name} should be skipped")),
+            )
+
+        auth_calls = []
+
+        def _authenticate_native(ring, **kwargs):
+            auth_calls.append((ring, kwargs))
+            return "native-token", "tenant-id"
+
+        created_agent_clients = []
+        created_connectivity_clients = []
+        created_capacity_clients = []
+        monkeypatch.setattr(cli, "authenticate_flightcheck", _authenticate_native)
+        monkeypatch.setattr(
+            cli,
+            "AgentBuilderClient",
+            lambda *args, **kwargs: (
+                created_agent_clients.append((args, kwargs)) or object()
+            ),
+        )
+        monkeypatch.setattr(
+            cli,
+            "ConnectivityClient",
+            lambda *args, **kwargs: (
+                created_connectivity_clients.append((args, kwargs)) or object()
+            ),
+        )
+
+        class _CapacityClient:
+            def __init__(self, *args, **kwargs) -> None:
+                created_capacity_clients.append((args, kwargs))
+
+            def authenticate(self):
+                return None
+
+        monkeypatch.setattr(cli, "PowerPlatformClient", _CapacityClient)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "cli.py",
+                "--scope",
+                scope,
+                "--no-open",
+                "--no-telemetry",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 0
+        assert auth_calls == (
+            [
+                (
+                    "test",
+                    {
+                        "include_connectivity": True,
+                        "allow_write": False,
+                    },
+                )
+            ]
+            if expects_agent_clients
+            else []
+        )
+        assert bool(created_agent_clients) is expects_agent_clients
+        assert bool(created_connectivity_clients) is expects_agent_clients
+        assert bool(created_capacity_clients) is expects_capacity_client
+        if expects_capacity_client:
+            assert created_capacity_clients[0][1] == {"ring": "test"}
+        runner = _FakeRunner.last_instance
+        assert runner is not None
+        assert [category for category, _ in runner.registered] == expected_categories
+        assert runner.native_connector_filter == expected_filter
+
+    def test_native_no_dataverse_rejects_legacy_only_scope(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        (local_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "releaseLine": "da",
+                    "environmentId": "00000000-0000-4000-8000-000000001111",
+                    "powerPlatformApiEndpoint": (
+                        "https://0000000000004000800000000000111."
+                        "1.environment.api.test.powerplatform.com"
+                    ),
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            cli,
+            "authenticate_flightcheck",
+            lambda *_a, **_k: (_ for _ in ()).throw(
+                AssertionError("Authentication should not start")
+            ),
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "cli.py",
+                "--scope",
+                "solution",
+                "--no-open",
+                "--no-telemetry",
+            ],
+        )
 
         with pytest.raises(SystemExit) as exc:
             cli.main()
@@ -267,3 +820,59 @@ class TestPvaScopeGating:
         assert exc.value.code == 0
         assert _RecordingPVA.instantiated is True
 
+
+class TestTerminalBlockedSummary:
+    """Regression (ADO 7943641): a blocked-only run must surface as blocking
+    in the terminal summary.
+
+    Before the fix ``_print_prioritized_summary`` computed the NOT_READY
+    headline as ``failed + errors`` (excluding blocked), had no Blocked field
+    in the counts strip, and ``_status_tag`` had no BLOCKED mapping — so a
+    blocked-only run printed "0 issues need attention" and rendered the
+    blocked row as "[?   ]".
+    """
+
+    @staticmethod
+    def _blocked_result():
+        from flightcheck.runner import CheckResult, Priority, RunResult, Status
+
+        blocked_row = CheckResult(
+            checkpoint_id="WD-CONN-999",
+            category="Workday",
+            priority=Priority.CRITICAL.value,
+            status=Status.BLOCKED.value,
+            description="Essential Workday capability",
+            result="Workday connector unavailable in this environment",
+            remediation="Provision the Workday connection, then re-run.",
+            roles=["Workday Admin"],
+        )
+        return RunResult(
+            scope="workday-da:final",
+            started="2026-01-01T00:00:00Z",
+            duration_secs=1.0,
+            results=[blocked_row],
+            total=1,
+            blocked=1,
+            overall="NOT_READY",
+        )
+
+    def test_status_tag_has_blocked_mapping(self):
+        from flightcheck.runner import Status
+
+        assert cli._status_tag(Status.BLOCKED.value) == "[BLK ]"
+
+    def test_blocked_only_headline_counts_the_block(self, capsys):
+        cli._print_prioritized_summary(self._blocked_result())
+        out = capsys.readouterr().out
+        # Headline must count the blocked row, not report zero.
+        assert "1 issue needs attention" in out
+        assert "0 issue" not in out
+
+    def test_blocked_counts_strip_and_row_tag(self, capsys):
+        cli._print_prioritized_summary(self._blocked_result())
+        out = capsys.readouterr().out
+        assert "Blocked: 1" in out
+        # The blocked row surfaces under ACTION REQUIRED with the [BLK ] tag.
+        assert "[BLK ]" in out
+        assert "WD-CONN-999" in out
+        assert "[?   ]" not in out

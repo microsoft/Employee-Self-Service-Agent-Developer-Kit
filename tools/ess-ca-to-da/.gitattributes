@@ -1,0 +1,4 @@
+# Deterministic line endings for this tool, independent of a contributor's
+# core.autocrlf setting. Text is stored and checked out as LF; binaries are
+# auto-detected and left untouched.
+* text=auto eol=lf

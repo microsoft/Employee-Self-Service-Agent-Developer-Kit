@@ -1,0 +1,99 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""Public command-discovery contracts for Workday setup."""
+
+from pathlib import Path
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SOLUTION = _REPO_ROOT / "solutions" / "ess-maker-skills"
+_PROMPTS = _SOLUTION / ".github" / "prompts"
+
+
+def _normalize(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_connect_workday_prompt_preselects_workday() -> None:
+    prompt = (_PROMPTS / "connect-workday.prompt.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = _normalize(prompt)
+
+    assert "Connect the active ESS HR agent to Workday" in prompt
+    assert ".github/prompts/connect.prompt.md" in prompt
+    assert "workday` supplied as the selected" in prompt
+    assert "without asking which system to connect" in normalized
+
+
+def test_menu_exposes_specific_and_generic_connect_commands() -> None:
+    menu = (_PROMPTS / "menu.prompt.md").read_text(encoding="utf-8")
+
+    assert "| `/connect-workday` | Connect the active ESS HR agent to Workday |" in menu
+    assert "| `/connect` | Choose an available integration |" in menu
+
+
+def test_maker_prompt_catalog_exposes_routing_descriptions() -> None:
+    prompt_files = sorted(_PROMPTS.glob("*.prompt.md"))
+
+    assert prompt_files
+    for prompt_file in prompt_files:
+        parts = prompt_file.read_text(encoding="utf-8").split("---", 2)
+        assert len(parts) == 3, f"{prompt_file.name} has no YAML frontmatter"
+        assert (
+            "description:" in parts[1]
+        ), f"{prompt_file.name} has no routing description"
+
+
+def test_readme_documents_da_scope_and_target_deployment() -> None:
+    readme = (_SOLUTION / "README.md").read_text(encoding="utf-8")
+    normalized = _normalize(readme)
+
+    assert "this release supports the **ESS HR Agent**" in readme
+    assert "ESS IT Agent is not supported" in readme
+    assert "scripts/alm/README.md" in readme
+    assert "signed-in end-to-end Workday scenario" in normalized
+    workday = _normalize(
+        readme.split("### Workday (HCM / Payroll / Absence)", 1)[1]
+        .split("### ServiceNow", 1)[0]
+    )
+    assert "does not require ISU service accounts" in workday
+    assert "return to `/connect workday` for the promoted target" in workday
+    assert "Topic enabling and content changes happen only in Development" in workday
+    assert "Test and Production verify the promoted content without changing it" in workday
+    assert "Two supported install paths" not in workday
+    assert "automatically creates" not in workday
+    assert "| `/connect` | Choose an available integration |" in readme
+    assert "| `/connect-workday` | Connect the ESS HR agent to Workday |" in readme
+
+
+def test_connect_workday_bypasses_runtime_readiness_gate() -> None:
+    instructions = (
+        _SOLUTION / ".github" / "copilot-instructions.md"
+    ).read_text(encoding="utf-8")
+    normalized = _normalize(instructions)
+
+    assert "typed `/connect` or `/connect-workday`" in normalized
+    assert "Do not require `connect_ready: true`" in normalized
+
+
+def test_connect_workday_routes_to_architecture_aware_connect() -> None:
+    instructions = (
+        _SOLUTION / ".github" / "copilot-instructions.md"
+    ).read_text(encoding="utf-8")
+    workday = (
+        _SOLUTION / "src" / "skills" / "connect" / "workday" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized = _normalize(instructions)
+
+    assert (
+        "(`/connect workday` or `/connect-workday`) | "
+        "`src/skills/connect/SKILL.md`"
+    ) in normalized
+    assert (
+        "Provision/connect the Workday setup environment (`/connect workday`) "
+        "| `src/skills/setup/SKILL.md`"
+    ) not in normalized
+    assert "scripts/workday_connect.py" in workday
+    assert "This branch is DA-only" in workday

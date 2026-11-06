@@ -74,8 +74,9 @@ def test_kit_setup_nudge_is_plan_env_driven():
 
 def test_first_run_setup_pending_is_the_fre_signal():
     p = _plan()
-    # The admin's setup task — not yet run, no env pinned — IS the first-run
-    # setup: when they ask "what are my tasks?", nudge them to run /setup now.
+    # The admin's environment task — still open, no env pinned — IS the first-run
+    # setup: when they ask "what are my tasks?", nudge them to create or choose
+    # the environment now.
     assert p.first_run_setup_pending("T1") is True
     assert p.task_brief("T1")["firstRunSetup"] is True
     # A non-setup task is never the first-run setup (it's the other side of the
@@ -83,9 +84,8 @@ def test_first_run_setup_pending_is_the_fre_signal():
     assert p.first_run_setup_pending("T2") is False
     assert p.task_brief("T2")["firstRunSetup"] is False
     # Once an environment is pinned the env decision is made, so it's no longer
-    # the *first* run — even while the setup task is still open (e.g. the ESS
-    # agent install was blocked before /setup could finish, yet the environment
-    # the maker created was still persisted).
+    # the *first* run — even while the setup task is still open (e.g. the admin
+    # pinned the environment while its agent setup is still pending).
     p.add_output(plan_artifact("primaryEnvironment", "Environment",
                                {"environmentId": "e1", "environmentUrl": "u"},
                                produced_by_task_id="T1"))

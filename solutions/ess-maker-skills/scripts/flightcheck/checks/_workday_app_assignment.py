@@ -86,18 +86,19 @@ def _workday_hints(config) -> tuple[str, str]:
     and ``entraAppObjectId`` steers the application lookup. The config-schema
     documents both as top-level keys of ``.local/config.json`` — the file
     FlightCheck loads into ``runner.config`` — so that source wins. In
-    practice the connect / setup playbooks currently persist them to
-    ``.local/connect/workday/config.json`` instead, which the runner never
-    loads; without a fallback the hint is always empty at runtime and the
-    consent / assignment / NameID checks silently validate ``sps[0]`` (an
-    arbitrary sibling Workday app). We therefore fall back to that connect
-    config. Any read/parse error degrades to empty hints (→ unscoped /
+    practice older callers may omit an explicit provider overlay, so they fall
+    back to ``.local/connect/workday/config.json``. When ``--connect-config``
+    was supplied, that explicit architecture-specific file is authoritative:
+    missing values remain missing rather than bleeding in from CEA state.
+    Any fallback read/parse error degrades to empty hints (→ unscoped /
     ``sps[0]`` behavior), never raising — FlightCheck emitters must not throw.
     """
     cfg = config or {}
     app_id = str(cfg.get("entraAppId") or "").strip()
     obj_id = str(cfg.get("entraAppObjectId") or "").strip()
     if app_id and obj_id:
+        return app_id, obj_id
+    if cfg.get("_connectConfigPath"):
         return app_id, obj_id
     try:
         connect_path = os.path.join(".local", "connect", "workday", "config.json")

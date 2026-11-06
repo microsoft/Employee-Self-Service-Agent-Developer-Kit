@@ -1,56 +1,32 @@
-# Connect Script
+# Connect integrations
+
+This is a provider-neutral router, not an integration setup procedure.
+Provider names, availability, aliases, entry points, state rules, prerequisites,
+and lifecycle instructions belong in each provider's own directory.
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
-Do not rephrase, add commentary, or tell the user what tools you are calling
-or what files you are reading.
-
----
+Do not narrate tools, files, or internal routing.
 
 ## Start
 
-Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
-message, and it never fails the step): `python scripts/emit_capability.py connect`
-
-If the user specified an integration as an argument (e.g., the user said
-"servicenow" or "workday", or the prompt was invoked as `/connect servicenow`),
-pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
-"which system" question and go directly to routing for that integration.
+If the user or calling prompt already selected an integration, pass that
+selection to `step1.md` as `PRE_SELECTED_INTEGRATION`. An unambiguous selection
+from the current conversation also counts; do not ask the same question again.
+Preserve the original request and target intent through routing and any
+required foundation setup. Provider-specific follow-ups belong to that
+provider's entry point.
 
 Read `src/skills/connect/step1.md` and follow it.
 
-(Step 1 asks which integration, detects existing state, and dispatches —
-ServiceNow to its own step files, Workday to the setup orchestrator
-`src/skills/setup/SKILL.md`.)
+## Boundaries
 
----
-
-## Routing
-
-Each integration routes differently — ServiceNow has its own step files;
-Workday delegates to the setup orchestrator:
-
-- **ServiceNow**: `src/skills/connect/servicenow/`
-  - Steps template: `src/skills/connect/servicenow/steps.md`
-  - State file: `.local/connect/servicenow/steps.md`
-  - Config file: `.local/connect/servicenow/config.json`
-  - Step 1: `step1.md` — instance info, MCP setup, connectivity check
-  - Step 2 (Entra): `step2-entra.md` — create Entra app registration for user login
-  - Step 2 (Certificate): `step2-certificate.md` — create two Entra apps + OIDC + system user
-  - Step 2 (OAuth2): `step2-oauth2.md` — create OAuth app via MCP
-  - Step 3 (Entra): `step3-entra.md` — install extension pack (Entra fields)
-  - Step 3 (Certificate): `step3-certificate.md` — install extension pack (Certificate fields)
-  - Step 3 (OAuth2): `step3-oauth2.md` — install extension pack (OAuth2 fields)
-  - Step 3 (Basic): `step3-basic.md` — install extension pack (Basic fields)
-  - Step 4: `step4.md` — verify connection
-
-- **Workday**: handled by the **setup orchestrator**
-  (`src/skills/setup/SKILL.md`), not a `connect/workday/` step sequence.
-  `src/skills/connect/step1.md` routes the Workday branch straight there. The
-  orchestrator sequences the six Workday setup skills (environment, ESS install,
-  Entra app, tenant config, extension pack, topic) using the master checklist as
-  a resume-aware spine, and persists state under `.local/setup/workday/tasks.md`
-  + `setupStatus` in `.local/connect/workday/config.json`.
-
-Each integration's steps.md and config.json persist after completion.
-Running `/connect` again lets the user add a different integration
-without losing existing ones.
+- Discover providers from their `integration.json` registrations, not from a
+  hard-coded provider list or the existence of retained step files.
+- Apply the selected provider's availability before provider state,
+  credentials, telemetry, MCP, or lifecycle actions. This applies equally to
+  preselection, repair requests, follow-ups, and saved-state resume.
+- Do not inspect, reset, copy, or migrate provider state here. Let the selected
+  provider own readiness and resume decisions.
+- There is no shared connection checklist or generic Fresh Start operation.
+- New integrations belong in their own child directories with their own
+  registrations and entry points.

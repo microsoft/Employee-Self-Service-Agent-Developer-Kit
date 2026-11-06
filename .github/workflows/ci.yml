@@ -5,9 +5,10 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "main-ca", "release/**" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "main-ca", "release/**" ]
+    types: [ "opened", "synchronize", "reopened", "edited" ]
 
 permissions:
   contents: read
@@ -79,6 +80,63 @@ jobs:
       shell: pwsh
       run: ./setup/Install-EssAdk.Tests.ps1
 
+  mcp-foundation:
+    name: MCP foundation tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install Python dependencies
+      run: >-
+        pip install
+        -r requirements-dev.txt
+        -r solutions/ess-maker-skills/src/mcp/agentconfig_core/requirements.txt
+
+    - name: Run MCP foundation tests
+      run: >-
+        python -m pytest
+        tests/mcp/agentconfig_core
+        tests/scripts/test_mcp_config.py
+        -q
+
+  landing-page-config:
+    name: Landing-page configuration
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install Python dependencies
+      run: >-
+        pip install
+        -r requirements-dev.txt
+        -r solutions/ess-maker-skills/src/mcp/agentconfig_landing_page/requirements.txt
+
+    - name: Run AgentConfiguration tests
+      run: >-
+        python -m pytest
+        tests/mcp/agentconfig
+        tests/scripts/test_setup_preserves_title_id.py
+        tests/scripts/test_validate_branding.py
+        -q
+
+    - name: Test ESS Maker Quick Actions
+      working-directory: tools/ess-maker-profile/extension
+      run: |
+        node extension.test.js
+        npm run validate
+
   flightcheck-tests:
     name: FlightCheck offline test suite
     runs-on: ubuntu-latest
@@ -86,9 +144,9 @@ jobs:
     # Runs the whole FlightCheck pytest suite. Every test is offline: network
     # calls are mocked (responses / respx) or replayed from committed VCR
     # cassettes, and `live`-marked tests are skipped unless opted in with
-    # --run-live. This is the job that actually enforces the FlightCheck tests
-    # on every PR (previously none of them ran in CI). It includes the offline
-    # URL hygiene gate (tests/flightcheck/test_url_hygiene.py), which asserts
+    # --run-live. This job enforces the FlightCheck tests on PRs targeting main
+    # or release branches, including the offline URL hygiene gate
+    # (tests/flightcheck/test_url_hygiene.py), which asserts
     # fetchable report URLs use https. It does NOT verify a path is live (that
     # a learn.microsoft.com article still exists) — stale-path detection is a
     # separate, networked concern kept out of this deterministic job.
@@ -110,3 +168,39 @@ jobs:
 
     - name: Run FlightCheck offline test suite
       run: python -m pytest tests/flightcheck -q
+
+  script-tests:
+    name: Lifecycle script test suite
+    runs-on: ubuntu-latest
+
+    # Runs the tests/scripts suites, which cover the evaluation lifecycle
+    # (create/generate, review, runs, CSV export, push scoping) and the other
+    # scripts helpers. Previously only tests/flightcheck ran in CI, so these
+    # suites — including the evaluation review/run/CSV lifecycle tests — were
+    # never enforced on a PR. Every test here is offline (no live tenant).
+    #
+    # test_installer_launch.py and test_installer_maker_profile.py are ignored:
+    # they are red-by-design TDD tests for an unimplemented installer
+    # maker-profile feature (they assert the setup scripts branch on
+    # MAKER_PROFILE_INSTALLED, which they do not yet). Those failures predate
+    # this job and are unrelated to the script suites; remove the ignores when
+    # that installer feature lands.
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install runtime and test dependencies
+      run: |
+        pip install -r solutions/ess-maker-skills/scripts/requirements.txt
+        pip install -e .[test]
+
+    - name: Run lifecycle script test suite
+      run: >-
+        python -m pytest tests/scripts
+        --ignore=tests/scripts/test_installer_launch.py
+        --ignore=tests/scripts/test_installer_maker_profile.py
+        -q

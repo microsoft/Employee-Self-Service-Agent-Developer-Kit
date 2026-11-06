@@ -150,15 +150,16 @@ requires declared outputs and a verified ID for Environment artifacts. Graph
 validation rejects cycles, and rendered workstream sections preserve dependency
 order while keeping independent preparation parallel.
 
-`setup-status` distinguishes an environment from an installed agent
+`setup-status` distinguishes an environment from a recorded agent
 (`environmentPinned` and `agentPinned`). `setupTaskId` and `setupEnvironmentKey`
 identify the first unfinished environment-producing task in dependency order:
-`provisionedEnvironment` for provisioning or `primaryEnvironment` for the
-corresponding setup/binding milestone. `capture-setup` uses that declared key by
+`provisionedEnvironment` for an environment-only task or `primaryEnvironment` for
+the corresponding setup/binding milestone. `capture-setup` uses that declared key by
 default, including with an explicit `--task`; `--key` remains an override.
 `firstRunSetupTaskId` identifies ready first-run work before an environment is
-pinned. Completing provisioning leaves unsatisfied installation/binding tasks
-open. Foundation-only results not yet in `.local/config.json` use the confirmed
+pinned. Completing an environment-only task leaves unsatisfied agent setup and
+binding tasks open. An environment that exists before `/setup` records it in
+`.local/config.json` (`/setup` never creates environments) uses the confirmed
 `pin-output` path with the same declared key, not a renamed environment output.
 
 ## Progress-aware next actions

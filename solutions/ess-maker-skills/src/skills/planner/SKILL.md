@@ -45,8 +45,9 @@ the sponsor's intent, a set of atomic Tasks each owned by a role and a person,
 and a ledger of what each Task produced. It captures the sponsor's intent first,
 grounds that scope by *researching Microsoft Learn*, assigns the
 work, and captures Task outputs so later Tasks read them straight off the Plan.
-`/setup` owns foundation prerequisites, environment selection/provisioning guidance,
-ESS installation, and this person's workspace binding. A shared environment does
+`/setup` owns foundation prerequisites, environment selection (it shows the Power
+Platform admin center steps but never creates an environment), ESS agent creation
+or connection, and this person's workspace binding. A shared environment does
 not mean every colleague's workspace is already connected to it.
 
 The Plan lives at `workspace/plan/plan.json` — a persistent local **draft** until
@@ -135,7 +136,8 @@ skills' setup requirements or make Planner the default welcome.
 
 Every other skill requires `.local/config.json` with `setup: "complete"`.
 `/planner` is the exception: on a greenfield tenant the environment doesn't
-exist yet, and the first Task the Plan emits is usually "run setup". So:
+exist yet, and the Plan's first Tasks are usually creating the environment and
+running setup. So:
 
 1. **Complete the workspace bootstrap on first Planner use in each chat.**
    Whichever flow starts first runs this shared gate: creating/interviewing,
@@ -230,10 +232,10 @@ checked for an existing plan.**
      sharing succeeded before attempting activation. Reuse an existing shared
      identity, and report an already-active plan instead of creating a duplicate.
      Preserve the lifecycle ownership and previous-version archival safeguards.
-   - **Reconcile a finished first-run setup — invisibly, once.** The Power
-     Platform admin usually runs `/setup` as their first-run experience, so the
-     environment can already exist while the plan's setup task still reads Not
-     started. Before you show anything, read
+   - **Reconcile a finished first-run setup — invisibly, once.** Makers often
+     run `/setup` as their first-run experience, so the environment and agent can
+     already be recorded while the plan's setup task still reads Not started.
+     Before you show anything, read
      `python scripts/planner/cli.py setup-status`: if it reports `setupTaskOpen`
      **true** *and* `.local/config.json` shows setup complete, fold that finished
      setup into the plan now — confirm the detected environment, then
@@ -262,11 +264,12 @@ checked for an existing plan.**
      back to the local best-effort gating in `src/skills/planner/mytasks.md`
      (resolve the caller's identity or ask which of the plan's roles are theirs,
      then show only those roles' tasks). **If the caller's own ready task is the
-     first-run setup** (it stands up the environment and none is pinned yet), say
-     so and nudge them to run `/setup` **now** — `task-brief` flags this as the
-     first-run setup; when they return, capture what it produced (Phase 6),
-     persisting the environment they created even if the ESS agent install was
-     blocked before `/setup` could finish (`src/skills/planner/capture.md`).
+     first-run setup** (it produces the environment and none is pinned yet), say
+     so and nudge them to create or choose the environment in the Power Platform
+     admin center **now** (`/setup` never creates one) — `task-brief` flags this
+     as the first-run setup; then pin its verified environment ID
+     (`src/skills/planner/capture.md` → *When the environment exists before
+     `/setup` records it*).
    - On a general resume, offer other actions if relevant, without replacing the
      personal next step with a generic menu: **continue/extend** the plan (add or assign tasks),
      **edit** the plan — they can revise the ESS scenario plan Markdown directly
@@ -339,10 +342,10 @@ don't re-interview, rebuild the plan, or execute the recommended action.
 > plan. Phase 3 must emit the **full task set** grounded in research and the
 > sponsor's chosen systems/scenarios: the setup task **plus**, for each captured
 > system, its **role-boundary connect decomposition** researched from that
-> system's setup checklist (Phase 2 axis 2 — Workday is *seven* tasks across five
+> system's planning reference (Phase 2 axis 2 — Workday is *six* tasks across four
 > roles, not one coarse "connect" task), authoring tasks per scenario, an evals
 > task, and publish — each with a grounded role and `produces`/`consumes`
-> keys. **Do not stop after adding the "run setup" task.** The interview
+> keys. **Do not stop after adding the environment and setup tasks.** The interview
 > (Phase 1) must capture the scenarios and either known systems or explicit pending
 > system decisions before scoped research in Phase 2 and modelling in Phase 3 —
 > those drive the tasks and the roles. Once the full set is modelled, **show its

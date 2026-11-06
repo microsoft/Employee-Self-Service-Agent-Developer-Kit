@@ -133,14 +133,12 @@ Both flows declare exactly one Workday connection:
 ```
 
 `ff0df` is configured with Power Platform's **"Microsoft Entra ID
-Integrated"** authentication type (see skill-5,
-`src/skills/setup/workday/install-workday-extension-pack.md`, S5.3), not Basic
-auth.
+Integrated"** authentication type for this CEA connection reference, not Basic
+auth. This is runtime reference documentation, not a DA installation playbook.
 "Microsoft Entra ID Integrated" authenticates the signed-in employee against
 a **federated Workday enterprise app** in Entra
 (Application ID URI: `http://www.workday.com/{WD_TENANT}`) — the same
-enterprise app the setup flow provisions in skill-3,
-`src/skills/setup/workday/provision-workday-entra-app.md`. The X.509 signing
+enterprise app configured for Workday federation. The X.509 signing
 certificate WD-CONN-102 inspects lives on that same enterprise app as a
 `keyCredential`. It is the signing key Entra uses to issue SAML assertions
 for browser-based Workday SSO and is the most visible expiry-driven artifact
@@ -156,8 +154,9 @@ on the federation app that ESS's user-context SOAP/REST calls depend on.
 
 On a **full / legacy install** (3 connection refs), the ISU SOAP calls keep
 working when this cert expires, but the OAuthUser/`ff0df` path is at risk.
-On a **simplified install** (1 connection ref, OAuthUser only — see WD-PKG-001),
-`ff0df` is the entire Workday surface, so cert expiry combined with a
+On a **simplified install** (1 connection ref, OAuthUser only — `ff0df` or the
+`msdyn_sharedworkdaysoap_workdayruntime` reference; see WD-PKG-001), that
+reference is the entire Workday surface, so cert expiry combined with a
 JWT-validating Workday API Client takes user-facing Workday topics offline.
 
 **Root cause:** The X.509 signing certificate on the federated Workday SAML

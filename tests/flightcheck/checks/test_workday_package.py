@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 import responses
+from unittest.mock import patch
 
 from tests.conftest import require_validated_mock
 from tests.mocks import dataverse as dv
@@ -87,6 +88,38 @@ def _non_workday_ref() -> dict[str, Any]:
 
 class TestPackageFlavorDetection:
     @responses.activate
+    @pytest.mark.parametrize("extra", ["none", "legacy", "duplicate-oauth", "duplicate-runtime", "unknown"])
+    def test_runtime_and_domain_oauth_coexistence(
+        self, runner: _MinimalRunner, fake_dataverse_url: str, extra: str
+    ) -> None:
+        from flightcheck.checks.workday import _check_package_flavor
+
+        refs = [
+            *dv.workday_connection_refs_runtime(),
+            *dv.workday_connection_refs_simplified(),
+        ]
+        if extra == "legacy":
+            refs.append(dv.workday_connection_ref(suffix="0786a", display_name="Generic User"))
+        elif extra == "duplicate-oauth":
+            refs.extend(dv.workday_connection_refs_simplified())
+        elif extra == "duplicate-runtime":
+            refs.extend(dv.workday_connection_refs_runtime())
+        elif extra == "unknown":
+            refs.append(dv.workday_connection_ref(suffix="abcde", display_name="Custom"))
+        _register_connection_refs(base_url=fake_dataverse_url, refs=refs)
+
+        result = _check_package_flavor(runner, wd_flows=[{"name": "runtime"}])[0]
+
+        if extra == "none":
+            assert result.status == "Passed"
+            assert runner._workday_package_flavor == "simplified"
+            assert "2 Workday connection reference(s)" in result.result
+            assert "Workday Runtime OBO + OAuthUser/OBO" in result.result
+        else:
+            assert result.status == "Warning"
+            assert runner._workday_package_flavor == "unknown"
+
+    @responses.activate
     def test_simplified_install_passes_with_flavor_simplified(
         self, runner: _MinimalRunner, fake_dataverse_url: str
     ) -> None:
@@ -128,6 +161,56 @@ class TestPackageFlavorDetection:
         assert runner._workday_package_flavor == "full"
         assert "full / legacy" in r.result
         assert len(runner._workday_connection_refs) == 3
+
+    @responses.activate
+    def test_duplicate_known_role_does_not_match_a_valid_fingerprint(
+        self, runner: _MinimalRunner, fake_dataverse_url: str
+    ) -> None:
+        from flightcheck.checks.workday import _check_package_flavor
+
+        duplicate = dv.workday_connection_refs_simplified()[0]
+        duplicate = {
+            **duplicate,
+            "connectionreferenceid": (
+                "00000000-0000-0000-0000-000000009999"
+            ),
+        }
+        _register_connection_refs(
+            base_url=fake_dataverse_url,
+            refs=[
+                *dv.workday_connection_refs_simplified(),
+                duplicate,
+            ],
+        )
+
+        results = _check_package_flavor(runner, wd_flows=[])
+
+        r = _result_by_id(results, "WD-PKG-001")
+        assert r.status == "Warning"
+        assert runner._workday_package_flavor == "unknown"
+
+    @responses.activate
+    def test_runtime_install_uses_simplified_behavior(
+        self, runner: _MinimalRunner, fake_dataverse_url: str
+    ) -> None:
+        from flightcheck.checks.workday import _check_package_flavor
+
+        _register_connection_refs(
+            base_url=fake_dataverse_url,
+            refs=dv.workday_connection_refs_runtime(),
+        )
+
+        runner._workday_flows = [{"name": "ESS Workday Runtime"}]
+        results = _check_package_flavor(
+            runner,
+            wd_flows=runner._workday_flows,
+        )
+
+        r = _result_by_id(results, "WD-PKG-001")
+        assert r.status == "Passed"
+        assert runner._workday_package_flavor == "simplified"
+        assert "msdyn_EssWorkdayRuntime" in r.result
+        assert len(runner._workday_connection_refs) == 1
 
     @responses.activate
     def test_no_workday_refs_returns_not_configured_with_flavor_none(
@@ -296,6 +379,30 @@ class TestPackageFlavorDetection:
 
 
 class TestPackageConnectionCompleteness:
+    @pytest.mark.parametrize("unbound_index", [None, 0, 1])
+    def test_coexisting_runtime_and_oauth_both_require_bindings(
+        self, runner: _MinimalRunner, unbound_index: int | None
+    ) -> None:
+        from flightcheck.checks.workday import _check_package_connection_completeness
+
+        runner._workday_package_flavor = "simplified"
+        runner._workday_connection_refs = [
+            dv.workday_connection_refs_runtime()[0],
+            *dv.workday_connection_refs_simplified(),
+        ]
+        if unbound_index is not None:
+            runner._workday_connection_refs[unbound_index]["connectionid"] = None
+
+        result = _check_package_connection_completeness(runner)[0]
+
+        assert result.status == ("Passed" if unbound_index is None else "Failed")
+        if unbound_index is None:
+            assert "All 2 Workday connection reference(s)" in result.result
+        else:
+            role = "Workday Runtime (OBO)" if unbound_index == 0 else "OAuthUser"
+            assert role in result.result
+            assert "unbound" in result.result
+
     def test_simplified_all_bound_passes(self, runner: _MinimalRunner) -> None:
         from flightcheck.checks.workday import _check_package_connection_completeness
 
@@ -318,6 +425,61 @@ class TestPackageConnectionCompleteness:
         r = _result_by_id(results, "WD-CONN-012")
 
         assert r.status == "Passed"
+
+    def test_runtime_all_bound_passes(self, runner: _MinimalRunner) -> None:
+        from flightcheck.checks.workday import _check_package_connection_completeness
+
+        runner._workday_package_flavor = "simplified"
+        runner._workday_connection_refs = [
+            dv.workday_connection_refs_runtime()[0]
+        ]
+
+        results = _check_package_connection_completeness(runner)
+        r = _result_by_id(results, "WD-CONN-012")
+
+        assert r.status == "Passed"
+        assert "Workday Runtime (OBO)" in r.result
+
+    def test_runtime_detection_ignores_agent_scoped_refs(
+        self, runner: _MinimalRunner
+    ) -> None:
+        from flightcheck.checks.workday import _check_package_flavor
+
+        refs = dv.workday_connection_refs_runtime()
+        refs.append({
+            "connectionreferencelogicalname": (
+                "gptagent_copilotforemployeeselfservicehr."
+                "3164dae9-3a2b-5843-98dd-e62bb5123324.shared_workdaysoap"
+            ),
+            "connectionreferencedisplayname": "Agent Workday Runtime",
+            "connectorid": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+            "connectionid": "agent-connection",
+            "statuscode": 1,
+        })
+        runner._workday_connection_refs = refs
+
+        with patch("auth.query_all", return_value=refs):
+            results = _check_package_flavor(runner, wd_flows=[{"name": "runtime"}])
+
+        r = _result_by_id(results, "WD-PKG-001")
+        assert r.status == "Passed"
+        assert runner._workday_package_flavor == "simplified"
+        assert len(runner._workday_connection_refs) == 1
+
+    def test_runtime_unbound_fails(self, runner: _MinimalRunner) -> None:
+        from flightcheck.checks.workday import _check_package_connection_completeness
+
+        runtime_ref = dv.workday_connection_refs_runtime()[0]
+        runtime_ref["connectionid"] = None
+        runner._workday_package_flavor = "simplified"
+        runner._workday_connection_refs = [runtime_ref]
+
+        results = _check_package_connection_completeness(runner)
+        r = _result_by_id(results, "WD-CONN-012")
+
+        assert r.status == "Failed"
+        assert "Workday Runtime (OBO)" in r.result
+        assert "unbound" in r.result
 
     def test_full_with_one_unbound_fails_with_role_in_diagnostic(
         self, runner: _MinimalRunner

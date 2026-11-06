@@ -1138,7 +1138,8 @@ def test_rejected_token_is_reported_without_automatic_replay(monkeypatch):
     with pytest.raises(base_client_module.AgentConfigApiError) as error:
         _run(client, lambda: client.list_project_plans("proj1"))
     assert error.value.http_status == 401
-    assert "HTTP 401" in str(error.value)
+    assert "Renew credentials for the original account" in str(error.value)
+    assert _token() not in str(error.value)
     assert len(calls) == 1
 
 

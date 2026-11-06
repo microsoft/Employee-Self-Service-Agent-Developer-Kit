@@ -14,6 +14,33 @@ const actionsMatch = src.match(/const ACTIONS = (\[[\s\S]*?\]);/);
 if (!actionsMatch) throw new Error('Could not find ACTIONS in extension.js');
 const ACTIONS = eval(actionsMatch[1]);
 
+const customizationMatch = src.match(/const CUSTOMIZATION_ITEMS = (\[[\s\S]*?\]);/);
+if (!customizationMatch) throw new Error('Could not find CUSTOMIZATION_ITEMS in extension.js');
+const CUSTOMIZATION_ITEMS = eval(customizationMatch[1]);
+
+function createCustomizationProvider(completed) {
+    const vscode = {
+        EventEmitter: class {
+            constructor() { this.event = () => {}; }
+            fire() {}
+        },
+        TreeItem: class {
+            constructor(label) { this.label = label; }
+        },
+        TreeItemCollapsibleState: { None: 0 },
+        MarkdownString: class {
+            constructor(value) { this.value = value; }
+        },
+        ThemeIcon: class {
+            constructor(id) { this.id = id; }
+        },
+    };
+    const providerMatch = src.match(/class CustomizationTreeProvider \{[\s\S]*?\n\}/);
+    if (!providerMatch) throw new Error('Could not find CustomizationTreeProvider in extension.js');
+    const Provider = eval(`(${providerMatch[0]})`);
+    return new Provider({ globalState: { get: () => completed } });
+}
+
 // Extract CHAT_ONLY_LAYOUT
 const layoutMatch = src.match(/const CHAT_ONLY_LAYOUT = (\{[\s\S]*?\});/);
 if (!layoutMatch) throw new Error('Could not find CHAT_ONLY_LAYOUT in extension.js');
@@ -59,8 +86,8 @@ function test(name, fn) {
 
 console.log('ACTIONS structure:');
 
-test('has 7 actions', () => {
-    assert.strictEqual(ACTIONS.length, 7);
+test('has 8 actions', () => {
+    assert.strictEqual(ACTIONS.length, 8);
 });
 
 test('every action has required fields', () => {
@@ -69,15 +96,29 @@ test('every action has required fields', () => {
         assert.ok(a.icon, `missing icon for ${a.id}`);
         assert.ok(a.label, `missing label for ${a.id}`);
         assert.ok(a.sub, `missing sub for ${a.id}`);
-        assert.ok(a.slash, `missing slash for ${a.id}`);
+        assert.ok(a.query, `missing query for ${a.id}`);
         assert.ok(Array.isArray(a.requires), `requires not array for ${a.id}`);
     }
 });
 
-test('every slash command starts with /', () => {
-    for (const a of ACTIONS) {
-        assert.ok(a.slash.startsWith('/'), `${a.id}: slash "${a.slash}" doesn't start with /`);
-    }
+test('landing-page action sends the slash command', () => {
+    const landingPage = ACTIONS.find(a => a.id === 'landingPage');
+    assert.strictEqual(landingPage.label, 'Customize landing page');
+    assert.strictEqual(landingPage.query, '/landing-page');
+    assert.deepStrictEqual(landingPage.requires, ['setup']);
+});
+
+test('topic actions send explicit intent through the not-yet-available gates', () => {
+    const create = ACTIONS.find(a => a.id === 'create');
+    const update = ACTIONS.find(a => a.id === 'update');
+    assert.strictEqual(create.label, 'Create a topic (Coming Soon)');
+    assert.strictEqual(update.label, 'Update a topic (Coming Soon)');
+    assert.strictEqual(create.query, 'Create a topic');
+    assert.strictEqual(update.query, 'Update a topic');
+});
+
+test('landing-page action is last, immediately after push', () => {
+    assert.deepStrictEqual(ACTIONS.slice(-2).map(action => action.id), ['push', 'landingPage']);
 });
 
 test('setup has no requirements', () => {
@@ -104,6 +145,68 @@ test('all requires reference valid action ids', () => {
 test('no duplicate action ids', () => {
     const ids = ACTIONS.map(a => a.id);
     assert.strictEqual(ids.length, new Set(ids).size);
+});
+
+test('landing-page tutorial offers only supported settings', () => {
+    const getTutorialHtml = eval(`(${_extractFn('getTutorialHtml')})`);
+    const section = getTutorialHtml().match(/<section id="landing-page">([\s\S]*?)<\/section>/);
+    assert.ok(section, 'landing-page tutorial section is missing');
+    assert.deepStrictEqual(
+        [...section[1].matchAll(/<li><strong>([^<]+)<\/strong>/g)].map(match => match[1]),
+        ['Categorized starter prompts', 'Accent colors', 'Quick links', 'Stay up to date'],
+    );
+    assert.doesNotMatch(section[1], /quick access|isQuickAccessEnabled/i);
+});
+
+console.log('\nCustomization tree:');
+
+test('customization order matches every action after setup', () => {
+    assert.deepStrictEqual(
+        CUSTOMIZATION_ITEMS.map(item => item.id),
+        ACTIONS.filter(action => action.id !== 'setup').map(action => action.id),
+    );
+});
+
+test('rendered landing-page action is last, immediately after push', () => {
+    const items = createCustomizationProvider([]).getChildren();
+    assert.deepStrictEqual(items.slice(-2).map(item => item.label), [
+        'Push to Copilot Studio', 'Customize landing page',
+    ]);
+    const landingPage = ACTIONS.find(action => action.id === 'landingPage');
+    assert.strictEqual(items.at(-1).command.command, `essMaker.run_${landingPage.id}`);
+    assert.strictEqual(landingPage.query, '/landing-page');
+});
+
+test('customization actions stay clickable before and after setup', () => {
+    for (const completed of [[], ['setup']]) {
+        const items = createCustomizationProvider(completed).getChildren();
+        assert.strictEqual(items.length, CUSTOMIZATION_ITEMS.length);
+        assert.deepStrictEqual(
+            items.map(item => item.command?.command),
+            CUSTOMIZATION_ITEMS.map(item => item.run),
+        );
+        assert.ok(items.every(item => item.iconPath.id !== 'lock'));
+    }
+});
+
+test('detailed tutorial places landing page after push throughout', () => {
+    const getTutorialHtml = eval(`(${_extractFn('getTutorialHtml')})`);
+    const html = getTutorialHtml();
+    const nav = html.match(/<nav>([\s\S]*?)<\/nav>/)[1];
+    assert.deepStrictEqual(
+        [...nav.matchAll(/href="#([^"]+)"/g)].slice(-2).map(match => match[1]),
+        ['push', 'landing-page'],
+    );
+    const workflow = html.match(/<ol>([\s\S]*?)<\/ol>/)[1];
+    assert.deepStrictEqual(
+        [...workflow.matchAll(/<strong>([^<]+)<\/strong>/g)].slice(-2).map(match => match[1]),
+        ['Push', 'Customize landing page'],
+    );
+    assert.deepStrictEqual(
+        [...html.matchAll(/<section id="([^"]+)">/g)].slice(-2).map(match => match[1]),
+        ['push', 'landing-page'],
+    );
+    assert.match(html, /<code>\/landing-page<\/code>/);
 });
 
 console.log('\nactionState logic:');
@@ -182,14 +285,74 @@ test('view container is in activitybar (primary sidebar)', () => {
     assert.strictEqual(pkg.contributes.viewsContainers.activitybar[0].id, 'essMakerActions');
 });
 
-test('view is webview type', () => {
+test('topic command titles are marked coming soon', () => {
+    const commands = new Map(pkg.contributes.commands.map(command => [
+        command.command, command.title,
+    ]));
+    assert.strictEqual(
+        commands.get('essMaker.runCreate'),
+        'ESS Maker: Create a topic (Coming Soon)',
+    );
+    assert.strictEqual(
+        commands.get('essMaker.runUpdate'),
+        'Agent Developer Kit: Modify a topic (Coming Soon)',
+    );
+});
+
+test('quick start view is a tree (no webview type)', () => {
     const view = pkg.contributes.views.essMakerActions[0];
-    assert.strictEqual(view.type, 'webview');
+    assert.strictEqual(view.type, undefined);
     assert.strictEqual(view.id, 'essMaker.actionsView');
 });
 
-test('activates on startup finished', () => {
-    assert.ok(pkg.activationEvents.includes('onStartupFinished'));
+test('customization view is a tree named Customization (no guidance webview)', () => {
+    const views = pkg.contributes.views.essMakerActions;
+    const opts = views.find((v) => v.id === 'essMaker.customizationView');
+    assert.ok(opts, 'customizationView missing');
+    assert.strictEqual(opts.type, undefined);
+    assert.strictEqual(opts.name, 'Customization');
+    assert.ok(!views.some((v) => v.id === 'essMaker.customizationInfoView'),
+        'customizationInfoView should be removed');
+});
+
+test('activates during startup so the guided layout is ready before startup settles', () => {
+    assert.ok(pkg.activationEvents.includes('*'));
+    assert.ok(!pkg.activationEvents.includes('onStartupFinished'));
+});
+
+test('package version matches the current Maker artifact release', () => {
+    assert.strictEqual(pkg.version, '0.4.37');
+    assert.ok(fs.existsSync(path.join(__dirname, `ess-maker-profile-${pkg.version}.vsix`)));
+    assert.ok(!fs.existsSync(path.join(__dirname, 'ess-maker-profile-0.4.36.vsix')));
+});
+
+test('updates layout settings concurrently during startup', () => {
+    assert.ok(
+        /Promise\.all\(Object\.entries\(settings\)\.map/.test(src),
+        'layout settings should be updated concurrently'
+    );
+});
+
+test('awaits the first Maker layout before completing activation dispatch', () => {
+    assert.ok(
+        /await applyGuidedLayout\(\{ silent: true, firstRun: true \}\)/.test(src),
+        'first Maker layout should be awaited'
+    );
+    assert.ok(
+        /firstRun \? 350 : 200/.test(src),
+        'first-run layout should not retain the old multi-second delay'
+    );
+});
+
+test('does not persist first-run state when an essential layout command fails', () => {
+    assert.ok(/async function requireRun\(commandId, \.\.\.args\)/.test(src));
+    assert.ok(/await requireRun\('workbench\.view\.extension\.essMakerActions'\)/.test(src));
+    assert.ok(/await openGettingStarted\(undefined, \{ required: true \}\)/.test(src));
+    assert.ok(/await requireRun\('workbench\.action\.chat\.open'\)/.test(src));
+    assert.ok(
+        /await applyGuidedLayout\(\{ silent: true, firstRun: true \}\);\s*await context\.globalState\.update\(APPLIED_KEY, true\)/.test(src),
+        'first-run state must follow the awaited guided layout'
+    );
 });
 
 test('exposes the essMaker.autoUpdateCheck opt-out setting', () => {
@@ -197,6 +360,57 @@ test('exposes the essMaker.autoUpdateCheck opt-out setting', () => {
     assert.ok(prop, 'essMaker.autoUpdateCheck missing from configuration');
     assert.strictEqual(prop.type, 'boolean');
     assert.strictEqual(prop.default, true);
+});
+
+console.log('\nfirst-install mode dispatch (ADO #7895603):');
+
+test('extension does not prompt for mode inside VS Code', () => {
+    // The mode is resolved in the installer CLI before VS Code launches
+    // (setup/Install-EssAdk.ps1 + install-ess-adk.sh prompt there), so
+    // essMaker.mode is already written to settings.json by the time the
+    // extension activates. If the extension prompted here on first
+    // launch, its picker would race the theme picker + Copilot sign-in
+    // that VS Code renders on first launch, so we guard against a mode
+    // picker regressing into the extension.
+    assert.ok(!/async function promptForInstallMode/.test(src), 'promptForInstallMode should not exist; the installer prompts in the CLI');
+    assert.ok(!/showQuickPick\([\s\S]{0,200}?Maker \(recommended\)/.test(src), 'in-VS-Code Maker/Developer picker should not exist');
+});
+
+test('firstInstallDispatch defaults blank / "prompt" installer values to maker', () => {
+    assert.ok(/if\s*\(!effectiveMode \|\| effectiveMode === 'prompt'\)/.test(src), 'fallback branch should still guard blank / prompt');
+    assert.ok(/effectiveMode = 'maker'/.test(src), 'fallback should default to maker without a modal');
+});
+
+test('firstInstallDispatch persists the resolved mode to global settings', () => {
+    assert.ok(/'essMaker\.mode',[\s\S]*?ConfigurationTarget\.Global/.test(src), 'resolved mode should be persisted with ConfigurationTarget.Global');
+});
+
+test('developer mode does NOT inject /setup from the extension (installer owns dispatch)', () => {
+    // F-3 regression guard: the installer already runs ``code chat "/setup"``
+    // for developer mode before launching VS Code, so injecting again in
+    // the extension opens two /setup chats on the fresh-install path.
+    // The isDeveloperMode branch of firstInstallDispatch must therefore
+    // not call injectSetup / waitForWelcomeWizard.
+    const devBranch = src.match(/if\s*\(isDeveloperMode\)\s*\{([\s\S]*?)\n\s*return;\s*\n\s*\}/);
+    assert.ok(devBranch, 'isDeveloperMode branch not found in firstInstallDispatch');
+    assert.ok(!/injectSetup\s*\(/.test(devBranch[1]), 'developer branch must not call injectSetup - installer owns /setup dispatch');
+    assert.ok(!/waitForWelcomeWizard\s*\(/.test(devBranch[1]), 'developer branch must not wait for welcome wizard to inject /setup');
+});
+
+test('legacy essMaker.mode values are normalized (lite -> maker, standard -> developer)', () => {
+    assert.ok(/function normalizeInstallerMode/.test(src), 'normalizeInstallerMode helper missing');
+    assert.ok(/if\s*\(mode === 'lite'\)\s*return 'maker'/.test(src), "'lite' should be normalized to 'maker'");
+    assert.ok(/if\s*\(mode === 'standard'\)\s*return 'developer'/.test(src), "'standard' should be normalized to 'developer'");
+    assert.ok(/normalizeInstallerMode\(installerMode\)/.test(src), 'firstInstallDispatch should normalize before checking fallback');
+});
+
+test('essMaker.mode config schema accepts the new maker/developer values', () => {
+    const modeProp = pkg.contributes.configuration.properties['essMaker.mode'];
+    assert.ok(modeProp, 'essMaker.mode missing from configuration');
+    assert.ok(modeProp.enum.includes('maker'), "enum should include 'maker'");
+    assert.ok(modeProp.enum.includes('developer'), "enum should include 'developer'");
+    assert.ok(modeProp.enum.includes('lite'), "enum should still include legacy 'lite'");
+    assert.ok(modeProp.enum.includes('standard'), "enum should still include legacy 'standard'");
 });
 
 console.log('\nauto-update: parseLsRemoteSha:');
@@ -245,6 +459,12 @@ test('extensionIsStale true only when repo version is newer', () => {
     assert.strictEqual(extensionIsStale('0.4.23', '0.4.24'), true);
     assert.strictEqual(extensionIsStale('0.4.24', '0.4.24'), false);
     assert.strictEqual(extensionIsStale('0.4.25', '0.4.24'), false);
+});
+
+test('landing-page package prompts existing 0.4.33 installs to reinstall', () => {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+    assert.strictEqual(extensionIsStale('0.4.33', packageJson.version), true);
+    assert.ok(ACTIONS.some((action) => action.id === 'landingPage'));
 });
 
 test('extensionIsStale false when a version is missing', () => {

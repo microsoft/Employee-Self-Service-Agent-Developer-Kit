@@ -4,6 +4,9 @@ This skill guides the user through deleting evaluation test sets or individual
 test cases from their Copilot Studio agent. Deleting means removing files
 locally AND pushing the deletion to the live environment via push.
 
+Explain that DA-GA evaluation deletion is not yet available in this release and
+stop before changing local files.
+
 ## CRITICAL — Local Files Are a Working Copy
 
 The files in `workspace/agents/{slug}/evaluations/` are a **working copy**. Deleting
@@ -70,7 +73,7 @@ Wait for confirmation.
 
 ```
 python scripts/checkpoint.py "pre-delete-evaluation-{name}"
-python scripts/emit_capability.py evaluations
+python scripts/emit_capability.py evaluation_delete
 ```
 
 The `emit_capability.py` line records anonymous usage telemetry (best-effort,
@@ -106,8 +109,10 @@ dimension scores to drop — for example, deleting the only negative case drops
 Failure Mode Coverage, or removing a keyword input shifts Diversity.
 
 Invoke the validate subagent on **all remaining** `.mcs.yml` files in the
-affected category (not just the deleted file). After it returns, paste its
-full quality report output verbatim to the user (do not summarize). Then
+affected category (not just the deleted file). After it returns, paste the exact
+compact **Post-generation quality report** scorecard from
+`src/skills/evaluations/experience-contract.md` verbatim, without a separate
+preamble, table, filename callout, or summary. Then
 follow the quality gate + fix flow defined in
 `src/skills/evaluations/quality-fix-flow.md`. The “review step” referred to
 there is Step 6 of this skill.
@@ -140,10 +145,20 @@ deleted.
 
 ## Step 8: Push
 
-Run `python scripts/push.py`. The push script automatically orders
+Run `python scripts/push.py --yes --force-delete`. Pass `--yes` — the script
+otherwise prompts on `input()`, which a non-interactive subprocess cannot answer
+and which reads as a hang. Deletions are destructive, so `--yes` alone is
+refused; `--force-delete` is required alongside it. Both are authorized only by
+the explicit Step 6 confirmation. The push script automatically orders
 evaluation deletions — children are deleted before parents.
 
 **If the push fails:** show the error and offer retry or revert.
+
+> **Dataverse-free (MinimalBot) agents:** eval-set deletion is not yet
+> supported for these agents. `push.py --force-delete` is refused with a clear
+> message rather than silently adding a duplicate set. Explain to the maker that
+> obsolete evaluation sets must currently be cleaned up in Copilot Studio
+> directly for Dataverse-free agents.
 
 ## Step 9: Verify
 

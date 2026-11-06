@@ -5,32 +5,33 @@
 ESS Maker Kit — Planner: deterministic setup-task decomposition.
 
 The ``/planner`` skill's Phase 3 (``src/skills/planner/model.md``) has to turn a
-system's setup into **atomic, role-boundary Tasks**. Doing that from memory is
-where the plan drifts: the LLM under-decomposes a rich multi-role setup into a
-couple of coarse tasks and *invents* roles (e.g. tagging Workday SSO as "Global
-Administrator" or the firewall step as a bare "Network Administrator"), losing
-the fidelity the setup skills were carefully authored with.
+system's rollout into **atomic, role-boundary Tasks**. Doing that from memory is
+where the plan drifts: the LLM under-decomposes a rich multi-role rollout into a
+couple of coarse tasks and *invents* roles (e.g. tagging Workday sign-in as
+"Global Administrator"), losing the fidelity the connect skills were carefully
+authored with.
 
-This module removes the guesswork. It reads the canonical, information-complete
-setup checklist that every setup skill already renders and updates
-(``src/skills/setup/<system>/tasks.md`` — the same file
-``tests/setup/test_checklist_template.py`` pins), groups its steps by the
-**role boundary** the checklist itself declares, and emits one grounded Task per
-(group, role). Two things make the output correct where the freehand path was
-wrong:
+This module removes the guesswork. It reads the system's planning reference
+(``src/skills/planner/systems/<system>.md``), groups its steps by the **role
+boundary** the reference declares, and emits one grounded Task per
+(group, role). After the two ``/setup`` foundation groups, the Workday reference
+follows the six ``/connect-workday`` phases in the order of
+``PHASE_DEFINITIONS`` (``scripts/workday_connect_model.py``). The reference is a
+planning map only; ``/connect-workday`` owns the lifecycle and its state. Two
+things make the output correct where the freehand path was wrong:
 
-* **Roles are grounded, then mapped to an *attestable* role.** Each checklist
-  item carries a verbatim ``role:`` (``App/Cloud App Admin``, ``InfoSec/IT`` …).
-  Those are *display* labels, not the closed set of roles the plan backend will
-  accept on a task (``src/mcp/agentconfig_planner/roles_surface.py`` →
-  ``ATTESTABLE_ROLES``; a non-attestable role can never be attested, so the work
-  stays invisible — see ``src/skills/planner/assign.md`` → *Nudge*). We ground
-  the label, then map it to the correct attestable role id. Crucially, Workday
-  SSO maps to ``EntraCloudApplicationAdministrator`` (App/Cloud App Admin) — NOT
-  ``EntraGlobalAdministrator`` — and the firewall step to
-  ``EntraNetworkAdministrator`` as the closest attestable proxy for InfoSec/IT.
+* **Roles are grounded, then mapped to an *attestable* role.** Each step carries
+  a verbatim ``role:`` (``Application Administrator or Cloud Application
+  Administrator``, ``Workday Administrator`` …). Those are *display* labels, not
+  the closed set of roles the plan backend will accept on a task
+  (``src/mcp/agentconfig_planner/roles_surface.py`` → ``ATTESTABLE_ROLES``; a
+  non-attestable role can never be attested, so the work stays invisible — see
+  ``src/skills/planner/assign.md`` → *Nudge*). We ground the label, then map it
+  to the correct attestable role id. Crucially, the Workday Entra work maps to
+  ``EntraCloudApplicationAdministrator`` — the least-privileged role that can do
+  it — and never to ``EntraGlobalAdministrator``.
 
-* **Every step is accounted for.** All 25 Workday steps across 6 groups are
+* **Every step is accounted for.** All 14 Workday steps across 6 groups are
   covered, so no group silently disappears.
 
 Pure logic, no network (see ``tests/AGENTS.md`` — pure-logic helpers are exempt
@@ -47,44 +48,45 @@ from pathlib import Path
 from planner.roles import slugify_role_id
 
 # scripts/planner/setup_tasks.py -> parents[2] is the solution root
-# (solutions/ess-maker-skills), which holds src/skills/setup/<system>/tasks.md.
+# (solutions/ess-maker-skills), which holds src/skills/planner/systems/<system>.md.
 _SOLUTION_ROOT = Path(__file__).resolve().parents[2]
 
-# A checkbox item line immediately followed by its hidden metadata comment —
-# the same shape ``tests/setup/test_checklist_template.py`` parses. The item's
-# user-facing text is captured so we can title minority-role tasks from it.
+# A step line immediately followed by its hidden metadata comment. The step's
+# user-facing text is captured so minority-role tasks can title themselves from
+# it. A legacy ``- [ ]`` checkbox before the text is still accepted.
 _ITEM_RE = re.compile(
-    r"^-\s*\[(?P<box>[ xX])\]\s+(?P<text>.*?)\n\s*<!--(?P<meta>.*?)-->\s*$",
+    r"^-\s*(?:\[(?P<box>[ xX])\]\s+)?(?P<text>.*?)\n[ \t]*<!--(?P<meta>.*?)-->\s*$",
     re.MULTILINE,
 )
-# "### 3. Workday single sign-on (Entra)" -> number + heading text.
+# "### 4. Microsoft Entra" -> number + heading text.
 _HEADING_RE = re.compile(r"^###\s+(?P<num>\d+)\.\s+(?P<title>.+?)\s*$", re.MULTILINE)
 # The bold lead of an item line is its short title: "**Title** — summary".
 _TITLE_RE = re.compile(r"\*\*(?P<title>.+?)\*\*")
 _STEP_RE = re.compile(r"S(?P<group>\d+)\.(?P<minor>\d+)")
 
-# The shared foundation groups — a Power Platform environment and the ESS base
-# agent — are produced by the backbone "Run setup" task (model.md). ``--skip-
+# The shared foundation groups — a Power Platform environment and the ESS HR
+# agent — are produced by the backbone /setup task (model.md). ``--skip-
 # foundation`` drops them so the emitted set doesn't duplicate that task.
 FOUNDATION_GROUPS = frozenset({1, 2})
 
 
 # --- role grounding --------------------------------------------------------
 
-# Ordered (substring, canonical display) rules that collapse the checklist's
-# messy ``role:`` labels onto a single grounded role. Substring match against the
-# lower-cased raw label; first hit wins — so the consent step's "Consent-capable
-# role (App/Cloud App Admin, …)" resolves to App/Cloud App Admin before the bare
-# fallback strips its parenthetical. Grounded in the labels in
-# ``src/skills/setup/workday/tasks.md`` and the role matrix in
-# ``src/reference/ess-docs/setup/role-gating.md``.
+# Ordered (substring, canonical display) rules that collapse the reference's
+# ``role:`` labels onto a single grounded role. Substring match against the
+# lower-cased raw label; first hit wins — so "Application Administrator or Cloud
+# Application Administrator (a separate consent-capable administrator …)"
+# resolves to the Entra app administrator before the bare fallback strips its
+# parenthetical. Grounded in the labels in ``src/skills/planner/systems/*.md``
+# and the role table in ``src/reference/ess-docs/setup/role-gating.md``.
 _ROLE_ALIASES: tuple[tuple[str, str], ...] = (
-    ("consent-capable", "App/Cloud App Admin"),
-    ("app/cloud app admin", "App/Cloud App Admin"),
+    ("cloud application administrator", "Entra app administrator"),
+    ("application administrator", "Entra app administrator"),
+    ("entra app administrator", "Entra app administrator"),
+    ("app/cloud app admin", "Entra app administrator"),
     ("environment maker", "Environment Maker"),
     ("power platform administrator", "Power Platform Administrator"),
     ("workday administrator", "Workday Administrator"),
-    ("infosec", "InfoSec/IT"),
 )
 
 # Grounded role id (``slugify`` of the canonical display) -> attestable compact
@@ -92,17 +94,15 @@ _ROLE_ALIASES: tuple[tuple[str, str], ...] = (
 # ``src/mcp/agentconfig_planner/roles_surface.py`` (``ATTESTABLE_ROLES``); a task
 # whose ``--role`` isn't one of those can never be attested/assigned to a real
 # person, so grounding alone isn't enough — the grounded role must be mapped to
-# the attestable role that owns that work:
-#   * App/Cloud App Admin -> Cloud Application Administrator (the least-privilege
-#     Entra role for enterprise-app/SSO config) — NOT Global Administrator.
-#   * InfoSec/IT -> Network Administrator (no InfoSec attestable role exists; the
-#     network-allowlist change is closest to the Entra Network Administrator).
+# the attestable role that owns that work. The Entra app administrator maps to
+# Cloud Application Administrator: either it or Application Administrator can
+# configure the Workday enterprise application, and it is the less privileged of
+# the two. It is never Global Administrator.
 _ATTESTABLE_BY_GROUNDED: dict[str, str] = {
     "power-platform-administrator": "EntraPowerPlatformAdministrator",
     "environment-maker": "PowerPlatformEnvironmentMaker",
-    "app-cloud-app-admin": "EntraCloudApplicationAdministrator",
+    "entra-app-administrator": "EntraCloudApplicationAdministrator",
     "workday-administrator": "WorkdayAdmin",
-    "infosec-it": "EntraNetworkAdministrator",
 }
 
 # Attestable compact id -> wire display name, mirrored from
@@ -114,18 +114,17 @@ _ATTESTABLE_DISPLAY: dict[str, str] = {
     "PowerPlatformEnvironmentMaker": "Environment Maker",
     "EntraCloudApplicationAdministrator": "Cloud Application Administrator",
     "WorkdayAdmin": "Workday administrator",
-    "EntraNetworkAdministrator": "Network Administrator",
 }
 
 
 def canonical_role(raw_label: str) -> str:
-    """Collapse a checklist ``role:`` label onto its canonical display name.
+    """Collapse a reference ``role:`` label onto its canonical display name.
 
-    Handles the real Workday labels — ``App/Cloud App Admin or App Owner``,
-    ``Consent-capable role (App/Cloud App Admin, Priv Role Admin, GA)``,
-    ``Environment Maker (+ Workday SME)`` — via the alias table, falling back to
-    stripping any ``(…)`` parenthetical and ``or …`` alternate so an unknown
-    system still yields a stable grounded role.
+    Handles the real Workday labels — ``Application Administrator or Cloud
+    Application Administrator (…)``, ``Environment Maker (+ package installation
+    access)`` — via the alias table, falling back to stripping any ``(…)``
+    parenthetical and ``or …`` alternate so an unknown system still yields a
+    stable grounded role.
     """
     low = (raw_label or "").lower()
     for needle, display in _ROLE_ALIASES:
@@ -139,7 +138,7 @@ def canonical_role(raw_label: str) -> str:
 
 @dataclass(frozen=True)
 class GroundedRole:
-    """A checklist role, grounded and mapped to its attestable counterpart."""
+    """A reference role, grounded and mapped to its attestable counterpart."""
 
     grounded_id: str
     grounded_display: str
@@ -149,7 +148,7 @@ class GroundedRole:
 
 
 def ground_role(raw_label: str) -> GroundedRole:
-    """Ground a raw checklist ``role:`` label and map it to an attestable role."""
+    """Ground a raw reference ``role:`` label and map it to an attestable role."""
     display = canonical_role(raw_label)
     grounded_id = slugify_role_id(display)
     attestable = _ATTESTABLE_BY_GROUNDED.get(grounded_id)
@@ -173,11 +172,13 @@ def ground_role(raw_label: str) -> GroundedRole:
     )
 
 
-# --- checklist parsing -----------------------------------------------------
+# --- reference parsing -----------------------------------------------------
 
 
 @dataclass(frozen=True)
 class ChecklistItem:
+    """One step of a planning reference."""
+
     step_id: str
     group_index: int
     group_title: str
@@ -185,6 +186,7 @@ class ChecklistItem:
     summary: str
     role_label: str
     gate: str
+    phase: str = ""  # owning lifecycle phase; empty for foundation work
 
     @property
     def step_order(self) -> tuple[int, int]:
@@ -202,11 +204,12 @@ def _metadata(raw: str) -> dict[str, str]:
 
 
 def parse_setup_checklist(md_text: str) -> list[ChecklistItem]:
-    """Parse a setup ``tasks.md`` into its checklist items (metadata + heading).
+    """Parse a planning reference into its steps (metadata + heading).
 
     Each returned item carries its stable Step ID, the numbered group it sits
-    under, its user-facing title/summary, the verbatim ``role:`` label, and the
-    completion ``gate`` — everything the decomposition needs.
+    under, its user-facing title/summary, the verbatim ``role:`` label, the
+    confirmation ``gate``, and the lifecycle ``phase`` (empty for foundation
+    work) — everything the decomposition needs.
     """
     headings = [
         (m.start(), int(m.group("num")), m.group("title").strip())
@@ -245,6 +248,7 @@ def parse_setup_checklist(md_text: str) -> list[ChecklistItem]:
                 summary=summary,
                 role_label=meta.get("role", ""),
                 gate=meta.get("gate", ""),
+                phase=meta.get("phase", ""),
             )
         )
     return items
@@ -267,64 +271,56 @@ class _Slot:
     command: str | None = None
 
 
-# Workday: one slot per (group_index, grounded role id). produces/consumes keys
-# and the backbone they thread through are grounded in model.md's "Typical
-# greenfield backbone". Group 5 splits across two roles (Environment Maker for
-# the pack + connect, InfoSec/IT for the firewall allowlist), so it carries two
-# slots.
+# Workday: one slot per (group_index, grounded role id). The produces/consumes
+# keys thread the work in /connect-workday order: the maker's preflight unlocks
+# the Entra handoff, the Entra signing certificate unlocks the Workday
+# administrator, and both administrator outputs unlock the maker's connection.
+# Group 6 spans the Connections, Runtime configuration, and Maker validation
+# phases, which the same maker runs in one /connect-workday session.
 _WORKDAY_SLOTS: dict[tuple[int, str], _Slot] = {
     (1, "power-platform-administrator"): _Slot(
         task_id="workday-pp-environment",
         title="Set up the Power Platform environment",
-        how="Create the Power Platform environment with a Dataverse database so the ESS agent and its data have a home, and confirm Copilot Studio capacity",
+        how="Create or choose the Power Platform environment for the ESS HR agent in the Power Platform admin center, confirm Copilot Studio capacity, and give the maker the Environment Maker role in it",
         produces=("primaryEnvironment",),
     ),
     (2, "environment-maker"): _Slot(
-        task_id="workday-ess-base-agent",
-        title="Install the Employee Self-Service base agent",
-        how="Add the Microsoft Employee Self-Service base agent to the environment from AppSource",
+        task_id="workday-ess-hr-agent",
+        title="Set up the ESS HR agent",
+        how="Run /setup with the maker's own login to create a fresh ESS HR agent or select an existing one, and bring its local copy into the workspace",
         produces=("essAgent",),
         consumes=("primaryEnvironment",),
+        command="/setup",
     ),
-    (3, "app-cloud-app-admin"): _Slot(
-        task_id="workday-sso-entra",
-        title="Set up Workday single sign-on (Entra)",
-        how="Register and configure the Workday enterprise SSO app in Entra — SAML app, exposed API permission, admin consent, user assignment, NameID mapping, SAML signing options, and single-tenant federation",
+    (3, "environment-maker"): _Slot(
+        task_id="workday-preflight",
+        title="Confirm Workday readiness for the ESS HR agent",
+        how="Start /connect-workday to confirm the agent, environment, and maker account, verify Dataverse access, and choose the supported Workday package before anything changes",
+        produces=("workdayPreflight",),
+        consumes=("primaryEnvironment", "essAgent"),
+        command="/connect-workday",
+    ),
+    (4, "entra-app-administrator"): _Slot(
+        task_id="workday-entra-app",
+        title="Set up Workday sign-in in Microsoft Entra",
+        how="Follow the /connect-workday handoff to configure the Workday enterprise application — SAML, the connector scope, delegated permissions and admin consent, employee assignment, and NameID — then hand the signing certificate to the Workday administrator. Either an Application Administrator or a Cloud Application Administrator can do this. It is a reusable tenant foundation, so reuse an existing configuration rather than replace it",
         produces=("workdayEntraApp",),
-        consumes=("primaryEnvironment",),
+        consumes=("workdayPreflight",),
     ),
-    (4, "workday-administrator"): _Slot(
+    (5, "workday-administrator"): _Slot(
         task_id="workday-tenant-config",
         title="Configure the Workday tenant",
-        how="In Workday, register the API client, capture the connection details (client id, endpoints, tenant), activate the OAuth/SAML authentication policy, and match the signing certificate to Entra",
+        how="Follow the /connect-workday handoff to trust the Microsoft Entra sign-in with the transferred certificate, set up the employee API client and domain security, activate the employee authentication policy, and return the client ID, token endpoint, and REST and SOAP base URLs",
         produces=("workdayTenantConfig",),
-        consumes=("primaryEnvironment",),
-    ),
-    (5, "environment-maker"): _Slot(
-        task_id="workday-pack-connect",
-        title="Install the Workday extension pack and connect",
-        how="Run /connect to install the Workday extension pack, bind the Workday and Dataverse connections to your account, set the Workday REST address, turn on the cloud flows, and wire up the employee-context lookup",
-        produces=("workdayConnection",),
-        # Also consumes the firewall allowlist: /connect binds the connection and
-        # exercises the Workday REST endpoint, so it stays locked until InfoSec/IT
-        # has opened the network path (otherwise the graph would mark Workday
-        # connectivity ready while the firewall change is still outstanding).
-        consumes=("primaryEnvironment", "essAgent", "workdayEntraApp", "workdayTenantConfig", "workdayNetworkAllowlist"),
-        command="/connect",
-    ),
-    (5, "infosec-it"): _Slot(
-        task_id="workday-firewall-allowlist",
-        title="Allow Workday through your firewall",
-        how="Add the Workday REST and SOAP endpoints to your network allowlist so agent traffic can reach Workday",
-        produces=("workdayNetworkAllowlist",),
+        consumes=("workdayEntraApp",),
     ),
     (6, "environment-maker"): _Slot(
-        task_id="workday-first-topic",
-        title="Author your first custom Workday topic",
-        how="Run /create to author your first custom Workday topic — define its trigger phrases, wire it to Workday with your tenant's reference IDs, and review it for issues",
-        produces=("topic:workday",),
-        consumes=("primaryEnvironment", "essAgent", "workdayConnection"),
-        command="/create",
+        task_id="workday-connect",
+        title="Connect the ESS HR agent to Workday",
+        how="Continue /connect-workday to install the Workday package, create the Workday and Dataverse connections, apply the runtime configuration and Workday topics, and smoke-test a read-only scenario in the Test pane without publishing. A promoted Test or Prod environment reuses the Entra and Workday configuration and repeats only this task",
+        produces=("workdayConnection",),
+        consumes=("primaryEnvironment", "essAgent", "workdayEntraApp", "workdayTenantConfig"),
+        command="/connect-workday",
     ),
 }
 
@@ -337,6 +333,11 @@ _SYSTEM_SLOTS: dict[str, dict[tuple[int, str], _Slot]] = {
 # (plan_model._render_tasks). Falls back to a title-cased form of the system id.
 _SYSTEM_STREAM: dict[str, str] = {
     "workday": "Workday",
+}
+
+# The skill that owns a system's lifecycle phases, named in task descriptions.
+_SYSTEM_LIFECYCLE: dict[str, str] = {
+    "workday": "/connect-workday",
 }
 
 
@@ -362,6 +363,7 @@ class SetupTask:
     consumes: list[str] = field(default_factory=list)
     command: str | None = None
     stream: str = ""
+    phases: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -377,6 +379,7 @@ class SetupTask:
             "groupTitle": self.group_title,
             "stepIds": list(self.step_ids),
             "gates": list(self.gates),
+            "phases": list(self.phases),
             "rawRoleLabels": list(self.raw_role_labels),
             "produces": list(self.produces),
             "consumes": list(self.consumes),
@@ -413,13 +416,14 @@ def _step_range(step_ids: list[str]) -> str:
 
 
 def _role_notes(raw_labels: list[str]) -> str:
-    """Surface grounding nuance carried in the raw labels (consent escalation,
-    an SME collaborator) so it survives into the description."""
+    """Surface grounding nuance carried in the raw labels (a conditional consent
+    administrator, extra access the role needs) so it survives into the
+    description."""
     notes: list[str] = []
     joined = " ".join(raw_labels).lower()
-    if "consent-capable" in joined:
+    if "consent" in joined:
         notes.append(
-            "admin consent may also need Privileged Role Administrator or Global Administrator"
+            "involve a separate consent-capable administrator only if tenant policy prevents admin consent"
         )
     for label in raw_labels:
         m = re.search(r"\(\+\s*(?P<who>[^)]+?)\)", label)
@@ -445,6 +449,10 @@ def _build_task(
             if (m := re.match(r"[a-z]+", it.gate.strip().lower()))
         }
     )
+    phases: list[str] = []
+    for it in items:
+        if it.phase and it.phase not in phases:
+            phases.append(it.phase)
     raw_labels: list[str] = []
     for it in items:
         if it.role_label and it.role_label not in raw_labels:
@@ -469,16 +477,23 @@ def _build_task(
 
     notes = _role_notes(raw_labels)
     grounding = (
-        f"Grounded in setup/{system}/tasks.md group {group_index} "
-        f"({group_title}) steps {_step_range(step_ids)}."
+        f"Grounded in planner/systems/{system}.md group {group_index} "
+        f"({group_title}) steps {_step_range(step_ids)}"
     )
+    if phases:
+        owner = _SYSTEM_LIFECYCLE.get(system)
+        noun = "phase" if len(phases) == 1 else "phases"
+        lead = f"{owner} {noun}" if owner else noun.capitalize()
+        grounding += f"; {lead}: {', '.join(phases)}"
+    grounding += "."
     role_line = (
-        f"Checklist role: {grounded.grounded_display}{notes}; "
+        f"Reference role: {grounded.grounded_display}{notes}; "
         f"attestable role: {grounded.attestable_display}."
     )
     if not grounded.mapped:
         role_line += " No attestable role fits — assign a person directly."
-    description = f"{how}. {grounding} {role_line}"
+    # Reference summaries are full sentences; drop their period before joining.
+    description = f"{how.rstrip(' .')}. {grounding} {role_line}"
 
     stream_display = _SYSTEM_STREAM.get(system, system.replace("-", " ").title())
 
@@ -500,18 +515,19 @@ def _build_task(
         consumes=consumes,
         command=command,
         stream=stream_display,
+        phases=phases,
     )
 
 
 def decompose(system: str, items: list[ChecklistItem]) -> list[SetupTask]:
-    """Group checklist items by (group, grounded role) — the role boundary — and
-    emit one grounded, attestable-mapped Task per partition, in checklist order."""
+    """Group reference steps by (group, grounded role) — the role boundary — and
+    emit one grounded, attestable-mapped Task per partition, in reference order."""
     slots = _SYSTEM_SLOTS.get(system, {})
     ordered = sorted(items, key=lambda it: it.step_order)
 
     # Preserve first-seen order of each (group, grounded-role) partition, and
     # remember which grounded role opened each group (its "primary" role) so a
-    # minority role (e.g. the firewall step) titles itself from its own item.
+    # minority role in a mixed group titles itself from its own first step.
     partitions: dict[tuple[int, str], list[ChecklistItem]] = {}
     group_primary: dict[int, str] = {}
     order: list[tuple[int, str]] = []
@@ -545,19 +561,20 @@ def decompose(system: str, items: list[ChecklistItem]) -> list[SetupTask]:
 
 
 def checklist_path(system: str) -> Path:
-    return _SOLUTION_ROOT / "src" / "skills" / "setup" / system / "tasks.md"
+    """Path of a system's planning reference."""
+    return _SOLUTION_ROOT / "src" / "skills" / "planner" / "systems" / f"{system}.md"
 
 
 def system_setup_tasks(system: str, skip_foundation: bool = False) -> list[SetupTask]:
-    """Read ``setup/<system>/tasks.md`` and decompose it into grounded Tasks.
+    """Read ``planner/systems/<system>.md`` and decompose it into grounded Tasks.
 
-    Raises ``FileNotFoundError`` when the system has no setup checklist (today
-    only ``workday`` ships one under ``src/skills/setup/``).
+    Raises ``FileNotFoundError`` when the system has no planning reference
+    (today only ``workday`` ships one under ``src/skills/planner/systems/``).
     """
     path = checklist_path(system)
     if not path.is_file():
         raise FileNotFoundError(
-            f"no setup checklist for system {system!r} (expected {path})"
+            f"no planning reference for system {system!r} (expected {path})"
         )
     items = parse_setup_checklist(path.read_text(encoding="utf-8"))
     tasks = decompose(system, items)
