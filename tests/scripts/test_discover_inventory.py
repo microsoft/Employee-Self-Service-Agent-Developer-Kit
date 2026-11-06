@@ -21,6 +21,7 @@ rule does not apply to the kit's pure-logic helpers.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -481,3 +482,41 @@ class TestCapabilityTelemetry:
         monkeypatch.chdir(tmp_path)
 
         assert di.main(list(self._ARGV)) == 0
+
+
+class TestUnchangedRerun:
+    """A rerun over an unchanged tenant must not empty the results or the mirror.
+
+    The crawler skips the sync when its payload already matches the service, so
+    nothing passes through the recorder that both outputs are built from. Unless the
+    bridge records that confirmed payload, the run lists no resources and the local
+    mirror retires every row it holds.
+    """
+
+    def test_an_unchanged_rerun_keeps_every_row_active(self, tmp_path, monkeypatch):
+        from tenant_inventory_discovery.in_memory_inventory import (
+            InMemoryInventoryClient,
+        )
+
+        # One store across both runs, standing in for WeveNova. --local-only builds a
+        # fresh empty store per run, so its reruns are never unchanged.
+        service = InMemoryInventoryClient()
+        monkeypatch.setattr(
+            di, "_build_inventory_client", lambda *_a, **_k: (service, "mcp:test", None)
+        )
+        monkeypatch.chdir(tmp_path)
+        results = tmp_path / "results.json"
+        mirror = tmp_path / "inventory.json"
+        argv = ["--tenant-id", "demo-tenant", "--demo", "--quiet"]
+        argv += ["--json-out", str(results), "--inventory-out", str(mirror)]
+
+        assert di.main(list(argv)) == 0
+        first = json.loads(results.read_text(encoding="utf-8"))
+        assert di.main(list(argv)) == 0
+        second = json.loads(results.read_text(encoding="utf-8"))
+
+        assert second["sync"]["unchanged"]  # the skipped-sync path, not a second write
+        assert second["discovered"] == first["discovered"]
+        doc = json.loads(mirror.read_text(encoding="utf-8"))
+        states = {rec["state"] for recs in doc["resources"].values() for rec in recs}
+        assert states == {"Active"}

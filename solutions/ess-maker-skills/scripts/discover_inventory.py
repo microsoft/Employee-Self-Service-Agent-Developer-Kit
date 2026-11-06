@@ -737,6 +737,11 @@ def main(argv=None) -> int:
             result = _summary_to_dict(summary)
             result["fatalError"] = str(exc)
         else:
+            if summary.sync_unchanged:
+                # The skipped sync sent nothing for the recorder to capture, yet the
+                # service provably holds this payload. Record it before the results and
+                # the mirror read the recorder, or both would show an empty tenant.
+                inventory.record_unchanged(summary.payload)
             result = _summary_to_dict(summary)
     finally:
         progress.stop()
