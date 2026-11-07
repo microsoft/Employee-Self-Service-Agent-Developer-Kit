@@ -128,7 +128,9 @@ def test_topic_save_acknowledges_captured_content_not_concurrent_disk_edit(tmp_p
 
     def save(selected, **kwargs):
         (root / "topics" / "A.mcs.yml").write_text("later edit", encoding="utf-8")
-        return {"verifiedComponents": 1, "components": [{"id": "topic-a"}]}
+        return {"verifiedComponents": 1, "components": [{
+            "id": "topic-a", "schemaName": "agent.topic.A", "dialog": {"submitted": True},
+        }]}
 
     client.update_dialog_components.side_effect = save
     result = topic_authoring.save_workspace_topic_updates(
@@ -144,13 +146,16 @@ def test_topic_save_acknowledges_captured_content_not_concurrent_disk_edit(tmp_p
 def test_local_ack_failure_keeps_known_remote_result_and_cause(tmp_path, monkeypatch):
     root = _topic_workspace(tmp_path / "agent")
     client = Mock()
-    known = {"verifiedComponents": 1, "components": [{"id": "topic-a"}]}
+    known = {"verifiedComponents": 1, "components": [{
+        "id": "topic-a", "schemaName": "agent.topic.A", "dialog": {},
+    }]}
     client.update_dialog_components.return_value = known
     cause = PermissionError("Baseline is locked")
     monkeypatch.setattr(topic_authoring, "acknowledge_files", Mock(side_effect=cause))
     with pytest.raises(topic_authoring.ComponentEditError) as error:
         topic_authoring.save_workspace_topic_updates(client, root, [{
             "path": "topics/A.mcs.yml", "submittedYaml": "submitted", "dialog": {},
+            "componentId": "topic-a", "schemaName": "agent.topic.A",
         }])
     assert error.value.__cause__ is cause
     assert error.value.evidence["remoteResult"] == known
@@ -189,8 +194,12 @@ def test_scoped_cli_retains_known_remote_result_when_acknowledgement_fails(
     monkeypatch.setattr(push, "_minimalbot_topic_update_plan", lambda *args, **kwargs: [{
         "displayName": "A", "path": "topics/A.mcs.yml",
         "dialog": {}, "submittedYaml": "submitted",
+        "componentId": "topic-a", "schemaName": "agent.topic.A",
     }])
-    known = {"verifiedComponents": 1, "verified": True, "writeAttempted": True}
+    known = {
+        "verifiedComponents": 1, "verified": True, "writeAttempted": True,
+        "components": [{"id": "topic-a", "schemaName": "agent.topic.A", "dialog": {}}],
+    }
     client.update_dialog_components.return_value = known
     cause = PermissionError("Baseline is locked")
     monkeypatch.setattr(topic_authoring, "acknowledge_files", Mock(side_effect=cause))
