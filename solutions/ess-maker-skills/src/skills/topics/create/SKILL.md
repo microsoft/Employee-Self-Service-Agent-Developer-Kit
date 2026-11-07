@@ -2,7 +2,7 @@
 
 Create one ordinary Copilot Studio topic in the selected editable Dev agent. The normal output is a `.mcs.yml` draft followed by an approved native save. Do not activate or publish as a save side effect.
 
-Read [experience-contract.md](../experience-contract.md) before interacting with the maker. Use its Create summary, short Push topic to agent / Keep as draft control, topic outcome heads, authorization rules and state-aware testing continuation. Keep requirements and revisions in normal chat; do not paraphrase fixed copy or put the summary inside the question.
+Read [experience-contract.md](../experience-contract.md) before interacting with the maker. Use its Create summary, initial routing-conflict decision when applicable, otherwise the short Push topic to agent / Keep as draft control, topic outcome heads, authorization rules and state-aware testing continuation. Keep requirements and revisions in normal chat; do not paraphrase fixed copy or put the summary inside the question.
 
 ## Boundaries
 
@@ -53,13 +53,13 @@ Assess alignment across:
 
 If the read fails, report alignment as unverified and pause advisably. Offer best-effort testing/browser collaboration through the topic-test owner only when `scripts/native_topic_test.py` is installed and its supported conditions hold; do not claim an automated browser instruction reader.
 
-When a matching instruction change is useful, edit only the desired instruction section in `{agent.folder}/agent.mcs.yml`. Preview it separately:
+When the maker selects Resolve the routing conflict in the Agent Instructions, or the correction is already explicitly authorized, edit only the desired instruction section in `{agent.folder}/agent.mcs.yml`. Do not prepare it merely because a topic is being authored. Preview it separately:
 
 ```powershell
 python scripts\agent_instructions.py update --draft "{agent.folder}\agent.mcs.yml" --expected ".local\topic-authoring\instructions-before.json" --output ".local\topic-authoring\instructions-preview.json"
 ```
 
-Ordinary topic and instruction changes require separate approvals. A known mismatch is advisory: explain its issue, practical effect and suggested action in Notes, and allow a deliberate topic-only save while reporting unresolved alignment. An unchanged approved Push batch or explicitly authorized in-scope debugging objective supplies its scoped consent as defined in the shared experience contract.
+Ordinary topic and instruction changes require separate approvals. A known mismatch is advisory: explain its issue, likely execution impact and separate suggested action under Routing Conflicts, and offer the shared initial routing-conflict decision before Push. Allow a deliberate topic-only save while reporting unresolved alignment. Use the shared targeted instruction-change preview and exact two-component review before saving either proposed change. An unchanged approved Push batch or explicitly authorized in-scope debugging objective supplies its scoped consent as defined in the shared experience contract.
 
 ## 4. Preview and approve the topic save
 
@@ -69,9 +69,9 @@ Run without `--yes`:
 python scripts\topic_authoring.py create --draft "{agent.folder}\topics\{ExactFileStem}.mcs.yml" --display-name "{Display name}" --description "{Description}" --output ".local\topic-authoring\topic-preview.json"
 ```
 
-Render the shared Create summary with the exact submitted behavior and relevant advisories in Notes. Explain that creation is inactive and unpublished. Follow it with the separate Push topic to agent / Keep as draft control unless the unchanged operation already has scoped batch/debugging approval.
+Render the shared Create summary with the exact submitted behavior and applicable Notes and Routing Conflicts sections. Explain that creation is inactive and unpublished. With a known instruction-routing conflict, use the initial Resolve the routing conflict in the Agent Instructions / Push topic anyway / Keep as draft decision. Otherwise use the separate Push topic to agent / Keep as draft control. Reuse unchanged scoped batch/debugging approval rather than asking again.
 
-Keep as draft performs no remote save and uses **Draft kept locally. Agent unchanged.** Changed drafts require a new preview, but the preview JSON is not a save token. Material changes outside the approved scope require a new summary and approval.
+Keep as draft performs no remote save and uses **Draft kept locally. Agent unchanged.** only for a draft-only outcome. If another approved component was saved, use the shared composed report with actual per-component results. Changed drafts require a new preview, but the preview JSON is not a save token. Material changes outside the approved scope require a new summary and approval.
 
 ## 5. Save and report authoritative results
 
@@ -89,10 +89,10 @@ After the applicable instruction approval, including valid scoped batch/debuggin
 python scripts\agent_instructions.py update --draft "{agent.folder}\agent.mcs.yml" --expected ".local\topic-authoring\instructions-before.json" --yes --output ".local\topic-authoring\instructions-result.json"
 ```
 
-Use the shared truthful topic outcome head and factual trailer, distinguishing topic and instruction results. In composed Push, return those facts to its one results report instead of stacking owner reports. Preserve known remote success when local result-file or bookkeeping output fails. Do not blind-retry an uncertain create.
+Select the presentation from the approval scope. A topic and routing correction approved together use the shared composed Push report, including the complete instruction-save statement in its row and the conflict assessment and testing readiness in the trailer. Do not stack topic and instruction outcome blocks. Outside composed Push, use the shared truthful topic or instruction outcome block with its full statement and paragraph structure. A successful instruction save is not proof of topic execution. Preserve known remote success when local result-file or bookkeeping output fails. Do not blind-retry an uncertain create.
 
 ## 6. Testing and evaluation handoff
 
-After a confirmed push, follow the shared state-aware testing continuation. If testing was already requested and `scripts/native_topic_test.py` is installed, carry the selected topic, intended behavior and authorized editable scope into `src/skills/topics/test/SKILL.md` without repeating the testing offer or topic selection. An inactive topic still requires explicit activation consent; honor no-activation and test-only requests. If the testing capability is unavailable, report conversation acceptance as pending. Do not publish.
+After a confirmed push, honor the initial routing-conflict decision. Only for a newly discovered or materially changed conflict, follow the shared combined routing-conflict/testing decision; otherwise use the ordinary state-aware testing continuation. Push topic anyway carries the declined correction into later authorized testing, but does not itself authorize testing. A test-anyway choice enters testing directly with that exclusion; do not introduce another testing offer or repair the declined conflict. If testing was already requested and `scripts/native_topic_test.py` is installed, carry the selected topic, intended behavior and authorized editable scope into `src/skills/topics/test/SKILL.md` without repeating the testing offer or topic selection. An inactive topic still requires explicit activation consent; honor no-activation and test-only requests. If the testing capability is unavailable, report conversation acceptance as pending. Do not publish.
 
 At the end of an authoring iteration, identify relevant existing evaluation cases across sets, including routing, negative, fallback, and cross-topic impact. Do not regenerate evaluations automatically or repeat this review after every edit. For separately requested evaluation work, use `src/skills/evaluations/dispatcher/SKILL.md`.

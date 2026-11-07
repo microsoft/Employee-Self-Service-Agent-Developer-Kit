@@ -148,7 +148,10 @@ def test_shared_experience_preserves_approved_copy_and_template_boundary():
         "> **Testing paused.**\n>\n> Let me know when the test browser is ready.",
         "> **Testing stopped.**",
     ):
-        assert literal in contract
+        if literal.startswith("> |"):
+            assert " ".join(literal.split()) in " ".join(contract.split())
+        else:
+            assert literal in contract
     quoted = "\n".join(line for line in contract.splitlines() if line.startswith(">"))
     for instruction in (
         "Keep instructions, variable definitions",
@@ -181,6 +184,26 @@ def test_push_uses_one_inventory_scoped_consent_and_composed_results():
         "### Push statuses:", 1
     )[0]
     assert "> [Full draft]" not in comparison
+    assert (
+        "> **Not included**\n>\n> **{Component type}**\n>\n"
+        "> - {Component name}: {Exclusion reason}"
+    ) in comparison
+    assert "even when those entries appeared earlier in the conversation" in comparison
+    assert "one named bullet with its reason per component" in contract
+    assert "parsed instruction section with the baseline separately from metadata" in push
+    assert "unchanged instructions out of pending and excluded changes" in push
+    assert "rename as Display name" in push
+
+
+def test_already_satisfied_topic_outcome_does_not_claim_a_new_push():
+    contract = _read("src/skills/topics/experience-contract.md")
+    update = _read("src/skills/topics/update/SKILL.md")
+    assert "**Topic already up to date. No push needed.**" in contract
+    assert "`writeAttempted: false`" in contract
+    assert "`updatedComponents: 0`" in contract
+    assert "Do not attribute the existing change to this operation." in contract
+    assert "no-write outcome" in update
+    assert "verified saved content" in update
 
 
 def test_advisories_have_structured_issue_effect_and_own_action_line():
@@ -196,6 +219,120 @@ def test_advisories_have_structured_issue_effect_and_own_action_line():
         "test or change and its purpose."
     ) in contract
     assert "Ordinary factual notes retain their existing form." in contract
+
+
+def test_initial_routing_conflict_decision_precedes_push_and_preserves_exact_scope():
+    contract = _read("src/skills/topics/experience-contract.md")
+    initial = contract.split("### Initial routing-conflict decision\n", 1)[1].split(
+        "### Authorization and recovery\n", 1
+    )[0]
+    assert (
+        "> **Resolve the routing conflict in the Agent Instructions** / "
+        "**Push topic anyway** / **Keep as draft**"
+    ) in initial
+    assert "before any topic or instruction push" in initial
+    assert "does not approve a topic push, instruction push, activation or testing" in initial
+    assert "Review the topic draft and targeted instruction correction together" in initial
+    assert "exclude unrelated pending edits" in initial
+    assert "pause dependent work" in initial
+    assert "Push topic anyway approves only the displayed topic save" in initial
+    assert "declined routing correction as an explicit exclusion" in initial
+    assert "Do not immediately offer the same resolution decision again" in initial
+    assert "do not offer runnable testing of unsaved topic changes" in initial
+
+
+def test_new_conflict_after_push_combines_state_aware_testing_without_instruction_consent():
+    contract = _read("src/skills/topics/experience-contract.md")
+    follow_up = contract.split(
+        "### Combined routing-conflict and testing follow-up\n", 1
+    )[1].split("### Targeted instruction-change preview and approval\n", 1)[0]
+    assert (
+        "> **How would you like to continue with {Topic title}?**\n>\n"
+        "> **Resolve the routing conflict in the Agent Instructions** / "
+        "**Not now, Activate and test anyway.**"
+    ) in follow_up
+    assert "**Not now, Test anyway.**" in follow_up
+    assert "does not approve an instruction push, activation or testing" in follow_up
+    assert "Confirm authoritative Active state before sending a test message" in follow_up
+    assert "do not silently repair it during testing" in follow_up
+    assert "scoped batch/debugging consent rules" in follow_up
+    assert "deliberate topic-only save" in follow_up
+    assert "only when a routing conflict is newly discovered or materially changed" in follow_up
+    assert "Do not repeat the resolution choice for the same conflict" in follow_up
+    assert "Prepare instruction change for review" not in contract
+    assert "> **Routing Conflicts**" in follow_up
+    assert "This routing conflict will likely block topic execution." in follow_up
+    assert "Check the installed testing capability before offering a runnable test" in follow_up
+    testing = _read("src/skills/topics/test/SKILL.md")
+    assert "does not include automated conversation testing" in testing
+    assert "Do not display runnable testing or activation choices" in testing
+    assert not (SOLUTION / "scripts" / "native_topic_test.py").exists()
+
+
+def test_instruction_correction_has_separate_preview_approval_and_truthful_outcomes():
+    contract = _read("src/skills/topics/experience-contract.md")
+    preview = contract.split(
+        "### Targeted instruction-change preview and approval\n", 1
+    )[1].split("### Instruction-push outcomes and testing\n", 1)[0]
+    assert "> **Current wording**" in preview
+    assert "> **Proposed wording**" in preview
+    assert "> **Push instruction change** / **Keep as draft**" in preview
+    assert "It does not authorize activation, testing or publication." in preview
+    assert "concurrency and readback safeguards" in preview
+    assert "**Instruction draft kept locally.**" in preview
+    assert "Agent instructions already up to date." in contract
+    assert "Instruction push could not be confirmed." in contract
+    assert "Topic execution has not yet been verified." in contract
+    assert "complete `{Verified instruction-save result}` statement" in contract
+
+
+def test_draft_and_partial_instruction_results_do_not_assume_a_topic_push():
+    contract = _read("src/skills/topics/experience-contract.md")
+    preview = contract.split(
+        "### Targeted instruction-change preview and approval\n", 1
+    )[1].split("### Instruction-push outcomes and testing\n", 1)[0]
+    outcomes = contract.split("### Instruction-push outcomes and testing\n", 1)[1].split(
+        "## ", 1
+    )[0]
+    assert "{topic_save_state}" in preview
+    assert "The new topic remains local and has not been pushed." in preview
+    assert "The proposed changes remain local; distinguish them from the existing saved topic." in preview
+    assert "review the topic and isolated instruction correction together" in preview
+    assert (
+        "**Summarize each change**, **Push all listed changes**, "
+        "**Choose what to push**, and **Cancel**"
+    ) in preview
+    assert "**Only when the proposed topic content is already authoritatively saved:**" in preview
+    assert "Do not offer runnable testing of unsaved topic changes" in preview
+    assert "The topic was already pushed." not in preview
+    assert "Report the actual topic-save state" in outcomes
+    assert "verified already current" in outcomes
+    assert "topic Push is still pending" in outcomes
+    assert "instruction update saves or activates the topic" in outcomes
+    assert "explicitly requests testing despite the remaining conflict" in outcomes
+    assert "Do not automatically repeat resolution for the same conflict" in outcomes
+    assert "For partial saves, use the composed report" in contract
+
+
+def test_topic_and_push_handoffs_honor_initial_decisions_and_limit_fallbacks():
+    for owner in ("create", "update"):
+        guidance = _read(f"src/skills/topics/{owner}/SKILL.md")
+        assert "initial routing-conflict decision" in guidance
+        assert "Resolve the routing conflict in the Agent Instructions / Push topic anyway / Keep as draft" in guidance
+        assert "newly discovered or materially changed conflict" in guidance
+        assert "does not itself authorize testing" in guidance
+    for entry in ("create", "update", "push"):
+        prompt = " ".join(_read(f".github/prompts/{entry}.prompt.md").split())
+        assert "initial routing-conflict decision" in prompt
+        assert "combined routing-conflict/testing decision" in prompt
+        assert "newly discovered or materially changed conflict" in prompt
+    contract = _read("src/skills/topics/experience-contract.md")
+    composed = contract.split("### Composed Push report:", 1)[1].split(
+        "## Topic testing continuation", 1
+    )[0]
+    assert "honor the initial routing-conflict decision" in composed
+    assert "Only for a newly discovered or materially changed conflict" in composed
+    assert "Do not offer runnable testing of topic changes left local" in composed
 
 
 def test_readiness_message_has_maker_actions_and_a_separate_readiness_control():
@@ -292,6 +429,9 @@ def test_authoring_carries_context_and_honors_scoped_debugging():
     contract = _read("src/skills/topics/experience-contract.md")
     assert "Topic selection is a fallback, not a mandatory question" in update
     assert "discovered titles with short purposes plus free text" in update
+    assert "re-render the change-focused Update summary from step 2" in update
+    assert "Do not reduce the re-review to conflicting reply excerpts alone." in update
+    assert "the freshly read current wording versus the proposal" in contract
     assert "A test-only request must not silently authorize edits" in contract
     assert (
         "repeated necessary fixes, pushes and retests do not each need fresh approval"
