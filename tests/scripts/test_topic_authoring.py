@@ -61,11 +61,26 @@ def topic_cli(monkeypatch, tmp_path, fake_tenant_id):
         "createdComponents": 1,
         "verifiedComponents": 1,
     }
-    transport.update_dialog_components.return_value = {
-        "updatedComponents": 1,
-        "verifiedComponents": 1,
-        "blockingDiagnostics": [],
-    }
+    def update_components(updates, **_kwargs):
+        return {
+            "updatedComponents": len(updates),
+            "verifiedComponents": len(updates),
+            "verified": True,
+            "writeAttempted": True,
+            "blockingDiagnostics": [],
+            "components": [
+                {
+                    **copy.deepcopy(next(
+                        component for component in components
+                        if component["id"] == update["componentId"]
+                    )),
+                    "dialog": copy.deepcopy(update["dialog"]),
+                }
+                for update in updates
+            ],
+        }
+
+    transport.update_dialog_components.side_effect = update_components
     connect = Mock(return_value=(client, target))
     monkeypatch.setattr(authoring, "connect_selected_dev_workspace", connect)
     monkeypatch.setattr(
@@ -404,7 +419,7 @@ def test_update_sends_captured_yaml_with_fresh_read_baseline(topic_cli):
 
 
 def test_update_acknowledges_capture_not_later_disk_edit(topic_cli):
-    _register_existing(topic_cli)
+    component = _register_existing(topic_cli)
     before = topic_cli.root / "before.json"
     authoring.main(
         ["read", "--topic", str(topic_cli.draft), "--output", str(before)]
@@ -419,6 +434,7 @@ def test_update_acknowledges_capture_not_later_disk_edit(topic_cli):
             "updatedComponents": 1,
             "verifiedComponents": 1,
             "blockingDiagnostics": [],
+            "components": [{**component, "dialog": submitted}],
         }
 
     topic_cli.transport.update_dialog_components.side_effect = update
@@ -441,6 +457,115 @@ def test_update_acknowledges_capture_not_later_disk_edit(topic_cli):
     )
     assert json.loads(acknowledged.read_text(encoding="utf-8")) == submitted
     assert json.loads(topic_cli.draft.read_text(encoding="utf-8")) == later
+
+
+@pytest.mark.parametrize("operation", ["update", "workspace"])
+@pytest.mark.parametrize("later_edit", [False, True])
+def test_merged_save_acknowledges_readback_and_preserves_later_draft(
+    topic_cli, monkeypatch, capsys, operation, later_edit,
+):
+    topic_cli.dialog["beginDialog"]["actions"].append({
+        "$kind": "SendActivity", "id": "unrelated-action", "activity": "Helpful note.",
+    })
+    topic_cli.draft.write_text(json.dumps(topic_cli.dialog), encoding="utf-8")
+    component = _register_existing(topic_cli)
+    before = topic_cli.root / "before.json"
+    authoring.main(["read", "--topic", str(topic_cli.draft), "--output", str(before)])
+    capsys.readouterr()
+
+    desired = copy.deepcopy(component["dialog"])
+    desired["modelDescription"] = "Approved description."
+    submitted = json.dumps(desired)
+    topic_cli.draft.write_text(submitted, encoding="utf-8")
+    remote = copy.deepcopy(component)
+    remote["dialog"]["beginDialog"]["actions"].pop()
+    saved = copy.deepcopy(remote)
+    saved["dialog"]["modelDescription"] = desired["modelDescription"]
+    later = {**desired, "modelDescription": "Later pending description."}
+
+    client = native.MinimalBotEvaluationClient(
+        topic_cli.target["environment"]["id"], topic_cli.target["agent"]["id"],
+        topic_cli.target["environment"]["tenantId"],
+    )
+    client.read_components = Mock(side_effect=[
+        {"changeToken": "before", "botComponentChanges": [{"component": remote}]},
+        {"changeToken": "after", "botComponentChanges": [{"component": saved}]},
+    ])
+
+    def request(*_args, **_kwargs):
+        if later_edit:
+            topic_cli.draft.write_text(json.dumps(later), encoding="utf-8")
+        return SimpleNamespace(status_code=200, headers={}), {}
+
+    client._request = Mock(side_effect=request)
+    if operation == "update":
+        monkeypatch.setattr(authoring, "_native_client", lambda *_args: client)
+        authoring.main([
+            "update", "--draft", str(topic_cli.draft), "--expected", str(before), "--yes",
+        ])
+        result = json.loads(capsys.readouterr().out)
+    else:
+        result = authoring.save_workspace_topic_updates(
+            client, topic_cli.agent_folder, [{
+                "path": "topics/CaseSensitiveName.mcs.yml",
+                "componentId": component["id"], "schemaName": component["schemaName"],
+                "expectedDialog": component["dialog"], "dialog": desired,
+                "submittedYaml": submitted,
+            }],
+            retry_on_conflict=False,
+        )
+
+    baseline = topic_cli.agent_folder / ".baseline" / "topics" / topic_cli.draft.name
+    assert json.loads(baseline.read_text(encoding="utf-8")) == saved["dialog"]
+    assert json.loads(topic_cli.draft.read_text(encoding="utf-8")) == (
+        later if later_edit else saved["dialog"]
+    )
+    assert result["reconciledComponents"] == 1
+    assert result["writeAttempted"] is True
+    assert result["components"] == [saved]
+    client._request.assert_called_once()
+
+
+@pytest.mark.parametrize("operation", ["update", "workspace"])
+def test_merged_projection_failure_preserves_remote_result_and_local_files(
+    topic_cli, monkeypatch, operation,
+):
+    component = _register_existing(topic_cli)
+    before = topic_cli.root / "before.json"
+    authoring.main(["read", "--topic", str(topic_cli.draft), "--output", str(before)])
+    saved = {**component, "dialog": {**component["dialog"], "remoteField": "preserved"}}
+    known = {
+        "updatedComponents": 1, "verifiedComponents": 1, "verified": True,
+        "writeAttempted": True, "components": [saved],
+    }
+    topic_cli.transport.update_dialog_components.side_effect = None
+    topic_cli.transport.update_dialog_components.return_value = known
+    cause = authoring.ObjectModelConverterError("Projection failed after verified save")
+    monkeypatch.setattr(authoring, "_project_topic", Mock(side_effect=cause))
+    baseline = topic_cli.agent_folder / ".baseline" / "topics" / topic_cli.draft.name
+    original = (topic_cli.draft.read_bytes(), baseline.read_bytes())
+
+    with pytest.raises(authoring.ComponentEditError) as error:
+        if operation == "update":
+            authoring.main([
+                "update", "--draft", str(topic_cli.draft),
+                "--expected", str(before), "--yes",
+            ])
+        else:
+            authoring.save_workspace_topic_updates(
+                topic_cli.transport, topic_cli.agent_folder, [{
+                    "path": "topics/CaseSensitiveName.mcs.yml",
+                    "componentId": component["id"], "schemaName": component["schemaName"],
+                    "dialog": topic_cli.dialog,
+                    "submittedYaml": topic_cli.draft.read_text(encoding="utf-8"),
+                }],
+            )
+
+    assert error.value.__cause__ is cause
+    assert error.value.evidence["remoteResult"]["components"] == [saved]
+    assert error.value.evidence["remoteResult"]["writeAttempted"] is True
+    assert (topic_cli.draft.read_bytes(), baseline.read_bytes()) == original
+    topic_cli.transport.update_dialog_components.assert_called_once()
 
 
 def test_bookkeeping_failure_retains_verified_remote_result(topic_cli, monkeypatch):

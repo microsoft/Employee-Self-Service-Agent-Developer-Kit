@@ -25,6 +25,7 @@ from minimalbot_evaluation import (
     ComponentEditError,
     MinimalBotEvaluationClient,
     MinimalBotEvaluationError,
+    _without_server_generated_fields,
     resolve_workday_dialogs,
 )
 from setup_existing_da import (
@@ -32,6 +33,7 @@ from setup_existing_da import (
     connect_selected_dev_workspace,
 )
 from workspace_state import (
+    _atomic_write_text,
     acknowledge_files,
     collect_files,
     compute_diff,
@@ -178,6 +180,52 @@ def _acknowledge_topic(
     captured_yaml: str,
 ) -> None:
     acknowledge_files(agent_folder, {relative_path: captured_yaml})
+
+
+def _acknowledge_topic_updates(
+    agent_folder: Path,
+    updates: list[dict[str, Any]],
+    result: dict[str, Any],
+) -> None:
+    content_updates = [update for update in updates if "dialog" in update]
+    if not content_updates:
+        return
+    components = result.get("components")
+    if not isinstance(components, list):
+        raise ValueError("The verified topic result contains no saved components.")
+    agent_folder = Path(agent_folder).resolve()
+    acknowledged = {}
+    replacements = []
+    for update in content_updates:
+        draft_path, relative_path = _topic_path(
+            agent_folder, agent_folder / update["path"],
+        )
+        matches = [
+            component for component in components
+            if isinstance(component, dict)
+            and str(component.get("id") or "").casefold()
+            == str(update["componentId"]).casefold()
+        ]
+        if (
+            len(matches) != 1
+            or str(matches[0].get("schemaName") or "").casefold()
+            != str(update["schemaName"]).casefold()
+            or not isinstance(matches[0].get("dialog"), dict)
+        ):
+            raise ValueError("The verified result does not identify one saved topic.")
+        captured_yaml = update["submittedYaml"]
+        verified_yaml = captured_yaml
+        if _without_server_generated_fields(matches[0]["dialog"]) != (
+            _without_server_generated_fields(update["dialog"])
+        ):
+            verified_yaml = _project_topic(matches[0]).replace("\r\n", "\n")
+            replacements.append((draft_path, captured_yaml, verified_yaml))
+        acknowledged[relative_path] = verified_yaml
+
+    for draft_path, captured_yaml, verified_yaml in replacements:
+        if draft_path.read_text(encoding="utf-8") == captured_yaml:
+            _atomic_write_text(draft_path, verified_yaml)
+    acknowledge_files(agent_folder, acknowledged)
 
 
 def _register_created_topic(
@@ -396,21 +444,19 @@ def plan_workspace_topic_updates(
 def save_workspace_topic_updates(
     client, agent_dir, updates, *, retry_on_conflict=True,
 ):
-    """Save mapped Object Model updates and acknowledge their captured YAML."""
-    submitted = {}
+    """Save mapped updates and synchronize their verified content safely."""
     for update in updates:
         if "dialog" in update:
             if not isinstance(update.get("submittedYaml"), str) or not update.get("path"):
                 raise ValueError("Content updates require a path and captured submitted YAML.")
-            submitted[update["path"]] = update["submittedYaml"]
     result = (
         client.update_dialog_components(updates)
         if retry_on_conflict
         else client.update_dialog_components(updates, _retry_on_conflict=False)
     )
     try:
-        acknowledge_files(agent_dir, submitted)
-    except (OSError, ValueError) as exc:
+        _acknowledge_topic_updates(agent_dir, updates, result)
+    except (OSError, ValueError, ObjectModelConverterError) as exc:
         raise ComponentEditError(
             "Topic save was verified remotely, but local acknowledgement failed. "
             "Do not repeat the remote write to repair local bookkeeping.",
@@ -573,26 +619,31 @@ def main(argv: list[str] | None = None) -> int:
         result["before"] = current
         if args.yes:
             emit_capability_use("topic_update")
+            topic_update = {
+                "componentId": entry["componentId"],
+                "schemaName": entry["schemaName"],
+                "expectedDialog": expected_component["dialog"],
+                "dialog": desired_dialog,
+                "requireCleanDiagnostics": True,
+            }
             update = native.update_dialog_components(
-                [
-                    {
-                        "componentId": entry["componentId"],
-                        "schemaName": entry["schemaName"],
-                        "expectedDialog": expected_component["dialog"],
-                        "dialog": desired_dialog,
-                        "requireCleanDiagnostics": True,
-                    }
-                ],
+                [topic_update],
                 _retry_on_conflict=False,
             )
             result.update(update)
             result["saved"] = True
             try:
-                _acknowledge_topic(agent_folder, relative_path, captured_yaml)
-            except OSError as exc:
+                _acknowledge_topic_updates(
+                    agent_folder, [{
+                        **topic_update,
+                        "path": relative_path,
+                        "submittedYaml": captured_yaml,
+                    }], update,
+                )
+            except (OSError, ValueError, ObjectModelConverterError) as exc:
                 result["bookkeepingComplete"] = False
                 raise TopicBookkeepingError(
-                    "The topic update was verified, but baseline acknowledgement failed.",
+                    "The topic update was verified, but local tracking failed.",
                     {"remoteResult": result, "localError": _exception_chain(exc)},
                 ) from exc
             result["bookkeepingComplete"] = True
