@@ -344,7 +344,13 @@ When a change or assistance is needed, render:
 
 `{Current outcome and obstacle}` preserves completed work, unfinished or unobserved behavior and material uncertainty. `{Concrete tweak or next action}` addresses the actual obstacle: reconcile conflicting authoring constraints or eval intent, offer manual testing guidance for a tooling limitation, or identify a missing prerequisite or observation. These are applicable examples, not mandatory report categories. Do not hand back work that can still be performed safely within the existing authorization.
 
-Render the selected block using its quoted wording, emphasis and paragraph breaks. Link actual available evidence after the complete outcome block; omit unavailable links. Preserve material evidence limitations without adding a mandatory test ledger, regression matrix or grading claim. For pause/stop, keep the fixed acknowledgement separate and report any completed work using the appropriate outcome block.
+Render the selected block using its quoted wording, emphasis and paragraph breaks. After the complete outcome block, render:
+
+> **Evidence:** {Available evidence links}
+
+`{Available evidence links}` contains descriptive Markdown links to the selected run's existing result/report files and other relevant artifacts. Resolve paths from the operations' returned evidence locations and retained run context, including `evidenceDirectory` for native topic tests. Omit unavailable artifacts, and omit the entire Evidence line only when no relevant evidence is available. A missing screenshot does not make a saved result file unavailable.
+
+Preserve material evidence limitations without adding a mandatory test ledger, regression matrix or grading claim. For pause/stop, keep the fixed acknowledgement separate and report any completed work using the appropriate outcome block.
 
 ### Testing offers
 

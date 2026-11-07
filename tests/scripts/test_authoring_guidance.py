@@ -234,7 +234,9 @@ def test_testing_reports_and_missing_permissions_reuse_scoped_contracts():
     ) in instructions
     assert "retrieving topic results does not start new testing or authorize changes" in instructions
     assert "### Topic debugging outcome: `{topic_test_results}`" in contract
-    assert "Link actual available evidence after the complete outcome block" in contract
+    assert "> **Evidence:** {Available evidence links}" in contract
+    assert "including `evidenceDirectory` for native topic tests" in contract
+    assert "A missing screenshot does not make a saved result file unavailable." in contract
     assert "For pause/stop, keep the fixed acknowledgement separate" in contract
     assert "unfinished or unobserved behavior and material uncertainty" in contract
     assert (

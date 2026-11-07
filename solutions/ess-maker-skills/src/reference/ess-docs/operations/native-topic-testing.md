@@ -70,6 +70,8 @@ Prepare a fresh window when the existing one is unavailable or unusable, after i
 
 ### Browser refresh signals
 
+If expected controls are not visible, try CDP `Emulation.clearDeviceMetricsOverride` on the selected test page, then recheck visibility.
+
 Consider refreshing when:
 
 - Replies still reflect older content after a verified save and new conversation.
