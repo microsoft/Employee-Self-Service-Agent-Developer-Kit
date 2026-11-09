@@ -789,4 +789,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from adk_telemetry import script_error_boundary
+
+    with script_error_boundary("reconcile_setup_agent"):
+        sys.exit(main())
