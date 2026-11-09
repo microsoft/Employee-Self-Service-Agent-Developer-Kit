@@ -285,8 +285,9 @@ def _try_me_company_name_lookup(app, account) -> str:
 class GraphClient:
     """Lightweight Microsoft Graph client with MSAL interactive auth."""
 
-    def __init__(self, tenant_id: str):
+    def __init__(self, tenant_id: str, *, strict_reads: bool = False):
         self.tenant_id = tenant_id
+        self.strict_reads = strict_reads
         self._token: str | None = None
         self.signed_in_username: str | None = None
 
@@ -373,8 +374,12 @@ class GraphClient:
         url = f"{GRAPH_BASE}{path}"
         resp = _SESSION.get(url, headers=self.headers, params=params, timeout=30)
         if resp.status_code == 403:
+            if self.strict_reads:
+                raise PermissionError(f"Graph returned HTTP 403 on {path}.")
             return {"_error": "insufficient_permissions", "_status": 403}
         if resp.status_code == 401:
+            if self.strict_reads:
+                resp.raise_for_status()
             return {"_error": "token_expired", "_status": 401}
         resp.raise_for_status()
         return resp.json()
@@ -400,18 +405,40 @@ class GraphClient:
         """
         items: list = []
         url = f"{GRAPH_BASE}{path}"
+        seen_urls: set[str] = set()
         while url:
+            if self.strict_reads:
+                if url in seen_urls:
+                    raise ValueError("Graph returned a repeated collection continuation.")
+                seen_urls.add(url)
             resp = _SESSION.get(url, headers=self.headers, params=params, timeout=30)
             if resp.status_code in (401, 403):
-                if raise_on_permission_error:
+                if self.strict_reads and resp.status_code == 401:
+                    resp.raise_for_status()
+                if raise_on_permission_error or self.strict_reads:
                     raise PermissionError(
                         f"Graph returned HTTP {resp.status_code} on {path}."
                     )
                 return items  # partial results
             resp.raise_for_status()
             data = resp.json()
+            if self.strict_reads and (
+                not isinstance(data, dict) or not isinstance(data.get("value"), list)
+                or any(not isinstance(row, dict) for row in data["value"])
+            ):
+                raise ValueError("Graph returned an invalid resource collection.")
             items.extend(data.get("value", []))
             url = data.get("@odata.nextLink")
+            if self.strict_reads and url is not None:
+                from urllib.parse import urlsplit
+
+                expected, actual = urlsplit(f"{GRAPH_BASE}{path}"), urlsplit(str(url))
+                if (
+                    not isinstance(url, str) or not url
+                    or actual.scheme != expected.scheme or actual.netloc != expected.netloc
+                    or actual.path != expected.path or actual.fragment
+                ):
+                    raise ValueError("Graph returned an invalid collection continuation.")
             params = None  # nextLink is fully qualified
         return items
 

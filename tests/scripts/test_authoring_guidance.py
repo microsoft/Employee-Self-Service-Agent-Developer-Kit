@@ -64,17 +64,17 @@ def test_eval_driven_aliases_are_thin_and_scenario_lifecycle_is_retired():
     ).exists()
 
 
-def test_flow_and_retired_workday_routes_are_notice_only():
+def test_flow_routes_are_notice_only_and_retired_workday_route_is_removed():
     create = _read("src/skills/workflows/create/SKILL.md")
     update = _read("src/skills/workflows/update/SKILL.md")
-    workday = _read("src/skills/setup/workday/create-new-topic.md")
 
     for guidance in (create, update):
         assert "outside ADK" in guidance
         assert "Do not" in guidance
         assert "runtime testing" in guidance
-    assert "does not author custom topics or template configurations" in workday
-    assert "src/skills/setup/workday-da/" in workday
+    retired_route = "src/skills/setup/workday/create-new-topic.md"
+    assert not (SOLUTION / retired_route).exists()
+    assert retired_route not in _read("src/skills/topics/create/SKILL.md")
 
 
 def test_evaluation_handoff_uses_remote_context_without_overwriting_drafts():

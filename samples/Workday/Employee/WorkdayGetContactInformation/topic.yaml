@@ -39,15 +39,6 @@ beginDialog:
 
   actions:
     - kind: BeginDialog
-      id: uzpKxp
-      displayName: Check user access
-      input:
-        binding:
-          EmployeeName: =Topic.EmployeeName
-
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemAccessCheck
-
-    - kind: BeginDialog
       id: Z6efSa
       displayName: Fetch Work Contact Information from Workday
       input:

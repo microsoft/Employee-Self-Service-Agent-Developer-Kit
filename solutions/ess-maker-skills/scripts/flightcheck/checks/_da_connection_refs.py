@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..agent_scope import active_agent_bot_id
+from ..agent_scope import active_agent_bot_id, configured_agents
 
 
 WORKDAY_SOAP_CONNECTOR_SUFFIX = "/apis/shared_workdaysoap"
@@ -44,14 +44,10 @@ WORKDAY_SOAP_CONNECTOR_SUFFIX = "/apis/shared_workdaysoap"
 def agent_bot_ids(config: dict[str, Any]) -> list[str]:
     """Return configured bot IDs from multi-agent and single-agent config."""
     bot_ids: list[str] = []
-    for agent in config.get("agents", []) or []:
-        bid = (agent or {}).get("botId")
+    for agent in configured_agents(config):
+        bid = agent.get("botId")
         if isinstance(bid, str) and bid.strip():
             bot_ids.append(bid.strip())
-    single = (config.get("agent") or {}).get("botId")
-    if isinstance(single, str) and single.strip():
-        bot_ids.append(single.strip())
-
     seen: set[str] = set()
     ordered: list[str] = []
     for bot_id in bot_ids:
