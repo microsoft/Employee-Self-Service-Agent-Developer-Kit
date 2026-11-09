@@ -43,8 +43,8 @@ _DA_PRODUCT_REGISTRY = (
 _UI_FORMATTING = _SOLUTION / "src" / "reference" / "ui-formatting-guidelines.md"
 _PREPARE_FRESH_WORKSPACE = _SOLUTION / "scripts" / "prepare_fresh_workspace.py"
 _RESET_LOCAL_WORKSPACE = _SOLUTION / "scripts" / "reset_local_workspace.py"
-_WORKDAY = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
-_CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
+_WORKDAY = _SOLUTION / "src" / "skills" / "connect" / "workday" / "SKILL.md"
+_WORKDAY_ENTRY = _SOLUTION / "src" / "skills" / "connect" / "workday" / "entry.md"
 _INSTRUCTIONS = _SOLUTION / ".github" / "copilot-instructions.md"
 _SETUP_PROMPT = _SOLUTION / ".github" / "prompts" / "setup.prompt.md"
 _PROMPTS = _SOLUTION / ".github" / "prompts"
@@ -180,7 +180,7 @@ def test_setup_seeds_shared_cache_once_and_reuses_flightcheck_account() -> None:
         for line in readiness.splitlines()
         if line.startswith("python scripts/flightcheck/cli.py")
     ]
-    assert len(commands) == 4
+    assert len(commands) == 3
     assert all('--preferred-username "{SETUP_ACCOUNT}"' in line for line in commands)
     assert "including retries and rechecks" in readiness
 
@@ -678,12 +678,11 @@ def test_public_setup_does_not_configure_mcp() -> None:
     assert "materialize-defaults" not in prompt
 
 
-def test_global_and_command_gates_require_canonical_da_completion() -> None:
+def test_global_and_command_gates_require_canonical_da_foundation() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
 
     assert "`schema_version`" in instructions
     assert "equal to `4`" in instructions
-    assert "`agents` entry matching `.local/config.json`" in instructions
     assert "`connect_ready` equal to `true`" in instructions
     assert '`status` equal to `"complete"`' not in instructions
 
@@ -692,7 +691,6 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
         "create.prompt.md",
         "delete.prompt.md",
         "evaluate.prompt.md",
-        "push.prompt.md",
         "restore-template-configs.prompt.md",
         "review.prompt.md",
         "run.prompt.md",
@@ -718,7 +716,19 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
         ), path
 
     connect_prompt = (_PROMPTS / "connect.prompt.md").read_text(encoding="utf-8")
+    servicenow_entry = (
+        _PROMPTS.parents[1]
+        / "src"
+        / "skills"
+        / "connect"
+        / "servicenow"
+        / "entry.md"
+    ).read_text(encoding="utf-8")
+    assert ".local/setup/config.json" in servicenow_entry
+    assert "authoring-ready gate" in " ".join(servicenow_entry.split())
+    assert "sync-authoring-readiness" not in servicenow_entry
     assert "schema_version: 4" in connect_prompt
+    assert "`connect_ready: true`" in connect_prompt
     assert 'steps.SETUP-07.state: "done"' in connect_prompt
     assert "Do not require\n`connect_ready: true`" in connect_prompt
     assert "workspace evidence" in connect_prompt
@@ -750,6 +760,7 @@ def test_global_gate_routes_flightcheck_through_setup_evidence() -> None:
     assert "Apply the first matching state" in normalized
     assert "**Standalone FlightCheck:**" in instructions
     assert "**Canonical setup ready:**" in instructions
+    assert "**Selected DA diagnostics:**" in instructions
     assert "**Setup readiness outstanding:**" in instructions
     assert "**Workspace preparation required:**" in instructions
     assert "exact maker-facing copy" in normalized
@@ -757,7 +768,7 @@ def test_global_gate_routes_flightcheck_through_setup_evidence() -> None:
     assert "Some setup items still require attention:" in normalized
     assert "Setup needs to prepare the local agent workspace." in normalized
     assert "Collect every non-empty `failure_causes` entry" in normalized
-    assert "**Environment capacity**" in instructions
+    assert "**Environment capacity**" not in instructions
     assert "**Connections**" in instructions
     assert "**Agent content**" in instructions
     assert "keep the canonical setup IDs internal" in normalized
@@ -793,6 +804,27 @@ def test_global_gate_routes_flightcheck_through_setup_evidence() -> None:
     assert entry_contract.count("```json") == 2
 
 
+def test_da_flightcheck_entry_does_not_require_completed_connections() -> None:
+    instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
+    entry = instructions.split("#### FlightCheck entry contract", 1)[1]
+    entry = entry.split("### If canonical setup is ready", 1)[0]
+    da_entry = entry.split("**Selected DA diagnostics:**", 1)[1]
+    da_entry = " ".join(da_entry.split("**Setup readiness outstanding:**", 1)[0].split())
+    assert 'one selected Declarative Agent (`releaseLine: "da"`)' in da_entry
+    assert "canonical setup state is absent" in da_entry
+    assert "must not require `connect_ready: true`" in da_entry
+    assert "same selected target, scope and CLI as standalone execution" in da_entry
+    assert "Never borrow another agent's identity or change setup state" in da_entry
+    assert "`/flightcheck` may run only its local-files scope" not in instructions
+
+    prompt = (_PROMPTS / "flightcheck.prompt.md").read_text(encoding="utf-8")
+    skill = (_SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Selected DA diagnostics" in prompt
+    assert "Do not substitute local-only checks for a requested full run" in prompt
+    assert "do not send it to setup merely because `connect_ready` is false" in skill
+    assert "never substitute for a requested full run" in skill
+
+
 def test_maker_profile_requires_only_canonical_completion() -> None:
     text = _MAKER_PROFILE.read_text(encoding="utf-8")
 
@@ -808,18 +840,20 @@ def test_maker_profile_requires_only_canonical_completion() -> None:
 
 
 def test_workday_da_setup_routes_only_supported_hr_agents() -> None:
-    step1 = _CONNECT_STEP1.read_text(encoding="utf-8")
+    step1 = _WORKDAY_ENTRY.read_text(encoding="utf-8")
     normalized_step1 = " ".join(step1.split())
     workday = _WORKDAY.read_text(encoding="utf-8")
 
-    assert "src/skills/setup/workday-da/SKILL.md" in step1
+    assert "src/skills/connect/workday/SKILL.md" in step1
     assert "gptagent_copilotforemployeeselfservicehr" in step1
     assert "Workday integration with the ESS IT Agent isn't supported" in step1
     assert "or run `WD-PKG-001`" in normalized_step1
-    assert "src/skills/foundation-setup/SKILL.md" not in step1
+    assert "src/skills/foundation-setup/SKILL.md" in step1
+    assert "product boundaries below before invoking Setup" in normalized_step1
     assert _WORKDAY.is_file()
-    assert "Hybrid Workday extension setup is not available" in workday
-    assert "Do not run the retained Workday setup playbooks" in workday
+    assert "This branch is DA-only" in workday
+    assert "main-ca" in workday
+    assert "scripts/workday_connect.py" in workday
 
 
 def test_foundation_routes_supported_da_setup_paths() -> None:
@@ -893,10 +927,11 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert '--agent-id "{AGENT_ID}"' in text
     assert '--ring "{RING}"' in text
     assert "resolve the service ring" in normalized.casefold()
-    assert text.index("setup_existing_da.py inspect-agent") < text.index(
+    start = text.split("## Start", 1)[1]
+    assert start.index("setup_existing_da.py inspect-agent") < start.index(
         "da-existing-dev.md"
     )
-    assert text.index("setup_existing_da.py inspect-agent") < text.index(
+    assert start.index("setup_existing_da.py inspect-agent") < start.index(
         "da-prod-to-dev.md"
     )
     assert _DA_MOS_STARTER.is_file()
@@ -1454,11 +1489,22 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         "append `--select-account` only to the first read-only command that can authenticate"
     ) in normalized_foundation
     assert "Parse `DA_AGENTBUILDER_AUTH_JSON:`" in foundation
+    assert "A login hint is not identity proof" in foundation
+    assert "do not use cached-account inventory as proof" in (
+        normalized_foundation
+    )
+    assert "persists the verified account" in normalized_foundation
+    assert "`/connect` and its FlightChecks can reuse and reverify" in (
+        foundation
+    )
     assert (
         "later commands reuse its cached token and sign-in name"
         in normalized_foundation
     )
-    assert "setup_existing_da.py cached-accounts` again" in foundation
+    assert "setup_existing_da.py cached-accounts` again" not in foundation
+    assert "offer one normal Microsoft account-picker retry" in (
+        normalized_foundation
+    )
     assert "Do you have a test tenant user?" not in foundation
     assert "does not prove that the maker holds a particular administrator role" in (
         normalized_foundation
@@ -2241,7 +2287,7 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     assert text.count(agent_link) == 1
     progress_line = (
         "**Runtime readiness:** Agent access {agent access progress status} · "
-        "Capacity {environment capacity progress status} · Connections "
+        "Connections "
         "{connections progress status} · Content {agent content progress status}"
     )
     assert progress_line in text
@@ -2251,10 +2297,10 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
         in text
     )
     assert "compact two-line snapshot" in text
-    assert "whenever one of its four check statuses changes" in normalized
+    assert "whenever one of its three check statuses changes" in normalized
     assert "**🔄 Checking** only for the operation that will run next" in text
     assert "**⬜ Pending** for an applicable check that has not run" in text
-    assert "**🔄 {resolved count} of 4 resolved**" in text
+    assert "**🔄 {resolved count} of 3 resolved**" in text
     assert "**⛔ Waiting for action**" in text
     assert "Do not calculate or display the final **Overall** verdict" in text
     readiness_table = "\n".join(
@@ -2262,7 +2308,6 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
             "| Check                | Status                         | Details                                 |",
             "| -------------------- | ------------------------------ | --------------------------------------- |",
             "| Agent access         | {agent access status}          | {agent access evidence summary}         |",
-            "| Environment capacity | {environment capacity status}  | {environment capacity evidence summary} |",
             "| Connections          | {connections status}           | {connections evidence summary}          |",
             "| Agent content        | {agent content status}         | {agent content evidence summary}        |",
             "| **Overall**          | **{overall readiness status}** | **{maker-facing readiness summary}**    |",
@@ -2323,9 +2368,9 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         "do not claim that the registry declares no requirement for that product"
     ) in normalized
     assert (
-        "run the three setup-readiness FlightChecks and the broad connection diagnostic"
+        "run the two setup-readiness FlightChecks and the broad connection diagnostic"
     ) in normalized
-    assert "present all four together" in normalized
+    assert "present all three together" in normalized
     assert (
         "Attempt every available check before producing the final runtime-readiness table"
         in normalized
@@ -2336,103 +2381,35 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         "**⚠️ Ready with limitation**",
         "**➖ Not required**",
         "**⛔ Action required**",
-        "**⚠️ Skipped by administrator attestation**",
         "**⚠️ Check unavailable**",
         "**⬜ Not checked**",
     ):
         assert readiness_status in text
-    assert "### Capacity follow-up" in text
+    assert "ENV-CAPACITY-001" not in text
+    assert "### Capacity follow-up" not in text
+    assert "administrator-attested-skip" not in text
+    assert "{environment capacity status}" not in text
+    for path in (_DA_MOS_STARTER, _DA_ALM_IMPORT, _DA_PROD_TO_DEV):
+        delegated = " ".join(path.read_text(encoding="utf-8").split())
+        assert "three setup-readiness FlightChecks" not in delegated
+        assert "all four FlightChecks" not in delegated
     assert "Times are shown in your local timezone" not in text
-    assert (
-        "We weren’t able to automatically verify capacity for "
-        "**{ENVIRONMENT_DISPLAY_NAME}**."
-    ) in text
     assert "canonical `environment.display_name`" in text
     assert '--environment-display-name "{ENVIRONMENT_DISPLAY_NAME}"' in text
     assert "Your agent and local authoring workspace are already available." in text
-    assert "#### Copilot Studio message capacity" in text
-    assert "In the left navigation, select **Licensing**." in text
-    assert "Under **Products**, select **Copilot Studio**." in text
-    assert "Select **Manage Copilot Credits**." in text
-    capacity_section = text.split("### Capacity follow-up", 1)[1].split(
-        "**End message.**",
-        1,
-    )[0]
-    assert agent_link not in capacity_section
-    assert (
-        "Setup requires a nonzero allocation for an automatic pass; for initial use, we recommend "
-        "allocating **500 or more Copilot Credits**."
-    ) in normalized
-    assert (
-        "After a Power Platform administrator verifies or changes the allocation, use "
-        "**Check again**"
-    ) in normalized
-    assert (
-        "| **Power Platform administrator** | Review or change capacity, or consent to overriding this capacity check | Required for administrator-attested skip |"
-        in text
-    )
-    assert "> ⚠️ **Administrator consent required**" in text
-    assert (
-        "a **Power Platform administrator is present and has consented to "
-        "override the capacity check for {ENVIRONMENT_DISPLAY_NAME}**"
-        in normalized
-    )
-    assert "The original unavailable or denied result remains the recorded evidence." in (
-        normalized
-    )
     assert "Complete this check to finish foundation readiness" not in text
     assert "using `ring_from_environment_host()`" in normalized
     assert "do not assume production" in normalized
     assert '--ring "{CONFIRMED_RING}"' in text
-    assert "--administrator-attested-skip" in text
     assert "--manual-attested" not in text
     assert "--manual-overridden" not in text
-    assert "requires an observed allocation greater than zero" in normalized
-    assert "The first eligible result can be used for administrator attestation" in normalized
-    shared_capacity = " ".join(
-        _PERMISSION_GUIDANCE.read_text(encoding="utf-8").split(
-            "## Capacity verification and administration", 1,
-        )[1].split()
-    )
-    assert "after the first successful zero-allocation result" in shared_capacity
-    assert "**Check again** is optional" in shared_capacity
-    assert "after a second successful zero-allocation result" not in shared_capacity
-    assert (
-        "`Failed` and `Error` are not eligible for administrator-attested skip"
-        in shared_capacity
-    )
-    assert "after a second zero-allocation result" not in text
-    assert "**Check again before overriding**" not in text
-    warning_choices = text.split("For `Warning`, present:", 1)[1].split(
-        "When the status is `Manual`", 1
-    )[0]
-    assert "- **Check again**" in warning_choices
-    assert "- **Continue with administrator-attested skip**" in warning_choices
-    assert "- **Not yet**" in warning_choices
-    assert "- **Help me decide**" in warning_choices
-    assert "> ⚠️ **Administrator consent required**" in warning_choices
-    assert "The original zero-allocation result remains the recorded evidence." in warning_choices
-    assert "rerender the Warning Message block above" in warning_choices
+    permission_guidance = _PERMISSION_GUIDANCE.read_text(encoding="utf-8")
+    assert "## Capacity verification and administration" not in permission_guidance
+    assert "Copilot Studio capacity" not in permission_guidance
     assert (
         "Use the following exact evidence-summary templates, substituting only "
         "their documented placeholders"
     ) in normalized
-    assert "A capacity check of {environment display name}" in text
-    assert "A recheck of {environment display name}" not in text
-    assert (
-        "Never treat the maker's statement that capacity was allocated as verification"
-        in normalized
-    )
-    assert "Continue with administrator-attested skip" in text
-    assert (
-        "A Power Platform administrator was present and consented to override this capacity check"
-        in normalized
-    )
-    assert "The final readiness table remains available" in normalized
-    assert (
-        "`Failed` and `Error` are not eligible for administrator-attested skip"
-        in normalized
-    )
     assert "Agent content is present in your local workspace." in text
     assert "When it is false after materialization" in normalized
     assert (
@@ -2616,3 +2593,20 @@ def test_flightcheck_preserves_standalone_and_configured_scope_modes() -> None:
     assert "scope selection supported by the active configuration" in normalized
     assert "supported scopes are `full`, `environment`" in skill
     assert "scope fixed to `local`" not in normalized
+
+
+def test_flightcheck_renders_the_executed_output_and_allows_interpreted_findings() -> None:
+    instructions = " ".join(_INSTRUCTIONS.read_text(encoding="utf-8").split())
+    prompt = " ".join((_PROMPTS / "flightcheck.prompt.md").read_text(encoding="utf-8").split())
+    skill = (_SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md").read_text(encoding="utf-8")
+    rendering = skill.split("## Step 3: Read results and present findings", 1)[1]
+
+    for text in (instructions, " ".join(rendering.split())):
+        assert "executed run's output directory" in text
+        assert "workspace/flightcheck/workday-litmus" in text
+        assert "report.html" in text
+    assert "Read `workspace/flightcheck/results.json`" not in rendering
+    assert "[View full report]({OUTPUT_DIRECTORY}/report.html)" in rendering
+    assert "interpreted DA diagnostic summary and findings table" in prompt
+    assert "Do not add process narration" in prompt
+    assert "pre-deployment readiness" not in prompt

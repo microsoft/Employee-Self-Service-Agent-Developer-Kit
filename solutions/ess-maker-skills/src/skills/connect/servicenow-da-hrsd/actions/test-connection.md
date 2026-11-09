@@ -1,0 +1,60 @@
+# Record current Test pane evidence
+
+Ask the maker to run one privacy-safe HRSD request in the Copilot Studio Test
+pane: **List my open HR cases**. The prompt must not contain a person's name,
+email, employee ID, case number, case title, or other personal data.
+
+Before opening Test, save the current authored draft. The Test evidence binds
+the server-saved draft semantic identity and selected ServiceNow connection;
+unsaved editor-buffer changes are not covered.
+
+[Open Employee Self-Service (HR) in Copilot Studio]({COPILOT_STUDIO_AGENT_URL})
+
+Use `links.copilotStudioAgent.url` from the provider inspection result.
+
+Open the `Test` pane from this exact agent landing; do not invent a
+tab-specific URL.
+
+The maker decides whether the ServiceNow functionality worked correctly.
+Do not require a non-empty case result, and do not automatically treat a
+sample, empty result, or conversational response as pass or fail.
+
+Render the target link, saved-draft instruction, exact prompt, and privacy
+boundary above in the ordinary current-task reply. Then use this compact
+result question:
+
+<!-- visible-handoff-question:v1 -->
+```json
+[
+  {
+    "header": "Test ServiceNow HRSD",
+    "question": "Selected agent: Employee Self-Service (HR) (`{SELECTED_AGENT_SLUG}` / `{SELECTED_AGENT_ID}`)\nRequired prompt: **List my open HR cases**\n\nDid the ServiceNow HRSD capability work correctly for the exact saved draft and selected ServiceNow connection?\n\nReturn only Pass or Not pass. Do not include response content, personal data, case identifiers, tokens, or secrets.",
+    "options": [
+      { "label": "Pass, the ServiceNow HRSD capability worked correctly" },
+      { "label": "Not pass, it failed or could not be verified" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Record only an allowlisted prompt category and the maker's pass/fail outcome.
+Never store response text, case/ticket data, URLs, identifiers, or free-form
+details:
+
+```text
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-test --prompt-category list-my-open-hr-cases --result <pass-or-fail>
+```
+
+- **Pass:** record `--result pass`.
+- **Not pass:** record `--result fail` without inventing a failure category.
+- While the question is unanswered, the test is not performed or the maker is
+  not ready, return `ACTION_RESULT = "waiting"` and do not record evidence.
+
+Do not infer success from topic, credential, binding, or historical publish
+health. A current passing result completes the ServiceNow Connect lifecycle;
+publishing is a separate user action outside Connect.
+Return `ACTION_RESULT = "recorded"` after current evidence is recorded. If the
+question tool is unavailable or the maker has not responded, return
+`ACTION_RESULT = "waiting"`. Do not ask a second failure-classification
+question.

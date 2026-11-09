@@ -219,6 +219,27 @@ def test_maker_validation_summary_preserves_test_then_publish_order() -> None:
     }
 
 
+@pytest.mark.parametrize("realm", ["dev", "test", "prod"])
+def test_runtime_summary_enables_topics_only_in_development(realm) -> None:
+    import workday_connect_model as model
+
+    state = model.default_state()
+    state["activeTargetRealm"] = realm
+    for phase in ("preflight", "entra", "workday-admin", "connections"):
+        state["phases"][phase]["status"] = "complete"
+
+    summary = model.next_phase_summary(state)
+    assert summary["id"] == "runtime"
+    description = " ".join(summary["whatHappens"])
+    if realm == "dev":
+        assert "enable the Workday topics" in description
+    else:
+        assert "enable the Workday topics" not in description
+        assert "verify the promoted Workday topic state without changing it" in description
+    assert "Preview and approve" in description
+    assert "Bind connections" in description
+
+
 def test_pending_current_phase_and_following_phases_are_pending() -> None:
     import workday_connect_model as model
 

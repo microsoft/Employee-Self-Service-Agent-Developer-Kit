@@ -83,7 +83,13 @@ CHECKPOINT_POLICIES: dict[str, CheckpointPolicy] = {
     "WD-CONN-012": CheckpointPolicy("runtime"),
     "WD-CONN-013": CheckpointPolicy("runtime"),
     "WD-DA-AUTH-001": CheckpointPolicy("runtime"),
-    "WD-REST-001": CheckpointPolicy("runtime"),
+    "WD-REST-001": CheckpointPolicy(
+        "connections",
+        (
+            ("workday-admin", "administrator-response-validated"),
+            ("connections", "physical-connections-verified"),
+        ),
+    ),
     "WD-REST-002": CheckpointPolicy("runtime"),
     "WD-DA-TOPIC-001": CheckpointPolicy("runtime"),
     "WD-DA-WIRING-001": CheckpointPolicy("runtime"),

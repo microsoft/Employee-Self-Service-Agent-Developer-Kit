@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
@@ -39,6 +40,14 @@ REALM_VALUES = {
 
 class WorkdayConnectRealmError(RuntimeError):
     """Raised when a promoted Workday target cannot be proven safely."""
+
+    customer_remediation = (
+        "Your existing Workday setup progress is preserved. Confirm that promotion "
+        "finished, then retry with the target environment's name or Dataverse "
+        "URL using the recorded maker account. If access is denied, ask the "
+        "Power Platform environment administrator to grant that maker access "
+        "before checking again."
+    )
 
 
 def _normalize_guid(value: Any, label: str) -> str:
@@ -152,12 +161,15 @@ def _environment_display_name(environment: Mapping[str, Any]) -> str:
 def _environment_candidates(
     environments: list[dict[str, Any]],
     *,
-    source_environment_id: str,
     environment_id: str | None,
     environment_url: str | None,
     environment_selector: str | None,
 ) -> list[tuple[str, str, str]]:
-    requested_id = str(environment_id or "").strip()
+    requested_id = (
+        _normalize_guid(environment_id, "Target environment ID")
+        if environment_id
+        else ""
+    )
     requested_url = (
         _normalize_environment_url(environment_url)
         if environment_url
@@ -165,29 +177,35 @@ def _environment_candidates(
     )
     selector = str(environment_selector or "").strip().casefold()
     candidates: list[tuple[str, str, str]] = []
+    id_counts: dict[str, int] = {}
     for environment in environments:
         candidate_id = _environment_id(environment)
         if not candidate_id:
             continue
-        normalized_id = _normalize_guid(
-            candidate_id,
-            "Visible environment ID",
-        )
-        if normalized_id.casefold() == source_environment_id.casefold():
+        if requested_id and candidate_id.casefold() != requested_id.casefold():
             continue
+        try:
+            normalized_id = _normalize_guid(
+                candidate_id,
+                "Visible environment ID",
+            )
+        except WorkdayConnectRealmError:
+            logging.getLogger(__name__).warning(
+                "Skipped an environment inventory entry whose identifier "
+                "cannot be used for GUID-based agent realm discovery."
+            )
+            continue
+        id_counts[normalized_id] = id_counts.get(normalized_id, 0) + 1
         try:
             candidate_url = _environment_url_from_inventory(
                 [environment],
                 normalized_id,
             )
         except WorkdayConnectRealmError:
+            if requested_id:
+                raise
             continue
         display_name = _environment_display_name(environment)
-        if requested_id and normalized_id.casefold() != _normalize_guid(
-            requested_id,
-            "Target environment ID",
-        ).casefold():
-            continue
         if requested_url and candidate_url != requested_url:
             continue
         if selector and selector not in {
@@ -197,6 +215,11 @@ def _environment_candidates(
         }:
             continue
         candidates.append((normalized_id, candidate_url, display_name))
+    if any(id_counts[candidate_id] > 1 for candidate_id, _, _ in candidates):
+        raise WorkdayConnectRealmError(
+            "Environment inventory returned duplicate records for the target "
+            "environment ID. Check again after the inventory issue is resolved."
+        )
     return candidates
 
 
@@ -310,6 +333,17 @@ def discover_realm_target(
             "The recorded Dev target belongs to a different ALM family."
         )
 
+    source_schema_name = str(
+        source_configuration.get("schemaName")
+        or direct_source.get("schemaName")
+        or ""
+    ).strip().casefold()
+    supported_agents = (catalog or load_catalog())["supportedAgents"]
+    if source_schema_name not in supported_agents:
+        raise WorkdayConnectRealmError(
+            "The recorded Dev source is not the supported ESS HR agent."
+        )
+
     direct_target = target_client.get_agent(target_agent_id)
     if _agent_id(
         direct_target,
@@ -351,8 +385,10 @@ def discover_realm_target(
         or direct_target.get("schemaName")
         or ""
     ).strip()
-    supported_agents = (catalog or load_catalog())["supportedAgents"]
-    if schema_name.casefold() not in supported_agents:
+    if schema_name.casefold() not in {
+        source_schema_name,
+        f"{source_schema_name}_{normalized_realm}",
+    }:
         raise WorkdayConnectRealmError(
             "The promoted target is not the supported ESS HR agent."
         )
@@ -503,10 +539,6 @@ def _discover_promoted_realm_identity(
         )
         candidates = _environment_candidates(
             environments,
-            source_environment_id=_normalize_guid(
-                source_environment_id,
-                "Recorded Dev environment ID",
-            ),
             environment_id=environment_id,
             environment_url=environment_url,
             environment_selector=environment_selector,

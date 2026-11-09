@@ -18,9 +18,50 @@ _WORKDAY_DA = (
     / "ess-maker-skills"
     / "src"
     / "skills"
-    / "setup"
-    / "workday-da"
+    / "connect"
+    / "workday"
 )
+
+
+def test_connect_prompt_allows_phase_walkthroughs_and_requires_them_before_questions():
+    prompt = (
+        _REPO_ROOT / "solutions" / "ess-maker-skills" / ".github" / "prompts"
+        / "connect.prompt.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(prompt.split())
+    assert "a Message block is not required" in normalized
+    assert "walkthrough in full before its confirmation" in normalized
+    assert "before showing another question" in normalized
+    assert "repair guidance before **Check again**" in normalized
+    assert "controller success and error JSON directly" in normalized
+    assert "For administrator workbook handoffs, the concise handoff and downloadable detailed workbook satisfy this rule" in normalized
+    assert "Connection, sharing, and Test pane walkthroughs still render in full" in normalized
+    assert "The ONLY text the user sees is Message blocks" not in normalized
+    assert "If there is no Message block for a situation, stay silent" not in normalized
+
+
+def test_portal_and_test_pane_walkthroughs_cannot_be_replaced_with_questions():
+    connections = (_WORKDAY_DA / "configure-power-platform.md").read_text(encoding="utf-8")
+    validation = (_WORKDAY_DA / "verify-connection.md").read_text(encoding="utf-8")
+    assert connections.index("Show these instructions before offering **Check again**") < (
+        connections.index("Show a **Create Microsoft Dataverse connection**")
+    )
+    assert connections.index("Show this complete click path before asking") < (
+        connections.index("3. Select **See details**.")
+    )
+    assert "before showing its confirmation or **Check again** question" in (
+        " ".join(connections.split())
+    )
+    assert validation.index("Render the following numbered walkthrough") < (
+        validation.index("Start a new conversation in the `Test` pane")
+    ) < validation.index('"header": "Test Workday"')
+    assert "Use the controller-verified agent name and known Copilot Studio link" in (
+        " ".join(validation.split())
+    )
+    assert "Do not ask whether the scenario passed before explaining how to run it." in (
+        " ".join(validation.split())
+    )
+    assert "this walkthrough again before the question" in " ".join(validation.split())
 
 
 def test_orchestrator_resumes_from_controller_status() -> None:
@@ -31,13 +72,118 @@ def test_orchestrator_resumes_from_controller_status() -> None:
     assert "nextPhaseId" in text
     assert "nextPhaseSummary" in text
     assert "What happens in this phase:" in text
-    assert "must not be collapsed into a one-line phase list" in text
+    assert "must not be collapsed into a one-line phase list" in normalized
     assert "Do not\nreplace the phase explanation with only" in text
     assert "do not create, copy, update, or infer status from a Markdown" in (
         normalized
     )
     assert "resume the same blocker" in text
     assert "controller status is `ready`" in text
+
+
+def test_promotion_request_does_not_assert_completed_promotion() -> None:
+    skill = " ".join((_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8").split())
+    assert "is not evidence that promotion happened" in skill
+    assert "does not promote or publish an agent" in skill
+    assert "Yes, promotion is complete - check again" in skill
+    assert "No, I need to complete promotion first" in skill
+    assert "do not ask it again" in skill
+    assert "same Power Platform environment as Dev" in skill
+    assert "Reuse a supplied valid environment selection" in skill
+    assert "Choose another environment" in skill
+
+
+def test_ready_dev_reentry_resolves_realm_before_showing_any_plan() -> None:
+    skill = " ".join((_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8").split())
+    start = skill.split("## Start or resume", 1)[1]
+    resolution = start.split("### Choose the presentation", 1)[0]
+
+    assert "before showing any plan, role table, progress table" in resolution
+    assert resolution.index("python scripts/workday_connect.py status") < (
+        resolution.index("discover-realm-target --realm test")
+    )
+    assert resolution.index("discover-realm-target --realm prod") < (
+        resolution.index("If controller status is `ready`")
+    )
+    assert "run `status` again and use the newly verified `activeTargetRealm`" in resolution
+    assert "Do not render the previous realm's progress or completion first" in resolution
+    assert "do not show a speculative Test or Production plan" in resolution
+    assert "go directly to **Completion** and finish this invocation" in resolution
+    assert "Do not show the opening role table, `progressText`, a phase plan, or a participant question" in resolution
+    assert "A bare Connect request after Development is Ready does not restart Development" in resolution
+    assert "Do not discover or activate the next realm without the maker's explicit intent" in resolution
+    assert start.index("If controller status is `ready`") < (
+        start.index("> Here's who may be needed")
+    )
+
+
+def test_promoted_realm_plan_contains_only_verified_unfinished_work() -> None:
+    skill = " ".join((_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8").split())
+    presentation = skill.split("### Choose the presentation", 1)[1].split(
+        "### First Development start only", 1
+    )[0]
+
+    assert "**Workday connection plan - Test**" in presentation
+    assert "**Workday connection plan - Production**" in presentation
+    assert "only after that realm has been resolved by the controller" in presentation
+    assert "including only phases whose `status` is not `complete`" in presentation
+    assert "Never show the Development opening briefing, capability table, or six-row `progressText`" in presentation
+    assert "even on the first invocation for that promoted target" in presentation
+    assert "narrow this list to the still-unfinished work" in presentation
+    assert "`foundationReused: true`" in presentation
+    assert "unfinished **Connections**, **Runtime configuration**, and **Maker validation**" in presentation
+    assert "Do not include completed Preflight or administrator phases" in presentation
+    assert "Development's completed connection remains unchanged" in presentation
+    assert "Do not claim reuse or promise the three-phase promoted plan until the controller confirms it" in presentation
+
+
+def test_dev_resume_keeps_progress_without_repeating_the_opening_briefing() -> None:
+    skill = " ".join((_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8").split())
+    presentation = skill.split("### Choose the presentation", 1)[1]
+    continuation = skill.split("### Continue the current unfinished phase", 1)[1]
+
+    assert "This table is an internal reference, not an opening customer plan" in skill
+    assert "Only when `activeTargetRealm` is `dev`, the lifecycle is not ready, all phases are still pending" in presentation
+    assert "no administrator evidence has been captured" in presentation
+    assert "do not repeat the full role table or completed administrator handoffs" in presentation
+    assert "Development progress rule" in continuation
+    assert "For a verified, non-ready `activeTargetRealm: dev`" in continuation
+    assert "on entry or resume and whenever `nextPhaseId` changes" in continuation
+    assert "before the current phase explanation or participant questions" in continuation
+    assert "transitions to `entra` and `workday-admin`, not only Preflight" in continuation
+    assert "run `status` again before presenting the next phase" in continuation
+    assert "do not reuse the previous phase's progress snapshot" in continuation
+    assert "Do not repeat it for every question, file-path request, or workbook correction" in continuation
+    assert "Omit it for a ready lifecycle and Test or Production plans" in continuation
+    assert "Only on the first Development start, render" not in continuation
+    assert "Omit it on every resume" not in continuation
+    assert "not a recap of every completed phase" in continuation
+
+
+@pytest.mark.parametrize("guide", ["provision-entra-app.md", "configure-tenant.md"])
+def test_administrator_phase_entry_keeps_development_progress(guide: str) -> None:
+    text = (_WORKDAY_DA / guide).read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "Before this phase's first question or handoff" in normalized
+    assert "**Development progress rule** in `SKILL.md`" in normalized
+    assert "show the current six-phase table for unfinished Development" in normalized
+    assert "unless the orchestrator already showed it for this phase entry" in normalized
+    assert "Do not repeat it for workbook corrections" in normalized
+    assert "insert a Development table into a Test or Production plan" in normalized
+    assert text.index("Development progress") < text.index("workday_connect.py")
+
+
+def test_administrator_handoffs_explain_readable_files_and_all_corrections() -> None:
+    for filename in ("provision-entra-app.md", "configure-tenant.md"):
+        text = " ".join((_WORKDAY_DA / filename).read_text(encoding="utf-8").split())
+        assert "Worksheet - Detailed" in text
+        assert "exact successful answer" in text
+        assert "information protection administrator" in text
+        assert "Never include credentials, tokens, private keys, or certificate" in text
+        assert "do not bypass required protections" in text
+        assert "details.fieldErrors" in text
+        assert "same workbook" in text
 
 
 def test_role_availability_is_state_aware_at_phase_boundary() -> None:
@@ -57,7 +203,7 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
     attestation = skill.index('"header": "Required access"')
     dispatch = skill.index("Dispatch from `nextPhaseId`")
 
-    assert briefing < status < attestation < dispatch
+    assert status < briefing < attestation < dispatch
     forms = [
         json.loads(form)
         for form in re.findall(
@@ -71,8 +217,8 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         {
             "header": "Workday administrator",
             "question": (
-                "Have you looped in the Workday administrator to complete "
-                "the next phase?"
+                "Have you arranged for a Workday administrator to complete "
+                "this step?"
             ),
             "options": [
                 {"label": "Yes, the Workday administrator is engaged"},
@@ -87,18 +233,17 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
     ] in forms
     expected_privilege_forms = [
         (
-            "Connection creation privilege",
+            "Connections access",
             (
-                "Do you have the Power Platform Environment Maker privilege "
-                "and package installation access to create the Workday "
-                "connections?"
+                "Do you have Power Platform Environment Maker access and "
+                "permission to install the Workday package in this environment?"
             ),
         ),
         (
-            "Maker validation privilege",
+            "Test access",
             (
-                "Do you have the Environment Maker privilege to perform "
-                "maker validation in the Copilot Studio Test pane?"
+                "Do you have Environment Maker access to test this agent "
+                "in the Copilot Studio Test pane?"
             ),
         ),
     ]
@@ -126,8 +271,7 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         {
             "header": "Required access",
             "question": (
-                "Are the people needed for the next phase available to help "
-                "when that phase begins?"
+                "Are the people listed for this step available to help?"
             ),
             "options": [
                 {"label": "Yes, required people are available"},
@@ -137,7 +281,11 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         }
     ] in forms
     assert "When `nextPhaseId` is `preflight` or `runtime`" in skill
-    assert "If controller status is `ready`, skip the availability question" in skill
+    ready_branch = normalized_skill.split(
+        "If controller status is `ready`", 1
+    )[1].split("For a non-ready lifecycle", 1)[0]
+    assert "go directly to **Completion** and finish this invocation" in ready_branch
+    assert "Do not show the opening role table, `progressText`, a phase plan, or a participant question" in ready_branch
     for phase_id in (
         "preflight",
         "entra",
@@ -180,7 +328,7 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
     )
     assert "tenantFoundationReused: true" not in tenant
     assert "When `nextPhaseId` is `entra`, dispatch" in skill
-    assert "presents the guided handoff" in skill
+    assert "presents a concise handoff and checked-in detailed workbook" in skill
     assert "stop before dispatching the next phase" in normalized_skill
     assert (
         "no phase progress or target configuration was changed"
@@ -216,7 +364,7 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         "Do not add a second engagement question here"
         in " ".join(tenant.split())
     )
-    assert "Have you looped in the Workday administrator" in tenant
+    assert "Have you arranged for a Workday administrator" in tenant
     assert "## One-way administrator handoff" in skill
     assert "Microsoft Entra sign-off must finish first" in skill
     assert "Only then may the Workday administrator phase begin" in skill
@@ -309,7 +457,8 @@ def test_maker_validation_ends_guided_lifecycle() -> None:
 
     assert "# Phase 6 - Maker validation" in text
     assert "without publishing the agent" in text
-    assert '"header": "Maker smoke test"' in text
+    assert '"header": "Test Workday"' in text
+    assert '"label": "No, the Test pane scenario did not work"' in text
     assert '"testUserCategory": "maker"' in text
     assert '"remediationId": "WD-E2E-006"' in text
     assert "record-validation-failure --evidence-file" in text
@@ -324,9 +473,42 @@ def test_maker_validation_ends_guided_lifecycle() -> None:
     assert "Promote the agent from Development to Test when ready" in text
     assert "Promote the agent from Test to Production when ready" in text
     assert "Publish and deploy the Production agent when ready" in text
-    assert "employee establish their own Workday connections" in text
+    assert "employee establish their own Workday connections" in normalized
     assert "Do not add Production employee-adoption steps" in text
     assert "outside this guided setup lifecycle" in normalized
+
+
+def test_workday_completion_does_not_return_to_setup() -> None:
+    finish = " ".join(
+        (_WORKDAY_DA / "verify-connection.md").read_text(encoding="utf-8").split()
+    )
+    orchestrator = " ".join(
+        (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8").split()
+    )
+    assert "render its `completionMessage` first" in finish
+    assert "Workday Connect is complete" in finish
+    assert "the maker Test pane validation passed" in finish
+    assert "Do not add a step count" in finish
+    assert "routine recaps of Development readiness, administrator handoffs or preserved sign-offs" in finish
+    assert "Do not append routine recaps" in orchestrator
+    assert "all six steps are finished" not in finish
+    assert "all six steps are finished" not in orchestrator
+    assert "End this Connect execution after its completion message" in finish
+    assert "do not invoke `src/skills/foundation-setup/SKILL.md` here" in finish
+    assert "Do not invoke Setup between phases or at completion" in orchestrator
+    assert "Do not ask the maker to run Connect again for this completed realm" in orchestrator
+    assert "under **Optional next steps**" in orchestrator
+    assert "Under **Optional next steps**" in finish
+    assert "Optional later - not part of this completed connection" not in orchestrator
+    assert "Do not start promotion or another realm without an explicit maker request" in orchestrator
+    for text in (finish, orchestrator):
+        assert "Resume after an integration completes" not in text
+        assert "I'm returning to Setup" not in text
+
+    preflight = " ".join(
+        (_WORKDAY_DA / "install-extension.md").read_text(encoding="utf-8").split()
+    )
+    assert "Never invoke Setup automatically between Workday phases" in preflight
 
 
 def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:
@@ -386,41 +568,21 @@ def test_every_phase_dispatch_target_exists_and_schema_is_reference_only() -> No
 
 def test_customer_messages_exclude_internal_implementation_terms() -> None:
     skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
-    activation = (
-        _REPO_ROOT
-        / "solutions"
-        / "ess-maker-skills"
-        / "src"
-        / "skills"
-        / "connect"
-        / "workday"
-        / "actions"
-        / "activate-workday-topics.md"
-    ).read_text(encoding="utf-8")
-    redirect = (
-        _REPO_ROOT
-        / "solutions"
-        / "ess-maker-skills"
-        / "src"
-        / "skills"
-        / "connect"
-        / "workday"
-        / "actions"
-        / "wire-user-context-redirect.md"
-    ).read_text(encoding="utf-8")
     readiness = skill.split("> Here's who may be needed", 1)[1].split(
-        "\nRun:",
+        "\n### Continue the current unfinished phase",
         1,
     )[0]
-    activation_message = activation.split("**Message:**", 1)[1].split(
-        "**End message.**",
-        1,
-    )[0]
-    redirect_message = redirect.split("**Message:**", 1)[1].split(
-        "**End message.**",
-        1,
-    )[0]
-    customer_text = readiness + activation_message + redirect_message
+    messages = []
+    for path in sorted((_WORKDAY_DA / "actions").glob("*.md")):
+        messages.extend(
+            re.findall(
+                r"\*\*Message:\*\*(.*?)\*\*End message\.\*\*",
+                path.read_text(encoding="utf-8"),
+                re.DOTALL,
+            )
+        )
+    assert messages
+    customer_text = " ".join((readiness + "\n".join(messages)).split())
 
     for internal_term in (
         "controller",
@@ -431,10 +593,20 @@ def test_customer_messages_exclude_internal_implementation_terms() -> None:
         "checkpoint",
         "CloudFlow",
         "delegatedauthorization",
+        "User Context",
+        "Workday templates",
+        "shared parameters",
+        "OAuthUser",
+        "reliable APIs",
+        "guided lifecycle",
     ):
         assert internal_term.casefold() not in customer_text.casefold()
     assert "Customer-facing language contract" in skill
     assert "Never show or narrate them" in skill
+    normalized = " ".join(skill.split())
+    assert "Keep execution-only notes and action markers" in normalized
+    assert "Do not turn later-phase sequencing rules into warnings about pages" in normalized
+    assert "Show necessary safety guidance at the step where it applies" in normalized
 
 
 def test_preflight_is_read_only_and_package_install_starts_connections() -> None:
@@ -452,6 +624,27 @@ def test_preflight_is_read_only_and_package_install_starts_connections() -> None
     assert "prepare-connections-approve --plan-file" in connections
     assert "--install-plan-hash" in connections
     assert "installs through PAC, and rereads Dataverse" in connections
+
+
+def test_preflight_recovery_is_limited_to_the_setup_development_foundation() -> None:
+    text = (_WORKDAY_DA / "install-extension.md").read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+    skill = " ".join((_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8").split())
+    retry = normalized.split("- **Check again:**", 1)[1].split("- **Not now**", 1)[0]
+
+    assert text.index("## Foundation-only scope") < text.index("workday_connect.py preflight")
+    assert "require `activeTargetRealm: dev` and the same agent and environment" in normalized
+    assert "If the active realm is `test` or `prod`" in normalized
+    assert "do not run `preflight`" in normalized
+    assert "it is not an active-target-preserving recheck across realms" in normalized
+    assert "may invalidate saved progress" in normalized
+    assert "recheck the foundation-only boundary before every retry" in retry
+    assert "automatically only within that boundary" in retry
+    assert "Preflight dispatch is foundation-only" in skill
+    assert "do not run `preflight` as a general prerequisite repair or recheck" in skill
+    for guide in (normalized, skill):
+        assert "If no target-preserving recovery is available" in guide
+        assert "show the exact blocker and stop" in guide
 
 
 def test_connections_are_proven_before_runtime_apply() -> None:
@@ -520,18 +713,39 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     )
     assert maker_connection_steps.index(
         "Select the already-created Workday connection"
-    ) < maker_connection_steps.index("Select **Manage**")
-    assert maker_connection_steps.index("Select **Manage**") < (
+    ) < maker_connection_steps.index("Select **See details**")
+    assert maker_connection_steps.index("Select **See details**") < (
+        maker_connection_steps.index("Open **Connection parameters**")
+    )
+    assert maker_connection_steps.index("Open **Connection parameters**") < (
         maker_connection_steps.index(
             "Enable **Allow permission to share parameters**"
         )
     )
-    assert "both entries displayed as Workday" in text
+    assert "Select **Manage**" not in maker_connection_steps
+    confirmation = next(
+        form[0]
+        for form in (
+            json.loads(block)
+            for block in re.findall(r"```json\s+(.*?)\s+```", text, re.DOTALL)
+        )
+        if isinstance(form, list)
+        and form[0]["question"].startswith("Are both Workday entries")
+    )
+    assert "connected to the connection shown above" in confirmation["question"]
+    assert "Allow permission to share parameters enabled for both?" in confirmation["question"]
+    assert "See details >" not in confirmation["question"]
+    assert "enabled under Manage" not in text
+    assert "Connect both maker-visible entries displayed as **Workday**" in text
+    assert "safe display name of the selected Workday connection from verified Connections evidence immediately before this question" in normalized
     assert "Confirm Workday connection" in text
     assert "Do not ask the maker or administrator to provide them again" in normalized
     assert "Do not request or collect a Workday password" in text
     assert "Reuse a healthy existing connection" in text
-    assert "Do not open Copilot Studio Connection Settings yet" in text
+    assert "Do not open Copilot Studio Connection Settings yet" not in text
+    assert "Keep the maker focused on the current connection walkthrough" in normalized
+    assert "Do not introduce later Copilot Studio pages" in normalized
+    assert "Keep this sequencing internal" in normalized
     assert "Do not provide the agent Connection Settings link" in text
     assert "Do not diagnose the flow authorization script as failed" in text
     assert "keep the customer in the Power Apps **Connections** page" in text
@@ -595,10 +809,10 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     )
     assert "resume the same handoff after approval" in normalized
     assert "Only after **Yes**\nmay the skill collect evidence" in text
-    assert "share these steps and the workbook" in text
+    assert "**Workday administrator handoff**" in normalized
     assert "workbook is the single capture worksheet" in normalized
     assert "fill every cell in the **Your tenant values** column" in normalized
-    assert "Upload the completed Workday administrator workbook" in text
+    assert "Save the completed Workday administrator workbook" in text
     assert (
         "do not repeat an **Information to return to the maker**"
         in normalized
@@ -615,6 +829,57 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     assert "ending at /ccx/service, without the tenant name" in text
     assert "using steps 2 through 7" not in text
     assert '"header": "Identity provider"' not in text
+
+
+@pytest.mark.parametrize("guide", ["provision-entra-app.md", "configure-tenant.md"])
+def test_administrator_handoffs_use_detailed_workbooks_without_repeated_tasks(
+    guide: str,
+) -> None:
+    text = (_WORKDAY_DA / guide).read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "administrator handoff**" in normalized
+    assert "handoff - share the workbook and target values" not in normalized
+    assert "> Share this detailed workbook" not in text
+    assert "The detailed workbook is the administrator's task guide" in normalized
+    assert "`packet.actions`, or an **Administrator tasks** section in chat" in normalized
+    assert "Internal reference only: do not render" in normalized
+    assert "show only the relevant help when needed" in normalized
+    assert "After the concise handoff and workbook are shared, ask exactly" in normalized
+    assert "Worksheet - Detailed" in text
+    assert "--substage handoff-presented" in text
+    assert "--substage completion-confirmed" in text
+    assert "Do not append these tasks to the shareable workbook handoff" in normalized
+    assert "and every applicable numbered task" not in normalized
+    assert "and the numbered tasks below" not in normalized
+    instructions = text.split("Render the following five bullets once", 1)[1]
+    file_guidance = instructions.split("\n\n", 2)[1]
+    bullets = [
+        line for line in file_guidance.splitlines()
+        if line.startswith("> - ")
+    ]
+    assert [line.split("**")[1] for line in bullets] == [
+        "Share:", "Complete:", "Confirm:", "Return:", "Protect:",
+    ]
+    assert "restating them in surrounding prose" in instructions
+    assert instructions.count("> - **Protect:**") == 1
+    assert "Do not share passwords or bypass required protections" not in instructions
+    assert "Return only non-secret values" not in instructions
+    assert "**Copy as path**" in instructions
+    assert "Paste the full path here, including the filename and `.xlsx` extension" in normalized
+    assert "Do not require an upload or a file picker" in instructions
+    assert "remove that outer pair" in instructions
+    assert "single literal argument" in instructions
+    assert "show the actual controller error" in instructions
+    assert "provide its full path again" in normalized
+    assert "Upload the completed" not in text
+    if guide == "provision-entra-app.md":
+        assert "certificate-handoff note" in normalized
+        assert "Render `packet.consentNote` exactly here" in normalized
+    else:
+        assert "preserve the current provider" in normalized
+        assert "customer-approved transition of only that environment" in normalized
+        assert "certificate already transferred" in normalized
 
 
 def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
@@ -648,7 +913,9 @@ def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
     assert "--activate --dry-run" in action
     assert "--activate --yes" in action
     assert "state` and `status` to `Active`" in action
-    assert "Refresh the Copilot\nStudio page" in action
+    assert "1. Refresh the Copilot Studio page." in action
+    assert "2. Open `Topics`." in action
+    assert "Workday topics show as `On`." in action
     assert '"header": "Confirm Workday topics"' in action
     assert "all Workday topics show as On" in action
     assert action.index("Confirm Workday topics") < action.index(
@@ -696,6 +963,41 @@ def test_topic_activation_precedes_runtime_template_and_user_context_wiring() ->
     assert "Do not ask the maker to choose an overwrite strategy" in action
 
 
+def test_topic_enabling_and_refresh_confirmation_are_development_only() -> None:
+    configure = (_WORKDAY_DA / "configure-power-platform.md").read_text(encoding="utf-8")
+    action = (_WORKDAY_DA / "actions" / "activate-workday-topics.md").read_text(encoding="utf-8")
+    skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
+
+    assert action.index("activeTargetRealm: dev") < action.index("--activate --dry-run")
+    assert "Stop if the active realm is unresolved" in action
+    assert "For `activeTargetRealm: dev`, run internally:" in configure
+    promoted = configure.split(
+        "For `activeTargetRealm: test` or `prod`,", 1,
+    )[1].split("Only after topic activation is verified", 1)[0]
+    normalized = " ".join(promoted.split())
+    assert "skip that activation action entirely" in promoted
+    assert "Do not run an activation push" in promoted
+    assert "or ask the maker to refresh Copilot Studio" in normalized
+    assert "read-only verification" in promoted
+    assert "record-topic-activation" in promoted
+    assert "do not replace a failed verification with local activation" in normalized
+    assert "correct topic state in Development" in normalized
+    assert "authorization remain required" in " ".join(skill.split())
+
+
+def test_promoted_runtime_verifies_content_without_local_authoring() -> None:
+    configure = (_WORKDAY_DA / "configure-power-platform.md").read_text(encoding="utf-8")
+    promoted = configure.split("**Test and Production:**", 1)[1]
+    normalized = " ".join(promoted.split())
+    assert "Do not run either content-editing action" in normalized
+    assert "record-runtime-template-wiring" in promoted
+    assert "reread that target's live components" in normalized
+    assert "never Development's local component IDs" in normalized
+    for action in ("wire-runtime-template-config.md", "wire-user-context-redirect.md"):
+        text = (_WORKDAY_DA / "actions" / action).read_text(encoding="utf-8")
+        assert text.index("activeTargetRealm: dev") < text.index("python scripts/checkpoint.py")
+
+
 def test_user_context_redirect_reconciles_without_publish_prompt() -> None:
     action = (
         _REPO_ROOT
@@ -726,7 +1028,7 @@ def test_maker_validation_lists_non_maker_work_as_post_skill_steps() -> None:
     assert "Microsoft 365 Chat" in text
     assert "their own Workday connections" in text
     assert "returns real" in text
-    assert "without an unexpected repeated sign-in" in text
+    assert "without unexpected repeated sign-ins" in text
     assert "Do not wait for those results" in text
     assert "keep the Workday skill open" in normalized
 
@@ -754,7 +1056,11 @@ def test_capability_claims_match_controller_surface() -> None:
         "must not by itself require the Entra or Workday administrators"
         in (normalized["skill"])
     )
-    assert "show this readiness briefing on every invocation" in normalized["skill"]
+    assert "On the first start of a non-ready Development lifecycle" in normalized["skill"]
+    assert "On resume, show the current phase and only its remaining participants" in (
+        normalized["skill"]
+    )
+    assert "do not repeat the full role table" in normalized["skill"]
     for required_role in (
         "Power Platform Environment Maker",
         "Application Administrator or Cloud Application Administrator",
@@ -763,7 +1069,7 @@ def test_capability_claims_match_controller_surface() -> None:
     ):
         assert required_role in skill
     assert (
-        "guided lifecycle completes after the maker's Test pane scenario succeeds"
+        "finishes after your Workday test succeeds in the Copilot Studio Test pane"
         in (normalized["skill"])
     )
     assert "Claim an automated change only after" in normalized["skill"]
