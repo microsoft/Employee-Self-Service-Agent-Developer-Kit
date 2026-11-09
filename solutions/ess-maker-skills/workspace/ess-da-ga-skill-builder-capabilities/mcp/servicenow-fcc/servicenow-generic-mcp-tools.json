@@ -1,0 +1,738 @@
+{
+    "tools": [
+        {
+            "name": "sn__list_records",
+            "description": "List records from any ServiceNow table (Table API). table: table name, e.g. sn_hr_core_case, sc_req_item, incident. query: encoded query, e.g. 'active=true^opened_for=javascript:gs.getUserID()^ORDERBYDESCsys_created_on'. fields: comma-separated fields to return (default all). limit (default 20, max 100) and offset page through results. display_value: 'false' (raw values, the default), 'true' (labels, e.g. state 'Closed Complete' and people's names) or 'all' (both).",
+            "inputSchema": {
+                "properties": {
+                    "table": {
+                        "type": "string"
+                    },
+                    "query": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "fields": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "limit": {
+                        "default": 20,
+                        "type": "integer"
+                    },
+                    "offset": {
+                        "default": 0,
+                        "type": "integer"
+                    },
+                    "display_value": {
+                        "default": "false",
+                        "type": "string"
+                    },
+                    "exclude_reference_link": {
+                        "default": true,
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "table"
+                ],
+                "type": "object"
+            },
+            "title": "List records",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__get_record",
+            "description": "Get one record from a ServiceNow table by sys_id. fields: comma-separated fields to return. display_value: 'false' (raw values, the default), 'true' (labels, e.g. state 'Closed Complete' and people's names) or 'all' (both).",
+            "inputSchema": {
+                "properties": {
+                    "table": {
+                        "type": "string"
+                    },
+                    "sys_id": {
+                        "type": "string"
+                    },
+                    "fields": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "display_value": {
+                        "default": "false",
+                        "type": "string"
+                    },
+                    "exclude_reference_link": {
+                        "default": true,
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "table",
+                    "sys_id"
+                ],
+                "type": "object"
+            },
+            "title": "Get record",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__create_record",
+            "description": "Create a record in a ServiceNow table. body: JSON object of field names and values. input_display_value=true treats body values as labels (e.g. state 'In Progress') instead of raw values. Returns the created record (with sys_id and number). display_value: 'false' (raw values, the default), 'true' (labels, e.g. state 'Closed Complete' and people's names) or 'all' (both).",
+            "inputSchema": {
+                "properties": {
+                    "table": {
+                        "type": "string"
+                    },
+                    "body": {
+                        "additionalProperties": true,
+                        "type": "object"
+                    },
+                    "input_display_value": {
+                        "default": false,
+                        "type": "boolean"
+                    },
+                    "fields": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "display_value": {
+                        "default": "false",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "table",
+                    "body"
+                ],
+                "type": "object"
+            },
+            "title": "Create record",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "write",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false
+            }
+        },
+        {
+            "name": "sn__update_record",
+            "description": "Update fields of a record in a ServiceNow table by sys_id. body: JSON object of the fields to change; journal fields such as comments and work_notes append an entry. input_display_value=true treats body values as labels. Returns the record after the update. display_value: 'false' (raw values, the default), 'true' (labels, e.g. state 'Closed Complete' and people's names) or 'all' (both).",
+            "inputSchema": {
+                "properties": {
+                    "table": {
+                        "type": "string"
+                    },
+                    "sys_id": {
+                        "type": "string"
+                    },
+                    "body": {
+                        "additionalProperties": true,
+                        "type": "object"
+                    },
+                    "input_display_value": {
+                        "default": false,
+                        "type": "boolean"
+                    },
+                    "fields": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "display_value": {
+                        "default": "false",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "table",
+                    "sys_id",
+                    "body"
+                ],
+                "type": "object"
+            },
+            "title": "Update record",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "write",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false
+            }
+        },
+        {
+            "name": "sn__delete_record",
+            "description": "Delete a record from a ServiceNow table by sys_id. This can't be undone.",
+            "inputSchema": {
+                "properties": {
+                    "table": {
+                        "type": "string"
+                    },
+                    "sys_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "table",
+                    "sys_id"
+                ],
+                "type": "object"
+            },
+            "title": "Delete record",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "write",
+                    "layer": "runtime",
+                    "destructive": true
+                }
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": true
+            }
+        },
+        {
+            "name": "sn__get_record_types",
+            "description": "List the ServiceNow tables (record types) available to the user.",
+            "inputSchema": {
+                "properties": {},
+                "type": "object",
+                "required": []
+            },
+            "title": "Get record types",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__get_record_schema",
+            "description": "Get a table's schema: its fields, their types, labels, choices and references.",
+            "inputSchema": {
+                "properties": {
+                    "table": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "table"
+                ],
+                "type": "object"
+            },
+            "title": "Get record schema",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__get_table_stats",
+            "description": "Aggregate statistics for a ServiceNow table (Aggregate API): count records matching an encoded query, optionally grouped (group_by) or with avg/min/max/sum of numeric fields.",
+            "inputSchema": {
+                "properties": {
+                    "table": {
+                        "type": "string"
+                    },
+                    "query": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "count": {
+                        "default": true,
+                        "type": "boolean"
+                    },
+                    "group_by": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "avg_fields": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "min_fields": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "max_fields": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "sum_fields": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "display_value": {
+                        "default": "false",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "table"
+                ],
+                "type": "object"
+            },
+            "title": "Get table stats",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__get_current_user_info",
+            "description": "Get the signed-in ServiceNow user's details: sys_id, user name, name and email.",
+            "inputSchema": {
+                "properties": {},
+                "type": "object",
+                "required": []
+            },
+            "title": "Get current user info",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__get_catalogs",
+            "description": "List the service catalogs the user can see (Service Catalog API). text: optional search text.",
+            "inputSchema": {
+                "properties": {
+                    "text": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "limit": {
+                        "default": 20,
+                        "type": "integer"
+                    }
+                },
+                "type": "object",
+                "required": []
+            },
+            "title": "Get catalogs",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__get_catalog_categories",
+            "description": "List the categories of a service catalog (catalog_id: the catalog's sys_id).",
+            "inputSchema": {
+                "properties": {
+                    "catalog_id": {
+                        "type": "string"
+                    },
+                    "top_level_only": {
+                        "default": false,
+                        "type": "boolean"
+                    },
+                    "limit": {
+                        "default": 20,
+                        "type": "integer"
+                    },
+                    "offset": {
+                        "default": 0,
+                        "type": "integer"
+                    }
+                },
+                "required": [
+                    "catalog_id"
+                ],
+                "type": "object"
+            },
+            "title": "Get catalog categories",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__get_catalog_items",
+            "description": "List or search the service catalog items the user can order (Service Catalog API). text: search text; category / catalog: sys_ids to filter by; limit and offset page through results.",
+            "inputSchema": {
+                "properties": {
+                    "limit": {
+                        "default": 20,
+                        "type": "integer"
+                    },
+                    "text": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "category": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "catalog": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "offset": {
+                        "default": 0,
+                        "type": "integer"
+                    }
+                },
+                "type": "object",
+                "required": []
+            },
+            "title": "Get catalog items",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__get_catalog_item",
+            "description": "Get one catalog item by sys_id, including its variables (the questions its order form asks: names, types, mandatory flags, choices).",
+            "inputSchema": {
+                "properties": {
+                    "sys_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "sys_id"
+                ],
+                "type": "object"
+            },
+            "title": "Get catalog item",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__order_item",
+            "description": "Order a catalog item now (Service Catalog API order_now). body: {\"sysparm_quantity\": \"1\", \"variables\": {question_name: value}, \"sysparm_requested_for\": user sys_id (optional)}. Returns the request number and sys_id.",
+            "inputSchema": {
+                "properties": {
+                    "sys_id": {
+                        "type": "string"
+                    },
+                    "body": {
+                        "additionalProperties": true,
+                        "type": "object"
+                    }
+                },
+                "required": [
+                    "sys_id",
+                    "body"
+                ],
+                "type": "object"
+            },
+            "title": "Order item",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "write",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false
+            }
+        },
+        {
+            "name": "sn__get_knowledge_articles",
+            "description": "Search ServiceNow knowledge articles (Knowledge API). query: text to search for; filter: encoded query; kb: knowledge base sys_ids; fields; limit.",
+            "inputSchema": {
+                "properties": {
+                    "query": {
+                        "type": "string"
+                    },
+                    "filter": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "limit": {
+                        "default": 20,
+                        "type": "integer"
+                    },
+                    "fields": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "kb": {
+                        "default": "",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "query"
+                ],
+                "type": "object"
+            },
+            "title": "Get knowledge articles",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__get_knowledge_article",
+            "description": "Get one knowledge article by sys_id, including its text.",
+            "inputSchema": {
+                "properties": {
+                    "sys_id": {
+                        "type": "string"
+                    },
+                    "fields": {
+                        "default": "",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "sys_id"
+                ],
+                "type": "object"
+            },
+            "title": "Get knowledge article",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__get_attachment_metadata",
+            "description": "List attachment metadata. query: encoded query on sys_attachment, e.g. 'table_name=sn_hr_core_case^table_sys_id=<sys_id>'.",
+            "inputSchema": {
+                "properties": {
+                    "query": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "limit": {
+                        "default": 20,
+                        "type": "integer"
+                    },
+                    "offset": {
+                        "default": 0,
+                        "type": "integer"
+                    }
+                },
+                "type": "object",
+                "required": []
+            },
+            "title": "Get attachment metadata",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__retrieve_attachment_metadata",
+            "description": "Get one attachment's metadata (file name, size, type, record it belongs to) by sys_id.",
+            "inputSchema": {
+                "properties": {
+                    "sys_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "sys_id"
+                ],
+                "type": "object"
+            },
+            "title": "Retrieve attachment metadata",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__retrieve_attachment_content",
+            "description": "Download an attachment's content as base64 (files up to 1048576 bytes).",
+            "inputSchema": {
+                "properties": {
+                    "sys_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "sys_id"
+                ],
+                "type": "object"
+            },
+            "title": "Retrieve attachment content",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "sn__upload_attachment_file",
+            "description": "Attach a file to a record. table_name and table_sys_id identify the record; file_name; content_base64: the file's content; content_type. Max 5242880 bytes.",
+            "inputSchema": {
+                "properties": {
+                    "table_name": {
+                        "type": "string"
+                    },
+                    "table_sys_id": {
+                        "type": "string"
+                    },
+                    "file_name": {
+                        "type": "string"
+                    },
+                    "content_base64": {
+                        "type": "string"
+                    },
+                    "content_type": {
+                        "default": "application/octet-stream",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "table_name",
+                    "table_sys_id",
+                    "file_name",
+                    "content_base64"
+                ],
+                "type": "object"
+            },
+            "title": "Upload attachment file",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "write",
+                    "layer": "runtime"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false
+            }
+        },
+        {
+            "name": "sn__delete_attachment",
+            "description": "Delete an attachment by sys_id. This can't be undone.",
+            "inputSchema": {
+                "properties": {
+                    "sys_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "sys_id"
+                ],
+                "type": "object"
+            },
+            "title": "Delete attachment",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "write",
+                    "layer": "runtime",
+                    "destructive": true
+                }
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": true
+            }
+        }
+    ]
+}

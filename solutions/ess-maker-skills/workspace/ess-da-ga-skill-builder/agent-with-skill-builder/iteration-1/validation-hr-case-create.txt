@@ -1,0 +1,3 @@
+INFO    workspace/ess-da-ga-skill-builder/agent-with-skill-builder/iteration-1/hr-case-create/SKILL.md: Copilot won't ask before sn__create_record, sn__update_record (the plugin marks them non-consequential), so the skill's confirmation or form is the only safeguard.
+1 skill(s): 0 error(s), 0 warning(s). Checked front matter, size, file types, references and depth, scripts, tool names and arguments, promised operations.
+

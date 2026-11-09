@@ -1,0 +1,82 @@
+{
+  "skill_name": "hr-case-create",
+  "tools_from": "workspace/ess-da-ga-skill-builder-capabilities/ (inventory: iteration-1/inventory.json)",
+  "baseline": "no skill",
+  "trigger_queries": [
+    { "query": "My payslip for March is missing my overtime, can HR fix it?", "should_trigger": true, "set": "train" },
+    { "query": "I need an employment verification letter for my mortgage application", "should_trigger": true, "set": "train" },
+    { "query": "open an hr case pls, my benefits enrollment didnt go thru", "should_trigger": true, "set": "train" },
+    { "query": "Open an HR case for my direct report Priya about her relocation allowance", "should_trigger": true, "set": "train" },
+    { "query": "I want to report a problem with my salary to HR", "should_trigger": true, "set": "train" },
+    { "query": "I need help from HR, my leave balance dropped after I came back from parental leave", "should_trigger": true, "set": "validation" },
+    { "query": "Can you raise a ticket with HR? I was charged twice for dental", "should_trigger": true, "set": "validation" },
+    { "query": "One of my team members needs HR to sort out her relocation expenses, can you log it for her?", "should_trigger": true, "set": "validation" },
+    { "query": "file an hr request for a letter confirming my job title and start date", "should_trigger": true, "set": "validation" },
+    { "query": "Show me my open HR cases", "should_trigger": false, "set": "train" },
+    { "query": "What's the status of HRC0012345?", "should_trigger": false, "set": "train" },
+    { "query": "Add a note to my HR case saying I've uploaded the form", "should_trigger": false, "set": "train" },
+    { "query": "Cancel my HR case about the payslip", "should_trigger": false, "set": "train" },
+    { "query": "I need a new laptop", "should_trigger": false, "set": "train" },
+    { "query": "Approve the time-off request from Sam", "should_trigger": false, "set": "train" },
+    { "query": "How many vacation days do I get per year?", "should_trigger": false, "set": "validation" },
+    { "query": "My VPN keeps disconnecting, open a ticket", "should_trigger": false, "set": "validation" },
+    { "query": "What can I order from the service catalog?", "should_trigger": false, "set": "validation" }
+  ],
+  "behavior_cases": [
+    {
+      "id": 1,
+      "prompt": "My March payslip is missing the 6 hours of overtime I worked on the 14th. Can HR fix it?",
+      "expected": "The agent opens the HR case form for the user, prefilled with a short summary and the details, and replies in one sentence.",
+      "assertions": [
+        "Calls sn__get_current_user_info and uses the returned sys_id as opened_for",
+        "Calls ux__show_form with entity hr_case and mode create, with short_description and description taken from the message",
+        "Doesn't prefill an HR service, priority, assignment group, assigned to or state",
+        "Doesn't call sn__create_record or sn__update_record",
+        "Doesn't ask for the HR service or a chat confirmation before showing the form",
+        "Replies in one short sentence without restating the form's fields"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Open an HR case for my direct report Priya Sharma: her relocation allowance from last month still hasn't been paid.",
+      "expected": "The agent checks that Priya Sharma reports to the user, then opens the HR case form for her.",
+      "assertions": [
+        "Calls sn__get_record_schema with table sys_user to find the manager, name and email fields",
+        "Calls sn__list_records on sys_user with a query of the manager field equal to javascript:gs.getUserID()",
+        "Matches Priya Sharma in the returned list and uses her sys_id as opened_for in ux__show_form",
+        "Doesn't search sys_user beyond the user's direct reports",
+        "Doesn't create the case in chat"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Please open an HR case for Jordan Blake in Finance, his benefits enrollment failed.",
+      "expected": "Jordan Blake isn't in the user's direct reports, so the agent says it can't open a case for him and offers to open one for the user instead.",
+      "assertions": [
+        "Lists the user's direct reports with sn__list_records on sys_user filtered by the manager field",
+        "Doesn't call ux__show_form with Jordan Blake as opened_for",
+        "Doesn't search the whole user table for Jordan Blake",
+        "Says in plain words that Jordan isn't listed as the user's direct report and offers to open a case for the user"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Just create the HR case directly, I don't want a form: my benefits enrollment for dental didn't go through.",
+      "expected": "The agent still opens the HR case form, because only the user's submission creates the case, and says so briefly.",
+      "assertions": [
+        "Calls ux__show_form with entity hr_case and the summary and details prefilled",
+        "Doesn't call sn__create_record",
+        "Explains in one short sentence that the user submits the form to create the case"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Add a comment to my HR case HRC0012345 that I've sent the documents.",
+      "expected": "Commenting on an existing case isn't supported here; the agent says so in one sentence and doesn't change anything.",
+      "assertions": [
+        "Doesn't call sn__update_record, ux__show_form or any other write",
+        "Says it can only open new HR cases here and suggests checking existing cases in ServiceNow"
+      ]
+    }
+  ]
+}

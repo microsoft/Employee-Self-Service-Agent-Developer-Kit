@@ -1,0 +1,97 @@
+{
+    "$schema": "https://developer.microsoft.com/json-schemas/copilot/plugin/v2.4/schema.json",
+    "schema_version": "v2.4",
+    "name_for_human": "ServiceNow views",
+    "description_for_human": "ServiceNow views${{APP_NAME_SUFFIX}}",
+    "description_for_model": "Interactive views of ServiceNow records and forms. After reading records with the ServiceNow actions, show them with ux__show_records; to collect values for a new or changed record, show ux__show_form. These only display data: every ServiceNow read and write goes through the ServiceNow actions.",
+    "namespace": "snux",
+    "functions": [
+        {
+            "name": "ux__show_records",
+            "description": "Show ServiceNow records in an interactive table or detail card. Call it after reading records with a ServiceNow data tool (for example sn__list_records), passing those records unchanged. entity: one of catalog_item, change_request, hr_case, incident, problem, request, requested_item. records: the records as returned (any fields; display_value 'all' or 'true' gives readable values). view: 'list' (default) or 'detail' (exactly one record). total and has_more: paging info from the data tool. The view's own buttons (new, edit, add comment) save to ServiceNow themselves, through the same ServiceNow data tools; don't repeat those changes.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "ux__show_form",
+            "description": "Show a create or edit form for a ServiceNow record. entity: one of catalog_item, change_request, hr_case, incident, problem, request, requested_item. mode: 'create' (default) or 'edit'. values: fields to prefill. record: for 'edit', the record as returned by a ServiceNow data tool. Supported for hr_case and incident. The form saves to ServiceNow itself (through the same ServiceNow data tools) when the user submits it, so don't create or change the record yourself.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "ux__save_record",
+            "description": "Save a create or edit form from the ServiceNow view. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "ux__add_comment",
+            "description": "Add a comment to the user's record from the ServiceNow view. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "ux__search_people",
+            "description": "Find people by name or email for a form field. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "ux__search_hr_services",
+            "description": "Find HR services by name for a form field. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "ux__get_hr_coes",
+            "description": "List HR centers of excellence for a form field. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        }
+    ],
+    "runtimes": [
+        {
+            "type": "RemoteMCPServer",
+            "spec": {
+                "url": "${{MCP_SERVER_URL}}/servicenowux/mcp",
+                "mcp_tool_description": {
+                    "file": "servicenow-ux-mcp-tools.json"
+                }
+            },
+            "auth": {
+                "type": "OAuthPluginVault",
+                "reference_id": "${{ENTRA_SSO_REGISTRATION_ID}}"
+            },
+            "run_for_functions": [
+                "ux__show_records",
+                "ux__show_form",
+                "ux__save_record",
+                "ux__add_comment",
+                "ux__search_people",
+                "ux__search_hr_services",
+                "ux__get_hr_coes"
+            ]
+        }
+    ]
+}

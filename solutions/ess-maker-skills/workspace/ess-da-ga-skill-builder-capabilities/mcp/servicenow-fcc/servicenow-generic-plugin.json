@@ -1,0 +1,237 @@
+{
+    "$schema": "https://developer.microsoft.com/json-schemas/copilot/plugin/v2.4/schema.json",
+    "schema_version": "v2.4",
+    "name_for_human": "ServiceNow",
+    "description_for_human": "ServiceNow${{APP_NAME_SUFFIX}}",
+    "description_for_model": "Generic ServiceNow REST actions (Table API records, schema, statistics, current user, service catalog and ordering, knowledge articles, attachments) for the employee's HR cases, catalog requests and orders, approvals and IT tickets. Use these actions, not knowledge search, whenever the user wants to see, create or change anything in ServiceNow; the agent's skills say which table, query and fields to use.",
+    "namespace": "sngeneric",
+    "functions": [
+        {
+            "name": "sn__list_records",
+            "description": "List records from any ServiceNow table (Table API). table: table name, e.g. sn_hr_core_case, sc_req_item, incident. query: encoded query, e.g. 'active=true^opened_for=javascript:gs.getUserID()^ORDERBYDESCsys_created_on'. fields: comma-separated fields to return (default all). limit (default 20, max 100) and offset page through results. display_value: 'false' (raw values, the default), 'true' (labels, e.g. state 'Closed Complete' and people's names) or 'all' (both).",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__get_record",
+            "description": "Get one record from a ServiceNow table by sys_id. fields: comma-separated fields to return. display_value: 'false' (raw values, the default), 'true' (labels, e.g. state 'Closed Complete' and people's names) or 'all' (both).",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__create_record",
+            "description": "Create a record in a ServiceNow table. body: JSON object of field names and values. input_display_value=true treats body values as labels (e.g. state 'In Progress') instead of raw values. Returns the created record (with sys_id and number). display_value: 'false' (raw values, the default), 'true' (labels, e.g. state 'Closed Complete' and people's names) or 'all' (both).",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__update_record",
+            "description": "Update fields of a record in a ServiceNow table by sys_id. body: JSON object of the fields to change; journal fields such as comments and work_notes append an entry. input_display_value=true treats body values as labels. Returns the record after the update. display_value: 'false' (raw values, the default), 'true' (labels, e.g. state 'Closed Complete' and people's names) or 'all' (both).",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__delete_record",
+            "description": "Delete a record from a ServiceNow table by sys_id. This can't be undone.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__get_record_types",
+            "description": "List the ServiceNow tables (record types) available to the user.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__get_record_schema",
+            "description": "Get a table's schema: its fields, their types, labels, choices and references.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__get_table_stats",
+            "description": "Aggregate statistics for a ServiceNow table (Aggregate API): count records matching an encoded query, optionally grouped (group_by) or with avg/min/max/sum of numeric fields.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__get_current_user_info",
+            "description": "Get the signed-in ServiceNow user's details: sys_id, user name, name and email.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__get_catalogs",
+            "description": "List the service catalogs the user can see (Service Catalog API). text: optional search text.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__get_catalog_categories",
+            "description": "List the categories of a service catalog (catalog_id: the catalog's sys_id).",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__get_catalog_items",
+            "description": "List or search the service catalog items the user can order (Service Catalog API). text: search text; category / catalog: sys_ids to filter by; limit and offset page through results.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__get_catalog_item",
+            "description": "Get one catalog item by sys_id, including its variables (the questions its order form asks: names, types, mandatory flags, choices).",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__order_item",
+            "description": "Order a catalog item now (Service Catalog API order_now). body: {\"sysparm_quantity\": \"1\", \"variables\": {question_name: value}, \"sysparm_requested_for\": user sys_id (optional)}. Returns the request number and sys_id.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__get_knowledge_articles",
+            "description": "Search ServiceNow knowledge articles (Knowledge API). query: text to search for; filter: encoded query; kb: knowledge base sys_ids; fields; limit.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__get_knowledge_article",
+            "description": "Get one knowledge article by sys_id, including its text.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__get_attachment_metadata",
+            "description": "List attachment metadata. query: encoded query on sys_attachment, e.g. 'table_name=sn_hr_core_case^table_sys_id=<sys_id>'.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__retrieve_attachment_metadata",
+            "description": "Get one attachment's metadata (file name, size, type, record it belongs to) by sys_id.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__retrieve_attachment_content",
+            "description": "Download an attachment's content as base64 (files up to 1048576 bytes).",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__upload_attachment_file",
+            "description": "Attach a file to a record. table_name and table_sys_id identify the record; file_name; content_base64: the file's content; content_type. Max 5242880 bytes.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        },
+        {
+            "name": "sn__delete_attachment",
+            "description": "Delete an attachment by sys_id. This can't be undone.",
+            "capabilities": {
+                "confirmation": {
+                    "isNonConsequential": true
+                }
+            }
+        }
+    ],
+    "runtimes": [
+        {
+            "type": "RemoteMCPServer",
+            "spec": {
+                "url": "${{MCP_SERVER_URL}}/servicenowgeneric/mcp",
+                "mcp_tool_description": {
+                    "file": "servicenow-generic-mcp-tools.json"
+                }
+            },
+            "auth": {
+                "type": "OAuthPluginVault",
+                "reference_id": "${{ENTRA_SSO_REGISTRATION_ID}}"
+            },
+            "run_for_functions": [
+                "sn__list_records",
+                "sn__get_record",
+                "sn__create_record",
+                "sn__update_record",
+                "sn__delete_record",
+                "sn__get_record_types",
+                "sn__get_record_schema",
+                "sn__get_table_stats",
+                "sn__get_current_user_info",
+                "sn__get_catalogs",
+                "sn__get_catalog_categories",
+                "sn__get_catalog_items",
+                "sn__get_catalog_item",
+                "sn__order_item",
+                "sn__get_knowledge_articles",
+                "sn__get_knowledge_article",
+                "sn__get_attachment_metadata",
+                "sn__retrieve_attachment_metadata",
+                "sn__retrieve_attachment_content",
+                "sn__upload_attachment_file",
+                "sn__delete_attachment"
+            ]
+        }
+    ]
+}
