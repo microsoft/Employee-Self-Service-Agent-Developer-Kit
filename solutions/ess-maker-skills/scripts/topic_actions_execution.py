@@ -22,6 +22,7 @@ from topic_actions_catalog import CatalogSnapshot, plan_catalog_actions
 from topic_actions_components import normalize_state
 from topic_actions_discovery import _identity
 from topic_actions_planning import TopicPlan, _digest
+from topic_actions_presentation import result_text, review_text
 from topic_actions_state import TopicStateError, TopicStateStore
 
 
@@ -109,14 +110,14 @@ def build_state_payload(evidence: OperationEvidence, plan: TopicPlan) -> dict:
     }
 
 
-def public_plan(plan: TopicPlan) -> dict:
+def public_plan(plan: TopicPlan, evidence: OperationEvidence | None = None) -> dict:
     def changes(items):
         return [
             {"componentId": item.component_id, "before": item.before, "after": item.after}
             for item in items
         ]
 
-    return {
+    result = {
         "target": {
             "tenantId": plan.target.tenant_id, "environmentId": plan.target.environment_id,
             "agentId": plan.target.agent_id,
@@ -141,6 +142,14 @@ def public_plan(plan: TopicPlan) -> dict:
             for key, schema, identity in plan.members
         ],
     }
+    if evidence is not None:
+        result["account"] = evidence.account_id
+        result["currentStates"] = [
+            {"componentId": topic.component_id, "state": topic.state}
+            for topic in evidence.snapshot.evidence.topics
+            if topic.component_id in evidence.snapshot.evidence.selected_member_ids
+        ]
+    return result
 
 
 def _component_map(body: dict) -> dict:
@@ -286,10 +295,11 @@ class TopicActionSession:
             return self._result("blocked", blockers=("evidence_read_failed",))
         if blockers or plan.outcome not in ("changes_proposed", "already_correct"):
             return self._result(
-                "blocked", plan=plan, blockers=blockers or (f"plan_{plan.outcome}",),
+                "blocked", plan=plan, evidence=evidence,
+                blockers=blockers or (f"plan_{plan.outcome}",),
             )
         if preview:
-            return self._result("preview", plan=plan)
+            return self._result("preview", plan=plan, evidence=evidence)
         if self.state_store is not None and (plan.delta or self.action == "restore"):
             try:
                 self._state_revision, self._baseline_review = self.state_store.review(
@@ -301,9 +311,10 @@ class TopicActionSession:
         basis = evidence.fingerprint()
         deadline = self.clock() + 300
         try:
-            review = {**public_plan(plan), "account": evidence.account_id}
+            review = {**public_plan(plan, evidence), "account": evidence.account_id}
             if self._baseline_review is not None:
                 review["baseline"] = deepcopy(self._baseline_review)
+            review["userMessage"] = review_text(review)
             decision = confirm(review)
         except (KeyboardInterrupt, EOFError):
             decision = "cancel"
@@ -441,6 +452,7 @@ class TopicActionSession:
         blockers: tuple[str, ...] = (), write_status: str = "not_attempted",
         completed: bool = False, topics: list[dict] | None = None,
         submission_http_status: int | None = None,
+        evidence: OperationEvidence | None = None,
     ) -> dict:
         partial_message = "Not every result could be verified. No changes will be replayed automatically."
         if status == "partial" and topics and all(
@@ -451,14 +463,14 @@ class TopicActionSession:
                 "Readback shows the eligible topics in their requested states, but content or scope "
                 "preservation could not be verified. No changes will be replayed automatically."
             )
-        return {
+        result = {
             "contractVersion": 1, "contractStatus": "provisional",
             "status": status, "completed": completed, "writeStatus": write_status,
             "submissionHttpStatus": submission_http_status,
             "blockers": list(dict.fromkeys(blockers)), "topics": topics or [],
             "warnings": list(plan.warnings) if plan else [],
             "baseline": deepcopy(self._baseline_review),
-            "plan": public_plan(plan) if plan else None,
+            "plan": public_plan(plan, evidence) if plan else None,
             "callerContext": deepcopy(self.caller_context),
             "message": {
                 "blocked": "Topic actions are blocked. No changes were attempted.",
@@ -478,3 +490,5 @@ class TopicActionSession:
                 ),
             }[status],
         }
+        result["userMessage"] = result_text(result)
+        return result

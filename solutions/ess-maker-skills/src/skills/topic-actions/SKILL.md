@@ -32,8 +32,8 @@ do not add a separate preview approval, a "start review" confirmation or a
 approval and does not replace that fresh execution review.
 
 Display the complete required review once, including every selected member,
-account, target, changes, already-correct topics, protections and warnings.
-Group repeated warnings without omitting distinct risks. Then present one
+account, target, changes, already-correct topics, protections and material
+limitations in plain language. Then present one
 explicit decision control: **Approve**, **Deny** or **Cancel**, with no
 preselected approval. Send the actual decision to the same waiting process;
 map explicit denial to `deny` and cancellation to `cancel`. Ambiguous text
@@ -56,6 +56,30 @@ counts, whether a write was attempted, and any material blocker or
 preservation limitation. Distinguish observed state success from incomplete
 preservation. Do not repeat the review, narrate routine steps, open another
 decision control or append an unsolicited follow-up menu.
+
+### Fixed maker-facing wording
+
+The helper supplies `userMessage` on every review and result. Render that
+field verbatim as Markdown, without paraphrasing, adding a warning section,
+exposing internal reason codes or appending the raw diagnostic `message`.
+Use the review's text before the one approval control, and the result's text
+as the final response. Do not duplicate the review after execution.
+Do not regenerate counts, infer missing membership or turn an incomplete
+result into success. For multiple independent previews, render each returned
+`userMessage`; do not combine them into a newly interpreted successful scope.
+
+The deterministic presentation is owned by
+`scripts/topic_actions_presentation.py`. Its "Before you approve" notes
+retain material limitations, dependency impact and original-state capture.
+Preview uses "About this preview" instead and never asks for approval.
+Routine diagnostics such as service-enforced edit permission are not
+repeated as notices. Structured `warnings`, `blockers`, HTTP status and
+other evidence remain intact for callers and requested technical diagnosis;
+not displaying raw warning lists does not remove checks or establish trust.
+Unknown limitations receive a plain-language notice, never silent omission.
+Only when the maker explicitly requests diagnostics may safe reason codes
+and HTTP status accompany the fixed copy. Never expose private evidence,
+caller context, service bodies or credentials.
 
 These rules govern generated conversation content, not host-rendered tool
 panels or permission controls. Do not promise to hide those panels, change
@@ -157,9 +181,9 @@ calling conversation. An in-process caller can use
 a nonempty `callerContext` JSON object. Never put context, tokens or component
 bodies in terminal commands, chat output or files.
 
-Parse `TOPIC_ACTIONS_RESULT_JSON:`. Present the target, selected sets,
-observed differences, proposed changes, already-correct topics, protections
-and blockers in plain language, including the unverified-assumption warnings.
+Parse `TOPIC_ACTIONS_RESULT_JSON:` and render its `userMessage`.
+It presents the target, selected sets, current states, proposed changes,
+already-correct topics, protections and limitations in fixed plain language.
 Observed differences in a blocked plan are **not eligible changes**. Report
 all requested sets; missing membership never
 becomes a smaller successful action. No user approval can override blockers.
@@ -168,9 +192,9 @@ does not acquire write scopes or collect executable consent.
 
 For the normal write flow, run `python scripts/topic_actions.py --execute`.
 Keep standard input open: send one JSON request line, wait for
-`TOPIC_ACTIONS_REVIEW_JSON:`, and display the complete returned review,
+`TOPIC_ACTIONS_REVIEW_JSON:`, and display its complete `userMessage`,
 including account, target, every selected set/member, proposed changes,
-already-correct topics, protections and warnings. Only then obtain the
+already-correct topics, protections and material limitations. Only then obtain the
 maker's explicit answer and send `approve`, `deny` or `cancel` as the next
 line to **that same process**. Never prefill approval. EOF cancels; ambiguous
 answers do not approve. Do not save an approval or replay it in another
@@ -194,8 +218,8 @@ without a mode remains a read-only prerequisite inspection.
 
 The planner deduplicates selected membership. Known required topics cannot be
 valid members and remain defensively protected. Unknown required status does
-not block this policy and must remain visible as an unverified-protection
-warning. Selected sets do not protect each other. For disable, a fully enabled
+not block this policy and remains visible as a plain-language limitation
+before approval. Selected sets do not protect each other. For disable, a fully enabled
 outside set protects shared topics; a
 partly enabled outside set protects them only when it has an On member outside
 the selected union. This protection uses only the source-defined map; its
@@ -241,7 +265,8 @@ intent or promise automatic recovery.
 For `/topic-actions Restore the original topic states`, use `action: "restore"`
 through the same preview/execute helper, selected-target checks, five-minute
 approval and one-submission flow. Display `restoreStates`, the baseline date,
-all recorded members, already-correct topics, protections and warnings.
+all recorded members, already-correct topics, protections and material
+limitations through the returned fixed wording.
 Treat an explicit request to revert the skill's changes or return to the
 initial topic states as restore, not as disabling every set.
 The computed delta may contain both On and Off changes. Restore only topics
@@ -303,9 +328,10 @@ review freshness and state-only payload checks remain unchanged. A genuine
 preservation failure must be distinguished from observed state success.
 Enabled state does not establish runtime health or resolved diagnostics.
 
-For an unsuccessful submission, report the safe failure category and
-`submissionHttpStatus` when available. Do not expose exception messages or
-service response bodies. A rejected request is not successful completion;
+For an unsuccessful submission, use the fixed plain-language failure text.
+Keep the safe failure category and `submissionHttpStatus` in the diagnostic
+result; show them only when technical details are requested. Do not expose
+exception messages or service response bodies. A rejected request is not successful completion;
 readback observations do not authorize a retry.
 
 Distinguish blocked, denied, cancelled, review-required, already-correct,

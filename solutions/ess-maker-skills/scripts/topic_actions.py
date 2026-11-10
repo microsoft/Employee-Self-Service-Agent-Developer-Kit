@@ -26,6 +26,7 @@ from agentbuilder import (
 )
 from flightcheck.agent_scope import active_agent
 from topic_actions_client import TopicActionsClient
+from topic_actions_presentation import result_text
 
 
 RESULT_MARKER = "TOPIC_ACTIONS_RESULT_JSON:"
@@ -346,7 +347,7 @@ def _result(
     target: dict[str, str] | None = None,
     verified: bool = False,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "contractVersion": 1,
         "contractStatus": "provisional",
         "status": (
@@ -366,6 +367,8 @@ def _result(
         },
         "callerContext": deepcopy(context),
     }
+    result["userMessage"] = result_text(result)
+    return result
 
 
 def inspect_request(
@@ -552,8 +555,9 @@ def run_topic_actions(
 
 def _confirm_stdin(plan: dict[str, Any]) -> str:
     print(REVIEW_MARKER + json.dumps(plan, sort_keys=True), flush=True)
+    print(plan["userMessage"], file=sys.stderr, flush=True)
     print(
-        "Review the complete plan and warnings above. Enter approve, deny or cancel:",
+        "Review the topic changes above. Enter approve, deny or cancel:",
         file=sys.stderr, flush=True,
     )
     answer = sys.stdin.readline()
@@ -582,6 +586,7 @@ def main(argv: list[str] | None = None) -> int:
                 "completed": False, "writeStatus": "not_attempted",
                 "sets": [{"key": item["key"], "name": item["name"]} for item in document["sets"]],
             }
+            result["userMessage"] = result_text(result)
         except DiscoveryError as error:
             result = _result(error.reason, str(error), {})
         print(RESULT_MARKER + json.dumps(result, sort_keys=True))
