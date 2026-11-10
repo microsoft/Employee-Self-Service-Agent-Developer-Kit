@@ -45,7 +45,7 @@ from flightcheck import telemetry as _fc
 def test_script_entry_point_observes_crash_without_changing_exception(script_id, monkeypatch, captured_post):
     """Execute the actual CLI guard with a failing main, without tenant operations."""
     monkeypatch.setattr(adk, "_SYNC", False)
-    path = Path(adk.__file__).with_name(script_id + ".py")
+    path = Path(adk.__file__).parent.joinpath(*script_id.split(".")).with_suffix(".py")
     tree = ast.parse(path.read_text(encoding="utf-8-sig"))
     guard = tree.body[-1]
     assert isinstance(guard, ast.If)
@@ -108,6 +108,22 @@ def test_script_error_uses_deepest_allowed_frame_not_customer_frame(captured_pos
     assert data["error_category"] == "type"
     assert data["error_code"] == "UNHANDLED_TYPE_ERROR"
     assert "employee data" not in json.dumps(data)
+
+
+def test_flightcheck_crash_reports_allowed_nested_module(captured_post):
+    root = Path(adk.__file__).parent
+    namespace = {}
+    exec(compile("def crash():\n    raise ValueError('private check output')\n",
+                 str(root / "flightcheck" / "runner.py"), "exec"), namespace)
+    with pytest.raises(ValueError):
+        with adk.script_error_boundary("flightcheck.cli"):
+            namespace["crash"]()
+    data = _last_activity(captured_post)["data"]
+    assert data["script_id"] == "flightcheck.cli"
+    assert data["adk_capability"] == "flightcheck"
+    assert data["failure_module"] == "flightcheck.runner"
+    assert data["failure_line"] == 2
+    assert "private check output" not in json.dumps(data)
 
 
 def test_nested_script_boundaries_emit_once(captured_post):

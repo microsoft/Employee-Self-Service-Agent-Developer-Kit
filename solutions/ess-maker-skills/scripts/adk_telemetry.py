@@ -123,6 +123,7 @@ SCRIPT_ERROR_ENTRY_POINTS = {
     "evaluation_promotion": "evaluation_update",
     "evaluation_runs": "evaluation_validate",
     "flow_run_inspect": "workflow_test",
+    "flightcheck.cli": "flightcheck",
     "install_workday_da_extension": "connect",
     "mcp_config": "setup",
     "plant_debug": "topic_test",
@@ -144,9 +145,12 @@ SCRIPT_ERROR_ENTRY_POINTS = {
 _SCRIPT_ERROR_MODULES = tuple(SCRIPT_ERROR_ENTRY_POINTS) + (
     "agentbuilder", "auth", "setup_state", "adk_telemetry",
     "connect_lifecycle", "da_product_registry",
+    "flightcheck.runner", "flightcheck.da_execution", "flightcheck.da_profiles",
 )
 _SCRIPT_ERROR_FILES = {
-    os.path.normcase(os.path.realpath(os.path.join(os.path.dirname(__file__), name + ".py"))): name
+    os.path.normcase(os.path.realpath(os.path.join(
+        os.path.dirname(__file__), *name.split("."),
+    ) + ".py")): name
     for name in _SCRIPT_ERROR_MODULES
 }
 _SCRIPT_ERROR_ACTIVE: ContextVar[bool] = ContextVar("adk_script_error_active", default=False)

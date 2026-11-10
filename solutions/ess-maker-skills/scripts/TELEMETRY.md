@@ -84,7 +84,8 @@ then create an action item or request a privacy-reviewed repro separately.
 Coverage is the `SCRIPT_ERROR_ENTRY_POINTS` registry in `adk_telemetry.py`:
 DA setup/ALM/reconciliation, ServiceNow and Workday connection CLIs, push/publish,
 checkpoint, cleanup scans, topic/workflow debug utilities, evaluation CLIs,
-analytics pointer, MCP configuration, and branding validation (31 entry points).
+analytics pointer, MCP configuration, branding validation, and the FlightCheck
+CLI (32 entry points).
 These main-branch entry points explicitly attribute this event to DA, including
 feature/detached branches; a `main-ca` branch classification is rejected.
 No CA code or dashboard is changed.
@@ -92,8 +93,9 @@ No CA code or dashboard is changed.
 **Not covered:** handled/reported errors, normal `SystemExit` (including nonzero
 validation/auth exits), cancellation, imports/syntax errors before the boundary,
 background-thread/task failures, native crashes, forced termination, legacy or
-unregistered entry points, `evaluation_review.py`'s inline CLI, and FlightCheck
-(which retains its existing check/run/error telemetry). An error count is
+unregistered entry points and `evaluation_review.py`'s inline CLI. FlightCheck
+also retains its existing check/run/error telemetry; handled checkpoint Errors
+are not escaping CLI crashes and do not produce this new event. An error count is
 neither an all-failure count nor a skill failure rate: there is no complete
 invocation denominator, and older clones have no script-error instrumentation.
 Do not add existing API/build/FlightCheck errors to this count; they can
@@ -124,6 +126,14 @@ Chart ID: `gNGdJXtmd7tNdEF-MRJUJXu8QX6GDHZ4HUhjyGPOZvUmDEYnkzxMEAEiuK4`.
 The cube/chart definitions and unchanged existing DA charts/CA tab were read
 back after publication. End-to-end ingestion is pending a real instrumented
 script failure; an empty chart is not evidence that no failures occurred.
+
+The combined ADK Platform tab also includes this DA-only trend (chart
+`gNGdJXtmd7tNdEF-MRJUJXu8QX6GDHZ4HUhjyArdqdt1jkOEuh7Ur7IXZjU`), without
+customer/tenant exclusions so internal validation can be observed. The combined
+FlightCheck tab has a matching DA-only trend restricted to
+`script_id == "flightcheck.cli"` (chart
+`gNGdJXtmd7tNdEF-MRJUJXu8QX6GDHZ4HUhjyLBibXkg8UMZoH3OLmA1bFk`).
+These charts count escaping CLI crashes, not handled check findings.
 
 ## Column naming reminder
 
