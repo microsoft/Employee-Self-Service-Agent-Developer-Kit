@@ -13,7 +13,6 @@ import sys
 from typing import Any
 import uuid
 
-from adk_telemetry import emit_capability_use
 from agentbuilder import AgentBuilderError
 from agentbuilder_object_model import (
     ObjectModelConverterError,
@@ -584,7 +583,6 @@ def main(argv: list[str] | None = None) -> int:
         }
         result["componentPreview"] = component
         if args.yes:
-            emit_capability_use("topic_create")
             saved = native.create_dialog_component(component)
             result.update(saved)
             result["saved"] = True
@@ -618,7 +616,6 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("The expected topic identity differs from its current mapping.")
         result["before"] = current
         if args.yes:
-            emit_capability_use("topic_update")
             topic_update = {
                 "componentId": entry["componentId"],
                 "schemaName": entry["schemaName"],

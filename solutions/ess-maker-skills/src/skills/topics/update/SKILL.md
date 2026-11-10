@@ -28,6 +28,14 @@ The returned component is authoritative current state. The optional projection i
 
 ## 2. Draft and review the change
 
+Immediately before applying the intended edit, record this authoring invocation once, including when the maker later keeps the draft locally:
+
+```powershell
+python scripts/emit_capability.py topic_update
+```
+
+Telemetry is best-effort and must not block authoring. Previewing, saving or recovering the same proposal adds no authoring count. When this owner receives an unchanged draft for a later Push, skip this emission and reuse the draft; do not treat saving it as new authoring.
+
 Edit `{agent.folder}/topics/{Topic}.mcs.yml`. Preserve behavior outside the requested scope.
 
 Ask in normal chat only for missing requirements. Prepare the shared change-focused Update summary with affected Behavior, Inputs, Outputs and Starts when, relevant before/after details, verified Unchanged facts, applicable Notes and Routing Conflicts sections, and the full-draft link. Render it after the current instruction-alignment assessment and native preview, before the separate short decision control.
@@ -63,6 +71,8 @@ python scripts\topic_authoring.py update --draft "{agent.folder}\topics\{Topic}.
 Render the shared Update summary in normal chat. With a known instruction-routing conflict, follow it with the initial Resolve the routing conflict in the Agent Instructions / Push topic anyway / Keep as draft decision. Otherwise use the separate Push topic to agent / Keep as draft control. Reuse unchanged scoped batch/debugging approval rather than asking again. Keep as draft performs no remote save and uses **Draft kept locally. Agent unchanged.** only for a draft-only outcome. If another approved component was saved, use the shared composed report with actual per-component results.
 
 After topic approval, including valid unchanged batch/debugging consent:
+
+Follow **Push telemetry** in the shared experience contract. Reuse an enclosing approved batch's lifecycle without emitting again. Otherwise own the standalone batch, starting immediately before the approved save below and applying the shared terminal mapping after the final observed result, including any jointly approved instruction save. Keep capability authoring counts separate from this save lifecycle.
 
 ```powershell
 python scripts\topic_authoring.py update --draft "{agent.folder}\topics\{Topic}.mcs.yml" --expected ".local\topic-authoring\topic-before.json" --yes --output ".local\topic-authoring\topic-result.json"

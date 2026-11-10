@@ -285,6 +285,7 @@ Push instruction change authorizes only the displayed correction for the identif
 
 #### Apply an approved change
 
+- Follow **Push telemetry** below. Reuse an enclosing approved batch's lifecycle; otherwise own the standalone instruction-save batch.
 - Use the owning operations and preserve their concurrency and readback safeguards.
 - Save and verify a new topic before an instruction correction that depends on its existence.
 - Pause dependent work after a failed or uncertain prerequisite.
@@ -531,6 +532,70 @@ Observe the result and attempt appropriate in-scope recovery. Continue with inde
 After `{composed_push_report}`, continue already-requested next steps within their authorization rather than asking again. For confirmed pushed topics, honor the initial routing-conflict decision. Only for a newly discovered or materially changed conflict, use the combined routing-conflict/testing decision above, not a second testing offer. Otherwise offer relevant testing once using the continuation below, carrying any deliberately declined correction as an exclusion. Do not offer runnable testing of topic changes left local. Carry or infer the topic and use selection only when the target remains ambiguous.
 
 Preserve required owner links/reminders once in the composed response, without duplicate owner reports or menus. If no follow-up applies, finish without a generic What next form. Pushing evaluations does not itself authorize running them. No publication or expanded scope is implied.
+
+## Push telemetry
+
+The session owns one lifecycle for each approved save batch. **Push all listed changes** and **Push selected changes** each define one batch; **Push this change** defines a one-component batch. A standalone approved topic or instruction save is also one batch. A topic and instruction correction approved together share a batch. Keep the approved scope, lifecycle ownership, observed times and emitted calls in session context. Nested component owners reuse that context and must not emit their own lifecycle. Separate later approvals start separate batches; recovery of the same approved operation does not.
+
+Apply this section to explicit evaluation Push, including selected evaluations inside a mixed batch. Do not add it to evaluation Run, Request Review or reviewer completion. Preserve their existing deployment and usage owners.
+
+### Start the approved execution
+
+Finish discovery, previews, target checks and applicable consent first. No local changes, a dry run, a draft kept locally or cancellation before execution emits no Push events. Excluded and kept-pending components are outside the approved batch, not failures.
+
+Use the selected agent's verified ID, not its title. Immediately before dispatching the first approved save command, observe the clock:
+
+```powershell
+[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+```
+
+Retain the returned integer as the start time, then invoke once:
+
+```powershell
+python scripts\emit_capability.py push --event build-start --agent-id "{AgentId}"
+```
+
+Dispatch the approved save through its owner. Do not add an initial `push` usage call; that count belongs to the terminal sequence below. Verification, local acknowledgement, in-scope recovery and pauses after start remain inside this execution window.
+
+### Interpret the terminal result
+
+Use observed owner results, not exit code alone. Maker-facing Pushed / Failed / Unconfirmed / Pushed with local issue remain separate from the coarse telemetry outcomes.
+
+| Observed execution result                                                                                   | BuildOutcome | DeployOutcome  | BuildErrorCode         | DeployErrorCode          | ErrorCategory |
+| ----------------------------------------------------------------------------------------------------------- | ------------ | -------------- | ---------------------- | ------------------------ | ------------- |
+| Approved operations completed successfully, saved state verified, with at least one confirmed remote change | `success`    | `success`      | empty                  | empty                    | empty         |
+| Approved operations completed successfully and all verified already-current content without writing         | `success`    | not emitted    | empty                  | empty                    | empty         |
+| One or more dispatched component operations ended in error                                                  | `failure`    | `server_error` | `PUSH_PARTIAL_FAILURE` | `DEPLOY_PARTIAL_FAILURE` | `runtime`     |
+
+A returned write error counts as operation failure even when its remote effect remains unconfirmed. `server_error` is the existing aggregate deploy label, not a claim that the service rejected every write. Preserve uncertainty and any confirmed saves in the maker-facing report; never replay a write merely to improve telemetry.
+
+A successful owner result with only a non-fatal baseline-refresh or cleanup warning remains telemetry success. Report the local issue truthfully. If verified remote saves are followed by a hard local persistence or output failure that prevents owner completion, omit the terminal sequence while that failure remains. Do not relabel it as remote failure, downgrade an owner error to a warning, or change save/recovery behavior to produce a telemetry result.
+
+Keep a paused or still-running batch open. On cancellation after execution starts, omit completion, deploy and usage events for that batch, including when some components were already saved. Preserve those confirmed saves and report the remaining cancellations. Separately completed batches retain their events. If execution context or timing is lost, do not fabricate completion.
+
+The already-current mapping requires successful completion and authoritative no-write verification for every approved operation. A zero update count alone is insufficient. Failed, unconfirmed, paused or cancelled operations and unresolved hard local failures do not qualify. Do not force a write or claim a deployment occurred.
+
+### Emit the terminal sequence once
+
+For a mapped terminal result, observe the end clock after final verification, local work and authorized recovery. Subtract the retained start integer from that end integer to obtain `DurationMs`. Include post-start pauses; exclude earlier authoring and review. Use actual clock observations, never estimated conversation time. Missing or negative elapsed time is unavailable evidence, not zero.
+
+Resolve `DeployTarget` only for a result that emits `agent-deploy`, from the target environment, not the agent's Dev/Prod realm. Honor `ESS_ADK_DEPLOY_TARGET` only when it is `sandbox` or `production`. Otherwise classify the selected environment's observed/cached `environmentSku` through the existing SDK. Use only metadata tied to the selected environment; do not borrow another agent's cached SKU. Use an empty string when no matching SKU is available:
+
+```powershell
+python -c "import sys; sys.path.insert(0, 'scripts'); import adk_telemetry; print(adk_telemetry.classify_deploy_target(sys.argv[1]))" "{EnvironmentSku}"
+```
+
+When the SKU is unavailable, the SDK's empty/unknown-SKU fallback is `production`; this is a telemetry default, not proof of environment type. Do not make an additional environment API request solely for telemetry. Do not switch identity, prompt for authentication or mutate environment configuration solely for telemetry.
+
+Substitute the table's outcome and error fields, using empty strings for successful error fields. Invoke the applicable commands once, in this order. For verified already-current execution, omit the `agent-deploy` command and use build `success` with empty error fields; still emit one `push` usage event:
+
+```powershell
+python scripts\emit_capability.py push --event build-complete --agent-id "{AgentId}" --outcome "{BuildOutcome}" --duration-ms {DurationMs} --error-code "{BuildErrorCode}" --error-category "{ErrorCategory}"
+python scripts\emit_capability.py push --event agent-deploy --agent-id "{AgentId}" --outcome "{DeployOutcome}" --duration-ms {DurationMs} --deploy-target "{DeployTarget}" --error-code "{DeployErrorCode}" --error-category "{ErrorCategory}"
+python scripts\emit_capability.py push
+```
+
+These are save-execution events, not activation, publication, promotion or conversation acceptance. Telemetry is best-effort: preserve consent and continue the maker's operation if an emission fails. Exit zero is not ingestion confirmation. Do not retry unknown delivery, repurpose the SDK session ID, create persistent batch state, or include content, paths or raw diagnostic messages in event fields.
 
 ## Topic testing continuation
 
