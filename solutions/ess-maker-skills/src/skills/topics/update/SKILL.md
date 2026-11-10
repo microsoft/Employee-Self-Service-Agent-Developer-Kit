@@ -2,7 +2,7 @@
 
 Update one mapped topic in the selected editable Dev agent from an ordinary `.mcs.yml` draft. Preserve native identity, unrelated behavior, active state, and newer non-overlapping remote content. Do not activate or publish as a save side effect.
 
-Read [experience-contract.md](../experience-contract.md) before interacting with the maker. Use its change-focused Update summary, initial routing-conflict decision when applicable, otherwise the short Push topic to agent / Keep as draft control, topic outcome heads, authorization rules and state-aware testing continuation.
+Read [experience-contract.md](../experience-contract.md) before interacting with the maker. Apply its Text-response authoring scope and Response wording and local drafts rules. Use its change-focused Update summary, initial routing-conflict decision when applicable, otherwise its wording-aware Push decision, topic outcome heads, authorization rules and state-aware testing continuation.
 
 ## Boundaries
 
@@ -10,6 +10,7 @@ Read [experience-contract.md](../experience-contract.md) before interacting with
 - Resolve the topic through `.component-map.json`; never retarget by display name.
 - Read the current native topic before editing.
 - Preserve unrelated dialog fields, action IDs, triggers, metadata, expressions, and state.
+- Preserve supplied or accepted response wording and links outside the authorized wording change. Do not polish or paraphrase them without permission.
 - Re-evaluate stale review suggestions against the current actions before applying them.
 - Treat routing overlap and instruction mismatch as advisory. Do not auto-deactivate or overwrite another topic.
 - Do not author Power Automate flows.
@@ -25,6 +26,8 @@ python scripts\topic_authoring.py read --topic "{agent.folder}\topics\{Topic}.mc
 ```
 
 The returned component is authoritative current state. The optional projection is evidence, not permission to overwrite the working draft. Read the full local draft and surrounding components whose contracts matter.
+
+Check the requested and resulting topic against the shared authoring scope before editing. If preserving existing behavior would leave it outside that boundary, explain the limitation and seek an in-scope request rather than silently deleting or rewriting that behavior.
 
 ## 2. Draft and review the change
 
@@ -68,7 +71,7 @@ Preview without mutation:
 python scripts\topic_authoring.py update --draft "{agent.folder}\topics\{Topic}.mcs.yml" --expected ".local\topic-authoring\topic-before.json" --output ".local\topic-authoring\topic-preview.json"
 ```
 
-Render the shared Update summary in normal chat. With a known instruction-routing conflict, follow it with the initial Resolve the routing conflict in the Agent Instructions / Push topic anyway / Keep as draft decision. Otherwise use the separate Push topic to agent / Keep as draft control. Reuse unchanged scoped batch/debugging approval rather than asking again. Keep as draft performs no remote save and uses **Draft kept locally. Agent unchanged.** only for a draft-only outcome. If another approved component was saved, use the shared composed report with actual per-component results.
+Render the shared Update summary in normal chat with affected Response text or Suggested response and the explicit local-workspace statement. With a known instruction-routing conflict, follow it with the initial Resolve the routing conflict in the Agent Instructions / Push topic anyway / Keep as draft decision with the shared wording-review rules. Otherwise use the suggested-response decision when wording remains unaccepted, including I want to update the response, or the separate Push topic to agent / Keep as draft control for supplied or accepted wording. Follow the shared normal-chat revision continuation before saving changed wording. Reuse unchanged scoped batch/debugging approval rather than asking again. Keep as draft performs no remote save and uses **Draft kept locally. Agent unchanged.** only for a draft-only outcome. If another approved component was saved, use the shared composed report with actual per-component results.
 
 After topic approval, including valid unchanged batch/debugging consent:
 

@@ -55,6 +55,102 @@ def test_authoring_usage_precedes_drafting_and_excludes_later_saves():
         assert "unchanged draft for a later Push, skip this emission" in skill
 
 
+def test_text_response_scope_is_shared_without_narrowing_yaml_admission():
+    contract = _read("src/skills/topics/experience-contract.md")
+    scope = contract.split("## Text-response authoring scope\n", 1)[1].split(
+        "## Authoring summaries\n", 1
+    )[0]
+    instructions = " ".join(_read(".github/copilot-instructions.md").split())
+    for guidance in (scope, instructions):
+        assert "one employee intent" in guidance
+        assert "every authored response ending" in guidance
+        assert (
+            "Cross-topic calls or routing, live lookups, flow invocations "
+            "and business/ISV actions are prohibited."
+        ) in guidance
+    assert "must be a text message" in scope
+    assert "not just the last serialized YAML node" in scope
+    assert "Do not silently remove requested or existing behavior" in scope
+    assert "optional exact-response compatibility as a universal admission requirement" in scope
+    assert "When a topic needs an existing external flow" not in instructions
+    assert "Backend-backed topic" not in instructions
+    for owner in ("create", "update"):
+        assert "Text-response authoring scope" in _read(
+            f"src/skills/topics/{owner}/SKILL.md"
+        )
+
+
+def test_wording_review_preserves_supplied_text_and_distinguishes_local_drafts():
+    contract = _read("src/skills/topics/experience-contract.md")
+    wording = contract.split("### Response wording and local drafts\n", 1)[1].split(
+        "### Advisory entries in Notes\n", 1
+    )[0]
+    assert "Preserve wording supplied as the intended response, including links." in wording
+    assert "Do not polish or paraphrase it unless requested." in wording
+    assert "Distinguish intended response text from background material" in wording
+    assert "Ask for missing essential facts rather than inventing them." in wording
+    assert "> **Response text**\n>\n> > {Response text}" in wording
+    assert "> **Suggested response**\n>\n> > {Suggested response}" in wording
+    assert "`.mcs.yml` file saved locally" in wording
+    assert (
+        "> The proposed changes are saved locally in your VS Code workspace. "
+        "They have not been pushed to the agent."
+    ) in wording
+    assert "Keeping a draft locally does not accept a suggestion or authorize a remote save." in wording
+    assert "If the proposed content is already authoritatively saved, report that state instead." in wording
+    assert "without treating it as Push consent" in wording
+    assert "do not infer acceptance from the file's presence or add persistent approval metadata" in wording
+    assert "Preserve exact wording when requested" not in _read(
+        "src/skills/topics/create/SKILL.md"
+    )
+
+
+def test_suggested_response_revision_returns_to_review_without_save_consent():
+    contract = _read("src/skills/topics/experience-contract.md")
+    decision = contract.split("### Suggested-response decision\n", 1)[1].split(
+        "### Initial routing-conflict decision\n", 1
+    )[0]
+    assert (
+        "> **Use this suggested response and push {Topic title} to {Destination agent}?**\n>\n"
+        "> **Push topic to agent** / **I want to update the response** / **Keep as draft**"
+    ) in decision
+    assert "accepts the displayed suggested wording and approves the topic save together" in decision
+    assert "Do not add a separate mandatory wording-approval step." in decision
+    assert "does not accept the suggestion or authorize a remote save" in decision
+    assert (
+        "> What would you like to change? Describe the edits or paste the response you want."
+    ) in decision
+    assert "return to the applicable decision control before any save" in decision
+    assert decision.index("Obtain a fresh native preview") < decision.index(
+        "Then show the revised summary and wording"
+    )
+    assert "Keep as draft retains the suggestion locally without accepting it." in decision
+    assert "saved locally in your VS Code workspace" in decision
+    for owner in ("create", "update"):
+        guidance = _read(f"src/skills/topics/{owner}/SKILL.md")
+        assert "I want to update the response" in guidance
+        assert "normal-chat revision continuation before saving changed wording" in guidance
+    push = " ".join(_read(".github/prompts/push.prompt.md").split())
+    assert "unaccepted or acceptance-unknown response wording before any batch Push approval" in push
+    assert "**I want to update the response** before Keep pending" in push
+    assert "Return to this component's refreshed review before saving it." in push
+    assert "before Keep as draft and use the response-revision continuation" in contract
+    assert "resolving the instruction conflict alone does not accept it" in contract
+
+
+def test_debugging_preserves_wording_without_claiming_verbatim_runtime_delivery():
+    contract = _read("src/skills/topics/experience-contract.md")
+    goal = contract.split("### Scoped runtime correctness goal\n", 1)[1].split(
+        "### Topic debugging outcome:", 1
+    )[0]
+    assert "Preserve supplied or accepted response wording and links during debugging" in goal
+    assert "unless the maker authorizes a wording change" in goal
+    assert "Do not replace wording merely to obtain a passing test." in goal
+    assert "literal saved content and verbatim runtime delivery are distinct claims" in goal
+    assert "a save alone does not establish the last" in goal
+    assert "without restricting read-only inspection of existing topics" in goal
+
+
 def test_eval_driven_aliases_are_thin_and_scenario_lifecycle_is_retired():
     create = _read("src/skills/topics/create-eval-driven/SKILL.md")
     update = _read("src/skills/topics/update-eval-driven/SKILL.md")
