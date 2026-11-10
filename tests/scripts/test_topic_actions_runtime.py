@@ -12,6 +12,7 @@ import pytest
 import requests
 
 from agentbuilder import AgentBuilderClient, AgentBuilderError, AgentBuilderHTTPError
+from topic_actions_client import TopicActionsClient
 from topic_actions_catalog import (
     InstalledPackage, compare_catalog, load_catalog, parse_catalog, plan_catalog_actions,
     snapshot_from_response,
@@ -572,17 +573,116 @@ def test_native_gate_denies_even_a_direct_submission_and_never_asks_for_consent(
     result = TopicActionSession(backend, "enable").run(lambda _: pytest.fail("Blocked plan cannot request consent"))
     assert result["status"] == "blocked" and not backend.submissions
     client = Mock(spec=AgentBuilderClient)
-    native = NativeActionBackend(client, TARGET, ("alpha",), parse_catalog(catalog_document()), "maker")
+    components = Mock(spec=TopicActionsClient)
+    native = NativeActionBackend(client, TARGET, ("alpha",), parse_catalog(catalog_document()), "maker", components)
     with pytest.raises(ValueError, match="not admitted"):
         native.submit_once(TARGET.agent_id, {})
-    client.update_components_once.assert_not_called()
+    components.submit_state_payload.assert_not_called()
+
+
+def dev_source_document():
+    document = catalog_document()
+    document["authorityStatus"] = "provisional"
+    document["source"]["approvalReference"] = None
+    package = document["packages"][0]
+    package.update(
+        packageId=None, setCoverage="unknown",
+        requiredTopicCoverage="unknown", requiredTopicSource=None,
+    )
+    for topic in package["topics"]:
+        topic.update(classification="unknown", required=None)
+    for topic_set in document["sets"]:
+        topic_set["sourceVariants"][0].update(
+            membershipStatus="provisional", membershipComplete=None,
+        )
+    return document
+
+
+def dev_native_backend(*, selected=("alpha",), before=None, after=None, realm="dev"):
+    """Synthetic transport packets exercise policy, not native API qualification."""
+    catalog = parse_catalog(dev_source_document())
+    first = operation_evidence(before, selected=selected, document=catalog.document()).body
+    last = operation_evidence(
+        after, selected=selected, document=catalog.document(), revision="r2",
+    ).body
+    for body in (first, last):
+        body["bot"] = {"cdsBotId": TARGET.agent_id, "schemaName": "synthetic.hr"}
+    client = Mock(spec=AgentBuilderClient)
+    client.tenant_id = TARGET.tenant_id
+    client.host = "https://0000000000000000000000000000222.2.environment.api.test.powerplatform.com"
+    client.ring = "test"
+    client.api_version = "2024-10-01"
+    client.get_agent.return_value = {"botId": TARGET.agent_id, "realm": realm}
+    components = Mock(spec=TopicActionsClient)
+    components.tenant_id = TARGET.tenant_id
+    components.environment_id = TARGET.environment_id
+    components.bot_id = TARGET.agent_id
+    components.host = client.host
+    components.ring = client.ring
+    components.signed_in_username = "synthetic-maker"
+    components.single_attempt = True
+    components.read_components.side_effect = [deepcopy(first), deepcopy(first), deepcopy(last)]
+    return NativeActionBackend(client, TARGET, selected, catalog, "synthetic-maker", components)
+
+
+def test_dev_source_policy_preserves_unknown_evidence_and_exposes_it_at_review():
+    backend = dev_native_backend()
+    packet = backend.read()
+    assert backend.admission_blockers(packet) == ()
+    assert packet.snapshot.source_inventory_only
+    assert all(topic.required is None for topic in packet.snapshot.evidence.topics)
+    assert packet.snapshot.evidence.coverage_complete is False
+    assert all(item.membership_complete is None for item in packet.snapshot.evidence.sets)
+    plan = plan_catalog_actions(packet.snapshot, "enable")
+    assert plan.outcome == "changes_proposed"
+    assert {item.component_id for item in plan.delta} == {"a", "shared"}
+    assert plan.execution_policy == "source_inventory"
+    assert plan.live_actions_available
+    assert {"catalog_review_pending", "installed_package_unverified", "unknown_protection"} <= set(plan.warnings)
+    assert "native_draft_published_effects_unqualified" in plan.warnings
+
+
+@pytest.mark.parametrize("action", ["enable", "disable"])
+def test_native_dev_execution_uses_full_computed_union_and_verifies_readback(action):
+    enabled = {"a": "On", "shared": "On", "b": "On"}
+    backend = dev_native_backend(
+        selected=("alpha", "beta"),
+        before=enabled if action == "disable" else None,
+        after=enabled if action == "enable" else None,
+    )
+    reviews = []
+
+    def confirm(plan):
+        reviews.append(deepcopy(plan))
+        return "approve"
+
+    result = TopicActionSession(backend, action).run(confirm)
+    assert result["completed"] and result["status"] == "completed"
+    assert backend.components.submit_state_payload.call_count == 1
+    assert backend.components.read_components.call_count == 3
+    payload = backend.components.submit_state_payload.call_args.args[0]
+    updates = [row["component"] for row in payload["botComponentChanges"]]
+    assert len(updates) == 3
+    assert {row["id"] for row in updates} == {"a", "b", "shared"}
+    expected_state = "Active" if action == "enable" else "Inactive"
+    assert all(row["state"] == row["status"] == expected_state for row in updates)
+    assert payload["changeToken"] == "r1"
+    backend.client.update_components_once.assert_not_called()
+    assert reviews[0]["account"] == "synthetic-maker"
+    assert len(reviews[0]["members"]) == 4
+    assert reviews[0]["warnings"] == result["warnings"]
+    assert "No publish operation was requested" in result["message"]
+    with pytest.raises(ValueError, match="already consumed"):
+        backend.submit_once(TARGET.agent_id, {})
+    assert backend.components.submit_state_payload.call_count == 1
 
 
 @pytest.mark.parametrize("action", ["enable", "disable"])
 def test_native_execution_preserves_unparented_bot_settings_without_submitting_them(action):
-    before = operation_evidence({"a": "On", "shared": "On"} if action == "disable" else None)
-    after = operation_evidence(
-        {"a": "On", "shared": "On"} if action == "enable" else None, revision="r2",
+    enabled = {"a": "On", "shared": "On"}
+    backend = dev_native_backend(
+        before=enabled if action == "disable" else None,
+        after=enabled if action == "enable" else None,
     )
     settings = {
         "$kind": "BotComponentInsert",
@@ -591,17 +691,18 @@ def test_native_execution_preserves_unparented_bot_settings_without_submitting_t
             "schemaName": "synthetic.hr.BotSettingsComponent.ConnectionParameter",
         },
     }
-    for packet in (before, after):
-        packet.body["botComponentChanges"].append(deepcopy(settings))
-    backend = SyntheticBackend([before, before, after])
+    packets = list(backend.components.read_components.side_effect)
+    for packet in packets:
+        packet["botComponentChanges"].append(deepcopy(settings))
+    backend.components.read_components.side_effect = packets
 
     result = TopicActionSession(backend, action).run(lambda _: "approve")
 
     assert result["status"] == "completed" and result["completed"]
-    assert len(backend.submissions) == 1
-    updates = backend.submissions[0][1]["botComponentChanges"]
-    assert {row["component"]["id"] for row in updates} == {"a", "shared"}
-    assert after.body["botComponentChanges"][-1] == settings
+    backend.components.submit_state_payload.assert_called_once()
+    payload = backend.components.submit_state_payload.call_args.args[0]
+    assert {row["component"]["id"] for row in payload["botComponentChanges"]} == {"a", "shared"}
+    assert packets[-1]["botComponentChanges"][-1] == settings
 
 
 @pytest.mark.parametrize(("kind", "parent"), [
@@ -625,6 +726,82 @@ def test_payload_still_rejects_missing_or_foreign_parents_outside_bot_settings_o
         build_state_payload(packet, plan)
 
 
+def test_native_dev_noop_confirms_and_rereads_without_submission():
+    backend = dev_native_backend()
+    reviews = []
+
+    def confirm(plan):
+        reviews.append(plan)
+        return "approve"
+
+    result = TopicActionSession(backend, "disable").run(confirm)
+    assert result["status"] == "already_correct" and result["completed"]
+    assert reviews[0]["alreadyCorrect"] == ["a", "shared"]
+    assert backend.components.read_components.call_count == 2
+    backend.components.submit_state_payload.assert_not_called()
+
+
+@pytest.mark.parametrize("realm", ["dev", "test", "prod", None, 0, 1, 2])
+def test_native_realm_does_not_block_approved_exact_target_execution(realm):
+    backend = dev_native_backend(realm=realm, after={"a": "On", "shared": "On"})
+    reviews = []
+    result = TopicActionSession(backend, "enable").run(
+        lambda review: reviews.append(review) or "approve",
+    )
+    assert result["status"] == "completed" and result["completed"]
+    assert len(reviews) == 1
+    assert "native_draft_published_effects_unqualified" in reviews[0]["warnings"]
+    backend.components.submit_state_payload.assert_called_once()
+
+
+@pytest.mark.parametrize("returned_id", [TARGET.tenant_id, None, "not-an-id"])
+def test_native_direct_lookup_still_must_identify_the_selected_agent(returned_id):
+    backend = dev_native_backend(realm="prod")
+    backend.client.get_agent.return_value = {"botId": returned_id, "realm": "prod"}
+    result = TopicActionSession(backend, "enable").run(
+        lambda _: pytest.fail("A mismatched agent cannot request approval."),
+    )
+    assert result["status"] == "blocked"
+    backend.components.read_components.assert_not_called()
+    backend.components.submit_state_payload.assert_not_called()
+
+
+@pytest.mark.parametrize("change", ["missing_member", "unknown_state", "wrong_parent"])
+def test_dev_policy_does_not_waive_identity_membership_or_state_failures(change):
+    backend = dev_native_backend()
+    body = deepcopy(next(backend.components.read_components.side_effect))
+    if change == "missing_member":
+        body["botComponentChanges"].pop(0)
+    elif change == "unknown_state":
+        body["botComponentChanges"][0]["component"]["status"] = "Active"
+    else:
+        body["botComponentChanges"][0]["component"]["parentBotId"] = TARGET.tenant_id
+    backend.components.read_components.side_effect = [body]
+    result = TopicActionSession(backend, "enable").run(
+        lambda _: pytest.fail("Unresolved topics cannot request approval."),
+    )
+    assert result["status"] == "blocked"
+    backend.components.submit_state_payload.assert_not_called()
+
+
+@pytest.mark.parametrize("change", ["content", "extra_topic", "wrong_target"])
+def test_native_submission_independently_rejects_payload_outside_computed_plan(change):
+    backend = dev_native_backend()
+    packet = backend.read()
+    plan = plan_catalog_actions(packet.snapshot, "enable")
+    payload = build_state_payload(packet, plan)
+    agent = TARGET.agent_id
+    if change == "content":
+        payload["botComponentChanges"][0]["component"]["dialog"] = {"changed": True}
+    elif change == "extra_topic":
+        payload["botComponentChanges"].append(deepcopy(payload["botComponentChanges"][0]))
+    else:
+        agent = TARGET.tenant_id
+    with pytest.raises(ValueError):
+        backend.submit_once(agent, payload)
+    backend.components.submit_state_payload.assert_not_called()
+
+
 @pytest.mark.parametrize(("status", "reason"), [
     (302, "write_http_error"), (400, "write_request_rejected"),
     (401, "write_authentication_failed"), (403, "write_access_denied"),
@@ -633,14 +810,15 @@ def test_payload_still_rejects_missing_or_foreign_parents_outside_bot_settings_o
     (429, "write_throttled"), (500, "write_service_failed"),
 ])
 def test_native_http_failures_keep_safe_status_and_stop_without_replay(status, reason):
-    before = operation_evidence()
-    backend = SyntheticBackend([before, before, before], error=AgentBuilderHTTPError("private", status))
+    backend = dev_native_backend()
+    backend.components.submit_state_payload.side_effect = AgentBuilderHTTPError("private", status)
     result = TopicActionSession(backend, "enable").run(lambda _: "approve")
     assert result["status"] == "unverified" and not result["completed"]
     assert reason in result["blockers"]
     assert result["submissionHttpStatus"] == status
     assert "fresh_approval_required" in result["blockers"]
-    assert len(backend.submissions) == 1 and backend.reads == 3
+    assert backend.components.submit_state_payload.call_count == 1
+    assert backend.components.read_components.call_count == 3
     assert "private" not in json.dumps(result)
 
 
@@ -651,14 +829,15 @@ def test_native_http_failures_keep_safe_status_and_stop_without_replay(status, r
     (ValueError("private"), "submission_validation_failed"),
 ])
 def test_submission_failures_are_classified_without_disclosing_details_or_replaying(failure, reason):
-    before = operation_evidence()
-    backend = SyntheticBackend([before, before, before], error=failure)
+    backend = dev_native_backend()
+    backend.components.submit_state_payload.side_effect = failure
     result = TopicActionSession(backend, "enable").run(lambda _: "approve")
     assert result["status"] == "unverified" and not result["completed"]
     assert result["submissionHttpStatus"] is None
     assert reason in result["blockers"]
     assert "fresh_approval_required" in result["blockers"]
-    assert len(backend.submissions) == 1 and backend.reads == 3
+    assert backend.components.submit_state_payload.call_count == 1
+    assert backend.components.read_components.call_count == 3
     assert all(topic["state"] == "Off" for topic in result["topics"])
     assert "private" not in json.dumps(result)
 
@@ -703,3 +882,186 @@ def test_isolated_transport_disables_retries_and_redirects_without_changing_shar
         assert shared_adapter.max_retries.total == 3
     finally:
         client.session.close()
+
+
+@pytest.mark.parametrize("status", [200, 307, 400, 409, 429, 500])
+def test_topic_client_preserves_http_status_without_replay(monkeypatch, status):
+    client = TopicActionsClient(
+        TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
+        host=dev_native_backend().client.host, ring="test",
+        token="private-token", account="synthetic-maker",
+    )
+    expected = build_state_payload(operation_evidence(), plan_catalog_actions(operation_evidence().snapshot, "enable"))
+    isolated = Mock()
+    isolated.__enter__ = Mock(return_value=isolated)
+    isolated.__exit__ = Mock(return_value=False)
+    isolated.request.return_value.status_code = status
+    isolated.request.return_value.json.return_value = {}
+    monkeypatch.setattr("topic_actions_client.requests.Session", Mock(return_value=isolated))
+    if status == 200:
+        client.submit_state_payload(expected)
+    else:
+        with pytest.raises(AgentBuilderHTTPError) as error:
+            client.submit_state_payload(expected)
+        assert error.value.status_code == status
+    assert isolated.request.call_count == 1
+    assert isolated.request.call_args.kwargs["json"] == expected
+    assert isolated.request.call_args.kwargs["allow_redirects"] is False
+    assert isolated.mount.call_args.args[1].max_retries.total == 0
+    with pytest.raises(ValueError, match="already consumed"):
+        client.submit_state_payload(expected)
+    assert isolated.request.call_count == 1
+
+
+def test_topic_client_sends_reviewed_payload_without_extra_reads_or_mutation(monkeypatch):
+    client = TopicActionsClient(
+        TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
+        host=dev_native_backend().client.host, ring="test",
+        token="private-token", account="synthetic-maker",
+    )
+    evidence = operation_evidence()
+    payload = build_state_payload(evidence, plan_catalog_actions(evidence.snapshot, "enable"))
+    original = deepcopy(payload)
+    events = []
+    def request(*args, **kwargs):
+        events.append("submit")
+        assert kwargs["body"] == original
+        return Mock(status_code=200), {}
+    monkeypatch.setattr(client, "read_components", lambda: pytest.fail("No unreviewed reread."))
+    monkeypatch.setattr(client, "_request", request)
+    client.submit_state_payload(payload)
+    assert events == ["submit"]
+    assert payload == original
+
+
+@pytest.mark.parametrize("failure", [requests.Timeout("private"), requests.ConnectionError("private")])
+def test_topic_client_does_not_wrap_or_replay_transport_failure(monkeypatch, failure):
+    client = TopicActionsClient(
+        TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
+        host=dev_native_backend().client.host, ring="test",
+        token="private-token", account="synthetic-maker",
+    )
+    isolated = Mock()
+    isolated.__enter__ = Mock(return_value=isolated)
+    isolated.__exit__ = Mock(return_value=False)
+    isolated.request.side_effect = failure
+    monkeypatch.setattr("topic_actions_client.requests.Session", Mock(return_value=isolated))
+    with pytest.raises(type(failure)):
+        client.submit_state_payload({"changeToken": "synthetic"})
+    with pytest.raises(ValueError, match="already consumed"):
+        client.submit_state_payload({"changeToken": "synthetic"})
+    assert isolated.request.call_count == 1
+
+
+def test_read_only_topic_client_refuses_submission_without_network(monkeypatch):
+    client = TopicActionsClient(
+        TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
+        host=dev_native_backend().client.host, ring="test",
+        token="private-token", account="synthetic-maker", read_only=True,
+    )
+    request = Mock(side_effect=AssertionError("Preview cannot submit."))
+    monkeypatch.setattr(client, "_request", request)
+    with pytest.raises(ValueError):
+        client.submit_state_payload({"changeToken": "synthetic"})
+    request.assert_not_called()
+
+
+@pytest.mark.parametrize("body", [None, [], "private-response"])
+def test_topic_client_rejects_non_object_component_reads(monkeypatch, body):
+    client = TopicActionsClient(
+        TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
+        host=dev_native_backend().client.host, ring="test",
+        token="private-token", account="synthetic-maker",
+    )
+    monkeypatch.setattr(client, "_request", lambda *args, **kwargs: (Mock(status_code=200), body))
+    with pytest.raises(AgentBuilderError, match="unexpected payload"):
+        client.read_components()
+
+
+@pytest.mark.parametrize("status", [200, 307, 403])
+def test_topic_client_read_uses_native_post_and_does_not_follow_redirects(monkeypatch, status):
+    client = TopicActionsClient(
+        TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
+        host=dev_native_backend().client.host, ring="test",
+        token="private-token", account="synthetic-maker",
+    )
+    isolated = Mock()
+    isolated.__enter__ = Mock(return_value=isolated)
+    isolated.__exit__ = Mock(return_value=False)
+    isolated.request.return_value.status_code = status
+    body = operation_evidence().body
+    isolated.request.return_value.json.return_value = body
+    monkeypatch.setattr("topic_actions_client.requests.Session", Mock(return_value=isolated))
+    if status == 200:
+        assert client.read_components() == body
+    else:
+        with pytest.raises(AgentBuilderHTTPError) as error:
+            client.read_components()
+        assert error.value.status_code == status
+    isolated.request.assert_called_once()
+    assert isolated.request.call_args.args == ("POST", client._components_url)
+    assert isolated.request.call_args.kwargs["json"] == {}
+    assert isolated.request.call_args.kwargs["allow_redirects"] is False
+
+
+@pytest.mark.parametrize("action", ["enable", "disable"])
+@pytest.mark.parametrize("generated_changes", [False, True])
+def test_native_controller_executes_through_topic_owned_client(monkeypatch, action, generated_changes):
+    backend = dev_native_backend(
+        before={"a": "On", "shared": "On"} if action == "disable" else None,
+    )
+    remote = deepcopy(next(backend.components.read_components.side_effect))
+    if generated_changes:
+        before, after = server_generated_readback(action)
+        remote["botComponentChanges"] = deepcopy(before.body["botComponentChanges"])
+    components = TopicActionsClient(
+        TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
+        ring=backend.client.ring, host=backend.client.host,
+        token="private-token", account=backend.account_id,
+    )
+    backend.components = components
+    writes = []
+    def request(method, url, **kwargs):
+        assert url == components._components_url
+        if method == "PUT":
+            payload = kwargs["body"]
+            writes.append(deepcopy(payload))
+            changes = {row["component"]["id"]: row for row in payload["botComponentChanges"]}
+            remote["botComponentChanges"] = [
+                {"$kind": "BotComponentInsert", "component": deepcopy(changes[row["component"]["id"]]["component"])}
+                if row["component"]["id"] in changes else row
+                for row in remote["botComponentChanges"]
+            ]
+            if generated_changes:
+                remote["botComponentChanges"] = deepcopy(after.body["botComponentChanges"])
+            remote["changeToken"] = "r2"
+            return Mock(status_code=200), {}
+        assert method == "POST"
+        return Mock(status_code=200), deepcopy(remote)
+    monkeypatch.setattr(components, "_request", request)
+    result = TopicActionSession(backend, action).run(lambda _: "approve")
+    assert result["completed"] and result["status"] == "completed"
+    assert len(writes) == 1
+    assert {row["component"]["id"] for row in writes[0]["botComponentChanges"]} == {"a", "shared"}
+    assert all(topic["state"] == ("On" if action == "enable" else "Off") for topic in result["topics"])
+    backend.client.fetch_components.assert_not_called()
+    backend.client.update_components_once.assert_not_called()
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("tenant_id", TARGET.agent_id),
+    ("environment_id", TARGET.agent_id),
+    ("bot_id", TARGET.tenant_id),
+    ("host", "https://another.invalid"),
+    ("ring", "prod"),
+    ("signed_in_username", "another-maker"),
+    ("single_attempt", False),
+])
+def test_topic_component_client_must_remain_bound_to_reviewed_target_and_account(field, value):
+    backend = dev_native_backend()
+    packet = backend.read()
+    payload = build_state_payload(packet, plan_catalog_actions(packet.snapshot, "enable"))
+    setattr(backend.components, field, value)
+    with pytest.raises(ValueError, match="not admitted"):
+        backend.submit_once(TARGET.agent_id, payload)
+    backend.components.submit_state_payload.assert_not_called()

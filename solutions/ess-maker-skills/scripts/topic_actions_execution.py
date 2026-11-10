@@ -3,8 +3,8 @@
 
 """In-memory review, single-attempt execution and conservative reconciliation.
 
-The controller is transport-independent. Production admission is supplied only
-by the native adapter, never by request JSON or an approval digest.
+The controller is transport-independent. The native adapter verifies the selected
+target and exact source-inventory scope; service authorization remains native.
 """
 
 from __future__ import annotations
@@ -18,11 +18,11 @@ from typing import Callable, Protocol
 from requests import RequestException
 
 from agentbuilder import AgentBuilderError, AgentBuilderHTTPError
-from minimalbot_evaluation import _without_server_generated_fields
 from topic_actions_catalog import CatalogSnapshot, plan_catalog_actions
 from topic_actions_components import normalize_state
 from topic_actions_discovery import _identity
 from topic_actions_planning import TopicPlan, _digest
+from topic_actions_state import TopicStateError, TopicStateStore
 
 
 _LOCKS_GUARD = threading.Lock()
@@ -126,11 +126,20 @@ def public_plan(plan: TopicPlan) -> dict:
         "proposedChanges": changes(plan.delta),
         "observedDifferences": changes(plan.state_differences),
         "alreadyCorrect": list(plan.satisfied_member_ids),
+        "restoreStates": [
+            {"componentId": identity, "state": state} for identity, state in plan.desired_states
+        ],
         "protected": [{
             "componentId": item.component_id, "reason": item.reason,
             "protectingSets": list(item.protecting_sets),
         } for item in plan.skips],
         "blockers": list(plan.blockers),
+        "executionPolicy": plan.execution_policy,
+        "warnings": list(plan.warnings),
+        "members": [
+            {"setKey": key, "schemaName": schema, "componentId": identity}
+            for key, schema, identity in plan.members
+        ],
     }
 
 
@@ -145,6 +154,18 @@ def _component_map(body: dict) -> dict:
             raise ValueError("Ambiguous readback.")
         result[identity] = item
     return result
+
+
+def _without_server_generated_fields(value):
+    if isinstance(value, dict):
+        return {
+            key: _without_server_generated_fields(child)
+            for key, child in value.items()
+            if key not in {"diagnostics", "structuredCondition"}
+        }
+    if isinstance(value, list):
+        return [_without_server_generated_fields(child) for child in value]
+    return value
 
 
 def _preservation_content(component: dict, *, state_change: bool) -> dict:
@@ -181,6 +202,8 @@ def _reconcile(before: OperationEvidence, after: OperationEvidence, plan: TopicP
     stable_authority = (
         before.account_id == after.account_id
         and before.snapshot.catalog_revision == after.snapshot.catalog_revision
+        and before.snapshot.source_inventory_only == after.snapshot.source_inventory_only
+        and before.snapshot.warnings == after.snapshot.warnings
         and before.snapshot.evidence.target == after.snapshot.evidence.target
         and before.snapshot.members == after.snapshot.members
         and before.snapshot.evidence.sets == after.snapshot.evidence.sets
@@ -206,7 +229,10 @@ def _reconcile(before: OperationEvidence, after: OperationEvidence, plan: TopicP
             )
             reason = "readback"
         else:
-            desired = "On" if plan.action == "enable" else "Off"
+            desired = (
+                dict(before.snapshot.restore_states)[identity] if plan.action == "restore"
+                else ("On" if plan.action == "enable" else "Off")
+            )
             status = "already_correct" if state == desired else "unverified"
             reason = "readback"
         results.append({"componentId": identity, "state": state, "status": status, "reason": reason})
@@ -214,26 +240,34 @@ def _reconcile(before: OperationEvidence, after: OperationEvidence, plan: TopicP
 
 
 class TopicActionSession:
-    """One review and at most one dispatch. No saved approval, journal or replay."""
+    """One review and at most one dispatch. No saved approval or replay."""
 
     def __init__(
         self, backend: ActionBackend, action: str, *, caller_context: dict | None = None,
         clock: Callable[[], float] = time.monotonic,
+        state_store: TopicStateStore | None = None,
     ) -> None:
-        if action not in ("enable", "disable"):
+        if action not in ("enable", "disable", "restore"):
             raise ValueError("Unsupported action.")
         self.backend = backend
         self.action = action
         self.caller_context = deepcopy(caller_context or {})
         self.clock = clock
+        self.state_store = state_store
+        self._state_revision = ""
+        self._baseline_review = None
+        self._state_operation = None
+        self._readback = None
         self._used = False
 
-    def run(self, confirm: Callable[[dict], str]) -> dict:
+    def run(self, confirm: Callable[[dict], str], *, preview: bool = False) -> dict:
         if self._used:
             return self._result("blocked", blockers=("session_consumed",))
         self._used = True
         try:
             evidence = self.backend.read()
+        except TopicStateError as error:
+            return self._result("blocked", blockers=(error.reason,))
         except AgentBuilderHTTPError as error:
             reason = {
                 401: "authentication_failed",
@@ -254,11 +288,23 @@ class TopicActionSession:
             return self._result(
                 "blocked", plan=plan, blockers=blockers or (f"plan_{plan.outcome}",),
             )
+        if preview:
+            return self._result("preview", plan=plan)
+        if self.state_store is not None and (plan.delta or self.action == "restore"):
+            try:
+                self._state_revision, self._baseline_review = self.state_store.review(
+                    evidence, restoring=self.action == "restore",
+                )
+            except TopicStateError as error:
+                return self._result("blocked", plan=plan, blockers=(error.reason,))
         # Freeze the basis before handing the public copy to the interaction.
         basis = evidence.fingerprint()
         deadline = self.clock() + 300
         try:
-            decision = confirm(public_plan(plan))
+            review = {**public_plan(plan), "account": evidence.account_id}
+            if self._baseline_review is not None:
+                review["baseline"] = deepcopy(self._baseline_review)
+            decision = confirm(review)
         except (KeyboardInterrupt, EOFError):
             decision = "cancel"
         except Exception:
@@ -273,7 +319,21 @@ class TopicActionSession:
         if not lock.acquire(blocking=False):
             return self._result("review_required", plan=plan, blockers=("operation_in_progress",))
         try:
-            return self._execute(plan, basis, deadline)
+            result = self._execute(plan, basis, deadline)
+            if self._state_operation is not None:
+                try:
+                    self.state_store.finish(
+                        self._state_operation, self._readback,
+                        verified=result["status"] in ("completed", "completed_with_protections"),
+                        attempted=result["writeStatus"] == "submitted",
+                    )
+                except Exception:
+                    return self._result(
+                        "unverified", plan=plan, write_status=result["writeStatus"],
+                        topics=result["topics"],
+                        blockers=("state_journal_update_failed", "fresh_approval_required"),
+                    )
+            return result
         finally:
             lock.release()
 
@@ -295,14 +355,20 @@ class TopicActionSession:
                 topics, verified = _reconcile(fresh, fresh, plan)
                 if not verified or any(item["status"] == "unverified" for item in topics):
                     return self._result("review_required", plan=plan, blockers=("evidence_changed",))
+                if self.state_store is not None and self.action == "restore" and not plan.skips:
+                    self.state_store.finish_restore_noop(fresh, self._state_revision)
                 return self._result("already_correct", plan=plan, completed=not plan.skips, topics=topics)
             payload = build_state_payload(fresh, plan)
+            if self.state_store is not None:
+                self._state_operation = self.state_store.begin(fresh, plan, self._state_revision)
             final_blockers = self.backend.admission_blockers(fresh)
             if final_blockers or self.clock() >= deadline:
                 return self._result(
                     "review_required", plan=plan,
                     blockers=tuple(final_blockers) or ("approval_expired",),
                 )
+        except TopicStateError as error:
+            return self._result("review_required", plan=plan, blockers=(error.reason,))
         except Exception:
             return self._result("blocked", plan=plan, blockers=("pre_dispatch_check_failed",))
         # An error after entering submit is potentially applied, even on timeout.
@@ -334,6 +400,7 @@ class TopicActionSession:
             pass
         try:
             after = self.backend.read()
+            self._readback = after
             topics, scope_verified = _reconcile(fresh, after, plan)
             scope_verified = scope_verified and not self.backend.admission_blockers(after)
         except (Exception, KeyboardInterrupt):
@@ -389,10 +456,13 @@ class TopicActionSession:
             "status": status, "completed": completed, "writeStatus": write_status,
             "submissionHttpStatus": submission_http_status,
             "blockers": list(dict.fromkeys(blockers)), "topics": topics or [],
+            "warnings": list(plan.warnings) if plan else [],
+            "baseline": deepcopy(self._baseline_review),
             "plan": public_plan(plan) if plan else None,
             "callerContext": deepcopy(self.caller_context),
             "message": {
                 "blocked": "Topic actions are blocked. No changes were attempted.",
+                "preview": "Preview only. No changes were attempted and no executable approval was collected.",
                 "cancelled": "Cancelled. No changes were attempted.",
                 "denied": "Not approved. No changes were attempted.",
                 "review_required": "The evidence changed or approval expired. Review and approve a fresh plan.",
@@ -400,6 +470,11 @@ class TopicActionSession:
                 "completed": "The requested topic states were verified. No publish operation was requested.",
                 "completed_with_protections": "Eligible topic changes were verified; protected topics were left unchanged.",
                 "partial": partial_message,
-                "unverified": "The submission outcome is uncertain. Observations are not proof that this request made the changes.",
+                "unverified": (
+                    "No topic submission was attempted, but local operation bookkeeping could not "
+                    "be finalized. Keep the saved baseline; further writes remain blocked."
+                    if write_status == "not_attempted" else
+                    "The submission outcome is uncertain. Observations are not proof that this request made the changes."
+                ),
             }[status],
         }
