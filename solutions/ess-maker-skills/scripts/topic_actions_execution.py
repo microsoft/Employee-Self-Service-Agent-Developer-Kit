@@ -15,7 +15,10 @@ import time
 import threading
 from typing import Callable, Protocol
 
-from agentbuilder import AgentBuilderHTTPError
+from requests import RequestException
+
+from agentbuilder import AgentBuilderError, AgentBuilderHTTPError
+from minimalbot_evaluation import _without_server_generated_fields
 from topic_actions_catalog import CatalogSnapshot, plan_catalog_actions
 from topic_actions_components import normalize_state
 from topic_actions_discovery import _identity
@@ -72,8 +75,11 @@ def build_state_payload(evidence: OperationEvidence, plan: TopicPlan) -> dict:
         identity = _identity(component.get("id"))
         if identity in indexed:
             raise ValueError("Ambiguous component identity.")
-        if _identity(component.get("parentBotId")) != plan.target.agent_id:
-            raise ValueError("Unverified parent identity.")
+        parent_id = component.get("parentBotId")
+        # Native bot settings can omit their parent; they are never submitted.
+        if parent_id is not None or component.get("$kind") != "BotSettingsComponent":
+            if _identity(parent_id) != plan.target.agent_id:
+                raise ValueError("Unverified parent identity.")
         indexed[identity] = component
     changes = []
     for change in plan.delta:
@@ -141,6 +147,22 @@ def _component_map(body: dict) -> dict:
     return result
 
 
+def _preservation_content(component: dict, *, state_change: bool) -> dict:
+    """Normalize readback only, not the reviewed evidence or submitted payload."""
+    content = deepcopy(component)
+    if content.get("$kind") == "DialogComponent" and "dialog" in content:
+        content["dialog"] = _without_server_generated_fields(content["dialog"])
+    if state_change:
+        for key in ("state", "status", "version"):
+            content.pop(key, None)
+        audit = content.get("auditInfo")
+        if isinstance(audit, dict):
+            audit.pop("modifiedTimeUtc", None)
+            if not audit:
+                content.pop("auditInfo")
+    return content
+
+
 def _reconcile(before: OperationEvidence, after: OperationEvidence, plan: TopicPlan) -> tuple[list[dict], bool]:
     """Observed desired state after an uncertain submission is not attribution."""
     before_map = _component_map(before.body)
@@ -148,17 +170,13 @@ def _reconcile(before: OperationEvidence, after: OperationEvidence, plan: TopicP
     delta = {item.component_id: item for item in plan.delta}
     containment = set(before_map) == set(after_map)
     for identity, original in before_map.items():
-        current = deepcopy(after_map.get(identity))
+        current = after_map.get(identity)
         if current is None:
             containment = False
             continue
-        expected = deepcopy(original)
-        if identity in delta:
-            expected.pop("state", None)
-            expected.pop("status", None)
-            current.pop("state", None)
-            current.pop("status", None)
-        if current != expected:
+        if _preservation_content(current, state_change=identity in delta) != _preservation_content(
+            original, state_change=identity in delta,
+        ):
             containment = False
     stable_authority = (
         before.account_id == after.account_id
@@ -289,9 +307,29 @@ class TopicActionSession:
             return self._result("blocked", plan=plan, blockers=("pre_dispatch_check_failed",))
         # An error after entering submit is potentially applied, even on timeout.
         acknowledged = False
+        submission_reason = "submission_outcome_uncertain"
+        submission_http_status = None
         try:
             self.backend.submit_once(plan.target.agent_id, payload)
             acknowledged = True
+        except AgentBuilderHTTPError as error:
+            submission_http_status = error.status_code
+            submission_reason = {
+                400: "write_request_rejected",
+                401: "write_authentication_failed", 403: "write_access_denied",
+                404: "write_target_not_found",
+                409: "write_conflict", 412: "write_conflict",
+                413: "write_request_too_large", 429: "write_throttled",
+            }.get(
+                error.status_code,
+                "write_service_failed" if 500 <= error.status_code < 600 else "write_http_error",
+            )
+        except RequestException:
+            submission_reason = "write_transport_failed"
+        except AgentBuilderError:
+            submission_reason = "write_acknowledgement_unverified"
+        except ValueError:
+            submission_reason = "submission_validation_failed"
         except (Exception, KeyboardInterrupt):
             pass
         try:
@@ -301,6 +339,7 @@ class TopicActionSession:
         except (Exception, KeyboardInterrupt):
             return self._result(
                 "unverified", plan=plan, write_status="submitted",
+                submission_http_status=submission_http_status,
                 blockers=("readback_failed", "fresh_approval_required"),
                 topics=[{
                     "componentId": identity, "state": "Unknown",
@@ -314,7 +353,10 @@ class TopicActionSession:
         if not acknowledged:
             return self._result(
                 "unverified", plan=plan, write_status="submitted", topics=topics,
-                blockers=("submission_outcome_uncertain", "fresh_approval_required"),
+                submission_http_status=submission_http_status,
+                blockers=tuple(dict.fromkeys((
+                    submission_reason, "submission_outcome_uncertain", "fresh_approval_required",
+                ))),
             )
         if verified:
             for item in topics:
@@ -331,10 +373,21 @@ class TopicActionSession:
         self, status: str, *, plan: TopicPlan | None = None,
         blockers: tuple[str, ...] = (), write_status: str = "not_attempted",
         completed: bool = False, topics: list[dict] | None = None,
+        submission_http_status: int | None = None,
     ) -> dict:
+        partial_message = "Not every result could be verified. No changes will be replayed automatically."
+        if status == "partial" and topics and all(
+            item["status"] in ("observed_desired", "already_correct", "protected")
+            for item in topics
+        ):
+            partial_message = (
+                "Readback shows the eligible topics in their requested states, but content or scope "
+                "preservation could not be verified. No changes will be replayed automatically."
+            )
         return {
             "contractVersion": 1, "contractStatus": "provisional",
             "status": status, "completed": completed, "writeStatus": write_status,
+            "submissionHttpStatus": submission_http_status,
             "blockers": list(dict.fromkeys(blockers)), "topics": topics or [],
             "plan": public_plan(plan) if plan else None,
             "callerContext": deepcopy(self.caller_context),
@@ -344,9 +397,9 @@ class TopicActionSession:
                 "denied": "Not approved. No changes were attempted.",
                 "review_required": "The evidence changed or approval expired. Review and approve a fresh plan.",
                 "already_correct": "The eligible topics are already in the requested state. No changes were needed.",
-                "completed": "The requested topic states were verified. Nothing was published.",
+                "completed": "The requested topic states were verified. No publish operation was requested.",
                 "completed_with_protections": "Eligible topic changes were verified; protected topics were left unchanged.",
-                "partial": "Not every result could be verified. No changes will be replayed automatically.",
+                "partial": partial_message,
                 "unverified": "The submission outcome is uncertain. Observations are not proof that this request made the changes.",
             }[status],
         }

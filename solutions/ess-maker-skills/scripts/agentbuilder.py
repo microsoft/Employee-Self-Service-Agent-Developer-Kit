@@ -1482,7 +1482,7 @@ class AgentBuilderClient:
                 allow_redirects=False,
             )
             if not 200 <= response.status_code < 300:
-                raise AgentBuilderError("Component submission was not acknowledged.")
+                _response_error(response, "Component submission")
             try:
                 body = response.json()
             except ValueError:
