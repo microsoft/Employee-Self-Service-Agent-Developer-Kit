@@ -51,12 +51,12 @@ preview again with the approved flags before deploying.
 Use `scripts/evaluation_deployment.py`; do not reproduce its transport logic.
 Its CLI actions are `request-review`, `run`, and `push`:
 
-| Workflow | Helper action |
-|---|---|
-| Flow R1 Request Review | `request-review` (the helper owns the local requested marker) |
-| Flow A Run | `run` |
-| Explicit standalone push | `push`, preserving existing review state |
-| Flow R2 completion | `push`, after the explicit completion marker step below |
+| Workflow                 | Helper action                                                 |
+| ------------------------ | ------------------------------------------------------------- |
+| Flow R1 Request Review   | `request-review` (the helper owns the local requested marker) |
+| Flow A Run               | `run`                                                         |
+| Explicit standalone push | `push`, preserving existing review state                      |
+| Flow R2 completion       | `push`, after the explicit completion marker step below       |
 
 Preview the exact selected set:
 
@@ -169,6 +169,8 @@ Ordinary explicit push must never perform this marker step.
 
 ## Promotion, scoped deployment, and verification
 
+For an explicit evaluation Push, read **Push telemetry** in [the shared experience contract](../topics/experience-contract.md). Reuse an enclosing approved Push batch's lifecycle without emitting again; otherwise own the standalone approved evaluation batch. Start immediately before `evaluation_deployment.py deploy --action push` and apply the shared terminal mapping after verification and local completion. Run, Request Review and reviewer completion do not acquire a Push lifecycle from this instruction, even when their helper action is `push`.
+
 The helper owns the following sequence. These underlying commands explain
 scope and safeguards; do not run them again outside the helper or fall back to
 an unscoped `push.py` call if preparation or verification fails:
@@ -194,6 +196,7 @@ an unscoped `push.py` call if preparation or verification fails:
    field or requiring an API-parity implementation.
    Never use an unscoped push: unrelated pending topics, workflows, and sets
    must remain local.
+
 5. For Request Review, the selected action authorizes the underlying
    noninteractive push immediately. For other actions, run it after their
    required confirmation:
@@ -204,6 +207,7 @@ an unscoped `push.py` call if preparation or verification fails:
 
    Preserve unrelated local topic or workflow deletions. Missing cases in a new
    copy do not delete cases from the retained old remote set.
+
 6. Verify the deployed identity and complete selected YAML content before
    reporting success or starting a run. Native local sidecars are not
    remote-marker evidence. Use the
@@ -227,12 +231,12 @@ its recovery instructions instead of manually deleting files.
 
 ## Continue exactly the intended action
 
-| Action | After verified deployment |
-|---|---|
-| Request Review / Flow R1 | Report the actual uploaded/reused set and local request with the shared-review warning. Do not start a run or send notification |
-| Run | Pass the verified deployed set identity to `run/SKILL.md`; complete connection prerequisites and start exactly once |
-| Explicit evaluation push | Report deployment only, preserving any existing review state; do not tag or run. After verified success, run `python scripts/analytics_pointer.py --post-deploy` and show any stdout verbatim. This is a one-time reminder for the current DA environment/agent association; it is silent after completion |
-| Reviewer completion / Flow R2 | Confirm local completion and successful YAML push/reuse, not shared completion. Offer Run subject to the existing review/connection gates |
+| Action                        | After verified deployment                                                                                                                                                                                                                                                                                  |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Request Review / Flow R1      | Report the actual uploaded/reused set and local request with the shared-review warning. Do not start a run or send notification                                                                                                                                                                            |
+| Run                           | Pass the verified deployed set identity to `run/SKILL.md`; complete connection prerequisites and start exactly once                                                                                                                                                                                        |
+| Explicit evaluation push      | Report deployment only, preserving any existing review state; do not tag or run. After verified success, run `python scripts/analytics_pointer.py --post-deploy` and show any stdout verbatim. This is a one-time reminder for the current DA environment/agent association; it is silent after completion |
+| Reviewer completion / Flow R2 | Confirm local completion and successful YAML push/reuse, not shared completion. Offer Run subject to the existing review/connection gates                                                                                                                                                                  |
 
 On error or cancellation, distinguish saved locally, staged, deployed, and
 started. Preserve the source and retry context; never claim review availability

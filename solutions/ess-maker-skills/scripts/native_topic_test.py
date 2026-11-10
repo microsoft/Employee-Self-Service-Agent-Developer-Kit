@@ -21,7 +21,6 @@ import uuid
 
 import requests
 
-from adk_telemetry import emit_capability_use
 from agentbuilder import AgentBuilderClient, AgentBuilderError, canonical_json
 from drive_surface import DriveResult, DriveSurface
 from minimalbot_evaluation import ComponentEditError, MinimalBotEvaluationError
@@ -760,7 +759,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.require_empty_conversation and args.operation not in {"run", "capture"}:
         parser.error("--require-empty-conversation is valid only for run or capture.")
     try:
-        emit_capability_use("topic_test")
         root = args.kit_root.resolve()
         client, target = connect_selected_dev_workspace(root, args.account)
         if args.operation == "prepare-browser":

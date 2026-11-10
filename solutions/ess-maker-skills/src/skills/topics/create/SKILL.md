@@ -28,6 +28,14 @@ Use the returned current native inventory with the local mapped topics. Warn abo
 
 ## 2. Draft ordinary topic YAML
 
+Immediately before substantive drafting, record this authoring invocation once, including when the maker later keeps the draft locally:
+
+```powershell
+python scripts/emit_capability.py topic_create
+```
+
+Telemetry is best-effort and must not block authoring. Previewing, saving or recovering the same proposal adds no authoring count. When this owner receives an unchanged draft for a later Push, skip this emission and reuse the draft; do not treat saving it as new authoring.
+
 Create `{agent.folder}/topics/{ExactFileStem}.mcs.yml`. The filename stem becomes the final schema suffix with spelling and case preserved.
 
 Use the existing Object Model-compatible YAML shape. Include all behavior needed by the request, not only fixed text. Preserve expressions and unknown supported fields from any selected pattern. Do not add authoring-origin tags or a mandatory preview artifact.
@@ -74,6 +82,8 @@ Render the shared Create summary with the exact submitted behavior and applicabl
 Keep as draft performs no remote save and uses **Draft kept locally. Agent unchanged.** only for a draft-only outcome. If another approved component was saved, use the shared composed report with actual per-component results. Changed drafts require a new preview, but the preview JSON is not a save token. Material changes outside the approved scope require a new summary and approval.
 
 ## 5. Save and report authoritative results
+
+Follow **Push telemetry** in the shared experience contract. Reuse an enclosing approved batch's lifecycle without emitting again. Otherwise own the standalone batch, starting immediately before the first approved save below and applying the shared terminal mapping after the final observed result, including any jointly approved instruction save. Keep capability authoring counts separate from this save lifecycle.
 
 After topic approval, including valid unchanged batch/debugging consent:
 

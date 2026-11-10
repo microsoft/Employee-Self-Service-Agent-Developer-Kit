@@ -17,6 +17,12 @@ Read `src/skills/topics/experience-contract.md` before presenting inventory,
 comparisons, decisions or results. Use its literal copy and scoped consent
 rules. Keep previews in normal chat and decision controls short.
 
+Own the shared contract's **Push telemetry** lifecycle for the approved batch.
+Start it immediately before the first approved save dispatch, pass its context
+to nested owners without duplicate events, and apply its terminal mapping after
+the final observed result. Inspection, preview and pre-execution cancellation
+do not start it. The explicit evaluation branch below follows the same rule.
+
 ## Explicit evaluation push
 
 If the request explicitly targets only evaluation test sets, route before the

@@ -44,6 +44,30 @@ def test_topic_owners_use_yaml_adapters_and_separate_instruction_approval():
     assert "conversation acceptance as pending" in update
 
 
+def test_authoring_usage_precedes_drafting_and_excludes_later_saves():
+    for operation in ("create", "update"):
+        skill = _read(f"src/skills/topics/{operation}/SKILL.md")
+        command = f"python scripts/emit_capability.py topic_{operation}"
+        assert skill.count(command) == 1
+        assert skill.index("## 2.") < skill.index(command) < skill.index("## 3.")
+        assert "including when the maker later keeps the draft locally" in skill
+        assert "Previewing, saving or recovering the same proposal adds no authoring count" in skill
+        assert "unchanged draft for a later Push, skip this emission" in skill
+
+
+def test_testing_usage_counts_attempted_passes_and_post_fix_retests():
+    skill = _read("src/skills/topics/test/SKILL.md")
+    command = "python scripts/emit_capability.py topic_test"
+    assert skill.count(command) == 1
+    assert skill.index("## Execute and interpret tests") < skill.index(command)
+    assert skill.index(command) < skill.index("Use the reference's general `capture`")
+    assert "first authorized `capture` or `run` attempt of each pass" in skill
+    assert "readiness-only pauses add no count" in skill
+    assert "resuming the same paused pass add no count" in skill
+    assert "Each post-fix retest starts a new pass" in skill
+    assert "count as two passes" in skill
+
+
 def test_eval_driven_aliases_are_thin_and_scenario_lifecycle_is_retired():
     create = _read("src/skills/topics/create-eval-driven/SKILL.md")
     update = _read("src/skills/topics/update-eval-driven/SKILL.md")
@@ -204,6 +228,70 @@ def test_already_satisfied_topic_outcome_does_not_claim_a_new_push():
     assert "Do not attribute the existing change to this operation." in contract
     assert "no-write outcome" in update
     assert "verified saved content" in update
+
+
+def test_push_owners_share_batch_telemetry_without_changing_other_evaluation_actions():
+    push = _read(".github/prompts/push.prompt.md")
+    assert "nested owners without duplicate events" in push
+    for operation in ("create", "update"):
+        owner = _read(f"src/skills/topics/{operation}/SKILL.md")
+        assert "**Push telemetry**" in owner
+        assert "Reuse an enclosing approved batch's lifecycle without emitting again" in owner
+    evaluations = _read("src/skills/evaluations/deployment-flow.md")
+    assert "../topics/experience-contract.md" in evaluations
+    assert "Reuse an enclosing approved Push batch's lifecycle without emitting again" in evaluations
+    assert "Run, Request Review and reviewer completion do not acquire a Push lifecycle" in evaluations
+    contract = _read("src/skills/topics/experience-contract.md")
+    assert "otherwise own the standalone instruction-save batch" in contract
+    assert "Separate later approvals start separate batches" in contract
+    assert "recovery of the same approved operation does not" in contract
+
+
+def test_push_telemetry_keeps_legacy_results_separate_from_save_evidence():
+    telemetry = _read("src/skills/topics/experience-contract.md").split(
+        "## Push telemetry\n", 1,
+    )[1].split("## Topic testing continuation\n", 1)[0]
+    normalized = " ".join(telemetry.split())
+    assert "cancellation before execution emits no Push events" in telemetry
+    assert "Do not add an initial `push` usage call" in telemetry
+    assert "A returned write error counts as operation failure" in telemetry
+    assert "Preserve uncertainty and any confirmed saves in the maker-facing report" in telemetry
+    assert "non-fatal baseline-refresh or cleanup warning remains telemetry success" in telemetry
+    assert "omit the terminal sequence while that failure remains" in telemetry
+    assert "all verified already-current content without writing" in telemetry
+    assert "On cancellation after execution starts, omit completion, deploy and usage events" in telemetry
+    assert "including when some components were already saved" in telemetry
+    assert "Separately completed batches retain their events" in telemetry
+    assert "authoritative no-write verification for every approved operation" in telemetry
+    assert "A zero update count alone is insufficient" in telemetry
+    assert (
+        "Failed, unconfirmed, paused or cancelled operations and unresolved "
+        "hard local failures do not qualify"
+    ) in telemetry
+    assert "For verified already-current execution, omit the `agent-deploy` command" in telemetry
+    assert "still emit one `push` usage event" in telemetry
+    assert "| `success` | not emitted | empty | empty | empty |" in normalized
+    assert "Missing or negative elapsed time is unavailable evidence, not zero" in telemetry
+    assert "Do not retry unknown delivery" in telemetry
+    assert (
+        "| `failure` | `server_error` | `PUSH_PARTIAL_FAILURE` | "
+        "`DEPLOY_PARTIAL_FAILURE` | `runtime` |"
+    ) in normalized
+
+
+def test_push_telemetry_uses_known_environment_metadata_without_lookup():
+    telemetry = _read("src/skills/topics/experience-contract.md").split(
+        "## Push telemetry\n", 1,
+    )[1].split("## Topic testing continuation\n", 1)[0]
+    assert "only for a result that emits `agent-deploy`" in telemetry
+    assert "not the agent's Dev/Prod realm" in telemetry
+    assert "Honor `ESS_ADK_DEPLOY_TARGET` only when it is `sandbox` or `production`" in telemetry
+    assert "do not borrow another agent's cached SKU" in telemetry
+    assert "Use an empty string when no matching SKU is available" in telemetry
+    assert "adk_telemetry.classify_deploy_target(sys.argv[1])" in telemetry
+    assert "a telemetry default, not proof of environment type" in telemetry
+    assert "Do not make an additional environment API request solely for telemetry" in telemetry
+    assert "Do not switch identity, prompt for authentication or mutate environment configuration" in telemetry
 
 
 def test_advisories_have_structured_issue_effect_and_own_action_line():

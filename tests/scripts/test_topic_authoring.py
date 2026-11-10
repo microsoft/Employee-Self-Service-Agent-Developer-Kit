@@ -16,6 +16,15 @@ import minimalbot_evaluation as native
 import topic_authoring as authoring
 
 
+@pytest.fixture(autouse=True)
+def no_operation_capability_events(monkeypatch):
+    def emit(event, _data, **_kwargs):
+        assert event != "adk.capability.use", "Authoring usage belongs to the skill."
+        return {}
+
+    monkeypatch.setattr("adk_telemetry._emit", emit)
+
+
 @pytest.fixture
 def topic_cli(monkeypatch, tmp_path, fake_tenant_id):
     agent_folder = tmp_path / "workspace" / "agents" / "selected"

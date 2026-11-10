@@ -38,6 +38,14 @@ Apply Not ready, keep paused or Stop without sending immediately using the share
 
 ## Execute and interpret tests
 
+Count one testing pass for the selected probes against the intended saved behavior. Immediately before the first authorized `capture` or `run` attempt of each pass, invoke:
+
+```powershell
+python scripts/emit_capability.py topic_test
+```
+
+This best-effort usage event measures an attempted pass, not successful replies. Inspection, browser preparation, activation and readiness-only pauses add no count. Additional prompts, `observe` calls and resuming the same paused pass add no count. Each post-fix retest starts a new pass and emits once before its first attempt: three initial probes followed by a fix and three retest probes count as two passes. Keep pass continuity in session context; do not add persistent telemetry state or replay an emission whose delivery is unknown.
+
 Use the reference's general `capture` operation for approved test messages, choosing a unique evidence directory for each turn. The operation records native state and the page/turn boundary before Send and returns correlated reply/card, completion and readback facts. `graded: false` and `outcome: captured` mean observed capture, not correctness or backend success. Interpret actual observations against intended behavior and retain evidence.
 
 Use the returned `signal` and `errorShaped` as advisory capture facts. An `ok` signal can describe a real error reply; consent, empty or partial captures cannot establish that the intended backend or topic logic ran. Check all captured bubbles against intent, using existing literal checks or semantic reasoning as appropriate. Do not treat a classifier or a vacuous absence check as a correctness verdict.

@@ -38,8 +38,12 @@ URL = (
 
 
 @pytest.fixture(autouse=True)
-def no_capability_network(monkeypatch):
-    monkeypatch.setattr(native, "emit_capability_use", lambda *_args: None)
+def no_operation_capability_events(monkeypatch):
+    def emit(event, _data, **_kwargs):
+        assert event != "adk.capability.use", "Testing passes belong to the skill."
+        return {}
+
+    monkeypatch.setattr("adk_telemetry._emit", emit)
 
 
 @pytest.fixture
@@ -528,8 +532,6 @@ def test_inspect_returns_authoritative_topic_without_requiring_exact_mode(
     if not literal:
         component["dialog"]["beginDialog"]["actions"].append({"$kind": "BeginDialog"})
     monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
-    capabilities = []
-    monkeypatch.setattr(native, "emit_capability_use", capabilities.append)
     assert native.main([
         "inspect", "--kit-root", str(tmp_path), "--component-id", COMPONENT_ID,
         "--output", str(args.output),
@@ -542,7 +544,6 @@ def test_inspect_returns_authoritative_topic_without_requiring_exact_mode(
     assert inspection["exactMode"]["supported"] is literal
     assert result["inspectionEvidence"]["componentHash"] == native._hash(component)
     assert result["state"] == result["status"] == "Active"
-    assert capabilities == ["topic_test"]
     assert not calls
 
 
@@ -795,20 +796,17 @@ def test_capture_output_failure_does_not_replace_known_facts_with_a_grade(
     assert "assessmentOutcome" not in result
 
 
-def test_capture_cli_emits_existing_topic_test_capability(
+def test_capture_cli_returns_observations_without_counting_a_pass(
     general_exercise, tmp_path, monkeypatch, capsys,
 ):
     args, client, calls = general_exercise
     monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
-    capabilities = []
-    monkeypatch.setattr(native, "emit_capability_use", capabilities.append)
     code = native.main([
         "capture", "--kit-root", str(tmp_path), "--inspection", str(args.inspection),
         "--prompt", args.prompt, "--cdp", args.cdp, "--url", URL, "--output", str(args.output),
     ])
     result = json.loads(capsys.readouterr().out)
     assert code == 0 and result["graded"] is False
-    assert capabilities == ["topic_test"]
     assert calls.count(("send", args.prompt)) == 1
 
 
@@ -1090,11 +1088,9 @@ def test_activation_must_record_intent_before_any_write(activation, tmp_path, mo
 
 
 @pytest.mark.parametrize("confirmed", [False, True])
-def test_activation_cli_confirmation_and_telemetry(activation, tmp_path, monkeypatch, capsys, confirmed):
+def test_activation_cli_confirmation_without_counting_a_pass(activation, tmp_path, monkeypatch, capsys, confirmed):
     args, client, _calls, _runtime, writes = activation
     monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
-    capabilities = []
-    monkeypatch.setattr(native, "emit_capability_use", capabilities.append)
     code = native.main([
         "activate", "--kit-root", str(tmp_path), "--inspection", str(args.inspection),
         "--output", str(args.output), *(["--yes"] if confirmed else []),
@@ -1102,7 +1098,6 @@ def test_activation_cli_confirmation_and_telemetry(activation, tmp_path, monkeyp
     result = json.loads(capsys.readouterr().out)
     assert code == 0 and result["outcome"] == ("activated" if confirmed else "preview")
     assert len(writes) == (1 if confirmed else 0)
-    assert capabilities == ["topic_test"]
 
 
 def test_activation_cli_keeps_known_remote_success_when_result_file_fails(
@@ -1173,8 +1168,6 @@ def test_browser_preparation_cli_returns_connection_without_human_readiness_or_s
 ):
     args, process, launches, metadata = browser_preparation
     monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (object(), TARGET))
-    capabilities = []
-    monkeypatch.setattr(native, "emit_capability_use", capabilities.append)
     code = native.main([
         "prepare-browser", "--kit-root", str(tmp_path), "--url", URL,
         "--output", str(args.output),
@@ -1199,7 +1192,6 @@ def test_browser_preparation_cli_returns_connection_without_human_readiness_or_s
     intent = native._read(tmp_path / args.output / "launch-intent.json")
     assert intent["launchAttempted"] is False
     assert native._read(tmp_path / args.output / "result.json") == result
-    assert capabilities == ["topic_test"]
 
 
 def test_browser_preparation_rejects_another_agent_before_launch(
