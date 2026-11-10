@@ -10,7 +10,7 @@ Read [experience-contract.md](../experience-contract.md) before interacting with
 - Read `.local/config.json` and use its selected agent folder and schema.
 - Read relevant existing topics before drafting. Preserve the established Object Model shape, expressions, IDs in copied patterns, and shared error behavior.
 - Preserve supplied response wording and links by default. Suggest wording only when it is absent, using established facts and the shared wording review. Clarify consequential unknowns, but do not require a questionnaire or a separate wording-approval lifecycle.
-- Treat same-name or semantic overlap as advisory. Explain the overlap and suggest an explicitly selected existing topic when appropriate. Do not automatically deactivate, reroute, overwrite, or reject a deliberate separate topic.
+- Follow the shared same-name creation rule. Treat meaningful intent overlap under a different name as advisory.
 - Do not create Power Automate flows. When the request requires flow authoring, explain that it must be completed outside ADK.
 - Creation stays inactive and unpublished. Only a separately selected Activate and test continuation may activate it through the installed testing owner.
 
@@ -24,7 +24,7 @@ Run:
 python scripts\topic_authoring.py list --output ".local\topic-authoring\topic-list.json"
 ```
 
-Use the returned current native inventory with the local mapped topics. Warn about meaningful intent overlap. A same-name advisory does not prohibit a separately approved create.
+Use the returned current native inventory with the local mapped topics. Apply the shared **Authoring policy for this release** to the proposed schema identity and display name before drafting and again before saving. Stop if the requested display name already exists. Warn about meaningful intent overlap under a different name.
 
 ## 2. Draft ordinary topic YAML
 

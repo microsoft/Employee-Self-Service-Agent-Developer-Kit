@@ -304,7 +304,19 @@ def test_session_component_writes_reuse_selected_transport_without_status_retry(
         assert [call.request.method for call in recorded.calls] == ["POST", "PUT"]
 
 
-def test_create_uses_exact_filename_schema_and_registers_verified_identity(topic_cli):
+@pytest.mark.parametrize("existing_name", [None, "Approved answer details"])
+def test_create_uses_exact_filename_schema_and_registers_verified_identity(
+    topic_cli, existing_name,
+):
+    if existing_name is not None:
+        topic_cli.components.append(
+            {
+                "$kind": "DialogComponent",
+                "id": "existing",
+                "schemaName": "contoso_agent.topic.Other",
+                "displayName": existing_name,
+            }
+        )
     assert authoring.main(
         [
             "create",
@@ -333,37 +345,75 @@ def test_create_uses_exact_filename_schema_and_registers_verified_identity(topic
     topic_cli.connect.assert_called_with(topic_cli.root.resolve(), None)
 
 
-def test_create_reports_same_name_as_advisory_and_still_sends(topic_cli, capsys):
+@pytest.mark.parametrize("existing_name", ["Approved answer", " APPROVED ANSWER "])
+@pytest.mark.parametrize("apply", [False, True])
+def test_create_blocks_same_name_without_changing_workspace(
+    topic_cli, existing_name, apply,
+):
     topic_cli.components.append(
         {
             "$kind": "DialogComponent",
             "id": "existing",
             "schemaName": "contoso_agent.topic.Other",
-            "displayName": " APPROVED ANSWER ",
+            "displayName": existing_name,
         }
     )
+    draft_before = topic_cli.draft.read_bytes()
+    map_path = topic_cli.agent_folder / ".component-map.json"
+    map_before = map_path.read_bytes()
+    args = [
+        "create",
+        "--draft",
+        str(topic_cli.draft),
+        "--display-name",
+        "Approved answer",
+    ]
+    if apply:
+        args.append("--yes")
+    with pytest.raises(native.ComponentEditError, match="already exists") as error:
+        authoring.main(args)
 
-    authoring.main(
-        [
-            "create",
-            "--draft",
-            str(topic_cli.draft),
-            "--display-name",
-            "Approved answer",
-            "--yes",
-        ]
-    )
-
-    result = json.loads(capsys.readouterr().out)
-    assert result["advisories"] == [
+    evidence = error.value.evidence
+    assert evidence["sameNameMatches"] == [
         {
             "kind": "same-name",
             "componentId": "existing",
             "schemaName": "contoso_agent.topic.Other",
-            "displayName": " APPROVED ANSWER ",
+            "displayName": existing_name,
         }
     ]
-    topic_cli.transport.create_dialog_component.assert_called_once()
+    assert evidence["target"] == topic_cli.target
+    assert evidence["saved"] is False
+    assert evidence["writeAttempted"] is False
+    topic_cli.transport.create_dialog_component.assert_not_called()
+    topic_cli.transport.update_dialog_components.assert_not_called()
+    assert topic_cli.draft.read_bytes() == draft_before
+    assert map_path.read_bytes() == map_before
+    assert not (topic_cli.agent_folder / ".baseline" / "topics" / topic_cli.draft.name).exists()
+
+
+def test_create_rechecks_same_name_after_preview(topic_cli):
+    args = [
+        "create",
+        "--draft",
+        str(topic_cli.draft),
+        "--display-name",
+        "Approved answer",
+    ]
+    assert authoring.main(args) == 0
+    topic_cli.components.append(
+        {
+            "$kind": "DialogComponent",
+            "id": "created-after-preview",
+            "schemaName": "contoso_agent.topic.Other",
+            "displayName": "Approved answer",
+        }
+    )
+
+    with pytest.raises(native.ComponentEditError, match="already exists"):
+        authoring.main([*args, "--yes"])
+
+    topic_cli.transport.create_dialog_component.assert_not_called()
 
 
 def test_read_uses_component_map_identity_and_can_project_yaml(topic_cli):

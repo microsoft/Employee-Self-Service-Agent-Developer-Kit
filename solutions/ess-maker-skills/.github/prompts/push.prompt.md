@@ -86,7 +86,7 @@ the selected owners before asking for Push approval. Include material
 evaluation-copy/reuse, local-replacement and review-state consequences in the
 displayed scope. Inventory inspection alone is not remote validation.
 
-For topic entries, apply the shared Text-response authoring scope before offering a save. Show unaccepted or acceptance-unknown response wording before any batch Push approval, using the shared Response text / Suggested response quotations. Explain that Push accepts the displayed wording for the approved topics together with their saves. Keep revisions in normal chat; persist them locally and refresh the review before approval. Local retention alone is not wording acceptance. Reuse valid unchanged scoped consent without an additional wording gate.
+For topic entries, apply the shared **Authoring policy for this release** and Text-response authoring scope before offering a save, making local revisions or dispatching an approved save. Show unaccepted or acceptance-unknown response wording before any batch Push approval, using the shared Response text / Suggested response quotations. Explain that Push accepts the displayed wording for the approved topics together with their saves. Keep revisions in normal chat; persist them locally and refresh the review before approval. Local retention alone is not wording acceptance. Reuse valid unchanged scoped consent without an additional wording gate.
 
 Use the shared inventory outcomes after appropriate observation and recovery:
 **No changes to push.** only after successful empty inspection, or **Could not

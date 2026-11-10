@@ -367,7 +367,7 @@ For full schemas, reference the topic YAML and workflow JSON files in the user's
 
 ## Extensibility Boundary
 
-Topic authoring is limited to one employee intent with a final text response at every authored response ending. Cross-topic calls or routing, live lookups, flow invocations and business/ISV actions are prohibited. Apply `src/skills/topics/experience-contract.md` before drafting or pushing topic changes; platform descriptions and integration references below do not expand this scope.
+Topic authoring is limited to one employee intent with a final text response at every authored response ending. Cross-topic calls or routing, live lookups, flow invocations and business/ISV actions are prohibited. Apply **Authoring policy for this release** and the authoring scope in `src/skills/topics/experience-contract.md` before drafting, fixing or pushing topic changes; platform descriptions and integration references below do not expand this scope.
 
 ### What customers CAN do (with this kit)
 

@@ -556,7 +556,7 @@ def main(argv: list[str] | None = None) -> int:
         filename_stem = draft_path.name[: -len(".mcs.yml")]
         schema_name = f"{target['agent']['schemaName']}.topic.{filename_stem}"
         display_name = str(args.display_name).strip()
-        result["advisories"] = [
+        name_matches = [
             {
                 "kind": "same-name",
                 "componentId": component.get("id"),
@@ -567,6 +567,13 @@ def main(argv: list[str] | None = None) -> int:
             if str(component.get("displayName") or "").strip().casefold()
             == display_name.casefold()
         ]
+        if name_matches:
+            raise ComponentEditError(
+                f"A topic named {display_name!r} already exists in the selected agent. "
+                "Choose a different name.",
+                {**result, "sameNameMatches": name_matches, "writeAttempted": False},
+            )
+        result["advisories"] = []
         component = {
             "$kind": "DialogComponent",
             "id": str(uuid.uuid4()),

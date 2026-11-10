@@ -27,7 +27,7 @@ python scripts\topic_authoring.py read --topic "{agent.folder}\topics\{Topic}.mc
 
 The returned component is authoritative current state. The optional projection is evidence, not permission to overwrite the working draft. Read the full local draft and surrounding components whose contracts matter.
 
-Check the requested and resulting topic against the shared authoring scope before editing. If preserving existing behavior would leave it outside that boundary, explain the limitation and seek an in-scope request rather than silently deleting or rewriting that behavior.
+Apply the shared **Authoring policy for this release** to this native identity before editing and again before saving. Check the requested and resulting topic against the shared authoring scope before editing. If preserving existing behavior would leave it outside that boundary, explain the limitation and seek an in-scope request rather than silently deleting or rewriting that behavior.
 
 ## 2. Draft and review the change
 

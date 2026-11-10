@@ -8,6 +8,7 @@ not yet available in this release.
 
 ## Rules
 
+- Before proposing or applying topic-file fixes or deletions, read and apply **Authoring policy for this release** in [the shared topic contract](../topics/experience-contract.md). Carry protected or unresolved items into the report as unchanged with their reason, not as fixed; continue read-only scanning and independently eligible work.
 - Do NOT run terminal commands or scripts EXCEPT the kit's own helper scripts under `scripts/` (specifically `python scripts/checkpoint.py`, `python scripts/push.py`, and `python scripts/emit_capability.py`, which Steps 2b and 6 require). For everything else - file edits, validation, lookups - use your built-in file reading, writing, and editing tools only. Do NOT use Python, PowerShell, Node.js, or any other scripting language to do work the editing tools can do.
 - Do NOT fix errors automatically without user confirmation. Present each group of errors and ask the user before making changes.
 - Do NOT modify the source template files in `src/`. Only modify files inside the agent folder (the cloned agent at the workspace root).

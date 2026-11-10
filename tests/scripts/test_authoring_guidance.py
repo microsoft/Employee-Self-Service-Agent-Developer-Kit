@@ -5,7 +5,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
+
+from jsonschema import Draft202012Validator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,6 +18,104 @@ SOLUTION = ROOT / "solutions" / "ess-maker-skills"
 
 def _read(relative: str) -> str:
     return (SOLUTION / relative).read_text(encoding="utf-8")
+
+
+def test_authoring_catalog_union_covers_only_the_pinned_da_ga_template_families():
+    reference = SOLUTION / "src" / "reference" / "topic-actions"
+    catalogs = {
+        path.name: json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(reference.glob("catalog.*.json"))
+        if path.name != "catalog.schema.json"
+    }
+    additions = catalogs["catalog.authoring-additions.json"]
+    primary = catalogs[additions["baseCatalog"]["file"]]
+    assert len(catalogs) >= 2
+    expected_counts = {"core": 3, "hr": 50, "it": 47}
+    expected_keys = {
+        f"source-family:gptagent_copilotforemployeeselfservice{suffix}"
+        for suffix in expected_counts
+    }
+    assert {package["key"] for package in additions["packages"]} == expected_keys
+
+    for package in additions["packages"]:
+        schema, = package["agentSchemaNames"]
+        suffix = schema.removeprefix("gptagent_copilotforemployeeselfservice")
+        assert package["sourcePath"].startswith("/sources/dev/AgentTemplates/")
+        assert package["sourceRevision"] == additions["source"]["revision"]
+        assert package["packageVersion"]
+        covered = [
+            topic["schemaName"]
+            for catalog in catalogs.values()
+            for candidate in catalog["packages"]
+            if candidate["key"] == package["key"]
+            for topic in candidate["topics"]
+        ]
+        assert all(name.startswith(schema + ".topic.") for name in covered)
+        assert len({name.casefold() for name in covered}) == len(set(covered))
+        names = sorted(set(covered))
+        source_coverage = package["combinedTopicInventory"]
+        assert source_coverage["coverage"] == "complete_at_source_revision"
+        assert len(names) == source_coverage["topicCount"] == expected_counts[suffix]
+        digest = hashlib.sha256(("\n".join(names) + "\n").encode()).hexdigest()
+        assert digest == source_coverage["schemaNamesSha256"]
+        primary_names = {
+            topic["schemaName"]
+            for candidate in primary["packages"]
+            if candidate["key"] == package["key"]
+            for topic in candidate["topics"]
+        }
+        added_names = [topic["schemaName"] for topic in package["topics"]]
+        assert len(added_names) == len(set(added_names))
+        assert primary_names.isdisjoint(added_names)
+
+
+def test_topic_actions_companion_artifacts_remain_byte_identical():
+    reference = SOLUTION / "src" / "reference" / "topic-actions"
+    additions = json.loads((reference / "catalog.authoring-additions.json").read_text())
+    base = additions["baseCatalog"]
+    for filename, expected_blob in (
+        (base["file"], base["gitBlob"]),
+        ("catalog.schema.json", "f20a61ef9fdf8c120f21706712153c509bf014a5"),
+    ):
+        content = (reference / filename).read_bytes()
+        blob = hashlib.sha1(f"blob {len(content)}\0".encode() + content).hexdigest()
+        assert blob == expected_blob, filename
+    primary = json.loads((reference / base["file"]).read_text())
+    schema = json.loads((reference / "catalog.schema.json").read_text())
+    Draft202012Validator(schema).validate(primary)
+
+
+def test_topic_mutation_routes_consume_the_central_inventory_policy():
+    contract = _read("src/skills/topics/experience-contract.md")
+    policy = contract.split("## Authoring policy for this release\n", 1)[1].split(
+        "## Authoring summaries\n", 1
+    )[0]
+    assert "src/reference/topic-actions/catalog.*.json" in policy
+    assert "excluding `catalog.schema.json`" in policy
+    assert "sources/dev/AgentTemplates" in policy
+    assert "Do not include those rows in DA-GA coverage" in policy
+    assert "A nonmatch is not proof of customer ownership." in policy
+    assert "Preserve an existing draft unchanged." in policy
+    for relative in (
+        ".github/copilot-instructions.md",
+        ".github/prompts/push.prompt.md",
+        "src/skills/topics/create/SKILL.md",
+        "src/skills/topics/update/SKILL.md",
+        "src/skills/topics/test/SKILL.md",
+        "src/skills/cleanup/SKILL.md",
+    ):
+        guidance = _read(relative)
+        assert "Authoring policy for this release" in guidance, relative
+        assert "catalog.*.json" not in guidance, relative
+
+
+def test_create_blocks_name_conflicts_but_keeps_intent_overlap_advisory():
+    contract = _read("src/skills/topics/experience-contract.md")
+    create = _read("src/skills/topics/create/SKILL.md")
+    assert "unique display name in the selected agent" in contract
+    assert "case-insensitively after trimming surrounding whitespace" in contract
+    assert "Stop if the requested display name already exists." in create
+    assert "meaningful intent overlap under a different name as advisory" in create
 
 
 def test_create_and_update_prompts_route_to_normal_topic_owners():
