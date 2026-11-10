@@ -16,11 +16,45 @@ Use ordinary chat for open-ended requirements and revisions. Do not put a free-t
 
 Use terse, external, semi-technical language about behavior and interfaces, without internal node labels. Use bold labels with whitespace between sections, short bullets for multiple inputs/outputs and required/optional markings where useful, inline code only for technical names the developer needs, and a link to the full draft for detail. Follow `src/reference/ui-formatting-guidelines.md` for UI actions.
 
-Omit genuinely empty sections. Unresolved information is not absence: identify it as unresolved rather than omitting it or calling it absent. When exact proposed wording matters, use a labeled blockquote beneath the relevant description. Describe dynamic or grounded responses by content and source rather than inventing an exact quote. For lengthy wording, provide a clearly labeled excerpt and access to the full text.
+Omit genuinely empty sections. Unresolved information is not absence: identify it as unresolved rather than omitting it or calling it absent. Apply the response-wording review below to literal response text. Describe dynamic content without inventing its rendered response. For lengthy wording, provide a clearly labeled excerpt and access to the full text.
+
+## Text-response authoring scope
+
+Constrain each authored topic to one employee intent. The final response at every authored response ending must be a text message. Cross-topic calls or routing, live lookups, flow invocations and business/ISV actions are prohibited.
+
+Review the requested behavior and every possible response ending, not just the last serialized YAML node. If the requested or resulting topic exceeds this scope, explain the unsupported requirement and seek an in-scope request. Do not silently remove requested or existing behavior to make it fit.
+
+Use the ordinary YAML authoring owners. Do not treat optional exact-response compatibility as a universal admission requirement. Separately scoped agent-instruction corrections retain their own preview and consent requirements.
 
 ## Authoring summaries
 
 Resolve `{Topic title}` and `{Destination agent}` from the selected topic and target. Describe Behavior, accepted parameters/collected information under Inputs, returned values and employee-visible behavior under Outputs, and triggering scope under Starts when. `{Draft link}` is the actual local draft. An advisory alone does not add an acknowledgement gate.
+
+### Response wording and local drafts
+
+Preserve wording supplied as the intended response, including links. Do not polish or paraphrase it unless requested. Distinguish intended response text from background material; clarify consequential ambiguity in normal chat. When wording is absent, suggest a response grounded in established facts. Ask for missing essential facts rather than inventing them.
+
+Under Outputs, show supplied or explicitly accepted wording with this label and quotation:
+
+> **Response text**
+>
+> > {Response text}
+
+Show newly generated wording that has not been accepted with this label and quotation:
+
+> **Suggested response**
+>
+> > {Suggested response}
+
+Bind each quotation to the actual local draft, identifying the relevant response ending when needed. For Update, distinguish current wording from the proposed wording and preserve accepted wording and links outside the authorized change. A change to wording requires a revised preview.
+
+A draft is the `.mcs.yml` file saved locally in the selected agent's topic folder in the VS Code workspace, not just text in chat or an unsaved editor buffer. After writing the draft successfully, include this statement with the summary, before the decision control, when the proposed changes remain local:
+
+> The proposed changes are saved locally in your VS Code workspace. They have not been pushed to the agent.
+
+If the proposed content is already authoritatively saved, report that state instead. Preserve known remote outcomes and uncertainty rather than describing already-saved or unconfirmed content as local-only.
+
+Keeping a draft locally does not accept a suggestion or authorize a remote save. Retain any explicit prior wording acceptance in session context without treating it as Push consent. If acceptance is unknown, show the wording for review before approval; do not infer acceptance from the file's presence or add persistent approval metadata.
 
 ### Advisory entries in Notes
 
@@ -112,11 +146,31 @@ For Update, include only affected fields, concise before/after details where use
 >
 > [Full draft]({Draft link})
 
-Follow either summary with the initial routing-conflict decision below when an instruction-routing conflict is known. Otherwise use this separate short choice control:
+Follow either summary with the initial routing-conflict decision below when an instruction-routing conflict is known. Otherwise use the suggested-response decision below for unaccepted suggested wording, or this separate short choice control for supplied or accepted wording:
 
 > **Push topic to agent** / **Keep as draft**
 
-Keep as draft leaves the draft local without a remote write. Do not offer a runnable remote test for a draft-only outcome.
+Keep as draft leaves the draft saved locally in the VS Code workspace without a remote write. Do not offer a runnable remote test for a draft-only outcome.
+
+### Suggested-response decision
+
+After displaying the suggested wording and completed summary, use:
+
+> **Use this suggested response and push {Topic title} to {Destination agent}?**
+>
+> **Push topic to agent** / **I want to update the response** / **Keep as draft**
+
+Push topic to agent accepts the displayed suggested wording and approves the topic save together. Do not add a separate mandatory wording-approval step. Activation, testing and publication retain their separate permission requirements.
+
+I want to update the response does not accept the suggestion or authorize a remote save. Continue in normal chat:
+
+> What would you like to change? Describe the edits or paste the response you want.
+
+Apply the requested revision to the local draft, preserving supplied replacement text. Obtain a fresh native preview and reassess any affected instruction alignment. Then show the revised summary and wording and return to the applicable decision control before any save. When the maker describes edits rather than supplies replacement text, label newly generated wording Suggested response until accepted.
+
+Keep as draft retains the suggestion locally without accepting it. Use the truthful draft-only outcome, with a trailer that explicitly identifies the VS Code workspace. For an unaccepted suggestion, use:
+
+> {Topic title} is saved locally in your VS Code workspace. The suggested response remains available for review or revision.
 
 ### Initial routing-conflict decision
 
@@ -125,6 +179,8 @@ When the initial Create or Update review identifies an instruction-routing confl
 > **How would you like to continue with {Topic title}?**
 >
 > **Resolve the routing conflict in the Agent Instructions** / **Push topic anyway** / **Keep as draft**
+
+When suggested wording remains unaccepted, include **I want to update the response** before Keep as draft and use the response-revision continuation above. Explain before the control that Push topic anyway also accepts the displayed suggestion; resolving the instruction conflict alone does not accept it.
 
 Resolve the routing conflict in the Agent Instructions prepares the targeted correction below while the proposed topic changes remain local. This choice does not approve a topic push, instruction push, activation or testing. Do not draft an instruction correction merely because a topic is being authored unless the correction is already within an explicitly authorized scope.
 
@@ -158,6 +214,8 @@ The head catalog `{topic_outcome_heads}` covers at least these resulting outcome
 - Remote save confirmed, but a subsequent local write failed: **Topic pushed; workspace update incomplete.**
 
 Select the head from the resulting known state after observation and appropriate session-led recovery. Add the flexible factual trailer. Preserve known remote success after a local failure; do not claim the agent is unchanged when its remote outcome is uncertain.
+
+For a retained draft, explicitly state that it is saved locally in the VS Code workspace. Distinguish local persistence, wording acceptance and remote save status; do not describe an unaccepted suggestion as approved.
 
 When authoritative verification succeeds with `writeAttempted: false` and `updatedComponents: 0`, use the already-up-to-date head, not a pushed head. Do not attribute the existing change to this operation. If local tracking fails afterward, retain the no-write head and disclose that local issue in the factual trailer. A zero update count alone does not establish verification.
 
@@ -413,7 +471,7 @@ Render applicable entries from `{component_inventory}`:
 >
 > - {Component name}: {Exclusion reason}
 
-Disclose material consequences, including actual evaluation new-copy/reuse and local-replacement effects, before the maker selects a Push action. Then use:
+Disclose material consequences, including actual evaluation new-copy/reuse and local-replacement effects, before the maker selects a Push action. For topic entries, apply Text-response authoring scope and show unaccepted or acceptance-unknown response wording using the labels and quotations above before any batch Push approval. Explain that Push accepts the displayed wording for the approved topics as well as authorizing their saves. Do not require a separate wording approval or repeat owner gates for unchanged reviewed content. Then use:
 
 > - **Summarize each change**
 > - **Push all listed changes**
@@ -453,6 +511,8 @@ Review each applicable entry of `{component_inventory}` in turn, either across t
 Follow with a short choice control:
 
 > **Push this change** / **Keep pending** / **Cancel remaining push**
+
+For a topic with unaccepted suggested wording, include **I want to update the response** before Keep pending. Use the same normal-chat revision continuation and return to this component's refreshed review before saving. Keep pending retains the local draft without accepting the suggestion.
 
 Push this change approves and pushes this item, then continues. Keep pending leaves this item unpushed, then continues. Cancel remaining push stops, preserves completed pushes and leaves unprocessed changes pending.
 
@@ -606,6 +666,8 @@ Check `scripts/native_topic_test.py` directly before offering runnable conversat
 Debug and fix the topic under test so its observed runtime behavior meets the latest authoring request, within the authorized scope. Make a lightweight, best-effort check that the behavior and proposed fixes preserve matching eval intent; keep those evals read-only. Continue useful in-scope investigation and corrections, checking the affected runtime behavior after changes. When conflicting goals or constraints prevent progress, recommend a concrete reconciliation. When tools, access or available evidence prevent further safe progress, explain the limitation and offer practical assistance, including manual testing guidance where appropriate. Honor explicit test-only, pause and stop requests.
 
 Use relevant existing cases and useful probes as advisory intent checks, not a graded eval run or a mandatory case-by-case coverage exercise. A fixable in-scope mismatch calls for further investigation and correction, not merely a recommendation to the maker. Do not weaken the authoring goal or edit evals to manufacture agreement.
+
+Preserve supplied or accepted response wording and links during debugging unless the maker authorizes a wording change. Do not replace wording merely to obtain a passing test. Text-message output, literal saved content and verbatim runtime delivery are distinct claims; a save alone does not establish the last. Apply Text-response authoring scope to proposed topic fixes without restricting read-only inspection of existing topics.
 
 ### Topic debugging outcome: `{topic_test_results}`
 

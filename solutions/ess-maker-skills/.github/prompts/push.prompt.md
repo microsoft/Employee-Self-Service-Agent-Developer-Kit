@@ -86,6 +86,8 @@ the selected owners before asking for Push approval. Include material
 evaluation-copy/reuse, local-replacement and review-state consequences in the
 displayed scope. Inventory inspection alone is not remote validation.
 
+For topic entries, apply the shared Text-response authoring scope before offering a save. Show unaccepted or acceptance-unknown response wording before any batch Push approval, using the shared Response text / Suggested response quotations. Explain that Push accepts the displayed wording for the approved topics together with their saves. Keep revisions in normal chat; persist them locally and refresh the review before approval. Local retention alone is not wording acceptance. Reuse valid unchanged scoped consent without an additional wording gate.
+
 Use the shared inventory outcomes after appropriate observation and recovery:
 **No changes to push.** only after successful empty inspection, or **Could not
 inspect local changes.** with the cause and an offer of the next safe action
@@ -112,6 +114,8 @@ with labeled types and individual name/reason bullets even when previously
 listed; do not replace it with a collective pending-changes sentence.
 Then offer **Push this change**, **Keep pending** or **Cancel
 remaining push**. Preserve completed pushes when remaining work is cancelled.
+
+For a topic with unaccepted suggested wording, include **I want to update the response** before Keep pending and follow the shared response-revision continuation. Return to this component's refreshed review before saving it.
 
 ## Compose the supported operations
 

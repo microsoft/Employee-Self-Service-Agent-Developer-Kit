@@ -2,21 +2,21 @@
 
 Create one ordinary Copilot Studio topic in the selected editable Dev agent. The normal output is a `.mcs.yml` draft followed by an approved native save. Do not activate or publish as a save side effect.
 
-Read [experience-contract.md](../experience-contract.md) before interacting with the maker. Use its Create summary, initial routing-conflict decision when applicable, otherwise the short Push topic to agent / Keep as draft control, topic outcome heads, authorization rules and state-aware testing continuation. Keep requirements and revisions in normal chat; do not paraphrase fixed copy or put the summary inside the question.
+Read [experience-contract.md](../experience-contract.md) before interacting with the maker. Apply its Text-response authoring scope and Response wording and local drafts rules. Use its Create summary, initial routing-conflict decision when applicable, otherwise its wording-aware Push decision, topic outcome heads, authorization rules and state-aware testing continuation. Keep requirements and revisions in normal chat; do not paraphrase fixed copy or put the summary inside the question.
 
 ## Boundaries
 
 - Require completed canonical setup for the selected Dev agent.
 - Read `.local/config.json` and use its selected agent folder and schema.
 - Read relevant existing topics before drafting. Preserve the established Object Model shape, expressions, IDs in copied patterns, and shared error behavior.
-- Draft wording from the approved request and supplied context. Preserve exact wording when requested. Clarify consequential unknowns, but do not require a questionnaire or a separate wording-approval lifecycle.
+- Preserve supplied response wording and links by default. Suggest wording only when it is absent, using established facts and the shared wording review. Clarify consequential unknowns, but do not require a questionnaire or a separate wording-approval lifecycle.
 - Treat same-name or semantic overlap as advisory. Explain the overlap and suggest an explicitly selected existing topic when appropriate. Do not automatically deactivate, reroute, overwrite, or reject a deliberate separate topic.
 - Do not create Power Automate flows. When the request requires flow authoring, explain that it must be completed outside ADK.
 - Creation stays inactive and unpublished. Only a separately selected Activate and test continuation may activate it through the installed testing owner.
 
 ## 1. Resolve the request and inspect current topics
 
-Understand the intended conversation, triggering scope, response/grounding, fallback behavior, integrations, and confirmation requirements. Read relevant examples from `{agent.folder}/topics/`.
+Understand the intended employee intent and response, and check the requested behavior against the shared authoring scope before drafting. Read relevant examples from `{agent.folder}/topics/`.
 
 Run:
 
@@ -38,7 +38,7 @@ Telemetry is best-effort and must not block authoring. Previewing, saving or rec
 
 Create `{agent.folder}/topics/{ExactFileStem}.mcs.yml`. The filename stem becomes the final schema suffix with spelling and case preserved.
 
-Use the existing Object Model-compatible YAML shape. Include all behavior needed by the request, not only fixed text. Preserve expressions and unknown supported fields from any selected pattern. Do not add authoring-origin tags or a mandatory preview artifact.
+Use the existing Object Model-compatible YAML shape for the in-scope request. Review every response ending against the shared authoring boundary; do not use the optional exact-response helper as a universal admission validator. Preserve expressions and unknown supported fields from any selected pattern without importing prohibited behavior. Do not add authoring-origin tags or a mandatory preview artifact.
 
 Prepare the Create summary from the shared experience contract. Cover relevant triggering intent, response/grounding, collected inputs, returned values and employee-visible outputs, confirmation, fallback, error behavior and dependencies. Render the completed summary after the current instruction-alignment assessment and native preview, before the separate short decision control.
 
@@ -77,7 +77,7 @@ Run without `--yes`:
 python scripts\topic_authoring.py create --draft "{agent.folder}\topics\{ExactFileStem}.mcs.yml" --display-name "{Display name}" --description "{Description}" --output ".local\topic-authoring\topic-preview.json"
 ```
 
-Render the shared Create summary with the exact submitted behavior and applicable Notes and Routing Conflicts sections. Explain that creation is inactive and unpublished. With a known instruction-routing conflict, use the initial Resolve the routing conflict in the Agent Instructions / Push topic anyway / Keep as draft decision. Otherwise use the separate Push topic to agent / Keep as draft control. Reuse unchanged scoped batch/debugging approval rather than asking again.
+Render the shared Create summary with the exact submitted behavior, labeled Response text or Suggested response, explicit local-workspace statement and applicable Notes and Routing Conflicts sections. Explain that creation is inactive and unpublished. With a known instruction-routing conflict, use the initial Resolve the routing conflict in the Agent Instructions / Push topic anyway / Keep as draft decision with the shared wording-review rules. Otherwise use the suggested-response decision when wording remains unaccepted, including I want to update the response, or the separate Push topic to agent / Keep as draft control for supplied or accepted wording. Follow the shared normal-chat revision continuation before saving changed wording. Reuse unchanged scoped batch/debugging approval rather than asking again.
 
 Keep as draft performs no remote save and uses **Draft kept locally. Agent unchanged.** only for a draft-only outcome. If another approved component was saved, use the shared composed report with actual per-component results. Changed drafts require a new preview, but the preview JSON is not a save token. Material changes outside the approved scope require a new summary and approval.
 
