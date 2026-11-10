@@ -55,15 +55,30 @@ def _row(payload, key):
     return next(row for row in payload["results"] if row["checkpoint_id"] == key)
 
 
-@pytest.mark.parametrize("permission_unavailable", [False, True])
+@pytest.mark.parametrize("access", ["tenant", "own", "neither", "consent"])
 def test_entra_coverage_has_full_checkpoint_and_profile_parity(
-    setup_workspace, monkeypatch, permission_unavailable,
+    setup_workspace, monkeypatch, access,
 ):
     ws = setup_workspace
+    if access == "consent":
+        from flightcheck.graph_client import GraphClient, GraphConsentError, GraphPermissionError
+
+        original_authenticate = GraphClient.authenticate
+
+        def authenticate(client, preferred_username=None, *, scopes=None, require_existing_consent=False):
+            if scopes == ["https://graph.microsoft.com/User.Read"]:
+                return original_authenticate(client, preferred_username, scopes=scopes)
+            error = GraphPermissionError if require_existing_consent else GraphConsentError
+            raise error("Directory consent unavailable")
+
+        monkeypatch.setattr(GraphClient, "authenticate", authenticate)
     user = graph_mock.profile_user()
     user["employeeType"] = None
     ws.graph_http.get(f"{graph_mock.GRAPH_BASE}/users").respond(
-        status_code=403 if permission_unavailable else 200, json={"value": [user]},
+        status_code=200 if access == "tenant" else 403, json={"value": [user]},
+    )
+    ws.graph_http.get(f"{graph_mock.GRAPH_BASE}/me").respond(
+        status_code=403 if access == "neither" else 200, json=user,
     )
     key = "AUTH-PROFILE-001"
     monkeypatch.setitem(registry.PROFILES, "da:test-entra-coverage", registry.ProfileSpec(
@@ -81,17 +96,30 @@ def test_entra_coverage_has_full_checkpoint_and_profile_parity(
             if index < 2:
                 _register_maker_baseline(http)
             payload, code = _run_cli(ws, monkeypatch, http, options, f"entra-{index}")
-        assert code == 0
-        if index < 2:
+        if access != "consent" or index >= 2:
+            assert code == 0
+        if index < 2 and access != "consent":
             assert payload["overall"] == "CHECKED_WITH_NOTES"
+        elif index < 2:
+            assert _row(payload, "PRE-001")["status"] == "Error"
         row = _row(payload, key)
         assert row["status"] == "Warning"
-        assert ("Not checked" if permission_unavailable else "Data-quality concern") in row["result"]
+        assert {
+            "tenant": "Data-quality concern", "own": "Own profile only",
+            "consent": "Own profile only", "neither": "Not checked",
+        }[access] in row["result"]
         assert "not a deployment blocker" in row["remediation"]
         assert "manualVerificationSteps" not in row["evidence"]
-        assert row["evidence"]["coverageVerified"] is not permission_unavailable
-        if permission_unavailable:
-            assert "usersChecked" not in row["evidence"] and "results" not in row["evidence"]
+        assert row["evidence"]["coverageVerified"] is (access == "tenant")
+        if access != "tenant":
+            assert row["evidence"]["profileVerified"] is (access in {"own", "consent"})
+            if access == "neither":
+                assert "usersChecked" not in row["evidence"] and "results" not in row["evidence"]
+            else:
+                assert row["evidence"]["scope"] == "me"
+                assert row["evidence"]["usersChecked"] == 1
+                assert "coveragePercent" not in json.dumps(row["evidence"])
+                assert "tenant-wide attribute coverage was not calculated" in row["result"]
             assert payload["coverage"]["limitations"] >= 1
             if index >= 2:
                 assert payload["coverage"]["limitations"] == 1

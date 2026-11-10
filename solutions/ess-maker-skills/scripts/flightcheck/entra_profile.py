@@ -57,29 +57,9 @@ def check_attributes(client: GraphClient, scope: str, attributes: list[str]) -> 
             time_budget=TIME_BUDGET_SECONDS,
         )
         users, complete = collection.items, collection.complete
-    if not users:
-        raise ValueError("No member users were returned; coverage cannot be calculated.")
-    counts = {name: {"available": 0, "empty": 0, "notReturned": 0} for name in attributes}
-    seen = set()
-    for user in users:
-        if scope == "tenant" and monotonic() - started >= TIME_BUDGET_SECONDS:
-            raise TimeoutError("The 30-second coverage budget expired; no partial coverage is reported.")
-        if not isinstance(user, dict) or not isinstance(user.get("id"), str) or not user["id"].strip():
-            raise ValueError("Graph returned a profile without a valid id.")
-        identity = user["id"].casefold()
-        if identity in seen:
-            raise ValueError("Graph returned duplicate users; coverage was not calculated.")
-        seen.add(identity)
-        if scope == "tenant" and user.get("userType") != "Member":
-            raise ValueError("Graph returned a user outside the requested Member population.")
-        for name in attributes:
-            if name not in user:
-                counts[name]["notReturned"] += 1
-                continue
-            value = user[name]
-            if value is not None and not isinstance(value, str):
-                raise ValueError(f"Graph returned an invalid type for {name}.")
-            counts[name]["available" if value is not None and value.strip() else "empty"] += 1
+    counts = _attribute_counts(
+        users, attributes, scope, started + TIME_BUDGET_SECONDS if scope == "tenant" else None,
+    )
     results = []
     for name, count in counts.items():
         percent = count["available"] * 100 / len(users)
@@ -90,7 +70,7 @@ def check_attributes(client: GraphClient, scope: str, attributes: list[str]) -> 
             "status": "Passed" if percent >= 95 and count["notReturned"] == 0 else "Warning",
         })
     if scope == "tenant" and monotonic() - started >= TIME_BUDGET_SECONDS:
-        raise TimeoutError("The 30-second coverage budget expired; no partial coverage is reported.")
+        raise TimeoutError("The coverage budget expired; no partial coverage is reported.")
     is_sample = scope == "tenant" and not complete
     label = "Profile coverage" if scope == "me" else "Sample coverage" if is_sample else "Tenant coverage"
     return {
@@ -119,4 +99,66 @@ def check_attributes(client: GraphClient, scope: str, attributes: list[str]) -> 
                 if is_sample else []
             ),
         ],
+    }
+
+
+def _attribute_counts(users, attributes, scope, deadline):
+    if not users:
+        raise ValueError("No member users were returned; coverage cannot be calculated.")
+    counts = {name: {"available": 0, "empty": 0, "notReturned": 0} for name in attributes}
+    seen = set()
+    for user in users:
+        if deadline is not None and monotonic() >= deadline:
+            raise TimeoutError("The coverage budget expired; no partial coverage is reported.")
+        if not isinstance(user, dict) or not isinstance(user.get("id"), str) or not user["id"].strip():
+            raise ValueError("Graph returned a profile without a valid id.")
+        identity = user["id"].casefold()
+        if identity in seen:
+            raise ValueError("Graph returned duplicate users; coverage was not calculated.")
+        seen.add(identity)
+        if scope == "tenant" and user.get("userType") != "Member":
+            raise ValueError("Graph returned a user outside the requested Member population.")
+        for name in attributes:
+            if name not in user:
+                counts[name]["notReturned"] += 1
+                continue
+            value = user[name]
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"Graph returned an invalid type for {name}.")
+            counts[name]["available" if value is not None and value.strip() else "empty"] += 1
+    return counts
+
+
+def check_own_profile(client: GraphClient, *, time_budget: float) -> dict:
+    if time_budget <= 0:
+        raise TimeoutError("The coverage budget expired; no partial coverage is reported.")
+    deadline = monotonic() + time_budget
+    profile = client.get_bounded_profile(
+        params={"$select": ",".join(["id", *ATTRIBUTES])}, time_budget=time_budget,
+    )
+    counts = _attribute_counts([profile], ATTRIBUTES, "me", deadline)
+    if monotonic() >= deadline:
+        raise TimeoutError("The coverage budget expired; no partial coverage is reported.")
+    return {
+        "status": "Warning",
+        "scope": "me",
+        "usersChecked": 1,
+        "profileVerified": True,
+        "coverageVerified": False,
+        "reason": "permission_unavailable",
+        "message": (
+            "Own profile only. Tenant-wide directory-read access was unavailable for this run. "
+            "Only your signed-in profile was checked; tenant-wide attribute coverage was not calculated."
+        ),
+        "results": [
+            {
+                "attribute": name,
+                "availability": "Available" if count["available"] else "Empty" if count["empty"] else "Not returned",
+            }
+            for name, count in counts.items()
+        ],
+        "hrCountryComparison": {
+            "status": "NotApplicable",
+            "reason": "No HR country source is configured in this Entra-only checker.",
+        },
     }

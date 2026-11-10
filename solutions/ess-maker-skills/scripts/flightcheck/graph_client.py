@@ -11,6 +11,7 @@ Reuses the same MSAL token cache as auth.py so users don't sign in twice.
 """
 
 import asyncio
+from contextlib import contextmanager
 from dataclasses import dataclass
 import os
 import sys
@@ -91,6 +92,10 @@ _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
 
 class GraphPermissionError(PermissionError):
     """Graph consent or a directory read was explicitly denied."""
+
+
+class GraphConsentError(RuntimeError):
+    """Required Graph authentication failed because consent is unavailable."""
 
 
 def _consent_unavailable(result: dict | None) -> bool:
@@ -397,8 +402,10 @@ class GraphClient:
                 **interactive_options,
             )
 
-        if require_existing_consent and _consent_unavailable(result):
-            raise GraphPermissionError("Existing Graph consent is unavailable for the requested read scope.")
+        if _consent_unavailable(result):
+            if require_existing_consent or requested_scopes == ["https://graph.microsoft.com/User.Read"]:
+                raise GraphPermissionError("Existing Graph consent is unavailable for the requested read scope.")
+            raise GraphConsentError("Graph authentication failed (consent_required).")
         if "access_token" not in result:
             # Don't echo error_description - it can include tenant IDs and
             # internal flow details (CWE-209). Mirrors the auth.py pattern.
@@ -498,8 +505,20 @@ class GraphClient:
         """Read sequential pages with a cancellable budget, including retry sleeps."""
         if limit <= 0 or time_budget <= 0:
             raise ValueError("Collection limit and time budget must be positive.")
-        try:
+        with self._bounded_errors(time_budget):
             return asyncio.run(self._bounded_collection(path, params, limit, time_budget))
+
+    def get_bounded_profile(self, *, params: dict, time_budget: float) -> dict:
+        """Read the signed-in profile using the collection retry/deadline policy."""
+        if time_budget <= 0:
+            raise ValueError("Profile time budget must be positive.")
+        with self._bounded_errors(time_budget):
+            return asyncio.run(self._bounded_profile(params, time_budget))
+
+    @contextmanager
+    def _bounded_errors(self, time_budget):
+        try:
+            yield
         except TimeoutError:
             raise TimeoutError(
                 f"The {time_budget:g}-second coverage budget expired; no partial coverage is reported."
@@ -521,6 +540,41 @@ class GraphClient:
             timeout=time_budget,
         )
 
+    async def _bounded_profile(self, params, time_budget):
+        return await asyncio.wait_for(self._read_bounded_profile(params, time_budget), timeout=time_budget)
+
+    async def _read_bounded_profile(self, params, time_budget):
+        async with httpx.AsyncClient(timeout=time_budget, follow_redirects=False) as session:
+            response = await self._get_with_retries(session, "/me", f"{GRAPH_BASE}/me", params)
+            data = response.json()
+            if not isinstance(data, dict):
+                raise ValueError("Graph returned an invalid user profile.")
+            return data
+
+    async def _get_with_retries(self, session, path, url, params):
+        retry = _RETRY
+        while True:
+            try:
+                response = await session.get(url, headers=self.headers, params=params)
+            except (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
+                if not retry.total:
+                    raise
+                retry = retry.increment(method="GET", url=url, error=exc)
+                await asyncio.sleep(retry.get_backoff_time())
+                continue
+            if retry.total and retry.is_retry(
+                "GET", response.status_code, "Retry-After" in response.headers,
+            ):
+                metadata = HTTPResponse(status=response.status_code, headers=response.headers)
+                retry = retry.increment(method="GET", url=url, response=metadata)
+                delay = retry.get_retry_after(metadata) if retry.respect_retry_after_header else None
+                await asyncio.sleep(delay or retry.get_backoff_time())
+                continue
+            if response.status_code == 403:
+                raise GraphPermissionError(f"Graph returned HTTP 403 on {path}.")
+            response.raise_for_status()
+            return response
+
     async def _read_bounded_collection(self, path, params, limit, time_budget):
         items: list[dict] = []
         seen_urls: set[str] = set()
@@ -532,31 +586,7 @@ class GraphClient:
                 if url in seen_urls:
                     raise ValueError("Graph returned a repeated collection continuation.")
                 seen_urls.add(url)
-                retry = _RETRY
-                while True:
-                    try:
-                        response = await session.get(url, headers=self.headers, params=params)
-                    except (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
-                        if not retry.total:
-                            raise
-                        retry = retry.increment(method="GET", url=url, error=exc)
-                        await asyncio.sleep(retry.get_backoff_time())
-                        continue
-                    if retry.total and retry.is_retry(
-                        "GET", response.status_code, "Retry-After" in response.headers,
-                    ):
-                        metadata = HTTPResponse(status=response.status_code, headers=response.headers)
-                        retry = retry.increment(method="GET", url=url, response=metadata)
-                        delay = (
-                            retry.get_retry_after(metadata)
-                            if retry.respect_retry_after_header else None
-                        )
-                        await asyncio.sleep(delay or retry.get_backoff_time())
-                        continue
-                    if response.status_code == 403:
-                        raise GraphPermissionError(f"Graph returned HTTP 403 on {path}.")
-                    response.raise_for_status()
-                    break
+                response = await self._get_with_retries(session, path, url, params)
                 page, continuation = _collection_page(response.json(), path)
                 if continuation in seen_urls:
                     raise ValueError("Graph returned a repeated collection continuation.")

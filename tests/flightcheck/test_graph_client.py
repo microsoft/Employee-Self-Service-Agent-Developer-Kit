@@ -203,6 +203,30 @@ def test_optional_read_uses_existing_consent_and_preserves_real_auth_errors(monk
         )
 
 
+@pytest.mark.parametrize("self_profile", [True, False])
+def test_consent_denial_preserves_required_auth_gates(monkeypatch, tmp_path, self_profile):
+    monkeypatch.chdir(tmp_path)
+    app = MagicMock()
+    app.get_accounts.return_value = [{"username": "maker@example.test"}]
+    app.acquire_token_silent.return_value = None
+    app.acquire_token_interactive.return_value = {
+        "error": "invalid_grant", "suberror": "consent_required", "error_codes": [65001],
+    }
+    monkeypatch.setattr(graph_client.msal, "SerializableTokenCache", MagicMock())
+    monkeypatch.setattr(graph_client.msal, "PublicClientApplication", lambda *_a, **_k: app)
+    client = graph_client.GraphClient("organizations")
+    scopes = ["https://graph.microsoft.com/User.Read"] if self_profile else None
+    expected_error = graph_client.GraphPermissionError if self_profile else graph_client.GraphConsentError
+    with pytest.raises(expected_error, match="consent") as failed:
+        client.authenticate(preferred_username="maker@example.test", scopes=scopes)
+    app.acquire_token_interactive.assert_called_once_with(
+        scopes or graph_client.GRAPH_SCOPES, prompt="select_account", login_hint="maker@example.test",
+    )
+    if not self_profile:
+        assert isinstance(failed.value, RuntimeError) and not isinstance(failed.value, PermissionError)
+    assert client._token is None
+
+
 def test_no_cached_account_returns_empty_without_prompt():
     app = _fake_app(accounts=[], silent_result=None)
     with patch.object(graph_client.msal, "PublicClientApplication", return_value=app):

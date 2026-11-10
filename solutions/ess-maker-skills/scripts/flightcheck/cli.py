@@ -64,7 +64,7 @@ from flightcheck.runner import (
     maker_diagnostic_outcome,
 )
 from flightcheck.agent_scope import active_agent, configured_agents, is_declarative_agent, validate_agent_slug
-from flightcheck.graph_client import GraphClient, GraphPermissionError
+from flightcheck.graph_client import GraphClient, GraphConsentError, GraphPermissionError
 from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
 from flightcheck.pva_client import PVAClient
 from flightcheck.powerplatform_client import PowerPlatformClient
@@ -1749,6 +1749,8 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     runner.env_id = env_id
     runner.graph = graph
     runner.client_availability = client_availability
+    runner.tenant_id = tenant_id
+    runner.authenticated_account = canonical_username
     runner.pp_admin = pp_admin
     runner.pva = pva
     runner.powerplatform = powerplatform
@@ -2018,7 +2020,7 @@ def _client_blockers(
 
 def _record_graph_permission_failure(availability, optional: bool, error: BaseException) -> None:
     status = getattr(getattr(error, "response", None), "status_code", None)
-    if isinstance(error, GraphPermissionError) or status == 403:
+    if isinstance(error, (GraphPermissionError, GraphConsentError)) or status == 403:
         state = availability["graph"]
         state["permissionUnavailable"] = True
         state["reason"] = "permission_unavailable"
@@ -2765,6 +2767,8 @@ def _run_profile(args):
     runner.env_id = env_id
     runner.graph = graph
     runner.client_availability = client_availability
+    runner.tenant_id = tenant_id
+    runner.authenticated_account = canonical_username
     runner.pp_admin = pp_admin
     runner.pva = pva
     runner.powerplatform = powerplatform
@@ -3236,6 +3240,7 @@ def main():
     connectivity = None
     powerplatform = None
     azure_arm = None
+    graph_permission_unavailable = False
     if da_local_scope:
         tenant_id = None
         dv_token = None
@@ -3399,6 +3404,7 @@ def main():
         except Exception as e:
             print(f"  Graph: WARNING — {e}")
             print("  (Some checks will be skipped)")
+            graph_permission_unavailable = isinstance(e, (GraphPermissionError, GraphConsentError))
             # Discard the unauthenticated client so Graph-dependent checks see a
             # clean None and emit SKIPPED, rather than each call raising
             # "Call authenticate() first". Mirrors the pp_admin / powerplatform /
@@ -3547,6 +3553,11 @@ def main():
     runner.dv_token = dv_token
     runner.env_id = env_id
     runner.graph = graph
+    runner.tenant_id = tenant_id
+    runner.authenticated_account = (
+        getattr(args, "preferred_username", None) or getattr(graph, "signed_in_username", None)
+    )
+    runner.client_availability = {"graph": {"permissionUnavailable": graph_permission_unavailable}}
     runner.pp_admin = pp_admin
     runner.pva = pva
     runner.powerplatform = powerplatform

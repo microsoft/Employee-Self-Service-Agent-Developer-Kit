@@ -95,6 +95,7 @@ def setup_workspace(tmp_path, monkeypatch):
         httpx_mock.get(f"{graph_mock.GRAPH_BASE}/users").respond(json={
             "value": [graph_mock.profile_user()],
         })
+        httpx_mock.get(f"{graph_mock.GRAPH_BASE}/me").respond(json=graph_mock.profile_user())
         yield SimpleNamespace(
             config=config, native=native, content=content, auth=auth, root=tmp_path,
             graph_http=httpx_mock,

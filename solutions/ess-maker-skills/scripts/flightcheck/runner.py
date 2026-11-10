@@ -287,6 +287,27 @@ class FlightCheckRunner:
         """Register a check function. fn(runner) -> list[CheckResult]."""
         self._check_fns.append((category, fn))
 
+    def self_profile_graph(self):
+        """Authenticate a separate, identity-bound client for this user's profile."""
+        from agentbuilder import AgentBuilderError, tenant_id_from_access_token
+        from .graph_client import GraphClient
+
+        client = GraphClient(self.tenant_id, strict_reads=True)
+        expected = self.authenticated_account
+        token = client.authenticate(
+            preferred_username=expected, scopes=["https://graph.microsoft.com/User.Read"],
+        )
+        account = client.signed_in_username
+        if not account or (expected and account.casefold() != expected.casefold()):
+            raise ValueError("Graph authentication selected a different or unverifiable account.")
+        try:
+            tenant = tenant_id_from_access_token(token)
+        except AgentBuilderError as exc:
+            raise ValueError("Graph authentication returned an unreadable tenant identity.") from exc
+        if not tenant or (self.tenant_id != "organizations" and tenant.casefold() != self.tenant_id.casefold()):
+            raise ValueError("Graph authentication selected a different or unverifiable tenant.")
+        return client
+
     def should_execute(self, checkpoint_id: str) -> bool:
         """Return whether the current target/profile requests this checkpoint."""
         return (

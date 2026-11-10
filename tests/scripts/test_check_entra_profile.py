@@ -4,6 +4,7 @@
 """Graph contract tests use the CSDL-backed builders in tests.mocks.graph."""
 
 import asyncio
+import base64
 import json
 from time import monotonic
 from types import SimpleNamespace
@@ -20,6 +21,11 @@ import check_entra_profile as check
 from flightcheck.graph_client import CollectionRead, GraphClient, GraphPermissionError
 from tests.conftest import require_validated_mock
 from tests.mocks import graph
+
+
+def _token(tenant=graph.MOCK_TENANT_ID):
+    claims = base64.urlsafe_b64encode(json.dumps({"tid": tenant}).encode()).decode().rstrip("=")
+    return f"header.{claims}.signature"
 
 
 @pytest.fixture
@@ -389,7 +395,9 @@ def test_invalid_or_repeated_continuation_does_not_become_a_successful_sample(cl
         check.check_attributes(client, "tenant", ["usageLocation"])
 
 
-@pytest.mark.parametrize("status", ["Passed", "Warning", "Denied", "Error"])
+@pytest.mark.parametrize("status", [
+    "Passed", "Warning", "Denied", "OwnEmpty", "OwnOmitted", "BothDenied", "Error",
+])
 @respx.mock
 def test_registered_flightcheck_writes_html_json_and_nonblocking_warnings(
     client, monkeypatch, tmp_path, capsys, status,
@@ -400,15 +408,25 @@ def test_registered_flightcheck_writes_html_json_and_nonblocking_warnings(
     user = graph.profile_user()
     if status == "Warning":
         user["usageLocation"] = None
+    fallback = status in {"Denied", "OwnEmpty", "OwnOmitted", "BothDenied"}
     respx.get(f"{graph.GRAPH_BASE}/users").respond(
-        status_code=403 if status == "Denied" else 400 if status == "Error" else 200,
+        status_code=403 if fallback else 400 if status == "Error" else 200,
         json={"value": [user]},
     )
+    own = graph.profile_user()
+    if status == "OwnEmpty":
+        own["jobTitle"] = None
+    elif status == "OwnOmitted":
+        del own["employeeType"]
+    own_route = respx.get(f"{graph.GRAPH_BASE}/me").respond(
+        status_code=403 if status == "BothDenied" else 200, json=own,
+    ) if fallback else None
+    scopes_used = []
 
     def authenticate(self, preferred_username=None, *, scopes=None, require_existing_consent=False):
-        assert scopes == ["https://graph.microsoft.com/User.Read.All"]
-        assert require_existing_consent is True
-        self._token = "test-token"
+        assert scopes == [f"https://graph.microsoft.com/{'User.Read.All' if require_existing_consent else 'User.Read'}"]
+        scopes_used.extend(scopes)
+        self._token = _token()
         self.signed_in_username = preferred_username
         return self._token
 
@@ -424,13 +442,13 @@ def test_registered_flightcheck_writes_html_json_and_nonblocking_warnings(
         cli.main()
     payload = json.loads((output / "results.json").read_text(encoding="utf-8"))
     row = next(item for item in payload["results"] if item["checkpoint_id"] == "AUTH-PROFILE-001")
-    assert row["status"] == ("Warning" if status == "Denied" else status)
+    assert row["status"] == ("Warning" if fallback else status)
     assert exited.value.code == (1 if status == "Error" else 0)
     html = (output / "report.html").read_text(encoding="utf-8")
     assert "AUTH-PROFILE-001" in html
     assert "/flightcheck --checkpoint AUTH-PROFILE-001" in html
     assert "--scope checkpoint:" not in html
-    if status in {"Warning", "Denied"}:
+    if status == "Warning" or fallback:
         assert "Warnings tab" in html
         assert "Needs manual verification" not in html
     if status in {"Passed", "Warning"}:
@@ -451,16 +469,41 @@ def test_registered_flightcheck_writes_html_json_and_nonblocking_warnings(
         assert "NEEDS MANUAL VERIFICATION" not in stdout
     elif status == "Passed":
         assert row["remediation"] == ""
-    elif status == "Denied":
+    elif status == "BothDenied":
         assert "Not checked" in row["result"]
         assert row["evidence"]["coverageVerified"] is False
         assert "results" not in row["evidence"]
         assert "usersChecked" not in row["evidence"]
         assert "Access limitation, not a deployment blocker" in row["remediation"]
+        assert row["evidence"]["profileVerified"] is False
+    elif fallback:
+        assert "Own profile only" in row["result"]
+        assert "tenant-wide attribute coverage was not calculated" in row["result"]
+        assert "Personalization opportunity, not a deployment blocker" in row["remediation"]
+        assert "your own profile" in row["remediation"]
+        assert "existing approved User.Read.All" in row["remediation"]
+        evidence = row["evidence"]
+        assert evidence["scope"] == "me" and evidence["usersChecked"] == 1
+        assert evidence["profileVerified"] is True and evidence["coverageVerified"] is False
+        assert len(evidence["results"]) == len(check.ATTRIBUTES)
+        assert not {"isSample", "populationComplete", "thresholdPercent"}.intersection(evidence)
+        assert "coveragePercent" not in json.dumps(evidence)
+        assert "Mock title" not in json.dumps(evidence)
+        assert graph.MOCK_USER_ID not in json.dumps(evidence)
+        states = {item["attribute"]: item["availability"] for item in evidence["results"]}
+        assert states["jobTitle"] == ("Empty" if status == "OwnEmpty" else "Available")
+        assert states["employeeType"] == ("Not returned" if status == "OwnOmitted" else "Available")
+        assert "Own profile only" in html
+        assert "%" not in row["result"]
     else:
         assert "400" in row["result"]
         assert "admin-consented User.Read.All" in row["remediation"]
         assert "results" not in row["evidence"]
+    assert scopes_used == [
+        "https://graph.microsoft.com/User.Read.All",
+        *(["https://graph.microsoft.com/User.Read"] if fallback else []),
+    ]
+    assert (own_route.call_count if own_route else 0) == int(fallback)
 
 
 def test_shared_da_planning_discovers_coverage_but_not_in_local_mode():
@@ -484,6 +527,7 @@ def test_da_permission_error_is_not_checked_warning_without_manual_verification(
     monkeypatch.setattr(client, "get_bounded_collection", Mock(side_effect=GraphPermissionError("HTTP 403")))
     spec = registry.resolve("AUTH-PROFILE-001")
     runner = SimpleNamespace(graph=client, agent_slug="hr", env_id="test-environment")
+    runner.self_profile_graph = Mock(side_effect=GraphPermissionError("User.Read denied"))
     executor = DAExecutor(runner, SimpleNamespace(), (spec.key,), (spec,), {})
     runner.da_executor = executor
     row = executor.run(runner)[0]
@@ -535,7 +579,7 @@ def test_focused_permission_fallback_does_not_hide_other_authentication_failures
     }
 
     def authenticate(self, preferred_username=None, *, scopes=None, require_existing_consent=False):
-        assert require_existing_consent is True
+        assert require_existing_consent is (scopes == ["https://graph.microsoft.com/User.Read.All"])
         raise failures[failure]
 
     monkeypatch.setattr(GraphClient, "authenticate", authenticate)
@@ -592,3 +636,148 @@ def test_optional_coverage_does_not_weaken_required_graph_plans(monkeypatch):
     blockers = cli._client_blockers(availability, "PROFILE")
     assert len(blockers) == 1
     assert blockers[0].status == "Blocked"
+
+
+@pytest.mark.parametrize("tenant_elapsed,own_elapsed", [(23, 1), (23, 8), (31, 1)])
+def test_fallback_shares_read_budget_but_excludes_self_authentication(
+    monkeypatch, tenant_elapsed, own_elapsed,
+):
+    from flightcheck.checks.entra_profile import run_entra_profile_checks
+
+    now = [0]
+    monkeypatch.setattr("flightcheck.entra_profile.monotonic", lambda: now[0])
+    monkeypatch.setattr("flightcheck.checks.entra_profile.monotonic", lambda: now[0])
+    tenant_client, own_client = Mock(), Mock()
+    read_budgets = []
+
+    def denied(*_args, **_kwargs):
+        now[0] += tenant_elapsed
+        raise GraphPermissionError("Directory read denied")
+
+    def authenticate():
+        now[0] += 120
+        return own_client
+
+    def read(**kwargs):
+        read_budgets.append(kwargs["time_budget"])
+        now[0] += own_elapsed
+        return graph.profile_user()
+
+    tenant_client.get_bounded_collection.side_effect = denied
+    own_client.get_bounded_profile.side_effect = read
+    runner = SimpleNamespace(graph=tenant_client, self_profile_graph=Mock(side_effect=authenticate))
+    row = run_entra_profile_checks(runner)[0]
+    assert runner.graph is tenant_client
+    assert read_budgets == ([30 - tenant_elapsed] if tenant_elapsed < 30 else [])
+    if tenant_elapsed + own_elapsed < 30:
+        assert row.status == "Warning"
+        assert row.evidence["profileVerified"] is True
+        assert "Own profile only" in row.result
+        assert "not a deployment blocker" in row.remediation
+    else:
+        assert row.status == "Error"
+        assert "budget expired" in row.result
+        assert "results" not in row.evidence
+        assert "Restore the Graph read" in row.remediation
+    if tenant_elapsed >= 30:
+        runner.self_profile_graph.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", [
+    TimeoutError("budget expired"), requests.ConnectionError("Network unavailable"),
+    ValueError("Invalid directory data"),
+])
+def test_fallback_does_not_hide_nonpermission_read_failures(failure):
+    from flightcheck.checks.entra_profile import run_entra_profile_checks
+
+    client = Mock()
+    client.get_bounded_collection.side_effect = failure
+    runner = SimpleNamespace(graph=client, self_profile_graph=Mock())
+    row = run_entra_profile_checks(runner)[0]
+    assert row.status == "Error"
+    assert (type(failure).__name__ if isinstance(failure, requests.RequestException) else str(failure)) in row.result
+    assert "Restore the Graph read" in row.remediation
+    runner.self_profile_graph.assert_not_called()
+
+
+@pytest.mark.parametrize("identity", ["matching", "other_account", "missing_account", "other_tenant", "missing_tenant"])
+def test_self_profile_authentication_verifies_account_and_tenant(monkeypatch, identity):
+    from flightcheck.runner import FlightCheckRunner
+
+    def authenticate(client, preferred_username=None, *, scopes=None):
+        assert preferred_username == "maker@example.test"
+        assert scopes == ["https://graph.microsoft.com/User.Read"]
+        client.signed_in_username = {
+            "other_account": "other@example.test", "missing_account": None,
+        }.get(identity, preferred_username)
+        return _token(
+            "00000000-0000-4000-8000-000000009999" if identity == "other_tenant"
+            else "" if identity == "missing_tenant" else graph.MOCK_TENANT_ID,
+        )
+
+    monkeypatch.setattr(GraphClient, "authenticate", authenticate)
+    runner = FlightCheckRunner()
+    runner.tenant_id = graph.MOCK_TENANT_ID
+    runner.authenticated_account = "maker@example.test"
+    runner.graph = Mock()
+    original = runner.graph
+    if identity == "matching":
+        assert runner.self_profile_graph().signed_in_username == "maker@example.test"
+    else:
+        with pytest.raises(ValueError, match="different or unverifiable|unreadable tenant identity"):
+            runner.self_profile_graph()
+    assert runner.graph is original
+
+
+@respx.mock
+def test_self_profile_retry_after_is_cancelled_by_its_remaining_deadline(client):
+    route = respx.get(f"{graph.GRAPH_BASE}/me").respond(429, headers={"Retry-After": "60"})
+    started = monotonic()
+    with pytest.raises(TimeoutError, match="budget expired; no partial coverage"):
+        client.get_bounded_profile(params={}, time_budget=0.5)
+    assert monotonic() - started < 2
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_own_profile_fallback_preserves_required_graph_client_blockers(monkeypatch, tmp_path):
+    from flightcheck import cli, registry
+    from flightcheck.graph_client import GraphConsentError
+    from flightcheck.runner import CheckResult
+
+    monkeypatch.chdir(tmp_path)
+    required = registry.CheckpointSpec(
+        key="TEST-GRAPH-REQUIRED", category_label="Test", clients=frozenset({registry.GRAPH}),
+        requires_config=False,
+        category_fn=lambda _: [CheckResult(
+            "TEST-GRAPH-REQUIRED", "Test", "High", "Passed", "Required Graph read", "Complete.",
+        )],
+    )
+    monkeypatch.setitem(registry.REGISTRY, required.key, required)
+    monkeypatch.setitem(registry.PROFILES, "entra:test-mixed", registry.ProfileSpec(
+        "entra:test-mixed", ("AUTH-PROFILE-001", required.key), "Mixed Graph access requirements.",
+    ))
+
+    def authenticate(client, preferred_username=None, *, scopes=None, require_existing_consent=False):
+        if scopes != ["https://graph.microsoft.com/User.Read"]:
+            raise GraphConsentError("Directory consent unavailable")
+        client.signed_in_username = preferred_username
+        client._token = _token()
+        return client._token
+
+    monkeypatch.setattr(GraphClient, "authenticate", authenticate)
+    respx.get(f"{graph.GRAPH_BASE}/me").respond(json=graph.profile_user())
+    output = tmp_path / "report"
+    monkeypatch.setattr("sys.argv", [
+        "flightcheck", "--profile", "entra:test-mixed", "--validation-realm", "dev",
+        "--tenant-id", graph.MOCK_TENANT_ID, "--preferred-username", "maker@example.test",
+        "--output", str(output), "--no-open", "--no-telemetry",
+    ])
+    with pytest.raises(SystemExit) as exited:
+        cli.main()
+    payload = json.loads((output / "results.json").read_text(encoding="utf-8"))
+    assert exited.value.code == 1 and payload["blocked"] >= 1
+    row = next(item for item in payload["results"] if item["checkpoint_id"] == "AUTH-PROFILE-001")
+    assert row["status"] == "Warning" and row["evidence"]["profileVerified"] is True
+    assert "Own profile only" in row["result"]
+    assert "not a deployment blocker" in row["remediation"]
