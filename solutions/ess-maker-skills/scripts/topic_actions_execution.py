@@ -10,33 +10,27 @@ by the native adapter, never by request JSON or an approval digest.
 from __future__ import annotations
 
 from copy import deepcopy
-
 from dataclasses import asdict, dataclass, field
-
 import time
-
 import threading
-
 from typing import Callable, Protocol
 
 from agentbuilder import AgentBuilderHTTPError
-
 from topic_actions_catalog import CatalogSnapshot, plan_catalog_actions
-
 from topic_actions_components import normalize_state
-
 from topic_actions_discovery import _identity
-
 from topic_actions_planning import TopicPlan, _digest
 
-_LOCKS_GUARD = threading.Lock()
 
+_LOCKS_GUARD = threading.Lock()
 _TARGET_LOCKS: dict[tuple[str, str, str], threading.Lock] = {}
+
 
 def _target_lock(plan: TopicPlan):
     key = (plan.target.tenant_id, plan.target.environment_id, plan.target.agent_id)
     with _LOCKS_GUARD:
         return _TARGET_LOCKS.setdefault(key, threading.Lock())
+
 
 @dataclass(frozen=True)
 class OperationEvidence:
@@ -51,10 +45,63 @@ class OperationEvidence:
             "body": self.body, "blockers": self.blockers,
         })
 
+
 class ActionBackend(Protocol):
     def read(self) -> OperationEvidence: ...
     def admission_blockers(self, evidence: OperationEvidence) -> tuple[str, ...]: ...
     def submit_once(self, target_agent_id: str, payload: dict) -> None: ...
+
+
+def build_state_payload(evidence: OperationEvidence, plan: TopicPlan) -> dict:
+    """Preserve complete remote components; change only the approved state pair."""
+    token = evidence.body.get("changeToken")
+    if not isinstance(token, str) or not token.strip() or not plan.delta:
+        raise ValueError("A fresh change token and nonempty delta are required.")
+    if plan != plan_catalog_actions(evidence.snapshot, plan.action) or plan.blockers:
+        raise ValueError("The plan must be computed from this exact evidence.")
+    indexed = {}
+    rows = evidence.body.get("botComponentChanges")
+    if not isinstance(rows, list):
+        raise ValueError("Invalid component collection.")
+    for row in rows:
+        if not isinstance(row, dict) or row.get("$kind") != "BotComponentInsert":
+            raise ValueError("Unsupported component collection.")
+        component = row.get("component")
+        if not isinstance(component, dict):
+            raise ValueError("Invalid component.")
+        identity = _identity(component.get("id"))
+        if identity in indexed:
+            raise ValueError("Ambiguous component identity.")
+        if _identity(component.get("parentBotId")) != plan.target.agent_id:
+            raise ValueError("Unverified parent identity.")
+        indexed[identity] = component
+    changes = []
+    for change in plan.delta:
+        component = indexed.get(change.component_id)
+        if (
+            component is None or component.get("$kind") != "DialogComponent"
+            or normalize_state(component.get("state"), component.get("status"))[0] != change.before
+            or any(
+                schema != component.get("schemaName")
+                for _, schema, identity in evidence.snapshot.members
+                if identity == change.component_id
+            )
+        ):
+            raise ValueError("The exact topic state could not be established.")
+        updated = deepcopy(component)
+        updated["state"] = updated["status"] = "Active" if change.after == "On" else "Inactive"
+        changes.append({"$kind": "BotComponentUpdate", "component": updated})
+    return {
+        "changeToken": token,
+        "botComponentChanges": changes,
+        **{key: [] for key in (
+            "cloudFlowDefinitionChanges", "connectionReferenceChanges",
+            "connectorDefinitionChanges", "environmentVariableChanges",
+            "aIPluginOperationChanges", "componentCollectionChanges",
+            "dataverseTableSearchChanges", "connectedAgentDefinitionChanges",
+        )},
+    }
+
 
 def public_plan(plan: TopicPlan) -> dict:
     def changes(items):
@@ -80,6 +127,7 @@ def public_plan(plan: TopicPlan) -> dict:
         "blockers": list(plan.blockers),
     }
 
+
 def _component_map(body: dict) -> dict:
     result = {}
     for row in body["botComponentChanges"]:
@@ -91,6 +139,7 @@ def _component_map(body: dict) -> dict:
             raise ValueError("Ambiguous readback.")
         result[identity] = item
     return result
+
 
 def _reconcile(before: OperationEvidence, after: OperationEvidence, plan: TopicPlan) -> tuple[list[dict], bool]:
     """Observed desired state after an uncertain submission is not attribution."""
@@ -144,6 +193,7 @@ def _reconcile(before: OperationEvidence, after: OperationEvidence, plan: TopicP
             reason = "readback"
         results.append({"componentId": identity, "state": state, "status": status, "reason": reason})
     return results, containment and stable_authority
+
 
 class TopicActionSession:
     """One review and at most one dispatch. No saved approval, journal or replay."""
@@ -228,9 +278,54 @@ class TopicActionSession:
                 if not verified or any(item["status"] == "unverified" for item in topics):
                     return self._result("review_required", plan=plan, blockers=("evidence_changed",))
                 return self._result("already_correct", plan=plan, completed=not plan.skips, topics=topics)
-            return self._result("blocked", plan=plan, blockers=("execution_unavailable",))
+            payload = build_state_payload(fresh, plan)
+            final_blockers = self.backend.admission_blockers(fresh)
+            if final_blockers or self.clock() >= deadline:
+                return self._result(
+                    "review_required", plan=plan,
+                    blockers=tuple(final_blockers) or ("approval_expired",),
+                )
         except Exception:
             return self._result("blocked", plan=plan, blockers=("pre_dispatch_check_failed",))
+        # An error after entering submit is potentially applied, even on timeout.
+        acknowledged = False
+        try:
+            self.backend.submit_once(plan.target.agent_id, payload)
+            acknowledged = True
+        except (Exception, KeyboardInterrupt):
+            pass
+        try:
+            after = self.backend.read()
+            topics, scope_verified = _reconcile(fresh, after, plan)
+            scope_verified = scope_verified and not self.backend.admission_blockers(after)
+        except (Exception, KeyboardInterrupt):
+            return self._result(
+                "unverified", plan=plan, write_status="submitted",
+                blockers=("readback_failed", "fresh_approval_required"),
+                topics=[{
+                    "componentId": identity, "state": "Unknown",
+                    "status": "unverified", "reason": "readback_unavailable",
+                } for identity in fresh.snapshot.evidence.selected_member_ids],
+            )
+        verified = scope_verified and all(
+            item["status"] in ("observed_desired", "already_correct", "protected")
+            for item in topics
+        )
+        if not acknowledged:
+            return self._result(
+                "unverified", plan=plan, write_status="submitted", topics=topics,
+                blockers=("submission_outcome_uncertain", "fresh_approval_required"),
+            )
+        if verified:
+            for item in topics:
+                if item["status"] == "observed_desired":
+                    item["status"] = "changed"
+        return self._result(
+            ("completed_with_protections" if plan.skips else "completed") if verified else "partial",
+            plan=plan, write_status="submitted", topics=topics,
+            completed=verified and not plan.skips,
+            blockers=() if verified else ("verification_incomplete", "fresh_approval_required"),
+        )
 
     def _result(
         self, status: str, *, plan: TopicPlan | None = None,
