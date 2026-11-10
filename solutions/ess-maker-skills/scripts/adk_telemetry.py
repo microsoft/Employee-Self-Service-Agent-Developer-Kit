@@ -145,7 +145,7 @@ SCRIPT_ERROR_ENTRY_POINTS = {
 _SCRIPT_ERROR_MODULES = tuple(SCRIPT_ERROR_ENTRY_POINTS) + (
     "agentbuilder", "auth", "setup_state", "adk_telemetry",
     "connect_lifecycle", "da_product_registry",
-    "flightcheck.runner", "flightcheck.da_execution", "flightcheck.da_profiles",
+    "flightcheck.runner", "flightcheck.da_execution",
 )
 _SCRIPT_ERROR_FILES = {
     os.path.normcase(os.path.realpath(os.path.join(
