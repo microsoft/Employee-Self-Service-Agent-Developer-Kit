@@ -7,6 +7,11 @@ setup-required stop.** Use both the user's message and the invoked command
 prompt: `/connect workday` remains a Connect request when `workday` is supplied
 as the command argument.
 
+Do the classification and any setup-gate reads **silently, in one pass** — do
+not narrate them ("config missing", "setup not ready", "starting setup",
+"loading instructions"). The maker's first visible output is the setup-required
+Message block or the response from the experience you route to.
+
 ### Setup-independent routes
 
 Apply these routes before the ordinary setup gate below. For a matching request,
@@ -32,8 +37,16 @@ The selected entry point owns any metadata checks and missing-state handling.
   `connect_ready: true`; Workday connections may be the remaining runtime
   readiness blocker. A missing `.local` directory or a `Path does not exist`
   result is expected unprepared state, not a terminal Connect failure.
-- If the user typed `/setup` or explicitly asked to run setup, proceed with
-  setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
+- If the user typed `/setup` or gave the direct setup invocation `run setup`
+  (the Copilot CLI has no typed `/setup`, so `run setup` is its
+  command-equivalent), proceed with setup — read
+  `src/skills/foundation-setup/SKILL.md` and follow it. While Planner is
+  briefing the maker's assigned setup task, a natural-language request to start
+  it ("start setup") enters setup the same way; do not ask the maker to type
+  `/setup`. Any other open-ended or exploratory setup phrasing — "set up ESS",
+  "I want to set up ESS", "set up ESS for the first time", "deploy ESS", "where
+  do I start", "how do I get started" — is not a setup route; it follows the
+  setup gate below.
 - If the user typed `/planner` or explicitly requested a planning or plan
   action — **plan a rollout / plan my ESS deployment / create a plan / build a
   scenario plan / show my plan status / "what am I assigned?"** — proceed with
@@ -519,8 +532,9 @@ JSON format", "something went wrong with Workday".
 status", "what am I assigned", "what are my tasks", "my tasks", "what's
 assigned to me", "/planner". Open-ended first-time requests with no explicit
 planning intent — "where do I start", "how do I get started", "I want to deploy
-ESS" — are not planner triggers; they follow the setup gate, and `/setup`
-offers **Plan my ESS rollout first** when no plan exists.
+ESS", "set up ESS", "set up ESS for the first time" — are neither planner nor
+setup triggers; they follow the setup gate, and `/setup` (or the Copilot CLI's
+`run setup`) offers **Plan my ESS rollout first** when no plan exists.
 
 **Trigger phrases for roles:** "assign the ServiceNow admin role to <person>",
 "make <person> the Workday admin", "give <person> the <role> role", "who holds

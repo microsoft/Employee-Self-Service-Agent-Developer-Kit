@@ -18,6 +18,15 @@ Microsoft authorization, encounters denied access, names a Power Platform role,
 or hands an action to an administrator. That file owns the operation-specific
 role language and administrator handoff.
 
+When Planner hands off the maker's assigned setup task because they asked in
+natural language to start it ("start setup", "start my setup task"), treat the
+request exactly like `/setup`: continue directly and never ask the maker to
+retype it as a command. Retain the assigned task, plan role, and the plan's
+target environment through setup so Planner can return to that task afterward.
+A plan assignment is not proof of access: keep the normal sign-in and
+environment-access checks, and use the permission guidance above to explain a
+specific missing permission rather than asking which role the maker holds.
+
 ## Setup state sources
 
 - **Current setup state:** `.local/setup/config.json`
