@@ -1,50 +1,74 @@
-# Topic actions - nonmutating preview
+# Topic actions - nonmutating entry
 
-This is the M1 entry only. It can verify authentication and read access to the
-exact selected agent. Discovery, protections, planning, approval and mutation
-are not implemented. Do not treat successful reads as write authority,
-installed-topic verification, connection health or employee readiness.
+M1 verifies account and selected-agent read access only. Discovery, planning,
+approval and execution are not available in this milestone. No topic writes
+or publishing are supported.
 
-<!-- TODO(M2-M7): connect the real discovery/planner and approved execution/UX. -->
+## Entry and prerequisites
 
-## Inputs and setup
 
-Honor the workspace's canonical setup gate in `.github/copilot-instructions.md`
-before gathering action, set keys or target IDs. When setup is missing or
-incomplete, immediately render that gate's setup-required Message block, telling
-the maker to run `/setup`.
+This route owns its setup gate. Read `.local/config.json` and
+`.local/setup/config.json`; resolve `activeAgent` to exactly one canonical
+`agent.workspace_slug`. Require schema version 4, consistent tenant,
+environment and agent IDs, DA release line, a recorded workspace folder and
+agent path, and `steps.SETUP-07.state: "done"`.
 
-Then finish the request without authentication or topic changes. Do not silently
-stop or wait for inputs that cannot be resolved before setup. If workspace
-configuration is malformed or unreadable, report the configuration blocker
-without exposing its contents. A failed prerequisite read or helper invocation
-must produce an explicit user-facing blocker and a supported next step, not an
-empty response.
+Do not require `connect_ready: true`, a healthy Workday/ServiceNow connection
+or employee-data calls. Use `src/reference/ui-formatting-guidelines.md` for
+maker-facing guidance. Preserve the requested action, sets and established
+target, and distinguish these entry outcomes:
 
-Never start, resume or repair setup or a connection automatically. Retain the
-caller's context and completed work. If the maker cancels before the check, stop
-without authentication or changes.
+- **Setup not established:** explain that ADK has not established the account,
+  agent and environment. Direct the maker to run `/setup` in this workspace,
+  then return to this conversation with a new topic-change request.
+- **Setup incomplete:** name the unfinished step only when known. Workspace
+  preparation is required; connection health is not. Direct the maker to
+  `/setup` for the same agent, retaining confirmed completed steps, then ask
+  them to return here with a new request.
+- **Setup broken or target unverified:** identify only the information that
+  cannot be validated. Do not assume `/setup` repairs it or recommend deleting
+  setup state, switching targets or creating a replacement. State when the
+  supported recovery route or installed-version support is unconfirmed.
+- **Selected package or topics missing:** distinguish verified absence of a
+  package from missing topics within an installed package. Name the affected
+  set and topics when known. Use an existing setup/recovery destination only
+  when verified for that problem and installed version; otherwise state that
+  the destination is unconfirmed. `/setup` does not install extension packs;
+  `/connect` completion is not package or topic evidence.
+- **Evidence unavailable or ambiguous:** do not diagnose absence or access
+  denial. Unverified installation does not mean a missing package; unresolved
+  topic identities can be missing or ambiguous. For unresolved membership,
+  ask the ADK administrator to investigate, then return here for a fresh check.
+- **Access denied:** describe the denied operation only. A denied read does
+  not verify missing topic-edit permission. Only a verified edit denial may
+  direct the maker to the administrator responsible for that agent and
+  environment to grant topic-edit access. Do not invent a permission-request
+  command or infer denial from an unavailable permission check.
 
-Use the current canonical target from `.local/setup/config.json` and the
-`activeAgent` in `.local/config.json`. Do not borrow the first agent, another
-environment, a cached connection target or a previous conversation's identity.
+For each pre-write blocker show "No topics were changed." Never automatically
+start setup, install packages, repair a connection, switch targets or resume
+topic changes after recovery. A new request performs fresh checks, review and
+applicable explicit approval. The helper rechecks identity and direct native
+Dev access; reads do not prove write permission.
 
-The provisional request is a JSON object with:
+Direct entry and a calling skill use the same nonmutating target verifier. Preserve
+confirmed completed caller/setup progress and return its context in memory
+without completing unresolved caller steps. Returning a JSON object is not
+proof that setup has consumed it. Use an existing caller continuation only
+when its contract and installed-version support have been verified; otherwise
+explain that automatic return is unavailable and keep the result in this
+conversation. Do not promise persistent resume, invent a destination, mark
+the topic step complete or start the caller's next mutation.
 
-- `target`: `tenantId`, `environmentId`, `agentId` from the selected workspace.
-- `action`: exactly `enable` or `disable`.
-- `setKeys`: a nonempty array of distinct opaque set keys already supplied by
-  the caller/maker. Their membership is not verified by M1. Never invent keys,
-  expand "all", infer groups from topic names, or offer a fabricated catalog.
-- `entry`: `direct` or `caller`.
-- `callerContext`: optional private JSON object; required for `caller` entry.
-  Keep it with the caller in memory. Do not put it, tokens or component bodies
-  in terminal commands, chat output or saved files.
-
-If action or keys are not established, explain that topic-set actions and their
-catalog are not available in this preview. Do not invent a selection UI.
+Before writes, **Cancel** or **Not now** ends the request. Show "Canceled.
+No topics were changed." Direct entry remains in this conversation. Caller
+entry preserves completed steps and leaves the topic step incomplete unless
+the requested state was independently verified, using only the supported
+caller return. Closing the control or an ambiguous custom answer is not
+approval. No automatic retry or resume follows cancellation.
 
 ## Run the read-only check
+
 
 Pass the request JSON on standard input to
 `python scripts/topic_actions.py`, from this solution's workspace.
@@ -62,8 +86,8 @@ succeeded. It is not completion of the requested enable/disable action.
 All exits have `completed: false` and `writeStatus: "not_attempted"`. Report
 missing/incomplete/broken setup, an unverified target, denied access or
 cancellation truthfully. Preserve all caller progress and leave unresolved
-caller steps incomplete. Return to the existing caller; never invent a
-destination or invoke its next mutating step.
+caller steps incomplete. Use only a verified existing caller return; never invent a destination
+or invoke its next mutating step.
 
 ## Safety boundary
 

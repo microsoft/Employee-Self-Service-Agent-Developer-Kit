@@ -1,19 +1,22 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Provisional, read-only entry for topic-set actions.
-
-TODO(M2-M7): add discovery, planning and execution behind their safety gates.
-"""
+"""Topic-set actions with fail-closed native preview and in-memory caller results."""
 
 from __future__ import annotations
 
 import argparse
+
 from copy import deepcopy
+
 import json
+
 from pathlib import Path
+
 import sys
+
 from typing import Any
+
 import uuid
 
 import requests
@@ -27,15 +30,16 @@ from agentbuilder import (
     environment_id_from_host,
     validate_environment_host,
 )
+
 from flightcheck.agent_scope import active_agent
 
-
 RESULT_MARKER = "TOPIC_ACTIONS_RESULT_JSON:"
-TARGET_FIELDS = frozenset({"tenantId", "environmentId", "agentId"})
-REQUEST_FIELDS = frozenset(
-    {"target", "action", "setKeys", "entry", "callerContext"}
-)
 
+TARGET_FIELDS = frozenset({"tenantId", "environmentId", "agentId"})
+
+REQUEST_FIELDS = frozenset(
+    {"contractVersion", "target", "action", "setKeys", "entry", "callerContext"}
+)
 
 class TopicActionsError(ValueError):
     """A safe, structured entry failure without raw input or service bodies."""
@@ -44,17 +48,66 @@ class TopicActionsError(ValueError):
         super().__init__(message)
         self.reason = reason
 
+def _entry_message(reason: str, message: str) -> str:
+    if reason == "cancelled":
+        return "Canceled. No topics were changed."
+    if reason == "setup_not_run":
+        message = (
+            "ADK setup has not established the account, agent and environment "
+            "in this workspace. Run /setup here, then return to this conversation "
+            "and start a new topic-change request."
+        )
+    elif reason == "setup_incomplete":
+        message += (
+            " Run /setup in this workspace to continue setup for the same agent, "
+            "keeping completed steps. Then return to this conversation and "
+            "start a new topic-change request."
+        )
+    elif reason in ("setup_broken", "workspace_missing", "target_unverified", "target_not_found"):
+        if reason == "target_not_found":
+            message = (
+                "The selected agent could not be accessed. Its availability "
+                "could not be established; do not assume it was deleted."
+            )
+        message += (
+            " Keep the existing target and completed setup steps. A supported "
+            "recovery route for this problem has not been confirmed; do not "
+            "create or select a replacement agent to continue this request."
+        )
+    elif reason == "access_denied":
+        message = (
+            "The signed-in account was denied read access to the selected agent "
+            "or environment. Ask the administrator responsible for that agent "
+            "and environment to check read access, then return here with a new "
+            "request. Topic-edit permission is still unverified."
+        )
+    elif reason == "authentication_failed":
+        message = (
+            "I couldn't verify the signed-in account. This does not establish "
+            "that the account lacks topic-edit permission. Return here with a "
+            "new request after account access can be verified."
+        )
+    elif reason in ("authentication_or_evidence_failed", "evidence_read_failed"):
+        message = (
+            "I couldn't complete the topic review because account or topic "
+            "evidence was unavailable. This does not establish an access denial, "
+            "missing packages or already-correct topic states. Any new request "
+            "will check the evidence again."
+        )
+    return message if "No topics were changed." in message else message + " No topics were changed."
 
 def _guid(value: Any) -> str:
     if not isinstance(value, str):
         raise ValueError("An identity must be a GUID string.")
     return str(uuid.UUID(value))
 
-
 def validate_request(value: Any) -> dict[str, Any]:
     """Validate provisional logical inputs, not topic-set membership."""
     if not isinstance(value, dict) or set(value) - REQUEST_FIELDS:
         raise TopicActionsError("invalid_request", "Unsupported request shape.")
+    version = value.get("contractVersion", 1)
+    if type(version) is not int or version != 1:
+        raise TopicActionsError("invalid_request", "Unsupported request contract version.")
     target = value.get("target")
     try:
         if not isinstance(target, dict) or set(target) != TARGET_FIELDS:
@@ -101,6 +154,7 @@ def validate_request(value: Any) -> dict[str, Any]:
             "invalid_request", "Caller context must be a JSON object."
         ) from exc
     return {
+        "contractVersion": version,
         "target": target,
         "action": value["action"],
         "setKeys": list(keys),
@@ -108,26 +162,26 @@ def validate_request(value: Any) -> dict[str, Any]:
         "callerContext": deepcopy(context),
     }
 
-
 def _read_object(path: Path, missing_reason: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8-sig"))
     except FileNotFoundError as exc:
         raise TopicActionsError(
-            missing_reason, "Workspace setup is missing. Run /setup."
+            missing_reason, "The active agent's workspace information is missing."
         ) from exc
     except (OSError, ValueError) as exc:
         raise TopicActionsError(
-            "setup_broken", "Workspace setup could not be read. Use /setup."
+            "setup_broken", "The existing setup information could not be read."
         ) from exc
     if not isinstance(value, dict):
         raise TopicActionsError(
-            "setup_broken", "Workspace setup is malformed. Use /setup."
+            "setup_broken", "The existing setup information is malformed."
         )
     return value
 
-
-def _workspace_target(root: Path, target: dict[str, str]) -> dict[str, str]:
+def _workspace_target(
+    root: Path, target: dict[str, str], *, require_connect_ready: bool = True,
+) -> dict[str, str]:
     setup = _read_object(root / ".local" / "setup" / "config.json", "setup_not_run")
     config = _read_object(root / ".local" / "config.json", "workspace_missing")
     slug = config.get("activeAgent")
@@ -141,7 +195,7 @@ def _workspace_target(root: Path, target: dict[str, str]) -> dict[str, str]:
         or not isinstance(setup.get("agents"), dict)
     ):
         raise TopicActionsError(
-            "setup_broken", "Selected-agent setup is malformed. Use /setup."
+            "setup_broken", "The selected agent's saved setup information cannot be validated."
         )
     selected = active_agent(config, slug)
     matches = [
@@ -190,13 +244,36 @@ def _workspace_target(root: Path, target: dict[str, str]) -> dict[str, str]:
         raise TopicActionsError(
             "target_unverified", "The request does not match verified workspace identity."
         ) from exc
-    if record.get("connect_ready") is not True:
+    workspace = record.get("workspace", {})
+    steps = record.get("steps", {})
+    if not isinstance(workspace, dict) or not isinstance(steps, dict):
+        raise TopicActionsError(
+            "setup_broken", "The selected agent's workspace preparation record is malformed.",
+        )
+    local_step = steps.get("SETUP-07", {})
+    if not isinstance(local_step, dict):
+        raise TopicActionsError(
+            "setup_broken", "The selected agent's local workspace setup step is malformed.",
+        )
+    workspace_recorded = (
+        isinstance(workspace.get("folder"), str) and bool(workspace["folder"].strip())
+        and isinstance(workspace.get("agent_path"), str) and bool(workspace["agent_path"].strip())
+    )
+    if not require_connect_ready and local_step.get("state") == "done" and not workspace_recorded:
+        raise TopicActionsError(
+            "setup_broken",
+            "Local workspace setup is recorded as complete, but its workspace information is missing.",
+        )
+    prepared = workspace_recorded and local_step.get("state") == "done"
+    if (require_connect_ready and record.get("connect_ready") is not True) or (
+        not require_connect_ready and not prepared
+    ):
         raise TopicActionsError(
             "setup_incomplete",
-            "Selected-agent setup is incomplete. Use /setup; existing progress is retained.",
+            "Selected-agent setup is incomplete." if require_connect_ready else
+            "Setup has not finished preparing the selected agent's local workspace.",
         )
     return {"host": host, "ring": ring, "api_version": api_version}
-
 
 def _result(
     reason: str,
@@ -211,7 +288,7 @@ def _result(
         "contractStatus": "provisional",
         "status": "cancelled" if reason == "cancelled" else "blocked",
         "reason": reason,
-        "message": message,
+        "message": _entry_message(reason, message),
         "completed": False,
         "writeStatus": "not_attempted",
         "target": target,
@@ -221,9 +298,8 @@ def _result(
             "writeAuthority": "unverified",
             "topicSets": "unverified",
         },
-        "callerContext": context,
+        "callerContext": deepcopy(context),
     }
-
 
 def inspect_request(
     value: Any,
@@ -248,7 +324,7 @@ def inspect_request(
         request = validate_request(value)
         context = request["callerContext"]
         target = request["target"]
-        connection = _workspace_target(workspace_root, target)
+        connection = _workspace_target(workspace_root, target, require_connect_ready=False)
         token, tenant_id, account = authenticate_flightcheck(
             connection["ring"],
             cache_path=workspace_root / DEFAULT_TOKEN_CACHE,
@@ -289,13 +365,13 @@ def inspect_request(
     except TopicActionsError as exc:
         return _result(exc.reason, str(exc), context, target=target)
     except AgentBuilderHTTPError as exc:
-        reason = {
+        reason = "authentication_failed" if stage == "authentication_failed" else {
             401: "authentication_failed",
             403: "access_denied",
             404: "target_not_found",
         }.get(exc.status_code, "target_unverified")
         return _result(
-            reason, "The selected agent could not be accessed. No changes were attempted.",
+            reason, "The selected agent could not be accessed.",
             context, target=target,
         )
     except (AgentBuilderError, requests.RequestException, OSError, ValueError):
@@ -308,7 +384,7 @@ def inspect_request(
         "implementation_pending",
         "Account and selected-agent read access verified. Topic-set actions are not "
         "available yet; write authority and topic-set readiness remain unverified. "
-        "No topic changes were attempted.",
+        "No topics were changed.",
         context, target=target, verified=True,
     )
 
