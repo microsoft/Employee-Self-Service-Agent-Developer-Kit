@@ -264,7 +264,7 @@ def test_unknown_state_and_missing_freshness_remain_explicit(catalog, inventory)
 def native_payload():
     """Pure parser fixture using the existing setup/M2 native fetch field contract.
 
-    Confirmed consumers: setup_existing_da._validate_changeset_identity and
+    Confirmed consumers: topic_actions_flat_discovery.inventory_from_response and
     PR481 topic_actions_components._snapshot. Not a network mock or cassette.
     """
     return {
@@ -364,8 +364,8 @@ def test_live_entry_orders_verified_target_then_fresh_read_and_never_mutates(
     client.fetch_components = lambda identity: events.append(("fetch", identity)) or object()
     client.update_components = lambda *_: pytest.fail("Discovery must never update components.")
     monkeypatch.setattr(
-        "topic_actions_flat_discovery.validate_existing_dev_connection",
-        lambda *_, **kwargs: events.append(("verify", kwargs["agent_id"])),
+        "topic_actions_flat_discovery.verify_native_target",
+        lambda _, target: events.append(("verify", target.agent_id)),
     )
     monkeypatch.setattr("topic_actions_flat_discovery.inventory_from_response", lambda *_: inventory)
     result = discover_topic_sets(TARGET, ("isv-a",), client=client, catalog=catalog)
@@ -377,7 +377,7 @@ def test_live_entry_orders_verified_target_then_fresh_read_and_never_mutates(
 @pytest.mark.parametrize("keys", [(), ("isv-a", "isv-a"), (" unsafe",), ["isv-a"]])
 def test_bad_selection_fails_before_reads(monkeypatch, catalog, keys):
     monkeypatch.setattr(
-        "topic_actions_flat_discovery.validate_existing_dev_connection",
+        "topic_actions_flat_discovery.verify_native_target",
         lambda *_args, **_kwargs: pytest.fail("Invalid selection must not read."),
     )
     with pytest.raises(DiscoveryError):
@@ -386,7 +386,7 @@ def test_bad_selection_fails_before_reads(monkeypatch, catalog, keys):
 
 def test_bad_catalog_fails_before_reads(monkeypatch, catalog):
     monkeypatch.setattr(
-        "topic_actions_flat_discovery.validate_existing_dev_connection",
+        "topic_actions_flat_discovery.verify_native_target",
         lambda *_args, **_kwargs: pytest.fail("Invalid catalog must not read."),
     )
     with pytest.raises(DiscoveryError) as error:
@@ -403,7 +403,7 @@ def test_client_binding_rejects_mismatched_tenant_or_environment(monkeypatch, ca
     for key, value in change.items():
         setattr(client, key, value)
     monkeypatch.setattr(
-        "topic_actions_flat_discovery.validate_existing_dev_connection",
+        "topic_actions_flat_discovery.verify_native_target",
         lambda *_args, **_kwargs: pytest.fail("Unbound client must not read."),
     )
     with pytest.raises(DiscoveryError):
@@ -418,7 +418,7 @@ def test_failed_read_has_no_cached_or_synthetic_fallback(monkeypatch, catalog, f
     def fail(*_args, **_kwargs):
         raise failure
 
-    monkeypatch.setattr("topic_actions_flat_discovery.validate_existing_dev_connection", fail)
+    monkeypatch.setattr("topic_actions_flat_discovery.verify_native_target", fail)
     with pytest.raises(DiscoveryError) as error:
         discover_flat_topic_sets(read_client(), TARGET, catalog)
     assert error.value.reason == reason

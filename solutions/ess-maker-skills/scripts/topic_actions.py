@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Topic-set actions with fail-closed native preview and in-memory caller results."""
+"""Topic-set preview, explicit approval, single-attempt writes and readback."""
 
 from __future__ import annotations
 
@@ -25,12 +25,14 @@ from agentbuilder import (
     validate_environment_host,
 )
 from flightcheck.agent_scope import active_agent
+from topic_actions_client import TopicActionsClient
 
 
 RESULT_MARKER = "TOPIC_ACTIONS_RESULT_JSON:"
+REVIEW_MARKER = "TOPIC_ACTIONS_REVIEW_JSON:"
 TARGET_FIELDS = frozenset({"tenantId", "environmentId", "agentId"})
 REQUEST_FIELDS = frozenset(
-    {"contractVersion", "target", "action", "setKeys", "entry", "callerContext"}
+    {"contractVersion", "target", "action", "setKeys", "entry", "callerContext", "initializeBaseline"}
 )
 
 
@@ -45,7 +47,44 @@ class TopicActionsError(ValueError):
 def _entry_message(reason: str, message: str) -> str:
     if reason == "cancelled":
         return "Canceled. No topics were changed."
-    if reason == "setup_not_run":
+    if reason == "original_baseline_missing":
+        message = (
+            "No saved original topic-state baseline is available. An already-modified "
+            "agent's original states cannot be reconstructed from today's states. "
+            "First-use initialization is only valid before any topic-actions changes; "
+            "recovery of an older original baseline is not automated."
+        )
+    elif reason == "restore_conflict":
+        message = (
+            "A topic affected by the skill no longer matches its recorded state or "
+            "content. Restore stopped to preserve intervening edits. Resolve the "
+            "conflict before requesting a fresh restore review."
+        )
+    elif reason in ("baseline_topic_identity_changed", "restore_membership_changed"):
+        message = (
+            "Topic identity or recorded set membership changed since the original "
+            "baseline. Restore cannot safely substitute or omit topics. Review the "
+            "changed membership before starting another request."
+        )
+    elif reason == "previous_write_uncertain_restore_required":
+        message = (
+            "A previous submission is uncertain and cannot be replayed as a normal "
+            "enable/disable action. Request a fresh review to restore the saved "
+            "original states; conflicting evidence will still block restore."
+        )
+    elif reason == "topic_operation_in_progress_or_interrupted":
+        message = (
+            "Another topic operation is running or stopped before its outcome was "
+            "recorded. No operation will be replayed automatically. Keep the saved "
+            "baseline; automatic recovery of an interrupted operation is unavailable."
+        )
+    elif reason in ("baseline_invalid", "baseline_storage_unavailable"):
+        message = (
+            "The original-state store could not be safely read or saved. Keep the "
+            "existing baseline; do not delete or replace it with current states. "
+            "Restore and further writes remain blocked until storage is usable."
+        )
+    elif reason == "setup_not_run":
         message = (
             "ADK setup has not established the account, agent and environment "
             "in this workspace. Run /setup here, then return to this conversation "
@@ -132,14 +171,19 @@ def validate_request(value: Any) -> dict[str, Any]:
         raise TopicActionsError(
             "invalid_request", "Provide one tenant, environment and agent ID."
         ) from exc
-    if value.get("action") not in ("enable", "disable"):
+    action = value.get("action")
+    if action not in ("enable", "disable", "restore"):
         raise TopicActionsError(
-            "invalid_request", "Choose one action: enable or disable."
+            "invalid_request", "Choose one action: enable, disable or restore."
         )
-    keys = value.get("setKeys")
+    initialize = value.get("initializeBaseline", False)
+    if type(initialize) is not bool or (action == "restore" and initialize):
+        raise TopicActionsError("invalid_request", "Restore requires an existing original baseline.")
+    keys = value.get("setKeys", [] if action == "restore" else None)
     if (
         not isinstance(keys, list)
-        or not keys
+        or (not keys and action != "restore")
+        or (action == "restore" and keys)
         or any(
             not isinstance(key, str)
             or not key
@@ -173,6 +217,7 @@ def validate_request(value: Any) -> dict[str, Any]:
         "target": target,
         "action": value["action"],
         "setKeys": list(keys),
+        "initializeBaseline": initialize,
         "entry": entry,
         "callerContext": deepcopy(context),
     }
@@ -304,7 +349,10 @@ def _result(
     return {
         "contractVersion": 1,
         "contractStatus": "provisional",
-        "status": "cancelled" if reason == "cancelled" else "blocked",
+        "status": (
+            "cancelled" if reason == "cancelled" else
+            "inspected" if reason == "inspection_only" else "blocked"
+        ),
         "reason": reason,
         "message": _entry_message(reason, message),
         "completed": False,
@@ -400,23 +448,24 @@ def inspect_request(
             context, target=target,
         )
     return _result(
-        "implementation_pending",
-        "Account and selected-agent read access verified. Topic-set actions are not "
-        "available yet; write authority and topic-set readiness remain unverified. "
-        "No topics were changed.",
+        "inspection_only",
+        "Account and selected-agent read access verified. This read-only inspection "
+        "does not execute topic actions; write authority and topic-set readiness "
+        "remain unverified. Use --preview or --execute for the topic-set flow.",
         context, target=target, verified=True,
     )
 
 
 def run_topic_actions(
     value: Any, *, workspace_root: Path, confirm,
-    account_hint: str | None = None, cancelled: bool = False,
+    account_hint: str | None = None, cancelled: bool = False, preview: bool = False,
 ) -> dict[str, Any]:
-    """Direct and caller entry; native release gates cannot be supplied in JSON."""
+    """Shared selected-agent entry; approval stays within this invocation."""
     from topic_actions_catalog import load_catalog
     from topic_actions_discovery import DiscoveryError, DiscoveryTarget
     from topic_actions_execution import TopicActionSession
     from topic_actions_native import NativeActionBackend
+    from topic_actions_state import TopicStateError, TopicStateStore
 
     context = value.get("callerContext", {}) if isinstance(value, dict) else {}
     context = deepcopy(context) if isinstance(context, dict) else {}
@@ -428,11 +477,23 @@ def run_topic_actions(
         request = validate_request(value)
         target = request["target"]
         connection = _workspace_target(workspace_root, target, require_connect_ready=False)
+        discovery_target = DiscoveryTarget(target["tenantId"], target["environmentId"], target["agentId"])
+        state_store = TopicStateStore(
+            workspace_root.resolve(), discovery_target, first_use=request["initializeBaseline"],
+        )
+        selected_keys = (
+            state_store.restore_keys() if request["action"] == "restore"
+            else tuple(request["setKeys"])
+        )
         catalog = load_catalog()
         token, tenant, account = authenticate_flightcheck(
-            connection["ring"], cache_path=workspace_root / DEFAULT_TOKEN_CACHE,
-            account_hint=account_hint, include_connectivity=False, allow_write=False,
-            emit_account_identity=False, return_account_identity=True,
+            connection["ring"],
+            cache_path=workspace_root / DEFAULT_TOKEN_CACHE,
+            account_hint=account_hint,
+            include_connectivity=False,
+            allow_write=not preview,
+            emit_account_identity=False,
+            return_account_identity=True,
         )
         if (
             _guid(tenant) != target["tenantId"]
@@ -440,6 +501,11 @@ def run_topic_actions(
             or (account_hint is not None and account.casefold() != account_hint.strip().casefold())
         ):
             raise TopicActionsError("account_mismatch", "The authenticated account or tenant could not be verified.")
+        components = TopicActionsClient(
+            target["environmentId"], target["agentId"], target["tenantId"],
+            ring=connection["ring"], host=connection["host"],
+            token=token, account=account, read_only=preview,
+        )
         stage = "target_unverified"
         client = AgentBuilderClient(
             connection["host"], token, ring=connection["ring"],
@@ -447,16 +513,24 @@ def run_topic_actions(
         )
         try:
             backend = NativeActionBackend(
-                client, DiscoveryTarget(target["tenantId"], target["environmentId"], target["agentId"]),
-                tuple(request["setKeys"]), catalog, account,
+                client, discovery_target, selected_keys, catalog, account, components,
             )
+            if request["action"] == "restore":
+                backend.state_store = state_store
+                backend.restoring = True
             result = TopicActionSession(
                 backend, request["action"], caller_context=request["callerContext"],
-            ).run(confirm)
+                state_store=state_store,
+            ).run(confirm, preview=preview)
             result["reason"] = next(iter(result["blockers"]), result["status"])
             return _entry_feedback(result)
         finally:
             client.session.close()
+    except TopicStateError as error:
+        return _result(
+            error.reason, "Original topic-state evidence is missing, conflicting or unavailable.",
+            context, target=target,
+        )
     except (TopicActionsError, DiscoveryError) as error:
         return _result(error.reason, str(error), context, target=target)
     except AgentBuilderHTTPError as error:
@@ -476,13 +550,25 @@ def run_topic_actions(
         )
 
 
+def _confirm_stdin(plan: dict[str, Any]) -> str:
+    print(REVIEW_MARKER + json.dumps(plan, sort_keys=True), flush=True)
+    print(
+        "Review the complete plan and warnings above. Enter approve, deny or cancel:",
+        file=sys.stderr, flush=True,
+    )
+    answer = sys.stdin.readline()
+    return answer.strip().casefold() if answer else "cancel"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace-root", type=Path, default=Path.cwd())
     parser.add_argument("--account", help="Verify this Microsoft work account.")
     parser.add_argument("--cancel", action="store_true")
-    parser.add_argument("--preview", action="store_true", help="Read and plan using the proposed catalog; native writes stay blocked.")
-    parser.add_argument("--list-sets", action="store_true", help="List provisional source definitions, not installed availability.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--preview", action="store_true", help="Read and plan without write scopes or executable approval.")
+    mode.add_argument("--execute", action="store_true", help="Read one JSON request line, then collect explicit approval on standard input.")
+    mode.add_argument("--list-sets", action="store_true", help="List provisional source definitions, not installed availability.")
     args = parser.parse_args(argv)
     if args.list_sets:
         from topic_actions_catalog import load_catalog
@@ -500,17 +586,24 @@ def main(argv: list[str] | None = None) -> int:
             result = _result(error.reason, str(error), {})
         print(RESULT_MARKER + json.dumps(result, sort_keys=True))
         return 0 if result["status"] == "source_catalog_only" else 1
+    if args.execute and not args.cancel:
+        print(
+            "Enter one JSON request line. Approval follows the live topic review.",
+            file=sys.stderr, flush=True,
+        )
     try:
-        value = {} if args.cancel else json.load(sys.stdin)
+        value = {} if args.cancel else (
+            json.loads(sys.stdin.readline()) if args.execute else json.load(sys.stdin)
+        )
     except (OSError, ValueError):
         result = _result(
             "invalid_request", "Provide one JSON request on standard input.", {}
         )
     else:
-        if args.preview:
+        if args.preview or args.execute:
             result = run_topic_actions(
-                value, workspace_root=args.workspace_root, confirm=lambda _plan: "cancel",
-                account_hint=args.account, cancelled=args.cancel,
+                value, workspace_root=args.workspace_root, confirm=_confirm_stdin,
+                account_hint=args.account, cancelled=args.cancel, preview=args.preview,
             )
         else:
             result = inspect_request(
@@ -519,7 +612,10 @@ def main(argv: list[str] | None = None) -> int:
             )
     public = {key: item for key, item in result.items() if key != "callerContext"}
     print(RESULT_MARKER + json.dumps(public, sort_keys=True))
-    return 0 if result["reason"] in ("implementation_pending", "cancelled") else 1
+    return 0 if (
+        result["status"] in ("inspected", "preview", "cancelled", "denied")
+        or result.get("completed") is True
+    ) else 1
 
 
 if __name__ == "__main__":

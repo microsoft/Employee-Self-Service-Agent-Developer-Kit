@@ -8,6 +8,8 @@ from dataclasses import replace
 import io
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 import responses
@@ -114,7 +116,7 @@ def test_read_only_check_verifies_exact_target_and_preserves_progress(
         request_value, workspace_root=workspace, account_hint="MAKER@example.com",
     )
 
-    assert result["reason"] == "implementation_pending"
+    assert result["reason"] == "inspection_only"
     assert result["checks"] == {
         "account": "verified", "targetReadAccess": "verified",
         "writeAuthority": "unverified", "topicSets": "unverified",
@@ -185,6 +187,10 @@ def test_new_direct_and_caller_entries_share_controller_without_completing_calle
     backends = []
 
     def backend(*args):
+        assert isinstance(args[-1], entry.TopicActionsClient)
+        assert args[-1].single_attempt is True
+        assert args[-1].read_only is False
+        assert args[-1].signed_in_username == "maker@example.com"
         result = SyntheticBackend([operation_evidence()], gates=("release_control_unavailable",))
         backends.append(result)
         return result
@@ -221,6 +227,108 @@ def test_proposed_catalog_cli_does_not_authenticate_or_claim_installed_availabil
     result = json.loads(capsys.readouterr().out.split(entry.RESULT_MARKER, 1)[1])
     assert result["status"] == "source_catalog_only"
     assert not result["completed"]
+    assert result["writeStatus"] == "not_attempted"
+
+
+@pytest.mark.parametrize(("answer", "status", "completed"), [
+    ("approve\n", "completed", True),
+    ("deny\n", "denied", False),
+    ("cancel\n", "cancelled", False),
+    ("", "cancelled", False),
+    ("yes\n", "blocked", False),
+])
+def test_execute_cli_reviews_then_uses_explicit_same_session_consent(
+    workspace, request_value, monkeypatch, capsys, answer, status, completed,
+):
+    from tests.scripts.test_topic_actions_runtime import SyntheticBackend, operation_evidence
+    from topic_actions_discovery import DiscoveryTarget
+
+    auth_calls = _auth(monkeypatch)
+    before = operation_evidence({"a": "On", "shared": "On"})
+    after = operation_evidence(revision="r2")
+    target = DiscoveryTarget(TENANT_ID, ENVIRONMENT_ID, AGENT_ID)
+    def bind(packet):
+        for row in packet.body["botComponentChanges"]:
+            row["component"]["parentBotId"] = AGENT_ID
+        return replace(
+            packet, snapshot=replace(packet.snapshot, evidence=replace(packet.snapshot.evidence, target=target)),
+        )
+    before, after = bind(before), bind(after)
+    request_value["initializeBaseline"] = True
+    backend = SyntheticBackend([before, before, after])
+    monkeypatch.setattr("topic_actions_native.NativeActionBackend", lambda *args: backend)
+    monkeypatch.setattr(entry.sys, "stdin", io.StringIO(json.dumps(request_value) + "\n" + answer))
+
+    exit_code = entry.main(["--execute", "--workspace-root", str(workspace)])
+
+    output = capsys.readouterr().out
+    lines = output.splitlines()
+    assert lines[0].startswith(entry.REVIEW_MARKER)
+    review = json.loads(lines[0].removeprefix(entry.REVIEW_MARKER))
+    result = json.loads(lines[-1].removeprefix(entry.RESULT_MARKER))
+    assert review["action"] == "disable"
+    assert len(review["proposedChanges"]) == 2
+    assert result["status"] == status
+    assert result["completed"] is completed
+    assert exit_code == (1 if status == "blocked" else 0)
+    assert auth_calls == [(("test",), {
+        "cache_path": workspace / entry.DEFAULT_TOKEN_CACHE,
+        "account_hint": None,
+        "include_connectivity": False,
+        "allow_write": True,
+        "emit_account_identity": False,
+        "return_account_identity": True,
+    })]
+    assert len(backend.submissions) == (1 if completed else 0)
+    assert "callerContext" not in result
+    assert "do-not-emit" not in output
+    assert "private-token" not in output
+    assert review["baseline"]["status"] == "capture_before_first_write"
+
+
+def test_preview_is_truthful_nonmutating_and_uses_read_only_auth(
+    workspace, request_value, monkeypatch, capsys,
+):
+    from tests.scripts.test_topic_actions_runtime import SyntheticBackend, operation_evidence
+
+    auth_calls = _auth(monkeypatch)
+    backend = SyntheticBackend([operation_evidence({"a": "On", "shared": "On"})])
+    monkeypatch.setattr("topic_actions_native.NativeActionBackend", lambda *args: backend)
+    monkeypatch.setattr(entry.sys, "stdin", io.StringIO(json.dumps(request_value)))
+
+    assert entry.main(["--preview", "--workspace-root", str(workspace)]) == 0
+
+    output = capsys.readouterr().out
+    result = json.loads(output.removeprefix(entry.RESULT_MARKER))
+    assert result["status"] == "preview"
+    assert not result["completed"]
+    assert result["writeStatus"] == "not_attempted"
+    assert entry.REVIEW_MARKER not in output
+    assert auth_calls[0][1]["allow_write"] is False
+    assert auth_calls[0][1]["include_connectivity"] is False
+    assert backend.reads == 1 and not backend.submissions
+
+
+def test_restore_request_derives_scope_and_cannot_initialize_or_narrow_original(request_value):
+    value = {**request_value, "action": "restore"}
+    value.pop("setKeys")
+    assert entry.validate_request(value)["setKeys"] == []
+    for update in (
+        {"setKeys": ["synthetic-set"]}, {"initializeBaseline": True},
+        {"initializeBaseline": "true"},
+    ):
+        with pytest.raises(entry.TopicActionsError):
+            entry.validate_request({**value, **update})
+
+
+def test_restore_missing_original_stops_without_authentication(workspace, request_value):
+    value = {**request_value, "action": "restore", "setKeys": []}
+    result = entry.run_topic_actions(
+        value, workspace_root=workspace,
+        confirm=lambda _: pytest.fail("Missing original evidence cannot ask for consent."),
+    )
+    assert result["reason"] == "original_baseline_missing"
+    assert "cannot be reconstructed from today's states" in result["message"]
     assert result["writeStatus"] == "not_attempted"
 
 
@@ -362,7 +470,7 @@ def test_cli_emits_only_public_result(workspace, request_value, monkeypatch, cap
     assert "private-token" not in output
     public = json.loads(output.removeprefix(entry.RESULT_MARKER))
     assert "callerContext" not in public
-    assert public["reason"] == "implementation_pending"
+    assert public["reason"] == "inspection_only"
     assert public["completed"] is False
 
 
@@ -449,7 +557,7 @@ def test_m1_inspection_does_not_require_business_connection_readiness(
 
     result = entry.inspect_request(request_value, workspace_root=workspace)
 
-    assert result["reason"] == "implementation_pending"
+    assert result["reason"] == "inspection_only"
     assert result["checks"]["targetReadAccess"] == "verified"
     assert result["checks"]["writeAuthority"] == "unverified"
     assert len(responses.calls) == 1
@@ -565,3 +673,43 @@ def test_cancellation_has_truthful_copy_without_marking_caller_steps_complete(
     assert not result["completed"]
     assert result["writeStatus"] == "not_attempted"
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(("tenant", "account"), [
+    (ENVIRONMENT_ID, "maker@example.com"),
+    (TENANT_ID, "other@example.com"),
+    (TENANT_ID, None),
+])
+def test_authentication_cannot_change_requested_account_or_tenant(
+    workspace, request_value, monkeypatch, tenant, account,
+):
+    _auth(monkeypatch, tenant=tenant, account=account)
+    result = entry.run_topic_actions(
+        request_value, workspace_root=workspace, account_hint="maker@example.com",
+        confirm=lambda _: pytest.fail("A mismatched account cannot request approval."),
+    )
+    assert result["reason"] == "account_mismatch"
+    assert result["writeStatus"] == "not_attempted"
+
+
+def test_topic_actions_imports_without_connect_workday_or_evaluation_runtime():
+    script = """
+import importlib
+import importlib.abc
+from pathlib import Path
+import sys
+
+class ForbidConnectDependencies(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.startswith(("minimalbot_evaluation", "connect_workday", "setup_existing_da")):
+            raise ImportError("Topic actions must not depend on " + fullname)
+
+sys.meta_path.insert(0, ForbidConnectDependencies())
+for module in Path.cwd().glob("topic_actions*.py"):
+    importlib.import_module(module.stem)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=Path(entry.__file__).parent,
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr

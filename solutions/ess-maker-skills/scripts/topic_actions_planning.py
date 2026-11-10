@@ -54,10 +54,19 @@ class TopicPlan:
     state_differences: tuple[TopicChange, ...] = ()
     observed_satisfied_member_ids: tuple[str, ...] = ()
     evidence_kind: str = "synthetic"
+    execution_policy: str = "provided_evidence"
+    warnings: tuple[str, ...] = ()
+    members: tuple[tuple[str, str, str | None], ...] = ()
+    desired_states: tuple[tuple[str, str], ...] = ()
 
     @property
     def live_actions_available(self) -> bool:
-        return False
+        return (
+            self.evidence_kind == "catalog"
+            and self.execution_policy == "source_inventory"
+            and not self.blockers
+            and self.outcome in ("changes_proposed", "already_correct")
+        )
 
 
 def _fail(reason: str) -> None:
