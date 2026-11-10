@@ -52,6 +52,12 @@ The selected entry point owns any metadata checks and missing-state handling.
   configuration is available. Deleting deployed sets still requires setup.
 - If the user typed `/flightcheck` or explicitly asked to validate setup or
   environment readiness, follow the **FlightCheck entry contract** below.
+- If the user typed `/topic-actions` or explicitly asked to enable or disable
+  whole ESS topic sets, follow `src/skills/topic-actions/SKILL.md`.
+  That entry verifies canonical selected-agent identity and workspace
+  preparation without requiring connection health or `connect_ready: true`.
+  It never starts setup or repairs a connection automatically. Native writes
+  remain blocked pending catalog authority and platform qualification.
 
 ### Setup gate for all other requests
 
