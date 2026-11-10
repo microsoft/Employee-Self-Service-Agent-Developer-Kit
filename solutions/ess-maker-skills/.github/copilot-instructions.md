@@ -61,7 +61,9 @@ The selected entry point owns any metadata checks and missing-state handling.
   writes use exact source-defined membership and explicit same-session
   approval, without requiring a Dev realm or ALM enrollment. The native
   service still enforces edit access. Catalog/package authority and platform qualification remain
-  unverified warnings, not write-admission gates.
+  unverified diagnostics, not write-admission gates. Render the helper's
+  `userMessage` verbatim, not raw warning lists or internal codes. Material
+  limitations remain in its plain-language approval notes.
 
 ### Setup gate for all other requests
 

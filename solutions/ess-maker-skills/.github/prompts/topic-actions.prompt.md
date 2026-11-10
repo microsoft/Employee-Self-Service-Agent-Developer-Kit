@@ -16,6 +16,10 @@ need no approval. Do not add redundant confirmations, paste shell scripts or
 raw helper output into responses, or offer unrequested follow-up actions.
 Keep the supported interactive-terminal fallback when needed; do not
 promise to hide host-rendered tool panels or bypass permission controls.
+Render the helper's `userMessage` verbatim for each review and result.
+Do not paraphrase it, add warning lists, display internal codes or append raw
+diagnostic messages. Material limitations stay in the plain-language
+"Before you approve" notes; safe technical details are available on request.
 
 Use its source-inventory preview and same-session approval/execution flow.
 For restore requests, use the fixed original baseline and recorded sets rather
@@ -38,8 +42,8 @@ Native writes are not restricted to Dev agents or ALM-enrolled agents.
 Verify the exact selected native target and account; the service enforces
 edit access. Use the topic-action-owned component client, not Connect
 Workday's client or update logic. Central release admission and prequalification
-are not required by this implementation; keep the unverified catalog,
-package, protection and API assumptions visible in the review. Do not claim
+are not required by this implementation; keep material catalog,
+package, protection and API limitations visible through the fixed review notes. Do not claim
 customer-release qualification or proven draft/published isolation.
 Never invent approval, prefill an approve response, publish, or bypass a
 remaining identity, membership, state or freshness blocker through another
