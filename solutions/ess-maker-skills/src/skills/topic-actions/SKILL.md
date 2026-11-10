@@ -7,6 +7,50 @@ not released:** package authority, effective permission, centrally controlled
 admission and native concurrency/draft/published behavior remain unverified.
 Never describe a preview as a completed enable/disable.
 
+## Interaction and output
+
+Use the established selected target, action and exact set keys. Ask a
+clarifying question only when missing or ambiguous information prevents the
+requested operation; do not ask the maker to repeat known selections or
+confirm that routine checks should run.
+
+For listing or preview requests, perform the read-only work and show the
+result without approval or an unsolicited offer to execute. For an explicit
+enable/disable request, use the execution helper's fresh review directly;
+do not add a separate preview approval, a "start review" confirmation or a
+"ready to proceed" question before it. A previous preview is not executable
+approval and does not replace that fresh execution review.
+
+Display the complete required review once, including every selected member,
+account, target, changes, already-correct topics, protections and warnings.
+Group repeated warnings without omitting distinct risks. Then present one
+explicit decision control: **Approve**, **Deny** or **Cancel**, with no
+preselected approval. Send the actual decision to the same waiting process;
+map explicit denial to `deny` and cancellation to `cancel`. Ambiguous text
+is never approval. Do not introduce a second confirmation after approval;
+continue with the mandatory fresh checks and readback. Changed evidence or
+expired approval still requires a new review and explicit approval.
+
+Keep routine authentication, prerequisite checks and execution bookkeeping
+out of the conversation. Use the existing entry/helper instead of inventing
+ad hoc shell orchestration for normal operations. Do not paste PowerShell,
+Python, shell commands, request JSON, helper source, raw stdout or polling
+transcripts into the review or final answer. Give terminal instructions only
+when the supported interactive-terminal fallback is necessary or the maker
+explicitly requests commands. If diagnostics are requested, provide only
+safe supported details; never expose tokens, private context or raw service
+bodies.
+
+After the result, give one concise outcome with the selected sets, verified
+counts, whether a write was attempted, and any material blocker or
+preservation limitation. Distinguish observed state success from incomplete
+preservation. Do not repeat the review, narrate routine steps, open another
+decision control or append an unsolicited follow-up menu.
+
+These rules govern generated conversation content, not host-rendered tool
+panels or permission controls. Do not promise to hide those panels, change
+host permission settings or bypass required approvals.
+
 ## Entry and prerequisites
 
 This route owns its setup gate. Read `.local/config.json` and
@@ -138,6 +182,20 @@ submission is not attributed to this request. Verify non-state content and
 outside-scope preservation; otherwise report partial/unverified. Never replay,
 automatically roll back, publish, repair or continue a detached write.
 Any later attempt needs new evidence and approval.
+
+Preservation comparison tolerates `version` and `auditInfo.modifiedTimeUtc`
+updates only on topics in the approved delta, and generated `diagnostics` and
+`structuredCondition` within dialogue definitions, including dependent topics.
+Other content, identity, membership and outside-scope state/revision changes
+remain strict. This normalization applies only to post-submission readback;
+review freshness and state-only payload checks remain unchanged. A genuine
+preservation failure must be distinguished from observed state success.
+Enabled state does not establish runtime health or resolved diagnostics.
+
+For an unsuccessful submission, report the safe failure category and
+`submissionHttpStatus` when available. Do not expose exception messages or
+service response bodies. A rejected request is not successful completion;
+readback observations do not authorize a retry.
 
 Distinguish blocked, denied, cancelled, review-required, already-correct,
 completed, completed-with-protections, partial and unverified outcomes.
