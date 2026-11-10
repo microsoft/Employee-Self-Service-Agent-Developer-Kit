@@ -1,17 +1,23 @@
 ---
 mode: agent
-description: "Check the selected ESS target without changing topics"
+description: "Preview whole ESS topic-set enable/disable plans and safety blockers"
 ---
 
-# Topic actions entry
+# Topic actions
 
-Read `src/skills/topic-actions/SKILL.md` first. It owns this route's
-target and workspace-preparation gate. Do not require connection health
-or `connect_ready: true`. Do not automatically start setup.
+Read `src/skills/topic-actions/SKILL.md` first. It owns this route's narrower
+target and workspace-preparation gate; do not require connection health or
+`connect_ready: true`. Do not automatically start setup.
 
-Use its nonmutating account/target check. Distinguish setup not established,
-incomplete and broken; `/setup` is not a universal repair command.
-Preserve confirmed caller progress without promising an unverified return.
-Report blockers explicitly without exposing raw inputs or service bodies.
+Use its proposed-catalog preview. If prerequisite inspection or the helper
+fails, report the blocker and supported next step. Do not expose raw inputs,
+exceptions, caller context or service bodies.
+Distinguish setup not established, incomplete and broken. `/setup` is a
+supported setup entry, not a universal repair command or package installer.
+Do not label unavailable evidence as missing packages, access denial or an
+already-correct result. Before writes, cancellation says "Canceled. No topics
+were changed." Preserve confirmed caller progress without promising an
+unverified automatic return or resume.
 
-This milestone cannot discover, plan, enable, disable or publish topics.
+Native writes are not released. Do not bypass a blocker using Connect Workday
+activation, topic authoring, publishing, local flags or another mutation path.

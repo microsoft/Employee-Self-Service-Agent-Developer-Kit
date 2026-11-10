@@ -6,17 +6,11 @@
 from __future__ import annotations
 
 import argparse
-
 from copy import deepcopy
-
 import json
-
 from pathlib import Path
-
 import sys
-
 from typing import Any
-
 import uuid
 
 import requests
@@ -30,16 +24,15 @@ from agentbuilder import (
     environment_id_from_host,
     validate_environment_host,
 )
-
 from flightcheck.agent_scope import active_agent
 
+
 RESULT_MARKER = "TOPIC_ACTIONS_RESULT_JSON:"
-
 TARGET_FIELDS = frozenset({"tenantId", "environmentId", "agentId"})
-
 REQUEST_FIELDS = frozenset(
     {"contractVersion", "target", "action", "setKeys", "entry", "callerContext"}
 )
+
 
 class TopicActionsError(ValueError):
     """A safe, structured entry failure without raw input or service bodies."""
@@ -47,6 +40,7 @@ class TopicActionsError(ValueError):
     def __init__(self, reason: str, message: str) -> None:
         super().__init__(message)
         self.reason = reason
+
 
 def _entry_message(reason: str, message: str) -> str:
     if reason == "cancelled":
@@ -96,10 +90,31 @@ def _entry_message(reason: str, message: str) -> str:
         )
     return message if "No topics were changed." in message else message + " No topics were changed."
 
+
+def _entry_feedback(result: dict[str, Any]) -> dict[str, Any]:
+    if result["writeStatus"] != "not_attempted":
+        return result
+    result["message"] = _entry_message(result["reason"], result["message"])
+    if result["status"] == "blocked":
+        blockers = result.get("blockers", ())
+        if any(reason.startswith("installed_package_unverified:") for reason in blockers):
+            result["message"] += (
+                " Selected package installation could not be verified; this "
+                "does not establish that a package is missing."
+            )
+        if any(reason.startswith("unresolved_member:") for reason in blockers):
+            result["message"] += (
+                " Some topic identities could not be resolved exactly; they "
+                "may be missing or ambiguous. The selected scope was not narrowed."
+            )
+    return result
+
+
 def _guid(value: Any) -> str:
     if not isinstance(value, str):
         raise ValueError("An identity must be a GUID string.")
     return str(uuid.UUID(value))
+
 
 def validate_request(value: Any) -> dict[str, Any]:
     """Validate provisional logical inputs, not topic-set membership."""
@@ -162,6 +177,7 @@ def validate_request(value: Any) -> dict[str, Any]:
         "callerContext": deepcopy(context),
     }
 
+
 def _read_object(path: Path, missing_reason: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -178,6 +194,7 @@ def _read_object(path: Path, missing_reason: str) -> dict[str, Any]:
             "setup_broken", "The existing setup information is malformed."
         )
     return value
+
 
 def _workspace_target(
     root: Path, target: dict[str, str], *, require_connect_ready: bool = True,
@@ -275,6 +292,7 @@ def _workspace_target(
         )
     return {"host": host, "ring": ring, "api_version": api_version}
 
+
 def _result(
     reason: str,
     message: str,
@@ -300,6 +318,7 @@ def _result(
         },
         "callerContext": deepcopy(context),
     }
+
 
 def inspect_request(
     value: Any,
@@ -389,12 +408,98 @@ def inspect_request(
     )
 
 
+def run_topic_actions(
+    value: Any, *, workspace_root: Path, confirm,
+    account_hint: str | None = None, cancelled: bool = False,
+) -> dict[str, Any]:
+    """Direct and caller entry; native release gates cannot be supplied in JSON."""
+    from topic_actions_catalog import load_catalog
+    from topic_actions_discovery import DiscoveryError, DiscoveryTarget
+    from topic_actions_execution import TopicActionSession
+    from topic_actions_native import NativeActionBackend
+
+    context = value.get("callerContext", {}) if isinstance(value, dict) else {}
+    context = deepcopy(context) if isinstance(context, dict) else {}
+    if cancelled:
+        return _result("cancelled", "Cancelled. No changes were attempted.", context)
+    target = None
+    stage = "authentication_failed"
+    try:
+        request = validate_request(value)
+        target = request["target"]
+        connection = _workspace_target(workspace_root, target, require_connect_ready=False)
+        catalog = load_catalog()
+        token, tenant, account = authenticate_flightcheck(
+            connection["ring"], cache_path=workspace_root / DEFAULT_TOKEN_CACHE,
+            account_hint=account_hint, include_connectivity=False, allow_write=False,
+            emit_account_identity=False, return_account_identity=True,
+        )
+        if (
+            _guid(tenant) != target["tenantId"]
+            or not isinstance(account, str) or not account.strip()
+            or (account_hint is not None and account.casefold() != account_hint.strip().casefold())
+        ):
+            raise TopicActionsError("account_mismatch", "The authenticated account or tenant could not be verified.")
+        stage = "target_unverified"
+        client = AgentBuilderClient(
+            connection["host"], token, ring=connection["ring"],
+            tenant_id=tenant, api_version=connection["api_version"],
+        )
+        try:
+            backend = NativeActionBackend(
+                client, DiscoveryTarget(target["tenantId"], target["environmentId"], target["agentId"]),
+                tuple(request["setKeys"]), catalog, account,
+            )
+            result = TopicActionSession(
+                backend, request["action"], caller_context=request["callerContext"],
+            ).run(confirm)
+            result["reason"] = next(iter(result["blockers"]), result["status"])
+            return _entry_feedback(result)
+        finally:
+            client.session.close()
+    except (TopicActionsError, DiscoveryError) as error:
+        return _result(error.reason, str(error), context, target=target)
+    except AgentBuilderHTTPError as error:
+        reason = "authentication_failed" if stage == "authentication_failed" else {
+            401: "authentication_failed",
+            403: "access_denied",
+            404: "target_not_found",
+        }.get(error.status_code, "evidence_read_failed")
+        return _result(
+            reason, "The selected agent could not be accessed.", context, target=target,
+        )
+    except (AgentBuilderError, requests.RequestException, OSError, ValueError):
+        return _result(
+            "authentication_or_evidence_failed",
+            "The account or topic-set evidence could not be verified. No changes were attempted.",
+            context, target=target,
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace-root", type=Path, default=Path.cwd())
     parser.add_argument("--account", help="Verify this Microsoft work account.")
     parser.add_argument("--cancel", action="store_true")
+    parser.add_argument("--preview", action="store_true", help="Read and plan using the proposed catalog; native writes stay blocked.")
+    parser.add_argument("--list-sets", action="store_true", help="List provisional source definitions, not installed availability.")
     args = parser.parse_args(argv)
+    if args.list_sets:
+        from topic_actions_catalog import load_catalog
+        from topic_actions_discovery import DiscoveryError
+
+        try:
+            document = load_catalog().document()
+            result = {
+                "contractVersion": 1, "status": "source_catalog_only",
+                "authorityStatus": document["authorityStatus"],
+                "completed": False, "writeStatus": "not_attempted",
+                "sets": [{"key": item["key"], "name": item["name"]} for item in document["sets"]],
+            }
+        except DiscoveryError as error:
+            result = _result(error.reason, str(error), {})
+        print(RESULT_MARKER + json.dumps(result, sort_keys=True))
+        return 0 if result["status"] == "source_catalog_only" else 1
     try:
         value = {} if args.cancel else json.load(sys.stdin)
     except (OSError, ValueError):
@@ -402,10 +507,16 @@ def main(argv: list[str] | None = None) -> int:
             "invalid_request", "Provide one JSON request on standard input.", {}
         )
     else:
-        result = inspect_request(
-            value, workspace_root=args.workspace_root,
-            account_hint=args.account, cancelled=args.cancel,
-        )
+        if args.preview:
+            result = run_topic_actions(
+                value, workspace_root=args.workspace_root, confirm=lambda _plan: "cancel",
+                account_hint=args.account, cancelled=args.cancel,
+            )
+        else:
+            result = inspect_request(
+                value, workspace_root=args.workspace_root,
+                account_hint=args.account, cancelled=args.cancel,
+            )
     public = {key: item for key, item in result.items() if key != "callerContext"}
     print(RESULT_MARKER + json.dumps(public, sort_keys=True))
     return 0 if result["reason"] in ("implementation_pending", "cancelled") else 1
