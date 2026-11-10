@@ -4,7 +4,6 @@
 """Pure controller/transport tests, not evidence of native API qualification."""
 
 from copy import deepcopy
-from types import SimpleNamespace
 
 from dataclasses import replace
 
@@ -20,6 +19,10 @@ from topic_actions_catalog import (
 )
 
 from topic_actions_discovery import DiscoveryError, DiscoveryTarget
+
+from topic_actions_execution import (
+    OperationEvidence, TopicActionSession,
+)
 
 from topic_actions_flat_discovery import InventoryTopic, NativeInventory
 
@@ -88,7 +91,32 @@ def operation_evidence(
             },
         } for name, state in states.items()],
     }
-    return SimpleNamespace(snapshot=snapshot, account_id="synthetic-account", body=body)
+    return OperationEvidence(snapshot, "synthetic-account", body)
+
+class SyntheticBackend:
+    """No network and no claim that supplied evidence exists on a real tenant."""
+
+    def __init__(self, packets, *, error=None, gates=()):
+        self.packets = iter(packets)
+        self.error = error
+        self.gates = gates
+        self.submissions = []
+        self.reads = 0
+
+    def read(self):
+        self.reads += 1
+        packet = next(self.packets)
+        if isinstance(packet, Exception):
+            raise packet
+        return deepcopy(packet)
+
+    def admission_blockers(self, evidence):
+        return self.gates
+
+    def submit_once(self, agent_id, payload):
+        self.submissions.append((agent_id, deepcopy(payload)))
+        if self.error:
+            raise self.error
 
 def test_bundled_proposal_remains_blocked_even_when_every_member_is_present():
     catalog = load_catalog()
@@ -247,3 +275,69 @@ def test_required_runtime_defense_and_all_protected_are_not_noop():
     plan = plan_catalog_actions(snapshot, "disable")
     assert plan.outcome == "all_protected"
     assert not plan.delta and not plan.satisfied_member_ids
+    backend = SyntheticBackend([replace(packet, snapshot=snapshot)])
+    result = TopicActionSession(backend, "disable").run(lambda _: pytest.fail("No approvable scope"))
+    assert result["status"] == "blocked"
+    assert not result["completed"]
+    assert not backend.submissions
+
+@pytest.mark.parametrize(("decision", "status"), [
+    ("deny", "denied"), ("cancel", "cancelled"), ("yes", "blocked"),
+])
+def test_denial_cancellation_and_unrecognized_consent_never_dispatch(decision, status):
+    backend = SyntheticBackend([operation_evidence()])
+    result = TopicActionSession(backend, "enable").run(lambda _: decision)
+    assert result["status"] == status
+    assert backend.reads == 1 and not backend.submissions
+
+@pytest.mark.parametrize("clock_values", [(0, 301), (0, 1, 301)])
+def test_expired_review_cannot_dispatch(clock_values):
+    before = operation_evidence()
+    backend = SyntheticBackend([before, before])
+    times = iter(clock_values)
+    result = TopicActionSession(backend, "enable", clock=lambda: next(times)).run(lambda _: "approve")
+    assert result["status"] == "review_required"
+    assert result["blockers"] == ["approval_expired"]
+    assert not backend.submissions
+
+@pytest.mark.parametrize("drift", ["state", "revision", "account", "content", "permission", "protection"])
+def test_any_relevant_drift_requires_new_review(drift):
+    before = operation_evidence()
+    fresh = operation_evidence()
+    if drift == "state":
+        fresh = operation_evidence({"a": "On"})
+    elif drift == "revision":
+        fresh = operation_evidence(revision="r2")
+    elif drift == "account":
+        fresh = replace(fresh, account_id="another-maker")
+    elif drift == "content":
+        fresh.body["botComponentChanges"][-1]["component"]["dialog"] = {"changed": True}
+    elif drift == "permission":
+        fresh = replace(fresh, blockers=("write_permission_lost",))
+    else:
+        evidence = fresh.snapshot.evidence
+        changed = tuple(replace(topic, required=True) if topic.component_id == "a" else topic for topic in evidence.topics)
+        fresh = replace(fresh, snapshot=replace(fresh.snapshot, evidence=replace(evidence, topics=changed)))
+    backend = SyntheticBackend([before, fresh])
+    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    assert result["status"] == "review_required"
+    assert not backend.submissions
+
+def test_noop_is_approved_and_rechecked_but_never_submitted():
+    before = operation_evidence({"a": "On", "shared": "On"})
+    backend = SyntheticBackend([before, before])
+    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    assert result["status"] == "already_correct" and result["completed"]
+    assert backend.reads == 2 and not backend.submissions
+    assert {item["status"] for item in result["topics"]} == {"already_correct"}
+
+
+def test_approved_delta_is_held_until_execution_is_available():
+    before = operation_evidence()
+    backend = SyntheticBackend([before, before])
+    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    assert result["status"] == "blocked"
+    assert result["blockers"] == ["execution_unavailable"]
+    assert result["writeStatus"] == "not_attempted"
+    assert not result["completed"]
+    assert backend.reads == 2 and not backend.submissions
