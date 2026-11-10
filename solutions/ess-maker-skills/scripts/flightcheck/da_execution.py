@@ -205,19 +205,25 @@ class DAExecutor:
     def graph(self):
         from agentbuilder import tenant_id_from_access_token
         from .graph_client import GraphClient
+        from .registry import graph_permission_is_optional, graph_scopes_for_specs
 
         if self._graph_error is not None:
             raise self._graph_error
         if self.runner.graph is None:
             client = GraphClient(self.runner.tenant_id, strict_reads=True)
             try:
-                token = client.authenticate(preferred_username=self.runner.authenticated_account)
+                scopes = graph_scopes_for_specs(self.specs)
+                token = client.authenticate(
+                    preferred_username=self.runner.authenticated_account,
+                    **({"scopes": list(scopes)} if scopes is not None else {}),
+                    **({"require_existing_consent": True} if graph_permission_is_optional(self.specs) else {}),
+                )
                 account = client.signed_in_username
                 if not account or account.casefold() != self.runner.authenticated_account.casefold():
                     raise ValueError("Graph authentication selected a different or unverifiable account.")
                 if tenant_id_from_access_token(token).casefold() != self.runner.tenant_id.casefold():
                     raise ValueError("Graph authentication selected a different tenant.")
-            except (RuntimeError, ValueError, requests.RequestException) as exc:
+            except (PermissionError, RuntimeError, ValueError, requests.RequestException) as exc:
                 self._graph_error = exc
                 raise
             self.runner.graph = client
@@ -335,6 +341,10 @@ class DAExecutor:
 
         definitions = [spec for spec in REGISTRY.values() if spec.da is not None]
         rows = list(self.rows.values())
+        unverified = {
+            row.checkpoint_id for row in rows
+            if row.status == "Warning" and row.evidence.get("coverageVerified") is False
+        }
         not_applicable = {
             row.checkpoint_id for row in rows
             if row.status == "NotConfigured" and row.evidence.get("applicability") in {
@@ -347,11 +357,15 @@ class DAExecutor:
             "planned": [spec.key for spec in self.specs],
             "emitted": [row.checkpoint_id for row in rows],
             "aliases": {key: list(value) for key, value in self.aliases.items()},
-            "automaticCompleted": sum(row.status in {"Passed", "Failed", "Warning"} for row in rows),
+            "automaticCompleted": sum(
+                row.status in {"Passed", "Failed", "Warning"} and row.checkpoint_id not in unverified
+                for row in rows
+            ),
             "manual": sum(row.status == "Manual" for row in rows),
             "notApplicable": len(not_applicable),
             "limitations": sum(
                 row.status in {"Blocked", "Error", "Skipped"}
+                or row.checkpoint_id in unverified
                 or (row.status == "NotConfigured" and row.checkpoint_id not in not_applicable)
                 for row in rows
             ),

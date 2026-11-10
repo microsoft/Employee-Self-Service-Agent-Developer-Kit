@@ -19,6 +19,7 @@ from unittest.mock import Mock
 
 import pytest
 import responses
+import respx
 import yaml
 
 from tests.conftest import require_validated_mock
@@ -82,14 +83,23 @@ def setup_workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(maker, "authenticate_flightcheck", auth)
     monkeypatch.setattr(maker, "authenticate_flightcheck_dependency", Mock(return_value="read-token"))
 
-    def authenticate_graph(client, preferred_username=None):
+    def authenticate_graph(client, preferred_username=None, *, scopes=None, require_existing_consent=False):
         claims = base64.urlsafe_b64encode(json.dumps({"tid": TENANT_ID}).encode()).decode().rstrip("=")
         client._token = f"header.{claims}.signature"
         client.signed_in_username = "maker@example.test"
         return client._token
 
     monkeypatch.setattr(GraphClient, "authenticate", authenticate_graph)
-    return SimpleNamespace(config=config, native=native, content=content, auth=auth, root=tmp_path)
+    require_validated_mock(graph_mock)
+    with respx.mock(assert_all_called=False) as httpx_mock:
+        httpx_mock.get(f"{graph_mock.GRAPH_BASE}/users").respond(json={
+            "value": [graph_mock.profile_user()],
+        })
+        httpx_mock.get(f"{graph_mock.GRAPH_BASE}/me").respond(json=graph_mock.profile_user())
+        yield SimpleNamespace(
+            config=config, native=native, content=content, auth=auth, root=tmp_path,
+            graph_http=httpx_mock,
+        )
 
 
 def _register_native(http, workspace, *, environment_body=None):
