@@ -73,6 +73,27 @@ def _make_result(checkpoint_id, status, priority="High", category="Test"):
     )
 
 
+@pytest.mark.parametrize("output", [None, "reports with spaces/nested", "absolute"])
+def test_saved_result_messages_show_full_native_paths(tmp_path, monkeypatch, capsys, output):
+    from flightcheck.runner import FlightCheckRunner, save_results
+
+    monkeypatch.chdir(tmp_path)
+    runner = FlightCheckRunner()
+    result = runner.run()
+    capsys.readouterr()
+    if output is None:
+        destination = tmp_path / "workspace" / "flightcheck"
+        save_results(result)
+    else:
+        destination = tmp_path / output
+        save_results(result, str(destination) if output == "absolute" else output)
+    messages = capsys.readouterr().out
+    for filename, label in (("results.json", "Results"), ("report.html", "Report")):
+        path = destination / filename
+        assert path.is_file()
+        assert f"{label} saved to {path}\n" in messages
+
+
 @pytest.mark.parametrize("diagnostic_only", [False, True])
 @pytest.mark.parametrize("tags", [
     [], ["Workday Litmus Test"], ["Customer alias", '<script>alert("tag")</script>'],

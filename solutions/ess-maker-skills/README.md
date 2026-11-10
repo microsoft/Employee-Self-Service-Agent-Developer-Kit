@@ -184,7 +184,7 @@ python scripts/flightcheck/cli.py --scope full
 
 Chat and standalone runs use the same checks for the same selected agent and
 scope. Both save a browser report (`report.html`) and detailed results
-(`results.json`).
+(`results.json`). The terminal prints the full path to each saved file.
 
 | Scope | What it checks |
 |-------|----------------|
