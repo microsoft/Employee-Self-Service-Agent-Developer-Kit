@@ -603,6 +603,13 @@ def test_customer_query_exclusions_match_known_non_customer_tenants():
         assert query_pack.count(tenant_id) == 1
 
 
+def test_wsr_contoso_demo_tenant_is_internal(monkeypatch):
+    monkeypatch.delenv("ESS_ADK_INTERNAL_TENANTS", raising=False)
+    tenant_id = "811c4ca4-538a-4a66-8c4b-d29ab413b37f"
+    assert _fc.classify_tenant(tenant_id) == _fc.TENANT_CLASS_INTERNAL
+    assert adk.common_dimensions(adk.SURFACE_CLI, tenant_id=tenant_id)["tenant_class"] == "internal"
+
+
 def test_classify_tenant_non_guid_maps_to_unknown():
     # Defense-in-depth: a non-empty tenant_id that isn't a canonical Entra
     # tenant GUID must NEVER classify as "customer" — otherwise the External
