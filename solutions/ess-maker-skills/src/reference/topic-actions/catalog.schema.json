@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Proposed ESS topic-set definition",
+  "description": "Review proposal, not the official ESS package wire contract. Describes static membership and provenance only; runtime identity, state, permission and approval are separate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "authorityStatus", "source", "packages", "sets"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "authorityStatus": {"enum": ["provisional", "owner_approved"]},
+    "source": {"$ref": "#/$defs/source"},
+    "packages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/package"}
+    },
+    "sets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/topicSet"}
+    }
+  },
+  "$defs": {
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!.*[\\u0000-\\u001f\\u007f])\\S(?:.*\\S)?$"
+    },
+    "nullableKey": {"anyOf": [{"$ref": "#/$defs/key"}, {"type": "null"}]},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "repositoryUrl", "revision", "approvalReference"],
+      "properties": {
+        "kind": {"enum": ["repository_inventory", "ess_package_mapping"]},
+        "repositoryUrl": {"$ref": "#/$defs/key"},
+        "revision": {"$ref": "#/$defs/key"},
+        "approvalReference": {"$ref": "#/$defs/nullableKey"}
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key", "packageId", "packageVersion", "agentSchemaNames",
+        "sourcePath", "sourceRevision", "setCoverage",
+        "requiredTopicCoverage", "requiredTopicSource", "topics"
+      ],
+      "properties": {
+        "key": {"$ref": "#/$defs/key"},
+        "packageId": {"$ref": "#/$defs/nullableKey"},
+        "packageVersion": {"$ref": "#/$defs/nullableKey"},
+        "agentSchemaNames": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/key"}
+        },
+        "sourcePath": {"$ref": "#/$defs/key"},
+        "sourceRevision": {"$ref": "#/$defs/key"},
+        "setCoverage": {
+          "enum": ["unknown", "complete"],
+          "description": "Whether the trusted mapping enumerates every set for this package family; needed to establish relevant outside-set membership, not a global gate on unrelated integrations."
+        },
+        "requiredTopicCoverage": {"enum": ["unknown", "complete"]},
+        "requiredTopicSource": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["sourcePath", "sourceRevision"],
+              "properties": {
+                "sourcePath": {"$ref": "#/$defs/key"},
+                "sourceRevision": {"$ref": "#/$defs/key"}
+              }
+            }
+          ]
+        },
+        "topics": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/topic"}
+        }
+      }
+    },
+    "topic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaName", "classification", "required"],
+      "properties": {
+        "schemaName": {"$ref": "#/$defs/key"},
+        "displayName": {"type": ["string", "null"]},
+        "classification": {
+          "enum": ["isv_topic", "required_system", "other_non_isv", "unknown"],
+          "description": "Source-backed eligibility classification; supporting ISV system topics can be isv_topic, but core, example, behavioral and customer-authored topics are not set members."
+        },
+        "required": {
+          "type": ["boolean", "null"],
+          "description": "true identifies a required system topic, which must not be a set member; null means classification is unknown. false requires trusted source evidence before live use."
+        }
+      }
+    },
+    "topicSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "name", "integration", "sourceVariants"],
+      "properties": {
+        "key": {"$ref": "#/$defs/key"},
+        "name": {"$ref": "#/$defs/key"},
+        "integration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["key", "name"],
+          "properties": {
+            "key": {"$ref": "#/$defs/key"},
+            "name": {"$ref": "#/$defs/key"}
+          }
+        },
+        "guidance": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["purpose", "employeeScenarios", "approvalStatus", "sourceUri", "sourceRevision"],
+              "properties": {
+                "purpose": {"$ref": "#/$defs/key"},
+                "employeeScenarios": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {"$ref": "#/$defs/key"}
+                },
+                "approvalStatus": {"enum": ["provisional", "ess_approved"]},
+                "sourceUri": {"$ref": "#/$defs/key"},
+                "sourceRevision": {"$ref": "#/$defs/key"}
+              }
+            }
+          ]
+        },
+        "sourceVariants": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/variant"}
+        }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["packageKey", "membershipStatus", "membershipComplete", "memberSchemaNames"],
+      "properties": {
+        "packageKey": {"$ref": "#/$defs/key"},
+        "membershipStatus": {"enum": ["provisional", "owner_approved"]},
+        "membershipComplete": {
+          "type": ["boolean", "null"],
+          "description": "Completeness against the owner-defined set, not merely within an extracted repository template."
+        },
+        "memberSchemaNames": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/key"}
+        }
+      }
+    }
+  }
+}

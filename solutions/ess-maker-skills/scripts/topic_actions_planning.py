@@ -221,6 +221,7 @@ def plan_topic_actions(snapshot: object, action: str) -> TopicPlan:
     explicitly separate from eligible changes and satisfied eligible members.
     No client, native token, synthetic fallback, or mutation is used.
     """
+    from topic_actions_catalog import CatalogSnapshot, plan_catalog_actions
     from topic_actions_discovery import _identity, _key, _target
     from topic_actions_flat_discovery import (
         FlatCatalog,
@@ -231,6 +232,8 @@ def plan_topic_actions(snapshot: object, action: str) -> TopicPlan:
         _validate_catalog,
     )
 
+    if type(snapshot) is CatalogSnapshot:
+        return plan_catalog_actions(snapshot, action)
     if type(snapshot) is not FlatDiscoveryResult:
         _fail("implementation_pending")
     if not isinstance(action, str) or action not in ("enable", "disable"):
