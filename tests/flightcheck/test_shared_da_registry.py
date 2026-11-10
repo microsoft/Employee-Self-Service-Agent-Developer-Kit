@@ -55,6 +55,55 @@ def _row(payload, key):
     return next(row for row in payload["results"] if row["checkpoint_id"] == key)
 
 
+@pytest.mark.parametrize("permission_unavailable", [False, True])
+def test_entra_coverage_has_full_checkpoint_and_profile_parity(
+    setup_workspace, monkeypatch, permission_unavailable,
+):
+    ws = setup_workspace
+    user = graph_mock.profile_user()
+    user["employeeType"] = None
+    ws.graph_http.get(f"{graph_mock.GRAPH_BASE}/users").respond(
+        status_code=403 if permission_unavailable else 200, json={"value": [user]},
+    )
+    key = "AUTH-PROFILE-001"
+    monkeypatch.setitem(registry.PROFILES, "da:test-entra-coverage", registry.ProfileSpec(
+        "da:test-entra-coverage", (key,), "Bounded Entra coverage.",
+    ))
+    findings = []
+    for index, options in enumerate((
+        ["--scope", "full", "--invocation-source", "adk"],
+        ["--scope", "full", "--invocation-source", "cli"],
+        ["--checkpoint", key],
+        ["--profile", "da:test-entra-coverage", "--validation-realm", "dev"],
+    )):
+        with responses.RequestsMock(assert_all_requests_are_fired=False) as http:
+            _register_native(http, ws)
+            if index < 2:
+                _register_maker_baseline(http)
+            payload, code = _run_cli(ws, monkeypatch, http, options, f"entra-{index}")
+        assert code == 0
+        if index < 2:
+            assert payload["overall"] == "CHECKED_WITH_NOTES"
+        row = _row(payload, key)
+        assert row["status"] == "Warning"
+        assert ("Not checked" if permission_unavailable else "Data-quality concern") in row["result"]
+        assert "not a deployment blocker" in row["remediation"]
+        assert "manualVerificationSteps" not in row["evidence"]
+        assert row["evidence"]["coverageVerified"] is not permission_unavailable
+        if permission_unavailable:
+            assert "usersChecked" not in row["evidence"] and "results" not in row["evidence"]
+            assert payload["coverage"]["limitations"] >= 1
+            if index >= 2:
+                assert payload["coverage"]["limitations"] == 1
+                assert payload["coverage"]["automaticCompleted"] == payload["total"] - 1
+        else:
+            assert "Personalization opportunity" in row["remediation"]
+            assert "If ESS uses Entra for an attribute" in row["remediation"]
+            assert "HR-to-Entra sync" in row["remediation"]
+        findings.append(row)
+    assert findings[0] == findings[1] == findings[2] == findings[3]
+
+
 @pytest.mark.parametrize("status", ["Passed", "Manual", "Blocked", "Error", "NotConfigured"])
 def test_custom_tags_merge_registered_and_producer_labels_without_mutation(status):
     from flightcheck.da_execution import decorate

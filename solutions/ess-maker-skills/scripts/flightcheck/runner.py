@@ -486,13 +486,9 @@ def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck
 #      unavailable; keeping it separate from Skipped prevents a
 #      release gate from being rendered as a success-shaped no-op.
 #
-#   2. MANUAL_VERIFICATION — Warning, Manual, NotConfigured. The
-#      kit cannot make a yes/no judgement, or surfaced a soft
-#      finding the operator should confirm is acceptable. Warnings
-#      live here (not in Action required) because they are "should
-#      I worry?" questions, not "fix this" instructions — the
-#      verification path is the operator's, not the kit's. NotConfigured
-#      means the kit had no creds/visibility to evaluate.
+#   2. REVIEW_ITEMS — Warning, Manual, NotConfigured. The legacy
+#      bucket key remains "manual_verification"; renderers distinguish
+#      non-blocking warning review from actual manual verification.
 #
 #   3. PASSED — Passed, Skipped. Skipped is grouped with Passed only
 #      for benign non-applicable rows. Essential unavailable capability
@@ -1024,21 +1020,18 @@ def _verdict_text(r: RunResult) -> tuple[str, str, str, str]:
     matters: the headline answers "is my deployment OK?" in five
     words or less; the subline says exactly what to do next.
 
-    Section pointers in the subline reflect the bucket model:
-    Failed / Error live under "Action required"; Warning / Manual /
-    NotConfigured live under "Needs manual verification". Pointing
-    operators at the right section is the whole reason the verdict
-    has a subline.
+    Point to the actual action panel and status filters without treating
+    automated warnings as manual verification.
     """
     failing = r.failed + r.blocked + r.errors
-    manual_count = r.warnings + r.manual + r.not_configured
+    manual_count = r.manual + r.not_configured
 
     if r.overall == "READY":
         if manual_count:
             sub = (
                 f"All {r.passed} automated check(s) passed. "
                 f"{manual_count} item(s) need manual verification \u2014 "
-                "see \u201cNeeds manual verification\u201d below."
+                "use the Manual and Not configured filters to find their next steps."
             )
         else:
             sub = (
@@ -1049,10 +1042,11 @@ def _verdict_text(r: RunResult) -> tuple[str, str, str, str]:
 
     if r.overall == "READY_WITH_WARNINGS":
         sub = (
-            f"{r.warnings} warning(s) found. Review each one in "
-            "\u201cNeeds manual verification\u201d below and confirm "
-            "it\u2019s acceptable before deploying."
+            f"{r.warnings} non-blocking warning(s) found. Use the Warnings tab "
+            "to review the findings and their next steps."
         )
+        if manual_count:
+            sub += f" {manual_count} item(s) also need manual verification."
         return (
             "verdict-warnings",
             "\u26a0",
@@ -1062,9 +1056,7 @@ def _verdict_text(r: RunResult) -> tuple[str, str, str, str]:
 
     # NOT_READY (or any unrecognized overall) — treat as a blocker.
     # Headline counts failures/blocked/errors as the truly blocking items;
-    # warnings (now in the manual section) are mentioned in the
-    # subline so the operator knows their scale without thinking
-    # they're additional blockers.
+    # Warnings are mentioned separately because they are not blockers.
     issue_word = "issue" if failing == 1 else "issues"
     blocked_text = (
         "failing/blocked/errored" if r.blocked else "failing/errored"
@@ -1072,13 +1064,13 @@ def _verdict_text(r: RunResult) -> tuple[str, str, str, str]:
     if r.warnings:
         sub = (
             f"{failing} {blocked_text} check(s) need action; "
-            f"{r.warnings} warning(s) need manual verification. "
-            "Start with \u201cAction required\u201d below."
+            f"{r.warnings} non-blocking warning(s) need review. "
+            "Start with Action items, then use the Warnings tab."
         )
     else:
         sub = (
             f"{failing} {blocked_text} check(s) need action. "
-            "See \u201cAction required\u201d below."
+            "See Action items below."
         )
     return (
         "verdict-not-ready",
@@ -1748,7 +1740,16 @@ def _render_header(
     reading_guide: str = "",
 ) -> str:
     """Render the Fluent 2 report header with dynamic run metadata."""
-    rerun = "/flightcheck" if r.scope == "full" else f"/flightcheck --scope {r.scope}"
+    if r.rerun_command:
+        rerun = r.rerun_command
+    elif r.profile:
+        rerun = f"/flightcheck --profile {r.profile}"
+    elif r.scope.startswith("checkpoint:"):
+        rerun = f"/flightcheck --checkpoint {r.scope.partition(':')[2]}"
+    elif r.scope.startswith("profile:"):
+        rerun = f"/flightcheck --profile {r.scope.partition(':')[2]}"
+    else:
+        rerun = "/flightcheck" if r.scope == "full" else f"/flightcheck --scope {r.scope}"
     agents = sorted(
         {
             agent

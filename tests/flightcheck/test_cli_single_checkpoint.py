@@ -1006,6 +1006,8 @@ class TestHermeticRun:
 
         class _Plan:
             clients = frozenset({registry.GRAPH})
+            graph_scopes = None
+            graph_permission_optional = False
             requires_config = True
             requires_dataverse_endpoint = False
             ordered_fns = [(
@@ -1067,6 +1069,8 @@ class TestHermeticRun:
 
         class _Plan:
             clients = frozenset({registry.GRAPH})
+            graph_scopes = None
+            graph_permission_optional = False
             requires_config = True
             requires_dataverse_endpoint = False
             ordered_fns = [(
@@ -1125,6 +1129,8 @@ class TestHermeticRun:
 
         class _Plan:
             clients = frozenset({registry.GRAPH})
+            graph_scopes = None
+            graph_permission_optional = False
             requires_config = True
             requires_dataverse_endpoint = False
             ordered_fns = [(
@@ -1190,6 +1196,8 @@ class TestHermeticRun:
 
         class _Plan:
             clients = frozenset({registry.GRAPH})
+            graph_scopes = None
+            graph_permission_optional = False
             requires_config = True
             requires_dataverse_endpoint = False
             ordered_fns = [(
@@ -2000,6 +2008,8 @@ class TestCheckpointTelemetry:
 
         class _Plan:
             clients = frozenset({_reg.GRAPH})
+            graph_scopes = None
+            graph_permission_optional = False
             requires_config = False
             requires_dataverse_endpoint = False
 
