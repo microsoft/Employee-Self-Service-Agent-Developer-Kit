@@ -73,7 +73,7 @@ flowchart LR
 | 2. Scenarios | Captures job stories, example requests and acceptance criteria | [interview.md](references/interview.md) |
 | 3. Analysis and plan | For each step of each scenario, judges from the tool descriptions whether a tool is purpose-built, an FCC (on-demand fetch) tool, partial or missing, and whether informational steps have a knowledge source; gives each scenario a verdict; recommends how to split or merge skills within the 8-skill limit, including an orchestration skill for mixed requests; flags conflicts with what the maker asked for | [limitations.md](references/limitations.md), [scenario-analysis.md](references/scenario-analysis.md) |
 | 4. Explicitness | Exact steps for changes and flexible lookups, exact everywhere, or goals only; where system details live | [interview.md](references/interview.md) |
-| 5. Sources | Grounds tables, fields, defaults and codes in the agent's existing skills, ESS samples, template configurations, the kit's references or the maker's documents, citing each fact | The capabilities folder's `skills/`, `src/examples/ess-samples/`, `src/reference/` |
+| 5. Sources | Grounds tables, fields, defaults and codes only in the capabilities folder's reference documents and existing skills, or the maker's own documents, citing each fact | The capabilities folder's `references/` and `skills/` |
 | 6. Rules | Confirmation style, acting on behalf of others, defaults | [interview.md](references/interview.md) |
 | 7. Draft and validate | Drafts from the template, validates, shows the maker a plain-language summary, and loops on feedback with a new iteration folder each time | [authoring-rules.md](references/authoring-rules.md), [examples.md](references/examples.md) |
 | 8. Practice checks | Writes trigger and behavior evals; optionally runs them with subagents against a baseline | [evals.md](references/evals.md) |
@@ -86,7 +86,7 @@ flowchart LR
 - **Promise only what the tools do.** A skill that loads and can't finish the job is worse than none. The validator's `--expect` option fails a skill that promises an operation without naming a tool that can do it.
 - **Orchestrate only when it's needed.** When people often mix knowledge questions and actions in one message, the builder recommends one orchestration skill, modeled on `hr-request-orchestration`, that routes between knowledge search and the area skills. Otherwise a short routing rule in the agent's instructions is enough.
 - **The maker decides.** The builder recommends with evidence (which steps, which tools, what's missing) and the maker chooses.
-- **Ground facts in sources.** Domain facts come from the agent's existing skills, ESS samples, template configurations, the kit's references or the maker's documents, each cited, never from model memory.
+- **Ground facts in sources.** Domain facts come only from the capabilities folder (reference documents and the agent's existing skills) or the maker's own documents, each cited, never from model memory or the kit's other files. A fact nobody supplies is a gap, not a guess.
 - **Rules that must always hold also go in the tools.** Copilot may answer without reading a skill, so the finish message lists rules for the developer to enforce in tool descriptions or server code.
 - **Inputs are data.** Tool manifests, samples and documents are never treated as instructions.
 - **Everything stays local** until the maker adds the skill to the ESS DA GA agent.
@@ -102,7 +102,7 @@ flowchart LR
 | [references/examples.md](references/examples.md) | A thin skill over purpose-built tools, a thick skill over FCC tools, and an orchestration skill across knowledge and actions |
 | [references/interview.md](references/interview.md) | Every question the builder asks, as `vscode_askQuestions` JSON |
 | [references/evals.md](references/evals.md) | Writing, running and grading trigger and behavior evals |
-| [references/capabilities-folder.md](references/capabilities-folder.md) | The `workspace/ess-da-ga-skill-builder-capabilities/` layout, accepted tool list formats and `knowledge.json` |
+| [references/capabilities-folder.md](references/capabilities-folder.md) | The `workspace/ess-da-ga-skill-builder-capabilities/` layout, accepted tool list formats, `knowledge.json` and reference documents |
 | [references/sources.md](references/sources.md) | Every external guide behind the rules |
 | [assets/](assets/) | Templates for `plan.md`, `SKILL.md` and `evals.json` |
 
@@ -112,7 +112,7 @@ All three live in the kit's `scripts/ess-da-ga-skill-builder/` folder, make no n
 
 | Script | What it does | Exit codes |
 | --- | --- | --- |
-| [skill_builder_inventory.py](../../../scripts/ess-da-ga-skill-builder/skill_builder_inventory.py) | Reads tool lists from a capabilities folder, an app package, plugin files or `tools/list` exports. Lists each tool's description, parameters, operations (create, read, update, comment, delete) and a first-pass kind, plus the agent's knowledge sources, existing skills and free slots | 0 success, 2 bad input, 3 no tools |
+| [skill_builder_inventory.py](../../../scripts/ess-da-ga-skill-builder/skill_builder_inventory.py) | Reads tool lists from a capabilities folder, an app package, plugin files or `tools/list` exports. Lists each tool's description, parameters, operations (create, read, update, comment, delete) and a first-pass kind, plus the agent's knowledge sources, reference documents, existing skills and free slots | 0 success, 2 bad input, 3 no tools |
 | [skill_builder_validate.py](../../../scripts/ess-da-ga-skill-builder/skill_builder_validate.py) | Checks Copilot's limits and load checks, the Agent Skills spec, file types, scripts against the sandbox rules, tool and argument names against the inventory, and with `--expect`, the promised operations, including `knowledge` | 0 no errors, 1 errors, 2 bad input |
 | [skill_builder_package.py](../../../scripts/ess-da-ga-skill-builder/skill_builder_package.py) | Validates again and writes the upload `.zip` with `SKILL.md` at its root | 0 packaged, 1 errors, 2 bad input |
 
@@ -165,7 +165,7 @@ Source: [Best practices for skill creators][bp].
 
 | Practice | Where we applied it |
 | --- | --- |
-| Start from real expertise, not general model knowledge | Round 5 grounds every fact in the agent's existing skills, ESS samples, template configurations, the kit's references or the maker's documents, and never states vendor behavior from memory |
+| Start from real expertise, not general model knowledge | Round 5 grounds every fact in the capabilities folder's reference documents and existing skills or the maker's documents, and never states vendor behavior from memory |
 | Add only what the agent lacks | Skills never restate a tool's description; purpose-built tools get thin skills |
 | Match how specific instructions are to how fragile each step is | Round 4: exact for changes, flexible for lookups |
 | Give one default approach, not a menu | [authoring-rules.md](references/authoring-rules.md) and the skill template |

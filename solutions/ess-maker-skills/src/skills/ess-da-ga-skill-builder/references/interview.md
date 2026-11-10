@@ -168,7 +168,7 @@ Move the recommendation to "Yes, often" when the maker's example requests alread
   "header": "Sources",
   "question": "What can I learn from to get the details right?",
   "options": [
-    { "label": "What the kit and agent have", "description": "The agent's existing skills, ESS samples, template configurations and the kit's references", "recommended": true },
+    { "label": "What the agent's folder has", "description": "The reference documents and existing skills in the capabilities folder", "recommended": true },
     { "label": "My own topic or configuration", "description": "Give me the path" },
     { "label": "Example conversations or replies", "description": "Paste them or give me a file" },
     { "label": "Policy or process documents", "description": "Give me the path" }

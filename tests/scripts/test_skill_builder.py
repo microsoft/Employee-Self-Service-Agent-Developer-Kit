@@ -67,6 +67,11 @@ def test_capabilities_folder_lists_servers_tools_and_skills(inventory: dict) -> 
     assert inventory["problems"] == []
 
 
+def test_references_are_listed_as_grounding_documents(inventory: dict) -> None:
+    assert [(r["file"], r["title"]) for r in inventory["references"]] == [("hr-case-fields.md", "HR case fields")]
+    assert "References: hr-case-fields.md" in inventory_mod.summary_text(inventory)
+
+
 def test_knowledge_comes_from_the_agent_capabilities_array(inventory: dict) -> None:
     knowledge = inventory["knowledge"]
     assert knowledge["provided"] is True and knowledge["sources"] == 2
@@ -99,6 +104,7 @@ def test_package_capabilities_and_unknown_folders(tmp_path: Path) -> None:
     (caps / "knowledge" / "knowledge.json").write_text('{"items": []}', encoding="utf-8")
     inv = inventory_mod.build_inventory(capabilities=caps)
     assert inv["not_used"] == [{"kind": "actions", "items": []}]
+    assert inv["references"] == [] and "References: none" in inventory_mod.summary_text(inv)
     assert inv["knowledge"]["provided"] is True and inv["knowledge"]["sources"] == 0
     assert any("isn't a capabilities array" in p for p in inv["problems"])
 

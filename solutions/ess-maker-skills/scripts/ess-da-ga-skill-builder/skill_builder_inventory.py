@@ -5,14 +5,15 @@
 
 Reads MCP tool manifests and lists every tool with its full description, parameters, what it can do (create,
 read, update, comment, delete) and a first-pass kind, plus the agent's knowledge sources (the `capabilities`
-array of declarativeAgent.json), its existing skills and free skill slots.
+array of declarativeAgent.json), its reference documents, its existing skills and free skill slots.
 Used by src/skills/ess-da-ga-skill-builder. Makes no network calls.
 
 Inputs (at least one):
   --capabilities DIR  a capabilities folder: DIR/mcp/<server>/ holds each MCP server's tool list (tools.json)
                       and, optionally, its plugin manifest (plugin.json); DIR/knowledge/knowledge.json holds the
-                      `capabilities` array copied from declarativeAgent.json; DIR/skills/<name>/SKILL.md holds the
-                      agent's existing skills. Other folders are listed as not used yet.
+                      `capabilities` array copied from declarativeAgent.json; DIR/references/ holds documents
+                      about the agent's systems (API contracts, tables, fields, codes); DIR/skills/<name>/SKILL.md
+                      holds the agent's existing skills. Other folders are listed as not used yet.
   --package DIR       a declarative agent app package (declarativeAgent.json, its plugin actions and their
                       mcp_tool_description files, and its agent_skills)
   --plugin FILE       a plugin manifest; its mcp_tool_description file is read from the same folder
@@ -42,7 +43,7 @@ from pathlib import Path
 
 MAX_SKILLS = 8
 TABLE_PARAMS = frozenset({"table", "table_name"})
-USED_CAPABILITY_KINDS = ("mcp", "knowledge", "skills")
+USED_CAPABILITY_KINDS = ("mcp", "knowledge", "references", "skills")
 KNOWLEDGE_CAPABILITIES = frozenset({"WebSearch", "OneDriveAndSharePoint", "GraphConnectors", "Dataverse",
                                     "TeamsMessages", "Email", "People", "Meetings", "EmbeddedKnowledge"})
 OTHER_CAPABILITIES = frozenset({"CodeInterpreter", "GraphicArt", "ScenarioModels"})
@@ -298,6 +299,20 @@ def read_knowledge(folder: Path, problems: list[str]) -> tuple[list[dict], bool]
     return capabilities, True
 
 
+def read_references(folder: Path) -> list[dict]:
+    """Documents in a capabilities folder's references/: the facts the builder may ground skills in."""
+    references = folder / "references"
+    if not references.is_dir():
+        return []
+    out = []
+    for path in sorted(p for p in references.rglob("*") if p.is_file() and not p.name.startswith(".")):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        heading = re.search(r"(?m)^#\s+(.+)$", text) if path.suffix.lower() == ".md" else None
+        out.append({"file": path.relative_to(references).as_posix(), "title": heading.group(1).strip() if heading else "",
+                    "chars": len(text)})
+    return out
+
+
 def read_capabilities(folder: Path) -> tuple[list[dict], list[dict], list[dict], list[str]]:
     """(servers, tools, not-used capability kinds, problems) from a capabilities folder."""
     mcp = folder / "mcp"
@@ -380,11 +395,13 @@ def build_inventory(package: Path | None = None, plugins: list[Path] = (), tools
     plugin_infos, tools, agent_name, instructions = [], [], "", 0
     servers, not_used, problems = [], [], []
     agent_capabilities: list[dict] = []
+    references: list[dict] = []
     knowledge_provided = False
     plugin_paths = list(plugins)
     if capabilities is not None:
         servers, tools, not_used, problems = read_capabilities(capabilities)
         agent_capabilities, knowledge_provided = read_knowledge(capabilities, problems)
+        references = read_references(capabilities)
         if skills_dir is None and (capabilities / "skills").is_dir():
             skills_dir = capabilities / "skills"
     if package is not None:
@@ -416,6 +433,7 @@ def build_inventory(package: Path | None = None, plugins: list[Path] = (), tools
         "skills": {"max": MAX_SKILLS, "used": len(skills), "free": MAX_SKILLS - len(skills),
                    "excluded": sorted(exclude), "items": skills},
         "knowledge": knowledge_summary(agent_capabilities, knowledge_provided, problems),
+        "references": references,
         "not_used": not_used, "problems": problems,
         "summary": {"tools": len(tools), "by_kind": counts, "write_paths": write_paths(tools),
                     "operations": operations_summary(tools), "servers": server_summaries(tools, servers)},
@@ -439,6 +457,10 @@ def summary_text(inv: dict) -> str:
                      + ("; other capabilities: " + ", ".join(others) if others else ""))
     else:
         lines.append("Knowledge: not provided (add knowledge/knowledge.json to the capabilities folder)")
+    if inv.get("capabilities"):
+        refs = inv.get("references") or []
+        lines.append("References: " + (", ".join(r["file"] for r in refs) if refs else
+                                       "none (add documents about the agent's systems to references/ in the capabilities folder)"))
     for srv in s["servers"]:
         lines.append(f"Server {srv['name']}: {srv['tools']} tools; "
                      + ", ".join(f"{k} {v}" for k, v in sorted(srv["by_kind"].items()))
@@ -473,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--capabilities", type=Path,
                         help="capabilities folder: mcp/<server>/tools.json (+ optional plugin.json), "
-                             "knowledge/knowledge.json, skills/")
+                             "knowledge/knowledge.json, references/, skills/")
     parser.add_argument("--package", type=Path, help="declarative agent app package folder (with declarativeAgent.json)")
     parser.add_argument("--plugin", type=Path, action="append", default=[],
                         help="plugin manifest; its tool description file is read from the same folder (repeatable)")
