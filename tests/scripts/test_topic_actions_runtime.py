@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 
-from agentbuilder import AgentBuilderClient, AgentBuilderError
+from agentbuilder import AgentBuilderClient, AgentBuilderError, AgentBuilderHTTPError
 from topic_actions_catalog import (
     InstalledPackage, compare_catalog, load_catalog, parse_catalog, plan_catalog_actions,
     snapshot_from_response,
@@ -329,6 +329,110 @@ def test_approval_then_fresh_read_one_dispatch_and_verified_content_preservation
     assert len(backend.submissions) == 1
 
 
+def server_generated_readback(action):
+    """Model the captured selected revision and dependent-dialog diagnostic churn."""
+    enabled = {"a": "On", "shared": "On"}
+    before = operation_evidence(enabled if action == "disable" else None)
+    after = operation_evidence(enabled if action == "enable" else None, revision="r2")
+    for packet in (before, after):
+        for row in packet.body["botComponentChanges"]:
+            component = row["component"]
+            component.update(version=1, auditInfo={"createdTimeUtc": "created", "modifiedTimeUtc": "before"})
+            component["dialog"]["beginDialog"] = {
+                "actions": [{
+                    "$kind": "InvokeFlowAction", "flowId": "original-flow",
+                    "input": {"binding": {"worker": "Global.Worker"}},
+                    "diagnostics": [{"message": "old diagnostic"}],
+                }, {
+                    "$kind": "ConditionGroup",
+                    "conditions": [{
+                        "condition": "=true", "structuredCondition": {"old": True},
+                        "actions": [],
+                    }],
+                }],
+            }
+    for row in after.body["botComponentChanges"]:
+        component = row["component"]
+        if component["id"] in ("a", "shared"):
+            component["version"] = 2
+            component["auditInfo"]["modifiedTimeUtc"] = "after"
+        actions = component["dialog"]["beginDialog"]["actions"]
+        actions[0].pop("diagnostics")
+        actions[1]["diagnostics"] = [{"message": "new diagnostic"}]
+        actions[1]["conditions"][0]["structuredCondition"] = {"new": True}
+    return before, after
+
+
+@pytest.mark.parametrize("action", ["enable", "disable"])
+def test_server_generated_readback_does_not_hide_verified_state_success(action):
+    before, after = server_generated_readback(action)
+    originals = deepcopy((before.body, after.body))
+    backend = SyntheticBackend([before, before, after])
+
+    result = TopicActionSession(backend, action).run(lambda _: "approve")
+
+    assert result["status"] == "completed" and result["completed"]
+    assert {topic["status"] for topic in result["topics"]} == {"changed"}
+    assert {topic["state"] for topic in result["topics"]} == ({"On"} if action == "enable" else {"Off"})
+    assert not result["blockers"]
+    assert len(backend.submissions) == 1 and backend.reads == 3
+    expected = build_state_payload(before, plan_catalog_actions(before.snapshot, action))
+    assert backend.submissions[0][1] == expected
+    assert (before.body, after.body) == originals
+
+
+@pytest.mark.parametrize(("identity", "path", "value"), [
+    ("a", ("dialog", "beginDialog", "actions", 0, "flowId"), "another-flow"),
+    ("a", ("dialog", "beginDialog", "actions", 0, "input", "binding", "worker"), "Global.Other"),
+    ("a", ("dialog", "beginDialog", "actions", 1, "conditions", 0, "condition"), "=false"),
+    ("unrelated", ("dialog", "private"), "changed-authored-content"),
+    ("a", ("schemaName",), "synthetic.hr.topic.other"),
+    ("a", ("parentBotId",), TARGET.tenant_id),
+    ("a", ("auditInfo", "createdTimeUtc"), "unexpected"),
+    ("a", ("unknownMetadata",), "unexpected"),
+    ("a", ("diagnostics",), [{"message": "not a dialog field"}]),
+    ("unrelated", ("version",), 2),
+    ("unrelated", ("auditInfo", "modifiedTimeUtc"), "after"),
+])
+def test_generated_readback_does_not_mask_authored_identity_or_unselected_revision_changes(identity, path, value):
+    before, after = server_generated_readback("enable")
+    component = next(
+        row["component"] for row in after.body["botComponentChanges"]
+        if row["component"]["id"] == identity
+    )
+    parent = component
+    for key in path[:-1]:
+        parent = parent[key]
+    parent[path[-1]] = value
+    backend = SyntheticBackend([before, before, after])
+
+    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+
+    assert result["status"] == "partial" and not result["completed"]
+    assert {topic["status"] for topic in result["topics"]} == {"observed_desired"}
+    assert "preservation could not be verified" in result["message"]
+    assert result["blockers"] == ["verification_incomplete", "fresh_approval_required"]
+    assert len(backend.submissions) == 1
+
+
+@pytest.mark.parametrize("field", ["version", "diagnostics"])
+def test_server_generated_drift_before_dispatch_still_requires_fresh_approval(field):
+    before, _ = server_generated_readback("enable")
+    fresh = deepcopy(before)
+    component = fresh.body["botComponentChanges"][0]["component"]
+    if field == "version":
+        component["version"] = 2
+    else:
+        component["dialog"]["beginDialog"]["actions"][0]["diagnostics"] = []
+    backend = SyntheticBackend([before, fresh])
+
+    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+
+    assert result["status"] == "review_required"
+    assert "evidence_changed" in result["blockers"]
+    assert not backend.submissions
+
+
 @pytest.mark.parametrize(("decision", "status"), [
     ("deny", "denied"), ("cancel", "cancelled"), ("yes", "blocked"),
 ])
@@ -472,6 +576,91 @@ def test_native_gate_denies_even_a_direct_submission_and_never_asks_for_consent(
     with pytest.raises(ValueError, match="not admitted"):
         native.submit_once(TARGET.agent_id, {})
     client.update_components_once.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["enable", "disable"])
+def test_native_execution_preserves_unparented_bot_settings_without_submitting_them(action):
+    before = operation_evidence({"a": "On", "shared": "On"} if action == "disable" else None)
+    after = operation_evidence(
+        {"a": "On", "shared": "On"} if action == "enable" else None, revision="r2",
+    )
+    settings = {
+        "$kind": "BotComponentInsert",
+        "component": {
+            "$kind": "BotSettingsComponent", "id": "settings",
+            "schemaName": "synthetic.hr.BotSettingsComponent.ConnectionParameter",
+        },
+    }
+    for packet in (before, after):
+        packet.body["botComponentChanges"].append(deepcopy(settings))
+    backend = SyntheticBackend([before, before, after])
+
+    result = TopicActionSession(backend, action).run(lambda _: "approve")
+
+    assert result["status"] == "completed" and result["completed"]
+    assert len(backend.submissions) == 1
+    updates = backend.submissions[0][1]["botComponentChanges"]
+    assert {row["component"]["id"] for row in updates} == {"a", "shared"}
+    assert after.body["botComponentChanges"][-1] == settings
+
+
+@pytest.mark.parametrize(("kind", "parent"), [
+    ("DialogComponent", None),
+    ("GlobalVariableComponent", None),
+    ("BotSettingsComponent", TARGET.tenant_id),
+    ("BotSettingsComponent", ""),
+])
+def test_payload_still_rejects_missing_or_foreign_parents_outside_bot_settings_omission(kind, parent):
+    packet = operation_evidence()
+    packet.body["botComponentChanges"].append({
+        "$kind": "BotComponentInsert",
+        "component": {
+            "$kind": kind, "id": "unselected",
+            "schemaName": "synthetic.hr.unselected", "parentBotId": parent,
+        },
+    })
+    plan = plan_catalog_actions(packet.snapshot, "enable")
+
+    with pytest.raises(ValueError):
+        build_state_payload(packet, plan)
+
+
+@pytest.mark.parametrize(("status", "reason"), [
+    (302, "write_http_error"), (400, "write_request_rejected"),
+    (401, "write_authentication_failed"), (403, "write_access_denied"),
+    (404, "write_target_not_found"), (409, "write_conflict"),
+    (412, "write_conflict"), (413, "write_request_too_large"),
+    (429, "write_throttled"), (500, "write_service_failed"),
+])
+def test_native_http_failures_keep_safe_status_and_stop_without_replay(status, reason):
+    before = operation_evidence()
+    backend = SyntheticBackend([before, before, before], error=AgentBuilderHTTPError("private", status))
+    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    assert result["status"] == "unverified" and not result["completed"]
+    assert reason in result["blockers"]
+    assert result["submissionHttpStatus"] == status
+    assert "fresh_approval_required" in result["blockers"]
+    assert len(backend.submissions) == 1 and backend.reads == 3
+    assert "private" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(("failure", "reason"), [
+    (requests.Timeout("private"), "write_transport_failed"),
+    (requests.ConnectionError("private"), "write_transport_failed"),
+    (AgentBuilderError("private"), "write_acknowledgement_unverified"),
+    (ValueError("private"), "submission_validation_failed"),
+])
+def test_submission_failures_are_classified_without_disclosing_details_or_replaying(failure, reason):
+    before = operation_evidence()
+    backend = SyntheticBackend([before, before, before], error=failure)
+    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    assert result["status"] == "unverified" and not result["completed"]
+    assert result["submissionHttpStatus"] is None
+    assert reason in result["blockers"]
+    assert "fresh_approval_required" in result["blockers"]
+    assert len(backend.submissions) == 1 and backend.reads == 3
+    assert all(topic["state"] == "Off" for topic in result["topics"])
+    assert "private" not in json.dumps(result)
 
 
 def test_payload_rejects_nonmatching_schema_or_plan_instead_of_changing_another_topic():
