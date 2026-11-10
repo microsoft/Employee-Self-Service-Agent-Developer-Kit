@@ -57,7 +57,7 @@ let knownNonCustomerTenantIds = dynamic([
 // clones and unhandled entry-point exceptions are covered. Do not union this
 // with API/build/FlightCheck errors: the same underlying failure may appear there.
 // -----------------------------------------------------------------------------
-// One dashboard signal: daily errors by script; raw WSR version deduplicates
+// Customer-only daily errors by script; this raw query deduplicates
 // transport retries with their stable per-error event_id.
 adk_script_error
 | where EventInfo_Time > ago(30d)
@@ -70,7 +70,7 @@ adk_script_error
 
 // Safe WSR investigation/action-item candidates: exact ADK location and bounded
 // diagnostic, never arbitrary exception text. Resolve line against the emitted
-// SHA; it does not reflect uncommitted edits. This is not a second dashboard.
+// SHA; it does not reflect uncommitted edits.
 adk_script_error
 | where EventInfo_Time > ago(7d)
 | where agent_type == "declarative_agent" and tenant_class == "customer"

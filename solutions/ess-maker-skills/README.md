@@ -476,7 +476,7 @@ capabilities are used and where they fail, so we can improve the product. It is
   identifier, numeric source line, random error-event ID, and a bounded error
   code/category with a developer-authored diagnostic sentence. The original
   exception message, traceback text, source text, paths, arguments, and locals
-  are **not emitted**. See [coverage and diagnostics](scripts/TELEMETRY.md#da-script-crash-diagnostics).
+  are **not emitted**. See the [investigation queries](scripts/telemetry_queries.kql).
 - Bounded **Connect lifecycle transitions** for instrumented providers:
   connector, lifecycle event, broad phase, outcome, duration, retry/resume
   counts, blocker category, bounded remediation/checkpoint ID, correlation ID,
