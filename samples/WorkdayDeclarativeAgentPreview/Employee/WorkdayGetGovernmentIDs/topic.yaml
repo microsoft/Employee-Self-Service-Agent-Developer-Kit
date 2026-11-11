@@ -31,7 +31,7 @@ beginDialog:
       input:
         binding:
           parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
-          scenarioName: ="msdyn_HRWorkdayHCMEmployeeGetGovernmentIds"
+          scenarioName: msdyn_HRWorkdayHCMEmployeeGetGovernmentIds
 
       dialog: msdyn_copilotforemployeeselfservicedahr.topic.WorkdaySystemGetCommonExecution
       output:
@@ -39,6 +39,19 @@ beginDialog:
           errorResponse: Topic.errorResponse
           isSuccess: Topic.isSuccess
           workdayResponse: Topic.workdayResponse
+
+    - kind: ConditionGroup
+      id: checkWorkdaySuccess
+      conditions:
+        - id: workdayFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendWorkdayError
+              activity: I encountered an error retrieving your government ID information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endOnWorkdayError
 
     - kind: ParseValue
       id: v0OBu2
@@ -130,6 +143,23 @@ beginDialog:
                 }
             )
         )
+
+    - kind: ConditionGroup
+      id: conditionGroup_PLj70M
+      conditions:
+        - id: conditionItem_TCBTE7
+          condition: =IsEmpty(Topic.parsedWorkdayResponse.GovernmentId)
+          actions:
+            - kind: SendActivity
+              id: sendActivity_jPX7sn
+              activity: There are no government IDs listed for you in the system. If this information should be included, you can update it directly in Workday or reach out to HR for assistance.
+
+      elseActions:
+        - kind: SendActivity
+          id: sendActivity_uxFMLZ
+          activity: |-
+            Here is your government ID information:
+            {Topic.finalizedResponseTableData}
 
 inputType:
   properties:
