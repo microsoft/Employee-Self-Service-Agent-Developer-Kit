@@ -157,3 +157,34 @@ def test_dom_capture_preserves_text_empty_cards_before_assertions(isolated_dom_p
     result = assess(aggregate_turn(list(snapshot.bubbles)), answer, True)
     assert result["outcome"] == "unsupported_reply"
     assert result["checks"]["savedResponse"]["assessed"] is False
+
+
+@pytest.mark.parametrize("control_count", [0, 1, 2])
+def test_reset_uses_only_the_supported_chat_frame(isolated_dom_page, control_count):
+    isolated_dom_page.set_content("""
+        <button onclick="document.body.dataset.clicked = 'true'">New chat</button>
+        <iframe title="Test"></iframe>
+    """)
+    frame = isolated_dom_page.frames[1]
+    control = """
+        <button onclick="document.body.dataset.clicks =
+            Number(document.body.dataset.clicks || 0) + 1">New chat</button>
+    """
+    frame.set_content("""
+        <div id="m365-chat-editor-target-element" role="textbox"
+             aria-label="Message Copilot" contenteditable="true">Unsent draft</div>
+        <button>Stop generating</button>
+    """ + control * control_count)
+    driver = DagaChatDriver(cdp="http://127.0.0.1:9222", expected_url=isolated_dom_page.url)
+    driver._page = isolated_dom_page
+
+    if control_count == 1:
+        assert driver.reset() is True
+        assert frame.evaluate("document.body.dataset.clicks") == "1"
+    else:
+        with pytest.raises(RuntimeError, match="Expected one visible New chat control"):
+            driver.reset()
+        assert frame.evaluate("document.body.dataset.clicks") is None
+
+    assert isolated_dom_page.evaluate("document.body.dataset.clicked") is None
+    assert not isolated_dom_page.is_closed()

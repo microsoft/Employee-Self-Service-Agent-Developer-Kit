@@ -162,6 +162,10 @@ def exercise(tmp_path, component, monkeypatch):
         def start(self):
             calls.append("start")
 
+        def reset(self):
+            calls.append("reset")
+            return True
+
         def prepare(self):
             return {
                 "pageTargetId": "owned-page", "expectedTurnIndex": 0,
@@ -188,6 +192,46 @@ def exercise(tmp_path, component, monkeypatch):
 
     monkeypatch.setattr(daga_chat_driver, "DagaChatDriver", Driver)
     return args, Client(), calls
+
+
+@pytest.mark.parametrize("failure", [None, "target", "click"])
+def test_new_conversation_cli_clicks_without_capture_or_component_changes(
+    exercise, tmp_path, monkeypatch, capsys, failure,
+):
+    args, client, calls = exercise
+    monkeypatch.setattr(
+        native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET),
+    )
+
+    def unexpected_components(*_args):
+        pytest.fail("Starting a new conversation must not read or change topic components.")
+
+    monkeypatch.setattr(client, "fetch_components", unexpected_components)
+    if failure == "click":
+        def failed_click(_self):
+            calls.append("reset")
+            raise RuntimeError("New chat click failed")
+
+        monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "reset", failed_click)
+    url = URL.replace(AGENT_ID, COMPONENT_ID) if failure == "target" else URL
+    code = native.main([
+        "new-conversation", "--kit-root", str(tmp_path), "--cdp", args.cdp, "--url", url,
+    ])
+    output = capsys.readouterr()
+
+    if failure:
+        assert code == 2
+        error = json.loads(output.err)["error"]
+        assert error["type"] == ("ValueError" if failure == "target" else "RuntimeError")
+        assert ("selected agent" if failure == "target" else "New chat click failed") in error["message"]
+    else:
+        assert code == 0
+        result = json.loads(output.out)
+        assert result["operation"] == "new-conversation"
+        assert result["outcome"] == "clicked"
+        assert result["target"] == TARGET
+    assert calls == ([] if failure == "target" else ["start", "reset", "close"])
+    assert not args.output.exists()
 
 
 @pytest.mark.parametrize("failure", ["changed", "inactive", "target", "phrase"])

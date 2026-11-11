@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Inspect topics, prepare a test browser, capture a turn, or activate one topic."""
+"""Inspect topics, prepare a browser, start a new conversation, capture, or activate."""
 
 from __future__ import annotations
 
@@ -720,10 +720,26 @@ def _activate(
     return result, 2 if errors or evidence_errors else 0
 
 
+def _new_conversation(args, target: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    from daga_chat_driver import DagaChatDriver, validate_studio_url
+
+    url = validate_studio_url(args.url, target)
+    driver = DagaChatDriver(cdp=args.cdp, expected_url=url)
+    driver.start()
+    try:
+        driver.reset()
+    finally:
+        driver.close()
+    return {
+        "operation": "new-conversation", "target": _identity(target), "outcome": "clicked",
+    }, 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=(
-        "list", "inspect", "prepare-browser", "run", "capture", "observe", "activate",
+        "list", "inspect", "prepare-browser", "new-conversation",
+        "run", "capture", "observe", "activate",
     ))
     parser.add_argument("--kit-root", type=Path, default=Path.cwd())
     parser.add_argument("--account")
@@ -746,6 +762,7 @@ def main(argv: list[str] | None = None) -> int:
     required = {
         "inspect": ("component_id",),
         "prepare-browser": ("url",),
+        "new-conversation": ("cdp", "url"),
         "run": ("inspection", "prompt", "cdp", "url", "output"),
         "capture": ("inspection", "prompt", "cdp", "url", "output"),
         "observe": ("previous",),
@@ -763,6 +780,8 @@ def main(argv: list[str] | None = None) -> int:
         client, target = connect_selected_dev_workspace(root, args.account)
         if args.operation == "prepare-browser":
             result, code = _prepare_browser(args, root, target)
+        elif args.operation == "new-conversation":
+            result, code = _new_conversation(args, target)
         elif args.operation in {"run", "capture", "observe"}:
             result, code = _exercise(args, root, client, target)
         elif args.operation == "activate":

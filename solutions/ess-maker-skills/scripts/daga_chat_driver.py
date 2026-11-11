@@ -4,8 +4,7 @@
 """Bounded embedded M365 chat operations on an operator-confirmed Studio page.
 
 The DOM boundaries adapt Microsoft ESS bot-test primitives. Authentication,
-navigation, publication, conversation resets and send replay are not operations
-of this driver.
+navigation, publication and send replay are not operations of this driver.
 """
 
 from __future__ import annotations
@@ -354,7 +353,14 @@ class DagaChatDriver:
         turns.nth(turns.count() - 1).screenshot(path=str(path), timeout=5_000)
 
     def reset(self) -> bool:
-        raise NotImplementedError("Conversation resets are not supported by this driver.")
+        control = self._unique(
+            self._root().get_by_role("button", name="New chat", exact=True),
+            "New chat control",
+        )
+        control.click(timeout=5_000)
+        self._boundary = self._confirmed = self._last_observed = None
+        self._identity_transitions.clear()
+        return True
 
     def close(self) -> None:
         if self._pw is not None:
