@@ -13,11 +13,12 @@ matching the active workspace slug with `connect_ready: true`, show:
 
 and STOP. Otherwise proceed.
 
-Read `src/skills/topics/experience-contract.md` before presenting inventory,
-comparisons, decisions or results. Use its literal copy and scoped consent
-rules. Keep previews in normal chat and decision controls short.
+Read the [shared foundation](../../src/skills/topics/experience-contract.md)
+and [Push experience](../../src/skills/topics/push-experience.md) before
+presenting inventory, comparisons, decisions or results. Use their literal
+copy and scoped consent rules. Keep previews in normal chat and decision controls short.
 
-Own the shared contract's **Push telemetry** lifecycle for the approved batch.
+Own Push experience's **Push telemetry** lifecycle for the approved batch.
 Start it immediately before the first approved save dispatch, pass its context
 to nested owners without duplicate events, and apply its terminal mapping after
 the final observed result. Inspection, preview and pre-execution cancellation
@@ -86,7 +87,9 @@ the selected owners before asking for Push approval. Include material
 evaluation-copy/reuse, local-replacement and review-state consequences in the
 displayed scope. Inventory inspection alone is not remote validation.
 
-For topic entries, apply the shared **Authoring policy for this release** and Text-response authoring scope before offering a save, making local revisions or dispatching an approved save. Show unaccepted or acceptance-unknown response wording before any batch Push approval, using the shared Response text / Suggested response quotations. Explain that Push accepts the displayed wording for the approved topics together with their saves. Keep revisions in normal chat; persist them locally and refresh the review before approval. Local retention alone is not wording acceptance. Reuse valid unchanged scoped consent without an additional wording gate.
+For topic entries, apply the shared **Authoring policy for this release** and Text-response authoring scope before offering a save, making local revisions or dispatching an approved save. Read [Authoring experience](../../src/skills/topics/authoring-experience.md) for the applicable summary and wording review. Show unaccepted or acceptance-unknown response wording before any batch Push approval, using its Response text / Suggested response quotations. Explain that Push accepts the displayed wording for the approved topics together with their saves. Keep revisions in normal chat; persist them locally and refresh the review before approval. Local retention alone is not wording acceptance. Reuse valid unchanged scoped consent without an additional wording gate.
+
+For a deleted topic path, read [Deletion experience](../../src/skills/topics/deletion-experience.md) and use the delete owner's fresh deletion preview and deletion summary instead of a content-update preview. The missing file does not establish intent, remote absence or approval. Show the deletion and any contained content explicitly before scoped destructive consent; keep protected or unresolved topics pending. Deletion does not author replacement content and needs no response-wording acceptance.
 
 Use the shared inventory outcomes after appropriate observation and recovery:
 **No changes to push.** only after successful empty inspection, or **Could not
@@ -125,6 +128,7 @@ Use these existing owners:
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | New topic draft                 | `src/skills/topics/create/SKILL.md`, using `topic_authoring.py create --draft`                              |
 | Existing mapped topic           | `src/skills/topics/update/SKILL.md`, using its fresh read and `topic_authoring.py update --draft`           |
+| Deleted mapped topic path       | `src/skills/topics/delete/SKILL.md`, using `topic_authoring.py delete --topic` and its reviewed preview     |
 | Instructions in `agent.mcs.yml` | `agent_instructions.py read`, then `agent_instructions.py update --draft` against that read snapshot        |
 | Evaluation sets                 | The selected-set evaluation deployment flow above, retaining its review state and applicable scoped consent |
 
@@ -156,7 +160,7 @@ component-type sections and individual component-name/reason bullets. Retain
 the inventory's readable names in comparisons and results and leave excluded
 changes pending.
 Do not advertise retired workflow/template-config deployment or deployed
-deletion as choices. Preserve separately authorized product-extension setup
+workflow/evaluation deletion as choices. Preserve separately authorized product-extension setup
 and explicit testing activation, without invoking them as save side effects.
 
 ## Recover, compose results and continue
@@ -179,21 +183,10 @@ instruction-save statement in the instruction row's Details, with conflict
 assessment and testing readiness in the trailer, not separate owner outcome
 blocks. Preserve known remote results, uncertainty, subsequent local
 output/bookkeeping failures, actual evaluation-copy/review facts and required links/reminders.
-Each owner acknowledges only captured submitted content. Later disk edits
+Each owner acknowledges only captured submitted content or verified deletion scope. Later disk edits
 remain pending. Do not concatenate owner reports or menus, blindly replay an
 uncertain write, refresh setup automatically or reset the whole baseline.
 
-Honor the initial routing-conflict decision and exact approved scope. Use the
-shared combined routing-conflict/testing decision and targeted instruction
-preview/approval only for a newly discovered or materially changed conflict
-after Push. After Push topic anyway, retain a concise conflict reminder and
-offer ordinary state-aware testing once unless already requested. Carry any
-declined instruction correction as an explicit exclusion into later authorized
-testing; topic-only Push does not authorize testing. Do not offer runnable
-testing of topic changes left local. Preserve per-component results when topic
-and instruction outcomes differ.
-If `scripts/native_topic_test.py` is absent, report conversation
-acceptance as pending. Saving does not activate or publish; activation requires
-the separate explicit testing choice. A save does not refresh review coverage,
-resolve findings or authorize evaluation execution. Finish without a generic
-What next form when no follow-up applies.
+For created or updated topics, read [Topic testing continuation](../../src/skills/topics/testing-experience.md#topic-testing-continuation) when reaching the handoff. Carry each selected topic's actual save/state, existing authorization and declined corrections. If `scripts/native_topic_test.py` is absent, report conversation acceptance as pending. Do not offer activation or conversation testing for deleted topics; carry their outcomes and remaining reference issues into the report without starting repairs.
+
+A save does not activate, publish, refresh review coverage, resolve findings or authorize evaluation execution. Preserve per-component results when topic and instruction outcomes differ. Finish without a generic What next form when no follow-up applies.

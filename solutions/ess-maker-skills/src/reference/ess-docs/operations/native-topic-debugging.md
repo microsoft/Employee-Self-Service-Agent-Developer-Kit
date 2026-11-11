@@ -1,6 +1,19 @@
 # Debug native topic behavior
 
-Use this procedure with the topic-testing owner, [bounded native operations](native-topic-testing.md) and the shared [experience contract](../../../skills/topics/experience-contract.md). The session selects probes, interprets evidence, chooses the fault surface and coordinates authorized corrections. Do not generate a second workflow engine or batch runner.
+Use this procedure with the topic-testing owner, the applicable [bounded operations](native-topic-testing.md), the [shared foundation](../../../skills/topics/experience-contract.md) and [Testing experience](../../../skills/topics/testing-experience.md). The session selects probes, interprets evidence, chooses the fault surface and coordinates authorized corrections. Do not generate a second workflow engine or batch runner.
+
+## Contents
+
+- [Build the probe set](#build-the-probe-set)
+- [Capture and confirm a real reply](#capture-and-confirm-a-real-reply)
+- [Check behavior against intent](#check-behavior-against-intent)
+- [Establish post-save conversation freshness](#establish-post-save-conversation-freshness)
+- [Localize a backend-backed mismatch](#localize-a-backend-backed-mismatch)
+- [Inspect native authoring validation](#inspect-native-authoring-validation)
+- [Observe internal state and narrow the boundary](#observe-internal-state-and-narrow-the-boundary)
+- [Correct, retest and clean up](#correct-retest-and-clean-up)
+
+Read the applicable section before its phase. Load localization or instrumentation guidance only when needed, including cleanup requirements before any temporary edit.
 
 ## Build the probe set
 
@@ -12,7 +25,7 @@ Describe the proposed testing scope in normal chat so the maker can adjust it. R
 
 ## Capture and confirm a real reply
 
-Prepare the browser and obtain readiness through the shared contract. Use a unique bounded `capture` for each approved turn. Read all bubbles, cards, timeout facts, turn identities and native readback.
+Prepare the browser and obtain readiness through Testing experience. Use a unique bounded `capture` for each approved turn. Read all bubbles, cards, timeout facts, turn identities and native readback.
 
 Use the returned `signal` as an advisory:
 
@@ -44,7 +57,7 @@ After saving a correction or diagnostic, inspect the updated native component. A
 Before retesting an affected scenario after a save:
 
 1. Retain the prior turn's result and correlation evidence. If a Send is uncertain, observe that attempt first; do not reset, reload, navigate or open another browser to hide its uncertainty.
-2. Establish a new Test conversation through the actual supported Test-pane interaction. Use available verified UI operations, or ask the maker to start it when that interaction is not automated. Record the observed action or maker confirmation. Clearing visible bubbles, reloading a page and obtaining an empty transcript are not independently proof of a fresh runtime conversation.
+2. Use [Start a new Test conversation](native-topic-testing.md#start-a-new-test-conversation) with the existing browser's `cdp` and `url`. It clicks **New chat** in the selected Test pane. Keep timing and recovery in the session; ask the maker only when a genuine human action is needed. Clearing visible bubbles, reloading a page and obtaining an empty transcript are not independently proof of a fresh runtime conversation.
 3. Keep the selected agent and test identity, confirm the pane is idle and the composer empty, and reuse still-valid readiness. Do not re-prompt for known connection facts or sign-in.
 4. Capture the first turn of the fresh scenario with the additional empty-boundary precondition:
 

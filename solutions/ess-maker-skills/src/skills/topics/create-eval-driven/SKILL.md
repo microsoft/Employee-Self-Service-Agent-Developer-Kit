@@ -7,5 +7,3 @@ This is a provisional compatibility alias. It does not own a separate scenario, 
 3. Use the supplied cases as authoring context without rewriting user evaluation data or claiming unsupported cases are runnable.
 4. When separate evaluation generation or editing is requested, hand the exact selected sources and thresholds to `src/skills/evaluations/dispatcher/SKILL.md`.
 5. Do not create a scenario document, runtime manifest, or custom materialized evaluation folder.
-
-Reassess this alias during later authorized runtime acceptance.

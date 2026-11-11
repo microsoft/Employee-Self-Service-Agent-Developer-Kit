@@ -1,12 +1,12 @@
 ---
 mode: agent
-description: "Type Enter to delete a topic, workflow, or evaluation test set from your agent"
+description: "Review topic deletion or check another component's deletion options"
 ---
 
 # Delete
 
-You are helping a customer delete a component from their ESS agent. This
-removes it from the local working copy AND from Copilot Studio.
+Use the selected component's owner. Topic deletion can be pushed to the agent,
+kept local for a later Push, or limited to discarding an unsaved draft.
 
 **Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`. If canonical state does not have `schema_version: 4` and an `agents` entry matching the active workspace slug with `connect_ready: true`, show:
 
@@ -14,19 +14,13 @@ removes it from the local working copy AND from Copilot Studio.
 
 and STOP. Otherwise proceed.
 
-Show:
-
-> Deleting components from a DA-GA agent is not yet available in this release. No local or remote files have been changed.
-
-and STOP.
-
 **IMPORTANT: When the user just types `/delete` with no additional text, do
 NOT silently route anywhere. Ask the user what they want to delete first.**
 
 ## Flow
 
-1. Ask the user: "What would you like to delete - a **topic**, a **workflow**, or an **evaluation** test set?"
-2. Wait for the user to answer.
+1. Infer the component type from the request when unambiguous. Otherwise ask what the maker wants to delete.
+2. Resolve a missing selection before continuing.
 3. Route based on their answer:
    - **topic**
      -> Read `src/skills/topics/delete/SKILL.md` and follow its instructions.
@@ -36,3 +30,6 @@ NOT silently route anywhere. Ask the user what they want to delete first.**
      -> Read `src/skills/evaluations/delete/SKILL.md` and follow its instructions.
 
 Do NOT proceed without reading the appropriate skill file first.
+
+Topic support does not enable deployed workflow or evaluation-set deletion.
+Preserve those owners' availability boundaries and do not fall back to Dataverse.

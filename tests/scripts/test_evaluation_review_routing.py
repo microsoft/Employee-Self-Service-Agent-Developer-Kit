@@ -122,23 +122,24 @@ def test_reviewer_recommendations_return_ownership_to_maker():
     assert "Do not claim that conversational recommendations were automatically written" in normalized
 
 
-def test_evaluation_push_is_scoped_and_warns_about_replacement_deletions():
+def test_evaluation_push_is_scoped_and_preserves_old_remote_copies():
     update_skill = _read("src/skills/evaluations/update/SKILL.md")
     deployment = _normalized("src/skills/evaluations/deployment-flow.md")
     assert "src/skills/evaluations/deployment-flow.md" in update_skill
     assert '--only "evaluations/{set}/*" --dry-run' in deployment
     assert '--only "evaluations/{set}/*" --yes' in deployment
-    assert '--yes --force-delete' in deployment
+    assert '--yes --force-delete' not in deployment
+    assert "Legacy Dataverse deployment is unavailable" in deployment
+    assert "`--force-delete` remains rejected" in deployment
     assert "Never use an unscoped" in deployment
     assert ".baseline/evaluations/{set}/" in deployment
-    assert "pushing a replacement will delete those cases" in deployment
+    assert "Missing cases in a new copy do not delete cases from the retained old remote set" in deployment
     assert "unrelated local topic or workflow deletions" in deployment
     assert "evaluation_promotion.py promote" in deployment
     assert "evaluation_promotion.py cleanup" in deployment
     assert "Do not manually delete promotion paths" in deployment
-    assert "On Dataverse, explain that pushing a replacement" in deployment
-    assert "new-copy behavior and old-copy retention instead" in deployment
-    assert "not case omissions in a native new copy" in deployment
+    assert "new-copy behavior and old-copy retention" in deployment
+    assert "Require explicit replacement approval" in deployment
 
 
 def test_review_requested_update_resolves_review_before_push():

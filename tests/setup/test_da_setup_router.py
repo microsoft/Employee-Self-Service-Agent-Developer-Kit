@@ -78,10 +78,17 @@ def test_setup_messages_use_fixed_templates_including_delegated_files() -> None:
 
     formatting = " ".join(_UI_FORMATTING.read_text(encoding="utf-8").split())
     assert (
-        "When an owning skill supplies an exact **Message** block or fixed "
-        "response template, render its wording and structure"
+        "Render the contents of an applicable template quote block or exact **Message** "
+        "block verbatim after resolving its documented placeholders"
     ) in formatting
-    assert "documented placeholders resolved from runtime context" in formatting
+    for requirement in (
+        "insert the resolved value verbatim",
+        "Referenced template blocks retain their own copy and bindings",
+        "Compose text only where a binding calls for it",
+        "documented omission, repetition and conditional-choice rules",
+        "Additional context uses an explicitly templated slot or message",
+    ):
+        assert requirement in formatting
     assert (
         "When the owning skill supplies no fixed copy, compose UI guidance "
         "from runtime context"
@@ -2503,7 +2510,7 @@ def test_non_da_ga_setup_implementation_is_absent() -> None:
 def test_da_commands_degrade_by_operation() -> None:
     expected_text = {
         "push.prompt.md": "## Compose the supported operations",
-        "delete.prompt.md": "DA-GA agent is not yet available",
+        "delete.prompt.md": "Topic support does not enable deployed workflow or evaluation-set deletion.",
         "troubleshoot.prompt.md": (
             "requires the corresponding product extension guidance"
         ),

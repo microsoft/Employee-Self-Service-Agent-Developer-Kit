@@ -143,7 +143,7 @@ Local draft -> Review and preview -> Scoped approval -> Native save and readback
 
 General `/push` first shows local pending changes, then delegates selected topics, separately approved instructions, and evaluation sets to their owners. Each owner acknowledges only its submitted content; later edits and unsupported changes remain pending. A local baseline is not a remote mirror.
 
-Explicit evaluation push retains its selected-set flow and native new-copy behavior. Workflow and template-config deployment, deployed-topic deletion, activation, and publication are not part of general Push. Publication remains separately approved.
+Explicit evaluation push retains its selected-set flow and native new-copy behavior. Topic deletion uses its owning operation with an impact preview and explicit destructive approval, including when selected in a Push batch. Workflow and template-config deployment, activation, and publication are not part of general Push. Publication remains separately approved.
 
 ### ✈️ FlightCheck — Agent Setup Diagnostics
 
@@ -170,12 +170,12 @@ Chat and standalone runs use the same checks for the same selected agent and
 scope. Both save a browser report (`report.html`) and detailed results
 (`results.json`).
 
-| Scope | What it checks |
-|-------|----------------|
-| `full` | The selected agent and its applicable setup checks (default) |
-| `workday` | Applicable Workday setup checks |
-| `servicenow` | Applicable ServiceNow setup checks |
-| `local` | Agent files in the ADK workspace only; no remote API calls |
+| Scope        | What it checks                                               |
+| ------------ | ------------------------------------------------------------ |
+| `full`       | The selected agent and its applicable setup checks (default) |
+| `workday`    | Applicable Workday setup checks                              |
+| `servicenow` | Applicable ServiceNow setup checks                           |
+| `local`      | Agent files in the ADK workspace only; no remote API calls   |
 
 For example: `python scripts/flightcheck/cli.py --scope local`.
 
@@ -326,18 +326,18 @@ This kit relies on structured instructions and multi-step tool use. Not all mode
 
 **Last tested:** 2026-05-04
 
-| Model | Status | Notes |
-|-------|--------|-------|
-| **Claude Sonnet 4.6** | ✅ Recommended | Reliable tool use, follows multi-step instructions accurately |
-| **Claude Opus 4.6** | ✅ Recommended | Reliable tool use, follows multi-step instructions accurately |
-| **Codex 5.4 Medium** | ✅ Recommended | Successfully handles MCP tool detection and setup flows |
-| **GPT-4o** | ⚠️ Not recommended | Fails to detect MCP tools reliably, struggles with multi-step setup flows |
-| **GPT-4.1** | ⚠️ Not recommended | Unreliable string substitution, fails MCP tool detection, produces malformed URLs |
-| **GPT 5.4** | ⚠️ Not recommended | Unreliable MCP tool detection, inconsistent multi-step instruction following |
-| **Codex 5.3 High** | ⚠️ Not recommended | Inconsistent MCP tool detection, unreliable multi-step setup flows |
-| **Codex 5.3** | ⚠️ Not recommended | Inconsistent MCP tool detection, false negatives on server connectivity |
-| **Codex 5.3 Medium** | ⚠️ Not recommended | Fails MCP tool detection, insufficient reasoning for multi-step setup flows |
-| **Claude Sonnet 4** | ⚠️ Not recommended | Fails MCP tool detection, insufficient reasoning for multi-step setup flows |
+| Model                 | Status             | Notes                                                                             |
+| --------------------- | ------------------ | --------------------------------------------------------------------------------- |
+| **Claude Sonnet 4.6** | ✅ Recommended     | Reliable tool use, follows multi-step instructions accurately                     |
+| **Claude Opus 4.6**   | ✅ Recommended     | Reliable tool use, follows multi-step instructions accurately                     |
+| **Codex 5.4 Medium**  | ✅ Recommended     | Successfully handles MCP tool detection and setup flows                           |
+| **GPT-4o**            | ⚠️ Not recommended | Fails to detect MCP tools reliably, struggles with multi-step setup flows         |
+| **GPT-4.1**           | ⚠️ Not recommended | Unreliable string substitution, fails MCP tool detection, produces malformed URLs |
+| **GPT 5.4**           | ⚠️ Not recommended | Unreliable MCP tool detection, inconsistent multi-step instruction following      |
+| **Codex 5.3 High**    | ⚠️ Not recommended | Inconsistent MCP tool detection, unreliable multi-step setup flows                |
+| **Codex 5.3**         | ⚠️ Not recommended | Inconsistent MCP tool detection, false negatives on server connectivity           |
+| **Codex 5.3 Medium**  | ⚠️ Not recommended | Fails MCP tool detection, insufficient reasoning for multi-step setup flows       |
+| **Claude Sonnet 4**   | ⚠️ Not recommended | Fails MCP tool detection, insufficient reasoning for multi-step setup flows       |
 
 ### Quick Start
 
@@ -361,25 +361,25 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 
 ## Available Commands
 
-| Command | What it does |
-|---------|-------------|
-| `/setup` | Connect this workspace to an existing editable DA Dev agent |
-| `/landing-page` | Configure landing-page branding and content |
-| `/connect` | Choose an available integration |
-| `/connect-workday` | Connect the ESS HR agent to Workday |
-| `/create` | Draft and approve a topic save, or separately author evaluation sets; flow authoring is outside ADK |
-| `/update` | Read and approve a mapped topic save, or separately edit evaluation sets |
-| `/delete` | Report that DA-GA deletion is not yet available |
-| `/scan` | Scan your agent for compile errors and fix them |
-| `/review` | Review local topics or evaluation test sets tagged for review |
-| `/evaluate` | Generate evaluation test sets for your agent |
-| `/run` | Prepare and run selected evaluation sets, or inspect history and results |
-| `/test` | Use installed bounded saved-topic testing when compatible and ready; otherwise report acceptance pending |
-| `/flightcheck` | Check the selected agent's setup and show what needs attention |
-| `/push` | Inspect pending changes and compose selected topic, instruction, and evaluation saves with separate approvals |
-| `/backup-template-configs` | Capture hybrid Workday reference-data template configs before an extension update |
-| `/restore-template-configs` | Restore hybrid Workday reference-data template configs after an extension update |
-| `/menu` | See all available commands |
+| Command                     | What it does                                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `/setup`                    | Connect this workspace to an existing editable DA Dev agent                                                   |
+| `/landing-page`             | Configure landing-page branding and content                                                                   |
+| `/connect`                  | Choose an available integration                                                                               |
+| `/connect-workday`          | Connect the ESS HR agent to Workday                                                                           |
+| `/create`                   | Draft and approve a topic save, or separately author evaluation sets; flow authoring is outside ADK           |
+| `/update`                   | Read and approve a mapped topic save, or separately edit evaluation sets                                      |
+| `/delete`                   | Report that DA-GA deletion is not yet available                                                               |
+| `/scan`                     | Scan your agent for compile errors and fix them                                                               |
+| `/review`                   | Review local topics or evaluation test sets tagged for review                                                 |
+| `/evaluate`                 | Generate evaluation test sets for your agent                                                                  |
+| `/run`                      | Prepare and run selected evaluation sets, or inspect history and results                                      |
+| `/test`                     | Use installed bounded saved-topic testing when compatible and ready; otherwise report acceptance pending      |
+| `/flightcheck`              | Check the selected agent's setup and show what needs attention                                                |
+| `/push`                     | Inspect pending changes and compose selected topic, instruction, and evaluation saves with separate approvals |
+| `/backup-template-configs`  | Capture hybrid Workday reference-data template configs before an extension update                             |
+| `/restore-template-configs` | Restore hybrid Workday reference-data template configs after an extension update                              |
+| `/menu`                     | See all available commands                                                                                    |
 
 You can also describe what you want in plain English — the agent will figure out the right approach.
 

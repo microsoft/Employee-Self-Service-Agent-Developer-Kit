@@ -1,137 +1,75 @@
-# Delete Topic Skill
+# Delete Topic
 
-This skill guides the user through deleting a topic from their Copilot Studio
-agent. Deleting means removing the topic both locally AND from the live
-environment via push.
+Delete one customer-authored topic from the selected editable Dev agent, keep its deletion local for a later Push, or discard an established unsaved local draft.
 
-Explain that DA-GA component deletion is not yet available in this release and
-stop before changing local files.
+Read the [shared foundation](../experience-contract.md) and [Deletion experience](../deletion-experience.md) before reviewing the request. Apply **Authoring policy for this release** and the deletion reference's summaries, local-only variations, scoped consent and outcome heads. Template protection cannot be overridden by approval or a cleanup request.
 
-## CRITICAL — Local Files Are a Working Copy
+## 1. Resolve the topic and effects
 
-The files in `workspace/agents/{slug}/` are a **working copy** of what's deployed in
-Copilot Studio. Deleting a local file is NOT the same as deleting the topic
-from the live agent. You MUST push the deletion to Copilot Studio via
-`push.py` for it to take effect. **NEVER stop after deleting only the local
-file.**
+Require completed canonical setup for the selected Dev agent. Read `.local/config.json` and resolve the intended topic from the request and context. Use `topic_authoring.py list` and the selected workspace's component mapping. Clarify ambiguity with discovered titles and purposes; do not silently retarget by display name.
 
-## Rules
+For an existing mapped topic, preview without mutation:
 
-- ALWAYS read `.local/config.json` to get the agent folder, slug, and schema name.
-- ALWAYS checkpoint before deleting anything.
-- ALWAYS push the deletion to Copilot Studio after removing the local file.
-- NEVER delete a file without confirming with the user first.
-- NEVER delete system topics unless the user explicitly insists after a warning.
-- **TRACK PROGRESS**: Use the todo list tool to track your progress.
-
-## Step 1: Identify the Topic
-
-Read `.local/config.json` to get `agent.folder` and `agent.slug`.
-
-If the user named a specific topic, find the matching file in
-`{agent.folder}/topics/`. Match by:
-- Filename (e.g., "submit it support ticket" → `submititsupportticket.mcs.yml`)
-- Display name inside the file (`componentName` field)
-- Trigger phrases (`triggerQueries`)
-
-If the match is ambiguous or no match is found, list the available topics
-from the folder and ask the user to pick one.
-
-## Step 2: Confirm Deletion
-
-Read the topic file to understand what it does. Show the user:
-
-- **Topic name** (from `componentName`)
-- **What it does** (from `modelDescription` or trigger phrases)
-- **Whether it's a system topic** (filenames like `on-error`, `conversation-start`,
-  `reset-conversation`, etc. are system topics)
-
-If it's a **system topic**, warn:
-
-> ⚠️ This is a system topic that handles core agent behavior. Deleting it
-> may break your agent. Are you sure you want to proceed?
-
-For all topics, confirm:
-
-> I'll delete **{TopicName}** from your agent and push the deletion to
-> Copilot Studio. This will remove it from the live environment. Proceed?
-
-Wait for the user to confirm before continuing.
-
-## Step 3: Checkpoint
-
-Save a backup before making changes. Run in the terminal:
-
+```powershell
+python scripts\topic_authoring.py delete --topic "{agent.folder}\topics\{Topic}.mcs.yml" --output ".local\topic-authoring\topic-delete-preview.json"
 ```
-python scripts/checkpoint.py "pre-delete-{TopicName}"
+
+The path can already be missing locally. The preview identifies the current topic, all contained components and the mapped working/baseline files affected by reconciliation. Review the complete scope, including any contained topics, against the shared policy. No remote or local deletion has occurred.
+
+Read relevant current topics and instructions to assess references and practical effects. Use `agent_instructions.py read` for current instructions. Do not equate containment with arbitrary topic references or assume deletion repairs callers. Disclose an unavailable impact assessment as unverified. Do not expand deletion to referenced resources.
+
+For an unmapped local draft, establish that it was never pushed before using the shared discard variation. Resolve ambiguous or uncertain remote state rather than treating missing tracking as absence.
+
+## 2. Review and obtain scoped approval
+
+Render `{delete_summary}` in normal chat, then the separate **Push deletion to agent** / **Keep deletion locally** / **Not now** control. For an unsaved draft, use **Discard local draft** / **Keep draft** instead.
+
+An unchanged approved Push batch may already supply deletion consent when its displayed scope explicitly includes this topic and contained content. Do not request the same approval again. A general cleanup/debugging objective, selection or missing local file alone does not supply destructive consent.
+
+After approval and before changing files or the agent, checkpoint:
+
+```powershell
+python scripts/checkpoint.py "pre-delete-{Topic}"
+```
+
+Record this deletion invocation once:
+
+```powershell
 python scripts/emit_capability.py topic_delete
 ```
 
-Tell the user: "Saved a backup of your current agent files." The
-`emit_capability.py` line records anonymous usage telemetry (best-effort,
-non-blocking); it needs no user-facing message and never fails the step.
+Telemetry is best-effort. Preview, cancellation and recovery add no authoring count. When pushing an already-staged deletion, do not count staging again.
 
-## Step 4: Delete the Local File
+## 3. Apply only the chosen operation
 
-Delete the topic file from `{agent.folder}/topics/{filename}.mcs.yml`.
+### Keep deletion locally or discard a draft
 
-Verify the file is gone by listing the topics directory.
+Use file tools to remove only the approved working files. Recheck their contents against the reviewed scope before removal; preserve later edits and obtain a revised decision when needed.
 
-## Step 5: Dry Run
+For an existing topic, retain `.baseline` and `.component-map.json` unchanged. Report **Deletion kept locally. Agent unchanged.** Do not run a remote write or automatically proceed to Push.
 
-Run in the terminal:
+For an established unsaved draft, remove only that draft and report **Local draft discarded. Agent unchanged.** No remote deletion or pending deletion tracking is created.
 
-```
-python scripts/push.py --dry-run
-```
+### Push deletion to agent
 
-Show the user the diff summary. It should show the topic as deleted. Example:
+Read [**Push telemetry**](../push-experience.md#push-telemetry) before remote execution. Reuse an enclosing approved batch's lifecycle; otherwise own the standalone batch, starting immediately before the approved command and ending from its observed result.
 
-> Here's what will be pushed:
->
-> | Action | File |
-> |--------|------|
-> | ❌ Delete | topics/submititsupportticket.mcs.yml |
-
-## Step 6: Push to Copilot Studio
-
-Ask the user: "Ready to push this deletion to your environment?"
-
-When confirmed, run in the terminal:
-
-```
-python scripts/push.py --yes
+```powershell
+python scripts\topic_authoring.py delete --topic "{agent.folder}\topics\{Topic}.mcs.yml" --expected ".local\topic-authoring\topic-delete-preview.json" --yes --output ".local\topic-authoring\topic-delete-result.json"
 ```
 
-This authenticates to Dataverse, deletes the bot component record, and
-updates the local baseline.
+The operation rereads current state, compares the complete reviewed deletion scope, submits the deletion through the AgentBuilder components API and verifies absence. The pre-write comparison is not an atomic compare-and-delete guarantee. If content or containment changed, return to review rather than silently accepting the new scope. Do not rely on the submitted component version to prevent concurrent changes.
 
-**If the push fails:**
-- Show the error output to the user.
-- Offer two options:
-  - **Retry** — run push again
-  - **Revert** — `python scripts/checkpoint.py --revert` to restore the
-    backup from Step 3
+Only verified absence permits local working-file, baseline and mapping cleanup. Later local edits are preserved and reported as incomplete reconciliation. This operation does not use Dataverse, `push.py --force-delete`, or the existing-topic update planner.
 
-## Step 7: Verify
+## 4. Interpret the outcome and recover
 
-After a successful push, tell the user:
+Use `{delete_outcome_heads}` from Deletion experience, or the enclosing [composed Push report](../push-experience.md#composed-push-report-composed_push_report). Preserve the service response, request ID, readback and causal errors for interpretation. An unsuccessful command or HTTP response alone does not establish that no deletion occurred.
 
-> ✅ **{TopicName}** has been deleted from your agent in Copilot Studio.
->
-> Remember to **Publish** your agent in the portal to make the change live
-> for end users.
->
-> [Open Copilot Studio](https://copilotstudio.microsoft.com/)
+For an uncertain result, inspect current components before any further mutation. Do not repeat deletion automatically. If inspection finds the topic already absent, report absence without attributing a new deletion to this operation.
 
-If the deleted topic was referenced by other topics (via `BeginDialog`),
-mention:
+When remote absence is verified but local reconciliation failed, use the captured preview and current workspace to complete only the outstanding approved local cleanup. Preserve newer files and mapping changes, unrelated edits and uncertainty. Do not repeat a remote write merely to repair bookkeeping or reset the whole baseline.
 
-> ⚠️ Other topics may reference this one. Run `/scan` to check for broken
-> references.
+A checkpoint restores local files only. Recreating a topic in the agent is a separate approved operation, not a rollback implied by a local restore.
 
-## Step 8: Offer Next Steps
-
-- "Would you like to delete another topic, or do something else?"
-- "Type `/scan` to check for any broken references."
-- "Type `/menu` to see all available commands."
+Do not invoke Copilot Studio Publish, activate content, or offer to test the deleted topic. Mention established remaining references or evaluation mismatches without silently fixing them. Finish without a generic next-action menu.

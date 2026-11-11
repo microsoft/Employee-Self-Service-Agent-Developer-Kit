@@ -298,11 +298,9 @@ def test_documented_push_commands_compose_one_lifecycle(delivery, monkeypatch, r
     emit_deploy = result != "already-current"
     contract = (
         Path(__file__).resolve().parents[2] / "solutions" / "ess-maker-skills"
-        / "src" / "skills" / "topics" / "experience-contract.md"
+        / "src" / "skills" / "topics" / "push-experience.md"
     ).read_text(encoding="utf-8")
-    telemetry = contract.split("## Push telemetry\n", 1)[1].split(
-        "## Topic testing continuation\n", 1,
-    )[0]
+    telemetry = contract.split("## Push telemetry\n", 1)[1]
     substitutions = {
         "AgentId": "test-agent",
         "BuildOutcome": "failure" if failed else "success",

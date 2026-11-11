@@ -2,7 +2,7 @@
 
 Create one ordinary Copilot Studio topic in the selected editable Dev agent. The normal output is a `.mcs.yml` draft followed by an approved native save. Do not activate or publish as a save side effect.
 
-Read [experience-contract.md](../experience-contract.md) before interacting with the maker. Apply its Text-response authoring scope and Response wording and local drafts rules. Use its Create summary, initial routing-conflict decision when applicable, otherwise its wording-aware Push decision, topic outcome heads, authorization rules and state-aware testing continuation. Keep requirements and revisions in normal chat; do not paraphrase fixed copy or put the summary inside the question.
+Read the [shared foundation](../experience-contract.md) before interacting with the maker. Apply its Text-response authoring scope, authoring policy and authorization rules. Before drafting, read [Response wording and local drafts](../authoring-experience.md#response-wording-and-local-drafts). Load the other linked references at the steps that need them, not all upfront.
 
 ## Boundaries
 
@@ -40,7 +40,7 @@ Create `{agent.folder}/topics/{ExactFileStem}.mcs.yml`. The filename stem become
 
 Use the existing Object Model-compatible YAML shape for the in-scope request. Review every response ending against the shared authoring boundary; do not use the optional exact-response helper as a universal admission validator. Preserve expressions and unknown supported fields from any selected pattern without importing prohibited behavior. Do not add authoring-origin tags or a mandatory preview artifact.
 
-Prepare the Create summary from the shared experience contract. Cover relevant triggering intent, response/grounding, collected inputs, returned values and employee-visible outputs, confirmation, fallback, error behavior and dependencies. Render the completed summary after the current instruction-alignment assessment and native preview, before the separate short decision control.
+Prepare the [Create summary](../authoring-experience.md#create-summary). Cover relevant triggering intent, response/grounding, collected inputs, returned values and employee-visible outputs, confirmation, fallback, error behavior and dependencies. Render the completed summary after the current instruction-alignment assessment and native preview, before the separate short decision control.
 
 ## 3. Assess agent-instruction alignment
 
@@ -67,7 +67,7 @@ When the maker selects Resolve the routing conflict in the Agent Instructions, o
 python scripts\agent_instructions.py update --draft "{agent.folder}\agent.mcs.yml" --expected ".local\topic-authoring\instructions-before.json" --output ".local\topic-authoring\instructions-preview.json"
 ```
 
-Ordinary topic and instruction changes require separate approvals. A known mismatch is advisory: explain its issue, likely execution impact and separate suggested action under Routing Conflicts, and offer the shared initial routing-conflict decision before Push. Allow a deliberate topic-only save while reporting unresolved alignment. Use the shared targeted instruction-change preview and exact two-component review before saving either proposed change. An unchanged approved Push batch or explicitly authorized in-scope debugging objective supplies its scoped consent as defined in the shared experience contract.
+Ordinary topic and instruction changes require separate approvals. For a known mismatch, read [Routing Conflicts](../authoring-experience.md#routing-conflicts) and the [initial routing-conflict decision](../authoring-experience.md#initial-routing-conflict-decision). Allow a deliberate topic-only save while reporting unresolved alignment. When preparing a correction, use the [targeted instruction-change preview](../authoring-experience.md#targeted-instruction-change-preview-and-approval) and [Push review](../push-experience.md#entry-inventory-and-choices) before saving either proposed change. Reuse unchanged scoped batch/debugging consent from the shared foundation.
 
 ## 4. Preview and approve the topic save
 
@@ -77,13 +77,13 @@ Run without `--yes`:
 python scripts\topic_authoring.py create --draft "{agent.folder}\topics\{ExactFileStem}.mcs.yml" --display-name "{Display name}" --description "{Description}" --output ".local\topic-authoring\topic-preview.json"
 ```
 
-Render the shared Create summary with the exact submitted behavior, labeled Response text or Suggested response, explicit local-workspace statement and applicable Notes and Routing Conflicts sections. Explain that creation is inactive and unpublished. With a known instruction-routing conflict, use the initial Resolve the routing conflict in the Agent Instructions / Push topic anyway / Keep as draft decision with the shared wording-review rules. Otherwise use the suggested-response decision when wording remains unaccepted, including I want to update the response, or the separate Push topic to agent / Keep as draft control for supplied or accepted wording. Follow the shared normal-chat revision continuation before saving changed wording. Reuse unchanged scoped batch/debugging approval rather than asking again.
+Render the completed Create summary and use the [Topic save decision](../authoring-experience.md#topic-save-decision), including its applicable wording or routing branch. Keep the summary in normal chat and the decision control separate. Explain that creation is inactive and unpublished. Revisions return to a fresh preview and the shared decision before saving; reuse unchanged scoped batch/debugging approval rather than asking again.
 
-Keep as draft performs no remote save and uses **Draft kept locally. Agent unchanged.** only for a draft-only outcome. If another approved component was saved, use the shared composed report with actual per-component results. Changed drafts require a new preview, but the preview JSON is not a save token. Material changes outside the approved scope require a new summary and approval.
+Keeping a draft performs no remote save. Use [Topic outcomes](../authoring-experience.md#topic-outcomes) for a draft-only result or the [composed report](../push-experience.md#composed-push-report-composed_push_report) for partial saves. Changed drafts require a new preview, but the preview JSON is not a save token. Material changes outside the approved scope require a new summary and approval.
 
 ## 5. Save and report authoritative results
 
-Follow **Push telemetry** in the shared experience contract. Reuse an enclosing approved batch's lifecycle without emitting again. Otherwise own the standalone batch, starting immediately before the first approved save below and applying the shared terminal mapping after the final observed result, including any jointly approved instruction save. Keep capability authoring counts separate from this save lifecycle.
+Read [**Push telemetry**](../push-experience.md#push-telemetry) before execution. Reuse an enclosing approved batch's lifecycle without emitting again. Otherwise own the standalone batch, starting immediately before the first approved save below and applying the shared terminal mapping after the final observed result, including any jointly approved instruction save. Keep capability authoring counts separate from this save lifecycle.
 
 After topic approval, including valid unchanged batch/debugging consent:
 
@@ -99,10 +99,10 @@ After the applicable instruction approval, including valid scoped batch/debuggin
 python scripts\agent_instructions.py update --draft "{agent.folder}\agent.mcs.yml" --expected ".local\topic-authoring\instructions-before.json" --yes --output ".local\topic-authoring\instructions-result.json"
 ```
 
-Select the presentation from the approval scope. A topic and routing correction approved together use the shared composed Push report, including the complete instruction-save statement in its row and the conflict assessment and testing readiness in the trailer. Do not stack topic and instruction outcome blocks. Outside composed Push, use the shared truthful topic or instruction outcome block with its full statement and paragraph structure. A successful instruction save is not proof of topic execution. Preserve known remote success when local result-file or bookkeeping output fails. Do not blind-retry an uncertain create.
+Report through [Topic outcomes](../authoring-experience.md#topic-outcomes) and, when applicable, [Instruction-push outcomes and testing](../authoring-experience.md#instruction-push-outcomes-and-testing). A joint approval uses the [composed Push report](../push-experience.md#composed-push-report-composed_push_report), not stacked owner blocks. Preserve known remote success when local result-file or bookkeeping output fails. Do not blind-retry an uncertain create.
 
 ## 6. Testing and evaluation handoff
 
-After a confirmed push, honor the initial routing-conflict decision. Only for a newly discovered or materially changed conflict, follow the shared combined routing-conflict/testing decision; otherwise use the ordinary state-aware testing continuation. Push topic anyway carries the declined correction into later authorized testing, but does not itself authorize testing. A test-anyway choice enters testing directly with that exclusion; do not introduce another testing offer or repair the declined conflict. If testing was already requested and `scripts/native_topic_test.py` is installed, carry the selected topic, intended behavior and authorized editable scope into `src/skills/topics/test/SKILL.md` without repeating the testing offer or topic selection. An inactive topic still requires explicit activation consent; honor no-activation and test-only requests. If the testing capability is unavailable, report conversation acceptance as pending. Do not publish.
+Read [Topic testing continuation](../testing-experience.md#topic-testing-continuation) when reaching this handoff. Carry the selected topic, latest intended behavior, actual save/state, existing authorization and declined corrections. Check `scripts/native_topic_test.py` before offering runnable testing; if unavailable, report conversation acceptance as pending. Enter [the testing owner](../test/SKILL.md) only within the shared consent rules. Do not activate or publish as a save side effect.
 
 At the end of an authoring iteration, identify relevant existing evaluation cases across sets, including routing, negative, fallback, and cross-topic impact. Do not regenerate evaluations automatically or repeat this review after every edit. For separately requested evaluation work, use `src/skills/evaluations/dispatcher/SKILL.md`.

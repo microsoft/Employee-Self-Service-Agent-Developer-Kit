@@ -28,7 +28,7 @@ def test_connect_workday_prompt_preselects_workday() -> None:
 
 
 def test_menu_exposes_specific_and_generic_connect_commands() -> None:
-    menu = (_PROMPTS / "menu.prompt.md").read_text(encoding="utf-8")
+    menu = _normalize((_PROMPTS / "menu.prompt.md").read_text(encoding="utf-8"))
 
     assert "| `/connect-workday` | Connect the active ESS HR agent to Workday |" in menu
     assert "| `/connect` | Choose an available integration |" in menu

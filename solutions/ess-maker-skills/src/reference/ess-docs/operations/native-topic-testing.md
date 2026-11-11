@@ -1,6 +1,21 @@
 # Native topic browser testing
 
-Use the bounded operations below from the topic-testing skill. The session owns intended behavior, test selection, interpretation, fixes and retests. Read `src/skills/topics/experience-contract.md` for the scoped runtime correctness goal, state-aware offers, normal-chat readiness/outcome and pause/stop copy. A one-turn capture does not limit the whole test to one message or one literal response.
+Use the bounded operations below from the topic-testing skill. The session owns intended behavior, test selection, interpretation, fixes and retests. Read [Testing experience](../../../skills/topics/testing-experience.md) for the scoped runtime correctness goal, state-aware offers, normal-chat readiness/outcome and pause/stop copy. A one-turn capture does not limit the whole test to one message or one literal response.
+
+## Contents
+
+- [Resolve and inspect](#resolve-and-inspect)
+- [Explicit activation](#explicit-activation)
+- [Prepare the test browser](#prepare-the-test-browser)
+- [Confirm browser readiness](#confirm-browser-readiness)
+- [Start a new Test conversation](#start-a-new-test-conversation)
+- [Capture an approved turn](#capture-an-approved-turn)
+- [Optional exact-response assertion](#optional-exact-response-assertion)
+- [Observe uncertainty without sending again](#observe-uncertainty-without-sending-again)
+- [Observe topic values temporarily](#observe-topic-values-temporarily), including [owned cleanup](#remove-only-owned-instrumentation)
+- [Fix and retest](#fix-and-retest)
+
+Read the applicable section and its subsections before its operation. Read the complete temporary-value section, including cleanup, before saving instrumentation.
 
 ## Resolve and inspect
 
@@ -93,6 +108,20 @@ Confirm the selected test resources, browser identity, correct Test pane and emp
 
 Preparation is separate from capture and is not recovery from an uncertain Send. Capture does not launch, authenticate, navigate, reset or reload.
 
+## Start a new Test conversation
+
+When a fresh scenario or post-save retest needs a new conversation, use the existing browser connection:
+
+```powershell
+python scripts\native_topic_test.py new-conversation `
+  --cdp "<confirmed numeric-loopback endpoint>" `
+  --url "<confirmed full Studio URL>"
+```
+
+The operation validates the selected agent and browser target, clicks **New chat** in the supported Test frame, and detaches without closing the browser or its profile. `outcome: clicked` means the click completed, not proof of server-side conversation identity or execution of the saved version. It does not capture or send a message.
+
+The session chooses when to call this operation and how to continue after its result or error. Reuse valid readiness and test-and-fix permission; starting a new conversation does not itself require another readiness question. Follow [post-save conversation freshness](native-topic-debugging.md#establish-post-save-conversation-freshness) for the next capture, and preserve conversation context between related turns.
+
 ## Capture an approved turn
 
 Choose a unique output directory for each authorized turn:
@@ -112,7 +141,7 @@ The result includes the existing reply classifier's `signal` (`ok`, `consent_gat
 
 After a saved change or when an independent conversation is required, follow [post-save conversation freshness](native-topic-debugging.md#establish-post-save-conversation-freshness). `capture` and `run` accept `--require-empty-conversation` to reject a nonempty or unverified prepared turn boundary before Send. The flag never resets the conversation and never falls back to an old one. It verifies an empty transcript, not a new server-side conversation or execution of the saved version; retain the actual preparation and observed-version evidence separately. `observe` preserves the original gate facts without applying a new empty-conversation requirement.
 
-Use further completed turns to exercise authorized paraphrases or conversation branches. A card is observed evidence, not automatically a failure. The current driver does not submit interactive-card actions, inject backend faults, reset conversations or provide exact-topic invocation traces. Report a specific unperformed interaction or collaborate with the maker when needed; do not claim those capabilities or reject all ordinary dialogs because optional exact-mode is incompatible.
+Use further completed turns to exercise authorized paraphrases or conversation branches. A card is observed evidence, not automatically a failure. The current driver does not submit interactive-card actions, inject backend faults or provide exact-topic invocation traces. Report a specific unperformed interaction or collaborate with the maker when needed; do not claim those capabilities or reject all ordinary dialogs because optional exact-mode is incompatible.
 
 ## Optional exact-response assertion
 

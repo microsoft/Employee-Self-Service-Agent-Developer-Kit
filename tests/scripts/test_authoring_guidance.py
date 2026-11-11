@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -88,7 +89,7 @@ def test_topic_actions_companion_artifacts_remain_byte_identical():
 def test_topic_mutation_routes_consume_the_central_inventory_policy():
     contract = _read("src/skills/topics/experience-contract.md")
     policy = contract.split("## Authoring policy for this release\n", 1)[1].split(
-        "## Authoring summaries\n", 1
+        "## Authorization and recovery\n", 1
     )[0]
     assert "src/reference/topic-actions/catalog.*.json" in policy
     assert "excluding `catalog.schema.json`" in policy
@@ -101,6 +102,7 @@ def test_topic_mutation_routes_consume_the_central_inventory_policy():
         ".github/prompts/push.prompt.md",
         "src/skills/topics/create/SKILL.md",
         "src/skills/topics/update/SKILL.md",
+        "src/skills/topics/delete/SKILL.md",
         "src/skills/topics/test/SKILL.md",
         "src/skills/cleanup/SKILL.md",
     ):
@@ -173,7 +175,7 @@ def test_testing_usage_counts_attempted_passes_and_post_fix_retests():
 def test_text_response_scope_is_shared_without_narrowing_yaml_admission():
     contract = _read("src/skills/topics/experience-contract.md")
     scope = contract.split("## Text-response authoring scope\n", 1)[1].split(
-        "## Authoring summaries\n", 1
+        "## Authoring policy for this release\n", 1
     )[0]
     instructions = " ".join(_read(".github/copilot-instructions.md").split())
     for guidance in (scope, instructions):
@@ -196,7 +198,7 @@ def test_text_response_scope_is_shared_without_narrowing_yaml_admission():
 
 
 def test_wording_review_preserves_supplied_text_and_distinguishes_local_drafts():
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/authoring-experience.md")
     wording = contract.split("### Response wording and local drafts\n", 1)[1].split(
         "### Advisory entries in Notes\n", 1
     )[0]
@@ -221,7 +223,7 @@ def test_wording_review_preserves_supplied_text_and_distinguishes_local_drafts()
 
 
 def test_suggested_response_revision_returns_to_review_without_save_consent():
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/authoring-experience.md")
     decision = contract.split("### Suggested-response decision\n", 1)[1].split(
         "### Initial routing-conflict decision\n", 1
     )[0]
@@ -243,8 +245,8 @@ def test_suggested_response_revision_returns_to_review_without_save_consent():
     assert "saved locally in your VS Code workspace" in decision
     for owner in ("create", "update"):
         guidance = _read(f"src/skills/topics/{owner}/SKILL.md")
-        assert "I want to update the response" in guidance
-        assert "normal-chat revision continuation before saving changed wording" in guidance
+        assert "../authoring-experience.md#topic-save-decision" in guidance
+        assert "Revisions return to a fresh preview" in guidance
     push = " ".join(_read(".github/prompts/push.prompt.md").split())
     assert "unaccepted or acceptance-unknown response wording before any batch Push approval" in push
     assert "**I want to update the response** before Keep pending" in push
@@ -254,7 +256,7 @@ def test_suggested_response_revision_returns_to_review_without_save_consent():
 
 
 def test_debugging_preserves_wording_without_claiming_verbatim_runtime_delivery():
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/testing-experience.md")
     goal = contract.split("### Scoped runtime correctness goal\n", 1)[1].split(
         "### Topic debugging outcome:", 1
     )[0]
@@ -276,6 +278,7 @@ def test_eval_driven_aliases_are_thin_and_scenario_lifecycle_is_retired():
 
     assert "provisional compatibility alias" in create
     assert "provisional compatibility alias" in update
+    assert "Reassess this alias" not in create + update
     assert "src/skills/topics/create/SKILL.md" in create
     assert "src/skills/topics/update/SKILL.md" in update
     assert "eval_scenario.py" not in create + update
@@ -335,22 +338,57 @@ def test_testing_handoff_checks_runtime_availability_not_legacy_skill_presence()
 
 
 def test_authoring_and_push_entry_points_consume_the_shared_experience():
-    for path in (
-        ".github/prompts/create.prompt.md",
-        ".github/prompts/update.prompt.md",
-        ".github/prompts/push.prompt.md",
-        ".github/prompts/test.prompt.md",
-        ".github/copilot-instructions.md",
-    ):
-        assert "src/skills/topics/experience-contract.md" in _read(path)
-    for owner in ("create", "update", "test"):
-        assert "../experience-contract.md" in _read(
-            f"src/skills/topics/{owner}/SKILL.md"
-        )
+    for owner, references in {
+        "create": ("authoring", "push", "testing"),
+        "update": ("authoring", "push", "testing"),
+        "delete": ("deletion", "push"),
+        "test": ("testing",),
+    }.items():
+        guidance = _read(f"src/skills/topics/{owner}/SKILL.md")
+        assert "../experience-contract.md" in guidance
+        for reference in references:
+            assert f"../{reference}-experience.md" in guidance
+    push = _read(".github/prompts/push.prompt.md")
+    for reference in ("experience-contract", "authoring-experience", "deletion-experience",
+                      "push-experience", "testing-experience"):
+        assert f"src/skills/topics/{reference}.md" in push
+    assert "src/skills/topics/testing-experience.md" in _read(".github/prompts/test.prompt.md")
+    assert "src/skills/topics/experience-contract.md" in _read(".github/copilot-instructions.md")
+
+
+def test_focused_experience_and_review_links_resolve():
+    topics = SOLUTION / "src" / "skills" / "topics"
+    documents = [topics / "experience-contract.md", *topics.glob("*-experience.md")]
+    documents += [topics / owner / "SKILL.md" for owner in ("create", "update", "delete", "test", "review")]
+    for document in documents:
+        text = document.read_text(encoding="utf-8")
+        for destination in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
+            if "://" in destination or destination.startswith("{"):
+                continue
+            path, _, anchor = destination.partition("#")
+            target = document.parent / path if path else document
+            assert target.is_file(), (document, destination)
+            if anchor:
+                headings = re.findall(r"^#{1,6} (.+)$", target.read_text(encoding="utf-8"), re.MULTILINE)
+                anchors = {
+                    re.sub(r"[^\w -]", "", heading.lower()).replace(" ", "-")
+                    for heading in headings
+                }
+                assert anchor in anchors, (document, destination)
 
 
 def test_shared_experience_preserves_approved_copy_and_template_boundary():
-    contract = _read("src/skills/topics/experience-contract.md")
+    foundation = _read("src/skills/topics/experience-contract.md")
+    assert "../../reference/ui-formatting-guidelines.md#authoring-pattern" in foundation
+    assert "These baselines govern coverage; the template's fixed copy remains verbatim." in foundation
+    assert "Place any additional relevant context separately from the literal block" not in foundation
+    contract = "\n".join(
+        _read(f"src/skills/topics/{reference}.md")
+        for reference in (
+            "experience-contract", "authoring-experience", "deletion-experience",
+            "push-experience", "testing-experience",
+        )
+    )
     for literal in (
         "> **Push topic to agent** / **Keep as draft**",
         "**Topic pushed to agent.**",
@@ -380,9 +418,8 @@ def test_shared_experience_preserves_approved_copy_and_template_boundary():
             assert literal in contract
     quoted = "\n".join(line for line in contract.splitlines() if line.startswith(">"))
     for instruction in (
-        "Keep instructions, variable definitions",
-        "Render the literal wording and paragraph structure",
-        "Place any additional relevant context separately from the literal block",
+        "Read and apply [Authoring pattern]",
+        "These baselines govern coverage",
         "Use the freshly read saved state",
         "Describe behavior and its limits rather than attempts or iterations",
         "not whatever reply happens to be saved",
@@ -396,7 +433,7 @@ def test_shared_experience_preserves_approved_copy_and_template_boundary():
 
 def test_push_uses_one_inventory_scoped_consent_and_composed_results():
     push = " ".join(_read(".github/prompts/push.prompt.md").split())
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/push-experience.md")
     assert "initially none" in push
     assert "Empty selection never means all changes" in push
     assert "Do not ask for independent owner approval again" in push
@@ -422,7 +459,7 @@ def test_push_uses_one_inventory_scoped_consent_and_composed_results():
 
 
 def test_already_satisfied_topic_outcome_does_not_claim_a_new_push():
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/authoring-experience.md")
     update = _read("src/skills/topics/update/SKILL.md")
     assert "**Topic already up to date. No push needed.**" in contract
     assert "`writeAttempted: false`" in contract
@@ -440,19 +477,20 @@ def test_push_owners_share_batch_telemetry_without_changing_other_evaluation_act
         assert "**Push telemetry**" in owner
         assert "Reuse an enclosing approved batch's lifecycle without emitting again" in owner
     evaluations = _read("src/skills/evaluations/deployment-flow.md")
-    assert "../topics/experience-contract.md" in evaluations
+    assert "../topics/push-experience.md#push-telemetry" in evaluations
     assert "Reuse an enclosing approved Push batch's lifecycle without emitting again" in evaluations
     assert "Run, Request Review and reviewer completion do not acquire a Push lifecycle" in evaluations
-    contract = _read("src/skills/topics/experience-contract.md")
-    assert "otherwise own the standalone instruction-save batch" in contract
-    assert "Separate later approvals start separate batches" in contract
-    assert "recovery of the same approved operation does not" in contract
+    authoring = _read("src/skills/topics/authoring-experience.md")
+    assert "otherwise own the standalone instruction-save batch" in authoring
+    push_experience = _read("src/skills/topics/push-experience.md")
+    assert "Separate later approvals start separate batches" in push_experience
+    assert "recovery of the same approved operation does not" in push_experience
 
 
 def test_push_telemetry_keeps_legacy_results_separate_from_save_evidence():
-    telemetry = _read("src/skills/topics/experience-contract.md").split(
+    telemetry = _read("src/skills/topics/push-experience.md").split(
         "## Push telemetry\n", 1,
-    )[1].split("## Topic testing continuation\n", 1)[0]
+    )[1]
     normalized = " ".join(telemetry.split())
     assert "cancellation before execution emits no Push events" in telemetry
     assert "Do not add an initial `push` usage call" in telemetry
@@ -482,9 +520,9 @@ def test_push_telemetry_keeps_legacy_results_separate_from_save_evidence():
 
 
 def test_push_telemetry_uses_known_environment_metadata_without_lookup():
-    telemetry = _read("src/skills/topics/experience-contract.md").split(
+    telemetry = _read("src/skills/topics/push-experience.md").split(
         "## Push telemetry\n", 1,
-    )[1].split("## Topic testing continuation\n", 1)[0]
+    )[1]
     assert "only for a result that emits `agent-deploy`" in telemetry
     assert "not the agent's Dev/Prod realm" in telemetry
     assert "Honor `ESS_ADK_DEPLOY_TARGET` only when it is `sandbox` or `production`" in telemetry
@@ -497,7 +535,7 @@ def test_push_telemetry_uses_known_environment_metadata_without_lookup():
 
 
 def test_advisories_have_structured_issue_effect_and_own_action_line():
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/authoring-experience.md")
     advisory = (
         "> - {Advisory issue}. {Practical effect}.\n>\n"
         ">   **Suggested action:** {Concrete next action}."
@@ -512,9 +550,9 @@ def test_advisories_have_structured_issue_effect_and_own_action_line():
 
 
 def test_initial_routing_conflict_decision_precedes_push_and_preserves_exact_scope():
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/authoring-experience.md")
     initial = contract.split("### Initial routing-conflict decision\n", 1)[1].split(
-        "### Authorization and recovery\n", 1
+        "### Topic outcomes\n", 1
     )[0]
     assert (
         "> **Resolve the routing conflict in the Agent Instructions** / "
@@ -532,7 +570,7 @@ def test_initial_routing_conflict_decision_precedes_push_and_preserves_exact_sco
 
 
 def test_new_conflict_after_push_combines_state_aware_testing_without_instruction_consent():
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/authoring-experience.md")
     follow_up = contract.split(
         "### Combined routing-conflict and testing follow-up\n", 1
     )[1].split("### Targeted instruction-change preview and approval\n", 1)[0]
@@ -561,7 +599,7 @@ def test_new_conflict_after_push_combines_state_aware_testing_without_instructio
 
 
 def test_instruction_correction_has_separate_preview_approval_and_truthful_outcomes():
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/authoring-experience.md")
     preview = contract.split(
         "### Targeted instruction-change preview and approval\n", 1
     )[1].split("### Instruction-push outcomes and testing\n", 1)[0]
@@ -578,7 +616,7 @@ def test_instruction_correction_has_separate_preview_approval_and_truthful_outco
 
 
 def test_draft_and_partial_instruction_results_do_not_assume_a_topic_push():
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/authoring-experience.md")
     preview = contract.split(
         "### Targeted instruction-change preview and approval\n", 1
     )[1].split("### Instruction-push outcomes and testing\n", 1)[0]
@@ -608,26 +646,29 @@ def test_draft_and_partial_instruction_results_do_not_assume_a_topic_push():
 def test_topic_and_push_handoffs_honor_initial_decisions_and_limit_fallbacks():
     for owner in ("create", "update"):
         guidance = _read(f"src/skills/topics/{owner}/SKILL.md")
-        assert "initial routing-conflict decision" in guidance
-        assert "Resolve the routing conflict in the Agent Instructions / Push topic anyway / Keep as draft" in guidance
-        assert "newly discovered or materially changed conflict" in guidance
-        assert "does not itself authorize testing" in guidance
+        assert "../authoring-experience.md#initial-routing-conflict-decision" in guidance
+        assert "../testing-experience.md#topic-testing-continuation" in guidance
+        assert "existing authorization and declined corrections" in guidance
     for entry in ("create", "update", "push"):
         prompt = " ".join(_read(f".github/prompts/{entry}.prompt.md").split())
-        assert "initial routing-conflict decision" in prompt
-        assert "combined routing-conflict/testing decision" in prompt
-        assert "newly discovered or materially changed conflict" in prompt
-    contract = _read("src/skills/topics/experience-contract.md")
-    composed = contract.split("### Composed Push report:", 1)[1].split(
-        "## Topic testing continuation", 1
+        assert "declined corrections" in prompt
+        assert "newly discovered or materially changed conflict" not in prompt
+    push = _read("src/skills/topics/push-experience.md")
+    composed = push.split("### Composed Push report:", 1)[1].split(
+        "## Push telemetry", 1
     )[0]
-    assert "honor the initial routing-conflict decision" in composed
-    assert "Only for a newly discovered or materially changed conflict" in composed
-    assert "Do not offer runnable testing of topic changes left local" in composed
+    assert "testing-experience.md#topic-testing-continuation" in composed
+    testing = _read("src/skills/topics/testing-experience.md")
+    offers = testing.split("### Testing offers\n", 1)[1].split("### Browser readiness", 1)[0]
+    assert "honor the initial routing-conflict decision" in offers
+    assert "only for a newly discovered or materially changed conflict" in offers
+    assert "The topic-only Push did not authorize testing." in offers
+    assert "Do not offer runnable testing of topic changes left local" in offers
+    assert "do not repeat the ordinary testing offer or silently fix that conflict" in offers
 
 
 def test_readiness_message_has_maker_actions_and_a_separate_readiness_control():
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/testing-experience.md")
     assert (
         "> **Test browser readiness**\n>\n"
         "> **Topic:** {Topic title}\n>\n"
@@ -653,11 +694,11 @@ def test_readiness_message_has_maker_actions_and_a_separate_readiness_control():
 
 
 def test_testing_reports_and_missing_permissions_reuse_scoped_contracts():
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/testing-experience.md")
     instructions = " ".join(_read(".github/copilot-instructions.md").split())
     assert (
         "for existing topic conversation results, read "
-        "`src/skills/topics/experience-contract.md` and use "
+        "`src/skills/topics/testing-experience.md` and use "
         "`{topic_test_results}` with saved observations."
     ) in instructions
     assert "retrieving topic results does not start new testing or authorize changes" in instructions
@@ -677,7 +718,7 @@ def test_testing_reports_and_missing_permissions_reuse_scoped_contracts():
 
 
 def test_debugging_outcome_has_goal_and_only_needed_recommendation_without_loop_ledger():
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/testing-experience.md")
     report = contract.split("### Topic debugging outcome: `{topic_test_results}`", 1)[1].split(
         "### Testing offers", 1
     )[0]
@@ -702,7 +743,7 @@ def test_debugging_outcome_has_goal_and_only_needed_recommendation_without_loop_
 
 
 def test_scoped_runtime_goal_is_advisory_and_keeps_fixable_work_in_scope():
-    contract = _read("src/skills/topics/experience-contract.md")
+    contract = _read("src/skills/topics/testing-experience.md")
     prompt = _read(".github/prompts/test.prompt.md")
     assert "scoped runtime correctness goal" in prompt
     assert "offer manual testing guidance" in prompt
@@ -732,6 +773,6 @@ def test_authoring_carries_context_and_honors_scoped_debugging():
     )
     assert (
         "An already-requested test does not waive missing activation permission"
-        in contract
+        in _read("src/skills/topics/testing-experience.md")
     )
-    assert "Honor explicit no-activation requests" in contract
+    assert "Honor explicit no-activation requests" in _read("src/skills/topics/testing-experience.md")

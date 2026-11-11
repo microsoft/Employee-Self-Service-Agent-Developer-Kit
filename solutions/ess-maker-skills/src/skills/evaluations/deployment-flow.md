@@ -169,7 +169,7 @@ Ordinary explicit push must never perform this marker step.
 
 ## Promotion, scoped deployment, and verification
 
-For an explicit evaluation Push, read **Push telemetry** in [the shared experience contract](../topics/experience-contract.md). Reuse an enclosing approved Push batch's lifecycle without emitting again; otherwise own the standalone approved evaluation batch. Start immediately before `evaluation_deployment.py deploy --action push` and apply the shared terminal mapping after verification and local completion. Run, Request Review and reviewer completion do not acquire a Push lifecycle from this instruction, even when their helper action is `push`.
+For an explicit evaluation Push, read **Push telemetry** in [Push experience](../topics/push-experience.md#push-telemetry). Reuse an enclosing approved Push batch's lifecycle without emitting again; otherwise own the standalone approved evaluation batch. Start immediately before `evaluation_deployment.py deploy --action push` and apply the shared terminal mapping after verification and local completion. Run, Request Review and reviewer completion do not acquire a Push lifecycle from this instruction, even when their helper action is `push`.
 
 The helper owns the following sequence. These underlying commands explain
 scope and safeguards; do not run them again outside the helper or fall back to
