@@ -64,8 +64,8 @@ def test_readme_documents_da_scope_and_target_deployment() -> None:
     assert "Test and Production verify the promoted content without changing it" in workday
     assert "Two supported install paths" not in workday
     assert "automatically creates" not in workday
-    assert "| `/connect` | Choose an available integration |" in readme
-    assert "| `/connect-workday` | Connect the ESS HR agent to Workday |" in readme
+    assert "| `/connect` | Choose an available integration |" in normalized
+    assert "| `/connect-workday` | Connect the ESS HR agent to Workday |" in normalized
 
 
 def test_connect_workday_bypasses_runtime_readiness_gate() -> None:

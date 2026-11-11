@@ -238,7 +238,7 @@ def test_suggested_response_revision_returns_to_review_without_save_consent():
         "> What would you like to change? Describe the edits or paste the response you want."
     ) in decision
     assert "return to the applicable decision control before any save" in decision
-    assert decision.index("Obtain a fresh native preview") < decision.index(
+    assert decision.index("Obtain a fresh save preview") < decision.index(
         "Then show the revised summary and wording"
     )
     assert "Keep as draft retains the suggestion locally without accepting it." in decision
@@ -704,7 +704,7 @@ def test_testing_reports_and_missing_permissions_reuse_scoped_contracts():
     assert "retrieving topic results does not start new testing or authorize changes" in instructions
     assert "### Topic debugging outcome: `{topic_test_results}`" in contract
     assert "> **Evidence:** {Available evidence links}" in contract
-    assert "including `evidenceDirectory` for native topic tests" in contract
+    assert "including `evidenceDirectory` for topic tests" in contract
     assert "A missing screenshot does not make a saved result file unavailable." in contract
     assert "For pause/stop, keep the fixed acknowledgement separate" in contract
     assert "unfinished or unobserved behavior and material uncertainty" in contract

@@ -166,7 +166,7 @@ I want to update the response does not accept the suggestion or authorize a remo
 
 > What would you like to change? Describe the edits or paste the response you want.
 
-Apply the requested revision to the local draft, preserving supplied replacement text. Obtain a fresh native preview and reassess any affected instruction alignment. Then show the revised summary and wording and return to the applicable decision control before any save. When the maker describes edits rather than supplies replacement text, label newly generated wording Suggested response until accepted.
+Apply the requested revision to the local draft, preserving supplied replacement text. Obtain a fresh save preview and reassess any affected instruction alignment. Then show the revised summary and wording and return to the applicable decision control before any save. When the maker describes edits rather than supplies replacement text, label newly generated wording Suggested response until accepted.
 
 Keep as draft retains the suggestion locally without accepting it. Use the truthful draft-only outcome, with a trailer that explicitly identifies the VS Code workspace. For an unaccepted suggestion, use:
 
@@ -235,7 +235,7 @@ For a newly discovered or materially changed conflict after a confirmed topic pu
 >
 >   **Suggested action:** {Concrete next action}.
 
-For a verified no-write result or a confirmed save with a local issue, retain the corresponding truthful `{topic_outcome_heads}` head and factual trailer rather than claiming a new push. `{Verified topic state}` comes from observed native state, not the save itself.
+For a verified no-write result or a confirmed save with a local issue, retain the corresponding truthful `{topic_outcome_heads}` head and factual trailer rather than claiming a new push. `{Verified topic state}` comes from observed remote state, not the save itself.
 
 Follow with one combined decision, not a routing-resolution offer followed by another testing offer. Check the installed testing capability before offering a runnable test; report an actual capability gap rather than advertising unavailable testing. Without a routing conflict, use the ordinary state-aware testing offer.
 
@@ -263,7 +263,7 @@ Resolve unverified topic state or report its blocker rather than guessing which 
 
 #### Prepare the correction
 
-Carry forward the selected agent, topic, identified conflict and actual topic-save state. Use current native instruction evidence to prepare the smallest targeted correction through the normal instruction owner.
+Carry forward the selected agent, topic, identified conflict and actual topic-save state. Use current saved instruction evidence to prepare the smallest targeted correction through the normal instruction owner.
 
 Preserve unrelated live instructions and pending local edits. Isolate the correction without losing other drafts or including them in the proposed push.
 

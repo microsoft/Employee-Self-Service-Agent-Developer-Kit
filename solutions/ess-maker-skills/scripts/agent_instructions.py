@@ -135,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--kit-root", type=Path, default=Path.cwd())
     parser.add_argument("--account")
     parser.add_argument("--draft", type=Path, help="Desired agent.mcs.yml draft.")
-    parser.add_argument("--expected", type=Path, help="Fresh native read snapshot.")
+    parser.add_argument("--expected", type=Path, help="Fresh AgentBuilder read snapshot.")
     parser.add_argument("--output", type=Path, help="Reusable JSON result path.")
     parser.add_argument("--yaml-output", type=Path, help="Optional reusable read projection.")
     parser.add_argument("--yes", action="store_true", help="Apply the separately approved save.")
@@ -201,9 +201,9 @@ def main(argv: list[str] | None = None) -> int:
         for key in ("id", "schemaName", "parentBotId")
     }
     if current_identity != expected_identity:
-        raise ValueError("The native GPT component identity changed after the read.")
+        raise ValueError("The GPT component identity changed after the read.")
     if current["component"]["metadata"]["instructions"] != expected_instructions:
-        raise ValueError("Native instructions changed after the expected read.")
+        raise ValueError("Saved instructions changed after the expected read.")
 
     result.update(
         {

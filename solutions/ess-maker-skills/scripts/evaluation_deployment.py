@@ -428,7 +428,7 @@ def deploy_evaluation_set(
             exc.add_note(f"Deployment lock cleanup also failed: {cleanup_exc}")
         if remote_result is not None and isinstance(exc, Exception):
             raise ComponentEditError(
-                "Verified native deployment was followed by an unexpected local failure.",
+                "Verified AgentBuilder deployment was followed by an unexpected local failure.",
                 {"remoteResult": remote_result, "localCompletion": False},
             ) from exc
         raise

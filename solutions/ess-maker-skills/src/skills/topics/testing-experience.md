@@ -62,7 +62,7 @@ Render the selected block using its quoted wording, emphasis and paragraph break
 
 > **Evidence:** {Available evidence links}
 
-`{Available evidence links}` contains descriptive Markdown links to the selected run's existing result/report files and other relevant artifacts. Resolve paths from the operations' returned evidence locations and retained run context, including `evidenceDirectory` for native topic tests. Omit unavailable artifacts, and omit the entire Evidence line only when no relevant evidence is available. A missing screenshot does not make a saved result file unavailable.
+`{Available evidence links}` contains descriptive Markdown links to the selected run's existing result/report files and other relevant artifacts. Resolve paths from the operations' returned evidence locations and retained run context, including `evidenceDirectory` for topic tests. Omit unavailable artifacts, and omit the entire Evidence line only when no relevant evidence is available. A missing screenshot does not make a saved result file unavailable.
 
 Preserve material evidence limitations without adding a mandatory test ledger, regression matrix or grading claim. For pause/stop, keep the fixed acknowledgement separate and report any completed work using the appropriate outcome block.
 

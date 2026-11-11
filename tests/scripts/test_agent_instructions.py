@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Native instruction YAML and concurrency contracts."""
+"""AgentBuilder instruction YAML and concurrency contracts."""
 
 from __future__ import annotations
 

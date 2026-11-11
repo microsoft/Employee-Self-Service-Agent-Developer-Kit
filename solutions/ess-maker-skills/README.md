@@ -117,17 +117,17 @@ review/connection prerequisites. A separate push command is not required;
 explicit evaluation push remains available outside this menu. Successful run
 initiation includes the current run's Copilot Studio link.
 
-These flows use the existing push APIs for evaluations. New or changed native MinimalBot
+These flows use the existing AgentBuilder push APIs for evaluations. New or changed
 YAML uploads a **new copy with a new deployed ID**, retaining the old remote copy;
 unchanged YAML, including local review-only changes, reuses its verified copy. The preview explains
-this before consent. Removing cases from a new native copy does not delete
+this before consent. Removing cases from a new copy does not delete
 them from the old remote set.
 
-Native push uploads YAML only: review status is retained locally but is **not
+Evaluation push uploads YAML only: review status is retained locally but is **not
 published as shared review metadata** or copied into the deployed baseline.
 Request Review and reviewer completion
 still perform the existing push in the same flow and report this limitation;
-they do not claim another user can discover the local review marker. New native
+they do not claim another user can discover the local review marker. New
 in-place-update APIs and cross-user-review parity are not part of this change.
 Files are retained when preparation or deployment cannot complete. Run
 `/evaluate` to create or manage sets and `/run` to prepare a selected set for
@@ -138,12 +138,12 @@ execution or inspect its history/results.
 Draft locally, review the exact requested change, and approve its supported save:
 
 ```text
-Local draft -> Review and preview -> Scoped approval -> Native save and readback
+Local draft -> Review and preview -> Scoped approval -> AgentBuilder save and readback
 ```
 
 General `/push` first shows local pending changes, then delegates selected topics, separately approved instructions, and evaluation sets to their owners. Each owner acknowledges only its submitted content; later edits and unsupported changes remain pending. A local baseline is not a remote mirror.
 
-Explicit evaluation push retains its selected-set flow and native new-copy behavior. Topic deletion uses its owning operation with an impact preview and explicit destructive approval, including when selected in a Push batch. Workflow and template-config deployment, activation, and publication are not part of general Push. Publication remains separately approved.
+Explicit evaluation push retains its selected-set flow and AgentBuilder new-copy behavior. Topic deletion uses its owning operation with an impact preview and explicit destructive approval, including when selected in a Push batch. Workflow and template-config deployment, activation, and publication are not part of general Push. Publication remains separately approved.
 
 ### ✈️ FlightCheck — Agent Setup Diagnostics
 

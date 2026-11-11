@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Inspect pending workspace changes and dispatch explicit native operations."""
+"""Inspect pending workspace changes and dispatch explicit AgentBuilder operations."""
 
 import argparse
 import json

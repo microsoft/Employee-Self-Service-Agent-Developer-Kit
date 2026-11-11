@@ -226,17 +226,17 @@ def _prepare_browser(
 def _components(client: AgentBuilderClient, target: dict[str, Any]) -> dict[str, dict[str, Any]]:
     changes = client.fetch_components(target["agent"]["id"]).get("botComponentChanges")
     if not isinstance(changes, list):
-        raise ValueError("Native read did not return component changes.")
+        raise ValueError("AgentBuilder read did not return component changes.")
     result = {}
     for change in changes:
         component = change.get("component") if isinstance(change, dict) else None
         if not isinstance(component, dict):
-            raise ValueError("Native read returned an unsupported component change.")
+            raise ValueError("AgentBuilder read returned an unsupported component change.")
         if not isinstance(component.get("id"), str):
-            raise ValueError("Native read returned a component without a supported identity.")
+            raise ValueError("AgentBuilder read returned a component without a supported identity.")
         component_id = str(uuid.UUID(component["id"]))
         if component_id in result:
-            raise ValueError("Native read returned duplicate component identities.")
+            raise ValueError("AgentBuilder read returned duplicate component identities.")
         result[component_id] = component
     return result
 
@@ -245,10 +245,10 @@ def literal_response(component: dict[str, Any]) -> tuple[str, list[str]]:
     """Accept only a literal SendActivity followed by EndDialog."""
     dialog = component.get("dialog") or {}
     if not isinstance(dialog, dict):
-        raise ValueError("Unsupported native dialog shape.")
+        raise ValueError("Unsupported Object Model dialog shape.")
     begin = dialog.get("beginDialog") or {}
     if not isinstance(begin, dict):
-        raise ValueError("Unsupported native trigger shape.")
+        raise ValueError("Unsupported Object Model trigger shape.")
     actions = begin.get("actions") or []
     if (
         component.get("$kind") != "DialogComponent"
@@ -263,12 +263,12 @@ def literal_response(component: dict[str, Any]) -> tuple[str, list[str]]:
         or set(actions[1]) - {"$kind", "id"}
     ):
         raise ValueError(
-            "Unsupported topic: only a native response-only dialog is supported. "
+            "Unsupported topic: only a response-only dialog is supported. "
             "No browser message was sent."
         )
     intent = begin.get("intent") or {}
     if not isinstance(intent, dict):
-        raise ValueError("Unsupported native intent shape.")
+        raise ValueError("Unsupported Object Model intent shape.")
     triggers = intent.get("triggerQueries")
     response = _expanded_literal_activity(actions[0].get("activity"))
     if (
@@ -287,7 +287,7 @@ def literal_response(component: dict[str, Any]) -> tuple[str, list[str]]:
 def _inspection(component: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
     dialog = component.get("dialog")
     if component.get("$kind") != "DialogComponent" or not isinstance(dialog, dict):
-        raise ValueError("The selected component is not a saved native dialog topic.")
+        raise ValueError("The selected component is not a saved dialog topic.")
     begin = dialog.get("beginDialog")
     intent = begin.get("intent") if isinstance(begin, dict) else None
     triggers = intent.get("triggerQueries") if isinstance(intent, dict) else None
@@ -312,9 +312,9 @@ def _inspection(component: dict[str, Any], target: dict[str, Any]) -> dict[str, 
 def _load_inspection(root: Path, path: Path) -> dict[str, Any]:
     inspection = _read(_evidence_path(root, path))
     if inspection.get("schemaVersion") != 1 or inspection.get("operation") != "inspect":
-        raise ValueError("Use an inspection produced by this native-topic test tool.")
+        raise ValueError("Use an inspection produced by this topic test tool.")
     if not isinstance(inspection.get("component"), dict):
-        raise ValueError("The inspection contains no native topic component.")
+        raise ValueError("The inspection contains no saved topic component.")
     return inspection
 
 
@@ -322,13 +322,13 @@ def _selected(
     inspection: dict[str, Any], target: dict[str, Any], components: dict[str, dict[str, Any]],
 ) -> tuple[str, dict[str, Any]]:
     if inspection.get("target") != _identity(target):
-        raise ValueError("The inspection or original run belongs to another native target.")
+        raise ValueError("The inspection or original run belongs to another agent target.")
     component_id = str(uuid.UUID(inspection["component"]["id"]))
     component = components.get(component_id)
     if component is None or _topic_state(component) != _topic_state(inspection["component"]):
-        raise ValueError("The selected native topic changed. Inspect it and approve its content again.")
+        raise ValueError("The selected saved topic changed. Inspect it and approve its content again.")
     if component.get("$kind") != "DialogComponent" or not isinstance(component.get("dialog"), dict):
-        raise ValueError("The selected component is not a saved native dialog topic.")
+        raise ValueError("The selected component is not a saved dialog topic.")
     return component_id, component
 
 
@@ -458,7 +458,7 @@ def _exercise(
     _write(output / "native-before.json", baseline)
     _write(output / "case.json", {
         "testCaseId": "native-fixed-response",
-        "description": "The selected native fixed-response topic returns its approved saved response.",
+        "description": "The selected fixed-response topic returns its approved saved response.",
         "requiredOutcomes": [{
             "id": "saved-response",
             "description": "The approved saved trigger returns the approved saved literal response.",
@@ -638,7 +638,7 @@ def _activate(
     before = _components(client, target)
     component_id, component = _selected(inspection, target, before)
     if not isinstance(component.get("schemaName"), str) or not component["schemaName"].strip():
-        raise ValueError("Native activation requires the inspected topic's schema name.")
+        raise ValueError("Topic activation requires the inspected topic's schema name.")
     output = _new_output(root, args.output, "activate")
     baseline = _snapshot(before, component_id)
     _write(output / "inspection.json", inspection)
@@ -662,7 +662,7 @@ def _activate(
             evidence_errors.append({"file": name, "error": _error_facts(exc)})
 
     if args.yes:
-        # Record intent before the single native operation. A missing result is
+        # Record intent before the single activation operation. A missing result is
         # never permission to repeat a potentially committed write.
         _write(output / "execution.json", {
             "schemaVersion": 1, "operation": "activate",
@@ -689,7 +689,7 @@ def _activate(
             })
             errors["activationError"] = _error_facts(exc)
         except (MinimalBotEvaluationError, requests.RequestException, ValueError, OSError) as exc:
-            # The native adapter wraps every attempted PUT in ComponentEditError;
+            # The AgentBuilder adapter wraps every attempted PUT in ComponentEditError;
             # these failures precede that boundary.
             result["outcome"] = "blocked"
             errors["activationError"] = _error_facts(exc)
@@ -703,7 +703,7 @@ def _activate(
             })
             record("native-after.json", after)
             if not result["stateMatchesRequest"]:
-                raise ValueError("Native readback differs from the inspected topic with Active state.")
+                raise ValueError("AgentBuilder readback differs from the inspected topic with Active state.")
         except (AgentBuilderError, requests.RequestException, ValueError) as exc:
             errors["nativeReadbackError"] = _error_facts(exc)
     result["activationOutcome"] = result["outcome"]
@@ -802,7 +802,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 component = components.get(str(uuid.UUID(args.component_id)))
                 if component is None:
-                    raise ValueError("The selected native topic was not found.")
+                    raise ValueError("The selected saved topic was not found.")
                 inspection = _inspection(component, target)
                 output = _new_output(root, args.output, "inspect")
                 _write(output / "inspection.json", inspection)

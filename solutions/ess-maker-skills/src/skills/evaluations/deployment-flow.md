@@ -34,7 +34,7 @@ preview again with the approved flags before deploying.
 3. Reconcile the selected set's `localStatus`, `deployedStatus`, and `nextAction`
    using `evaluation_review.py --list-all`. Ordinary Run never creates a review
    request or marks review complete. Pending-review gates remain effective.
-4. Use the existing native evaluation APIs. Native MinimalBot uploads YAML through
+4. Use the existing AgentBuilder evaluation APIs. MinimalBot uploads YAML through
    `BotComponentInsert`: new or changed YAML creates a new deployed copy and
    leaves the old remote copy intact. Unchanged YAML, including local
    review-only changes, uses verified reuse. Do not require a new in-place update/delete API.
@@ -103,7 +103,7 @@ in normal chat, before a separate short decision control:
 defined above, using the actual selected-set context and fresh helper result.
 Preserve the required backend/environment/agent identities, source and
 destination folders, push requirement, all selected changes, local promotion
-and replacement effects, actual native copy/reuse behavior and literal
+and replacement effects, actual AgentBuilder copy/reuse behavior and literal
 `reviewWarning`. Retain material preservation facts and caveats, including
 authored thresholds, review status and known expectation mismatches when
 relevant. Do not infer deployment, shared review availability or execution
@@ -136,7 +136,7 @@ same command with action=`push`. Keep `--replace` consistent with approved local
 replacement. A stale-token error
 means preview and confirm again, not bypassing the check. `blocked`, `cancelled`,
 and `failed` are not successful deployment statuses.
-Native `--force-delete` remains rejected; case omissions in a native new copy use
+AgentBuilder `--force-delete` remains rejected; case omissions in a new copy use
 normal scoped confirmation without that flag.
 
 For **Run**, do not call `deploy` separately. Give the confirmed action=`run`
@@ -192,7 +192,7 @@ an unscoped `push.py` call if preparation or verification fails:
    python scripts/push.py --only "evaluations/{set}/*" --dry-run
    ```
 
-   Preserve native review sidecars locally without inventing a wire
+   Preserve review sidecars locally without inventing a wire
    field or requiring an API-parity implementation.
    Never use an unscoped push: unrelated pending topics, workflows, and sets
    must remain local.
@@ -209,7 +209,7 @@ an unscoped `push.py` call if preparation or verification fails:
    copy do not delete cases from the retained old remote set.
 
 6. Verify the deployed identity and complete selected YAML content before
-   reporting success or starting a run. Native local sidecars are not
+   reporting success or starting a run. Local sidecars are not
    remote-marker evidence. Use the
    returned new ID for a native new copy, not the retained old remote ID.
    An unchanged reuse and any pending insertion retry retain their verified or
@@ -220,7 +220,7 @@ an unscoped `push.py` call if preparation or verification fails:
    failure, cancellation, or failed verification never authorizes cleanup.
 
 Success is only `status=pushed` or `status=up_to_date`, with matching returned
-`sets[].sourceFolder`, `agentSetFolder`, and a verified `testSetId`. Native success reports
+`sets[].sourceFolder`, `agentSetFolder`, and a verified `testSetId`. AgentBuilder success reports
 `reviewMetadataPersisted=false` and `deployedReviewStatus=null`, even when local
 review is requested/completed. Report its `deploymentBehavior`, actual deployed
 ID, retained old copy when applicable, local review status, and `reviewWarning`.

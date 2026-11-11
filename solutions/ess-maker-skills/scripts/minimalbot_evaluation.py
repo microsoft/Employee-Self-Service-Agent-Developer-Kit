@@ -184,7 +184,7 @@ def _instruction_segments(component: dict[str, Any]) -> list[Any]:
         or not isinstance(instructions.get("segments"), list)
     ):
         raise MinimalBotEvaluationError(
-            "Instruction editing requires native GptComponent TemplateLine instructions."
+            "Instruction editing requires GptComponent TemplateLine instructions."
         )
     return instructions["segments"]
 
@@ -192,7 +192,7 @@ def _instruction_segments(component: dict[str, Any]) -> list[Any]:
 def build_agent_instruction_update(
     component: dict[str, Any], edits: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Replace unique literals in text segments without altering other native fields."""
+    """Replace unique literals in text segments without altering other component fields."""
     segments = _instruction_segments(component)
     if not isinstance(edits, list) or not edits:
         raise MinimalBotEvaluationError("Provide at least one explicit instruction text edit.")
@@ -1095,7 +1095,7 @@ class MinimalBotEvaluationClient:
             or not matches[0]["schemaName"].strip()
         ):
             raise MinimalBotEvaluationError(
-                "Native instruction read requires one identified GPT component "
+                "Instruction read requires one identified GPT component "
                 f"belonging to the selected agent; selectedAgentId={self.bot_id}; "
                 f"nativeAgentId={bot.get('cdsBotId') if isinstance(bot, dict) else None}; "
                 "gptCandidates=" + json.dumps([
@@ -1104,12 +1104,12 @@ class MinimalBotEvaluationClient:
                 ])
             )
         if not isinstance(payload.get("changeToken"), str) or not payload["changeToken"]:
-            raise MinimalBotEvaluationError("The native instruction read omitted the changeToken.")
+            raise MinimalBotEvaluationError("The instruction read omitted the changeToken.")
         _instruction_segments(matches[0])
         return components, matches[0]
 
     def read_agent_instructions(self) -> dict[str, Any]:
-        """Return the current native GPT component, not the extracted agent file."""
+        """Return the current saved GPT component, not the extracted agent file."""
         payload = self.read_components()
         components, component = self._instruction_components(payload)
         return {
@@ -1170,7 +1170,7 @@ class MinimalBotEvaluationClient:
             != expected_component["metadata"]["instructions"]
         ):
             raise MinimalBotEvaluationError(
-                "Native instructions changed since the expected snapshot. No write was sent."
+                "Saved instructions changed since the expected snapshot. No write was sent."
             )
         if desired_instructions is None:
             desired_instructions = build_agent_instruction_update(current, edits)[
@@ -1208,7 +1208,7 @@ class MinimalBotEvaluationClient:
             )
         except MinimalBotEvaluationError as exc:
             raise AgentInstructionEditError(
-                "Instruction write outcome is unknown. Read native state before "
+                "Instruction write outcome is unknown. Read remote state before "
                 "deciding what to do next", evidence,
             ) from exc
         evidence.update({
@@ -1219,7 +1219,7 @@ class MinimalBotEvaluationClient:
         if response.status_code != 200:
             raise AgentInstructionEditError(
                 "Instruction update returned an unsuccessful HTTP response. "
-                "Inspect native state before deciding what to do next", evidence,
+                "Inspect remote state before deciding what to do next", evidence,
             )
 
         try:
@@ -1236,7 +1236,7 @@ class MinimalBotEvaluationClient:
         except Exception as exc:
             raise AgentInstructionEditError(
                 "Instruction PUT returned HTTP 200, but saved-state verification failed. "
-                "Inspect native state; no rollback was attempted", evidence,
+                "Inspect remote state; no rollback was attempted", evidence,
             ) from exc
         return {
             "updatedComponents": 1, "verifiedComponents": 1, "component": saved,
@@ -1273,7 +1273,7 @@ class MinimalBotEvaluationClient:
         ):
             raise MinimalBotEvaluationError("The dialog does not belong to this agent.")
         if not before.get("changeToken"):
-            raise MinimalBotEvaluationError("The native read omitted the changeToken.")
+            raise MinimalBotEvaluationError("The component read omitted the changeToken.")
         payload = {
             "changeToken": before["changeToken"],
             "botComponentChanges": [
@@ -2047,7 +2047,7 @@ class MinimalBotEvaluationClient:
                     )
             if current != plan["files"]:
                 raise MinimalBotEvaluationError(
-                    "Source changed during native deployment; local synchronization "
+                    "Source changed during AgentBuilder deployment; local synchronization "
                     "was not recorded."
                 )
             self._commit_tracking(root, plan)
@@ -2063,7 +2063,7 @@ class MinimalBotEvaluationClient:
                 pending_path.unlink()
         except Exception as exc:
             raise ComponentEditError(
-                "Native deployment was verified, but local synchronization failed.",
+                "AgentBuilder deployment was verified, but local synchronization failed.",
                 {"remoteResult": result, "acknowledgementComplete": False},
             ) from exc
         return result

@@ -1,6 +1,6 @@
 # Create Topic
 
-Create one ordinary Copilot Studio topic in the selected editable Dev agent. The normal output is a `.mcs.yml` draft followed by an approved native save. Do not activate or publish as a save side effect.
+Create one ordinary Copilot Studio topic in the selected editable Dev agent. The normal output is a `.mcs.yml` draft followed by an approved AgentBuilder save. Do not activate or publish as a save side effect.
 
 Read the [shared foundation](../experience-contract.md) before interacting with the maker. Apply its Text-response authoring scope, authoring policy and authorization rules. Before drafting, read [Response wording and local drafts](../authoring-experience.md#response-wording-and-local-drafts). Load the other linked references at the steps that need them, not all upfront.
 
@@ -24,7 +24,7 @@ Run:
 python scripts\topic_authoring.py list --output ".local\topic-authoring\topic-list.json"
 ```
 
-Use the returned current native inventory with the local mapped topics. Apply the shared **Authoring policy for this release** to the proposed schema identity and display name before drafting and again before saving. Stop if the requested display name already exists. Warn about meaningful intent overlap under a different name.
+Use the returned current agent inventory with the local mapped topics. Apply the shared **Authoring policy for this release** to the proposed schema identity and display name before drafting and again before saving. Stop if the requested display name already exists. Warn about meaningful intent overlap under a different name.
 
 ## 2. Draft ordinary topic YAML
 
@@ -40,11 +40,11 @@ Create `{agent.folder}/topics/{ExactFileStem}.mcs.yml`. The filename stem become
 
 Use the existing Object Model-compatible YAML shape for the in-scope request. Review every response ending against the shared authoring boundary; do not use the optional exact-response helper as a universal admission validator. Preserve expressions and unknown supported fields from any selected pattern without importing prohibited behavior. Do not add authoring-origin tags or a mandatory preview artifact.
 
-Prepare the [Create summary](../authoring-experience.md#create-summary). Cover relevant triggering intent, response/grounding, collected inputs, returned values and employee-visible outputs, confirmation, fallback, error behavior and dependencies. Render the completed summary after the current instruction-alignment assessment and native preview, before the separate short decision control.
+Prepare the [Create summary](../authoring-experience.md#create-summary). Cover relevant triggering intent, response/grounding, collected inputs, returned values and employee-visible outputs, confirmation, fallback, error behavior and dependencies. Render the completed summary after the current instruction-alignment assessment and save preview, before the separate short decision control.
 
 ## 3. Assess agent-instruction alignment
 
-Read current native instructions:
+Read current saved instructions:
 
 ```powershell
 python scripts\agent_instructions.py read --output ".local\topic-authoring\instructions-before.json"
@@ -91,7 +91,7 @@ After topic approval, including valid unchanged batch/debugging consent:
 python scripts\topic_authoring.py create --draft "{agent.folder}\topics\{ExactFileStem}.mcs.yml" --display-name "{Display name}" --description "{Description}" --yes --output ".local\topic-authoring\topic-result.json"
 ```
 
-The adapter captures submitted YAML once, creates one inactive component, verifies native readback and diagnostics, registers the verified identity in `.component-map.json`, and acknowledges only the captured YAML in `.baseline`. A later disk edit remains pending.
+The adapter captures submitted YAML once, creates one inactive component, verifies AgentBuilder readback and diagnostics, registers the verified identity in `.component-map.json`, and acknowledges only the captured YAML in `.baseline`. A later disk edit remains pending.
 
 After the applicable instruction approval, including valid scoped batch/debugging consent:
 

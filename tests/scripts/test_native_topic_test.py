@@ -48,7 +48,7 @@ def no_operation_capability_events(monkeypatch):
 
 @pytest.fixture
 def component():
-    # Expanded native literal shape verified by the live Maker-topic inspection.
+    # Expanded Object Model literal shape verified by the live Maker-topic inspection.
     return {
         "$kind": "DialogComponent", "id": COMPONENT_ID, "version": 3,
         "state": "Active", "status": "Active",
@@ -560,7 +560,7 @@ def test_later_observation_keeps_original_snapshot_and_expectation(
 
 @pytest.fixture
 def ordinary_dialog(component):
-    # Existing expanded native Object Model fields; literal extraction cannot
+    # Existing expanded Object Model fields; literal extraction cannot
     # grade a topic that continues into another dialog.
     component["dialog"]["beginDialog"]["actions"].insert(
         0, {"$kind": "BeginDialog", "dialog": "another-topic"},
@@ -893,7 +893,7 @@ def test_capture_native_integrity_failure_preserves_non_graded_reply(
         reads += 1
         if reads > 1:
             if failure == "readback":
-                raise native.requests.ConnectionError("Native readback unavailable")
+                raise native.requests.ConnectionError("AgentBuilder readback unavailable")
             component["status"] = "Inactive"
         return fetch(agent_id)
 
@@ -917,7 +917,7 @@ def activation(exercise, component, monkeypatch):
     })
     args.inspection.write_text(json.dumps(native._inspection(component, TARGET)), encoding="utf-8")
     args.operation, args.yes = "activate", False
-    # Exercise the existing native components transport contract locally. Its
+    # Exercise the existing AgentBuilder components transport contract locally. Its
     # BotComponentUpdate, changeToken and state/status fields are sourced from
     # MinimalBotEvaluationClient.update_dialog_components, not a guessed API.
     runtime = MinimalBotEvaluationClient(
@@ -1038,13 +1038,13 @@ def test_activation_retains_uncertain_or_accepted_write_evidence_and_never_retri
                 try:
                     raise native.requests.ConnectionError("Connection lost after request")
                 except native.requests.ConnectionError as cause:
-                    raise MinimalBotEvaluationError("Native write transport failed") from cause
+                    raise MinimalBotEvaluationError("AgentBuilder write transport failed") from cause
             if failure == "conflict":
                 response = native.requests.Response()
                 response.status_code = 409
                 return response, {}
         elif failure == "readback" and attempts:
-            raise MinimalBotEvaluationError("Native verification read unavailable")
+            raise MinimalBotEvaluationError("AgentBuilder verification read unavailable")
         return request(method, *request_args, **kwargs)
 
     monkeypatch.setattr(runtime, "_request", failing_request)

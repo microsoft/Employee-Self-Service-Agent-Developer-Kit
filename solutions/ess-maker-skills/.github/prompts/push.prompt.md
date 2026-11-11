@@ -136,7 +136,7 @@ For mixed scope, apply that evaluation flow to the selected evaluation portion a
 
 Topic creation uses ordinary YAML and separate creation metadata. Existing topics use their mapped identities. Follow the normal topic owner's overlap and instruction-alignment assessment without repeating still-current warnings.
 
-For instructions, read current native instructions and preview only the
+For instructions, read current saved instructions and preview only the
 instruction-section change. Preserve unrelated draft fields. Ordinary
 authoring has separate approvals; the shared Push consent below covers an
 unchanged displayed batch without another owner approval.
@@ -150,7 +150,7 @@ approval again for that unchanged authorized scope. A general request to push,
 before these scoped choices, is not itself batch consent.
 
 A material change to the authorized scope, intent or consequences requires a
-revised summary and fresh approval. Keep native concurrency checks,
+revised summary and fresh approval. Keep concurrency checks,
 confirmation tokens, method admission and destructive/replacement approvals;
 scoped batch consent is not a bypass for these safeguards. Do not treat an
 advisory override as permission for unsupported operations or blind replay.

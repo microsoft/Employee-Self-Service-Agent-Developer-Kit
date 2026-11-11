@@ -403,8 +403,8 @@ def test_native_deployment_reuses_existing_insert_with_action_aware_consent():
         "old remote copy will be retained",
         "removed cases are absent only from the new copy, not deleted from the old set",
         "`reuse` means the helper will verify the existing mapped copy",
-        "case omissions in a native new copy",
-        "Native `--force-delete` remains rejected",
+        "case omissions in a new copy",
+        "AgentBuilder `--force-delete` remains rejected",
         "pending insertion retry retain their verified or confirmed planned IDs",
         "Do not convert that existing limitation into a failed push",
         "python scripts/analytics_pointer.py --post-deploy",
@@ -432,7 +432,7 @@ def test_review_outcomes_preserve_native_local_metadata_without_retired_deployme
         "Existing native Push uploads evaluation YAML only. review.json stays local "
         "and is not published as shared review state."
     ) in deployment
-    assert "Native success reports `reviewMetadataPersisted=false` and `deployedReviewStatus=null`" in deployment
+    assert "AgentBuilder success reports `reviewMetadataPersisted=false` and `deployedReviewStatus=null`" in deployment
     update = _normalized(_skill("update"))
     assert "After verified Dataverse success with `reviewMetadataPersisted=true`" in update
     assert "For native success with `reviewMetadataPersisted=false`, say instead" in update
@@ -462,7 +462,7 @@ def test_native_local_review_does_not_require_unpublished_baseline_state():
 
 def test_public_guidance_records_existing_api_scope_not_native_parity_blockers():
     readme = _normalized(_read("README.md"))
-    assert "These flows use the existing push APIs" in readme
+    assert "These flows use the existing AgentBuilder push APIs" in readme
     assert "new copy with a new deployed ID" in readme
     assert "not published as shared review metadata" in readme
     assert "same flow and report this limitation" in readme

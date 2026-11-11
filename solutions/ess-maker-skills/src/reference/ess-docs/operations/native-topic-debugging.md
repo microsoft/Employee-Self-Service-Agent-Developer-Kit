@@ -1,4 +1,4 @@
-# Debug native topic behavior
+# Debug topic behavior
 
 Use this procedure with the topic-testing owner, the applicable [bounded operations](native-topic-testing.md), the [shared foundation](../../../skills/topics/experience-contract.md) and [Testing experience](../../../skills/topics/testing-experience.md). The session selects probes, interprets evidence, chooses the fault surface and coordinates authorized corrections. Do not generate a second workflow engine or batch runner.
 
@@ -9,7 +9,7 @@ Use this procedure with the topic-testing owner, the applicable [bounded operati
 - [Check behavior against intent](#check-behavior-against-intent)
 - [Establish post-save conversation freshness](#establish-post-save-conversation-freshness)
 - [Localize a backend-backed mismatch](#localize-a-backend-backed-mismatch)
-- [Inspect native authoring validation](#inspect-native-authoring-validation)
+- [Inspect authoring validation](#inspect-authoring-validation)
 - [Observe internal state and narrow the boundary](#observe-internal-state-and-narrow-the-boundary)
 - [Correct, retest and clean up](#correct-retest-and-clean-up)
 
@@ -25,7 +25,7 @@ Describe the proposed testing scope in normal chat so the maker can adjust it. R
 
 ## Capture and confirm a real reply
 
-Prepare the browser and obtain readiness through Testing experience. Use a unique bounded `capture` for each approved turn. Read all bubbles, cards, timeout facts, turn identities and native readback.
+Prepare the browser and obtain readiness through Testing experience. Use a unique bounded `capture` for each approved turn. Read all bubbles, cards, timeout facts, turn identities and AgentBuilder readback.
 
 Use the returned `signal` as an advisory:
 
@@ -52,7 +52,7 @@ Rendered card text can omit dropdown choices and other hidden state. Do not infe
 
 ## Establish post-save conversation freshness
 
-After saving a correction or diagnostic, inspect the updated native component. A save/readback proves persistence, not execution of that version.
+After saving a correction or diagnostic, inspect the updated saved component. A save/readback proves persistence, not execution of that version.
 
 Before retesting an affected scenario after a save:
 
@@ -75,7 +75,7 @@ Replay any necessary lead-in steps and preserve context between the scenario's t
 
 The flag checks the prepared boundary before Send. A nonempty or unknown boundary blocks without resetting or falling back to the existing conversation. It does not create a conversation or prove server-side freshness. Retain the actual new-conversation evidence and compare the captured behavior with the saved change. Allow for synthesized wording; a normal answer or a shared message prefix alone does not establish the exact topic or version used.
 
-If a new conversation cannot be established or the diagnostic remains invisible, report that limitation. Do not claim freshness or a variable value merely because the flag or native inspection succeeded. Preserve the unresolved cause.
+If a new conversation cannot be established or the diagnostic remains invisible, report that limitation. Do not claim freshness or a variable value merely because the flag or component inspection succeeded. Preserve the unresolved cause.
 
 ## Localize a backend-backed mismatch
 
@@ -85,11 +85,11 @@ Follow [workflow run inspection](../../../skills/workflows/test/SKILL.md) and [c
 
 A latest run is not necessarily the run caused by this probe, especially under concurrency. Retain that uncertainty unless identity and timing establish the connection. Inspect the first relevant failed action, status code, containing scope and subsequent skipped or catch-handler actions. A successful error handler or catch-all response does not itself establish that the original operation succeeded.
 
-If evidence localizes a required correction to a flow, connector or template configuration, direct it to its supported external owner. Do not fix topic text to disguise an uncorrected backend failure. Reinspect and retest within the approved scope after an actual external correction. If evidence instead points to a topic calculation, binding or branch, investigate that native topic.
+If evidence localizes a required correction to a flow, connector or template configuration, direct it to its supported external owner. Do not fix topic text to disguise an uncorrected backend failure. Reinspect and retest within the approved scope after an actual external correction. If evidence instead points to a topic calculation, binding or branch, investigate that topic.
 
-## Inspect native authoring validation
+## Inspect authoring validation
 
-For an unexplained authoring error, inspect the ordinary topic create/update operation's retained service response and the selected component's nested diagnostics from fresh native readback. Use the ordinary topic read operation when current component evidence is needed; do not save unchanged content just to obtain diagnostics.
+For an unexplained authoring error, inspect the ordinary topic create/update operation's retained service response and the selected component's nested diagnostics from fresh AgentBuilder readback. Use the ordinary topic read operation when current component evidence is needed; do not save unchanged content just to obtain diagnostics.
 
 Retain the actual error code, message, object path and reference or component identity when supplied. Resolve component IDs through the selected workspace map and inspect the named expression, binding or card. Ordinary create/update verifies saved content and checks blocking diagnostics; keep the full returned evidence rather than treating HTTP acceptance, YAML conversion or the diagnostic summary alone as validation of intended behavior.
 

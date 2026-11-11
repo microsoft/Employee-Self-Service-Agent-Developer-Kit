@@ -1,4 +1,4 @@
-# Native topic browser testing
+# Topic browser testing
 
 Use the bounded operations below from the topic-testing skill. The session owns intended behavior, test selection, interpretation, fixes and retests. Read [Testing experience](../../../skills/topics/testing-experience.md) for the scoped runtime correctness goal, state-aware offers, normal-chat readiness/outcome and pause/stop copy. A one-turn capture does not limit the whole test to one message or one literal response.
 
@@ -73,7 +73,7 @@ python scripts\native_topic_test.py prepare-browser `
   --url "<trusted selected-agent Studio URL>"
 ```
 
-Resolve the full URL internally from the selected setup context and the exact supported host/path contract in `daga_chat_driver.validate_studio_url`. Bind it to the selected environment and agent, retaining `agentBackend=cosmos` when present. The operation validates it against the authenticated native target before launch. Browser connection facts are operation inputs/outputs; the maker's part is sign-in and Test-pane readiness.
+Resolve the full URL internally from the selected setup context and the exact supported host/path contract in `daga_chat_driver.validate_studio_url`. Bind it to the selected environment and agent, retaining `agentBackend=cosmos` when present. The operation validates it against the authenticated agent target before launch. Browser connection facts are operation inputs/outputs; the maker's part is sign-in and Test-pane readiness.
 
 Preparation creates a fresh temporary profile, opens the selected URL, requests an ephemeral numeric-loopback debug port and verifies that browser metadata matches its dedicated debug descriptor. It returns `pid`, `profile`, `cdp`, `url`, the target and browser metadata, with workspace-local launch/result evidence. `prepared` means browser/connection preparation, not sign-in, Test-pane readiness or a passing test. No conversation Send, activation or publication is performed.
 
@@ -135,7 +135,7 @@ python scripts/native_topic_test.py capture `
   --output ".local/topic-tests/<unique attempt>"
 ```
 
-Capture accepts an approved prompt rather than requiring a saved trigger. It records native state and the page/turn boundary before one Send, then returns correlated reply/card, partial/timeout, screenshot and native-readback facts. `graded: false` and `outcome: captured` mean capture completed, not correctness or backend-completion proof. The session evaluates the observed behavior and relevant effects against the intended scenario.
+Capture accepts an approved prompt rather than requiring a saved trigger. It records remote state and the page/turn boundary before one Send, then returns correlated reply/card, partial/timeout, screenshot and AgentBuilder readback facts. `graded: false` and `outcome: captured` mean capture completed, not correctness or backend-completion proof. The session evaluates the observed behavior and relevant effects against the intended scenario.
 
 The result includes the existing reply classifier's `signal` (`ok`, `consent_gate`, `timeout` or `empty`) and `errorShaped` advisory. These do not grade the topic or prove a backend ran. Read every captured bubble, not just the first message.
 
@@ -192,7 +192,7 @@ Before any possible save, retain a small workspace-local cleanup record under th
 
 Use the ordinary topic update preview/save with the fresh read as `--expected`, retaining its concurrency checks and authoritative readback. The existing scoped debugging authorization covers this in-scope temporary edit without an independent per-node approval. Inspect the saved diagnostic content and retain its canonical identity/content for precise cleanup.
 
-Obtain a fresh `native_topic_test.py inspect` result after the save, establish [post-save conversation freshness](native-topic-debugging.md#establish-post-save-conversation-freshness), then use a bounded `capture --require-empty-conversation` with the authorized scenario and current browser readiness. Fresh native readback and a page reload alone do not establish updated-content execution. Read values actually present in the correlated reply alongside the normal reply and cards. A native expression, accepted save or absent bubble does not establish the variable's runtime value. Card DOM text can omit information such as dropdown options; a deliberately chosen count or safe projected field can provide evidence that the rendering alone lacks.
+Obtain a fresh `native_topic_test.py inspect` result after the save, establish [post-save conversation freshness](native-topic-debugging.md#establish-post-save-conversation-freshness), then use a bounded `capture --require-empty-conversation` with the authorized scenario and current browser readiness. Fresh AgentBuilder readback and a page reload alone do not establish updated-content execution. Read values actually present in the correlated reply alongside the normal reply and cards. A saved expression, accepted save or absent bubble does not establish the variable's runtime value. Card DOM text can omit information such as dropdown options; a deliberately chosen count or safe projected field can provide evidence that the rendering alone lacks.
 
 If a value is unavailable, inspect the capture, message wording, conversation freshness and diagnostics before drawing conclusions. A failure before the diagnostic boundary can prevent observation. When useful, move the owned message one boundary earlier, before the suspected `Split`, `First`, parse, card or other consumer, and repeat a deliberate probe within scope. Reconcile and remove the previous owned message before moving it; keep the ownership record current before another possible save. Compare observed values and message content across boundaries without assuming that an absent message alone proves reachability or the cause. Do not move it later as a substitute for earlier-boundary localization. Do not assume exact-topic invocation or reset/reload the conversation to conceal an uncertain Send; use independent `observe` against that attempt first.
 
@@ -200,7 +200,7 @@ If a value is unavailable, inspect the capture, message wording, conversation fr
 
 Always attempt safe cleanup before completing the debugging work, including after an inconclusive diagnosis or a pause/stop. Honor a stop instruction that forbids further writes and explicitly report any diagnostic left in place.
 
-Read the latest native topic and preserve legitimate intervening fixes and newer content. Use `strip_debug_nodes` with exact IDs and `expected_nodes` from the cleanup record, not marker-wide matching:
+Read the latest saved topic and preserve legitimate intervening fixes and newer content. Use `strip_debug_nodes` with exact IDs and `expected_nodes` from the cleanup record, not marker-wide matching:
 
 ```python
 cleaned_yaml, removed_ids = strip_debug_nodes(
@@ -210,15 +210,15 @@ cleaned_yaml, removed_ids = strip_debug_nodes(
 )
 ```
 
-`owned_yaml_action` is the complete parsed YAML action mapping, not a native `$kind` object or a raw YAML string. The guard checks unique identity and unchanged owned content before returning a cleanup delta. If identity or owned content differs, inspect and reconcile it rather than deleting an ambiguous node. Never restore the whole pre-debug snapshot over legitimate changes.
+`owned_yaml_action` is the complete parsed YAML action mapping, not an Object Model `$kind` object or a raw YAML string. The guard checks unique identity and unchanged owned content before returning a cleanup delta. If identity or owned content differs, inspect and reconcile it rather than deleting an ambiguous node. Never restore the whole pre-debug snapshot over legitimate changes.
 
-Preview/save the cleanup delta through the ordinary update operation using the current read as `--expected`. Verify authoritative native readback, absence of the owned diagnostic IDs, preservation of intended corrections and consistency of the local working draft/baseline. Retest the affected normal behavior without instrumentation when useful. Treat byte differences from native YAML projection separately from semantic content preservation.
+Preview/save the cleanup delta through the ordinary update operation using the current read as `--expected`. Verify authoritative AgentBuilder readback, absence of the owned diagnostic IDs, preservation of intended corrections and consistency of the local working draft/baseline. Retest the affected normal behavior without instrumentation when useful. Treat byte differences from Object Model-to-YAML projection separately from semantic content preservation.
 
-Retain the cleanup record and original errors until removal is verified. For interrupted or uncertain writes, inspect current native content before choosing the next action; do not blindly plant, save or resend. Report cleanup failure or uncertainty separately from the original diagnosis and known fix. Link actual value/capture and cleanup evidence after the shared outcome report rather than adding a debugging-mechanics ledger.
+Retain the cleanup record and original errors until removal is verified. For interrupted or uncertain writes, inspect current saved content before choosing the next action; do not blindly plant, save or resend. Report cleanup failure or uncertainty separately from the original diagnosis and known fix. Link actual value/capture and cleanup evidence after the shared outcome report rather than adding a debugging-mechanics ledger.
 
 ## Fix and retest
 
-Return observed issues to the ordinary topic/instruction owner with the selected target, intended behavior, issue evidence and existing debugging objective/editable scope. Necessary fixes, pushes and retests reuse that scoped authorization, subject to native concurrency safeguards. Ask again for expanded scope, changed intended behavior or additional consequential actions. A test-only request does not authorize edits; supplied evaluation cases remain read-only unless separately selected for evaluation work.
+Return observed issues to the ordinary topic/instruction owner with the selected target, intended behavior, issue evidence and existing debugging objective/editable scope. Necessary fixes, pushes and retests reuse that scoped authorization, subject to concurrency safeguards. Ask again for expanded scope, changed intended behavior or additional consequential actions. A test-only request does not authorize edits; supplied evaluation cases remain read-only unless separately selected for evaluation work.
 
 After a verified fix, reinspect and retest affected behavior with a new capture, making a lightweight, best-effort check against matching eval intent. This is a deliberate retest after known change, not replay of an uncertain attempt. Continue useful in-scope debugging toward the latest authoring goal; a fixable mismatch is not by itself a reason to hand work back. If conflicting goals or constraints prevent progress, recommend a concrete reconciliation. If tools, access or evidence prevent further safe progress, explain the limitation and offer practical assistance, including manual testing guidance where appropriate.
 

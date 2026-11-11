@@ -382,8 +382,8 @@ Topic authoring is limited to one employee intent with a final text response at 
 
 For direct topic creation and updates, read the normal owner under
 `src/skills/topics/create/SKILL.md` or `src/skills/topics/update/SKILL.md`.
-Those skills own current native inventory, mapped identity, ordinary
-`.mcs.yml` drafts, instruction alignment, applicable scoped consent, native save, and
+Those skills own current agent inventory, mapped identity, ordinary
+`.mcs.yml` drafts, instruction alignment, applicable scoped consent, AgentBuilder save, and
 readback. Do not treat the extracted `agent.mcs.yml` as authoritative current
 instructions or route through a second scenario/materializer workflow.
 
@@ -469,14 +469,14 @@ For detailed patterns, see `src/reference/ess-docs/customization/customize.md`.
 
 ## Agent Development Lifecycle (CRITICAL)
 
-**Native topic and instruction saves are explicit operations above the local
+**Topic and instruction saves are explicit operations above the local
 draft pipeline.** Follow the normal topic owner and
 its directly linked experience references for previews, applicable scoped
-approvals, native saves, and authoritative readback. Ordinary authoring has
+approvals, AgentBuilder saves, and authoritative readback. Ordinary authoring has
 separate topic/instruction approvals; an unchanged approved Push batch or
 explicitly scoped debugging objective does not repeat those owner gates.
 Do not claim that a local
-YAML edit alone saved the native topic or instructions.
+YAML edit alone saved the topic or instructions to the agent.
 
 The files in `workspace/agents/{slug}/` are a **local working copy** of the agent
 deployed in Copilot Studio. They are NOT the live agent.
@@ -490,7 +490,7 @@ pipeline:
 | 2. Local edit | Create, modify, or delete files in `workspace/agents/{slug}/` | File tools                                |
 | 3. Scan       | Check for compile errors                                      | Diagnostics tool on agent folder          |
 
-Always distinguish local drafts from native save/readback and conversation
+Always distinguish local drafts from AgentBuilder save/readback and conversation
 acceptance. When the maker asks to push local changes, follow
 `.github/prompts/push.prompt.md` and the selected operation's owner. Save is not
 activation or publication.
@@ -596,7 +596,7 @@ selected owner for supported saves and disclose unsupported operations.
 ## Testing and Deployment
 
 1. **Check for errors**: After creating or modifying files, check the VS Code Problems panel for compile errors.
-2. **Save when approved**: Follow the general Push prompt or selected owner for scoped native saves, applicable instruction consent, and authoritative readback. A save preserves state; creation is inactive.
+2. **Save when approved**: Follow the general Push prompt or selected owner for scoped AgentBuilder saves, applicable instruction consent, and authoritative readback. A save preserves state; creation is inactive.
 3. **Test when supported**: Use the topic-test owner when its runtime is installed. Follow the shared state-aware continuation: activation requires the explicit Activate and test selection and confirmed readback before testing; never publish. Preserve test-only/no-activation intent and report real unresolved prerequisites or missing capabilities as pending, not passed.
 
 ## Code Quality Rules
