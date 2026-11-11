@@ -56,8 +56,8 @@ def test_complete_review_has_exact_copy_without_routine_diagnostics():
         "| Topic set | Topic | Current state | Requested state | Plan |\n"
         "| --- | --- | --- | --- | --- |\n"
         "| alpha | alpha.topic | Off | On | Change |\n"
-        "| alpha | alpha.shared | On | On | Already correct |\n\n"
-        "Eligible changes: 1. Already correct: 1. Protected: 0.\n\n"
+        "| alpha | alpha.shared | On | On | No change |\n\n"
+        "Eligible changes: 1. No change: 1. Protected: 0.\n\n"
         "The skill will not publish."
     )
     assert review == original
@@ -104,11 +104,62 @@ def test_preview_does_not_infer_membership_or_collect_approval():
     review["selectedSets"].append("unresolved-set")
     review["members"][0]["componentId"] = None
     text = review_text(review, preview=True)
-    assert "| alpha | 1/2 | 1 | 0 | 1 |" in text
-    assert "| unresolved-set | Unresolved | Not established | Not established | Not established |" in text
+    assert "| alpha | alpha.topic | Unknown |" in text
+    assert "| unresolved-set | Unresolved | Unknown |" in text
     assert "Before you approve" not in text
-    assert "Topic presence does not confirm package installation or runtime health." in text
+    assert "Requested state" not in text
+    assert "Plan" not in text
     assert text.endswith("No topics were changed.")
+
+
+def test_preview_is_only_inventory_even_with_write_limitations_and_baseline():
+    review = _review()
+    review["warnings"] += [code for code in (
+        "catalog_release_untrusted", "installed_package_unverified", "unknown_protection",
+        "native_stale_write_protection_unqualified", "native_batch_behavior_unqualified",
+        "native_draft_published_effects_unqualified", "future_limitation",
+    )]
+    review["action"] = "disable"
+    review["baseline"] = {"status": "capture_before_first_write"}
+    original = deepcopy(review)
+    assert review_text(review, preview=True) == (
+        "## Topics\nAgent: agent\nEnvironment: environment\n\n"
+        "| Topic set | Topic | Current state |\n"
+        "| --- | --- | --- |\n"
+        "| alpha | alpha.topic | Off |\n"
+        "| alpha | alpha.shared | On |\n\n"
+        "No topics were changed."
+    )
+    assert review == original
+    result = _result("preview", submitted=False)
+    result["plan"] = review
+    assert result_text(result) == review_text(review, preview=True)
+
+
+@pytest.mark.parametrize("preview", [False, True])
+def test_topic_names_are_shortened_only_for_display(preview):
+    review = _review()
+    schema = "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetVisas"
+    review["members"][0]["schemaName"] = schema
+    text = review_text(review, preview=preview)
+    assert "| alpha | WorkdayGetVisas | Off |" in text
+    assert "gptagent" not in text
+    assert review["members"][0]["schemaName"] == schema
+
+
+def test_blocked_inventory_keeps_resolution_failure_without_showing_an_execution_plan():
+    review = _review()
+    review["blockers"] = ["missing_member"]
+    review["members"][0]["componentId"] = None
+    text = review_text(review, preview=True)
+    assert "| alpha | alpha.topic | Unknown |" in text
+    assert "The complete topic list could not be resolved." in text
+    assert "Could not proceed. No topics were changed." in text
+    assert "Requested state" not in text
+    assert "Eligible changes" not in text
+    result = _result("blocked", submitted=False)
+    result.update(plan=review, blockers=review["blockers"])
+    assert result_text(result) == text
 
 
 def test_entry_blockers_override_an_otherwise_executable_plan_in_display():
@@ -117,8 +168,8 @@ def test_entry_blockers_override_an_otherwise_executable_plan_in_display():
     text = result_text(result)
     assert "Could not proceed. No topics were changed." in text
     assert "No saved original topic states are available." in text
-    assert "Eligible changes: 0." in text
-    assert "| alpha | alpha.topic | Off | On | Not eligible |" in text
+    assert "Eligible changes:" not in text
+    assert "| alpha | alpha.topic | Off |" in text
     assert "Before you approve" not in text
 
 
@@ -139,7 +190,7 @@ def test_completed_and_noop_results_do_not_repeat_review_notices():
     )
     result.update(status="already_correct", writeStatus="not_attempted")
     text = result_text(result)
-    assert text.startswith("Already correct.\n")
+    assert text.startswith("No change needed.\n")
     assert text.endswith("No topics were changed.")
     assert "internal-warning" not in text
 

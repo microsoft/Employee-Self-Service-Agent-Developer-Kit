@@ -103,6 +103,10 @@ def _codes(values) -> set[str]:
     return {value.split(":", 1)[0] for value in values}
 
 
+def _topic_name(schema_name: str) -> str:
+    return schema_name.rsplit(".topic.", 1)[-1]
+
+
 def _blocker_messages(result: dict) -> list[str]:
     codes = _codes(result.get("blockers", ()))
     if not codes and result.get("reason"):
@@ -112,10 +116,12 @@ def _blocker_messages(result: dict) -> list[str]:
 
 
 def review_text(review: dict, *, preview: bool = False) -> str:
+    if preview:
+        return _topic_list_text(review)
     action = {"enable": "Enable", "disable": "Disable", "restore": "Restore"}[review["action"]]
     target = review["target"]
     lines = [
-        "## Topic preview" if preview else "## Review topic changes",
+        "## Review topic changes",
         f"Action: {action}",
     ]
     if review.get("account"):
@@ -132,21 +138,6 @@ def review_text(review: dict, *, preview: bool = False) -> str:
     protected = {item["componentId"]: item for item in review["protected"]}
     restore = {item["componentId"]: item["state"] for item in review["restoreStates"]}
     blocked = bool(review["blockers"])
-    if preview:
-        lines.extend((
-            "",
-            "| Topic set | Matched / expected | On | Off | Unknown |",
-            "| --- | --- | --- | --- | --- |",
-        ))
-        for key in review["selectedSets"]:
-            members = [item for item in review["members"] if item["setKey"] == key]
-            if not members:
-                counts = ["Unresolved", "Not established", "Not established", "Not established"]
-            else:
-                matched = sum(item["componentId"] is not None for item in members)
-                states = [current.get(item["componentId"], "Unknown") for item in members]
-                counts = [f"{matched}/{len(members)}", *(str(states.count(state)) for state in ("On", "Off", "Unknown"))]
-            lines.append("| " + " | ".join(_text(value) for value in (key, *counts)) + " |")
     lines.extend((
         "",
         "| Topic set | Topic | Current state | Requested state | Plan |",
@@ -168,15 +159,15 @@ def review_text(review: dict, *, preview: bool = False) -> str:
             )
         else:
             plan = "Not eligible" if blocked else (
-                "Change" if change else "Already correct" if identity in correct else "Unresolved"
+                "Change" if change else "No change" if identity in correct else "Unresolved"
             )
         lines.append("| " + " | ".join(_text(value) for value in (
-            member["setKey"], member["schemaName"], state, desired, plan,
+            member["setKey"], _topic_name(member["schemaName"]), state, desired, plan,
         )) + " |")
     lines.extend((
         "",
         f"Eligible changes: {0 if blocked else len(changes)}. "
-        f"Already correct: {len(correct)}. Protected: {len(protected)}.",
+        f"No change: {len(correct)}. Protected: {len(protected)}.",
     ))
     if blocked:
         lines.extend(("", "Could not proceed. No topics were changed.", *_blocker_messages(review)))
@@ -197,12 +188,37 @@ def review_text(review: dict, *, preview: bool = False) -> str:
     if codes - known:
         notes.append("Additional limitations need review. Technical details are available on request.")
     if notes:
-        lines.extend(("", "### About this preview" if preview or blocked else "### Before you approve"))
+        lines.extend(("", "### About this review" if blocked else "### Before you approve"))
         lines.extend("- " + note for note in notes)
-    if preview:
-        lines.extend(("", "Topic presence does not confirm package installation or runtime health."))
     if not blocked:
-        lines.extend(("", "No topics were changed." if preview else "The skill will not publish."))
+        lines.extend(("", "The skill will not publish."))
+    return "\n".join(lines)
+
+
+def _topic_list_text(review: dict) -> str:
+    target = review["target"]
+    lines = [
+        "## Topics",
+        f"Agent: {_text(target['agentId'])}",
+        f"Environment: {_text(target['environmentId'])}",
+        "",
+        "| Topic set | Topic | Current state |",
+        "| --- | --- | --- |",
+    ]
+    current = {item["componentId"]: item["state"] for item in review.get("currentStates", ())}
+    for member in review["members"]:
+        values = (
+            member["setKey"], _topic_name(member["schemaName"]),
+            current.get(member["componentId"], "Unknown"),
+        )
+        lines.append("| " + " | ".join(_text(value) for value in values) + " |")
+    for key in review["selectedSets"]:
+        if not any(member["setKey"] == key for member in review["members"]):
+            lines.append(f"| {_text(key)} | Unresolved | Unknown |")
+    if review["blockers"]:
+        lines.extend(("", "Could not proceed. No topics were changed.", *_blocker_messages(review)))
+    else:
+        lines.extend(("", "No topics were changed."))
     return "\n".join(lines)
 
 
@@ -226,8 +242,8 @@ def result_text(result: dict) -> str:
         heading = {
             "completed": "Completed.",
             "completed_with_protections": "Eligible changes completed; protected topics kept unchanged.",
-            "already_correct": "Already correct." if result.get("completed") else (
-                "Eligible topics already correct; protected topics kept unchanged."
+            "already_correct": "No change needed." if result.get("completed") else (
+                "No change needed for eligible topics; protected topics kept unchanged."
             ),
             "inspected": "Selected agent verified. Topic availability has not been checked.",
         }.get(status, "Could not proceed.")
