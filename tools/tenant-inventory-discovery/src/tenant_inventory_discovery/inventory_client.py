@@ -38,7 +38,7 @@ from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import quote
 
-from .config import DiscoveryConfig, RetryPolicy
+from .config import LOOPBACK_HOSTS, DiscoveryConfig, RetryPolicy
 from .errors import (
     InventoryApiError,
     NonRetryableApiError,
@@ -191,6 +191,24 @@ def _parse_retry_after(value: str | None) -> float | None:
         return None
 
 
+def _loopback_direct_mounts() -> dict[str, None]:
+    """``httpx`` mounts that send every loopback host straight to the direct transport.
+
+    ``httpx`` honors ``HTTP(S)_PROXY``/``ALL_PROXY`` (and the Windows system proxy) with
+    no exemption for ``localhost``. Verification is relaxed for loopback targets (see
+    :func:`~tenant_inventory_discovery.config.is_loopback_url`), so a proxied loopback
+    request would hand the bearer token to a hop no certificate check covers. Deriving
+    the patterns from ``LOOPBACK_HOSTS`` keeps the bypass and the relaxation in lockstep.
+    Every other host keeps the environment's proxy and CA settings.
+    """
+    patterns = set()
+    for host in LOOPBACK_HOSTS:
+        bare = host.strip("[]")
+        # httpx patterns need IPv6 literals bracketed, as in a URL.
+        patterns.add(f"all://[{bare}]" if ":" in bare else f"all://{bare}")
+    return dict.fromkeys(patterns)
+
+
 class HttpInventoryClient:
     """``httpx``-backed Inventory API client.
 
@@ -229,7 +247,10 @@ class HttpInventoryClient:
         else:
             default_timeout = self._sync_timeout = timeout
         self._client = httpx.Client(
-            timeout=default_timeout, transport=transport, verify=verify
+            timeout=default_timeout,
+            transport=transport,
+            verify=verify,
+            mounts=_loopback_direct_mounts(),
         )
         self._httpx = httpx
 

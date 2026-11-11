@@ -7,7 +7,9 @@ and the read/probe calls that stayed unchanged across the write API migration.
 
 from __future__ import annotations
 
+import http.server
 import json
+import threading
 
 import httpx
 import pytest
@@ -435,6 +437,94 @@ class TestProbe:
 
         with pytest.raises(InventoryApiError):
             _client(handler).probe()
+
+
+class _RecordingHandler(http.server.BaseHTTPRequestHandler):
+    """Answers every GET with an empty page and records the request target."""
+
+    def do_GET(self):
+        self.server.seen.append(self.path)
+        body = b'{"value": []}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def local_server():
+    """Start real HTTP servers on 127.0.0.1; each records the requests it receives."""
+    servers: list[http.server.ThreadingHTTPServer] = []
+
+    def start() -> http.server.ThreadingHTTPServer:
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RecordingHandler)
+        server.seen = []
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        return server
+
+    yield start
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+class TestLoopbackSkipsTheProxy:
+    """A loopback target is reached directly, even when the environment sets a proxy.
+
+    Verification is relaxed for loopback, so routing those requests through a proxy
+    would hand the bearer token to a hop that no certificate check covers. These run
+    against real sockets because the mock transport bypasses proxy selection.
+    """
+
+    @staticmethod
+    def _proxy_everything(monkeypatch, proxy_url: str) -> None:
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+            monkeypatch.setenv(name, proxy_url)
+            monkeypatch.setenv(name.lower(), proxy_url)
+        for name in ("NO_PROXY", "no_proxy"):
+            monkeypatch.delenv(name, raising=False)
+
+    @staticmethod
+    def _probe(base_url: str) -> None:
+        client = HttpInventoryClient(
+            _TENANT,
+            config=DiscoveryConfig(
+                inventory_base_url=base_url,
+                retry=RetryPolicy(max_attempts=1, base_delay_seconds=0.0),
+            ),
+            auth_token_provider=lambda: "test-token",
+        )
+        try:
+            client.probe()
+        finally:
+            client.close()
+
+    def test_a_loopback_target_bypasses_the_environment_proxy(
+        self, monkeypatch, local_server
+    ):
+        target, proxy = local_server(), local_server()
+        self._proxy_everything(monkeypatch, f"http://127.0.0.1:{proxy.server_port}")
+
+        self._probe(f"http://127.0.0.1:{target.server_port}/weveb2")
+
+        assert len(target.seen) == 1
+        assert proxy.seen == []
+
+    def test_a_remote_target_still_uses_the_environment_proxy(
+        self, monkeypatch, local_server
+    ):
+        proxy = local_server()
+        self._proxy_everything(monkeypatch, f"http://127.0.0.1:{proxy.server_port}")
+
+        self._probe("http://inventory.example.test/weveb2")
+
+        assert len(proxy.seen) == 1
+        assert proxy.seen[0].startswith("http://inventory.example.test/weveb2/api/beta/")
 
 
 class TestTheRequestHeaders:

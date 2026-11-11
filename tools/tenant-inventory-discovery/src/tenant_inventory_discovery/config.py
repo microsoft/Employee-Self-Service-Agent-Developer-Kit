@@ -48,7 +48,8 @@ def is_loopback_url(url: str | None) -> bool:
     Relaxing verification for loopback only is what keeps that convenience from
     becoming a hazard: traffic to ``localhost`` never leaves the machine, so there is
     no position from which to intercept it, while any real host still gets a full
-    certificate check and must opt out explicitly.
+    certificate check and must opt out explicitly. That holds only because the
+    inventory client routes loopback requests around any configured proxy.
     """
     if not url:
         return False
