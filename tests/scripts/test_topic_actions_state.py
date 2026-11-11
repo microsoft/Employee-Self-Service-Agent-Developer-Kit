@@ -184,6 +184,77 @@ def test_unrelated_edits_are_preserved_and_reported_not_restored(tmp_path):
     assert all(item["componentId"] != "unrelated" for item in reviews[0]["proposedChanges"])
 
 
+@pytest.mark.parametrize("change", ["missing", "schema"])
+@pytest.mark.parametrize("uncertain", [False, True])
+def test_restore_preserves_unrelated_deletion_or_rename(tmp_path, change, uncertain):
+    store = TopicStateStore(tmp_path, TARGET, first_use=True)
+    original = {"a": "On", "shared": "Off", "b": "Off"}
+    enabled = {"a": "On", "shared": "On", "b": "On"}
+    backend = dev_native_backend(selected=("alpha", "beta"), before=original, after=enabled)
+    if uncertain:
+        backend.components.submit_state_payload.side_effect = requests.Timeout()
+    result = TopicActionSession(backend, "enable", state_store=store).run(lambda _: "approve")
+    assert result["status"] == ("unverified" if uncertain else "completed")
+    baseline = deepcopy(store.load()["baseline"])
+    restored = dev_native_backend(
+        before=enabled, after=original, selected=store.restore_keys(),
+    )
+    packets = list(restored.components.read_components.side_effect)
+    for body in packets:
+        if change == "missing":
+            body["botComponentChanges"] = [
+                row for row in body["botComponentChanges"]
+                if row["component"]["id"] != "unrelated"
+            ]
+        else:
+            topic = next(
+                row["component"] for row in body["botComponentChanges"]
+                if row["component"]["id"] == "unrelated"
+            )
+            topic["schemaName"] += "-renamed"
+    restored.components.read_components.side_effect = packets
+    restored.state_store, restored.restoring = store, True
+    reviews = []
+
+    result = TopicActionSession(restored, "restore", state_store=store).run(
+        lambda review: reviews.append(review) or "approve",
+    )
+
+    assert result["completed"], result
+    assert len(reviews) == 1
+    restored.components.submit_state_payload.assert_called_once()
+    payload = restored.components.submit_state_payload.call_args.args[0]
+    assert {row["component"]["id"] for row in payload["botComponentChanges"]} == {"shared", "b"}
+    assert store.load()["baseline"] == baseline
+    assert store.load()["journal"]["pending"] is None
+
+
+def test_restore_still_blocks_missing_outside_topic_needed_for_shared_protection(tmp_path):
+    store = TopicStateStore(tmp_path, TARGET, first_use=True)
+    original = {"a": "Off", "shared": "Off", "b": "On"}
+    enabled = {**original, "a": "On", "shared": "On"}
+    result, _ = _native_run(store, "enable", original, enabled, selected=("alpha",))
+    assert result["completed"]
+    saved = store.path.read_bytes()
+    restored = dev_native_backend(before=enabled, selected=store.restore_keys())
+    packets = list(restored.components.read_components.side_effect)
+    for body in packets:
+        body["botComponentChanges"] = [
+            row for row in body["botComponentChanges"] if row["component"]["id"] != "b"
+        ]
+    restored.components.read_components.side_effect = packets
+    restored.state_store, restored.restoring = store, True
+
+    result = TopicActionSession(restored, "restore", state_store=store).run(
+        lambda _: pytest.fail("Unknown outside membership must not bypass shared protection."),
+    )
+
+    assert result["status"] == "blocked"
+    assert any("beta" in reason for reason in result["blockers"])
+    restored.components.submit_state_payload.assert_not_called()
+    assert store.path.read_bytes() == saved
+
+
 def test_disk_failure_prevents_submission(tmp_path, monkeypatch):
     store = TopicStateStore(tmp_path, TARGET, first_use=True)
     monkeypatch.setattr(store, "_save", Mock(side_effect=OSError("disk unavailable")))

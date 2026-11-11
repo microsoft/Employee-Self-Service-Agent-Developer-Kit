@@ -239,15 +239,16 @@ class TopicStateStore:
         # Older stores included parsed record data; exact legacy matches remain safe.
         legacy_current = _topics(evidence, normalize_structured_records=False)
         original, journal = data["baseline"]["topics"], data["journal"]
+        expected = dict(journal["tracked"])
+        pending = journal["pending"]
+        affected = set(expected) | set(pending["topics"] if pending else ())
         if any(
-            identity not in current or current[identity]["schemaName"] != item["schemaName"]
-            for identity, item in original.items()
+            identity not in current or current[identity]["schemaName"] != original[identity]["schemaName"]
+            for identity in affected
         ):
             raise TopicStateError("baseline_topic_identity_changed")
         if self._members(evidence.snapshot) != journal["sets"]:
             raise TopicStateError("restore_membership_changed")
-        expected = dict(journal["tracked"])
-        pending = journal["pending"]
         if pending:
             for identity, item in pending["topics"].items():
                 actual = current.get(identity)
