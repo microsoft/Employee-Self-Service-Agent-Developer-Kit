@@ -46,6 +46,10 @@ _LIMITATIONS = (
 )
 
 _BLOCKERS = (
+    ({"review_unavailable", "review_invalid"},
+     "This review is unavailable or has already been used. A new review and approval are required."),
+    ({"review_storage_unavailable"},
+     "The pending review could not be saved or read safely. A new review is required."),
     ({"approval_expired"}, "Approval expired. A new review and approval are required."),
     ({"evidence_changed", "baseline_changed_review_required"},
      "The reviewed information changed. A new review and approval are required."),

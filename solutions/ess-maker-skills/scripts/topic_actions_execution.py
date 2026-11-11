@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""In-memory review, single-attempt execution and conservative reconciliation.
+"""Fresh review, single-attempt execution and conservative reconciliation.
 
 The controller is transport-independent. The native adapter verifies the selected
 target and exact source-inventory scope; service authorization remains native.
@@ -269,7 +269,11 @@ class TopicActionSession:
         self._readback = None
         self._used = False
 
-    def run(self, confirm: Callable[[dict], str], *, preview: bool = False) -> dict:
+    def run(
+        self, confirm: Callable[[dict], str], *, preview: bool = False,
+        review_only: bool = False, approved_binding: str | None = None,
+        approval_deadline: float | None = None,
+    ) -> dict:
         if self._used:
             return self._result("blocked", blockers=("session_consumed",))
         self._used = True
@@ -310,12 +314,25 @@ class TopicActionSession:
         # Freeze the basis before handing the public copy to the interaction.
         basis = evidence.fingerprint()
         deadline = self.clock() + 300
+        if approval_deadline is not None:
+            deadline = min(deadline, approval_deadline)
         try:
             review = {**public_plan(plan, evidence), "account": evidence.account_id}
             if self._baseline_review is not None:
                 review["baseline"] = deepcopy(self._baseline_review)
             review["userMessage"] = review_text(review)
+            binding = _digest({
+                "evidence": basis, "review": review, "stateRevision": self._state_revision,
+            })
+            if review_only:
+                result = self._result("review_ready", plan=plan, evidence=evidence)
+                result.update(review=review, _reviewBinding=binding, userMessage=review["userMessage"])
+                return result
+            if approved_binding is not None and approved_binding != binding:
+                return self._result("review_required", plan=plan, blockers=("evidence_changed",))
             decision = confirm(review)
+        except TimeoutError:
+            return self._result("review_required", plan=plan, blockers=("approval_expired",))
         except (KeyboardInterrupt, EOFError):
             decision = "cancel"
         except Exception:
@@ -475,6 +492,7 @@ class TopicActionSession:
             "message": {
                 "blocked": "Topic actions are blocked. No changes were attempted.",
                 "preview": "Preview only. No changes were attempted and no executable approval was collected.",
+                "review_ready": "Review ready. No approval has been collected and no changes were attempted.",
                 "cancelled": "Cancelled. No changes were attempted.",
                 "denied": "Not approved. No changes were attempted.",
                 "review_required": "The evidence changed or approval expired. Review and approve a fresh plan.",

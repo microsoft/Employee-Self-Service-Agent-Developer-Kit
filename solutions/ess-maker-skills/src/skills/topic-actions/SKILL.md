@@ -2,7 +2,7 @@
 
 Enable or disable whole source-defined ESS topic sets, or restore the original
 states of topics changed by this skill, on one verified selected native
-agent using the computed planner, in-memory approval, single-attempt executor
+agent using the computed planner, short-lived review, single-attempt executor
 and readback. **The source-inventory policy intentionally removes central
 release admission and prequalification gates.** Matching topics are not proof
 of installed-package identity, complete membership, required-topic
@@ -25,17 +25,26 @@ requested operation; do not ask the maker to repeat known selections or
 confirm that routine checks should run.
 
 For listing or preview requests, perform the read-only work and show the
-result without approval or an unsolicited offer to execute. For an explicit
+result without approval or an unsolicited offer to execute. Show only the
+agent, environment, topic sets, short topic names and observed current states.
+Do not turn a topic-list request into an enable/disable plan: omit requested
+states, plan columns, change counts and write-specific limitation notes.
+Keep unresolved topics and blockers visible; do not imply complete discovery.
+For an explicit
 enable/disable request, use the execution helper's fresh review directly;
 do not add a separate preview approval, a "start review" confirmation or a
 "ready to proceed" question before it. A previous preview is not executable
 approval and does not replace that fresh execution review.
+Explicit enable, disable and restore requests always enter this write-review
+flow, even when the computed plan has no changes. Never substitute a read-only
+list or preview because approval transport appears unavailable.
 
 Display the complete required review once, including every selected member,
-account, target, changes, already-correct topics, protections and material
+account, target, changes, no-change topics, protections and material
 limitations in plain language. Then present one
 explicit decision control: **Approve**, **Deny** or **Cancel**, with no
-preselected approval. Send the actual decision to the same waiting process;
+preselected approval. Use the structured VS Code question and separate
+review/apply commands below, as Connect Workday does;
 map explicit denial to `deny` and cancellation to `cancel`. Ambiguous text
 is never approval. Do not introduce a second confirmation after approval;
 continue with the mandatory fresh checks and readback. Changed evidence or
@@ -71,12 +80,15 @@ result into success. For multiple independent previews, render each returned
 The deterministic presentation is owned by
 `scripts/topic_actions_presentation.py`. Its "Before you approve" notes
 retain material limitations, dependency impact and original-state capture.
-Preview uses "About this preview" instead and never asks for approval.
+Read-only previews show the topic inventory, not the execution review notes,
+and never ask for approval. Display the schema-name suffix after `.topic.`
+(for example, `WorkdayGetVisas`); keep full identities in structured evidence
+and mutation logic. Use "No change" rather than "Already correct" in plans.
 Routine diagnostics such as service-enforced edit permission are not
 repeated as notices. Structured `warnings`, `blockers`, HTTP status and
 other evidence remain intact for callers and requested technical diagnosis;
 not displaying raw warning lists does not remove checks or establish trust.
-Unknown limitations receive a plain-language notice, never silent omission.
+Unknown limitations receive a plain-language notice in execution reviews.
 Only when the maker explicitly requests diagnostics may safe reason codes
 and HTTP status accompany the fixed copy. Never expose private evidence,
 caller context, service bodies or credentials.
@@ -164,7 +176,7 @@ selection, silently narrow a partial set or authorize a topic individually.
 Discovery matches exact schema keys to installed component IDs and reports
 missing/ambiguous members. Legacy flat definitions remain read-only.
 
-## Read-only preview or same-session execution
+## Read-only preview or chat review and apply
 
 Pass one JSON request on standard input to:
 
@@ -182,33 +194,83 @@ a nonempty `callerContext` JSON object. Never put context, tokens or component
 bodies in terminal commands, chat output or files.
 
 Parse `TOPIC_ACTIONS_RESULT_JSON:` and render its `userMessage`.
-It presents the target, selected sets, current states, proposed changes,
-already-correct topics, protections and limitations in fixed plain language.
+For preview, it presents the agent, environment, selected topics and observed
+current states in fixed plain language, plus any blocker preventing resolution.
+Execution reviews additionally present proposed changes, no-change topics,
+protections and material limitations.
 Observed differences in a blocked plan are **not eligible changes**. Report
 all requested sets; missing membership never
 becomes a smaller successful action. No user approval can override blockers.
 Preview returns `status: "preview"` and `writeStatus: "not_attempted"`. It
 does not acquire write scopes or collect executable consent.
 
-For the normal write flow, run `python scripts/topic_actions.py --execute`.
-Keep standard input open: send one JSON request line, wait for
-`TOPIC_ACTIONS_REVIEW_JSON:`, and display its complete `userMessage`,
+For the normal write flow, pass the request on standard input to:
+
+`python scripts/topic_actions.py --review`
+
+This command finishes; it does not wait for terminal input. Parse
+`TOPIC_ACTIONS_RESULT_JSON:`. Only `status: "review_ready"` supplies a
+`reviewId` and permits asking for approval. Display its complete `userMessage`,
 including account, target, every selected set/member, proposed changes,
-already-correct topics, protections and material limitations. Only then obtain the
-maker's explicit answer and send `approve`, `deny` or `cancel` as the next
-line to **that same process**. Never prefill approval. EOF cancels; ambiguous
-answers do not approve. Do not save an approval or replay it in another
-process. If the host cannot maintain this interaction, run the command in
-an interactive terminal rather than imply approval was collected in chat.
+no-change topics, protections and material limitations. Keep `reviewId` and
+expiry metadata internal. For any other status, render the returned
+`userMessage` and stop without asking for approval.
+
+Then use `vscode_askQuestions` (or the host's structured question tool):
+
+```json
+[
+  {
+    "header": "Topic changes",
+    "question": "Apply the topic changes shown above?",
+    "options": [
+      { "label": "Approve" },
+      { "label": "Deny" },
+      { "label": "Cancel" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave every option initially unset. Only the maker's explicit **Approve**
+maps to `approve`; **Deny** maps to `deny`. **Cancel**, a dismissed question,
+or an ambiguous response maps to `cancel`, never approval. After the answer,
+run the fixed command with the returned ID and the actual decision:
+
+`python scripts/topic_actions.py --apply-review "{REVIEW_ID}" --decision "{DECISION}"`
+
+This consumes the pending review exactly once, including denial or cancellation.
+It needs no stdin continuation, background terminal, named pipe, computer
+control, or ad hoc bridge. Do not request desktop access or fall back to manual
+terminal instructions merely because the host cannot send input to a waiting
+process. Never prefill approval, save an approval for later, automatically retry
+an apply command, or recreate a consumed review silently.
+
+The pending review expires after five minutes. Apply authenticates again,
+rechecks the selected target, full evidence and exact review, then performs
+the existing fresh pre-dispatch checks and readback. A changed account,
+target, catalog, membership, content, topic state or original-state journal
+invalidates the review. Expiry is not extended by authentication or discovery.
+An expired, missing, consumed or changed review requires a new complete review
+and explicit approval; do not treat an old answer as approval of a new plan.
+Render the apply command's final `userMessage`; review creation is not completion.
+
+If a structured question tool is genuinely unavailable, report that specific
+blocker. Only then offer the existing interactive-terminal alternative, or use
+it when the maker explicitly requests terminal commands:
+`python scripts/topic_actions.py --execute`. That alternative reads one request
+line, emits `TOPIC_ACTIONS_REVIEW_JSON:`, and requires the actual decision as
+the next line in the same process. EOF cancels. It is not the normal chat route.
 
 An in-process host uses `run_topic_actions(..., confirm=...)` without
 `preview=True`; its callback owns displaying the review and collecting the
-maker's explicit answer. Both entry types use this same controller.
+maker's explicit answer. All entry types use this same controller.
 Authentication uses neutral ADK authentication utilities and the existing
 AgentBuilder cache (`.local/.agentbuilder_token_cache.bin`), not Connect
 Workday's authentication or token-cache implementation. Execution requests
-the explicit native component read/write scope; preview requests only the
-component read scope. A previously cached Workday `.default` token does not
+the explicit native component read/write scope at apply time; preview and
+review preparation request only the component read scope. A previously cached Workday `.default` token does not
 guarantee these scopes are available without sign-in or consent.
 Both recheck the exact tenant/account.
 No publish operation is requested. Running the CLI
@@ -263,7 +325,7 @@ interrupted before its outcome is recorded remains blocked; do not clear its
 intent or promise automatic recovery.
 
 For `/topic-actions Restore the original topic states`, use `action: "restore"`
-through the same preview/execute helper, selected-target checks, five-minute
+through the same review/apply helper, selected-target checks, five-minute
 approval and one-submission flow. Display `restoreStates`, the baseline date,
 all recorded members, already-correct topics, protections and material
 limitations through the returned fixed wording.
@@ -339,7 +401,11 @@ completed, completed-with-protections, partial and unverified outcomes.
 Protected topics are never reported as disabled. Partial, protected or
 uncertain scope must not complete the caller's whole-set request.
 
-Only the local original-state baseline and minimal write bookkeeping described
-above are persisted. No approval file, full component inventory, new FlightCheck
-profile, telemetry collector or diagnostic upload is introduced. Existing auth
+The local original-state baseline, minimal write bookkeeping and short-lived
+pending reviews are persisted under `.local/topic-actions`. Pending reviews
+contain only the non-secret target/request, evidence/review fingerprint and
+expiry metadata; they never contain an approval, caller context, token or full
+component inventory. A pending review is not permission to write. Its ID is
+atomically consumed before execution, and cannot resume or replay a write.
+No new FlightCheck profile, telemetry collector or diagnostic upload is introduced. Existing auth
 caches and platform logs are unchanged. Telemetry additions remain deferred.

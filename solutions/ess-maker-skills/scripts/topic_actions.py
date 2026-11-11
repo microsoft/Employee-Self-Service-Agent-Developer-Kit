@@ -10,6 +10,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import sys
+import time
 from typing import Any
 import uuid
 
@@ -462,8 +463,10 @@ def inspect_request(
 def run_topic_actions(
     value: Any, *, workspace_root: Path, confirm,
     account_hint: str | None = None, cancelled: bool = False, preview: bool = False,
+    review_only: bool = False, approved_binding: str | None = None,
+    approval_deadline: float | None = None,
 ) -> dict[str, Any]:
-    """Shared selected-agent entry; approval stays within this invocation."""
+    """Shared selected-agent entry; every write uses freshly verified evidence."""
     from topic_actions_catalog import load_catalog
     from topic_actions_discovery import DiscoveryError, DiscoveryTarget
     from topic_actions_execution import TopicActionSession
@@ -494,7 +497,7 @@ def run_topic_actions(
             cache_path=workspace_root / DEFAULT_TOKEN_CACHE,
             account_hint=account_hint,
             include_connectivity=False,
-            allow_write=not preview,
+            allow_write=not (preview or review_only),
             emit_account_identity=False,
             return_account_identity=True,
         )
@@ -507,7 +510,7 @@ def run_topic_actions(
         components = TopicActionsClient(
             target["environmentId"], target["agentId"], target["tenantId"],
             ring=connection["ring"], host=connection["host"],
-            token=token, account=account, read_only=preview,
+            token=token, account=account, read_only=preview or review_only,
         )
         stage = "target_unverified"
         client = AgentBuilderClient(
@@ -524,7 +527,10 @@ def run_topic_actions(
             result = TopicActionSession(
                 backend, request["action"], caller_context=request["callerContext"],
                 state_store=state_store,
-            ).run(confirm, preview=preview)
+            ).run(
+                confirm, preview=preview, review_only=review_only,
+                approved_binding=approved_binding, approval_deadline=approval_deadline,
+            )
             result["reason"] = next(iter(result["blockers"]), result["status"])
             return _entry_feedback(result)
         finally:
@@ -553,6 +559,54 @@ def run_topic_actions(
         )
 
 
+def review_topic_actions(value: Any, *, workspace_root: Path, account_hint=None) -> dict:
+    from topic_actions_approval import TopicReviewError, TopicReviewStore
+
+    try:
+        request = validate_request(value)
+        result = run_topic_actions(
+            request, workspace_root=workspace_root, account_hint=account_hint,
+            confirm=None, review_only=True,
+        )
+        binding = result.pop("_reviewBinding", None)
+        if result["status"] == "review_ready":
+            result.update(TopicReviewStore(workspace_root).create(request, binding))
+        return result
+    except (TopicActionsError, TopicReviewError) as error:
+        return _result(error.reason, str(error), {})
+
+
+def apply_topic_review(
+    review_id: str, decision: str, *, workspace_root: Path, account_hint=None,
+) -> dict:
+    from topic_actions_approval import TopicReviewError, TopicReviewStore
+
+    try:
+        pending = TopicReviewStore(workspace_root).consume(review_id)
+        if decision in ("deny", "cancel"):
+            result = _result("cancelled", "Canceled. No topics were changed.", {})
+            if decision == "deny":
+                result.update(status="denied", reason="denied", message="Not approved. No topics were changed.")
+                result["userMessage"] = result_text(result)
+            return result
+        if decision != "approve":
+            raise TopicReviewError("explicit_approval_required")
+        # Authentication and discovery must not extend the original review window.
+        deadline = min(
+            pending["createdMonotonic"] + 300, time.monotonic() + pending["remainingSeconds"],
+        )
+        return run_topic_actions(
+            pending["request"], workspace_root=workspace_root, account_hint=account_hint,
+            confirm=lambda _: decision, approved_binding=pending["binding"],
+            approval_deadline=deadline,
+        )
+    except TopicReviewError as error:
+        result = _result(error.reason, str(error), {})
+        result.update(status="review_required")
+        result["userMessage"] = result_text(result)
+        return result
+
+
 def _confirm_stdin(plan: dict[str, Any]) -> str:
     print(REVIEW_MARKER + json.dumps(plan, sort_keys=True), flush=True)
     print(plan["userMessage"], file=sys.stderr, flush=True)
@@ -572,8 +626,13 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--preview", action="store_true", help="Read and plan without write scopes or executable approval.")
     mode.add_argument("--execute", action="store_true", help="Read one JSON request line, then collect explicit approval on standard input.")
+    mode.add_argument("--review", action="store_true", help="Prepare a five-minute, single-use review for chat approval.")
+    mode.add_argument("--apply-review", metavar="REVIEW_ID", help="Consume a pending review using the maker's explicit decision.")
     mode.add_argument("--list-sets", action="store_true", help="List provisional source definitions, not installed availability.")
+    parser.add_argument("--decision", choices=("approve", "deny", "cancel"), help="Actual maker decision for --apply-review; never preselected.")
     args = parser.parse_args(argv)
+    if bool(args.apply_review) != bool(args.decision) or (args.apply_review and args.cancel):
+        parser.error("--apply-review requires --decision and cannot be combined with --cancel.")
     if args.list_sets:
         from topic_actions_catalog import load_catalog
         from topic_actions_discovery import DiscoveryError
@@ -597,7 +656,7 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr, flush=True,
         )
     try:
-        value = {} if args.cancel else (
+        value = {} if args.cancel or args.apply_review else (
             json.loads(sys.stdin.readline()) if args.execute else json.load(sys.stdin)
         )
     except (OSError, ValueError):
@@ -605,7 +664,16 @@ def main(argv: list[str] | None = None) -> int:
             "invalid_request", "Provide one JSON request on standard input.", {}
         )
     else:
-        if args.preview or args.execute:
+        if args.apply_review:
+            result = apply_topic_review(
+                args.apply_review, args.decision, workspace_root=args.workspace_root,
+                account_hint=args.account,
+            )
+        elif args.review:
+            result = review_topic_actions(
+                value, workspace_root=args.workspace_root, account_hint=args.account,
+            ) if not args.cancel else _result("cancelled", "Canceled. No topics were changed.", {})
+        elif args.preview or args.execute:
             result = run_topic_actions(
                 value, workspace_root=args.workspace_root, confirm=_confirm_stdin,
                 account_hint=args.account, cancelled=args.cancel, preview=args.preview,
@@ -618,7 +686,7 @@ def main(argv: list[str] | None = None) -> int:
     public = {key: item for key, item in result.items() if key != "callerContext"}
     print(RESULT_MARKER + json.dumps(public, sort_keys=True))
     return 0 if (
-        result["status"] in ("inspected", "preview", "cancelled", "denied")
+        result["status"] in ("inspected", "preview", "review_ready", "cancelled", "denied")
         or result.get("completed") is True
     ) else 1
 

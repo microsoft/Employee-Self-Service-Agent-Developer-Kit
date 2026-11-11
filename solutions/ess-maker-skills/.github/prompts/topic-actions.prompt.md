@@ -11,8 +11,12 @@ target and workspace-preparation gate; do not require connection health or
 
 Follow its interaction and output contract: reuse known selections, keep
 routine checks quiet, show one complete fresh execution review and collect
-one explicit same-process approval decision. Listing and preview requests
-need no approval. Do not add redundant confirmations, paste shell scripts or
+one explicit structured chat approval decision. Listing and preview requests
+need no approval. Show those requests as a concise topic inventory with short
+topic names and current states, not requested states, plans, change counts or
+write-specific limitation notes. Keep unresolved topics and blockers visible.
+Use "No change" instead of "Already correct" in execution plans.
+Do not add redundant confirmations, paste shell scripts or
 raw helper output into responses, or offer unrequested follow-up actions.
 Keep the supported interactive-terminal fallback when needed; do not
 promise to hide host-rendered tool panels or bypass permission controls.
@@ -21,7 +25,14 @@ Do not paraphrase it, add warning lists, display internal codes or append raw
 diagnostic messages. Material limitations stay in the plain-language
 "Before you approve" notes; safe technical details are available on request.
 
-Use its source-inventory preview and same-session approval/execution flow.
+Use its source-inventory preview or Workday-style review/approval/apply flow.
+Explicit enable, disable and restore requests use `--review`, even for a
+no-change plan; never replace them with a read-only listing. Display the
+returned review, collect an unset Approve/Deny/Cancel structured question, then
+send only the actual answer with `--apply-review` and `--decision`. A dismissed
+or ambiguous answer cancels. No waiting process, stdin continuation, computer
+control or generated approval bridge is needed. A review is single-use and
+expires after five minutes; changed evidence requires fresh review and consent.
 For restore requests, use the fixed original baseline and recorded sets rather
 than asking for a new selection. Restore only skill-affected topic states,
 not old content. Missing original evidence or intervening edits block restore;
@@ -47,6 +58,7 @@ package, protection and API limitations visible through the fixed review notes. 
 customer-release qualification or proven draft/published isolation.
 Never invent approval, prefill an approve response, publish, or bypass a
 remaining identity, membership, state or freshness blocker through another
-mutation path. A host must keep the execution process's input open until the
-maker answers its review. Otherwise use an interactive terminal; do not
-silently replace that review with approval saved from another invocation.
+mutation path. Never retry a consumed review, reuse an earlier answer, or claim
+completion until the apply result verifies it. Use the interactive terminal
+only when the maker requests it or a structured chat question is genuinely
+unavailable, not because direct terminal input continuation is missing.

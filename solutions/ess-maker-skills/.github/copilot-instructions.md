@@ -58,12 +58,22 @@ The selected entry point owns any metadata checks and missing-state handling.
   That entry verifies canonical selected-agent identity and workspace
   preparation without requiring connection health or `connect_ready: true`.
   It never starts setup or repairs a connection automatically. Native
-  writes use exact source-defined membership and explicit same-session
+  writes use exact source-defined membership and explicit fresh-review
   approval, without requiring a Dev realm or ALM enrollment. The native
   service still enforces edit access. Catalog/package authority and platform qualification remain
   unverified diagnostics, not write-admission gates. Render the helper's
   `userMessage` verbatim, not raw warning lists or internal codes. Material
   limitations remain in its plain-language approval notes.
+  Listing and read-only previews show short topic names and current states,
+  without a change plan or write-specific limitation notes. Keep unresolved
+  topics and blockers visible. Execution plans use "No change", not
+  "Already correct"; full schema identities remain internal.
+  Explicit enable/disable/restore requests use the packaged `--review` →
+  structured chat approval → `--apply-review` flow, even for a no-change plan.
+  Do not substitute preview, request computer control, build a bridge, or
+  require a waiting terminal. Leave approval unset and pass only the maker's
+  actual decision; dismissal cancels. Reviews expire after five minutes and
+  are single-use, with account, target, evidence and baseline rechecked on apply.
 
 ### Setup gate for all other requests
 
