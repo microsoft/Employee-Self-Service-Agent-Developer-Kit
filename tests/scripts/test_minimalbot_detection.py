@@ -25,6 +25,7 @@ import pytest
 import minimalbot_evaluation as mbe
 import evaluation_runs
 import push
+import topic_authoring
 
 
 ENV_ID = "214d162d-0479-e7b3-b118-3ba749943035"
@@ -425,6 +426,14 @@ class _RecordingClient:
         return {
             "updatedComponents": len(updates),
             "verifiedComponents": len(updates),
+            "components": [
+                {
+                    "id": update["componentId"],
+                    "schemaName": update["schemaName"],
+                    "dialog": update["dialog"],
+                }
+                for update in updates
+            ],
         }
 
 
@@ -580,7 +589,7 @@ def test_scoped_minimalbot_topic_dry_run_is_non_mutating(
     _write_existing_topic_change(tmp_path)
     fake = _RecordingClient()
     _patch_client(monkeypatch, fake)
-    monkeypatch.setattr(push, "yaml_to_object_models", _fake_topic_conversion)
+    monkeypatch.setattr(topic_authoring, "yaml_to_object_models", _fake_topic_conversion)
 
     push._minimalbot_push(
         _minimalbot_config(str(tmp_path)),
@@ -600,7 +609,7 @@ def test_scoped_minimalbot_topic_push_pins_account_and_updates_baseline(
     _write_existing_topic_change(tmp_path)
     fake = _RecordingClient()
     _patch_client(monkeypatch, fake)
-    monkeypatch.setattr(push, "yaml_to_object_models", _fake_topic_conversion)
+    monkeypatch.setattr(topic_authoring, "yaml_to_object_models", _fake_topic_conversion)
 
     push._minimalbot_push(
         _minimalbot_config(str(tmp_path)),
@@ -764,7 +773,7 @@ def test_minimalbot_activation_rejects_local_topic_content_changes(
     working_workflow.write_text('{"state":"unpushed"}', encoding="utf-8")
     fake = _RecordingClient()
     _patch_client(monkeypatch, fake)
-    monkeypatch.setattr(push, "yaml_to_object_models", _fake_topic_conversion)
+    monkeypatch.setattr(topic_authoring, "yaml_to_object_models", _fake_topic_conversion)
 
     with pytest.raises(
         SystemExit,

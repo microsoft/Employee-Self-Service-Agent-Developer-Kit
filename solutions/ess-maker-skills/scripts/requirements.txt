@@ -9,6 +9,10 @@ requests>=2.32.0,<3.0
 urllib3>=2.2.0,<3.0
 httpx>=0.27.0,<1.0
 
+# Browser topic testing attaches to an operator-owned Edge/Chromium over CDP.
+# No Playwright browser download is required.
+playwright>=1.61.0,<2.0
+
 # Local AgentConfiguration MCP server
 mcp>=1.29.0,<2.0.0
 

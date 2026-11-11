@@ -44,8 +44,8 @@ from auth import (  # noqa: E402
     load_config,
     query_all,
 )
-from push import (  # noqa: E402
-    load_component_map,
+from workspace_state import load_component_map  # noqa: E402
+from flow_registration import (  # noqa: E402
     _flow_response_kinds,
     _evaluate_flow_registration,
     _flow_connref_delete_filter,
@@ -206,10 +206,9 @@ def main():
         all_ready = all_ready and report["ready"]
 
     if not all_ready:
-        print("Some flows are not fully registered. If you authored + pushed "
-              "the flow, run `python push.py --repair --yes` (optionally pass a "
-              "flow name) once the connector is reachable to complete "
-              "registration.")
+        print("Some flows are not fully registered. Inspect their configuration "
+              "in Power Automate or the owning product-extension setup. "
+              "ADK does not deploy or repair workflow registration.")
         if _validate_is_gating(name_filter, strict):
             sys.exit(1)
         print(

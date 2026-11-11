@@ -68,7 +68,10 @@ def test_generated_quality_report_uses_exact_compact_scorecard(flow):
     assert "Post-generation quality report" in text
     assert "quality-fix-flow.md" in text
     assert "separate validation progress message or preamble" in text
-    assert "Do not add a table" in text
+    assert "render **Post-generation quality report** from" in text
+    assert "Do not append a next-steps heading or action questions to the scorecard." in text
+    assert "Leave next-step selection to this skill’s maker-action step" in text
+    assert "next-steps heading, and four closing questions" not in text
 
     contract = _contract("experience-contract")
     ordered_fragments = (
@@ -121,6 +124,35 @@ def test_validator_maps_full_rubric_names_without_expanding_scorecard():
     assert "do not append them to the compact maker-facing scorecard" in text
     assert "Never repeat those case tables" in text
     assert "Return only the compact scorecard" in text
+
+
+def test_standalone_deployment_preview_precedes_its_short_control():
+    deployment = _contract("deployment-flow")
+    preview = deployment.index("> **Evaluation deployment**")
+    control = deployment.index("> **Push this evaluation set?**")
+    assert preview < control
+    assert "> {Existing selected-set deployment preview}" in deployment[preview:control]
+    assert "> **Push evaluation set** / **Cancel**" in deployment
+    normalized = _normalized(deployment)
+    assert "actual selected-set context and fresh helper result" in normalized
+    assert "literal `reviewWarning`" in normalized
+    assert "adds no approval gate inside an unchanged approved general Push batch" in normalized
+    assert "Run and Request Review retain their existing controls and semantics" in normalized
+
+
+def test_rendering_instructions_stay_outside_evaluation_response_templates():
+    create = _skill("create")
+    quoted = "\n".join(line for line in create.splitlines() if line.startswith(">"))
+    assert quoted.count("> {Area summaries}") == 2
+    assert "Render one line per area" not in quoted
+    assert "Omit areas with 0 topics" not in quoted
+    assert "Define `{Area summaries}`" in create
+    run = _skill("run")
+    result = run.split("**Eval run complete", 1)[1].split("```", 1)[0]
+    assert "{Expected failure explanation}" in result
+    assert "{Expected failure table}" in result
+    assert "{Next corrective action question}" in result
+    assert "only when explicit expected-failure evidence exists" not in result
 
 
 @pytest.mark.parametrize("flow", ["create", "generate"])
@@ -311,8 +343,7 @@ def test_deployment_binds_confirmation_to_real_helper_and_selected_action():
         "do not call `deploy` separately",
         "evaluation_runs.py run-prepared",
         "Never reuse the pre-marker token",
-        "deployedReviewStatus=review_completed",
-        "deployedReviewStatus=review_requested",
+        "Legacy Dataverse deployment is unavailable",
         "`promotion.required`, `promotion.replacesLocalFiles`, and `promotion.changes`",
         "Even when `requiresPush=false`, continue through `deploy`",
         "A preview alone is not synchronization proof",
@@ -333,7 +364,6 @@ def test_request_review_selection_authorizes_immediate_push():
         "deploy it immediately without showing a separate scope confirmation",
         '--action "request-review" --confirmation-token "{confirmationToken}" --yes',
         "Request Review does not pause for confirmation",
-        "destructive Dataverse deletions",
         "replacement of different local files",
     ):
         assert fragment in deployment
@@ -373,8 +403,8 @@ def test_native_deployment_reuses_existing_insert_with_action_aware_consent():
         "old remote copy will be retained",
         "removed cases are absent only from the new copy, not deleted from the old set",
         "`reuse` means the helper will verify the existing mapped copy",
-        "not case omissions in a native new copy",
-        "Native `--force-delete` remains rejected",
+        "case omissions in a new copy",
+        "AgentBuilder `--force-delete` remains rejected",
         "pending insertion retry retain their verified or confirmed planned IDs",
         "Do not convert that existing limitation into a failed push",
         "python scripts/analytics_pointer.py --post-deploy",
@@ -390,9 +420,10 @@ def test_native_deployment_reuses_existing_insert_with_action_aware_consent():
     assert "`currentlyRunnable=null` means readiness is unknown" in run
 
 
-def test_review_outcomes_preserve_dataverse_metadata_without_native_parity_claims():
+def test_review_outcomes_preserve_native_local_metadata_without_retired_deployment():
     deployment = _normalized(_contract("deployment-flow"))
-    assert "Dataverse `push.py` persists `review.json` in the evaluation-parent description" in deployment
+    assert "Legacy Dataverse deployment is unavailable" in deployment
+    assert "Dataverse `push.py` persists" not in deployment
     assert "Native `review.json` remains in the selected local/promoted folder" in deployment
     assert "confirmed plan fingerprint, not the deployed `.baseline`" in deployment
     assert "native metadata-only changes: verify YAML reuse, retain local review intent" in deployment
@@ -401,8 +432,7 @@ def test_review_outcomes_preserve_dataverse_metadata_without_native_parity_claim
         "Existing native Push uploads evaluation YAML only. review.json stays local "
         "and is not published as shared review state."
     ) in deployment
-    assert "success reports `reviewMetadataPersisted=true`" in deployment
-    assert "Native success reports `reviewMetadataPersisted=false` and `deployedReviewStatus=null`" in deployment
+    assert "AgentBuilder success reports `reviewMetadataPersisted=false` and `deployedReviewStatus=null`" in deployment
     update = _normalized(_skill("update"))
     assert "After verified Dataverse success with `reviewMetadataPersisted=true`" in update
     assert "For native success with `reviewMetadataPersisted=false`, say instead" in update
@@ -432,7 +462,7 @@ def test_native_local_review_does_not_require_unpublished_baseline_state():
 
 def test_public_guidance_records_existing_api_scope_not_native_parity_blockers():
     readme = _normalized(_read("README.md"))
-    assert "These flows use the existing push APIs" in readme
+    assert "These flows use the existing AgentBuilder push APIs" in readme
     assert "new copy with a new deployed ID" in readme
     assert "not published as shared review metadata" in readme
     assert "same flow and report this limitation" in readme
@@ -520,18 +550,27 @@ def test_both_backends_require_discovered_explicit_connection_and_truthful_failu
 
 def test_entry_prompts_preserve_explicit_push_without_general_deployment_override():
     push = _read(".github/prompts/push.prompt.md")
-    assert push.index("## Explicit evaluation push") < push.index("## General component push")
+    assert push.index("## Explicit evaluation push") < push.index("## Inspect pending changes")
     assert "evaluation_deployment" not in push  # Shared guide owns the CLI.
     assert "deployment-flow.md" in push
     assert "python scripts/analytics_pointer.py --post-deploy" in push
     assert "--show" not in push
     assert "only after deployment verification" in push
     assert "do not substitute the Copilot Studio home page" in push
-    assert "Do NOT add `--yes`" in push.split("## General component push", 1)[1]
+    general = push.split("## Inspect pending changes", 1)[1]
+    assert "topic_authoring.py create --draft" in general
+    assert "topic_authoring.py update --draft" in general
+    assert "agent_instructions.py update --draft" in general
+    normalized_general = _normalized(general)
+    assert "Ordinary authoring has separate approvals" in normalized_general
+    assert "Carry this exact consent into the owners and their noninteractive `--yes`" in normalized_general
+    assert "Do not ask for independent owner approval again for that unchanged authorized scope" in normalized_general
+    assert "requires a revised summary and fresh approval" in normalized_general
+    assert "--force-delete" not in general
     assert "never launch an interactive evaluation push" in _normalized(push).lower()
     update = _normalized(_read(".github/prompts/update.prompt.md"))
-    assert "For **workflow updates only**" in update
-    assert "This restriction does not apply to evaluation operations" in update
+    assert "Workspace-level evaluation updates and review-tag workflows do not require configured-agent setup" in update
+    assert "separate deployment and run approvals" in update
     evaluate = _normalized(_read(".github/prompts/evaluate.prompt.md"))
     assert "**quality review** / **Run another quality review**" in evaluate
     assert "agentStudioUrl" in evaluate

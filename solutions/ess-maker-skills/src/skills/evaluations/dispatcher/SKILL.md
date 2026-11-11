@@ -34,7 +34,7 @@ If the request does not identify a scenario or goal, ask:
 
 Wait for the answer before routing.
 
-## Step 2: Search configured topics
+## Step 2: Search current configured topics
 
 Read `.local/config.json` when it exists. A configured topic inventory is
 available only when:
@@ -43,7 +43,19 @@ available only when:
 2. `agent.folder` is present; and
 3. `{agent.folder}/topics/` contains at least one `.mcs.yml` file.
 
-When the inventory is available, inspect every topic's:
+When canonical setup is ready, obtain the current remote inventory first:
+
+```powershell
+python scripts\topic_authoring.py list --output ".local\evaluation-context\topic-list.json"
+```
+
+For mapped topics relevant to the requested scenario, read current remote
+content with `topic_authoring.py read`. Use optional output under
+`.local\evaluation-context\`; never overwrite the working topic drafts. A
+missing local file does not establish remote absence. An approved local draft
+may describe intended behavior, but it is not deployed-state evidence.
+
+When current inventory is available, inspect each relevant topic's:
 
 - Filename and topic display name.
 - `modelDescription`.

@@ -1,172 +1,100 @@
-# Update Topic Skill
+# Update Topic
 
-This skill guides the user through modifying an existing Copilot Studio topic.
-Updating means editing the local working copy AND pushing the change to the
-live environment via push.
+Update one mapped topic in the selected editable Dev agent from an ordinary `.mcs.yml` draft. Preserve component identity, unrelated behavior, active state, and newer non-overlapping remote content. Do not activate or publish as a save side effect.
 
-This skill is local-only. Complete the checkpoint, edit, scan, and review, but
-skip every
-push, publish, or server-backed validation instruction. Finish by saying the
-local topic is ready and DA-GA deployment is not yet available. Do not offer to
-test the change because it is not deployed.
+Read the [shared foundation](../experience-contract.md) before interacting with the maker. Apply its Text-response authoring scope, authoring policy and authorization rules. Before drafting, read [Response wording and local drafts](../authoring-experience.md#response-wording-and-local-drafts). Load the other linked references at the steps that need them, not all upfront.
 
-## CRITICAL — Local Files Are a Working Copy
+## Boundaries
 
-The files in `workspace/agents/{slug}/` are a **working copy** of what's deployed in
-Copilot Studio. Editing a local file is NOT the same as updating the live
-topic. You MUST push the changes to Copilot Studio via `push.py` for them to
-take effect. **NEVER stop after editing only the local file.**
+- Require completed canonical setup for the selected Dev agent.
+- Resolve the topic through `.component-map.json`; never retarget by display name.
+- Read the current saved topic before editing.
+- Preserve unrelated dialog fields, action IDs, triggers, metadata, expressions, and state.
+- Preserve supplied or accepted response wording and links outside the authorized wording change. Do not polish or paraphrase them without permission.
+- Re-evaluate stale review suggestions against the current actions before applying them.
+- Treat routing overlap and instruction mismatch as advisory. Do not auto-deactivate or overwrite another topic.
+- Do not author Power Automate flows.
 
-## Rules
+## 1. Resolve and read the selected topic
 
-- ALWAYS read `.local/config.json` to get the agent folder, slug, and schema name.
-- ALWAYS read existing topic files in the user's agent folder as schema examples before editing any YAML.
-- ALWAYS checkpoint before making changes.
-- ALWAYS push changes to Copilot Studio after editing.
-- NEVER modify system topics (`on-error`, `conversation-start`, etc.) without
-  warning the user about potential side effects.
-- **PRESERVE THE AUTHORING INVARIANTS**: follow [`authoring-invariants.md`](src/reference/ess-docs/customization/authoring-invariants.md) — an edit MUST keep the shared-system-topic delegation, the standard parse → iterate → table rendering, and the shared error path intact.
-- **TRACK PROGRESS**: Use the todo list tool to track your progress.
+Infer or carry the selected topic from the request and context when unambiguous. Discover available local mapped and current saved topics using `topic_authoring.py list`. Topic selection is a fallback, not a mandatory question: when needed, offer discovered titles with short purposes plus free text for a name or description. Disambiguate and resolve exact component identity before proceeding; do not require name recall.
 
-## Step 1: Identify the Topic
+Read `.local/config.json`, resolve exactly one mapped path, and run:
 
-Read `.local/config.json` to get `agent.folder` and `agent.slug`.
-
-If the user named a specific topic, find the matching file in
-`{agent.folder}/topics/`. Match by filename, `componentName`, trigger phrases,
-or `modelDescription`.
-
-If the match is ambiguous, list available topics and ask the user to pick.
-
-## Step 2: Understand the Change
-
-Read the full topic file. Ask the user what they want to change if not
-already clear. Common modifications:
-
-| What the user says | What to change |
-|-------------------|---------------|
-| "Change the trigger phrases" | Update `triggerQueries` list |
-| "Change the response message" | Update `SendActivity` → `text` |
-| "Add a question/prompt" | Add a `Question` or `AdaptiveCardPrompt` action |
-| "Add a condition" | Add a `ConditionGroup` action |
-| "Change when the topic fires" | Update `modelDescription` and/or `triggerQueries` |
-| "Call a different workflow" | Update `InvokeFlowAction` → `flowId` |
-| "Add a step" | Insert a new action in the `actions` chain |
-| "Remove a step" | Remove an action (update `nextActionId` chain) |
-
-Show the user the relevant section of the current topic and propose the
-specific edit. Explain what will change and why.
-
-**Power Fx + Power Automate (flow-backed data).** If the change makes a topic **consume a custom Power Automate flow's output in Power Fx** — typed tables, dynamic/dependent option lists, or status/success handling — read `src/reference/ess-docs/customization/powerfx-and-power-automate-authoring.md` first. It defines the type-safety constraints (untyped flow output → stringify → `ParseValue` into a typed table, `number` not `integer` status codes, `kind:Skills` flow Response, PascalCase system-topic schemaname) and the deploy/verify loop (`push` registration, `publish`, `validate`, `--repair`). Skipping these causes silently dropped fields or a non-functional topic.
-
-**Acting on a `/review` finding.** If the change comes from a `/review` finding, prefer the structured
-findings catalog `/review` writes at `.local/review-findings/{topic-stem}-catalog.json` — it survives
-across sessions and gives each finding a stable `id`, its `files[]`, and a `concrete_fix`. List it with
-`python scripts/merge_findings.py --solution {topic-stem} --show` from `solutions/ess-maker-skills/`. Act on
-the finding whose `id` (or step/label) the customer named; if the catalog is absent, fall back to the
-suggested fix in the visible `/review` report. Either way, locate the action by its **identity** (`kind` +
-node `id`, step name/label, any quoted expression) — **not** a line number — and apply the fix. Read the
-surrounding actions first: if the node's actual context makes a better fix obvious than the suggestion (for
-example, the flagged value turns out to be dead — written but never read — so removing it is cleaner than
-rewriting it), apply that and say why. If one finding covers several angles at the same node, address each.
-
-After a fix is applied and you have confirmed by re-reading the file that the flagged node is gone or
-corrected, tell the customer to re-run `/review` — its reconcile step sees the finding's file changed
-(evidence-stale), confirms the node is gone, and records it resolved in the shared ledger so it stops being
-carried forward. Then continue from Step 3.
-
-## Step 3: Checkpoint
-
-Run in the terminal:
-
+```powershell
+python scripts\topic_authoring.py read --topic "{agent.folder}\topics\{Topic}.mcs.yml" --output ".local\topic-authoring\topic-before.json" --yaml-output ".local\topic-authoring\remote-topic.mcs.yml"
 ```
-python scripts/checkpoint.py "pre-update-{TopicName}"
+
+The returned component is authoritative current state. The optional projection is evidence, not permission to overwrite the working draft. Read the full local draft and surrounding components whose contracts matter.
+
+Apply the shared **Authoring policy for this release** to this component identity before editing and again before saving. Check the requested and resulting topic against the shared authoring scope before editing. If preserving existing behavior would leave it outside that boundary, explain the limitation and seek an in-scope request rather than silently deleting or rewriting that behavior.
+
+## 2. Draft and review the change
+
+Immediately before applying the intended edit, record this authoring invocation once, including when the maker later keeps the draft locally:
+
+```powershell
 python scripts/emit_capability.py topic_update
 ```
 
-Tell the user: "Saved a backup of your current agent files." The
-`emit_capability.py` line records anonymous usage telemetry (best-effort,
-non-blocking); it needs no user-facing message and never fails the step.
+Telemetry is best-effort and must not block authoring. Previewing, saving or recovering the same proposal adds no authoring count. When this owner receives an unchanged draft for a later Push, skip this emission and reuse the draft; do not treat saving it as new authoring.
 
-## Step 4: Apply the Edit
+Edit `{agent.folder}/topics/{Topic}.mcs.yml`. Preserve behavior outside the requested scope.
 
-Make the change to the topic file using file editing tools.
+Ask in normal chat only for missing requirements. Prepare the [change-focused Update summary](../authoring-experience.md#update-summary). Render it after the current instruction-alignment assessment and save preview, before the separate short decision control.
 
-**Safe modification patterns:**
-- Adding/removing trigger phrases: Edit the `triggerQueries` list
-- Changing messages: Edit `text` fields in `SendActivity` actions
-- Changing model description: Edit `modelDescription` (keep under 1024 chars)
-- Adding actions: Insert in the `actions` list and update `nextActionId` links
-- Removing actions: Remove from `actions` and fix `nextActionId` chain
+Warn about routing-changing overlap. Skip response-only overlap scans and reuse still-current assessments instead of repeating unchanged warnings.
 
-**What NOT to change without warning:**
-- `schemaName` — breaks references from other topics
-- `componentName` — may affect display in Copilot Studio
-- `kind` — system vs. general topic classification
-- Action IDs referenced by other actions — breaks the flow chain
+## 3. Assess instruction alignment
 
-After editing, read the file back to verify the change looks correct.
+Read current saved instructions:
 
-## Step 5: Scan for Errors
-
-Check for errors across the **full agent folder** using the diagnostics tool.
-
-- If errors exist in the **edited file** → fix them before proceeding.
-- If **pre-existing errors** exist in other files → mention briefly but do
-  NOT block the push.
-
-## Step 6: Dry Run
-
-Run in the terminal:
-
-```
-python scripts/push.py --dry-run
+```powershell
+python scripts\agent_instructions.py read --output ".local\topic-authoring\instructions-before.json"
 ```
 
-Show the user the diff summary. It should show the topic as modified.
+Assess intent/scope, routing/disambiguation, policy/confirmation, response/grounding, fallback, and identity/existence. If the read fails, mark alignment unverified and offer best-effort supported testing collaboration. Do not claim an automated browser instruction reader.
 
-## Step 7: Push to Copilot Studio
+When the maker selects Resolve the routing conflict in the Agent Instructions, or the correction is already explicitly authorized, edit only the desired instructions in `{agent.folder}/agent.mcs.yml` and preview separately. Do not prepare it merely because a topic is being authored:
 
-Ask the user: "Ready to push this change to your environment?"
-
-When confirmed, run:
-
-```
-python scripts/push.py --yes
+```powershell
+python scripts\agent_instructions.py update --draft "{agent.folder}\agent.mcs.yml" --expected ".local\topic-authoring\instructions-before.json" --output ".local\topic-authoring\instructions-preview.json"
 ```
 
-**If the push fails:**
-- Show the error output.
-- Offer: **Retry** or **Revert** (`python scripts/checkpoint.py --revert`).
+Ordinary authoring requires separate topic and instruction approvals. For a known mismatch, read [Routing Conflicts](../authoring-experience.md#routing-conflicts) and the [initial routing-conflict decision](../authoring-experience.md#initial-routing-conflict-decision). A deliberately approved topic-only save may leave that mismatch unresolved. When preparing a correction, use the [targeted instruction-change preview](../authoring-experience.md#targeted-instruction-change-preview-and-approval) and [Push review](../push-experience.md#entry-inventory-and-choices) before saving either proposed change. Reuse unchanged scoped batch/debugging consent from the shared foundation.
 
-## Step 8: Verify
+## 4. Preview and save
 
-After a successful push, tell the user:
+Preview without mutation:
 
-> ✅ **{TopicName}** has been updated in Copilot Studio.
-
-Topic (botcomponent) changes only go live once the agent is **published** (flow `clientdata` edits are live immediately). Ask **once** in chat whether to publish; on yes, run it **non-interactively** so the CLI's own confirmation never surfaces to the maker:
-
-```
-python scripts/publish.py --yes
+```powershell
+python scripts\topic_authoring.py update --draft "{agent.folder}\topics\{Topic}.mcs.yml" --expected ".local\topic-authoring\topic-before.json" --output ".local\topic-authoring\topic-preview.json"
 ```
 
-If the change added or modified a ServiceNow ITSM flow (e.g. the runtime dependent-dropdowns options flow), also run `validate.py` to confirm the flow is agent-invocable — this is **read-only** (it only reads registration state), so just run it without asking. It verifies the flow is activated, `modernflowtype=1`, has kind:Skills Response actions, a bound flow-scoped connection reference, and a system-topic link:
+Render the completed Update summary and use the [Topic save decision](../authoring-experience.md#topic-save-decision), including its applicable wording or routing branch. Keep the summary in normal chat and the decision control separate. Revisions return to a fresh preview and the shared decision before saving; reuse unchanged scoped batch/debugging approval rather than asking again. Keeping a draft performs no remote save. Use [Topic outcomes](../authoring-experience.md#topic-outcomes) for a draft-only result or the [composed report](../push-experience.md#composed-push-report-composed_push_report) for partial saves.
 
+After topic approval, including valid unchanged batch/debugging consent:
+
+Read [**Push telemetry**](../push-experience.md#push-telemetry) before execution. Reuse an enclosing approved batch's lifecycle without emitting again. Otherwise own the standalone batch, starting immediately before the approved save below and applying the shared terminal mapping after the final observed result, including any jointly approved instruction save. Keep capability authoring counts separate from this save lifecycle.
+
+```powershell
+python scripts\topic_authoring.py update --draft "{agent.folder}\topics\{Topic}.mcs.yml" --expected ".local\topic-authoring\topic-before.json" --yes --output ".local\topic-authoring\topic-result.json"
 ```
-python scripts/validate.py "<flow name>"
+
+The adapter uses mapped identity, initial reconciliation, service concurrency, and authoritative readback. It does not automatically reapply HTTP 409/412 responses. It acknowledges verified saved content, retaining the captured submitted YAML when it matches readback. After a compatible merge, it synchronizes the working draft only if it still matches the submitted capture; later disk edits remain pending.
+
+After the applicable instruction approval, including valid scoped batch/debugging consent:
+
+```powershell
+python scripts\agent_instructions.py update --draft "{agent.folder}\agent.mcs.yml" --expected ".local\topic-authoring\instructions-before.json" --yes --output ".local\topic-authoring\instructions-result.json"
 ```
 
-If the user prefers to publish manually instead, point them at [Copilot Studio](https://copilotstudio.microsoft.com/).
+Report through [Topic outcomes](../authoring-experience.md#topic-outcomes), including its verified no-write outcome, and, when applicable, [Instruction-push outcomes and testing](../authoring-experience.md#instruction-push-outcomes-and-testing). A joint approval uses the [composed Push report](../push-experience.md#composed-push-report-composed_push_report), not stacked owner blocks. Preserve known remote outcome separately from local bookkeeping or output failures. Do not auto-refresh setup, overwrite later local edits from remote content, or invent rollback/replay behavior.
 
-## Step 9: Continue into test, or offer next steps
+Unchanged-intent recovery does not require approval merely because another operation is needed. For materially changed target, behavior, scope or treatment of conflicting edits, follow the shared recovery rule: report the actual save outcome and re-render the change-focused Update summary from step 2 with Title, Agent, fresh current/proposed details, preservation facts and Full draft before obtaining the specific new decision. Do not reduce the re-review to conflicting reply excerpts alone.
 
-Unless the workspace uses AgentBuilder, offer to continue straight into a debug drive of the change — and if the user says yes, **do it in the same flow, don't make them start over**:
+## 5. Testing and evaluation handoff
 
-- "Want to check it works? I can drive **{TopicName}** now and exercise its happy path and failure handling."
-  - On yes: read `src/skills/topics/test/SKILL.md` and run its debug-and-validate loop **scoped to {TopicName}** — you already know the component (this was a topic update), so **skip the "topic or workflow?" question**, and reuse the signed-in test-pane session if one is already open (only do the launch → sign-in handoff if no browser is ready). Build the probe set (failure paths first) for {TopicName} and drive it.
-- For AgentBuilder, do not make this offer; say runtime testing is deferred
-  because the local change is not deployed.
-- "Would you like to make another change?"
-- "Type `/scan` to check for errors."
-- "Type `/menu` to see all available commands."
+Read [Topic testing continuation](../testing-experience.md#topic-testing-continuation) when reaching this handoff. Carry the selected topic, latest intended behavior, actual save/state, existing authorization and declined corrections. Check `scripts/native_topic_test.py` before offering runnable testing; if unavailable, report conversation acceptance as pending. Enter [the testing owner](../test/SKILL.md) only within the shared consent rules. Do not activate or publish as a save side effect.
+
+At the end of the authoring iteration, identify relevant affected evaluation cases across sets, including routing, negative, fallback, and cross-topic cases. A topic-only save may leave disclosed evaluation mismatches. Separately requested evaluation changes remain owned by `src/skills/evaluations/dispatcher/SKILL.md`.

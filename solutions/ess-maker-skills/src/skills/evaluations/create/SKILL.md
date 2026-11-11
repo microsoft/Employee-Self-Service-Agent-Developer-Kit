@@ -35,8 +35,14 @@ actions. Explicit evaluation push remains available through
 > command to follow.
 
 1. Read `.local/config.json` to get `agent.folder` and `agent.slug`.
-2. Read ALL topic files in `{agent.folder}/topics/` — every `.mcs.yml` file.
-3. Classify each topic:
+2. When canonical setup is ready, run `topic_authoring.py list`, then read
+   relevant mapped topics with `topic_authoring.py read` into
+   `.local/evaluation-context/`. Use this current remote inventory/content as
+   deployed-state evidence without overwriting local drafts.
+3. Read local topic drafts for intended pending behavior. Treat them as drafts,
+   not proof of current remote state. A missing local file does not prove a
+   topic is absent remotely.
+4. Classify each topic:
 
 | Trigger type | Classification | Use in test generation |
 |-------------|---------------|----------------------|
@@ -49,19 +55,19 @@ actions. Explicit evaluation push remains available through
 | `OnUnknownIntent` | System | Skip |
 | `OnGeneratedResponse` | System | Skip |
 
-4. For each user-facing topic, extract:
+5. For each user-facing topic, extract:
    - `triggerQueries` (if present) — these become test prompts
    - `modelDescription` — describes what the topic does (use for expected response and for generating natural-language prompt variants)
    - First `SendActivity` message — can inform expected response
    - Whether the topic calls a workflow (`InvokeFlowAction`) — indicates integration data tests
    - Whether the topic calls a shared system topic (`BeginDialog`) — indicates template-config-based integration
 
-5. Take note of special topics by display name or content:
+6. Take note of special topics by display name or content:
    - Topics related to **sensitive content** → generate SensitiveTopic tests
    - Topics related to **emotional intelligence / empathy** → generate EQTopic tests
    - Topics related to **clarification / ambiguity** → generate AmbiguousTopic tests
 
-6. **Group user-facing topics by area.** Look at the file names of all
+7. **Group user-facing topics by area.** Look at the file names of all
    user-facing topic files and find **common words or prefixes** shared across
    multiple files (e.g., all files starting with `Workday`, or containing
    `ServiceNow`, `SuccessFactors`, etc.). Use those shared words as the area
@@ -108,14 +114,19 @@ Do not infer parent identity from the folder or parent filename.
 
 ### 2b. Present scope options based on what exists
 
+Define `{Area summaries}` before rendering either message below: render one line
+per area derived from the agent's topic file names, for example
+**{AreaLabel} ({n}):** Topic Display Name, Topic Display Name, ...
+Omit areas with 0 topics. Do not hardcode ServiceNow/Workday/SuccessFactors;
+use whatever common words actually appear in this agent's file names.
+Each category-status placeholder below is the actual discovered status:
+`✅ exists (X tests)` with its real count, or `❌ missing`.
+
 **If ALL categories are missing** (fresh agent, no eval sets yet):
 
 > I found **{N}** user-facing topics in your agent, grouped by area:
 >
-> {Render one line per area derived from the agent's topic file names —
-> e.g. **{AreaLabel} ({n}):** Topic Display Name, Topic Display Name, ...
-> Omit areas with 0 topics. Do NOT hardcode ServiceNow/Workday/SuccessFactors
-> — use whatever common words actually appear in this agent's file names.}
+> {Area summaries}
 >
 > With positive, boundary, and negative cases per topic, this will generate
 > roughly **{N×3} to {N×5}** test cases for Topic Triggering alone (plus other
@@ -138,21 +149,18 @@ Do not infer parent identity from the folder or parent filename.
 
 > I found **{N}** user-facing topics in your agent, grouped by area:
 >
-> {Render one line per area derived from the agent's topic file names —
-> e.g. **{AreaLabel} ({n}):** Topic Display Name, Topic Display Name, ...
-> Omit areas with 0 topics. Do NOT hardcode ServiceNow/Workday/SuccessFactors
-> — use whatever common words actually appear in this agent's file names.}
+> {Area summaries}
 >
 > Here's what eval coverage looks like so far:
 >
 > | Category | Status |
 > |----------|--------|
-> | Topic Triggering | {✅ exists (X tests) / ❌ missing} |
-> | Ambiguous Prompts | {✅ exists (X tests) / ❌ missing} |
-> | Responsible AI | {✅ exists (X tests) / ❌ missing} |
-> | Sensitive Topics | {✅ exists (X tests) / ❌ missing} |
-> | Emotional Intelligence | {✅ exists (X tests) / ❌ missing} |
-> | Integration Data | {✅ exists (X tests) / ❌ missing} |
+> | Topic Triggering | {Topic Triggering status} |
+> | Ambiguous Prompts | {Ambiguous Prompts status} |
+> | Responsible AI | {Responsible AI status} |
+> | Sensitive Topics | {Sensitive Topics status} |
+> | Emotional Intelligence | {Emotional Intelligence status} |
+> | Integration Data | {Integration Data status} |
 >
 > You can **Edit this existing set**, **Add test cases to this set**, generate
 > the **{M} missing** category/categories, **Create a new set**, or **Keep it
@@ -598,11 +606,9 @@ passing every `.mcs.yml` path. Its first action must be to read
 `src/skills/evaluations/validate/SKILL.md`. Do not show a separate validation
 progress message or preamble after the generated-case preview.
 
-**After the subagent returns, display its Post-generation quality report
-scorecard verbatim. Preserve its exact
-opening paragraph, overall line, case-count line, eight score rows, optional
-improvements, local-only warning, next-steps heading, and four closing
-questions. Do not add a table, filename callout, summary, or second preamble.**
+After the validate subagent returns a completed quality report, render **Post-generation quality report** from `src/skills/evaluations/experience-contract.md` exactly. Do not append a next-steps heading or action questions to the scorecard.
+
+Leave next-step selection to this skill’s maker-action step after its quality gate and selected fix/revalidation flow. That step uses **Four maker actions** from the same contract.
 The generated-case tables from step 4.2 appear once only; never repeat them
 during or after quality validation unless a fix changed specific rows, in which
 case show only those changed rows.

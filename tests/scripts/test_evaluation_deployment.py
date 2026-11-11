@@ -59,55 +59,8 @@ def forbid_network(monkeypatch):
     def reject(*args, **kwargs):
         raise AssertionError("Tests must not call a live service.")
     monkeypatch.setattr(requests.sessions.Session, "request", reject)
-    monkeypatch.setattr(push, "run_checkpoint", lambda *args: None)
 
 
-class DataverseState:
-    """In-memory create/patch/read seams already used by push.py."""
-
-    def __init__(self, monkeypatch):
-        self.rows = {}
-        self.writes = []
-        self.fail_child = False
-        self.drop_update = False
-        monkeypatch.setattr(
-            push, "_AuthHolder",
-            lambda *args: SimpleNamespace(token="offline", acquire=lambda: None),
-        )
-        monkeypatch.setattr(push, "_verify_bot_exists", lambda *args: None)
-        monkeypatch.setattr(push, "query_all", self.query)
-        monkeypatch.setattr(push, "create_record", self.create)
-        monkeypatch.setattr(push, "update_record", self.update)
-        monkeypatch.setattr(push, "delete_record", self.delete)
-
-    def query(self, *args, **kwargs):
-        return deepcopy(list(self.rows.values()))
-
-    def create(self, env, token, table, data):
-        assert table == "botcomponents"
-        if self.fail_child and "ParentBotComponentId@odata.bind" in data:
-            raise requests.ConnectionError("offline child failure")
-        record_id = f"component-{len(self.rows) + 1}"
-        row = {**data, "botcomponentid": record_id, "statecode": 0}
-        parent = data.get("ParentBotComponentId@odata.bind")
-        if parent:
-            row["_parentbotcomponentid_value"] = parent.removeprefix(
-                "/botcomponents("
-            ).removesuffix(")")
-        self.rows[record_id] = row
-        self.writes.append(("create", record_id))
-        return record_id
-
-    def update(self, env, token, table, record_id, data):
-        self.writes.append(("update", record_id))
-        if not self.drop_update:
-            self.rows[record_id].update(data)
-        return True
-
-    def delete(self, env, token, table, record_id):
-        self.writes.append(("delete", record_id))
-        del self.rows[record_id]
-        return True
 
 
 class NativeState:
@@ -172,6 +125,19 @@ def test_cancellation_never_prepares_or_authenticates(monkeypatch):
     assert deployment.deploy_evaluation_set("anything")["status"] == "cancelled"
 
 
+def test_dataverse_delegation_is_retired_without_auth_or_remote_write(tmp_path, monkeypatch):
+    config = config_for(tmp_path)
+    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
+    monkeypatch.setattr(
+        deployment.MinimalBotEvaluationClient, "from_config",
+        lambda config: pytest.fail("A retired backend must not authenticate"),
+    )
+    result = deployment.preview_deployment(folder, config=config, solution_root=tmp_path)
+    assert result["status"] == "blocked"
+    assert "Dataverse evaluation deployment is retired" in result["error"]
+    assert not (Path(config["agent"]["folder"]) / ".evaluation-preview.json").exists()
+
+
 def test_missing_setup_preserves_workspace_review_intent(tmp_path):
     folder = write_set(tmp_path / "workspace" / "evaluations" / "selected")
     result = deployment.preview_deployment(
@@ -191,144 +157,22 @@ def test_reject_other_agent_before_review_write(tmp_path):
     assert not (folder / "review.json").exists()
 
 
-def test_workspace_review_push_is_scoped_and_does_not_run(tmp_path, monkeypatch):
-    config = config_for(tmp_path)
-    state = DataverseState(monkeypatch)
-    source = write_set(tmp_path / "workspace" / "evaluations" / "selected")
-    unrelated = write_set(Path(config["agent"]["folder"]) / "evaluations" / "unrelated")
-    result = execute(source, config, tmp_path, action="request-review")
-    assert result["status"] == "pushed", result
-    assert result["sets"][0]["deployedReviewStatus"] == "review_requested"
-    assert result["reviewMetadataPersisted"] is True
-    assert result["sets"][0]["testSetId"] == "component-1"
-    assert len(state.rows) == 2
-    assert not source.exists()
-    assert unrelated.exists()
-    assert not (unrelated.parents[1] / ".baseline" / "evaluations" / unrelated.name).exists()
-    assert "review_requested" in state.rows["component-1"]["description"]
-    assert result["environmentId"] == config["environmentId"]
 
 
-def test_unchanged_dataverse_reuses_id_without_write(tmp_path, monkeypatch):
-    config = config_for(tmp_path)
-    state = DataverseState(monkeypatch)
-    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
-    first = execute(folder, config, tmp_path)
-    state.writes.clear()
-    second = execute(folder, config, tmp_path)
-    assert first["status"] == "pushed", first
-    assert second["status"] == "up_to_date", second
-    assert first["sets"] == second["sets"]
-    assert not state.writes
-    assert not (folder / "review.json").exists()
 
 
-def test_dataverse_dirty_update_keeps_parent_identity(tmp_path, monkeypatch):
-    config = config_for(tmp_path)
-    state = DataverseState(monkeypatch)
-    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
-    first = execute(folder, config, tmp_path)
-    child = folder / "set-case0.mcs.yml"
-    child.write_text(child.read_text().replace("Expected answer", "New answer"))
-    state.writes.clear()
-    second = execute(folder, config, tmp_path)
-    assert second["status"] == "pushed", second
-    assert second["sets"][0]["testSetId"] == first["sets"][0]["testSetId"]
-    assert state.writes == [("update", "component-2")]
 
 
-@pytest.mark.parametrize("completion_action", ["run", "push"])
-def test_review_requested_blocks_run_and_completion_is_not_synthesized(
-    tmp_path, monkeypatch, completion_action,
-):
-    config = config_for(tmp_path)
-    DataverseState(monkeypatch)
-    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
-    assert execute(folder, config, tmp_path, action="request-review")["status"] == "pushed"
-    result = deployment.preview_deployment(
-        folder, action="run", config=config, solution_root=tmp_path,
-    )
-    assert result["status"] == "blocked"
-    assert json.loads((folder / "review.json").read_text())["status"] == "review_requested"
-    set_review_metadata(folder, "review_completed")
-    result = execute(folder, config, tmp_path, action=completion_action)
-    assert result["status"] == "pushed", result
-    assert result["sets"][0]["deployedReviewStatus"] == "review_completed"
 
 
-def test_request_review_no_change_is_metadata_only_and_repeat_noop(tmp_path, monkeypatch):
-    config = config_for(tmp_path)
-    state = DataverseState(monkeypatch)
-    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
-    execute(folder, config, tmp_path)
-    state.writes.clear()
-    result = execute(folder, config, tmp_path, action="request-review")
-    assert result["status"] == "pushed", result
-    assert state.writes == [("update", "component-1")]
-    state.writes.clear()
-    result = execute(folder, config, tmp_path, action="request-review")
-    assert result["status"] == "up_to_date", result
-    assert not state.writes
 
 
-def test_stale_preview_cannot_authorize_changed_source(tmp_path, monkeypatch):
-    config = config_for(tmp_path)
-    state = DataverseState(monkeypatch)
-    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
-    preview = deployment.preview_deployment(folder, config=config, solution_root=tmp_path)
-    child = folder / "set-case0.mcs.yml"
-    child.write_text(child.read_text().replace("Expected answer", "Changed answer"))
-    result = deployment.deploy_evaluation_set(
-        folder, config=config, solution_root=tmp_path, yes=True,
-        confirmation_token=preview["confirmationToken"],
-    )
-    assert result["status"] == "blocked"
-    assert not state.writes
 
 
-def test_selected_deletion_requires_extra_approval(tmp_path, monkeypatch):
-    config = config_for(tmp_path)
-    state = DataverseState(monkeypatch)
-    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected", cases=2)
-    execute(folder, config, tmp_path)
-    (folder / "set-case1.mcs.yml").unlink()
-    state.writes.clear()
-    result = execute(folder, config, tmp_path)
-    assert result["status"] == "blocked"
-    assert not state.writes
-    result = execute(folder, config, tmp_path, force_delete=True)
-    assert result["status"] == "pushed", result
-    assert len(state.rows) == 2
 
 
-@pytest.mark.parametrize("action", ["run", "request-review"])
-def test_partial_dataverse_write_stops_retry_without_duplicate(tmp_path, monkeypatch, action):
-    config = config_for(tmp_path)
-    state = DataverseState(monkeypatch)
-    state.fail_child = True
-    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
-    result = execute(folder, config, tmp_path, action=action)
-    assert result["status"] == "failed"
-    assert len(state.rows) == 1
-    assert "review_requested" not in state.rows["component-1"].get("description", "")
-    result = deployment.preview_deployment(folder, config=config, solution_root=tmp_path)
-    assert result["status"] == "blocked"
-    assert len(state.rows) == 1
-    assert folder.exists()
 
 
-def test_unverified_update_does_not_sync_or_cleanup(tmp_path, monkeypatch):
-    config = config_for(tmp_path)
-    state = DataverseState(monkeypatch)
-    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
-    execute(folder, config, tmp_path)
-    child = folder / "set-case0.mcs.yml"
-    child.write_text(child.read_text().replace("Expected answer", "Changed answer"))
-    state.drop_update = True
-    result = execute(folder, config, tmp_path)
-    assert result["status"] == "failed"
-    baseline = Path(config["agent"]["folder"]) / ".baseline" / "evaluations" / "selected"
-    assert "Expected answer" in (baseline / child.name).read_text()
 
 
 def test_native_workspace_plan_is_stable_and_reused_on_unchanged(tmp_path, monkeypatch):
@@ -554,7 +398,10 @@ def test_native_uncertain_mismatch_stops_without_replay(tmp_path, monkeypatch, f
     state.partial = failure == "partial"
     state.fail_before_write = failure == "absent"
     state.fail_after_write = failure == "different-definition"
-    assert execute(folder, config, tmp_path)["status"] == "failed"
+    failed = execute(folder, config, tmp_path)
+    assert failed["status"] == "failed"
+    assert "remoteResult" not in failed
+    assert "evidence" not in failed
     if failure == "different-definition":
         state.components[0]["component"]["definition"]["displayName"] = "Other"
     result = deployment.preview_deployment(folder, config=config, solution_root=tmp_path)
@@ -563,10 +410,10 @@ def test_native_uncertain_mismatch_stops_without_replay(tmp_path, monkeypatch, f
     assert not (Path(config["agent"]["folder"]) / ".component-map.json").exists()
 
 
-@pytest.mark.parametrize("minimalbot", [False, True])
+@pytest.mark.parametrize("minimalbot", [True])
 def test_method_guard_rejects_even_when_baseline_matches(tmp_path, monkeypatch, minimalbot):
     config = config_for(tmp_path, minimalbot=minimalbot)
-    state = NativeState(monkeypatch, config) if minimalbot else DataverseState(monkeypatch)
+    state = NativeState(monkeypatch, config)
     folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
     assert execute(folder, config, tmp_path)["status"] == "pushed"
     parent = folder / "set.mcs.yml"
@@ -581,10 +428,10 @@ def test_method_guard_rejects_even_when_baseline_matches(tmp_path, monkeypatch, 
     assert len(state.puts if minimalbot else state.writes) == count
 
 
-@pytest.mark.parametrize("minimalbot", [False, True])
+@pytest.mark.parametrize("minimalbot", [True])
 def test_cleanup_failure_is_successful_deployment_with_warning(tmp_path, monkeypatch, minimalbot):
     config = config_for(tmp_path, minimalbot=minimalbot)
-    state = NativeState(monkeypatch, config) if minimalbot else DataverseState(monkeypatch)
+    state = NativeState(monkeypatch, config)
     source = write_set(tmp_path / "workspace" / "evaluations" / "selected")
 
     def fail_cleanup(*args):
@@ -602,10 +449,10 @@ def test_cleanup_failure_is_successful_deployment_with_warning(tmp_path, monkeyp
     assert len(state.puts if minimalbot else state.writes) == count
 
 
-@pytest.mark.parametrize("minimalbot", [False, True])
+@pytest.mark.parametrize("minimalbot", [True])
 def test_lock_cleanup_failure_preserves_deployment_result(tmp_path, monkeypatch, minimalbot):
     config = config_for(tmp_path, minimalbot=minimalbot)
-    NativeState(monkeypatch, config) if minimalbot else DataverseState(monkeypatch)
+    NativeState(monkeypatch, config)
     folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
     original_unlink = Path.unlink
 
@@ -624,8 +471,8 @@ def test_lock_cleanup_failure_preserves_deployment_result(tmp_path, monkeypatch,
 
 
 def test_lock_cleanup_failure_preserves_structured_failure(tmp_path, monkeypatch):
-    config = config_for(tmp_path)
-    DataverseState(monkeypatch)
+    config = config_for(tmp_path, minimalbot=True)
+    NativeState(monkeypatch, config)
     folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
     original_unlink = Path.unlink
 
@@ -646,10 +493,10 @@ def test_lock_cleanup_failure_preserves_structured_failure(tmp_path, monkeypatch
     )
 
 
-@pytest.mark.parametrize("minimalbot", [False, True])
+@pytest.mark.parametrize("minimalbot", [True])
 def test_workspace_change_during_cleanup_blocks_continuation(tmp_path, monkeypatch, minimalbot):
     config = config_for(tmp_path, minimalbot=minimalbot)
-    state = NativeState(monkeypatch, config) if minimalbot else DataverseState(monkeypatch)
+    state = NativeState(monkeypatch, config)
     source = write_set(tmp_path / "workspace" / "evaluations" / "selected")
     original_cleanup = deployment.cleanup_workspace_set
 
@@ -672,24 +519,6 @@ def test_workspace_change_during_cleanup_blocks_continuation(tmp_path, monkeypat
     assert state.puts if minimalbot else state.writes
 
 
-def test_dataverse_baseline_failure_recovers_without_recreating(tmp_path, monkeypatch):
-    config = config_for(tmp_path)
-    state = DataverseState(monkeypatch)
-    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
-    original = push.update_baseline_scoped
-
-    def fail(*args):
-        raise OSError("Baseline write refused")
-
-    monkeypatch.setattr(push, "update_baseline_scoped", fail)
-    result = execute(folder, config, tmp_path)
-    assert result["status"] == "failed", result
-    assert result["remoteCommitted"] is True
-    count = len(state.writes)
-    monkeypatch.setattr(push, "update_baseline_scoped", original)
-    result = execute(folder, config, tmp_path)
-    assert result["status"] == "pushed", result
-    assert len(state.writes) == count
 
 
 def test_native_tracking_failure_recovers_without_reinserting(tmp_path, monkeypatch):
@@ -702,32 +531,22 @@ def test_native_tracking_failure_recovers_without_reinserting(tmp_path, monkeypa
         raise native.MinimalBotEvaluationError("Native tracking write failed")
 
     monkeypatch.setattr(state.client, "_commit_tracking", fail)
-    assert execute(folder, config, tmp_path)["status"] == "failed"
+    failed = execute(folder, config, tmp_path)
+    assert failed["status"] == "failed"
+    assert failed["evidence"]["remoteResult"]["verifiedComponents"] == 2
+    assert failed["evidence"]["acknowledgementComplete"] is False
     monkeypatch.setattr(state.client, "_commit_tracking", original)
     result = execute(folder, config, tmp_path)
     assert result["status"] == "pushed", result
     assert len(state.puts) == 1
 
 
-def test_remote_extra_case_blocks_noop(tmp_path, monkeypatch):
-    config = config_for(tmp_path)
-    state = DataverseState(monkeypatch)
-    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
-    assert execute(folder, config, tmp_path)["status"] == "pushed"
-    state.rows["unexpected"] = {
-        **state.rows["component-2"], "botcomponentid": "unexpected",
-    }
-    count = len(state.writes)
-    result = deployment.preview_deployment(folder, config=config, solution_root=tmp_path)
-    assert result["status"] == "blocked"
-    assert "case identities" in result["error"]
-    assert len(state.writes) == count
 
 
-@pytest.mark.parametrize("minimalbot", [False, True])
+@pytest.mark.parametrize("minimalbot", [True])
 def test_target_change_invalidates_confirmation(tmp_path, monkeypatch, minimalbot):
     config = config_for(tmp_path, minimalbot=minimalbot)
-    state = NativeState(monkeypatch, config) if minimalbot else DataverseState(monkeypatch)
+    state = NativeState(monkeypatch, config)
     folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
     preview = deployment.preview_deployment(folder, config=config, solution_root=tmp_path)
     config["agent"]["botId"] = "33333333-3333-3333-3333-333333333333"
@@ -757,8 +576,26 @@ def test_native_source_changed_during_push_is_not_marked_synchronized(tmp_path, 
     monkeypatch.setattr(state.client, "_request", changed)
     result = execute(folder, config, tmp_path)
     assert result["status"] == "failed", result
-    assert "Source changed" in result["error"]
+    assert any("Source changed" in item["message"] for item in result["errors"])
+    assert result["evidence"]["remoteResult"]["verifiedComponents"] == 2
     assert not (Path(config["agent"]["folder"]) / ".component-map.json").exists()
+
+
+def test_unexpected_post_deployment_error_preserves_verified_result(tmp_path, monkeypatch):
+    config = config_for(tmp_path, minimalbot=True)
+    state = NativeState(monkeypatch, config)
+    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
+    cause = RuntimeError("Unexpected local marker failure")
+
+    def fail(config):
+        raise cause
+
+    monkeypatch.setattr(deployment.analytics_pointer, "write_verified_deployment_marker", fail)
+    with pytest.raises(native.ComponentEditError) as error:
+        execute(folder, config, tmp_path)
+    assert error.value.__cause__ is cause
+    assert error.value.evidence["remoteResult"]["verifiedComponents"] == 2
+    assert len(state.puts) == 1
 
 
 @pytest.mark.parametrize("already_deployed", [False, True])
@@ -800,8 +637,8 @@ def test_native_workspace_changed_during_deployment_blocks_continuation(
 
 
 def test_workspace_collision_requires_replace_then_selected_consent(tmp_path, monkeypatch):
-    config = config_for(tmp_path)
-    DataverseState(monkeypatch)
+    config = config_for(tmp_path, minimalbot=True)
+    NativeState(monkeypatch, config)
     destination = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
     source = write_set(tmp_path / "workspace" / "evaluations" / "selected", cases=2)
     result = deployment.preview_deployment(source, config=config, solution_root=tmp_path)
@@ -862,10 +699,10 @@ def test_native_direct_stale_plan_cannot_duplicate_completed_set(tmp_path, monke
     assert len(state.puts) == 1
 
 
-@pytest.mark.parametrize("minimalbot", [False, True])
+@pytest.mark.parametrize("minimalbot", [True])
 def test_glob_characters_in_folder_do_not_expand_scope(tmp_path, monkeypatch, minimalbot):
     config = config_for(tmp_path, minimalbot=minimalbot)
-    state = NativeState(monkeypatch, config) if minimalbot else DataverseState(monkeypatch)
+    state = NativeState(monkeypatch, config)
     agent = Path(config["agent"]["folder"])
     selected = write_set(agent / "evaluations" / "set[1]")
     write_set(agent / "evaluations" / "set1")
@@ -877,27 +714,6 @@ def test_glob_characters_in_folder_do_not_expand_scope(tmp_path, monkeypatch, mi
     assert len(state.puts if minimalbot else state.rows) == (1 if minimalbot else 2)
 
 
-def test_recovery_preserves_unrelated_component_map_changes(tmp_path, monkeypatch):
-    config = config_for(tmp_path)
-    DataverseState(monkeypatch)
-    agent = Path(config["agent"]["folder"])
-    folder = write_set(agent / "evaluations" / "selected")
-    original = push.update_baseline_scoped
-
-    def fail(*args):
-        raise OSError("Baseline failure")
-
-    monkeypatch.setattr(push, "update_baseline_scoped", fail)
-    assert execute(folder, config, tmp_path)["status"] == "failed"
-    map_path = agent / ".component-map.json"
-    saved_map = json.loads(map_path.read_text())
-    saved_map["topics/unrelated.mcs.yml"] = {"botcomponentid": "unrelated"}
-    map_path.write_text(json.dumps(saved_map), encoding="utf-8")
-    monkeypatch.setattr(push, "update_baseline_scoped", original)
-    assert execute(folder, config, tmp_path)["status"] == "pushed"
-    assert json.loads(map_path.read_text())["topics/unrelated.mcs.yml"] == {
-        "botcomponentid": "unrelated",
-    }
 
 
 def test_native_unmapped_remote_child_blocks_unchanged(tmp_path, monkeypatch):

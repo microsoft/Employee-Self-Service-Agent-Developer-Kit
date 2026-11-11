@@ -21,6 +21,17 @@ SCHEMA = "gptagent_freshstarter"
 _MISSING = object()
 
 
+def test_exception_chain_preserves_redacted_secondary_cleanup_notes():
+    primary = PermissionError("Baseline is locked")
+    primary.add_note("Temporary file cleanup also failed: bearer secret-cleanup-token")
+    outer = RuntimeError("Local acknowledgement failed")
+    outer.__cause__ = primary
+    chain = alm_enrollment._exception_chain(outer)
+    assert [item["type"] for item in chain] == ["RuntimeError", "PermissionError"]
+    assert "Temporary file cleanup also failed" in chain[1]["notes"][0]
+    assert "secret-cleanup-token" not in json.dumps(chain)
+
+
 class FakeHTTPResponse:
     def __init__(
         self,

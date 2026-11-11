@@ -1,0 +1,1000 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""Contracts for selected-agent topic YAML authoring."""
+
+from __future__ import annotations
+
+import copy
+import json
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+
+import minimalbot_evaluation as native
+import topic_authoring as authoring
+
+
+@pytest.fixture(autouse=True)
+def no_operation_capability_events(monkeypatch):
+    def emit(event, _data, **_kwargs):
+        assert event != "adk.capability.use", "Authoring usage belongs to the skill."
+        return {}
+
+    monkeypatch.setattr("adk_telemetry._emit", emit)
+
+
+@pytest.fixture
+def topic_cli(monkeypatch, tmp_path, fake_tenant_id):
+    agent_folder = tmp_path / "workspace" / "agents" / "selected"
+    topics = agent_folder / "topics"
+    baseline = agent_folder / ".baseline" / "topics"
+    topics.mkdir(parents=True)
+    baseline.mkdir(parents=True)
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / "config.json").write_text(
+        json.dumps({"agent": {"folder": str(agent_folder)}}),
+        encoding="utf-8",
+    )
+    (agent_folder / ".component-map.json").write_text("{}\n", encoding="utf-8")
+
+    target = {
+        "environment": {
+            "id": "00000000-0000-0000-0000-000000005555",
+            "tenantId": fake_tenant_id,
+            "ring": "test",
+            "powerPlatformApiEndpoint": "https://api.test.example",
+        },
+        "agent": {
+            "id": "00000000-0000-0000-0000-000000004444",
+            "schemaName": "contoso_agent",
+            "realm": "dev",
+        },
+    }
+    components: list[dict] = []
+    client = SimpleNamespace(
+        host=target["environment"]["powerPlatformApiEndpoint"],
+        headers={"Authorization": "Bearer test-token"},
+        session=object(),
+        fetch_components=lambda _agent: {
+            "bot": {"cdsBotId": target["agent"]["id"]},
+            "changeToken": "fresh-token",
+            "botComponentChanges": [
+                {"component": copy.deepcopy(component)} for component in components
+            ]
+        },
+    )
+    transport = Mock()
+    transport.create_dialog_component.side_effect = lambda component: {
+        "component": copy.deepcopy(component),
+        "createdComponents": 1,
+        "verifiedComponents": 1,
+    }
+    def update_components(updates, **_kwargs):
+        return {
+            "updatedComponents": len(updates),
+            "verifiedComponents": len(updates),
+            "verified": True,
+            "writeAttempted": True,
+            "blockingDiagnostics": [],
+            "components": [
+                {
+                    **copy.deepcopy(next(
+                        component for component in components
+                        if component["id"] == update["componentId"]
+                    )),
+                    "dialog": copy.deepcopy(update["dialog"]),
+                }
+                for update in updates
+            ],
+        }
+
+    transport.update_dialog_components.side_effect = update_components
+    connect = Mock(return_value=(client, target))
+    monkeypatch.setattr(authoring, "connect_selected_dev_workspace", connect)
+    monkeypatch.setattr(
+        authoring,
+        "MinimalBotEvaluationClient",
+        Mock(return_value=transport),
+    )
+    monkeypatch.setattr(
+        authoring,
+        "yaml_to_object_models",
+        lambda items: [
+            {
+                "key": item["key"],
+                "success": True,
+                "elementType": "AdaptiveDialog",
+                "objectModel": json.loads(item["yaml"]),
+            }
+            for item in items
+        ],
+    )
+    monkeypatch.setattr(
+        authoring,
+        "object_models_to_yaml",
+        lambda items: [
+            {
+                "key": item["key"],
+                "success": True,
+                "elementType": "AdaptiveDialog",
+                "yaml": json.dumps(item["objectModel"]),
+            }
+            for item in items
+        ],
+    )
+    monkeypatch.chdir(tmp_path)
+    dialog = {
+        "$kind": "AdaptiveDialog",
+        "modelDescription": "Explain the approved answer.",
+        "unknown": {"preserve": True},
+        "beginDialog": {
+            "$kind": "OnRecognizedIntent",
+            "id": "existing-trigger",
+            "intent": {"$kind": "Intent", "triggerQueries": ["approved answer"]},
+            "actions": [
+                {
+                    "$kind": "SendActivity",
+                    "id": "existing-send",
+                    "activity": {
+                        "$kind": "Message",
+                        "text": [
+                            {
+                                "$kind": "TemplateLine",
+                                "segments": [
+                                    {"$kind": "TextSegment", "value": "Approved."},
+                                    {
+                                        "$kind": "ExpressionSegment",
+                                        "expression": "System.User.DisplayName",
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+    draft = topics / "CaseSensitiveName.mcs.yml"
+    draft.write_text(json.dumps(dialog), encoding="utf-8")
+    return SimpleNamespace(
+        root=tmp_path,
+        agent_folder=agent_folder,
+        draft=draft,
+        dialog=dialog,
+        target=target,
+        client=client,
+        transport=transport,
+        connect=connect,
+        components=components,
+    )
+
+
+def _map(topic_cli):
+    return json.loads(
+        (topic_cli.agent_folder / ".component-map.json").read_text(encoding="utf-8")
+    )
+
+
+def _register_existing(topic_cli):
+    component = {
+        "$kind": "DialogComponent",
+        "id": "00000000-0000-0000-0000-000000003333",
+        "schemaName": "contoso_agent.topic.CaseSensitiveName",
+        "displayName": "Approved answer",
+        "parentBotId": topic_cli.target["agent"]["id"],
+        "state": "Active",
+        "status": "Active",
+        "version": 7,
+        "dialog": copy.deepcopy(topic_cli.dialog),
+        "extensionData": {"unknown": "preserve"},
+    }
+    topic_cli.components.append(component)
+    mapping = {
+        "topics/CaseSensitiveName.mcs.yml": {
+            "componentKind": "DialogComponent",
+            "componentId": component["id"],
+            "schemaName": component["schemaName"],
+            "displayName": component["displayName"],
+            "version": 7,
+        }
+    }
+    (topic_cli.agent_folder / ".component-map.json").write_text(
+        json.dumps(mapping),
+        encoding="utf-8",
+    )
+    (topic_cli.agent_folder / ".baseline" / "topics" / topic_cli.draft.name).write_text(
+        json.dumps(topic_cli.dialog),
+        encoding="utf-8",
+    )
+    return component
+
+
+@pytest.mark.parametrize("status", [403, 409, 412, 503])
+def test_scoped_update_returns_service_evidence_without_conflict_replay(
+    topic_cli, monkeypatch, status,
+):
+    component = _register_existing(topic_cli)
+    component["managedProperties"] = {"isManaged": True, "isCustomizable": False}
+    client = native.MinimalBotEvaluationClient(
+        topic_cli.target["environment"]["id"], topic_cli.target["agent"]["id"],
+        topic_cli.target["environment"]["tenantId"],
+    )
+    read = Mock(return_value={
+        "changeToken": "fresh-token", "botComponentChanges": [{"component": component}],
+    })
+    body = {
+        "error": {"code": "service-permission-or-conflict", "unfamiliar": {"keep": True}},
+        "access_token": "must-not-emit",
+    }
+    request = Mock(return_value=(
+        SimpleNamespace(status_code=status, headers={"x-ms-request-id": "write-id"}), body,
+    ))
+    monkeypatch.setattr(client, "read_components", read)
+    monkeypatch.setattr(client, "_request", request)
+    desired = {**component["dialog"], "modelDescription": "Explicit approved edit"}
+
+    with pytest.raises(native.ComponentEditError) as error:
+        client.update_dialog_components([{
+            "componentId": component["id"], "schemaName": component["schemaName"],
+            "expectedDialog": component["dialog"], "dialog": desired,
+        }], _retry_on_conflict=False)
+
+    assert error.value.evidence["httpStatus"] == status
+    assert error.value.evidence["requestId"] == "write-id"
+    assert error.value.evidence["response"]["error"] == body["error"]
+    assert "must-not-emit" not in json.dumps(error.value.evidence)
+    request.assert_called_once()
+    read.assert_called_once()
+
+
+def test_accepted_create_readback_failure_preserves_cause_and_never_recreates(
+    topic_cli, monkeypatch,
+):
+    component = _register_existing(topic_cli)
+    component["state"] = component["status"] = "Inactive"
+    client = native.MinimalBotEvaluationClient(
+        topic_cli.target["environment"]["id"], topic_cli.target["agent"]["id"],
+        topic_cli.target["environment"]["tenantId"],
+    )
+    cause = RuntimeError("Unexpected readback failure")
+    client.read_components = Mock(side_effect=[{
+        "bot": {"cdsBotId": client.bot_id,
+                "schemaName": topic_cli.target["agent"]["schemaName"]},
+        "changeToken": "fresh-token", "botComponentChanges": [],
+    }, cause])
+    request = Mock(return_value=(
+        SimpleNamespace(status_code=200), {"unknownCreateEvidence": ["preserved"]},
+    ))
+    monkeypatch.setattr(client, "_request", request)
+
+    with pytest.raises(native.ComponentEditError) as error:
+        client.create_dialog_component(component)
+
+    assert error.value.evidence["writeAccepted"] is True
+    assert error.value.evidence["verified"] is False
+    assert error.value.evidence["response"] == {"unknownCreateEvidence": ["preserved"]}
+    assert error.value.__cause__ is cause
+    request.assert_called_once()
+
+
+def test_session_component_writes_reuse_selected_transport_without_status_retry(
+    topic_cli,
+):
+    from agentbuilder import AgentBuilderClient
+    import responses
+
+    builder = AgentBuilderClient(
+        native._environment_host(topic_cli.target["environment"]["id"], "test"),
+        "offline-token",
+        ring="test", tenant_id=topic_cli.target["environment"]["tenantId"],
+    )
+    client = native.MinimalBotEvaluationClient(
+        topic_cli.target["environment"]["id"], topic_cli.target["agent"]["id"],
+        topic_cli.target["environment"]["tenantId"],
+        host=builder.host, access_token="offline-token", session=builder.session,
+    )
+    assert client._session is builder.session
+    with responses.RequestsMock() as recorded:
+        recorded.post(client._components_url, json={}, status=503)
+        recorded.put(client._components_url, json={"serviceHint": "inspect"}, status=503)
+        response, _ = client._request("POST", client._components_url, body={})
+        assert response.status_code == 503
+        response, body = client._request("PUT", client._components_url, body={})
+        assert response.status_code == 503 and body == {"serviceHint": "inspect"}
+        assert [call.request.method for call in recorded.calls] == ["POST", "PUT"]
+
+
+@pytest.mark.parametrize("existing_name", [None, "Approved answer details"])
+def test_create_uses_exact_filename_schema_and_registers_verified_identity(
+    topic_cli, existing_name,
+):
+    if existing_name is not None:
+        topic_cli.components.append(
+            {
+                "$kind": "DialogComponent",
+                "id": "existing",
+                "schemaName": "contoso_agent.topic.Other",
+                "displayName": existing_name,
+            }
+        )
+    assert authoring.main(
+        [
+            "create",
+            "--draft",
+            str(topic_cli.draft),
+            "--display-name",
+            "Approved answer",
+            "--yes",
+        ]
+    ) == 0
+
+    component = topic_cli.transport.create_dialog_component.call_args.args[0]
+    assert component["schemaName"] == "contoso_agent.topic.CaseSensitiveName"
+    assert component["state"] == component["status"] == "Inactive"
+    assert component["extensionData"] == {"UseProvidedBotComponentId": True}
+    assert component["dialog"] == topic_cli.dialog
+    entry = _map(topic_cli)["topics/CaseSensitiveName.mcs.yml"]
+    assert entry["componentId"] == component["id"]
+    assert entry["schemaName"] == component["schemaName"]
+    assert (
+        topic_cli.agent_folder
+        / ".baseline"
+        / "topics"
+        / "CaseSensitiveName.mcs.yml"
+    ).read_text(encoding="utf-8") == json.dumps(topic_cli.dialog)
+    topic_cli.connect.assert_called_with(topic_cli.root.resolve(), None)
+
+
+@pytest.mark.parametrize("existing_name", ["Approved answer", " APPROVED ANSWER "])
+@pytest.mark.parametrize("apply", [False, True])
+def test_create_blocks_same_name_without_changing_workspace(
+    topic_cli, existing_name, apply,
+):
+    topic_cli.components.append(
+        {
+            "$kind": "DialogComponent",
+            "id": "existing",
+            "schemaName": "contoso_agent.topic.Other",
+            "displayName": existing_name,
+        }
+    )
+    draft_before = topic_cli.draft.read_bytes()
+    map_path = topic_cli.agent_folder / ".component-map.json"
+    map_before = map_path.read_bytes()
+    args = [
+        "create",
+        "--draft",
+        str(topic_cli.draft),
+        "--display-name",
+        "Approved answer",
+    ]
+    if apply:
+        args.append("--yes")
+    with pytest.raises(native.ComponentEditError, match="already exists") as error:
+        authoring.main(args)
+
+    evidence = error.value.evidence
+    assert evidence["sameNameMatches"] == [
+        {
+            "kind": "same-name",
+            "componentId": "existing",
+            "schemaName": "contoso_agent.topic.Other",
+            "displayName": existing_name,
+        }
+    ]
+    assert evidence["target"] == topic_cli.target
+    assert evidence["saved"] is False
+    assert evidence["writeAttempted"] is False
+    topic_cli.transport.create_dialog_component.assert_not_called()
+    topic_cli.transport.update_dialog_components.assert_not_called()
+    assert topic_cli.draft.read_bytes() == draft_before
+    assert map_path.read_bytes() == map_before
+    assert not (topic_cli.agent_folder / ".baseline" / "topics" / topic_cli.draft.name).exists()
+
+
+def test_create_rechecks_same_name_after_preview(topic_cli):
+    args = [
+        "create",
+        "--draft",
+        str(topic_cli.draft),
+        "--display-name",
+        "Approved answer",
+    ]
+    assert authoring.main(args) == 0
+    topic_cli.components.append(
+        {
+            "$kind": "DialogComponent",
+            "id": "created-after-preview",
+            "schemaName": "contoso_agent.topic.Other",
+            "displayName": "Approved answer",
+        }
+    )
+
+    with pytest.raises(native.ComponentEditError, match="already exists"):
+        authoring.main([*args, "--yes"])
+
+    topic_cli.transport.create_dialog_component.assert_not_called()
+
+
+def test_read_uses_component_map_identity_and_can_project_yaml(topic_cli):
+    component = _register_existing(topic_cli)
+    projection = topic_cli.root / "projection.mcs.yml"
+
+    authoring.main(
+        [
+            "read",
+            "--topic",
+            str(topic_cli.draft),
+            "--yaml-output",
+            str(projection),
+        ]
+    )
+
+    assert json.loads(projection.read_text(encoding="utf-8")) == component["dialog"]
+
+
+def test_update_sends_captured_yaml_with_fresh_read_baseline(topic_cli):
+    component = _register_existing(topic_cli)
+    before = topic_cli.root / "before.json"
+    authoring.main(
+        ["read", "--topic", str(topic_cli.draft), "--output", str(before)]
+    )
+    desired = copy.deepcopy(topic_cli.dialog)
+    desired["beginDialog"]["actions"][0]["activity"]["text"][0]["segments"][0][
+        "value"
+    ] = "Updated."
+    topic_cli.draft.write_text(json.dumps(desired), encoding="utf-8")
+
+    authoring.main(
+        [
+            "update",
+            "--draft",
+            str(topic_cli.draft),
+            "--expected",
+            str(before),
+            "--yes",
+        ]
+    )
+
+    topic_cli.transport.update_dialog_components.assert_called_once_with(
+        [
+            {
+                "componentId": component["id"],
+                "schemaName": component["schemaName"],
+                "expectedDialog": component["dialog"],
+                "dialog": desired,
+                "requireCleanDiagnostics": True,
+            }
+        ],
+        _retry_on_conflict=False,
+    )
+    acknowledged = (
+        topic_cli.agent_folder
+        / ".baseline"
+        / "topics"
+        / topic_cli.draft.name
+    )
+    assert json.loads(acknowledged.read_text(encoding="utf-8")) == desired
+
+
+def test_update_acknowledges_capture_not_later_disk_edit(topic_cli):
+    component = _register_existing(topic_cli)
+    before = topic_cli.root / "before.json"
+    authoring.main(
+        ["read", "--topic", str(topic_cli.draft), "--output", str(before)]
+    )
+    submitted = {**topic_cli.dialog, "modelDescription": "Submitted description"}
+    later = {**topic_cli.dialog, "modelDescription": "Later disk edit"}
+    topic_cli.draft.write_text(json.dumps(submitted), encoding="utf-8")
+
+    def update(*_args, **_kwargs):
+        topic_cli.draft.write_text(json.dumps(later), encoding="utf-8")
+        return {
+            "updatedComponents": 1,
+            "verifiedComponents": 1,
+            "blockingDiagnostics": [],
+            "components": [{**component, "dialog": submitted}],
+        }
+
+    topic_cli.transport.update_dialog_components.side_effect = update
+    authoring.main(
+        [
+            "update",
+            "--draft",
+            str(topic_cli.draft),
+            "--expected",
+            str(before),
+            "--yes",
+        ]
+    )
+
+    acknowledged = (
+        topic_cli.agent_folder
+        / ".baseline"
+        / "topics"
+        / topic_cli.draft.name
+    )
+    assert json.loads(acknowledged.read_text(encoding="utf-8")) == submitted
+    assert json.loads(topic_cli.draft.read_text(encoding="utf-8")) == later
+
+
+@pytest.mark.parametrize("operation", ["update", "workspace"])
+@pytest.mark.parametrize("later_edit", [False, True])
+def test_merged_save_acknowledges_readback_and_preserves_later_draft(
+    topic_cli, monkeypatch, capsys, operation, later_edit,
+):
+    topic_cli.dialog["beginDialog"]["actions"].append({
+        "$kind": "SendActivity", "id": "unrelated-action", "activity": "Helpful note.",
+    })
+    topic_cli.draft.write_text(json.dumps(topic_cli.dialog), encoding="utf-8")
+    component = _register_existing(topic_cli)
+    before = topic_cli.root / "before.json"
+    authoring.main(["read", "--topic", str(topic_cli.draft), "--output", str(before)])
+    capsys.readouterr()
+
+    desired = copy.deepcopy(component["dialog"])
+    desired["modelDescription"] = "Approved description."
+    submitted = json.dumps(desired)
+    topic_cli.draft.write_text(submitted, encoding="utf-8")
+    remote = copy.deepcopy(component)
+    remote["dialog"]["beginDialog"]["actions"].pop()
+    saved = copy.deepcopy(remote)
+    saved["dialog"]["modelDescription"] = desired["modelDescription"]
+    later = {**desired, "modelDescription": "Later pending description."}
+
+    client = native.MinimalBotEvaluationClient(
+        topic_cli.target["environment"]["id"], topic_cli.target["agent"]["id"],
+        topic_cli.target["environment"]["tenantId"],
+    )
+    client.read_components = Mock(side_effect=[
+        {"changeToken": "before", "botComponentChanges": [{"component": remote}]},
+        {"changeToken": "after", "botComponentChanges": [{"component": saved}]},
+    ])
+
+    def request(*_args, **_kwargs):
+        if later_edit:
+            topic_cli.draft.write_text(json.dumps(later), encoding="utf-8")
+        return SimpleNamespace(status_code=200, headers={}), {}
+
+    client._request = Mock(side_effect=request)
+    if operation == "update":
+        monkeypatch.setattr(authoring, "_native_client", lambda *_args: client)
+        authoring.main([
+            "update", "--draft", str(topic_cli.draft), "--expected", str(before), "--yes",
+        ])
+        result = json.loads(capsys.readouterr().out)
+    else:
+        result = authoring.save_workspace_topic_updates(
+            client, topic_cli.agent_folder, [{
+                "path": "topics/CaseSensitiveName.mcs.yml",
+                "componentId": component["id"], "schemaName": component["schemaName"],
+                "expectedDialog": component["dialog"], "dialog": desired,
+                "submittedYaml": submitted,
+            }],
+            retry_on_conflict=False,
+        )
+
+    baseline = topic_cli.agent_folder / ".baseline" / "topics" / topic_cli.draft.name
+    assert json.loads(baseline.read_text(encoding="utf-8")) == saved["dialog"]
+    assert json.loads(topic_cli.draft.read_text(encoding="utf-8")) == (
+        later if later_edit else saved["dialog"]
+    )
+    assert result["reconciledComponents"] == 1
+    assert result["writeAttempted"] is True
+    assert result["components"] == [saved]
+    client._request.assert_called_once()
+
+
+@pytest.mark.parametrize("operation", ["update", "workspace"])
+def test_merged_projection_failure_preserves_remote_result_and_local_files(
+    topic_cli, monkeypatch, operation,
+):
+    component = _register_existing(topic_cli)
+    before = topic_cli.root / "before.json"
+    authoring.main(["read", "--topic", str(topic_cli.draft), "--output", str(before)])
+    saved = {**component, "dialog": {**component["dialog"], "remoteField": "preserved"}}
+    known = {
+        "updatedComponents": 1, "verifiedComponents": 1, "verified": True,
+        "writeAttempted": True, "components": [saved],
+    }
+    topic_cli.transport.update_dialog_components.side_effect = None
+    topic_cli.transport.update_dialog_components.return_value = known
+    cause = authoring.ObjectModelConverterError("Projection failed after verified save")
+    monkeypatch.setattr(authoring, "_project_topic", Mock(side_effect=cause))
+    baseline = topic_cli.agent_folder / ".baseline" / "topics" / topic_cli.draft.name
+    original = (topic_cli.draft.read_bytes(), baseline.read_bytes())
+
+    with pytest.raises(authoring.ComponentEditError) as error:
+        if operation == "update":
+            authoring.main([
+                "update", "--draft", str(topic_cli.draft),
+                "--expected", str(before), "--yes",
+            ])
+        else:
+            authoring.save_workspace_topic_updates(
+                topic_cli.transport, topic_cli.agent_folder, [{
+                    "path": "topics/CaseSensitiveName.mcs.yml",
+                    "componentId": component["id"], "schemaName": component["schemaName"],
+                    "dialog": topic_cli.dialog,
+                    "submittedYaml": topic_cli.draft.read_text(encoding="utf-8"),
+                }],
+            )
+
+    assert error.value.__cause__ is cause
+    assert error.value.evidence["remoteResult"]["components"] == [saved]
+    assert error.value.evidence["remoteResult"]["writeAttempted"] is True
+    assert (topic_cli.draft.read_bytes(), baseline.read_bytes()) == original
+    topic_cli.transport.update_dialog_components.assert_called_once()
+
+
+def test_bookkeeping_failure_retains_verified_remote_result(topic_cli, monkeypatch):
+    monkeypatch.setattr(
+        authoring,
+        "_register_created_topic",
+        Mock(side_effect=PermissionError("map unavailable")),
+    )
+
+    with pytest.raises(authoring.TopicBookkeepingError) as exc_info:
+        authoring.main(
+            [
+                "create",
+                "--draft",
+                str(topic_cli.draft),
+                "--display-name",
+                "Approved answer",
+                "--yes",
+            ]
+        )
+
+    remote = exc_info.value.evidence["remoteResult"]
+    assert remote["saved"] is True
+    assert remote["verifiedComponents"] == 1
+    assert remote["bookkeepingComplete"] is False
+
+
+def test_output_failure_retains_verified_remote_result(topic_cli, monkeypatch):
+    monkeypatch.setattr(
+        authoring,
+        "_emit_result",
+        Mock(side_effect=PermissionError("output unavailable")),
+    )
+
+    with pytest.raises(authoring.TopicBookkeepingError) as exc_info:
+        authoring.main(
+            [
+                "create",
+                "--draft",
+                str(topic_cli.draft),
+                "--display-name",
+                "Case sensitive",
+                "--yes",
+            ]
+        )
+
+    remote = exc_info.value.evidence["remoteResult"]
+    assert remote["saved"] is True
+    assert remote["verifiedComponents"] == 1
+    assert remote["bookkeepingComplete"] is True
+    assert remote["outputComplete"] is False
+
+
+def test_native_create_allows_same_name_and_verifies_readback(topic_cli, monkeypatch):
+    component = {
+        "$kind": "DialogComponent",
+        "id": "new-topic",
+        "schemaName": "contoso_agent.topic.NewTopic",
+        "displayName": "Duplicate display name",
+        "parentBotId": topic_cli.target["agent"]["id"],
+        "state": "Inactive",
+        "status": "Inactive",
+        "dialog": topic_cli.dialog,
+    }
+    before = {
+        "bot": {
+            "cdsBotId": topic_cli.target["agent"]["id"],
+            "schemaName": topic_cli.target["agent"]["schemaName"],
+        },
+        "changeToken": "fresh",
+        "botComponentChanges": [
+            {
+                "component": {
+                    "$kind": "DialogComponent",
+                    "id": "existing",
+                    "displayName": component["displayName"],
+                }
+            }
+        ],
+    }
+    after = {
+        **before,
+        "changeToken": "saved",
+        "botComponentChanges": [
+            *before["botComponentChanges"],
+            {"component": component},
+        ],
+    }
+    from minimalbot_evaluation import MinimalBotEvaluationClient
+
+    native = MinimalBotEvaluationClient(
+        topic_cli.target["environment"]["id"],
+        topic_cli.target["agent"]["id"],
+        topic_cli.target["environment"]["tenantId"],
+    )
+    native.read_components = Mock(side_effect=[before, after])
+    request = Mock(return_value=(SimpleNamespace(status_code=200, headers={}), {}))
+    monkeypatch.setattr(native, "_request", request)
+
+    result = native.create_dialog_component(component)
+
+    assert result["component"] == component
+    request.assert_called_once()
+
+
+def _delete_client(topic_cli, monkeypatch):
+    client = native.MinimalBotEvaluationClient(
+        topic_cli.target["environment"]["id"], topic_cli.target["agent"]["id"],
+        topic_cli.target["environment"]["tenantId"],
+    )
+    before = topic_cli.client.fetch_components(topic_cli.target["agent"]["id"])
+    after = {**before, "changeToken": "after", "botComponentChanges": []}
+    client.read_components = Mock(side_effect=[before, after])
+    client._request = Mock(return_value=(
+        SimpleNamespace(status_code=200, headers={"x-ms-request-id": "deletion-id"}),
+        {"serviceDetail": {"keep": True}},
+    ))
+    monkeypatch.setattr(authoring, "_native_client", lambda *_args: client)
+    return client, before, after
+
+
+def _deletion_preview(topic_cli):
+    preview = topic_cli.root / "delete-preview.json"
+    args = ["delete", "--topic", str(topic_cli.draft)]
+    authoring.main([*args, "--output", str(preview)])
+    return [*args, "--expected", str(preview), "--yes"]
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test_delete_preview_and_execution_reconcile_only_verified_scope(
+    topic_cli, monkeypatch, capsys, staged,
+):
+    root = _register_existing(topic_cli)
+    child = {
+        **copy.deepcopy(root), "id": "00000000-0000-0000-0000-000000003334",
+        "schemaName": "contoso_agent.topic.Child", "parentBotComponentId": root["id"],
+    }
+    grandchild = {
+        **copy.deepcopy(child), "id": "00000000-0000-0000-0000-000000003335",
+        "schemaName": "contoso_agent.topic.Grandchild", "parentBotComponentId": child["id"],
+    }
+    topic_cli.components.extend([grandchild, child])
+    mapping = _map(topic_cli)
+    for component in (child, grandchild):
+        relative = f"topics/{component['schemaName'].split('.')[-1]}.mcs.yml"
+        mapping[relative] = {
+            "componentId": component["id"], "componentKind": "DialogComponent",
+            "schemaName": component["schemaName"],
+        }
+        for directory in (topic_cli.agent_folder, topic_cli.agent_folder / ".baseline"):
+            (directory / relative).write_text("child content", encoding="utf-8")
+    mapping["topics/untouched.mcs.yml"] = {"componentId": "unrelated"}
+    (topic_cli.agent_folder / ".component-map.json").write_text(json.dumps(mapping))
+    if staged:
+        topic_cli.draft.unlink()
+    client, _, _ = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["deleted"] is False
+    assert {component["id"] for component in preview["components"]} == {
+        root["id"], child["id"], grandchild["id"],
+    }
+    assert _map(topic_cli) == mapping
+    assert topic_cli.draft.exists() is not staged
+    client._request.assert_not_called()
+
+    authoring.main(args)
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["deleted"] is True and result["bookkeepingComplete"] is True
+    assert result["verified"] is True and result["requestId"] == "deletion-id"
+    assert result["response"] == {"serviceDetail": {"keep": True}}
+    assert _map(topic_cli) == {"topics/untouched.mcs.yml": {"componentId": "unrelated"}}
+    for relative in preview["workspace"]:
+        assert not (topic_cli.agent_folder / relative).exists()
+        assert not (topic_cli.agent_folder / ".baseline" / relative).exists()
+    client._request.assert_called_once()
+    call = client._request.call_args
+    assert call.args == ("PUT", client._components_url)
+    # Wire fields verified with Microsoft.Agents.ObjectModel's ElementSerializer.
+    assert call.kwargs["body"]["botComponentChanges"] == [
+        {"$kind": "BotComponentDelete", "botComponentId": component["id"], "versionNumber": 7}
+        for component in preview["components"]
+    ]
+    assert call.kwargs["body"]["changeToken"] == "fresh-token"
+    assert all(
+        value == [] for key, value in call.kwargs["body"].items()
+        if key not in {"changeToken", "botComponentChanges"}
+    )
+
+
+@pytest.mark.parametrize("drift", ["topic", "child", "local", "target"])
+def test_deletion_rejects_changed_approval_scope_before_write(
+    topic_cli, monkeypatch, drift,
+):
+    component = _register_existing(topic_cli)
+    client, before, _ = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    if drift == "topic":
+        before["botComponentChanges"][0]["component"]["displayName"] = "New name"
+    elif drift == "child":
+        before["botComponentChanges"].append({"component": {
+            **component, "id": "new-child", "parentBotComponentId": component["id"],
+        }})
+    elif drift == "local":
+        topic_cli.draft.write_text("Newer local edit", encoding="utf-8")
+    else:
+        topic_cli.target["agent"]["id"] = "different-agent"
+    mapping = _map(topic_cli)
+    local = topic_cli.draft.read_bytes()
+
+    with pytest.raises((native.ComponentEditError, ValueError)):
+        authoring.main(args)
+
+    client._request.assert_not_called()
+    assert topic_cli.draft.read_bytes() == local and _map(topic_cli) == mapping
+
+
+@pytest.mark.parametrize("failure", [
+    403, 409, 503, "transport", "readback", "present", "malformed", "replacement",
+])
+def test_deletion_failure_keeps_files_and_exposes_uncertainty_without_replay(
+    topic_cli, monkeypatch, failure,
+):
+    _register_existing(topic_cli)
+    client, before, after = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    mapping = _map(topic_cli)
+    content = topic_cli.draft.read_bytes()
+    cause = RuntimeError("Readback unavailable")
+    if isinstance(failure, int):
+        client._request.return_value = (
+            SimpleNamespace(status_code=failure, headers={"x-ms-request-id": "failure-id"}),
+            {"unexpected": {"keep": True}, "access_token": "do-not-emit"},
+        )
+    elif failure == "transport":
+        cause = native.MinimalBotEvaluationError("Transport failed")
+        client._request.side_effect = cause
+    elif failure == "readback":
+        client.read_components.side_effect = [before, cause]
+    elif failure == "present":
+        client.read_components.side_effect = [before, before]
+    elif failure == "replacement":
+        after["botComponentChanges"] = [{"component": {
+            **before["botComponentChanges"][0]["component"], "id": "replacement",
+        }}]
+    else:
+        del after["botComponentChanges"]
+
+    with pytest.raises(native.ComponentEditError) as error:
+        authoring.main(args)
+
+    assert error.value.evidence["writeAttempted"] is True
+    assert error.value.evidence["verified"] is False
+    assert topic_cli.draft.read_bytes() == content and _map(topic_cli) == mapping
+    client._request.assert_called_once()
+    if isinstance(failure, int):
+        assert error.value.evidence["httpStatus"] == failure
+        assert error.value.evidence["response"]["unexpected"] == {"keep": True}
+        assert "do-not-emit" not in json.dumps(error.value.evidence)
+    elif failure in {"transport", "readback"}:
+        assert error.value.__cause__ is cause
+
+
+@pytest.mark.parametrize("local_failure", ["later-edit", "map-write", "output"])
+def test_deletion_preserves_remote_success_when_local_work_fails(
+    topic_cli, monkeypatch, local_failure,
+):
+    _register_existing(topic_cli)
+    client, _, _ = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    if local_failure == "later-edit":
+        response = client._request.return_value
+
+        def write(*_args, **_kwargs):
+            topic_cli.draft.write_text("Newer edit", encoding="utf-8")
+            return response
+
+        client._request.side_effect = write
+    elif local_failure == "map-write":
+        monkeypatch.setattr(authoring, "save_component_map", Mock(
+            side_effect=PermissionError("Map unavailable"),
+        ))
+    else:
+        monkeypatch.setattr(authoring, "_emit_result", Mock(
+            side_effect=PermissionError("Output unavailable"),
+        ))
+
+    with pytest.raises(authoring.TopicBookkeepingError) as error:
+        authoring.main(args)
+
+    remote = error.value.evidence["remoteResult"]
+    assert remote["deleted"] is True and remote["verified"] is True
+    assert remote["bookkeepingComplete"] is (local_failure == "output")
+    client._request.assert_called_once()
+    if local_failure == "later-edit":
+        assert topic_cli.draft.read_text(encoding="utf-8") == "Newer edit"
+        assert "topics/CaseSensitiveName.mcs.yml" in _map(topic_cli)
+
+
+def test_already_absent_deletion_reconciles_without_a_new_remote_write(
+    topic_cli, monkeypatch, capsys,
+):
+    _register_existing(topic_cli)
+    client, _, after = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    capsys.readouterr()
+    client.read_components.side_effect = [after]
+
+    authoring.main(args)
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["alreadyAbsent"] is True and result["writeAttempted"] is False
+    assert result["deletedComponents"] == 0 and result["bookkeepingComplete"] is True
+    assert not topic_cli.draft.exists() and not _map(topic_cli)
+    client._request.assert_not_called()
+
+
+def test_absent_topic_with_replacement_is_not_reconciled(topic_cli, monkeypatch):
+    component = _register_existing(topic_cli)
+    client, _, after = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    after["botComponentChanges"] = [{"component": {**component, "id": "replacement"}}]
+    client.read_components.side_effect = [after]
+
+    with pytest.raises(native.ComponentEditError, match="replacement"):
+        authoring.main(args)
+
+    client._request.assert_not_called()
+    assert topic_cli.draft.exists() and _map(topic_cli)
+
+
+def test_deletion_without_preview_is_rejected_before_connection(topic_cli):
+    with pytest.raises(SystemExit):
+        authoring.main(["delete", "--topic", str(topic_cli.draft), "--yes"])
+    topic_cli.connect.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["wrong-agent", "version", "read", "path", "snapshot"])
+def test_invalid_deletion_inputs_stop_before_write(topic_cli, monkeypatch, failure):
+    _register_existing(topic_cli)
+    client, before, _ = _delete_client(topic_cli, monkeypatch)
+    if failure == "version":
+        del topic_cli.components[0]["version"]
+        del before["botComponentChanges"][0]["component"]["version"]
+    args = _deletion_preview(topic_cli)
+    cause = RuntimeError("Cannot read current state")
+    if failure == "wrong-agent":
+        before["bot"]["cdsBotId"] = "other-agent"
+    elif failure == "read":
+        client.read_components.side_effect = cause
+    elif failure == "path":
+        mapping = _map(topic_cli)
+        mapping["../outside.mcs.yml"] = next(iter(mapping.values()))
+        (topic_cli.agent_folder / ".component-map.json").write_text(json.dumps(mapping))
+    elif failure == "snapshot":
+        preview = topic_cli.root / "delete-preview.json"
+        data = json.loads(preview.read_text())
+        data["components"] = [None]
+        preview.write_text(json.dumps(data))
+
+    with pytest.raises((native.ComponentEditError, ValueError)) as error:
+        authoring.main(args)
+
+    client._request.assert_not_called()
+    assert topic_cli.draft.exists() and _map(topic_cli)
+    if failure in {"wrong-agent", "version", "read"}:
+        assert error.value.evidence["writeAttempted"] is False
+    if failure == "read":
+        assert error.value.__cause__ is cause

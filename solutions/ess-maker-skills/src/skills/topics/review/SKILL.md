@@ -17,11 +17,11 @@ publishing.
   persist the catalog **without narrating them**. Do not rephrase, add commentary, or tell the maker what
   tools you are calling or what files you are reading. The only thing the maker sees is the final report in
   Step 9.
-- **Speak the maker's language.** Hide the *review system's* vocabulary everywhere — "lens", "detector",
+- **Speak the maker's language.** Hide the _review system's_ vocabulary everywhere — "lens", "detector",
   "conformance", "reachability" tags (`REACHABLE_NORMAL_UI`), rule IDs (`BTPF-001`), catalog paths (the list
   is illustrative; the test is whether a maker who never saw this skill's internals would understand it). This
   is **not** a ban on technical content — the maker's own Power Fx, action kinds, field names, step names, and
-  `topic.mcs.yml:line` are *their* language, not ours. The roll-up and report table (Step 9c, S-4) stay plain
+  `topic.mcs.yml:line` are _their_ language, not ours. The roll-up and report table (Step 9c, S-4) stay plain
   and scannable (plain severity, step **display name**, everyday description, no line numbers); the
   **single-issue detail view** shows the maker's own code in full — the exact expression and location.
 - **TRACK PROGRESS**: use the todo list tool to track the steps below so the maker can see where you are.
@@ -50,7 +50,7 @@ maker asks about those, say they are not covered rather than guessing.
 
 ## Coverage mode (ISV docs may be absent)
 
-The **ISV field-conformance** check (Step 6) is the one check that can be *skipped* outright: it depends on a
+The **ISV field-conformance** check (Step 6) is the one check that can be _skipped_ outright: it depends on a
 backend-specific reference doc (`src/reference/ess-docs/isv/isv-<system>.md`) that is synced from an ESS
 reference source and may be absent — an external maker won't have it. Whether it can run depends on the
 **specific backend** the in-scope topic integrates, not on whether any ISV doc happens to exist.
@@ -60,7 +60,7 @@ verdict.** The probe resolves each in-scope topic's backend and checks its refer
 the script location (cwd-immune, `.gitignore`-immune), so the answer is deterministic and does not depend on
 you remembering to run a check correctly mid-flow:
 
-```
+```powershell
 python scripts/check_isv_coverage.py --agent {agent-slug} --topic {topic-stem}
 # scoped:  python scripts/check_isv_coverage.py --agent {agent-slug} --module {module-id}
 ```
@@ -78,7 +78,7 @@ cannot run, fall back to a direct filesystem test of the exact path
 (`Test-Path src/reference/ess-docs/isv/isv-<backend>.md`) — never a workspace/indexed search (the `isv/` folder
 is gitignored, so an index-respecting search reports a present doc as a false-absent).
 
-A second synced doc, `runtime/confirmed-runtime-heuristics.md`, only *corroborates* Power Fx severity — it is
+A second synced doc, `runtime/confirmed-runtime-heuristics.md`, only _corroborates_ Power Fx severity — it is
 **not** a check and its absence skips nothing. Without it the Power Fx caps still apply structurally (see
 `powerfx-topic-local.md`); score structurally and say nothing to the maker about it. Do **not** report missing
 runtime docs as reduced coverage.
@@ -176,13 +176,13 @@ authored topic and always applies (no reference docs needed).
 If the topic integrates ServiceNow:
 `python scripts/scan_config.py --agent {agent-slug} --topic {topic-stem}`. Every field it reports is one the
 topic parses but the scenario's template config never produces, so it will always render blank (uses the
-`BTCF` finding-ID prefix per [`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md)).
+`BTCF` finding-ID prefix per [`finding-contract.md`](../../../reference/ess-docs/conformance/finding-contract.md)).
 ServiceNow scenarios only — Workday's config declares just a top-level key, so it contributes nothing there.
 **Fix:** remove the field from the topic's parse schema, or add it to the scenario config's
 `OutputFieldMapping` if the integration should return it.
 
 Steps 3–6c are **internal reasoning**; every check reports findings in the one shape defined by
-[`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md) (precision bar,
+[`finding-contract.md`](../../../reference/ess-docs/conformance/finding-contract.md) (precision bar,
 reachability→severity, finding-ID prefixes, output format). Carry each finding's node locators (`id` /
 `displayName` / `kind`) through internally so consolidation and the report can name the step and a fixer can
 act. That structured vocabulary is internal only — see the **Speak the maker's language** rule.
@@ -212,7 +212,7 @@ Carry the consolidated locators, rule IDs, and `Fix targets` to Step 8.
 The checks are agentic, so coverage varies run to run — **a finding missing this run is not evidence it was
 fixed.** Persist this run and let the script reconcile it against the prior run so the report is consistent
 across sessions and `/update` can act precisely. The full shape, `id`-reuse, status/resolution, and
-staleness rules live in [`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md)
+staleness rules live in [`finding-contract.md`](../../../reference/ess-docs/conformance/finding-contract.md)
 (Persisted form); this step is the mechanics. The review scope is passed as `--solution` (the topic stem
 today; scope-neutral for a wider review later).
 
@@ -224,21 +224,20 @@ today; scope-neutral for a wider review later).
    Minting a new slug for an already-cataloged issue double-counts it (the script keys cross-run identity on
    `id`). `files[].path` is relative to `solutions/ess-maker-skills/`.
 2. Reconcile: for any prior finding now gone or corrected (especially `evidence_stale` ones), or one the
-   maker dismisses, add it to a `--resolve` file per finding-contract's *Recording a resolution*.
+   maker dismisses, add it to a `--resolve` file per finding-contract's _Recording a resolution_.
 3. Persist from `solutions/ess-maker-skills/`. **Put the findings in a file and pass its path — never inline
    the run's JSON into a shell command.** Baking the findings into a `Set-Content`/here-string makes the
    command text different every run, so it never matches a prior approval and re-prompts each time; a file the
    script reads keeps the executed command **identical across runs** (so an allow grant sticks), with the
    run-specific data in the file rather than the command. Stage the file **inside the workspace** under
    `.local\tmp\` (gitignored) — never `$env:TEMP`, `C:\temp`, or `/tmp`, which trigger sensitive-file prompts.
-
    - Write `.local\tmp\findings.json` (and, when reconciling, `.local\tmp\resolved.json`) with your
      file-writing capability — not an inline shell here-string. Ensure `.local\tmp\` exists first (a stable
      `New-Item -ItemType Directory -Force .local\tmp | Out-Null` is fine — its text never varies, so it is
      approved once, not per run).
    - Then run the **stable** command (identical every run — only the file content changes):
 
-   ```
+   ```powershell
    python scripts/merge_findings.py --solution {topic-stem} --current .local\tmp\findings.json
    ```
 
@@ -247,6 +246,7 @@ today; scope-neutral for a wider review later).
    also works — the point is the findings live in the file, not inlined in the command. The script's catalog
    is **authoritative** on the cross-run set. If it cannot run, present this run's findings and say the
    cross-run catalog was unavailable.
+
 4. Present (Step 9) the **active** set from the merged catalog — including findings not re-detected this run
    whose files are unchanged; flag `evidence_stale` ones as "previously flagged, code has since changed —
    worth confirming."
@@ -254,7 +254,7 @@ today; scope-neutral for a wider review later).
 ## Step 9: Present the report
 
 Present the maker-facing report exactly per
-[`report-format.md`](src/reference/ess-docs/conformance/report-format.md): the no-findings message (9a),
+[`report-format.md`](../../../reference/ess-docs/conformance/report-format.md): the no-findings message (9a),
 verdict line (9b), findings table (9c), and close (9d); and, when the maker asks about a **specific issue**,
 the **Issue detail view**. Follow those templates verbatim and apply the **Speak the maker's language** rule.
 
@@ -272,7 +272,7 @@ maker-facing report when it is unspecified but the review is scoped to a single 
 ## Scoped review (a whole module)
 
 If Step 1 resolved to a **module scope** (all topics for a backend), follow
-[`scoped-review.md`](src/reference/ess-docs/conformance/scoped-review.md) instead of running Steps 2–9
+[`scoped-review.md`](../../../reference/ess-docs/conformance/scoped-review.md) instead of running Steps 2–9
 once: it resolves the in-scope set by prefix, runs the detectors once with `--module`, loops the per-topic
 engine (Steps 2–8) persisting each catalog, verifies persistence, and presents the scoped roll-up (per
 `report-format.md`). The per-topic engine (Steps 2–8) and the finding contract are unchanged.
@@ -281,12 +281,12 @@ engine (Steps 2–8) persisting each catalog, verifies persistence, and presents
 
 Guidance docs under `src/reference/ess-docs/conformance/` (read the one a step cites when you reach it):
 
-- [`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md) — shared finding shape,
+- [`finding-contract.md`](../../../reference/ess-docs/conformance/finding-contract.md) — shared finding shape,
   precision bar, reachability→severity, finding-ID prefixes, output format, and the persisted catalog/ledger form.
-- [`powerfx-topic-local.md`](src/reference/ess-docs/conformance/powerfx-topic-local.md) — Power Fx heuristics (Step 5).
-- [`dangling-globals.md`](src/reference/ess-docs/conformance/dangling-globals.md) — `Global.*` integrity (Step 3).
-- [`ux-contract.md`](src/reference/ess-docs/conformance/ux-contract.md) — adaptive-card UX contract (Step 4).
-- [`isv-conformance.md`](src/reference/ess-docs/conformance/isv-conformance.md) — ISV field/schema conformance (Step 6).
-- [`isv-integration-pattern.md`](src/reference/ess-docs/conformance/isv-integration-pattern.md) — shared-orchestrator pattern (Step 6b).
-- [`report-format.md`](src/reference/ess-docs/conformance/report-format.md) — maker-facing output templates: single-topic report (Step 9), issue detail view, scoped roll-up.
-- [`scoped-review.md`](src/reference/ess-docs/conformance/scoped-review.md) — the module-scope sub-workflow (S-1–S-4).
+- [`powerfx-topic-local.md`](../../../reference/ess-docs/conformance/powerfx-topic-local.md) — Power Fx heuristics (Step 5).
+- [`dangling-globals.md`](../../../reference/ess-docs/conformance/dangling-globals.md) — `Global.*` integrity (Step 3).
+- [`ux-contract.md`](../../../reference/ess-docs/conformance/ux-contract.md) — adaptive-card UX contract (Step 4).
+- [`isv-conformance.md`](../../../reference/ess-docs/conformance/isv-conformance.md) — ISV field/schema conformance (Step 6).
+- [`isv-integration-pattern.md`](../../../reference/ess-docs/conformance/isv-integration-pattern.md) — shared-orchestrator pattern (Step 6b).
+- [`report-format.md`](../../../reference/ess-docs/conformance/report-format.md) — maker-facing output templates: single-topic report (Step 9), issue detail view, scoped roll-up.
+- [`scoped-review.md`](../../../reference/ess-docs/conformance/scoped-review.md) — the module-scope sub-workflow (S-1–S-4).

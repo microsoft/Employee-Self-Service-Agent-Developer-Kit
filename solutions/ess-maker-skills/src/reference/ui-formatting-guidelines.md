@@ -1,8 +1,9 @@
 # UI formatting guidelines
 
 This document is the source of truth for maker-facing guidance rendered by ESS
-Maker Skills. It applies to portal navigation, setup instructions, remediation,
-troubleshooting, and any message that asks the maker to perform UI actions.
+Maker Skills. It applies to authoring reviews, decisions and outcomes, portal
+navigation, setup instructions, remediation, troubleshooting, and any message
+that asks the maker to perform UI actions.
 
 ## Goals
 
@@ -34,13 +35,13 @@ setup status, evidence, or instructions for the maker.
 
 Use formatting consistently according to what the text represents:
 
-| Content | Format | Example |
-| --- | --- | --- |
-| Portal or web destination | Markdown link | [Power Apps](https://make.powerapps.com) |
-| Environment, agent, or selected value | Code | `ESS combined` |
-| Menu, tab, field, button, command, or keyboard shortcut | Code | `Connections`, `New connection`, `Ctrl+Shift+P` |
-| Product, connector, or service name | Bold | **Microsoft 365 Self-Help**, **Dataverse MCP** |
-| Chat choice the maker must select | Bold | **Check again** |
+| Content                                                 | Format        | Example                                         |
+| ------------------------------------------------------- | ------------- | ----------------------------------------------- |
+| Portal or web destination                               | Markdown link | [Power Apps](https://make.powerapps.com)        |
+| Environment, agent, or selected value                   | Code          | `ESS combined`                                  |
+| Menu, tab, field, button, command, or keyboard shortcut | Code          | `Connections`, `New connection`, `Ctrl+Shift+P` |
+| Product, connector, or service name                     | Bold          | **Microsoft 365 Self-Help**, **Dataverse MCP**  |
+| Chat choice the maker must select                       | Bold          | **Check again**                                 |
 
 Do not use bold for portal controls or code formatting for product names merely
 for emphasis. Formatting conveys meaning, not decoration.
@@ -86,9 +87,28 @@ control begins with its own decision prompt, explanation, and choices.
 
 ## Authoring pattern
 
-When an owning skill supplies an exact **Message** block or fixed response
-template, render its wording and structure with documented placeholders
-resolved from runtime context.
+Use normal chat for open-ended requirements and revisions, not free-text-only
+structured questions. Keep structured controls for genuine choices. Present
+summaries and previews in normal chat before a separate short decision control,
+not inside a long question description.
+
+Template quote blocks contain only literal response/control copy and simple
+substitution placeholders. Keep definitions, conditions, omission/repetition
+rules and rendering instructions outside them. Resolve every displayed
+placeholder from actual context; unresolved information is not an empty section.
+
+Render the contents of an applicable template quote block or exact **Message**
+block verbatim after resolving its documented placeholders. Preserve wording,
+labels, punctuation, emphasis, quotation structure, order and paragraph breaks.
+
+Resolve each placeholder according to its binding and insert the resolved value
+verbatim. Referenced template blocks retain their own copy and bindings. Compose
+text only where a binding calls for it, such as a behavior description or
+contextual trailer, and keep that composition within its slot. Apply the
+documented omission, repetition and conditional-choice rules.
+
+Additional context uses an explicitly templated slot or message. A flexible
+contextual trailer changes only that slot, not the surrounding template.
 
 When the owning skill supplies no fixed copy, compose UI guidance from runtime
 context:
