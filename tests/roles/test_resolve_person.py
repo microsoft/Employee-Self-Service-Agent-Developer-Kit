@@ -161,6 +161,24 @@ def test_cmd_exit_zero_and_prints_json_on_match(monkeypatch, capsys):
     assert payload["candidates"][0]["oid"] == "oid-1"
 
 
+def test_cmd_keeps_sign_in_narration_off_stdout(monkeypatch, capsys):
+    """Stdout carries only the JSON envelope the skill parses. The shared Graph
+    client announces interactive sign-in with a plain ``print``; that line has to
+    land on stderr, or the envelope on stdout stops being valid JSON."""
+    fake = _fake_graph_client([_user("oid-1", "Priya Sharma")])
+
+    class _Interactive(fake):
+        def authenticate(self):
+            print("Opening browser for Microsoft Graph sign-in...")
+            return super().authenticate()
+
+    monkeypatch.setattr(roles_cli, "GraphClient", _Interactive)
+    assert roles_cli.main(["resolve-person", "--name", "Priya", "--env-url", ""]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["candidates"][0]["oid"] == "oid-1"
+    assert "Opening browser" in captured.err
+
+
 def test_cmd_exit_one_only_when_auth_required(monkeypatch, capsys):
     """``no_match`` is a successful lookup (exit 0); only ``auth_required``
     exits non-zero so a caller can branch on 'needs sign-in'."""

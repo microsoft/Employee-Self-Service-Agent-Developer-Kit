@@ -37,6 +37,7 @@ outright (e.g. Microsoft corp), sign-in is refused, this CLI reports
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -155,7 +156,11 @@ def resolve_person(
 
 
 def _cmd_resolve_person(args: argparse.Namespace) -> int:
-    result = resolve_person(args.name, top=args.top, env_url=args.env_url)
+    # Stdout is the JSON contract the /roles skill parses. The shared Graph
+    # client narrates interactive sign-in with a plain print, so anything printed
+    # during the lookup goes to stderr, where the maker still sees it.
+    with contextlib.redirect_stdout(sys.stderr):
+        result = resolve_person(args.name, top=args.top, env_url=args.env_url)
     print(json.dumps(result, indent=2))
     # Exit non-zero only when sign-in is required, so a caller can branch on it.
     # ``no_match`` is a valid, successful lookup that simply found nobody.

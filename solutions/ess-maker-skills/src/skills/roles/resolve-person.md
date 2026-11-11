@@ -51,8 +51,9 @@ python scripts/roles/cli.py resolve-person --name "<what the maker said>"
 ```
 
 `--name` accepts a display name, an email, or a user principal name. The command
-prints a JSON envelope — `{"query", "status", "count", "candidates": [...]}` —
+prints a JSON envelope on stdout — `{"query", "status", "count", "candidates": [...]}` —
 where each candidate has `oid`, `displayName`, `userPrincipalName`, and `mail`.
+Sign-in messages go to stderr, so stdout always parses as JSON.
 It asks the directory for **only** a least-privilege, self-grantable
 read permission, so in a normal tenant the maker can approve the one-time
 sign-in themselves — no directory admin needed.
