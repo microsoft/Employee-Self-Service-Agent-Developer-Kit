@@ -28,6 +28,7 @@ What we lock down:
 from __future__ import annotations
 
 import json
+import ast
 import re
 import subprocess
 import sys
@@ -38,6 +39,181 @@ import pytest
 
 import adk_telemetry as adk
 from flightcheck import telemetry as _fc
+
+
+@pytest.mark.parametrize("script_id", adk.SCRIPT_ERROR_ENTRY_POINTS)
+def test_script_entry_point_observes_crash_without_changing_exception(script_id, monkeypatch, captured_post):
+    """Execute the actual CLI guard with a failing main, without tenant operations."""
+    monkeypatch.setattr(adk, "_SYNC", False)
+    path = Path(adk.__file__).parent.joinpath(*script_id.split(".")).with_suffix(".py")
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+    guard = tree.body[-1]
+    assert isinstance(guard, ast.If)
+    error = RuntimeError("customer content and secret must stay local")
+    namespace = {"__name__": "__main__", "sys": sys}
+    exec(compile("def main():\n    raise failure\n", str(path), "exec"),
+         {"failure": error}, namespace)
+    namespace["cli"] = namespace["main"]
+    with pytest.raises(RuntimeError) as raised:
+        exec(compile(ast.Module(body=[guard], type_ignores=[]), str(path), "exec"), namespace)
+    assert raised.value is error
+    events = [event for event in _captured_events(captured_post) if event["name"] == adk.EVENT_SCRIPT_ERROR]
+    assert len(events) == 1
+    data = events[0]["data"]
+    assert data["script_id"] == script_id
+    assert data["failure_module"] == script_id
+    assert data["failure_line"] == 2
+    assert data["agent_type"] == "declarative_agent"
+    assert "customer content" not in json.dumps(events)
+
+
+def test_script_error_payload_is_closed_and_never_formats_exception(monkeypatch, captured_post):
+    class SensitiveError(Exception):
+        def __str__(self):
+            raise AssertionError("Exception formatting must not run")
+
+    error = SensitiveError("employee salary=123", {"authorization": "secret"})
+    secret_path = str(Path(adk.__file__).parent / "customer-folder" / "setup_existing_da.py")
+    try:
+        exec(compile("raise failure", secret_path, "exec"), {"failure": error})
+    except SensitiveError as caught:
+        adk.emit_script_error("setup_existing_da", caught, block=True)
+    data = _last_activity(captured_post)["data"]
+    common = set(adk.common_dimensions("cli"))
+    assert set(data) == common | {
+        "script_error_schema_version", "event_id", "script_id", "adk_capability",
+        "failure_module", "failure_line", "error_category", "error_code", "error_message", "env",
+    }
+    assert data["failure_module"] == "unknown"
+    assert data["failure_line"] == 0
+    assert data["error_code"] == "UNHANDLED_EXCEPTION"
+    assert data["error_message"] == "An unexpected exception caused the script to fail."
+    assert all(value not in json.dumps(data) for value in (
+        "SensitiveError", "employee salary", "authorization", "secret", "customer-folder",
+    ))
+
+
+def test_script_error_uses_deepest_allowed_frame_not_customer_frame(captured_post):
+    root = Path(adk.__file__).parent
+    namespace = {}
+    exec(compile("def crash():\n    raise TypeError('employee data')\n",
+                 str(root / "agentbuilder.py"), "exec"), namespace)
+    try:
+        exec(compile("crash()", str(root / "setup_existing_da.py"), "exec"), namespace)
+    except TypeError as error:
+        adk.emit_script_error("setup_existing_da", error, block=True)
+    data = _last_activity(captured_post)["data"]
+    assert data["failure_module"] == "agentbuilder"
+    assert data["failure_line"] == 2
+    assert data["error_category"] == "type"
+    assert data["error_code"] == "UNHANDLED_TYPE_ERROR"
+    assert "employee data" not in json.dumps(data)
+
+
+def test_flightcheck_crash_reports_allowed_nested_module(captured_post):
+    root = Path(adk.__file__).parent
+    namespace = {}
+    exec(compile("def crash():\n    raise ValueError('private check output')\n",
+                 str(root / "flightcheck" / "runner.py"), "exec"), namespace)
+    with pytest.raises(ValueError):
+        with adk.script_error_boundary("flightcheck.cli"):
+            namespace["crash"]()
+    data = _last_activity(captured_post)["data"]
+    assert data["script_id"] == "flightcheck.cli"
+    assert data["adk_capability"] == "flightcheck"
+    assert data["failure_module"] == "flightcheck.runner"
+    assert data["failure_line"] == 2
+    assert "private check output" not in json.dumps(data)
+
+
+def test_nested_script_boundaries_emit_once(captured_post):
+    with pytest.raises(KeyError):
+        with adk.script_error_boundary("setup_existing_da"):
+            with adk.script_error_boundary("reconcile_setup_agent"):
+                raise KeyError("private key")
+    errors = [event for event in _captured_events(captured_post) if event["name"] == adk.EVENT_SCRIPT_ERROR]
+    assert len(errors) == 1
+    assert errors[0]["data"]["script_id"] == "setup_existing_da"
+    # A subsequent invocation is independent, not suppressed by the prior crash.
+    with pytest.raises(ValueError):
+        with adk.script_error_boundary("setup_existing_da"):
+            raise ValueError("private value")
+    errors = [event for event in _captured_events(captured_post) if event["name"] == adk.EVENT_SCRIPT_ERROR]
+    assert len(errors) == 2
+    assert errors[0]["data"]["event_id"] != errors[1]["data"]["event_id"]
+
+
+@pytest.mark.parametrize("exit_exception", [SystemExit(0), SystemExit(1), SystemExit(2), KeyboardInterrupt()])
+def test_script_boundary_excludes_normal_exits_and_cancellation(exit_exception, captured_post):
+    with pytest.raises(type(exit_exception)) as raised:
+        with adk.script_error_boundary("setup_existing_da"):
+            raise exit_exception
+    assert raised.value is exit_exception
+    assert not captured_post
+
+
+def test_script_boundary_success_and_handled_errors_do_not_emit(captured_post):
+    with adk.script_error_boundary("setup_existing_da"):
+        try:
+            raise ValueError("expected validation failure")
+        except ValueError:
+            pass
+    assert not captured_post
+
+
+@pytest.mark.parametrize("failure_point", ["emit_script_error", "flush"])
+def test_script_boundary_preserves_original_failure_when_reporting_breaks(monkeypatch, failure_point):
+    def broken(*args, **kwargs):
+        raise OSError("telemetry failure")
+
+    monkeypatch.setattr(adk, "emit_script_error", lambda *args: None)
+    monkeypatch.setattr(adk, failure_point, broken)
+    error = RuntimeError("original crash")
+    with pytest.raises(RuntimeError) as raised:
+        with adk.script_error_boundary("setup_existing_da"):
+            raise error
+    assert raised.value is error
+
+
+def test_script_error_opt_out_prevents_state_and_transport(monkeypatch, tmp_path, captured_post):
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+    assert adk.emit_script_error("setup_existing_da", RuntimeError())["reason"] == "disabled"
+    assert not captured_post
+    assert not Path(adk.SESSION_PATH).exists()
+    assert not Path(adk.BUFFER_PATH).exists()
+
+
+def test_script_error_respects_persisted_opt_out(captured_post):
+    adk.set_telemetry(False)
+    assert adk.emit_script_error("setup_existing_da", RuntimeError())["reason"] == "disabled"
+    assert not captured_post
+
+
+def test_script_error_rejects_ca_and_unregistered_scripts(monkeypatch, captured_post):
+    assert adk.emit_script_error("customer-script-with-secret", RuntimeError())["reason"] == "unsupported-script"
+    monkeypatch.setattr(_fc, "get_toolkit_git_branch", lambda: "main-ca")
+    assert adk.emit_script_error("setup_existing_da", RuntimeError())["reason"] == "unsupported-agent-type"
+    assert not captured_post
+
+
+def test_script_error_delivery_retry_keeps_event_identity(monkeypatch):
+    calls = []
+
+    def failing_post(ikey, events):
+        calls.extend(events)
+        return 503
+
+    monkeypatch.setattr(_fc, "_post", failing_post)
+    adk.emit_script_error("setup_existing_da", RuntimeError(), block=True)
+    original = next(event for event in calls if event["name"] == adk.EVENT_SCRIPT_ERROR)
+    buffered = Path(adk.BUFFER_PATH).read_text(encoding="utf-8")
+    assert original["data"]["event_id"] in buffered
+    delivered = []
+    monkeypatch.setattr(_fc, "_post", lambda ikey, events: delivered.extend(events) or 200)
+    adk.emit_capability_use("setup", block=True)
+    retried = [event for event in delivered if event["name"] == adk.EVENT_SCRIPT_ERROR]
+    assert len(retried) == 1
+    assert retried[0] == original
 
 
 DEV_TOKEN = "08e397b2c6c243eeaeb341e111c36167"
@@ -425,6 +601,13 @@ def test_customer_query_exclusions_match_known_non_customer_tenants():
 
     for tenant_id in _fc.KNOWN_NON_CUSTOMER_TEST_TENANT_IDS:
         assert query_pack.count(tenant_id) == 1
+
+
+def test_wsr_contoso_demo_tenant_is_internal(monkeypatch):
+    monkeypatch.delenv("ESS_ADK_INTERNAL_TENANTS", raising=False)
+    tenant_id = "811c4ca4-538a-4a66-8c4b-d29ab413b37f"
+    assert _fc.classify_tenant(tenant_id) == _fc.TENANT_CLASS_INTERNAL
+    assert adk.common_dimensions(adk.SURFACE_CLI, tenant_id=tenant_id)["tenant_class"] == "internal"
 
 
 def test_classify_tenant_non_guid_maps_to_unknown():
@@ -3349,8 +3532,8 @@ def test_emit_flightcheck_error_carries_connector(captured_post, monkeypatch):
 
 
 def test_schema_version_bump_records_agent_type_dim():
-    # agent_type is added in 1.7.0 so cubes can version-gate the CA/DA split.
-    assert adk.SCHEMA_VERSION == "1.7.0"
+    # 1.8 adds script errors; retain 1.7's agent_type dimension for the CA/DA split.
+    assert adk.SCHEMA_VERSION == "1.8.0"
 
 
 # --- emit_capability.py shim --connector plumbing -------------------------

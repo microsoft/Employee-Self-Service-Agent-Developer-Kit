@@ -184,7 +184,7 @@ python scripts/flightcheck/cli.py --scope full
 
 Chat and standalone runs use the same checks for the same selected agent and
 scope. Both save a browser report (`report.html`) and detailed results
-(`results.json`).
+(`results.json`). The terminal prints the full path to each saved file.
 
 | Scope | What it checks |
 |-------|----------------|
@@ -197,13 +197,18 @@ For example: `python scripts/flightcheck/cli.py --scope local`.
 
 **Standalone install (no VS Code or Copilot required):**
 
-If you only need to run FlightCheck, this single command handles everything — installs dependencies, signs you in, lets you pick your environment, and runs the check:
+For a Declarative Agent (DA) on Windows, this command installs dependencies,
+signs you in, and runs the latest DA setup diagnostics. Paste the agent's
+Copilot Studio URL or choose its environment and native agent:
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
 ```
 
-Re-run the same command to change your environment or agent. See [`setup/README.md`](../../setup/README.md) for details.
+Re-run the same command to change your environment or agent. This Windows
+entrypoint is DA-only; it does not fall back to legacy or environment-only
+checks. Dataverse and completed foundation setup are not required.
+See [`setup/README.md`](../../setup/README.md) for details.
 
 **Reading your report:** The summary identifies the agent and environment
 checked and separates passed checks, problems, warnings and items needing
@@ -472,6 +477,11 @@ capabilities are used and where they fail, so we can improve the product. It is
   `other`, or `unknown` — so raw branch names (which could otherwise carry
   personal / customer labels) are never emitted.
 - Scrubbed, non-sensitive **error categories** when something fails.
+- For unhandled exceptions in supported **DA scripts**, a fixed script/module
+  identifier, numeric source line, random error-event ID, and a bounded error
+  code/category with a developer-authored diagnostic sentence. The original
+  exception message, traceback text, source text, paths, arguments, and locals
+  are **not emitted**. See the [investigation queries](scripts/telemetry_queries.kql).
 - Bounded **Connect lifecycle transitions** for instrumented providers:
   connector, lifecycle event, broad phase, outcome, duration, retry/resume
   counts, blocker category, bounded remediation/checkpoint ID, correlation ID,

@@ -1,11 +1,13 @@
 <#
 .SYNOPSIS
-    One-liner bootstrap for FlightCheck-only installation.
+    One-liner bootstrap for Declarative Agent FlightCheck installation.
 
 .DESCRIPTION
     Downloads the installer script into a temp folder and runs it with
     -FlightCheckOnly. Installs only Python + Git, pip dependencies, and
-    walks through interactive environment/agent discovery.
+    selects a native Declarative Agent and runs shared maker setup diagnostics.
+    Legacy/custom-engine agents and environment-only runs are not supported
+    by this standalone entry point.
 
     Designed to be invoked from a single command:
 
