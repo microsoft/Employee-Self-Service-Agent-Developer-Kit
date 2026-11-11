@@ -6,6 +6,29 @@ The widget bundle, recipe authoring UI, and routing/packaging ship separately.
 To launch with the existing Python environment, run `python server.py` from this
 directory; dependencies are declared in `requirements.txt`.
 
+## Local Vorpal debugging
+
+Open `solutions\ess-maker-skills` as the VS Code workspace. In its
+`.vscode\mcp.json`, add `servers["ess-prompt-cards"]` using the same Python
+executable as `ess-landing-page-config`, `args: ["server.py"]`, and
+`cwd: "${workspaceFolder}\\src\\mcp\\agentconfig_prompt_cards"`. Set that
+server's `env.VORPAL_WIDGET_ORIGIN` to `https://localhost`.
+
+Run `npm run dev` from the local Vorpal checkout's `Client\Vorpal` folder.
+Its HTTPS preview server must serve
+`https://localhost/mcp-widget/prompt-cards/widget.js` with a trusted certificate
+covering `localhost`. The Vorpal and Jabberwocky dev servers share port 443;
+run only the intended widget server on that port.
+
+Use **MCP: List Servers** in VS Code to start or restart `ess-prompt-cards`,
+then ask chat to call `open_prompt_cards` with the target Employee Agent's
+`titleId`. Use the verified landing-page title ID, not the Dataverse bot ID.
+The opener reads real saved definitions. Row mutations and Apply changes
+write to the authenticated tenant's backend, so use a test agent.
+
+After editing Vorpal code, wait for the watch build and request a fresh widget.
+Create, edit, and duplicate controls in the management widget are placeholders.
+
 ## Wire contract
 
 Server: `ess-prompt-cards`. Resource:
