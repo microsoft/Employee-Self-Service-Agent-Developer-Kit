@@ -93,7 +93,10 @@ The same Codespace environment can be used to run FlightCheck without the full m
 
 ## FlightCheck-Only Mode
 
-For users who want to run a pre-deployment readiness check on their Power Platform environment — no coding tools or VS Code required. Just run this command:
+Run FlightCheck without coding tools or VS Code. The Windows standalone
+installer checks a selected Declarative Agent (DA), using the same setup
+diagnostics and report as `/flightcheck` in a configured DA workspace.
+It does not run legacy/custom-engine or environment-only checks.
 
 **Windows** (PowerShell):
 
@@ -101,23 +104,33 @@ For users who want to run a pre-deployment readiness check on their Power Platfo
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
 ```
 
-**macOS** (Terminal):
+That's it. The script handles everything automatically:
+
+1. Installs Python and Git (if not already present)
+2. Accepts your DA's Copilot Studio URL, or offers environment and native-agent selection
+3. Opens sign-in for the Microsoft work account that can access that agent
+4. Verifies the exact selected agent and saves its standalone configuration
+5. Runs the full DA setup diagnostics and opens the report
+
+Dataverse and completed foundation setup are not required. Checks needing
+unavailable evidence explain what remains unverified. Local-file checks need
+an agent workspace; the installer does not export a Dataverse solution.
+
+**macOS** retains its existing standalone discovery workflow:
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck-mac.sh)"
 ```
 
-That's it. The script handles everything automatically:
-
-1. Installs Python and Git (if not already present)
-2. Opens a browser window for you to sign in with your Microsoft work account
-3. Shows your available environments — pick one by number
-4. Shows the agents in that environment — pick one (or skip)
-5. Runs the full FlightCheck validation and displays results
+For DA diagnostics on macOS, use the direct command below from an already
+configured DA workspace.
 
 ### Changing your environment or agent
 
-Re-run the same command — it will ask if you want to reconfigure:
+Re-run the same Windows command and select the intended DA. Older
+environment-only/legacy standalone configurations are replaced only after
+the new target is verified. Existing maker-workspace configurations are not
+overwritten; use `/flightcheck` there or choose a separate `-InstallRoot`.
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
@@ -125,7 +138,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 ### Targeting a non-prod ring
 
-The FlightCheck-only installer targets the Power Platform **prod** service ring by default (where customer environments live). To validate a **preprod** or **test** environment, pass `-Ring` / `--ring`:
+The FlightCheck-only installer targets the Power Platform **prod** service ring by default (where customer environments live). To validate a **preprod** or **test** environment, pass `-Ring` / `--ring`. A supplied Copilot Studio URL must match that ring:
 
 **Windows** (PowerShell):
 
