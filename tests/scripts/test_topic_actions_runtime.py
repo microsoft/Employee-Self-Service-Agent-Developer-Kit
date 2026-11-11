@@ -434,6 +434,58 @@ def test_server_generated_drift_before_dispatch_still_requires_fresh_approval(fi
     assert not backend.submissions
 
 
+@pytest.mark.parametrize("action", ["enable", "disable"])
+def test_parsed_record_expression_readback_preserves_authored_expression(action):
+    before, after = server_generated_readback(action)
+    for evidence in (before, after):
+        for row in evidence.body["botComponentChanges"]:
+            row["component"]["dialog"]["value"] = {
+                "$kind": "ValueExpression", "expressionText": "{ worker: Global.Worker }",
+            }
+    for row in after.body["botComponentChanges"]:
+        row["component"]["dialog"]["value"]["structuredRecordExpression"] = {
+            "$kind": "StructuredRecordExpression", "fields": [],
+        }
+    originals = deepcopy((before.body, after.body))
+    backend = SyntheticBackend([before, before, after])
+
+    result = TopicActionSession(backend, action).run(lambda _: "approve")
+
+    assert result["completed"], result
+    assert len(backend.submissions) == 1
+    assert (before.body, after.body) == originals
+    submitted = backend.submissions[0][1]["botComponentChanges"][0]["component"]
+    assert submitted["dialog"]["value"] == before.body["botComponentChanges"][0]["component"]["dialog"]["value"]
+
+
+@pytest.mark.parametrize("change", ["expression", "missing_source", "wrong_kind", "outside_dialog"])
+def test_parsed_record_normalization_does_not_hide_authored_or_unknown_fields(change):
+    before, after = server_generated_readback("enable")
+    for evidence in (before, after):
+        value = {"$kind": "ValueExpression", "expressionText": "{ worker: Global.Worker }"}
+        component = evidence.body["botComponentChanges"][0]["component"]
+        if change == "missing_source":
+            value.pop("expressionText")
+        elif change == "wrong_kind":
+            value["$kind"] = "UnknownExpression"
+        if change == "outside_dialog":
+            component["value"] = value
+        else:
+            component["dialog"]["value"] = value
+    component = after.body["botComponentChanges"][0]["component"]
+    value = component["value"] if change == "outside_dialog" else component["dialog"]["value"]
+    value["structuredRecordExpression"] = {"$kind": "StructuredRecordExpression", "fields": []}
+    if change == "expression":
+        value["expressionText"] = "{ worker: Global.Other }"
+    backend = SyntheticBackend([before, before, after])
+
+    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+
+    assert result["status"] == "partial" and not result["completed"]
+    assert "verification_incomplete" in result["blockers"]
+    assert len(backend.submissions) == 1
+
+
 @pytest.mark.parametrize(("decision", "status"), [
     ("deny", "denied"), ("cancel", "cancelled"), ("yes", "blocked"),
 ])

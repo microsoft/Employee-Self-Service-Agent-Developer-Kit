@@ -165,23 +165,40 @@ def _component_map(body: dict) -> dict:
     return result
 
 
-def _without_server_generated_fields(value):
+def _without_server_generated_fields(value, *, normalize_structured_records: bool = True):
     if isinstance(value, dict):
+        parsed_record = (
+            normalize_structured_records
+            and value.get("$kind") == "ValueExpression"
+            and isinstance(value.get("expressionText"), str)
+            and bool(value["expressionText"].strip())
+        )
         return {
-            key: _without_server_generated_fields(child)
+            key: _without_server_generated_fields(
+                child, normalize_structured_records=normalize_structured_records,
+            )
             for key, child in value.items()
             if key not in {"diagnostics", "structuredCondition"}
+            and not (parsed_record and key == "structuredRecordExpression")
         }
     if isinstance(value, list):
-        return [_without_server_generated_fields(child) for child in value]
+        return [
+            _without_server_generated_fields(
+                child, normalize_structured_records=normalize_structured_records,
+            ) for child in value
+        ]
     return value
 
 
-def _preservation_content(component: dict, *, state_change: bool) -> dict:
+def _preservation_content(
+    component: dict, *, state_change: bool, normalize_structured_records: bool = True,
+) -> dict:
     """Normalize readback only, not the reviewed evidence or submitted payload."""
     content = deepcopy(component)
     if content.get("$kind") == "DialogComponent" and "dialog" in content:
-        content["dialog"] = _without_server_generated_fields(content["dialog"])
+        content["dialog"] = _without_server_generated_fields(
+            content["dialog"], normalize_structured_records=normalize_structured_records,
+        )
     if state_change:
         for key in ("state", "status", "version"):
             content.pop(key, None)

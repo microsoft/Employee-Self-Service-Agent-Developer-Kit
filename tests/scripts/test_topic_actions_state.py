@@ -400,3 +400,83 @@ def test_uncertain_unapplied_write_can_be_reconciled_by_approved_noop_restore(tm
     assert len(reviews) == 1
     restored.components.submit_state_payload.assert_not_called()
     assert store.load()["journal"]["pending"] is None
+
+
+def _record_expression_packets(backend, *, parsed):
+    packets = list(backend.components.read_components.side_effect)
+    for index, body in enumerate(packets):
+        value = {"$kind": "ValueExpression", "expressionText": "{ worker: Global.Worker }"}
+        if parsed or index == 2:
+            value["structuredRecordExpression"] = {"$kind": "StructuredRecordExpression", "fields": []}
+        body["botComponentChanges"][0]["component"]["dialog"]["value"] = value
+    backend.components.read_components.side_effect = packets
+    return packets
+
+
+@pytest.mark.parametrize("edit", [False, True])
+def test_restore_after_uncertain_write_ignores_only_derived_record_data(tmp_path, edit):
+    store = TopicStateStore(tmp_path, TARGET, first_use=True)
+    enabled = {"a": "On", "shared": "On", "b": "On"}
+    backend = dev_native_backend(selected=("alpha", "beta"), after=enabled)
+    _record_expression_packets(backend, parsed=False)
+    backend.components.submit_state_payload.side_effect = requests.Timeout()
+    result = TopicActionSession(backend, "enable", state_store=store).run(lambda _: "approve")
+    assert result["status"] == "unverified"
+    baseline = deepcopy(store.load()["baseline"])
+    saved = store.path.read_bytes()
+    restored = dev_native_backend(before=enabled, selected=store.restore_keys())
+    packets = _record_expression_packets(restored, parsed=True)
+    if edit:
+        for packet in packets:
+            packet["botComponentChanges"][0]["component"]["dialog"]["value"]["expressionText"] = "{ worker: Global.Other }"
+    restored.components.read_components.side_effect = packets
+    restored.state_store, restored.restoring = store, True
+    reviews = []
+
+    result = TopicActionSession(restored, "restore", state_store=store).run(
+        lambda p: reviews.append(p) or "approve",
+    )
+
+    assert store.load()["baseline"] == baseline
+    if edit:
+        assert result["blockers"] == ["restore_conflict"]
+        assert not reviews
+        restored.components.submit_state_payload.assert_not_called()
+        assert store.path.read_bytes() == saved
+    else:
+        assert result["completed"], result
+        assert len(reviews) == 1
+        restored.components.submit_state_payload.assert_called_once()
+        assert store.load()["journal"]["pending"] is None
+
+
+@pytest.mark.parametrize("uncertain", [False, True])
+def test_restore_accepts_exact_legacy_record_fingerprint_without_rewriting_baseline(
+    tmp_path, monkeypatch, uncertain,
+):
+    import topic_actions_state as state
+
+    store = TopicStateStore(tmp_path, TARGET, first_use=True)
+    enabled = {"a": "On", "shared": "On", "b": "On"}
+    backend = dev_native_backend(selected=("alpha", "beta"), after=enabled)
+    _record_expression_packets(backend, parsed=True)
+    if uncertain:
+        backend.components.submit_state_payload.side_effect = requests.Timeout()
+    current_topics = state._topics
+    with monkeypatch.context() as legacy:
+        legacy.setattr(
+            state, "_topics", lambda e: current_topics(e, normalize_structured_records=False),
+        )
+        result = TopicActionSession(backend, "enable", state_store=store).run(lambda _: "approve")
+    assert result["status"] == ("unverified" if uncertain else "completed")
+    baseline = deepcopy(store.load()["baseline"])
+    restored = dev_native_backend(before=enabled, selected=store.restore_keys())
+    _record_expression_packets(restored, parsed=True)
+    restored.state_store, restored.restoring = store, True
+
+    result = TopicActionSession(restored, "restore", state_store=store).run(lambda _: "approve")
+
+    assert result["completed"], result
+    restored.components.submit_state_payload.assert_called_once()
+    assert store.load()["baseline"] == baseline
+    assert store.load()["journal"]["pending"] is None

@@ -34,7 +34,7 @@ def _valid_topic(topic) -> bool:
     )
 
 
-def _topics(evidence) -> dict:
+def _topics(evidence, *, normalize_structured_records: bool = True) -> dict:
     from topic_actions_execution import _component_map, _preservation_content
 
     result, schemas = {}, set()
@@ -52,7 +52,9 @@ def _topics(evidence) -> dict:
         schemas.add(schema.casefold())
         result[identity] = {
             "schemaName": schema, "state": state,
-            "contentDigest": _digest(_preservation_content(component, state_change=True)),
+            "contentDigest": _digest(_preservation_content(
+                component, state_change=True, normalize_structured_records=normalize_structured_records,
+            )),
         }
     if not result:
         raise TopicStateError("baseline_topic_evidence_unavailable")
@@ -234,6 +236,8 @@ class TopicStateStore:
 
     def _restore_topics(self, data, evidence) -> tuple[dict, dict]:
         current = _topics(evidence)
+        # Older stores included parsed record data; exact legacy matches remain safe.
+        legacy_current = _topics(evidence, normalize_structured_records=False)
         original, journal = data["baseline"]["topics"], data["journal"]
         if any(
             identity not in current or current[identity]["schemaName"] != item["schemaName"]
@@ -249,12 +253,17 @@ class TopicStateStore:
                 actual = current.get(identity)
                 if (
                     actual is None or actual["schemaName"] != item["before"]["schemaName"]
-                    or actual["contentDigest"] != item["before"]["contentDigest"]
+                    or item["before"]["contentDigest"] not in (
+                        actual["contentDigest"], legacy_current[identity]["contentDigest"],
+                    )
                     or actual["state"] not in (item["before"]["state"], item["after"])
                 ):
                     raise TopicStateError("restore_conflict")
                 expected[identity] = actual
-        if any(current.get(identity) != item for identity, item in expected.items()):
+        if any(
+            current.get(identity) != item and legacy_current.get(identity) != item
+            for identity, item in expected.items()
+        ):
             raise TopicStateError("restore_conflict")
         if set(expected) - set(evidence.snapshot.evidence.selected_member_ids):
             raise TopicStateError("restore_membership_changed")
