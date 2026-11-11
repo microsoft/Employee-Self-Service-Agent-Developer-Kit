@@ -19,15 +19,18 @@ do not skip review, sharing, or explicit activation to ask for owners.
 ## How to nudge
 
 1. See which roles the plan actually assigns unfinished work to — its tasks assigned to a role
-   (`assignedToType: "Role"`) with nobody named on them. Split them against
-   `list_attestable_roles`:
-   - **Attestable roles** (e.g. `ServiceNowAdmin`, `WorkdayAdmin`) become visible
-     through **attestation** — handle them in steps 2–3.
-   - **Non-attestable roles** can't be attested, so attestation will never surface
-     their tasks. They become visible only when the task is handed to a **named
-     person** — handle them in step 4.
+   (`assignedToType: "Role"`) with nobody named on them. Shared tasks carry the
+   role's stored name (e.g. "Workday administrator") and the local plan its
+   compact id (`WorkdayAdmin`), so split them against `list_attestable_roles` by
+   matching either an entry's `roleId` or its `compactId`:
+   - **Attestable roles** (e.g. `ServiceNowAdmin`, `WorkdayAdmin`, or their stored
+     names) become visible through **attestation** — handle them in steps 2–3.
+   - **Non-attestable roles** match neither form and can't be attested, so
+     attestation will never surface their tasks. They become visible only when
+     the task is handed to a **named person** — handle them in step 4.
 2. Check who's already attested with `list_plan_role_assignments` — only nudge for
-   attestable roles with **no active** holder.
+   attestable roles with **no active** holder. Each assignment's `roleId` is the
+   stored name, so compare it with the entry's `roleId`.
     If `owner.<role-id>` is already recorded as a pending decision, include it in
     the status summary but do not repeat the assignment question. Nudge again only
     when the maker asks or that vacancy now blocks the work they want to start.

@@ -21,7 +21,7 @@ from mcp.types import ToolAnnotations
 
 from inventory_surface import InventorySurface
 from planner_client import PlannerClient
-from roles_surface import ATTESTABLE_ROLES
+from roles_surface import ATTESTABLE_ROLE_DEFINITIONS
 
 
 _READ_ONLY_ANNOTATIONS = ToolAnnotations(
@@ -341,7 +341,10 @@ async def create_project_plan_task(
     idempotencyKey: Optional[str] = None,
 ) -> str:
     """Create a task (body: title required; description?, assignedToId?,
-    assignedToType? User|Role, assignedToRoleId?, produces?, consumes?)."""
+    assignedToType? User|Role, assignedToRoleId?, produces?, consumes?). An
+    attestable role in assignedToRoleId, or in assignedToId when assignedToType
+    is Role, is written as its stored roleId from list_attestable_roles so the
+    task reaches the role's holders; other roles pass through unchanged."""
     return _format(
         await get_client().create_project_plan_task(
             projectId, planId, task, idempotencyKey
@@ -360,8 +363,10 @@ async def create_role_assigned_project_plan_task(
     consumes: Optional[list[str]] = None,
     idempotencyKey: Optional[str] = None,
 ) -> str:
-    """Create a pooled task assigned to whoever holds an attestable role
-    (WorkdayAdmin, ServiceNowAdmin, ServiceNowKnowledgeManager)."""
+    """Create a pooled task assigned to whoever holds an attestable role. Pass a
+    role from list_attestable_roles (its roleId or compactId, e.g. WorkdayAdmin);
+    the task is always written under the stored roleId so it reaches the role's
+    holders."""
     return _format(
         await get_client().create_role_assigned_project_plan_task(
             projectId,
@@ -465,16 +470,24 @@ async def delete_project_plan_task(
 
 # ----------------------------------------------------------------------
 # AgentConfiguration role attestation tools. The tenant is taken from the access
-# token; only the provider-owned attestable roles are valid and the
-# attestation provider is always External.
+# token; only the provider-owned attestable roles are valid, and each role's
+# attestation provider is derived from the role.
 # ----------------------------------------------------------------------
 
 
 @mcp.tool(annotations=_READ_ONLY_ANNOTATIONS)
 async def list_attestable_roles() -> str:
-    """List the provider-owned role identifiers accepted by plan attestation
-    (across the External, Entra, and PowerPlatform providers)."""
-    return _format(list(ATTESTABLE_ROLES))
+    """List the roles plan attestation accepts, across the External, Entra, and
+    PowerPlatform providers, as {roleId, compactId, provider}. roleId is the
+    name the service stores and returns (assignment roleId, task assignedToId
+    and assignedToRoleId), so match service data on it; compactId is the short
+    id the local plan uses. The role tools accept either form."""
+    return _format(
+        [
+            {"roleId": wire, "compactId": role_id, "provider": provider}
+            for role_id, (wire, provider) in ATTESTABLE_ROLE_DEFINITIONS.items()
+        ]
+    )
 
 
 @mcp.tool(annotations=_READ_ONLY_ANNOTATIONS)
@@ -488,7 +501,10 @@ async def list_plan_role_assignments(
     skiptoken: Optional[str] = None,
 ) -> str:
     """List active or revoked role assignments for a plan (plan-scoped;
-    optionally filter by subjectId, role, or status Active|Revoked)."""
+    optionally filter by subjectId, role, or status Active|Revoked). role takes
+    an attestable role (roleId or compactId from list_attestable_roles) and
+    filters on the stored roleId; each result's roleId is that stored name
+    (e.g. "Workday administrator"), never the compact id."""
     return _format(
         await get_client().list_plan_role_assignments(
             planId, subjectId, role, status, top, orderby, skiptoken
@@ -510,17 +526,17 @@ async def attest_plan_role(
     etag: Optional[str] = None,
     idempotencyKey: Optional[str] = None,
 ) -> str:
-    """Attest that a subject holds an attestable role for a plan. Pass a compact
-    role id from list_attestable_roles; the backend's attestable set spans three
-    providers - External (WorkdayAdmin, ServiceNowAdmin, ServiceNowKnowledgeManager),
-    Entra directory roles (e.g. EntraPowerPlatformAdministrator,
-    EntraGlobalAdministrator, EntraApplicationAdministrator), and PowerPlatform
-    (e.g. PowerPlatformEnvironmentMaker, PowerPlatformSystemAdministrator). Each
-    role's display name and owning provider are derived from the role, so the
-    provider is never a free choice (the backend rejects a mismatched provider);
-    a role's display name is also accepted in place of its compact id. Omit etag
-    for a first attestation; pass an existing assignment's strong ETag to converge
-    (never the plan's weak ETag)."""
+    """Attest that a subject holds an attestable role for a plan. Pass a role
+    from list_attestable_roles (its compactId or stored roleId); the backend's
+    attestable set spans three providers - External (WorkdayAdmin,
+    ServiceNowAdmin, ServiceNowKnowledgeManager), Entra directory roles (e.g.
+    EntraPowerPlatformAdministrator, EntraGlobalAdministrator,
+    EntraApplicationAdministrator), and PowerPlatform (e.g.
+    PowerPlatformEnvironmentMaker, PowerPlatformSystemAdministrator). The role
+    is always sent as its stored roleId, and its owning provider is derived from
+    the role, so the provider is never a free choice (the backend rejects a
+    mismatched provider). Omit etag for a first attestation; pass an existing
+    assignment's strong ETag to converge (never the plan's weak ETag)."""
     return _format(
         await get_client().attest_plan_role(
             planId, subjectId, role, etag=etag, idempotency_key=idempotencyKey

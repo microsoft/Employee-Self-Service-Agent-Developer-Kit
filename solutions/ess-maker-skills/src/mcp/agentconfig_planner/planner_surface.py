@@ -47,7 +47,7 @@ from _odata import (  # noqa: E402
 )
 from base_client import AgentConfigApiError  # noqa: E402
 
-from roles_surface import ATTESTABLE_ROLES, resolve_attestable_role  # noqa: E402
+from roles_surface import resolve_attestable_role, stored_role_name  # noqa: E402
 
 _AGENT_PROJECTS_COLLECTION = "me/agentConfigurationProjects"
 _PLANS_RESOURCE = "agentPlans"
@@ -72,6 +72,28 @@ _OUTPUT_KINDS = ("Custom", "Environment", "Connection", "KnowledgeSource")
 # properties; guard the size here so an oversized completion fails fast with an
 # actionable message instead of an opaque backend error.
 _MAX_COMPLETION_OUTPUTS_BYTES = 20_000
+
+
+def _with_stored_role_names(task: Any) -> Any:
+    """Return ``task`` with each attestable role written as WeveNova stores it.
+
+    A role-pooled task reaches the role's holders only when its role matches the
+    stored grant exactly (Ordinal equality), so fold a compact id or a
+    case/spacing variant of an attestable role to the wire display name. A
+    non-attestable role passes through unchanged, and ``task`` is never mutated.
+    """
+    if not isinstance(task, dict):
+        return task
+    fields = ["assignedToRoleId"]
+    assigned_type = task.get("assignedToType")
+    if isinstance(assigned_type, str) and assigned_type.lower() == "role":
+        fields.append("assignedToId")
+    updates: dict[str, str] = {}
+    for field in fields:
+        stored = stored_role_name(task.get(field))
+        if stored is not None and stored != task[field]:
+            updates[field] = stored
+    return {**task, **updates} if updates else task
 
 
 def _normalize_completion_outputs(outputs: Any) -> list[dict[str, Any]]:
@@ -361,6 +383,9 @@ class PlannerMixin:
     ) -> Any:
         if not isinstance(plan, dict):
             raise ValueError("plan must be an object")
+        tasks = plan.get("tasks")
+        if isinstance(tasks, list):
+            plan = {**plan, "tasks": [_with_stored_role_names(task) for task in tasks]}
         self._check_plan_payload(plan)
         return await self._request(
             "POST",
@@ -491,7 +516,7 @@ class PlannerMixin:
         return await self._request(
             "POST",
             self._tasks_collection_url(project_id, plan_id),
-            json=task,
+            json=_with_stored_role_names(task),
             headers=_mutation_headers(idempotency_key=idempotency_key),
             idempotent=idempotency_key is not None,
             transform_payload=False,
@@ -508,16 +533,14 @@ class PlannerMixin:
         consumes: Optional[list[str]] = None,
         idempotency_key: Optional[str] = None,
     ) -> Any:
-        if role not in ATTESTABLE_ROLES:
-            raise ValueError("role must be one of " + ", ".join(ATTESTABLE_ROLES))
-        if not isinstance(title, str) or not title.strip():
-            raise ValueError("title must be a non-empty string")
         # Send the backend **wire display name**, not the compact id: the service
         # stores attestation grants under the wire name (see ``attest_plan_role``)
         # and its caller-task expansion compares the two with Ordinal equality, so
         # a pooled task written with the compact id never surfaces to the role's
         # attested holders.
         wire_role, _provider = resolve_attestable_role(role)
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("title must be a non-empty string")
         body: dict[str, Any] = {
             "title": title,
             "assignedToId": wire_role,

@@ -10,8 +10,13 @@ or to check before/after attesting, call `list_plan_role_assignments` with the
 `planId`. Filter when it helps:
 
 - by person: `subjectId`,
-- by role: `role`,
+- by role: `role` — a role from `list_attestable_roles`, as its `roleId` or
+  `compactId`; the filter always matches on the stored role name,
 - by state: `status` = `Active` or `Revoked` (default view is the active ones).
+
+Each assignment's `roleId` is the role's stored name (e.g. "ServiceNow
+Administrator"), never its compact id, so group and match assignments on the
+`roleId` of the `list_attestable_roles` entries.
 
 Present it grouped by role in plain language — "ServiceNow admin: Priya Sharma;
 Workday admin: nobody yet". Resolve object ids back to names only when you already
@@ -21,6 +26,9 @@ have them from this session; don't imply you keep a record of people.
 
 `list_attestable_roles` returns the exact set the plan accepts. Use it to answer
 "what roles can I assign?" and to validate a maker's request before attesting.
+Each entry carries `roleId` — the name the service stores and returns on
+assignments and tasks — plus `compactId`, the short id the local plan uses, and
+`provider`. The role tools accept either form and always write the stored name.
 
 ## Revoke a role
 

@@ -97,8 +97,11 @@ admin to finish environment setup before anyone can assign its work.
   roles (`PowerPlatformEnvironmentMaker`, `PowerPlatformEnvironmentAdministrator`,
   `PowerPlatformSystemAdministrator`). Map a loose name the maker uses to the
   matching id ("the ServiceNow admin" → `ServiceNowAdmin`, "Power Platform admin"
-  → `EntraPowerPlatformAdministrator`). Only if the role genuinely isn't in that
-  list do you explain it can't be attested and stop.
+  → `EntraPowerPlatformAdministrator`). Each entry pairs that `compactId` with the
+  role's `roleId` — the name the service stores and returns on assignments and
+  tasks (e.g. "Workday administrator"). The role tools accept either form and
+  always write the stored name, so match service data on `roleId`. Only if the
+  role genuinely isn't in that list do you explain it can't be attested and stop.
 - **Attesting changes visibility.** After you attest, the person sees the plan
   and every task assigned to that role in their own "what am I assigned?" view, and
   can claim them. That is the whole point — state it back to the maker in plain
@@ -117,7 +120,8 @@ admin to finish environment setup before anyone can assign its work.
 ## The shape of an attestation
 
 `attest_plan_role` takes `planId`, `subjectId` (the person's directory object id —
-the `oid` from `resolve-person`), and `role` (an attestable role id). The provider
+the `oid` from `resolve-person`), and `role` (an attestable role — its `compactId`
+or stored `roleId`). The provider
 is handled for you. Omit `etag` for a first attestation; pass an existing
 assignment's **strong** ETag only to converge one already there
 (`list_plan_role_assignments` / `get_role_assignment` give you that ETag — never

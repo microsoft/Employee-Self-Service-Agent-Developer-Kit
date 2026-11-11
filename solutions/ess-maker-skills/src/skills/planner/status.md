@@ -192,9 +192,12 @@ Summarise, don't dump the table. Include the relevant points:
   it was removed / is no longer linked to the plan — is a silent stall: vacancies
   can't be announced proactively, so a status read is the one moment to catch them.
   For a shared plan, read its role assignments (`list_plan_role_assignments` —
-  active holders only) against the roles its unfinished tasks need; for any attestable role with no
-  active holder, name it and the work waiting on it (*"Heads up — the Workday admin
-  role is vacant, so the Workday connection work has no owner."*) For the maker,
+  active holders only) against the roles its unfinished tasks need. Assignments
+  carry the role's stored name (`roleId`, e.g. "Workday administrator") while the
+  summary shows its compact id (`WorkdayAdmin`), so pair them through the
+  `list_attestable_roles` entries (`roleId` ↔ `compactId`). For any attestable
+  role with no active holder, name it and the work waiting on it (*"Heads up — the
+  Workday admin role is vacant, so the Workday connection work has no owner."*) For the maker,
   recommend filling that vacancy through role assignment
   (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`). Read who's missing
   off the plan — never guess a name. For a local draft, report nominations from

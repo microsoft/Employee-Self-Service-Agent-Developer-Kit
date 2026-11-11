@@ -12,6 +12,7 @@ token's ``tid`` claim, so the tenant is never a tool argument.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from typing import Any, Optional
 
@@ -89,8 +90,7 @@ ATTESTABLE_ROLE_DEFINITIONS: dict[str, tuple[str, str]] = {
     for role_id, wire in roles.items()
 }
 
-# The compact role ids, in registry order - what ``list_attestable_roles``
-# returns and what ``create_role_assigned_project_plan_task`` validates against.
+# The compact role ids, in registry order.
 ATTESTABLE_ROLES = tuple(ATTESTABLE_ROLE_DEFINITIONS)
 
 # Compact id -> wire display name. Retained as a public alias (callers and tests
@@ -99,21 +99,51 @@ ATTESTABLE_ROLE_WIRE_NAMES = {
     role_id: wire for role_id, (wire, _provider) in ATTESTABLE_ROLE_DEFINITIONS.items()
 }
 
-# Wire display name -> owning provider, for callers that pass a display name.
-_WIRE_NAME_TO_PROVIDER = {
-    wire: provider for wire, provider in ATTESTABLE_ROLE_DEFINITIONS.values()
+
+def _fold_role_label(label: str) -> str:
+    """Fold a role label for matching: lower-case, drop every non-alphanumeric.
+
+    Mirrors ``scripts/planner/attestable._normalize`` so the MCP accepts the same
+    spellings as the local plan (``ServiceNowAdmin``, ``ServiceNow
+    Administrator``, ``servicenow-administrator``).
+    """
+    return re.sub(r"[^a-z0-9]+", "", label.lower())
+
+
+# Folded compact id AND folded wire display name -> compact id.
+_ROLE_LOOKUP: dict[str, str] = {
+    _fold_role_label(label): role_id
+    for role_id, (wire, _provider) in ATTESTABLE_ROLE_DEFINITIONS.items()
+    for label in (role_id, wire)
 }
 
 
+def _attestable_role_id(role: Any) -> Optional[str]:
+    if not isinstance(role, str):
+        return None
+    return _ROLE_LOOKUP.get(_fold_role_label(role))
+
+
+def stored_role_name(role: Any) -> Optional[str]:
+    """Return the wire display name WeveNova stores for an attestable role
+    label, or ``None`` when the label is not attestable."""
+    role_id = _attestable_role_id(role)
+    return ATTESTABLE_ROLE_DEFINITIONS[role_id][0] if role_id else None
+
+
 def resolve_attestable_role(role: str) -> tuple[str, str]:
-    """Resolve a caller-supplied role - a compact id (``WorkdayAdmin``) or the
-    backend wire display name (``Workday administrator``) - to its
-    ``(wire display name, owning provider)``. Raise ``ValueError`` listing the
+    """Resolve a caller-supplied role to its ``(wire display name, owning
+    provider)``.
+
+    WeveNova stores grants under the wire display name (``Workday
+    administrator``), returns it as the assignment ``roleId`` and task role, and
+    compares role names with Ordinal equality. So accept the compact id
+    (``WorkdayAdmin``), the display name, or a case/spacing variant of either,
+    but always resolve to the stored name. Raise ``ValueError`` listing the
     accepted values when the role is not attestable."""
-    if role in ATTESTABLE_ROLE_DEFINITIONS:
-        return ATTESTABLE_ROLE_DEFINITIONS[role]
-    if role in _WIRE_NAME_TO_PROVIDER:
-        return role, _WIRE_NAME_TO_PROVIDER[role]
+    role_id = _attestable_role_id(role)
+    if role_id is not None:
+        return ATTESTABLE_ROLE_DEFINITIONS[role_id]
     raise ValueError(
         "role must be one of "
         + ", ".join(ATTESTABLE_ROLES)
@@ -161,7 +191,10 @@ class RolesMixin:
                 f"subjectObjectId eq '{_escape_odata_literal(subject_id, 'subjectId')}'"
             )
         if role is not None:
-            clauses.append(f"roleId eq '{_escape_odata_literal(role, 'role')}'")
+            # Assignments carry the stored display name, and the service matches
+            # it exactly, so a compact id here would silently match nothing.
+            wire_role, _provider = resolve_attestable_role(role)
+            clauses.append(f"roleId eq '{_escape_odata_literal(wire_role, 'role')}'")
         if status is not None:
             if status not in _ROLE_ASSIGNMENT_STATUSES:
                 raise ValueError("status must be Active or Revoked")

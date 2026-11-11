@@ -349,19 +349,25 @@ def test_caller_task_guidance_requires_refresh_after_progress() -> None:
 # ---------------------------------------------------------------------------
 def test_list_attestable_roles_returns_provider_roles() -> None:
     result = _call("list_attestable_roles", {})
+    # roleId is the name the service stores and returns on assignments and tasks;
+    # compactId is the short id the local plan uses.
+    expected = [
+        ("Workday administrator", "WorkdayAdmin", "External"),
+        ("ServiceNow Administrator", "ServiceNowAdmin", "External"),
+        ("ServiceNow Knowledge Manager", "ServiceNowKnowledgeManager", "External"),
+        ("Global Administrator", "EntraGlobalAdministrator", "Entra"),
+        ("Network Administrator", "EntraNetworkAdministrator", "Entra"),
+        ("User Administrator", "EntraUserAdministrator", "Entra"),
+        ("Power Platform Administrator", "EntraPowerPlatformAdministrator", "Entra"),
+        ("Application Administrator", "EntraApplicationAdministrator", "Entra"),
+        ("Cloud Application Administrator", "EntraCloudApplicationAdministrator", "Entra"),
+        ("Environment Maker", "PowerPlatformEnvironmentMaker", "PowerPlatform"),
+        ("Environment Administrator", "PowerPlatformEnvironmentAdministrator", "PowerPlatform"),
+        ("System Administrator", "PowerPlatformSystemAdministrator", "PowerPlatform"),
+    ]
     assert json.loads(_result_text(result)) == [
-        "WorkdayAdmin",
-        "ServiceNowAdmin",
-        "ServiceNowKnowledgeManager",
-        "EntraGlobalAdministrator",
-        "EntraNetworkAdministrator",
-        "EntraUserAdministrator",
-        "EntraPowerPlatformAdministrator",
-        "EntraApplicationAdministrator",
-        "EntraCloudApplicationAdministrator",
-        "PowerPlatformEnvironmentMaker",
-        "PowerPlatformEnvironmentAdministrator",
-        "PowerPlatformSystemAdministrator",
+        {"roleId": role_id, "compactId": compact_id, "provider": provider}
+        for role_id, compact_id, provider in expected
     ]
 
 

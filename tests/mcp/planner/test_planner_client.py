@@ -344,6 +344,90 @@ def test_role_assigned_task_targets_a_role_pool(monkeypatch) -> None:
     }
 
 
+@pytest.mark.parametrize("role", ["ServiceNow Administrator", "servicenow administrator"])
+def test_role_assigned_task_accepts_the_stored_role_name(monkeypatch, role) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    _run(
+        client,
+        lambda: client.create_role_assigned_project_plan_task(
+            "proj1", "plan1", role, "Configure ServiceNow"
+        ),
+    )
+
+    body = json.loads(requests[0].content)
+    assert body["assignedToId"] == body["assignedToRoleId"] == "ServiceNow Administrator"
+
+
+def test_task_create_writes_attestable_roles_under_the_stored_name(monkeypatch) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    pooled = {
+        "title": "T",
+        "assignedToType": "Role",
+        "assignedToId": "WorkdayAdmin",
+        "assignedToRoleId": "WorkdayAdmin",
+    }
+    unknown = {
+        "title": "U",
+        "assignedToType": "Role",
+        "assignedToId": "SomeFutureRole",
+        "assignedToRoleId": "SomeFutureRole",
+    }
+    person = {
+        "title": "V",
+        "assignedToType": "User",
+        "assignedToId": CALLER_OID,
+        "assignedToRoleId": "workday administrator",
+    }
+
+    async def calls():
+        for task in (pooled, unknown, person):
+            await client.create_project_plan_task("proj1", "plan1", task)
+
+    _run(client, calls)
+
+    # Role expansion matches the stored grant name exactly, so an attestable role
+    # must be written under it; a role outside the catalog passes through as-is.
+    sent = [json.loads(r.content) for r in requests]
+    assert sent == [
+        {**pooled, "assignedToId": "Workday administrator", "assignedToRoleId": "Workday administrator"},
+        unknown,
+        {**person, "assignedToRoleId": "Workday administrator"},
+    ]
+    assert pooled["assignedToId"] == "WorkdayAdmin"
+
+
+def test_plan_create_writes_inline_task_roles_under_the_stored_name(monkeypatch) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    plan = {
+        "tasks": [
+            {
+                "title": "T",
+                "assignedToType": "Role",
+                "assignedToId": "ServiceNowAdmin",
+                "assignedToRoleId": "ServiceNowAdmin",
+            },
+            {"title": "U"},
+        ]
+    }
+
+    _run(client, lambda: client.create_project_plan("proj1", plan, "idem"))
+
+    assert json.loads(requests[0].content)["tasks"] == [
+        {
+            "title": "T",
+            "assignedToType": "Role",
+            "assignedToId": "ServiceNow Administrator",
+            "assignedToRoleId": "ServiceNow Administrator",
+        },
+        {"title": "U"},
+    ]
+    assert plan["tasks"][0]["assignedToId"] == "ServiceNowAdmin"
+
+
 def test_complete_task_normalizes_outputs_and_enforces_environment_rule(
     monkeypatch,
 ) -> None:
@@ -498,8 +582,10 @@ def test_role_assignment_routes_are_tenant_sharded(monkeypatch) -> None:
 
     listing = next(r for r in requests if r.method == "GET" and r.url.path.endswith("agentRoleAssignments"))
     assert str(listing.url).startswith(collection)
+    # The compact id filters on the stored display name: assignments are saved
+    # and matched under that name, so the compact id would hide the holder.
     assert listing.url.params["$filter"] == (
-        "targetPlanId eq 'plan1' and roleId eq 'WorkdayAdmin' and status eq 'Active'"
+        "targetPlanId eq 'plan1' and roleId eq 'Workday administrator' and status eq 'Active'"
     )
 
     getting = next(r for r in requests if r.method == "GET" and "('assign1')" in str(r.url))
@@ -529,6 +615,31 @@ def test_list_role_assignments_requires_target_plan_equality(monkeypatch) -> Non
 
     # Even with no optional filters, the plan-scoping equality is always present.
     assert requests[0].url.params["$filter"] == "targetPlanId eq 'plan1'"
+
+
+@pytest.mark.parametrize("role", ["Workday administrator", "workday-Administrator"])
+def test_list_role_assignments_filters_any_spelling_on_the_stored_name(
+    monkeypatch, role
+) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    _run(client, lambda: client.list_plan_role_assignments("plan1", role=role))
+
+    assert requests[0].url.params["$filter"] == (
+        "targetPlanId eq 'plan1' and roleId eq 'Workday administrator'"
+    )
+
+
+def test_list_role_assignments_rejects_an_unattestable_role_before_sending(
+    monkeypatch,
+) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    with pytest.raises(ValueError, match="role must be one of"):
+        _run(client, lambda: client.list_plan_role_assignments("plan1", role="NotARole"))
+    assert requests == []
 
 
 @pytest.mark.parametrize(

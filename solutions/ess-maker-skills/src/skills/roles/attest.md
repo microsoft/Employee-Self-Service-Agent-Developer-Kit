@@ -14,7 +14,9 @@ directory roles (including `EntraPowerPlatformAdministrator`,
 roles (`PowerPlatformEnvironmentMaker`, `PowerPlatformEnvironmentAdministrator`,
 `PowerPlatformSystemAdministrator`). Map a loose name the maker uses to the
 matching id ("the ServiceNow admin" → `ServiceNowAdmin`, "Power Platform admin" →
-`EntraPowerPlatformAdministrator`). Only if the role genuinely isn't in that list
+`EntraPowerPlatformAdministrator`). Each entry also carries the role's `roleId` —
+the name the service stores (e.g. "ServiceNow Administrator") — and
+`attest_plan_role` accepts either form. Only if the role genuinely isn't in that list
 do you stop and explain it can't be attested. Reuse an explicit or already-confirmed
 role choice; ask only when the mapping is ambiguous. Confirm the person/role
 pairing once before writing, using the original explicit request or the person's
@@ -26,7 +28,8 @@ Call `attest_plan_role` with:
 
 - `planId` — the plan in context,
 - `subjectId` — the person's `oid`,
-- `role` — the attestable role id.
+- `role` — the attestable role (its `compactId` or `roleId`; the stored name is
+  always what gets recorded).
 
 Omit `etag` for a first attestation; the provider is set for you.
 
