@@ -1106,9 +1106,7 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
     """
     if getattr(args, "no_telemetry", False):
         return
-    # Explicit --invocation-source wins; otherwise these single-purpose runs
-    # attribute to "connect" (vs "cli"/"adk"/"installer" for --scope runs).
-    _inv_source = getattr(args, "invocation_source", None) or "connect"
+    _inv_source = getattr(args, "invocation_source", None) or "cli"
     _tele_debug = os.environ.get(
         "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
     ).strip().lower() in ("1", "on", "true", "yes")
@@ -1786,10 +1784,6 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     # --- Emit anonymous outcome telemetry (best-effort; never affects exit) ---
     # Single-checkpoint mode never auto-opens the report; compact lifecycle
     # mode emits its stdout contract without per-step report files.
-    # Single-checkpoint runs are the "connect" invocation source: incremental
-    # FlightChecks that gate individual setup/connect steps (ADO 7587431).
-    # Without this, checkpoint runs were invisible to the Aria dashboards even
-    # though they exercise the same checks a full run does.
     _emit_run_telemetry(
         result, args, config, graph, tenant_id, scope=f"checkpoint:{target}"
     )
@@ -1819,7 +1813,7 @@ def _run_single_checkpoint(args, *, compact_stream=None):
             ),
             environment_id=str(runner.env_id or ""),
             invocation_id=args.invocation_id,
-            invocation_source=args.invocation_source or "connect",
+            invocation_source=args.invocation_source or "cli",
             exit_code=exit_code,
             target_is_family=spec.is_family,
         )
@@ -2779,9 +2773,6 @@ def _run_profile(args):
         print(f"\nNOTE: profile {profile_name} produced no result rows.")
         sys.exit(1)
 
-    # Profile runs are a "connect" invocation source too; emit outcome
-    # telemetry so they surface on the Aria dashboards alongside --scope and
-    # --checkpoint runs (best-effort; never affects exit).
     _emit_run_telemetry(
         result, args, config, graph, tenant_id, scope=f"profile:{profile_name}"
     )
@@ -2972,12 +2963,11 @@ def main():
         ),
     )
     parser.add_argument(
-        "--invocation-source", default=None,
+        "--invocation-source", default="cli",
         choices=["adk", "installer", "cli", "connect"],
         help="How FlightCheck was invoked (adk=slash-command, installer=standalone "
-             "installer, cli=direct Python CLI, connect=incremental single-checkpoint "
-             "or profile run from a connect/setup skill). Default: cli for --scope "
-             "runs, connect for --checkpoint/--profile runs.",
+             "installer, cli=direct Python CLI, connect=invoked by the /connect "
+             "skill). Default: cli for all run modes.",
     )
     parser.add_argument(
         "--workday-app-id", default=None,
@@ -3063,12 +3053,6 @@ def main():
     # None on the parser so checkpoint-mode can detect an explicit --scope.)
     if args.scope is None:
         args.scope = "full"
-
-    # --invocation-source defaults to "cli" for scope-mode runs. (Default is
-    # None on the parser so checkpoint-mode can default it to "connect" instead
-    # while still honouring an explicit --invocation-source.)
-    if args.invocation_source is None:
-        args.invocation_source = "cli"
 
     # Load config
     config_path = os.path.join(".local", "config.json")
