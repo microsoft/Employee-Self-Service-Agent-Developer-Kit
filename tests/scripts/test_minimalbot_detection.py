@@ -426,6 +426,14 @@ class _RecordingClient:
         return {
             "updatedComponents": len(updates),
             "verifiedComponents": len(updates),
+            "components": [
+                {
+                    "id": update["componentId"],
+                    "schemaName": update["schemaName"],
+                    "dialog": update["dialog"],
+                }
+                for update in updates
+            ],
         }
 
 

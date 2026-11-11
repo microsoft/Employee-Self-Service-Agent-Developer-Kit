@@ -1323,6 +1323,167 @@ class MinimalBotEvaluationClient:
             "requestId": evidence["requestId"], "response": _redact_evidence(evidence["response"]),
         }
 
+    def _deletion_inventory(self, payload: dict[str, Any]) -> dict[str, Any]:
+        bot = payload.get("bot")
+        if (
+            not isinstance(bot, dict)
+            or str(bot.get("cdsBotId") or "").casefold() != self.bot_id.casefold()
+            or not isinstance(payload.get("changeToken"), str)
+            or not payload["changeToken"]
+        ):
+            raise MinimalBotEvaluationError(
+                "Deletion requires a full component read for the selected agent."
+            )
+        components = self._remote_components(payload)
+        normalized = {key.casefold(): value for key, value in components.items()}
+        if len(normalized) != len(components):
+            raise MinimalBotEvaluationError("Duplicate component identity in deletion read.")
+        return normalized
+
+    def dialog_deletion_scope(
+        self, payload: dict[str, Any], component_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return the topic and all contained components from a full read."""
+        components = self._deletion_inventory(payload)
+        root_id = component_id.casefold()
+        root = components.get(root_id)
+        if (
+            root is None or root.get("$kind") != "DialogComponent"
+            or str(root.get("parentBotId") or "").casefold() != self.bot_id.casefold()
+        ):
+            raise MinimalBotEvaluationError(
+                "Deletion requires one identified topic belonging to the selected agent."
+            )
+        selected = {root_id}
+        while True:
+            children = {
+                key for key, component in components.items()
+                if str(component.get("parentBotComponentId") or "").casefold() in selected
+            }
+            if children <= selected:
+                break
+            selected.update(children)
+        return [
+            copy.deepcopy(components[key])
+            for key in [root_id, *sorted(selected - {root_id})]
+        ]
+
+    def delete_dialog_component(
+        self, expected_components: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Delete one reviewed topic subtree, then verify absence without retry."""
+        if not isinstance(expected_components, list) or not expected_components or any(
+            not isinstance(component, dict)
+            or not isinstance(component.get("id"), str) or not component["id"]
+            for component in expected_components
+        ):
+            raise MinimalBotEvaluationError("Deletion requires a reviewed component scope.")
+        expected = {
+            str(component["id"]).casefold(): component for component in expected_components
+        }
+        root = expected_components[0]
+        if (
+            len(expected) != len(expected_components)
+            or root.get("$kind") != "DialogComponent"
+            or str(root.get("parentBotId") or "").casefold() != self.bot_id.casefold()
+        ):
+            raise MinimalBotEvaluationError("Invalid reviewed topic deletion scope.")
+        root_id = str(root["id"]).casefold()
+        evidence = {
+            "componentIds": [component["id"] for component in expected_components],
+            "writeAttempted": False, "verified": False,
+        }
+        try:
+            before = self.read_components()
+            evidence["readback"] = before
+            components = self._deletion_inventory(before)
+        except Exception as exc:
+            raise ComponentEditError(
+                "The deletion pre-write read could not be verified. No write was sent.",
+                evidence,
+            ) from exc
+        schema_names = {
+            str(component["schemaName"]).casefold()
+            for component in expected_components if component.get("schemaName")
+        }
+        if root_id not in components:
+            remaining = [
+                component for key, component in components.items()
+                if key in expected
+                or str(component.get("schemaName") or "").casefold() in schema_names
+                or str(component.get("parentBotComponentId") or "").casefold() in expected
+            ]
+            if remaining:
+                raise ComponentEditError(
+                    "The topic is absent, but related or replacement content remains. "
+                    "Inspect it before local reconciliation.",
+                    {**evidence, "readback": before},
+                )
+            return {
+                **evidence, "verified": True, "alreadyAbsent": True,
+                "deletedComponents": 0, "absentComponentIds": evidence["componentIds"],
+                "readback": _redact_evidence(before),
+            }
+        current = self.dialog_deletion_scope(before, root["id"])
+        if {str(component["id"]).casefold(): component for component in current} != expected:
+            raise ComponentEditError(
+                "The topic or its contained content changed since review. "
+                "Review the new scope before deleting. No write was sent.",
+                {**evidence, "currentComponents": current},
+            )
+        if any(
+            not isinstance(component.get("version"), int)
+            or isinstance(component["version"], bool)
+            for component in current
+        ):
+            raise ComponentEditError("Deletion read omitted component versions.", evidence)
+        payload = {
+            "changeToken": before["changeToken"],
+            "botComponentChanges": [
+                {
+                    "$kind": "BotComponentDelete",
+                    "botComponentId": component["id"],
+                    "versionNumber": component["version"],
+                }
+                for component in current
+            ],
+            "cloudFlowDefinitionChanges": [],
+            "connectionReferenceChanges": [],
+            "connectorDefinitionChanges": [],
+            "environmentVariableChanges": [],
+            "aIPluginOperationChanges": [],
+            "componentCollectionChanges": [],
+            "dataverseTableSearchChanges": [],
+            "connectedAgentDefinitionChanges": [],
+        }
+        evidence = self._submit_component_edit(
+            payload, "topic deletion", evidence["componentIds"],
+        )
+        try:
+            after = self.read_components()
+            evidence["readback"] = after
+            actual = self._deletion_inventory(after)
+            remaining_ids = sorted(expected.keys() & actual.keys())
+            remaining_related = [
+                component for component in actual.values()
+                if str(component.get("parentBotComponentId") or "").casefold() in expected
+                or str(component.get("schemaName") or "").casefold() in schema_names
+            ]
+            if remaining_ids or remaining_related:
+                raise MinimalBotEvaluationError(
+                    "Readback still contains selected, contained or replacement components."
+                )
+        except Exception as exc:
+            raise ComponentEditError(
+                "Topic deletion returned HTTP 200, but absence could not be verified. "
+                "Inspect current state before any further write.",
+                evidence,
+            ) from exc
+        return {
+            **_redact_evidence(evidence), "verified": True, "alreadyAbsent": False,
+            "deletedComponents": len(current), "absentComponentIds": evidence["componentIds"],
+        }
+
     def update_dialog_components(
         self,
         updates: list[dict[str, Any]],
