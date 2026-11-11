@@ -15,10 +15,6 @@ _SOLUTION = _REPO_ROOT / "solutions" / "ess-maker-skills"
 _CONNECT = _SOLUTION / "src" / "skills" / "connect"
 _CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
 _CONNECT_SKILL = _SOLUTION / "src" / "skills" / "connect" / "SKILL.md"
-_SERVICENOW_MESSAGE = (
-    "Guided ServiceNow setup is not yet available in ADK. You can configure the "
-    "ServiceNow connection manually in Copilot Studio or contact admin."
-)
 _OLD_PROMPT = _SOLUTION / ".github" / "prompts" / "setup-workday.prompt.md"
 _WORKDAY_PROVIDER_DIR = _SOLUTION / "src" / "skills" / "connect" / "workday"
 
@@ -149,14 +145,15 @@ def test_clean_workspace_handoff_handles_missing_metadata_at_each_entry() -> Non
     assert "Unreadable or malformed files still require supported state recovery" in foundation
 
 
-def test_guided_servicenow_requests_stop_before_provider_actions() -> None:
+def test_servicenow_registration_dispatches_through_entry_doc() -> None:
     registration = json.loads(
         (_CONNECT / "servicenow" / "integration.json").read_text(encoding="utf-8")
     )
-    assert registration["availability"] == "unavailable"
-    assert registration["unavailableMessage"] == _SERVICENOW_MESSAGE
+    assert registration["availability"] == "available"
+    assert registration["entryDoc"] == "entry.md"
+    assert "unavailableMessage" not in registration
     assert "snow" in registration["aliases"]
-    assert "entryDoc" not in registration and "statusDoc" not in registration
+    assert (_CONNECT / "servicenow" / registration["entryDoc"]).is_file()
     skill = " ".join(_CONNECT_SKILL.read_text(encoding="utf-8").split())
     assert "repair requests, follow-ups, and saved-state resume" in skill
     route = _CONNECT_STEP1.read_text(encoding="utf-8")
@@ -231,13 +228,13 @@ def test_provider_registrations_have_unambiguous_names_and_safe_documents() -> N
             assert document.is_file()
 
 
-def test_flightcheck_and_docs_keep_servicenow_setup_manual() -> None:
+def test_flightcheck_and_docs_describe_available_servicenow_connect() -> None:
     text = (_SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md").read_text(encoding="utf-8")
     fixes = text.split("### 3c", 1)[1].split("### 3d", 1)[0]
     assert "Missing Workday connection" in fixes and "Missing Workday/ServiceNow" not in fixes
     readme = (_SOLUTION / "README.md").read_text(encoding="utf-8")
-    assert _SERVICENOW_MESSAGE in " ".join(readme.split())
-    assert "/connect servicenow" not in readme
+    assert "/connect servicenow" in readme
+    assert "Guided ServiceNow setup is not yet available" not in readme
 
 
 def test_retired_setup_is_removed_without_removing_foundation() -> None:

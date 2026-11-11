@@ -184,7 +184,7 @@ python scripts/flightcheck/cli.py --scope full
 
 Chat and standalone runs use the same checks for the same selected agent and
 scope. Both save a browser report (`report.html`) and detailed results
-(`results.json`).
+(`results.json`). The terminal prints the full path to each saved file.
 
 | Scope | What it checks |
 |-------|----------------|
@@ -197,13 +197,18 @@ For example: `python scripts/flightcheck/cli.py --scope local`.
 
 **Standalone install (no VS Code or Copilot required):**
 
-If you only need to run FlightCheck, this single command handles everything — installs dependencies, signs you in, lets you pick your environment, and runs the check:
+For a Declarative Agent (DA) on Windows, this command installs dependencies,
+signs you in, and runs the latest DA setup diagnostics. Paste the agent's
+Copilot Studio URL or choose its environment and native agent:
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
 ```
 
-Re-run the same command to change your environment or agent. See [`setup/README.md`](../../setup/README.md) for details.
+Re-run the same command to change your environment or agent. This Windows
+entrypoint is DA-only; it does not fall back to legacy or environment-only
+checks. Dataverse and completed foundation setup are not required.
+See [`setup/README.md`](../../setup/README.md) for details.
 
 **Reading your report:** The summary identifies the agent and environment
 checked and separates passed checks, problems, warnings and items needing
@@ -309,7 +314,15 @@ administrator details. Custom-engine Workday guidance is maintained on
 
 ### ServiceNow (HRSD / ITSM)
 
-Guided ServiceNow setup is not yet available in ADK. You can configure the ServiceNow connection manually in Copilot Studio or contact admin.
+Run `/connect servicenow` to connect an ESS DA HR (HRSD) or ESS DA IT (ITSM)
+Development agent. Connect shows the supported ServiceNow agents, lets you pick
+one or paste its Copilot Studio link, and resumes the saved progress for the
+selected agent. Settings without a reliable DA-scoped API require explicit
+maker or administrator confirmation. These items are reported as human-verified
+("Confirmed by the administrator", "Confirmed by the Maker") rather than as
+passing Connect checks.
+
+Connecting ServiceNow does not publish the agent.
 
 ### Developer integration tools
 
@@ -464,6 +477,12 @@ capabilities are used and where they fail, so we can improve the product. It is
   `other`, or `unknown` — so raw branch names (which could otherwise carry
   personal / customer labels) are never emitted.
 - Scrubbed, non-sensitive **error categories** when something fails.
+- Bounded **Connect lifecycle transitions** for instrumented providers:
+  connector, lifecycle event, broad phase, outcome, duration, retry/resume
+  counts, blocker category, bounded remediation/checkpoint ID, correlation ID,
+  and agent ID. ServiceNow HRSD/ITSM project their persisted phase transitions
+  through the same fail-open event and transport as Workday; nested
+  FlightCheck checkpoints remain excluded from lifecycle capability counts.
 - During **installation**, the one-shot installers (which run before Python is
   available) emit the same kind of event natively from PowerShell/bash: an
   install **start**, **per-step** progress, and a **completion**
@@ -477,6 +496,8 @@ capabilities are used and where they fail, so we can improve the product. It is
 
 - No developer, user, or account identifier (no AAD OID, email, or name).
 - No agent content, prompts, credentials, file contents, or personal data.
+- No Connect tokens, employee values, prompt/response text, instance URLs,
+  workbook content, connection secrets, or full lifecycle-state documents.
 
 **How to opt out**
 

@@ -120,7 +120,7 @@ DA full checks exact-agent access/content,
 ESS identity, environment metadata, conversation activation, instructions,
 sign-in configuration, used connection bindings and applicable local setup.
 The shared registry also includes tenant SKU/role observations, exact
-environment capacity/billing/DLP, knowledge/access and manual QA/publishing
+environment billing/DLP, manual audience/capacity comparison, knowledge/access and manual QA/publishing
 guidance. Attempt supported delegated reads; denied access or an unsupported
 observation gets scoped Manual steps, while malformed data and unexpected
 auth/service errors stay Errors. Inventory observations never prove

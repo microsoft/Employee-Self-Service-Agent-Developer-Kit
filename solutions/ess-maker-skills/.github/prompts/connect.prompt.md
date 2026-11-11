@@ -5,6 +5,8 @@ description: "Connect Workday or another supported integration"
 
 # Connect
 
+**ServiceNow route — read first.** When the selected integration is ServiceNow (including the agent-chooser path, before routing, choosing an agent, or running any command), read and follow `src/skills/connect/servicenow/entry.md` before any action.
+
 **Entry routing comes first.** Missing setup does not stop integration selection.
 Read `src/skills/connect/SKILL.md`, retain any selected integration and target,
 and apply provider availability before following that provider's entry point.
