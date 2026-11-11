@@ -2780,7 +2780,7 @@ def _run_profile(args):
     sys.exit(_run_exit_code(result))
 
 
-def main():
+def _parse_args():
     # Force UTF-8 console output so summary glyphs (→, •) don't crash on
     # Windows cp1252 terminals. Without this, _print_prioritized_summary
     # raises UnicodeEncodeError before save_results/telemetry are reached.
@@ -3019,7 +3019,21 @@ def main():
         parser.error("--compact-result requires --invocation-id.")
     if args.invocation_id and not args.compact_result:
         parser.error("--invocation-id requires --compact-result.")
+    return args
 
+
+def main():
+    args = _parse_args()
+    try:
+        from adk_telemetry import script_error_boundary
+    except Exception:
+        return _run_cli(args)
+
+    with script_error_boundary("flightcheck.cli", enabled=not args.no_telemetry):
+        return _run_cli(args)
+
+
+def _run_cli(args):
     # --- Targeted modes (additive; leave --scope behavior intact) ---
     if args.list_checkpoints:
         _print_checkpoint_list()
@@ -3806,7 +3820,4 @@ def _status_tag(status: str) -> str:
 
 
 if __name__ == "__main__":
-    from adk_telemetry import script_error_boundary
-
-    with script_error_boundary("flightcheck.cli"):
-        main()
+    main()

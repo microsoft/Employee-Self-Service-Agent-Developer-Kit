@@ -133,7 +133,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    from adk_telemetry import script_error_boundary
+    try:
+        from adk_telemetry import script_error_boundary
+    except Exception:
+        from contextlib import nullcontext as script_error_boundary
 
     with script_error_boundary("evaluation_presentation"):
         raise SystemExit(main())
