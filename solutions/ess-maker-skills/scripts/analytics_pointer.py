@@ -778,4 +778,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from adk_telemetry import script_error_boundary
+
+    with script_error_boundary("analytics_pointer"):
+        raise SystemExit(main())

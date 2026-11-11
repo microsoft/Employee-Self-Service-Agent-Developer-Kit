@@ -477,6 +477,11 @@ capabilities are used and where they fail, so we can improve the product. It is
   `other`, or `unknown` — so raw branch names (which could otherwise carry
   personal / customer labels) are never emitted.
 - Scrubbed, non-sensitive **error categories** when something fails.
+- For unhandled exceptions in supported **DA scripts**, a fixed script/module
+  identifier, numeric source line, random error-event ID, and a bounded error
+  code/category with a developer-authored diagnostic sentence. The original
+  exception message, traceback text, source text, paths, arguments, and locals
+  are **not emitted**. See the [investigation queries](scripts/telemetry_queries.kql).
 - Bounded **Connect lifecycle transitions** for instrumented providers:
   connector, lifecycle event, broad phase, outcome, duration, retry/resume
   counts, blocker category, bounded remediation/checkpoint ID, correlation ID,
