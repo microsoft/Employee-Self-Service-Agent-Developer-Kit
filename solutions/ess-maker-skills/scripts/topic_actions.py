@@ -396,10 +396,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cancel", action="store_true")
     args = parser.parse_args(argv)
     try:
-        value = {} if args.cancel else json.load(sys.stdin)
+        value = {} if args.cancel and sys.stdin.isatty() else json.load(sys.stdin)
     except (OSError, ValueError):
         result = _result(
-            "invalid_request", "Provide one JSON request on standard input.", {}
+            "cancelled" if args.cancel else "invalid_request",
+            "Cancelled. No topic changes were attempted." if args.cancel
+            else "Provide one JSON request on standard input.",
+            {},
         )
     else:
         result = inspect_request(
