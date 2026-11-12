@@ -517,11 +517,19 @@ def test_fresh_session_bootstrap_preserves_saved_draft_without_setup(tmp_path, p
     before = {file: file.read_bytes() for file in draft_files}
     if partial_config:
         _write_json(tmp_path / mcp_config.CONFIG_PATH, {"servers": {"custom": {"command": "custom"}}})
+    # The copy resolves its kit root from its own path; shared modules it imports,
+    # such as adk_telemetry, still load from the real scripts directory.
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            filter(None, [str(SOLUTION_ROOT / "scripts"), os.environ.get("PYTHONPATH")])
+        ),
+    }
 
     def run(*arguments):
         result = subprocess.run(
             [sys.executable, str(script), *arguments],
-            cwd=tmp_path.parent, capture_output=True, text=True, timeout=15,
+            cwd=tmp_path.parent, capture_output=True, text=True, timeout=15, env=env,
         )
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout.split(": ", 1)[1])
