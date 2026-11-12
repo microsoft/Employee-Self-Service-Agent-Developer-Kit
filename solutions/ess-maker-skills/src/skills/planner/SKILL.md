@@ -127,17 +127,27 @@ approving shared access." Host trust, Microsoft sign-in, permission to look up
 colleagues, and admin rights are different approvals. Do not ask for broader
 permissions to make planning work.
 
-## Gate — the one skill allowed before setup
+## Gate — Planner runs before setup
 
 Apply the **Intent gate** first. "First Planner use" means the first admitted
-Planner request, not the first message in every chat. The exception permits
-that request without completed setup or setup config; it does not relax other
+Planner request, not the first message in every chat. An admitted Planner
+request runs without completed setup or setup config; it does not relax other
 skills' setup requirements or make Planner the default welcome.
 
-Every other skill requires `.local/config.json` with `setup: "complete"`.
-`/planner` is the exception: on a greenfield tenant the environment doesn't
-exist yet, and the Plan's first Tasks are usually creating the environment and
-running setup. So:
+Planner does not decide whether another skill may start. A handoff to `/setup`,
+`/connect`, `/roles`, `/create`, `/discover`, an evaluation, or `/flightcheck`
+follows the destination's own entry contract (its route in
+`.github/copilot-instructions.md` and the skill's own entry checks). Workday
+Connect, Roles, evaluation test-set creation and updates, and the applicable
+FlightCheck paths start without completed setup. Where a destination does
+require setup, readiness is the canonical per-agent state:
+`.local/setup/config.json` has `schema_version: 4` and its `agents` entry for
+the `.local/config.json` `activeAgent` reports `connect_ready: true`. The
+`setup` field in `.local/config.json` is not a readiness signal.
+
+Planner itself runs before setup because on a greenfield tenant the environment
+doesn't exist yet, and the Plan's first Tasks are usually creating the
+environment and running setup. So:
 
 1. **Complete the workspace bootstrap on first Planner use in each chat.**
    Whichever flow starts first runs this shared gate: creating/interviewing,
@@ -237,13 +247,15 @@ checked for an existing plan.**
      already be recorded while the plan's setup task still reads Not started.
      Before you show anything, read
      `python scripts/planner/cli.py setup-status`: if it reports `setupTaskOpen`
-     **true** *and* `.local/config.json` shows setup complete, fold that finished
-     setup into the plan now — confirm the detected environment, then
-     `capture-setup --complete` — so the setup task (and anything else that run
-     produced) shows Complete before you present the plan
-     (`src/skills/planner/capture.md` → *Reconcile a first-run setup that already
-     ran*). If `setupTaskOpen` is **false**, it's already captured — skip silently;
-     never re-run `capture-setup`.
+     **true** *and* `workspaceSetupReady` **true** (canonical per-agent
+     readiness), fold that finished setup into the plan now — confirm the
+     detected environment, then `capture-setup --complete` — so the setup task
+     (and anything else that run produced) shows Complete before you present the
+     plan (`src/skills/planner/capture.md` → *Reconcile a first-run setup that
+     already ran*). If `setupTaskOpen` is **false**, it's already captured — skip
+     silently; never re-run `capture-setup`. If `workspaceSetupReady` is
+     **false**, setup hasn't finished for this workspace — leave the setup task
+     open.
    - Read `python scripts/planner/cli.py summary`. On resume, show a short progress
      summary, pending decisions, specific blockers, and **Your next step** for the
      requesting person. Select it from the plan lifecycle and their responsibilities

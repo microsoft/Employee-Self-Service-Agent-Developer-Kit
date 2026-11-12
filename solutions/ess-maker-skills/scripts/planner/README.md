@@ -151,7 +151,9 @@ validation rejects cycles, and rendered workstream sections preserve dependency
 order while keeping independent preparation parallel.
 
 `setup-status` distinguishes an environment from a recorded agent
-(`environmentPinned` and `agentPinned`). `setupTaskId` and `setupEnvironmentKey`
+(`environmentPinned` and `agentPinned`) and reports `workspaceSetupReady`: the
+canonical per-agent readiness that gates the planner's setup reconcile.
+`setupTaskId` and `setupEnvironmentKey`
 identify the first unfinished environment-producing task in dependency order:
 `provisionedEnvironment` for an environment-only task or `primaryEnvironment` for
 the corresponding setup/binding milestone. `capture-setup` uses that declared key by
@@ -170,11 +172,14 @@ Completed work disappears from `mine`; pending shared confirmation still blocks
 dependent execution, and another role's newly ready task is not assigned to the
 caller implicitly.
 
-`task-brief` reads `.local/config.json` to decide whether this workspace still
-needs binding. A completed setup for the same environment and recorded agent
-suppresses the `/setup` nudge. Completed/blocked tasks and tasks with unmet inputs
-do not get a binding nudge. Missing config is normal first-run state; corrupt
-config is reported explicitly. Override the config path for another workspace:
+`task-brief` reads `.local/config.json` and the canonical setup state beside it
+(`.local/setup/config.json`) to decide whether this workspace still needs
+binding. When the active agent reports `connect_ready: true` and the config
+records the same environment and agent, the `/setup` nudge is suppressed; the
+legacy `setup` field is not consulted. Completed/blocked tasks and tasks with
+unmet inputs do not get a binding nudge. Missing config is normal first-run
+state; corrupt config is reported explicitly. Override the config path for
+another workspace (canonical state is read from `setup/config.json` beside it):
 
 ```text
 python scripts/planner/cli.py task-brief --task <task-id> --config <config-path> --json

@@ -61,6 +61,46 @@ def read_config(path: str | os.PathLike[str] = CONFIG_PATH) -> dict[str, Any]:
     return data
 
 
+def _read_json_object(path: str) -> dict[str, Any]:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def workspace_setup_ready(config_path: str | os.PathLike[str] = CONFIG_PATH) -> bool:
+    """Whether canonical setup state reports this workspace's active agent ready.
+
+    The same rule as ``auth.is_connect_ready()`` and the kit's global setup gate:
+    ``setup/config.json`` beside ``config_path`` (``.local/setup/config.json``) has
+    ``schema_version`` 4 and an ``agents`` entry whose ``agent.workspace_slug``
+    matches ``activeAgent`` in ``config_path`` with ``connect_ready: true``. The
+    legacy ``setup`` field in ``config.json`` is never consulted; ``/setup`` writes
+    it when the workspace is materialized, before the remaining foundation steps
+    finish. Missing or unreadable state reads as not ready, so the planner points
+    the person to ``/setup``, which owns repairing it. Kept import-light instead of
+    calling ``auth`` so planner commands do not load MSAL or requests.
+    """
+    config_path = os.fspath(config_path)
+    config = _read_json_object(config_path)
+    state = _read_json_object(os.path.join(os.path.dirname(config_path), "setup", "config.json"))
+    agents = state.get("agents")
+    active_slug = config.get("activeAgent")
+    if state.get("schema_version") != 4 or not isinstance(agents, dict):
+        return False
+    if not isinstance(active_slug, str) or not active_slug:
+        return False
+    return any(
+        isinstance(agent_state, dict)
+        and isinstance(agent_state.get("agent"), dict)
+        and agent_state["agent"].get("workspace_slug") == active_slug
+        and agent_state.get("connect_ready") is True
+        for agent_state in agents.values()
+    )
+
+
 def config_snapshot(config: dict[str, Any]) -> dict[str, Any]:
     """A deep copy of the **whole** ``config.json`` — the setup capture diffs the
     entire file so it can pin **every** id + name (and any other artifact a skill

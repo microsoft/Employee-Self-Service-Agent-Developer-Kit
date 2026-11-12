@@ -21,16 +21,19 @@ Apply its **Communication rules** to every reply, including a prominent next-ste
 heading, bold action, and separate continuation prompt or command. Keep required
 questions in the main chat, not a delegated execution flow.
 
-**This is the one experience allowed before setup, after intent is admitted.**
+**Planner runs before setup, after intent is admitted.**
 The maker must have made an **explicit** planning or existing-plan request
 (`/planner`, "plan a rollout",
 "create a plan", "edit this plan", "assign owners", "record task completion",
 "share and activate the plan", "resume my plan") or
 chosen "Plan my ESS rollout first" when `/setup` offered it — either way,
 proceed with planning. On a brand-new tenant nothing is
-set up yet — planning is how the rollout is decided — so do not block on
-`.local/config.json` being `"complete"`. Read it if it exists (to reuse the
-environment/agent details), then proceed. The plan's first tasks are almost
+set up yet — planning is how the rollout is decided — so do not block on setup
+state. Read `.local/config.json` if it exists (to reuse the
+environment/agent details), then proceed. Planner does not decide whether
+another skill may start; each handoff follows that skill's own entry contract
+and the canonical per-agent setup state (the canonical planner's **Gate**).
+The plan's first tasks are almost
 always **a Power Platform administrator creating the environment** in the Power
 Platform admin center, then **an Environment Maker running `/setup`** to create or
 connect that environment's ESS agent and bring it into the workspace; the details

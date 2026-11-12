@@ -1107,9 +1107,9 @@ class Plan:
         return candidates[0]["id"]
 
     def _workspace_matches_plan(
-        self, environment: dict[str, Any], config: dict[str, Any] | None,
+        self, environment: dict[str, Any], config: dict[str, Any] | None, *, setup_ready: bool,
     ) -> bool:
-        if not config or config.get("setup") != "complete":
+        if not setup_ready or not config:
             return False
         bindings = [
             ("environmentId", environment.get("environmentId"), config.get("environmentId")),
@@ -1140,6 +1140,7 @@ class Plan:
 
     def kit_setup_nudge(
         self, task_id: str, *, workspace_config: dict[str, Any] | None = None,
+        workspace_setup_ready: bool = False,
     ) -> dict[str, Any] | None:
         """Whether this task's assignee should run ``/setup`` to connect their own
         kit to the plan's environment before starting.
@@ -1157,9 +1158,12 @@ class Plan:
           ``/setup`` and connect to that env.
         - Returns ``None`` for completed/blocked work, unmet dependencies, the
           setup task itself, or tasks that don't need the environment.
-        - When workspace config confirms setup complete for the same environment
-          and recorded agent identity, no binding nudge is needed. Without that
-          local evidence, the plan's shared environment alone is not enough.
+        - When canonical setup state reports this workspace's active agent ready
+          (``workspace_setup_ready``, see
+          :func:`planner.capture.workspace_setup_ready`) and the workspace config
+          records the same environment and agent identity, no binding nudge is
+          needed. Without that local evidence, the plan's shared environment alone
+          is not enough; the legacy ``setup`` field is not evidence.
         """
         task = self._require_task(task_id)
         if task.get("state") not in ("NotStarted", "InProgress"):
@@ -1174,7 +1178,7 @@ class Plan:
         if not env or self.blocking_inputs(task_id):
             return None
         attrs = env.get("attributes", {})
-        if self._workspace_matches_plan(attrs, workspace_config):
+        if self._workspace_matches_plan(attrs, workspace_config, setup_ready=workspace_setup_ready):
             return None
         return {
             "environmentId": attrs.get("environmentId", ""),
@@ -1213,6 +1217,7 @@ class Plan:
 
     def task_brief(
         self, task_id: str, *, workspace_config: dict[str, Any] | None = None,
+        workspace_setup_ready: bool = False,
     ) -> dict[str, Any]:
         """A briefing for a task's assignee: what to do (title + description), the
         role, the resolved values it consumes (e.g. the env id to use), and the
@@ -1226,7 +1231,9 @@ class Plan:
             "assignee": assignee_user_oid(task.get("assignedTo")),
             "state": task.get("state", ""),
             "firstRunSetup": self.first_run_setup_pending(task_id),
-            "kitSetup": self.kit_setup_nudge(task_id, workspace_config=workspace_config),
+            "kitSetup": self.kit_setup_nudge(
+                task_id, workspace_config=workspace_config, workspace_setup_ready=workspace_setup_ready,
+            ),
             "consumes": self.resolved_consumes(task_id),
             "blockedBy": self.blocking_inputs(task_id),
             "blockingReason": self.blocking_reason(task_id),

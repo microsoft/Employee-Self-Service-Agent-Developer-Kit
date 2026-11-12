@@ -96,19 +96,22 @@ def test_first_run_setup_pending_is_the_fre_signal():
     assert p.first_run_setup_pending("T1") is False
 
 
-@pytest.mark.parametrize(("overrides", "needs_binding"), [
-    ({}, False),
-    ({"setup": "incomplete"}, True),
-    ({"environmentId": "other-env"}, True),
-    ({"environmentId": None}, True),
-    ({"dataverseEndpoint": "https://other.crm.dynamics.com"}, True),
-    ({"dataverseEndpoint": " HTTPS://TEST.CRM.DYNAMICS.COM/ "}, False),
-    ({"agent": {"botId": "other-bot", "schemaName": "test_ess"}}, True),
-    ({"agent": {}}, True),
-    ({"agent": None}, True),
-    ({"agent": {"botId": "BOT-1", "schemaName": "renamed"}}, False),
+@pytest.mark.parametrize(("overrides", "setup_ready", "needs_binding"), [
+    ({}, True, False),
+    # /setup writes the legacy `setup: "complete"` before every foundation step is
+    # done, so a matching config without canonical readiness still needs binding.
+    ({}, False, True),
+    ({"setup": "incomplete"}, True, False),
+    ({"environmentId": "other-env"}, True, True),
+    ({"environmentId": None}, True, True),
+    ({"dataverseEndpoint": "https://other.crm.dynamics.com"}, True, True),
+    ({"dataverseEndpoint": " HTTPS://TEST.CRM.DYNAMICS.COM/ "}, True, False),
+    ({"agent": {"botId": "other-bot", "schemaName": "test_ess"}}, True, True),
+    ({"agent": {}}, True, True),
+    ({"agent": None}, True, True),
+    ({"agent": {"botId": "BOT-1", "schemaName": "renamed"}}, True, False),
 ])
-def test_task_brief_checks_current_workspace_binding(overrides, needs_binding):
+def test_task_brief_checks_current_workspace_binding(overrides, setup_ready, needs_binding):
     plan = _plan()
     plan.add_output(plan_artifact(
         "primaryEnvironment", "Environment",
@@ -125,7 +128,7 @@ def test_task_brief_checks_current_workspace_binding(overrides, needs_binding):
         "agent": {"botId": "bot-1", "schemaName": "test_ess"},
         **overrides,
     }
-    brief = plan.task_brief("T2", workspace_config=config)
+    brief = plan.task_brief("T2", workspace_config=config, workspace_setup_ready=setup_ready)
     assert (brief["kitSetup"] is not None) is needs_binding
     assert brief["blockedBy"] == {}
     assert brief["state"] == "NotStarted"
@@ -605,8 +608,13 @@ def test_cli_task_brief_uses_workspace_binding_without_mutating_plan(tmp_path, c
     ))
     plan.save_all(path)
     config_path.write_text(json.dumps({
-        "setup": "complete", "environmentId": "env",
+        "setup": "complete", "activeAgent": "ess", "environmentId": "env",
         "dataverseEndpoint": "https://test.crm.dynamics.com",
+    }), encoding="utf-8")
+    (tmp_path / "setup").mkdir()
+    (tmp_path / "setup" / "config.json").write_text(json.dumps({
+        "schema_version": 4,
+        "agents": {"agent-1": {"agent": {"workspace_slug": "ess"}, "connect_ready": True}},
     }), encoding="utf-8")
     before = path.read_bytes()
     assert _run("--plan", str(path), "task-brief", "--task", "T2", "--config", str(config_path)) == 0

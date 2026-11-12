@@ -18,6 +18,7 @@ from planner.capture import (
     read_config,
     snapshot_config,
     summarize_discovery,
+    workspace_setup_ready,
 )
 
 ENV_ID = "d3f10000-0000-1111-2222-333344445555"
@@ -34,6 +35,30 @@ def test_read_config_corrupt_surfaces_error(tmp_path):
     path.write_text("{not json", encoding="utf-8")
     with pytest.raises(ValueError, match="invalid JSON"):
         read_config(path)
+
+
+def _agent_state(slug, ready):
+    return {"agent": {"workspace_slug": slug}, "connect_ready": ready}
+
+
+@pytest.mark.parametrize(("state", "ready"), [
+    ({"schema_version": 4, "agents": {"a": _agent_state("ess", True)}}, True),
+    # The legacy `setup: "complete"` alone is not readiness.
+    (None, False),
+    # Readiness is scoped to the active agent.
+    ({"schema_version": 4, "agents": {"a": _agent_state("other", True), "b": _agent_state("ess", False)}}, False),
+    ({"schema_version": 3, "agents": {"a": _agent_state("ess", True)}}, False),
+    # Unreadable state reads as not ready; /setup owns repairing it.
+    ("{broken", False),
+])
+def test_workspace_setup_ready_requires_canonical_active_agent_state(tmp_path, state, ready):
+    config_path = tmp_path / ".local" / "config.json"
+    (config_path.parent / "setup").mkdir(parents=True)
+    config_path.write_text(json.dumps({"setup": "complete", "activeAgent": "ess"}), encoding="utf-8")
+    if state is not None:
+        text = state if isinstance(state, str) else json.dumps(state)
+        (config_path.parent / "setup" / "config.json").write_text(text, encoding="utf-8")
+    assert workspace_setup_ready(config_path) is ready
 
 
 def test_snapshot_config_returns_full_config(tmp_path):

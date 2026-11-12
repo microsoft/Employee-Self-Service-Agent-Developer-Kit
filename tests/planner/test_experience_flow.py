@@ -258,9 +258,14 @@ def test_setup_progression_refreshes_own_work_after_shared_confirmation(tmp_path
         "setup", "install", "review",
     ]
     config_path.write_text(json.dumps({
-        "setup": "complete", "environmentId": "env",
+        "setup": "complete", "activeAgent": "ess", "environmentId": "env",
         "dataverseEndpoint": "https://test.crm.dynamics.com",
         "agent": {"botId": "bot", "schemaName": "test_ess"},
+    }), encoding="utf-8")
+    (tmp_path / "setup").mkdir()
+    (tmp_path / "setup" / "config.json").write_text(json.dumps({
+        "schema_version": 4,
+        "agents": {"agent-1": {"agent": {"workspace_slug": "ess"}, "connect_ready": True}},
     }), encoding="utf-8")
     assert cli.main([
         "--plan", str(path), "capture-setup", "--config", str(config_path), "--complete",
@@ -336,7 +341,9 @@ def test_partial_setup_progression_keeps_only_unfinished_work_open(tmp_path):
     own = refreshed.tasks_for_person("admin", [role])[role]
     assert [item["task"]["id"] for item in own] == ["review"]
     assert own[0]["waitingOn"] == []
-    assert refreshed.task_brief("review", workspace_config=json.loads(config_path.read_text()))["kitSetup"] is None
+    assert refreshed.task_brief(
+        "review", workspace_config=json.loads(config_path.read_text()), workspace_setup_ready=True,
+    )["kitSetup"] is None
 def test_sync_queue_orders_upstream_metadata_before_dependent_completions():
     plan = Plan.new()
     plan.set_remote_identity(project_id="project", plan_id="plan")

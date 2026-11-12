@@ -9,6 +9,7 @@ Pure local IO (no network), so exempt from the FlightCheck cassette policy.
 from __future__ import annotations
 
 import json
+import os
 
 from planner import cli
 from planner.plan_model import Plan, plan_artifact
@@ -362,10 +363,14 @@ def test_set_state_completed_refused_with_unresolved_produces(tmp_path, capsys):
 # --- setup-status: the read-only guard shared by the /setup env-reuse offer and
 # --- the planner first-run-setup reconcile -------------------------------------
 
-def _setup_status(plan_path: str, capsys) -> dict:
-    """Run `setup-status` and return its parsed JSON (always exit 0 — a query)."""
+def _setup_status(plan_path: str, capsys, config: str | None = None) -> dict:
+    """Run `setup-status` and return its parsed JSON (always exit 0 — a query).
+
+    Workspace readiness comes from ``config`` (default: an absent workspace beside
+    the plan), never from the repository's own ``.local``."""
     capsys.readouterr()  # drain any prior command output so .out is just the JSON
-    assert _run("--plan", plan_path, "setup-status") == 0
+    config = config or os.path.join(os.path.dirname(plan_path), ".local", "config.json")
+    assert _run("--plan", plan_path, "setup-status", "--config", config) == 0
     return json.loads(capsys.readouterr().out)
 
 
@@ -382,8 +387,25 @@ def test_setup_status_no_plan_is_safe_noop(tmp_path, capsys):
         "firstRunSetupTaskId": None,
         "environmentPinned": False,
         "agentPinned": False,
+        "workspaceSetupReady": False,
         "environment": None,
     }
+
+
+def test_setup_status_reads_canonical_workspace_readiness(tmp_path, capsys):
+    # /setup writes the legacy `setup: "complete"` before every foundation step is
+    # done, so only the active agent's canonical `connect_ready` lets the planner
+    # reconcile close the setup task.
+    plan_path = str(tmp_path / "plan.json")
+    config_path = tmp_path / ".local" / "config.json"
+    (config_path.parent / "setup").mkdir(parents=True)
+    config_path.write_text(json.dumps({"setup": "complete", "activeAgent": "ess"}), encoding="utf-8")
+    assert _setup_status(plan_path, capsys, str(config_path))["workspaceSetupReady"] is False
+    (config_path.parent / "setup" / "config.json").write_text(json.dumps({
+        "schema_version": 4,
+        "agents": {"agent-1": {"agent": {"workspace_slug": "ess"}, "connect_ready": True}},
+    }), encoding="utf-8")
+    assert _setup_status(plan_path, capsys, str(config_path))["workspaceSetupReady"] is True
 
 
 def test_setup_status_reports_open_setup_task(tmp_path, capsys):

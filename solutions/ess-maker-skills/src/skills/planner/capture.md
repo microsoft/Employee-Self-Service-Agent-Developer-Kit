@@ -36,6 +36,10 @@ planner) run this after `/setup` returns** — the setup handoff returns control
 here; `/setup` itself never writes the plan. Confirm the detected
 values with the assignee and invoke
 `capture-setup` yourself (use `--dry-run` first to preview, then re-run to pin).
+Add `--complete` only when `setup-status` reports `workspaceSetupReady: true`.
+If `/setup` returned before every foundation step finished (for example a
+required connection or FlightCheck is still outstanding), pin without
+`--complete` and leave the task open.
 
 This reads the current `.local/config.json` and prints **every** artifact it will
 pin from what changed — e.g. an `Environment` (the `environmentId`, plus the URL
@@ -142,10 +146,16 @@ python scripts/planner/cli.py setup-status
 
 It prints JSON: `setupTaskId` and `setupEnvironmentKey` (the selected task and its
 declared environment output), `setupTaskOpen` (that task isn't Completed),
-`environmentPinned` (a reusable environment **URL** is on the plan), and the
-pinned `environment`. When **`setupTaskOpen` is true** *and* `.local/config.json`
-shows setup finished — `setup` is `"complete"` with a verified `environmentId`
-recorded — the setup already ran but was never captured. Guided setup records the
+`environmentPinned` (a reusable environment **URL** is on the plan), the pinned
+`environment`, and `workspaceSetupReady` (canonical per-agent readiness:
+`.local/setup/config.json` has `schema_version: 4` and the `agents` entry for the
+`.local/config.json` `activeAgent` reports `connect_ready: true`). When
+**`setupTaskOpen` is true** *and* **`workspaceSetupReady` is true**, with a
+verified `environmentId` recorded in `.local/config.json`, the setup already ran
+but was never captured. The `setup` field in `.local/config.json` is not
+evidence: `/setup` writes it when it brings the agent into the workspace, before
+every foundation step is done. When `workspaceSetupReady` is false, leave the
+setup task open. Guided setup records the
 `environmentId` and the agent identity without a `dataverseEndpoint`; when an
 older workspace config also records a `dataverseEndpoint`, the `environmentId`
 must belong to that URL. If the ID is missing, resolve it first; a URL alone is
@@ -257,8 +267,9 @@ pin the connection" — no re-discovery.
 *plan* fact once the Power Platform admin's environment task pins
 `primaryEnvironment`, but each assignee's own kit still has to connect to that
 same environment before their task's skill will work. `task-brief` reads the
-current workspace config and suppresses the nudge when setup is complete for the
-plan's environment and recorded agent. Do not repeat `/setup` for a person whose
+workspace's canonical setup state and config, and suppresses the nudge when the
+active agent reports `connect_ready: true` and `.local/config.json` records the
+plan's environment and agent. Do not repeat `/setup` for a person whose
 workspace is already bound.
 For a ready task that needs the environment and an unbound workspace, it prints **"First
 connect your kit: run /setup and choose environment `<envId>`"**. So the

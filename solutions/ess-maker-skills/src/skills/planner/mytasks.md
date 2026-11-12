@@ -23,12 +23,13 @@ each role they hold** — which naturally covers a person with more than one rol
 0. **Reconcile a finished first-run setup — once.** Before listing anyone's
    tasks, fold in a setup that already ran as a first-run experience: if
    `python scripts/planner/cli.py setup-status` reports `setupTaskOpen` **true**
-   and `.local/config.json` shows setup complete, confirm the detected
-   environment and run `capture-setup --complete` so the setup task (and
-   anything else that run produced) shows Complete before you show the list
+   and `workspaceSetupReady` **true** (canonical per-agent readiness), confirm
+   the detected environment and run `capture-setup --complete` so the setup task
+   (and anything else that run produced) shows Complete before you show the list
    (`src/skills/planner/capture.md` → *Reconcile a first-run setup that already
    ran*). If `setupTaskOpen` is **false**, there's nothing to reconcile —
-   continue.
+   continue. If `workspaceSetupReady` is **false**, setup hasn't finished for
+   this workspace — leave the setup task open and continue.
 1. **Find the person's roles — offline, so best-effort.** You're here only
    because the service (which would scope to the caller and expand their roles
    for you) is unreachable, so the attested role→person mapping can't be read
@@ -91,10 +92,11 @@ python scripts/planner/cli.py task-brief --task <T#>
   `task-brief` prints "First connect your
   kit: run /setup and choose environment `<envId>`". Nudge them to `/setup` into
   **that** environment (don't let them pick or create a different one), then they
-  do their task. The CLI checks `.local/config.json` on every brief and omits
-  this nudge when the workspace is already set up for that environment and
-  recorded agent. Do not add `/setup` back merely because the task consumes an
-  environment; they may have just finished it.
+  do their task. The CLI checks the workspace on every brief and omits this
+  nudge when canonical setup state reports the active agent ready
+  (`.local/setup/config.json`) and `.local/config.json` records that
+  environment and agent. Do not add `/setup` back merely because the task
+  consumes an environment; they may have just finished it.
 - **This person's own ready task IS the environment task** (it produces the
   environment and none is pinned yet) → `task-brief` prints **"First-run
   setup…"**. This is their first-run experience. Spell out that they create or

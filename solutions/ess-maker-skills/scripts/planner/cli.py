@@ -43,6 +43,7 @@ from planner.capture import (
     read_config,
     snapshot_config,
     summarize_discovery,
+    workspace_setup_ready,
 )
 from planner.plan_model import (
     ARTIFACT_KINDS,
@@ -619,7 +620,11 @@ def cmd_task_brief(args: argparse.Namespace) -> int:
     """Brief a task's assignee: how to do it, their role, the resolved values it
     consumes (e.g. the env id from setup), and the keys to capture when done."""
     plan = _load(args)
-    brief = plan.task_brief(args.task, workspace_config=read_config(args.config))
+    brief = plan.task_brief(
+        args.task,
+        workspace_config=read_config(args.config),
+        workspace_setup_ready=workspace_setup_ready(args.config),
+    )
     if args.json:
         print(json.dumps(brief, indent=2))
         return 0
@@ -816,9 +821,11 @@ def cmd_setup_status(args: argparse.Namespace) -> int:
       status and never writes the plan.
     * the ``/planner`` reconcile **guard** — on resume / "what am I assigned?",
       the planner folds a finished FRE setup into the plan via
-      ``capture-setup --complete`` ONLY while ``setupTaskOpen`` is true, so the
-      reconcile is idempotent and a completed setup task is never re-pinned on
-      every resume.
+      ``capture-setup --complete`` ONLY while ``setupTaskOpen`` is true and
+      ``workspaceSetupReady`` reports canonical readiness for this workspace's
+      active agent (never the legacy ``setup`` field), so the reconcile is
+      idempotent, a completed setup task is never re-pinned on every resume, and
+      an unfinished ``/setup`` never closes the plan's setup task.
 
     Safe no-op shape when there is no plan or no setup task (``hasPlan`` /
     ``setupTaskOpen`` false, ``environment`` null) so a standalone caller gets a
@@ -854,6 +861,7 @@ def cmd_setup_status(args: argparse.Namespace) -> int:
         ) if plan else None,
         "environmentPinned": bool(env_url),
         "agentPinned": bool(plan and (plan.output("essAgent") or plan.output("deployedEssAgent"))),
+        "workspaceSetupReady": workspace_setup_ready(args.config),
         "environment": {
             "environmentId": env_attrs.get("environmentId", ""),
             "environmentUrl": env_url,
@@ -1209,11 +1217,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "setup-status",
-        help="read-only JSON: the plan's pinned environment, setup output key + whether the /setup task is still "
-             "open (drives the /setup env-reuse offer and the planner reconcile guard)",
+        help="read-only JSON: the plan's pinned environment, setup output key, whether the /setup task is still "
+             "open, and whether this workspace's canonical setup is ready (drives the /setup env-reuse offer and "
+             "the planner reconcile guard)",
     )
     p.add_argument("--key", default="primaryEnvironment",
                    help="environment ledger key to report (default: primaryEnvironment)")
+    p.add_argument("--config", default=os.path.join(".local", "config.json"),
+                   help="workspace config; canonical setup state is read from setup/config.json beside it")
     p.set_defaults(func=cmd_setup_status)
 
     p = sub.add_parser("capture-discover", help="observe /discover output and pin the tenant inventory summary onto the plan")
@@ -1247,7 +1258,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("task-brief", help="brief an assignee: how, role, consumed values, outputs to capture")
     p.add_argument("--task", required=True)
     p.add_argument("--config", default=os.path.join(".local", "config.json"),
-                   help="workspace setup config used to avoid repeating an already-complete binding")
+                   help="workspace config used to avoid repeating an already-complete binding; canonical "
+                        "setup state is read from setup/config.json beside it")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_task_brief)
 
