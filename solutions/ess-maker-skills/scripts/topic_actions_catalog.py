@@ -54,6 +54,10 @@ class CatalogSnapshot:
     inventory_revision: str | None
     members: tuple[tuple[str, str, str | None], ...]
     evidence_kind: str = "provided_inventory"
+    source_inventory_only: bool = False
+    warnings: tuple[str, ...] = ()
+    restore_states: tuple[tuple[str, str], ...] = ()
+    restore_revision: str | None = None
 
 
 def parse_catalog(document: dict) -> Catalog:
@@ -303,8 +307,9 @@ def compare_catalog(
 
 def snapshot_from_response(
     catalog: Catalog, target: DiscoveryTarget, selected_keys: tuple[str, ...], body: dict,
+    *, source_inventory_only: bool = False,
 ) -> CatalogSnapshot:
-    """Native projection reuses M2 normalization; installation remains unverified."""
+    """Keep source-inventory policy distinct from verified package authority."""
     inventory = inventory_from_response(target, body)
     normalized = {
         _identity(row["component"]["id"]): normalize_state(
@@ -315,35 +320,77 @@ def snapshot_from_response(
         replace(topic, state=normalized.get(topic.component_id, "Unknown"))
         for topic in inventory.topics
     ))
-    return replace(compare_catalog(catalog, inventory, selected_keys), evidence_kind="native_read")
+    snapshot = replace(
+        compare_catalog(catalog, inventory, selected_keys), evidence_kind="native_read",
+    )
+    if not source_inventory_only:
+        return snapshot
+    # This policy deliberately does not require RC qualification. Preserve
+    # the unknown evidence and expose the waived checks rather than certify it.
+    qualifications = {
+        "catalog_release_untrusted", "catalog_review_pending",
+        "installed_package_unverified", "membership_review_pending",
+        "classification_unverified", "required_coverage_unverified",
+        "set_coverage_unverified", "custom_dependency_coverage_unverified",
+        "incomplete_coverage", "incomplete_membership", "missing_source",
+        "stale_or_unverified_source", "unknown_protection",
+    }
+    warnings = tuple(sorted({
+        reason.split(":", 1)[0] for reason in snapshot.evidence.blockers
+        if reason.split(":", 1)[0] in qualifications
+    }))
+    return replace(
+        snapshot, source_inventory_only=True,
+        evidence=replace(snapshot.evidence, blockers=tuple(
+            reason for reason in snapshot.evidence.blockers
+            if reason.split(":", 1)[0] not in qualifications
+        )),
+        warnings=(
+            *warnings, "write_permission_enforced_by_service",
+            "native_stale_write_protection_unqualified",
+            "native_batch_behavior_unqualified",
+            "native_draft_published_effects_unqualified",
+        ),
+    )
 
 
 def plan_catalog_actions(snapshot: CatalogSnapshot, action: str) -> TopicPlan:
     """Compute eligibility and outside-set protection instead of accepting skips."""
-    if type(snapshot) is not CatalogSnapshot or action not in ("enable", "disable"):
+    if type(snapshot) is not CatalogSnapshot or action not in ("enable", "disable", "restore"):
         _fail("invalid_plan")
     evidence = snapshot.evidence
     topics = {topic.component_id: topic for topic in evidence.topics}
     union = set(evidence.selected_member_ids)
     reasons = list(evidence.blockers)
-    desired = "On" if action == "enable" else "Off"
+    restore = dict(snapshot.restore_states)
+    if action == "restore" and (
+        not snapshot.restore_revision or not snapshot.source_inventory_only
+        or len(restore) != len(snapshot.restore_states) or set(restore) != union
+        or any(state not in ("On", "Off") for state in restore.values())
+    ):
+        _fail("original_baseline_missing")
     delta, satisfied, skips = [], [], []
     for identity in evidence.selected_member_ids:
         topic = topics.get(identity)
         if topic is None or topic.state == "Unknown":
             reasons.append(f"unknown_state:{identity}")
             continue
-        if topic.required is None:
+        desired = restore[identity] if action == "restore" else ("On" if action == "enable" else "Off")
+        disabling = desired == "Off"
+        if action == "restore" and topic.state == desired:
+            satisfied.append(identity)
+            continue
+        if topic.required is None and not snapshot.source_inventory_only:
             reasons.append(f"unknown_protection:{identity}")
             continue
         if topic.required:
-            if action == "disable":
+            if disabling:
                 skips.append(TopicSkip(identity, "required"))
             else:
                 reasons.append(f"required_member:{identity}")
             continue
         protecting = []
-        if action == "disable":
+        if disabling:
             for outside in evidence.sets:
                 if outside.key in evidence.selected_keys or identity not in outside.member_ids:
                     continue
@@ -376,5 +423,8 @@ def plan_catalog_actions(snapshot: CatalogSnapshot, action: str) -> TopicPlan:
         tuple(skips), blockers, outcome, "",
         state_differences=tuple(delta), observed_satisfied_member_ids=tuple(satisfied),
         evidence_kind="catalog",
+        execution_policy="source_inventory" if snapshot.source_inventory_only else "qualified_catalog",
+        warnings=snapshot.warnings, members=snapshot.members,
+        desired_states=snapshot.restore_states if action == "restore" else (),
     )
     return replace(plan, approval_basis="catalog:" + _digest(asdict(plan)))

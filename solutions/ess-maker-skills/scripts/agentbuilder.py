@@ -1453,6 +1453,43 @@ class AgentBuilderClient:
             raise AgentBuilderError("Component update returned an invalid shape.")
         return body
 
+    def update_components_once(
+        self,
+        agent_id: str,
+        change_set: dict[str, Any],
+    ) -> None:
+        """One isolated submission, without redirects or any transport replay.
+
+        This is a transport primitive, not topic-action release admission. It
+        deliberately leaves existing Workday and shared-client defaults intact.
+        """
+        agent_id = str(uuid.UUID(agent_id))
+        if not isinstance(change_set, dict):
+            raise ValueError("Component change set must be a JSON object.")
+        with requests.Session() as session:
+            session.mount("https://", HTTPAdapter(max_retries=Retry(total=0)))
+            session.trust_env = self.session.trust_env
+            session.verify = self.session.verify
+            session.cert = self.session.cert
+            session.proxies.update(self.session.proxies)
+            response = session.request(
+                "PUT",
+                f"{self.host}/copilotstudio/minimalBots/api/{agent_id}/components",
+                params={"api-version": NATIVE_ALM_API_VERSION},
+                headers={**self.headers, "Content-Type": "application/json"},
+                json=change_set,
+                timeout=180,
+                allow_redirects=False,
+            )
+            if not 200 <= response.status_code < 300:
+                _response_error(response, "Component submission")
+            try:
+                body = response.json()
+            except ValueError:
+                raise AgentBuilderError("Component submission acknowledgement was invalid.") from None
+            if not isinstance(body, dict):
+                raise AgentBuilderError("Component submission acknowledgement was invalid.")
+
     def update_bot_entity(
         self,
         agent_id: str,
