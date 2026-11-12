@@ -326,6 +326,16 @@ def test_tasks_for_person_groups_by_role_and_relation():
     assert grouped["eval-author"][0]["task"]["id"] == "P2"
 
 
+def test_tasks_for_person_matches_stored_role_names_and_compact_ids():
+    plan = Plan.new()
+    plan.add_task(new_task("P1", "workday", assigned_to=principal_pool("WorkdayAdmin")))
+    plan.add_task(new_task("P2", "power platform", assigned_to=principal_pool("Power Platform Administrator")))
+
+    grouped = plan.tasks_for_person(ANN, ["Workday administrator", "EntraPowerPlatformAdministrator"])
+    assert [item["task"]["id"] for item in grouped["WorkdayAdmin"]] == ["P1"]
+    assert [item["task"]["id"] for item in grouped["Power Platform Administrator"]] == ["P2"]
+
+
 # --------------------------------------------------------------------------- #
 # Execution order (topological render)
 # --------------------------------------------------------------------------- #

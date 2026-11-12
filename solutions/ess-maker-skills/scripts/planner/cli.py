@@ -1253,7 +1253,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("mine", help="show tasks for a person, grouped by role (Flow 2)")
     p.add_argument("--person", required=True)
-    p.add_argument("--roles", help="comma-separated roles the person holds")
+    p.add_argument("--roles", help="comma-separated roles the person holds (compact ids or stored role names)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_mine)
 

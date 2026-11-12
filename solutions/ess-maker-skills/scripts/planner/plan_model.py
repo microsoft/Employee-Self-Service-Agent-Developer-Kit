@@ -243,6 +243,12 @@ def assignee_user_oid(assigned_to: dict[str, Any] | None) -> str | None:
     return assigned_to.get("id")
 
 
+def _role_match_key(role: str) -> str:
+    """Fold an attestable role's compact id and stored name to one key; other
+    role labels match exactly as written."""
+    return resolve_attestable_role_id(role) or role
+
+
 def provenance(
     source: str,
     added_by: dict[str, Any] | None = None,
@@ -1656,20 +1662,25 @@ class Plan:
         Covers both tasks assigned directly to the person (bucketed by the
         task's retained role) and open pools for any role the person holds —
         which is how a multi-role person sees everything waiting on them.
+
+        ``roles`` may use the compact id (``WorkdayAdmin``) or the stored role
+        name the role tools return (``Workday administrator``); attestable roles
+        match on either spelling, and the group key stays the task's own role.
         """
-        role_set = set(roles)
+        role_set = {_role_match_key(r) for r in roles}
         grouped: dict[str, list[dict[str, Any]]] = {}
         for task in self.ordered_tasks():
             if task.get("state") == "Completed":
                 continue  # Flow 2 surfaces work still waiting, not finished tasks
             assigned = task.get("assignedTo") or {}
-            role = assignee_role_id(assigned) or "(no role)"
+            role_id = assignee_role_id(assigned)
+            role = role_id or "(no role)"
             owner = assignee_user_oid(assigned)
             if assigned.get("type") == "User" and owner == person_oid:
                 grouped.setdefault(role, []).append(
                     {"task": task, "relation": "assigned", "waitingOn": self.waiting_on(task.get("id"))}
                 )
-            elif assigned.get("type") == "Role" and assignee_role_id(assigned) in role_set:
+            elif assigned.get("type") == "Role" and role_id and _role_match_key(role_id) in role_set:
                 grouped.setdefault(role, []).append(
                     {"task": task, "relation": "pool", "waitingOn": self.waiting_on(task.get("id"))}
                 )

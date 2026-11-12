@@ -50,6 +50,10 @@ each role they hold** — which naturally covers a person with more than one rol
    - Open tasks for a role they hold ("open to your role"), which they can
      pick up.
 
+   `--roles` accepts each role's compact id (`WorkdayAdmin`) or the stored role
+   name the role tools return (`Workday administrator`); both match the same
+   tasks.
+
    Render their tasks as a **Step / Task / State** table (per role/group), using
    the State cell to carry readiness — one icon per state: **✅ Complete**,
    **🔄 In progress**, **🔒 Not started** for a task still waiting on an upstream
