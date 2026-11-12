@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Read-only comparison of interim flat definitions with one native Dev agent.
+"""Read-only comparison of interim flat definitions with one native agent.
 
 The catalog is supplied locally, not bundled from a private repository. Exact
 schema keys locate installed IDs; source-template IDs and display names never
@@ -23,11 +23,7 @@ from agentbuilder import (
     AgentBuilderHTTPError,
     environment_id_from_host,
 )
-from setup_existing_da import (
-    ExistingDASetupError,
-    _validate_changeset_identity,
-    validate_existing_dev_connection,
-)
+from topic_actions_client import verify_native_target
 from topic_actions_discovery import (
     DiscoveryError,
     DiscoveryTarget,
@@ -190,9 +186,18 @@ def inventory_from_response(target: DiscoveryTarget, body: dict) -> NativeInvent
     target = _target(target)
     if not isinstance(body, dict):
         _fail("invalid_inventory")
+    bot = body.get("bot")
     try:
-        schema = _validate_changeset_identity(body, target.agent_id)
-    except (ExistingDASetupError, ValueError, TypeError):
+        if (
+            not isinstance(bot, dict)
+            or _identity(bot.get("cdsBotId") or bot.get("componentIdUnique")) != target.agent_id
+        ):
+            raise ValueError
+        schema = bot.get("schemaName")
+        if not isinstance(schema, str) or not schema.strip():
+            raise ValueError
+        schema = schema.strip()
+    except (DiscoveryError, ValueError, TypeError):
         _fail("target_mismatch")
     changes = body.get("botComponentChanges")
     if not isinstance(changes, list):
@@ -361,7 +366,7 @@ def discover_flat_topic_sets(
     catalog: FlatCatalog,
     selected_keys: tuple[str, ...] | None = None,
 ) -> FlatDiscoveryResult:
-    """Verify client binding and native Dev identity before one component fetch."""
+    """Verify client binding and direct identity before one component fetch."""
     target = _target(target)
     _selection(selected_keys)
     _validate_catalog(catalog)
@@ -371,10 +376,7 @@ def discover_flat_topic_sets(
             or environment_id_from_host(client.host, client.ring) != target.environment_id
         ):
             _fail("client_target_mismatch")
-        validate_existing_dev_connection(
-            client, environment_id=target.environment_id,
-            agent_id=target.agent_id, allow_missing_schema=True,
-        )
+        verify_native_target(client, target)
         inventory = inventory_from_response(target, client.fetch_components(target.agent_id))
     except DiscoveryError:
         raise
@@ -385,9 +387,9 @@ def discover_flat_topic_sets(
         }.get(error.status_code, "read_failed"))
     except requests.Timeout:
         _fail("read_timeout")
-    except ExistingDASetupError:
+    except ValueError:
         _fail("target_unverified")
-    except (AgentBuilderError, requests.RequestException, ValueError, AttributeError, KeyError):
+    except (AgentBuilderError, requests.RequestException, AttributeError, KeyError):
         _fail("read_failed")
     return replace(
         compare_flat_catalog(catalog, inventory, selected_keys),
