@@ -53,21 +53,36 @@ The selected entry point owns any metadata checks and missing-state handling.
 - If the user typed `/flightcheck` or explicitly asked to validate setup or
   environment readiness, follow the **FlightCheck entry contract** below.
 - If the user typed `/topic-actions`, explicitly asked to enable or disable
-  whole ESS topic sets, or asked to undo earlier Topic Actions changes,
-  follow `src/skills/topic-actions/SKILL.md`.
+  whole ESS topic sets, list their current states, or undo earlier Topic Actions changes,
+  re-read `src/skills/topic-actions/SKILL.md` from disk for this invocation.
   That entry verifies canonical selected-agent identity and workspace
   preparation without requiring connection health or `connect_ready: true`.
   It never starts setup or repairs a connection automatically. Native
-  writes use exact source-defined membership and explicit fresh-review
+  writes use the exact source-defined set members present in the live agent and explicit fresh-review
   approval, without requiring a Dev realm or ALM enrollment. The native
   service still enforces edit access. Catalog/package authority and platform qualification remain
   unverified diagnostics, not write-admission gates. Render the helper's
   `userMessage` verbatim, not raw warning lists or internal codes. Material
-  limitations remain in its plain-language approval notes.
-  Listing and read-only previews show short topic names and current states,
-  without a change plan or write-specific limitation notes. Keep unresolved
+  limitations remain in structured diagnostics, available on request.
+  Do not add a "Before you approve" section or replace it with warning notes.
+  Ask only List/Enable/Disable first when the action is unknown. Then use
+  `--list-agent-sets` to show the selected agent's live set count, friendly
+  set names, present topic counts and Enabled/Disabled/Mixed/Unknown states.
+  Listing stops without a set question or approval. For enable/disable with
+  unknown sets, pass that fresh result's `selectionQuestion` unchanged as
+  the sole next structured question. Never batch action and set questions,
+  reuse earlier choices, synthesize all catalog sets or add free-text keys.
+  An absent/null question means no picker, not a catalog fallback. Reuse an already
+  explicit action and sets without this detour. Incomplete/failed discovery
+  is not an empty success. Only explicit per-topic previews show short topic
+  names and current states, without a change plan or write-specific notes. Keep unresolved
   topics and blockers visible. Execution plans use "No change", not
   "Already correct"; full schema identities remain internal.
+  Agent inventories may have different topic counts. Enable/disable all
+  present members of each requested set without missing-topic warnings for
+  absent template members. Only when no members are present say
+  "<set-key> topics are not available in this agent." Ambiguous matches,
+  unknown states, protections and freshness checks still apply.
   Explicit enable/disable requests use the packaged `--review` →
   structured chat approval → `--apply-review` flow for actual changes.
   Verified no-change enable/disable returns `already_correct` from `--review`;

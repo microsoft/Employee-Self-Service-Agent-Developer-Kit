@@ -122,7 +122,7 @@ def _guid(value: Any) -> str:
     return str(uuid.UUID(value))
 
 
-def validate_request(value: Any) -> dict[str, Any]:
+def validate_request(value: Any, *, list_sets: bool = False) -> dict[str, Any]:
     """Validate provisional logical inputs, not topic-set membership."""
     if not isinstance(value, dict) or set(value) - REQUEST_FIELDS:
         raise TopicActionsError("invalid_request", "Unsupported request shape.")
@@ -138,15 +138,15 @@ def validate_request(value: Any) -> dict[str, Any]:
         raise TopicActionsError(
             "invalid_request", "Provide one tenant, environment and agent ID."
         ) from exc
-    action = value.get("action")
-    if action not in ("enable", "disable"):
+    action = value.get("action", "list" if list_sets else None)
+    if action not in (("list",) if list_sets else ("enable", "disable")):
         raise TopicActionsError(
             "invalid_request", "Choose one action: enable or disable. Restore is not supported."
         )
-    keys = value.get("setKeys")
+    keys = value.get("setKeys", [] if list_sets else None)
     if (
         not isinstance(keys, list)
-        or not keys
+        or (bool(keys) if list_sets else not keys)
         or any(
             not isinstance(key, str)
             or not key
@@ -425,11 +425,12 @@ def run_topic_actions(
     account_hint: str | None = None, cancelled: bool = False, preview: bool = False,
     review_only: bool = False, approved_binding: str | None = None,
     approval_deadline: float | None = None,
+    list_sets: bool = False,
 ) -> dict[str, Any]:
     """Shared selected-agent entry; every write uses freshly verified evidence."""
     from topic_actions_catalog import load_catalog
     from topic_actions_discovery import DiscoveryError, DiscoveryTarget
-    from topic_actions_execution import TopicActionSession
+    from topic_actions_execution import TopicActionSession, agent_set_overview
     from topic_actions_native import NativeActionBackend
 
     context = value.get("callerContext", {}) if isinstance(value, dict) else {}
@@ -439,18 +440,22 @@ def run_topic_actions(
     target = None
     stage = "authentication_failed"
     try:
-        request = validate_request(value)
+        request = validate_request(value, list_sets=list_sets)
         target = request["target"]
         connection = _workspace_target(workspace_root, target, require_connect_ready=False)
         discovery_target = DiscoveryTarget(target["tenantId"], target["environmentId"], target["agentId"])
         catalog = load_catalog()
-        selected_keys = tuple(request["setKeys"])
+        selected_keys = (
+            tuple(item["key"] for item in catalog.document()["sets"])
+            if list_sets else tuple(request["setKeys"])
+        )
+        read_only = preview or review_only or list_sets
         token, tenant, account = authenticate_flightcheck(
             connection["ring"],
             cache_path=workspace_root / DEFAULT_TOKEN_CACHE,
             account_hint=account_hint,
             include_connectivity=False,
-            allow_write=not (preview or review_only),
+            allow_write=not read_only,
             emit_account_identity=False,
             return_account_identity=True,
         )
@@ -463,7 +468,7 @@ def run_topic_actions(
         components = TopicActionsClient(
             target["environmentId"], target["agentId"], target["tenantId"],
             ring=connection["ring"], host=connection["host"],
-            token=token, account=account, read_only=preview or review_only,
+            token=token, account=account, read_only=read_only,
         )
         stage = "target_unverified"
         client = AgentBuilderClient(
@@ -474,6 +479,10 @@ def run_topic_actions(
             backend = NativeActionBackend(
                 client, discovery_target, selected_keys, catalog, account, components,
             )
+            if list_sets:
+                result = agent_set_overview(backend.read(), catalog)
+                result["callerContext"] = deepcopy(request["callerContext"])
+                return result
             result = TopicActionSession(
                 backend, request["action"], caller_context=request["callerContext"],
             ).run(
@@ -573,6 +582,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--review", action="store_true", help="Prepare a five-minute, single-use review for chat approval.")
     mode.add_argument("--apply-review", metavar="REVIEW_ID", help="Consume a pending review using the maker's explicit decision.")
     mode.add_argument("--list-sets", action="store_true", help="List provisional source definitions, not installed availability.")
+    mode.add_argument("--list-agent-sets", action="store_true", help="Read the selected agent's available topic sets and aggregate states.")
     parser.add_argument("--decision", choices=("approve", "deny", "cancel"), help="Actual maker decision for --apply-review; never preselected.")
     args = parser.parse_args(argv)
     if bool(args.apply_review) != bool(args.decision) or (args.apply_review and args.cancel):
@@ -625,6 +635,11 @@ def main(argv: list[str] | None = None) -> int:
             result = review_topic_actions(
                 value, workspace_root=args.workspace_root, account_hint=args.account,
             )
+        elif args.list_agent_sets:
+            result = run_topic_actions(
+                value, workspace_root=args.workspace_root, confirm=None,
+                account_hint=args.account, list_sets=True,
+            )
         elif args.preview or args.execute:
             result = run_topic_actions(
                 value, workspace_root=args.workspace_root, confirm=_confirm_stdin,
@@ -638,7 +653,10 @@ def main(argv: list[str] | None = None) -> int:
     public = {key: item for key, item in result.items() if key != "callerContext"}
     print(RESULT_MARKER + json.dumps(public, sort_keys=True))
     return 0 if (
-        result["status"] in ("inspected", "preview", "review_ready", "cancelled", "denied")
+        result["status"] in (
+            "inspected", "preview", "review_ready", "sets_listed",
+            "cancelled", "denied",
+        )
         or result.get("completed") is True
     ) else 1
 

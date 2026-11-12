@@ -8,35 +8,6 @@ from __future__ import annotations
 import html
 
 
-_LIMITATIONS = (
-    (
-        {"catalog_release_untrusted", "catalog_review_pending", "membership_review_pending",
-         "missing_source", "stale_or_unverified_source"},
-        "The source topic list has not completed release review.",
-    ),
-    (
-        {"installed_package_unverified", "incomplete_membership", "incomplete_coverage",
-         "set_coverage_unverified", "custom_dependency_coverage_unverified"},
-        "Package coverage and additional dependencies have not been fully verified.",
-    ),
-    (
-        {"classification_unverified", "required_coverage_unverified", "unknown_protection"},
-        "Additional required or shared topics may not be identified by the source list.",
-    ),
-    (
-        {"native_stale_write_protection_unqualified"},
-        "Protection against concurrent edits has not been verified.",
-    ),
-    (
-        {"native_batch_behavior_unqualified"},
-        "All-or-nothing updates have not been verified.",
-    ),
-    (
-        {"native_draft_published_effects_unqualified"},
-        "Changes may affect published conversations; isolation has not been verified.",
-    ),
-)
-
 _BLOCKERS = (
     ({"review_unavailable", "review_invalid"},
      "This review is unavailable or has already been used. A new review and approval are required."),
@@ -61,7 +32,7 @@ _BLOCKERS = (
      "The selected agent could not be verified or accessed."),
     ({"missing_set", "ambiguous_or_unsupported_set", "unresolved_member", "missing_member",
       "ambiguous_member", "empty_membership"},
-     "The complete topic list could not be resolved. No smaller selection was used. Ask your ADK administrator to investigate."),
+     "I couldn't identify all the requested topics in this agent."),
     ({"unknown_state", "unknown_outside_state"},
      "Some topic states could not be verified."),
     ({"explicit_approval_required", "approval_interaction_failed"},
@@ -97,14 +68,38 @@ def _topic_name(schema_name: str) -> str:
 
 
 def _blocker_messages(result: dict) -> list[str]:
-    codes = _codes(result.get("blockers", ()))
+    blockers = result.get("blockers", ())
+    codes = _codes(blockers)
+    messages = []
+    selected = result.get("selectedSets", ())
+    for key in selected:
+        if f"set_absent:{key}" in blockers:
+            messages.append(f"{_text(key)} topics are not available in this agent.")
+    if messages:
+        codes -= {"set_absent", "missing_member"}
+        if all(
+            f"set_absent:{value.split(':', 1)[1]}" in blockers
+            for value in blockers if value.startswith("empty_membership:")
+        ):
+            codes.discard("empty_membership")
+        # Unresolved placeholders have no state; this is not another read failure.
+        if not any(
+            value.startswith("unknown_state:") and not value.startswith("unknown_state:unresolved:")
+            for value in blockers
+        ):
+            codes.discard("unknown_state")
     if not codes and result.get("reason"):
         codes.add(result["reason"].split(":", 1)[0])
-    messages = [message for keys, message in _BLOCKERS if codes & keys]
+    messages.extend(message for keys, message in _BLOCKERS if codes & keys)
     return messages or ["The information needed to continue could not be verified."]
 
 
 def review_text(review: dict, *, preview: bool = False) -> str:
+    if any(
+        reason.startswith("set_absent:")
+        for reason in review.get("blockers", ())
+    ):
+        return "\n".join((*_blocker_messages(review), "No topics were changed."))
     if preview:
         return _topic_list_text(review)
     action = {"enable": "Enable", "disable": "Disable"}[review["action"]]
@@ -157,17 +152,6 @@ def review_text(review: dict, *, preview: bool = False) -> str:
     ))
     if blocked:
         lines.extend(("", "Could not proceed. No topics were changed.", *_blocker_messages(review)))
-    notes = []
-    if review["action"] == "disable":
-        notes.append("Turning topics Off may make capabilities that depend on them unavailable.")
-    codes = _codes(review.get("warnings", ()))
-    notes.extend(message for keys, message in _LIMITATIONS if codes & keys)
-    known = {"write_permission_enforced_by_service"} | set().union(*(keys for keys, _ in _LIMITATIONS))
-    if codes - known:
-        notes.append("Additional limitations need review. Technical details are available on request.")
-    if notes:
-        lines.extend(("", "### About this review" if blocked else "### Before you approve"))
-        lines.extend("- " + note for note in notes)
     if not blocked:
         lines.extend(("", "The skill will not publish."))
     return "\n".join(lines)
@@ -202,6 +186,28 @@ def _topic_list_text(review: dict) -> str:
 
 def result_text(result: dict) -> str:
     status = result["status"]
+    if status == "sets_listed":
+        target = result["target"]
+        lines = [
+            "## Topic sets",
+            f"Agent: {_text(target['agentId'])}",
+            f"Environment: {_text(target['environmentId'])}",
+            "",
+            f"Topic sets found: {result['setCount']}.",
+        ]
+        if result["sets"]:
+            lines.extend(("", "| Topic set | Topics | State |", "| --- | --- | --- |"))
+            for item in result["sets"]:
+                count = item["topicCount"] if item["topicCount"] is not None else "Unknown"
+                lines.append(
+                    f"| {_text(item['name'])} | {_text(count)} | {_text(item['state'])} |"
+                )
+        else:
+            lines.append("No supported topic sets are available in this agent.")
+        if not result["discoveryComplete"]:
+            lines.append("Some topic sets could not be fully identified.")
+        lines.extend(("", "No topics were changed."))
+        return "\n".join(lines)
     if status == "source_catalog_only":
         return "Source-defined topic sets (availability not yet checked):\n" + "\n".join(
             f"- {_text(item['name'])}: {_text(item['key'])}" for item in result["sets"]

@@ -137,10 +137,12 @@ def compare_catalog(
     installed_packages: tuple[InstalledPackage, ...] = (),
     trusted_catalog_revision: str | None = None,
     dependency_coverage_verified: bool = False,
+    available_topics_only: bool = False,
 ) -> CatalogSnapshot:
     """Resolve exact members and retain every blocker in the selected scope.
 
-    Package records and trust arguments are adapter inputs, not customer
+    Native current-state operations use only members present in the agent.
+    Package records and policy arguments are adapter inputs, not customer
     assertions. The native adapter currently has no qualified package source.
     """
     selected = _selection(selected_keys)
@@ -149,7 +151,7 @@ def compare_catalog(
     target = _target(inventory.target)
     if parse_catalog(catalog.document()) != catalog:
         _fail("invalid_catalog")
-    if type(dependency_coverage_verified) is not bool:
+    if type(dependency_coverage_verified) is not bool or type(available_topics_only) is not bool:
         _fail("invalid_evidence")
     if not isinstance(installed_packages, tuple) or any(type(item) is not InstalledPackage for item in installed_packages):
         _fail("invalid_package_evidence")
@@ -199,7 +201,15 @@ def compare_catalog(
         choices = bound or candidates
         if len(choices) != 1:
             if topic_set["key"] in selected:
-                reasons.append(f"ambiguous_or_unsupported_set:{topic_set['key']}")
+                if available_topics_only and not any(
+                    by_schema.get(name.casefold())
+                    for variant in topic_set["sourceVariants"]
+                    for name in variant["memberSchemaNames"]
+                ):
+                    reasons.append(f"set_absent:{topic_set['key']}")
+                    sets.append(TopicSet(topic_set["key"], (), None, None))
+                else:
+                    reasons.append(f"ambiguous_or_unsupported_set:{topic_set['key']}")
             resolved_sets[topic_set["key"]] = None
             continue
         variant = choices[0]
@@ -254,14 +264,19 @@ def compare_catalog(
         if variant["membershipStatus"] != "owner_approved" or variant["membershipComplete"] is not True:
             reasons.append(f"membership_review_pending:{key}")
         ids = []
+        if key in selected and not any(by_schema.get(name.casefold()) for name in names):
+            reasons.append(f"set_absent:{key}")
         for name in names:
             candidates = by_schema.get(name.casefold(), [])
+            if available_topics_only and not candidates:
+                continue
             matches = candidates if len(candidates) == 1 and candidates[0].schema_name == name else []
             identity = matches[0].component_id if len(matches) == 1 else f"unresolved:{package['key']}:{name}"
             state = matches[0].state if len(matches) == 1 else "Unknown"
             definition = registry[name]
             if len(matches) != 1:
-                reasons.append(f"unresolved_member:{key}:{name}")
+                reason = "missing_member" if not candidates else "ambiguous_member"
+                reasons.append(f"{reason}:{key}:{name}")
             if definition["classification"] != "isv_topic" or definition["required"] is not False:
                 reasons.append(f"classification_unverified:{key}:{name}")
             topic = TopicEvidence(identity, definition["required"], state)
@@ -319,7 +334,9 @@ def snapshot_from_response(
         for topic in inventory.topics
     ))
     snapshot = replace(
-        compare_catalog(catalog, inventory, selected_keys), evidence_kind="native_read",
+        compare_catalog(
+            catalog, inventory, selected_keys, available_topics_only=source_inventory_only,
+        ), evidence_kind="native_read",
     )
     if not source_inventory_only:
         return snapshot

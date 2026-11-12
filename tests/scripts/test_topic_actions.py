@@ -230,6 +230,79 @@ def test_proposed_catalog_cli_does_not_authenticate_or_claim_installed_availabil
     assert result["writeStatus"] == "not_attempted"
 
 
+def test_agent_set_listing_cli_uses_read_only_discovery_without_set_keys_or_approval(
+    workspace, request_value, monkeypatch, capsys,
+):
+    from topic_actions_catalog import parse_catalog
+    from topic_actions_discovery import DiscoveryTarget
+    from tests.scripts.test_topic_actions_runtime import SyntheticBackend, catalog_document, operation_evidence
+
+    calls = _auth(monkeypatch)
+    catalog = parse_catalog(catalog_document())
+    packet = operation_evidence(
+        {"a": "On", "shared": "On", "b": "Off"}, selected=("alpha", "beta"),
+    )
+    target = DiscoveryTarget(TENANT_ID, ENVIRONMENT_ID, AGENT_ID)
+    packet = replace(
+        packet, snapshot=replace(packet.snapshot, evidence=replace(packet.snapshot.evidence, target=target)),
+    )
+    backend = SyntheticBackend([packet])
+    monkeypatch.setattr("topic_actions_catalog.load_catalog", lambda: catalog)
+    def adapter(*args):
+        assert args[2] == ("alpha", "beta")
+        assert args[-1].read_only
+        return backend
+    monkeypatch.setattr("topic_actions_native.NativeActionBackend", adapter)
+    value = {key: item for key, item in request_value.items() if key not in ("action", "setKeys")}
+    monkeypatch.setattr(entry.sys, "stdin", io.StringIO(json.dumps(value)))
+    assert entry.main(["--list-agent-sets", "--workspace-root", str(workspace)]) == 0
+    output = capsys.readouterr().out
+    result = json.loads(output.removeprefix(entry.RESULT_MARKER))
+    assert result["status"] == "sets_listed"
+    assert result["target"] == request_value["target"]
+    assert result["setCount"] == 2
+    assert [item["state"] for item in result["sets"]] == ["Enabled", "Mixed"]
+    assert [item["label"] for item in result["selectionQuestion"]["options"]] == [
+        "Synthetic alpha", "Synthetic beta",
+    ]
+    assert not result["completed"]
+    assert result["writeStatus"] == "not_attempted"
+    assert calls[0][1]["allow_write"] is False
+    assert calls[0][1]["include_connectivity"] is False
+    assert backend.reads == 1 and not backend.submissions
+    assert "do-not-emit" not in output and "private-token" not in output
+    assert entry.REVIEW_MARKER not in output
+    assert not (workspace / ".local" / "topic-actions").exists()
+
+
+@pytest.mark.parametrize("update", [
+    {"action": "enable"}, {"action": "disable"}, {"action": "restore"}, {"setKeys": ["alpha"]},
+])
+def test_agent_set_listing_rejects_mutation_or_selection_inputs_before_auth(request_value, update):
+    value = {
+        key: item for key, item in request_value.items() if key not in ("action", "setKeys")
+    }
+    with pytest.raises(entry.TopicActionsError):
+        entry.validate_request({**value, **update}, list_sets=True)
+
+
+def test_failed_agent_set_read_is_not_reported_as_an_empty_agent(workspace, request_value, monkeypatch):
+    from tests.scripts.test_topic_actions_runtime import SyntheticBackend
+
+    _auth(monkeypatch)
+    backend = SyntheticBackend([entry.requests.Timeout("private-service-detail")])
+    monkeypatch.setattr("topic_actions_native.NativeActionBackend", lambda *args: backend)
+    value = {key: item for key, item in request_value.items() if key not in ("action", "setKeys")}
+    result = entry.run_topic_actions(
+        value, workspace_root=workspace, confirm=None, list_sets=True,
+    )
+    assert result["status"] == "blocked"
+    assert "sets" not in result
+    assert "not available" not in result["userMessage"]
+    assert "private-service-detail" not in result["userMessage"]
+    assert not backend.submissions
+
+
 @pytest.mark.parametrize(("answer", "status", "completed"), [
     ("approve\n", "completed", True),
     ("deny\n", "denied", False),

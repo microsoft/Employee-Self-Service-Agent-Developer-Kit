@@ -18,7 +18,7 @@ from typing import Callable, Protocol
 from requests import RequestException
 
 from agentbuilder import AgentBuilderError, AgentBuilderHTTPError
-from topic_actions_catalog import CatalogSnapshot, plan_catalog_actions
+from topic_actions_catalog import Catalog, CatalogSnapshot, plan_catalog_actions
 from topic_actions_components import normalize_state
 from topic_actions_discovery import _identity
 from topic_actions_planning import TopicPlan, _digest
@@ -145,6 +145,62 @@ def public_plan(plan: TopicPlan, evidence: OperationEvidence | None = None) -> d
             for topic in evidence.snapshot.evidence.topics
             if topic.component_id in evidence.snapshot.evidence.selected_member_ids
         ]
+    return result
+
+
+def agent_set_overview(evidence: OperationEvidence, catalog: Catalog) -> dict:
+    """Summarize present sets from one verified read, without planning a write."""
+    snapshot = evidence.snapshot
+    topics = {item.component_id: item for item in snapshot.evidence.topics}
+    sets = []
+    complete = True
+    for definition in catalog.document()["sets"]:
+        key = definition["key"]
+        if f"set_absent:{key}" in snapshot.evidence.blockers:
+            continue
+        members = [identity for member_key, _, identity in snapshot.members if member_key == key]
+        unresolved = (
+            None in members
+            or f"ambiguous_or_unsupported_set:{key}" in snapshot.evidence.blockers
+        )
+        if not members and not unresolved:
+            continue
+        identities = {identity for identity in members if identity is not None}
+        states = {topics[identity].state for identity in identities}
+        state = "Unknown" if unresolved or "Unknown" in states or not states else (
+            "Enabled" if states == {"On"} else "Disabled" if states == {"Off"} else "Mixed"
+        )
+        complete = complete and not unresolved
+        sets.append({
+            "key": key,
+            "name": f"{definition['integration']['name']} {definition['name']}",
+            "topicCount": None if unresolved else len(identities),
+            "state": state,
+        })
+    result = {
+        "contractVersion": 1, "contractStatus": "provisional",
+        "status": "sets_listed", "reason": "sets_listed",
+        "completed": False, "writeStatus": "not_attempted",
+        "target": {
+            "tenantId": snapshot.evidence.target.tenant_id,
+            "environmentId": snapshot.evidence.target.environment_id,
+            "agentId": snapshot.evidence.target.agent_id,
+        },
+        "sets": sets, "setCount": len(sets), "discoveryComplete": complete,
+        "selectionQuestion": {
+            "header": "Topic sets",
+            "question": "Which topic sets would you like to change?",
+            "multiSelect": True,
+            "options": [
+                {"label": item["name"], "description": f"{item['state']}; {item['topicCount']} topics"}
+                for item in sets
+            ],
+            "allowFreeformInput": False,
+        } if complete and sets else None,
+        "warnings": list(snapshot.warnings),
+        "availabilityDiagnostics": list(snapshot.evidence.blockers),
+    }
+    result["userMessage"] = result_text(result)
     return result
 
 

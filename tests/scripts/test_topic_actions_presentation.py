@@ -7,7 +7,8 @@ from copy import deepcopy
 
 import pytest
 
-from topic_actions_execution import TopicActionSession
+from topic_actions_execution import TopicActionSession, agent_set_overview
+from topic_actions_catalog import load_catalog
 from topic_actions_presentation import result_text, review_text
 from tests.scripts.test_topic_actions_runtime import dev_native_backend
 
@@ -63,39 +64,196 @@ def test_complete_review_has_exact_copy_without_routine_diagnostics():
     assert review == original
 
 
-def test_material_notes_are_fixed_deduplicated_without_original_state_consent():
+@pytest.mark.parametrize(("states", "expected"), [
+    ({"a": "On", "shared": "On", "b": "On"}, ["Enabled", "Enabled"]),
+    ({"a": "Off", "shared": "Off", "b": "Off"}, ["Disabled", "Disabled"]),
+    ({"a": "On", "shared": "Off", "b": "Off"}, ["Mixed", "Disabled"]),
+])
+def test_agent_set_overview_aggregates_present_topics_without_a_topic_dump(states, expected):
+    backend = dev_native_backend(selected=("alpha", "beta"), before=states)
+    overview = agent_set_overview(backend.read(), backend.catalog)
+    assert overview["setCount"] == 2
+    assert overview["discoveryComplete"]
+    assert [item["state"] for item in overview["sets"]] == expected
+    assert [item["topicCount"] for item in overview["sets"]] == [2, 2]
+    assert overview["selectionQuestion"] == {
+        "header": "Topic sets",
+        "question": "Which topic sets would you like to change?",
+        "multiSelect": True,
+        "options": [
+            {"label": "Synthetic alpha", "description": f"{expected[0]}; 2 topics"},
+            {"label": "Synthetic beta", "description": f"{expected[1]}; 2 topics"},
+        ],
+        "allowFreeformInput": False,
+    }
+    assert "Topic sets found: 2." in overview["userMessage"]
+    assert f"| Synthetic alpha | 2 | {expected[0]} |" in overview["userMessage"]
+    assert "synthetic.hr.topic" not in overview["userMessage"]
+    assert "Before you approve" not in overview["userMessage"]
+    assert overview["writeStatus"] == "not_attempted"
+    backend.components.read_components.assert_called_once()
+    backend.components.submit_state_payload.assert_not_called()
+
+
+@pytest.mark.parametrize("change", ["fewer_topics", "unknown_state", "ambiguous_identity", "absent"])
+def test_agent_set_overview_distinguishes_smaller_sets_unknown_states_and_absence(change):
+    backend = dev_native_backend(selected=("alpha", "beta"))
+    body = deepcopy(next(backend.components.read_components.side_effect))
+    if change == "fewer_topics":
+        body["botComponentChanges"].pop(0)
+    elif change == "unknown_state":
+        body["botComponentChanges"][0]["component"]["status"] = "Active"
+    elif change == "ambiguous_identity":
+        duplicate = deepcopy(body["botComponentChanges"][0])
+        duplicate["component"]["id"] = "duplicate"
+        body["botComponentChanges"].append(duplicate)
+    else:
+        body["botComponentChanges"] = body["botComponentChanges"][-1:]
+    backend.components.read_components.side_effect = [body]
+    result = agent_set_overview(backend.read(), backend.catalog)
+    if change == "absent":
+        assert result["setCount"] == 0
+        assert result["sets"] == []
+        assert result["selectionQuestion"] is None
+        assert "No supported topic sets are available in this agent." in result["userMessage"]
+    else:
+        alpha = result["sets"][0]
+        assert alpha["key"] == "alpha"
+        assert alpha["state"] == ("Disabled" if change == "fewer_topics" else "Unknown")
+        assert alpha["topicCount"] == (
+            1 if change == "fewer_topics" else None if change == "ambiguous_identity" else 2
+        )
+        assert result["discoveryComplete"] is (change != "ambiguous_identity")
+        if change == "ambiguous_identity":
+            assert result["selectionQuestion"] is None
+    backend.components.submit_state_payload.assert_not_called()
+
+
+@pytest.mark.parametrize(("agent_schema", "expected"), [
+    ("gptagent_copilotforemployeeselfservicehr", [
+        ("workday-da-hr", "Workday HR Topics", "Enabled"),
+        ("servicenow-hr", "ServiceNow HR Topics", "Disabled"),
+    ]),
+    ("msdyn_copilotforemployeeselfservicedahr", [
+        ("workday-da-hr", "Workday HR Topics", "Enabled"),
+    ]),
+    ("msdyn_copilotforemployeeselfservicedait", [
+        ("workday-da-it", "Workday IT Topics", "Enabled"),
+    ]),
+    ("gptagent_copilotforemployeeselfserviceit", [
+        ("servicenow-it", "ServiceNow IT Topics", "Disabled"),
+    ]),
+])
+@pytest.mark.parametrize("smaller_sets", [False, True])
+def test_agent_set_overview_uses_bundled_names_and_only_present_sets(agent_schema, expected, smaller_sets):
+    catalog = load_catalog()
+    document = catalog.document()
+    backend = dev_native_backend(selected=tuple(item["key"] for item in document["sets"]))
+    backend.catalog = catalog
+    body = deepcopy(next(backend.components.read_components.side_effect))
+    template = body["botComponentChanges"][0]
+    body["bot"]["schemaName"] = agent_schema
+    body["botComponentChanges"] = []
+    package = next(
+        item["key"] for item in document["packages"] if agent_schema in item["agentSchemaNames"]
+    )
+    expected_counts = []
+    for key, _, state in expected:
+        topic_set = next(item for item in document["sets"] if item["key"] == key)
+        variant = next(item for item in topic_set["sourceVariants"] if item["packageKey"] == package)
+        schemas = variant["memberSchemaNames"][:2] if smaller_sets else variant["memberSchemaNames"]
+        expected_counts.append(len(schemas))
+        for schema in schemas:
+            row = deepcopy(template)
+            row["component"].update(
+                id=f"synthetic-{len(body['botComponentChanges'])}", schemaName=schema,
+                state="Active" if state == "Enabled" else "Inactive",
+                status="Active" if state == "Enabled" else "Inactive",
+            )
+            body["botComponentChanges"].append(row)
+    backend.components.read_components.side_effect = [body]
+    result = agent_set_overview(backend.read(), catalog)
+    assert result["setCount"] == len(expected) and result["discoveryComplete"]
+    assert [(item["key"], item["name"], item["state"]) for item in result["sets"]] == expected
+    assert [item["topicCount"] for item in result["sets"]] == expected_counts
+    assert [item["label"] for item in result["selectionQuestion"]["options"]] == [
+        name for _, name, _ in expected
+    ]
+    assert "not available" not in result["userMessage"]
+    backend.components.submit_state_payload.assert_not_called()
+
+
+def test_agent_set_overview_does_not_hide_unresolved_source_families_as_an_empty_list():
+    catalog = load_catalog()
+    document = catalog.document()
+    backend = dev_native_backend(selected=tuple(item["key"] for item in document["sets"]))
+    backend.catalog = catalog
+    body = deepcopy(next(backend.components.read_components.side_effect))
+    body["bot"]["schemaName"] = document["packages"][0]["agentSchemaNames"][0]
+    body["botComponentChanges"] = body["botComponentChanges"][:1]
+    topic_set = next(item for item in document["sets"] if item["key"] == "servicenow-it")
+    body["botComponentChanges"][0]["component"]["schemaName"] = (
+        topic_set["sourceVariants"][0]["memberSchemaNames"][0]
+    )
+    backend.components.read_components.side_effect = [body]
+    result = agent_set_overview(backend.read(), catalog)
+    assert result["setCount"] == 1
+    assert not result["discoveryComplete"]
+    assert result["selectionQuestion"] is None
+    assert result["sets"][0]["key"] == "servicenow-it"
+    assert result["sets"][0]["state"] == "Unknown"
+    assert result["sets"][0]["topicCount"] is None
+    assert "Some topic sets could not be fully identified." in result["userMessage"]
+    assert "No supported topic sets are available" not in result["userMessage"]
+    backend.components.submit_state_payload.assert_not_called()
+
+
+def test_agent_set_listing_does_not_require_a_write_change_token():
+    backend = dev_native_backend(selected=("alpha", "beta"))
+    body = deepcopy(next(backend.components.read_components.side_effect))
+    body.pop("changeToken")
+    backend.components.read_components.side_effect = [body]
+    result = agent_set_overview(backend.read(), backend.catalog)
+    assert result["setCount"] == 2
+    assert result["discoveryComplete"]
+    assert [item["state"] for item in result["sets"]] == ["Disabled", "Disabled"]
+    backend.components.submit_state_payload.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["enable", "disable"])
+@pytest.mark.parametrize("blocked", [False, True])
+def test_review_omits_entire_approval_notes_section_but_preserves_diagnostics(action, blocked):
     review = _review()
+    review["action"] = action
+    review["blockers"] = ["unknown_state"] if blocked else []
+    without_warnings = review_text(review)
     review["warnings"] += [
         "catalog_release_untrusted", "catalog_review_pending",
-        "native_draft_published_effects_unqualified", "unknown_protection",
+        "membership_review_pending", "installed_package_unverified",
+        "incomplete_membership", "incomplete_coverage", "set_coverage_unverified",
+        "custom_dependency_coverage_unverified", "classification_unverified",
+        "required_coverage_unverified", "unknown_protection",
+        "native_stale_write_protection_unqualified", "native_batch_behavior_unqualified",
+        "native_draft_published_effects_unqualified", "future_sensitive_internal_detail",
     ]
+    original = deepcopy(review)
     text = review_text(review)
-    assert "### Before you approve" in text
-    assert text.count("The source topic list has not completed release review.") == 1
-    assert "Changes may affect published conversations; isolation has not been verified." in text
-    assert "Additional required or shared topics may not be identified by the source list." in text
-    assert "original topic states" not in text
+    assert text == without_warnings
+    assert "Before you approve" not in text
+    assert "About this review" not in text
+    assert "Turning topics Off" not in text
     assert all(code not in text for code in review["warnings"])
     assert "warning" not in text.casefold()
-    review["warnings"].reverse()
-    assert review_text(review) == text
+    assert review == original
 
 
-def test_unknown_limitations_are_not_silently_discarded():
-    review = _review()
-    review["warnings"].append("future_sensitive_internal_detail")
-    text = review_text(review)
-    assert "Additional limitations need review. Technical details are available on request." in text
-    assert "future_sensitive_internal_detail" not in text
-
-
-def test_disable_review_explains_shared_capability_impact_and_current_state():
+def test_disable_review_keeps_protection_and_current_state_without_approval_notes():
     review = _review()
     review.update(action="disable", alreadyCorrect=[], proposedChanges=[])
     review["protected"] = [{"componentId": "shared", "reason": "shared", "protectingSets": ["beta"]}]
     text = review_text(review)
     assert "| alpha | alpha.shared | On | Off | Keep unchanged: used by beta |" in text
-    assert "Turning topics Off may make capabilities that depend on them unavailable." in text
+    assert "Before you approve" not in text
 
 
 def test_preview_does_not_infer_membership_or_collect_approval():
@@ -151,13 +309,97 @@ def test_blocked_inventory_keeps_resolution_failure_without_showing_an_execution
     review["members"][0]["componentId"] = None
     text = review_text(review, preview=True)
     assert "| alpha | alpha.topic | Unknown |" in text
-    assert "The complete topic list could not be resolved." in text
+    assert "I couldn't identify all the requested topics in this agent." in text
     assert "Could not proceed. No topics were changed." in text
     assert "Requested state" not in text
     assert "Eligible changes" not in text
     result = _result("blocked", submitted=False)
     result.update(plan=review, blockers=review["blockers"])
     assert result_text(result) == text
+
+
+def test_absent_topics_have_short_copy_without_approval_or_submission():
+    backend = dev_native_backend()
+    body = backend.components.read_components.side_effect
+    packets = list(body)
+    for packet in packets:
+        packet["botComponentChanges"] = [
+            row for row in packet["botComponentChanges"]
+            if row["component"]["id"] not in {"a", "shared", "b"}
+        ]
+    backend.components.read_components.side_effect = packets
+    result = TopicActionSession(backend, "disable").run(
+        lambda _: pytest.fail("Missing topics must not request approval."),
+    )
+    assert result["status"] == "blocked"
+    assert result["userMessage"] == "alpha topics are not available in this agent.\nNo topics were changed."
+    assert result["blockers"]
+    backend.components.submit_state_payload.assert_not_called()
+
+
+@pytest.mark.parametrize("agent_schema", [
+    package["agentSchemaNames"][0] for package in load_catalog().document()["packages"]
+])
+@pytest.mark.parametrize("action", ["enable", "disable"])
+@pytest.mark.parametrize("preview", [False, True])
+def test_absent_servicenow_it_has_friendly_copy_across_bundled_agent_families(
+    agent_schema, action, preview,
+):
+    backend = dev_native_backend(selected=("servicenow-it",))
+    backend.catalog = load_catalog()
+    body = deepcopy(next(backend.components.read_components.side_effect))
+    body["bot"]["schemaName"] = agent_schema
+    backend.components.read_components.side_effect = [body]
+    result = TopicActionSession(backend, action).run(
+        lambda _: pytest.fail("An absent set must not request approval."),
+        preview=preview, review_only=not preview,
+    )
+    assert result["status"] == "blocked"
+    assert result["writeStatus"] == "not_attempted"
+    assert "set_absent:servicenow-it" in result["blockers"]
+    assert result["userMessage"] == (
+        "servicenow-it topics are not available in this agent.\nNo topics were changed."
+    )
+    backend.components.submit_state_payload.assert_not_called()
+
+
+@pytest.mark.parametrize("case_alias", [False, True])
+def test_unsupported_family_with_matching_topics_is_not_reported_as_absent(case_alias):
+    backend = dev_native_backend(selected=("servicenow-it",))
+    backend.catalog = load_catalog()
+    document = backend.catalog.document()
+    topic_set = next(item for item in document["sets"] if item["key"] == "servicenow-it")
+    schema = topic_set["sourceVariants"][0]["memberSchemaNames"][0]
+    body = deepcopy(next(backend.components.read_components.side_effect))
+    body["bot"]["schemaName"] = document["packages"][0]["agentSchemaNames"][0]
+    body["botComponentChanges"][0]["component"]["schemaName"] = schema.upper() if case_alias else schema
+    backend.components.read_components.side_effect = [body]
+    result = TopicActionSession(backend, "disable").run(
+        lambda _: pytest.fail("An unsupported family cannot request approval."),
+    )
+    assert result["status"] == "blocked"
+    assert "ambiguous_or_unsupported_set:servicenow-it" in result["blockers"]
+    assert "not available" not in result["userMessage"]
+    backend.components.submit_state_payload.assert_not_called()
+
+
+def test_missing_set_copy_names_the_set_and_keeps_other_failures_visible():
+    review = _review()
+    review["selectedSets"] = ["servicenow-it"]
+    review["blockers"] = ["set_absent:servicenow-it", "authentication_failed"]
+    assert review_text(review, preview=True) == (
+        "servicenow-it topics are not available in this agent.\n"
+        "The signed-in account could not be verified.\nNo topics were changed."
+    )
+
+
+def test_ambiguous_topics_are_not_reported_as_absent():
+    review = _review()
+    review["blockers"] = ["ambiguous_member:alpha:alpha.topic"]
+    text = review_text(review, preview=True)
+    assert "I couldn't identify all the requested topics in this agent." in text
+    assert "not available" not in text
+    assert "administrator" not in text
 
 
 def test_entry_blockers_override_an_otherwise_executable_plan_in_display():

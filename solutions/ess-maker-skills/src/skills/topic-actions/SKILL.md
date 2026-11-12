@@ -23,14 +23,16 @@ clarifying question only when missing or ambiguous information prevents the
 requested operation; do not ask the maker to repeat known selections or
 confirm that routine checks should run.
 
-For listing or preview requests, perform the read-only work and show the
-result without approval or an unsolicited offer to execute. Show only the
-agent, environment, topic sets, short topic names and observed current states.
+For topic-set listing requests, show the live-agent set overview described
+below, without asking which sets to list. For explicit per-topic detail or
+preview requests, show the agent, environment, selected sets, short topic
+names and observed current states. Both are read-only and need no approval
+or unsolicited offer to execute.
 Do not turn a topic-list request into an enable/disable plan: omit requested
 states, plan columns, change counts and write-specific limitation notes.
 Keep unresolved topics and blockers visible; do not imply complete discovery.
 For an explicit
-enable/disable request, use the execution helper's fresh review directly;
+enable/disable request with established sets, use the execution helper's fresh review directly;
 do not add a separate preview approval, a "start review" confirmation or a
 "ready to proceed" question before it. A previous preview is not executable
 approval and does not replace that fresh execution review.
@@ -42,8 +44,7 @@ Never substitute a read-only list or preview because approval transport
 appears unavailable.
 
 Display the complete required review once, including every selected member,
-account, target, changes, no-change topics, protections and material
-limitations in plain language. Then present one
+account, target, changes, no-change topics and protections. Then present one
 explicit decision control: **Approve**, **Deny** or **Cancel**, with no
 preselected approval. Use the structured VS Code question and separate
 review/apply commands below, as Connect Workday does;
@@ -80,9 +81,10 @@ result into success. For multiple independent previews, render each returned
 `userMessage`; do not combine them into a newly interpreted successful scope.
 
 The deterministic presentation is owned by
-`scripts/topic_actions_presentation.py`. Its "Before you approve" notes
-retain material limitations and dependency impact.
-Read-only previews show the topic inventory, not the execution review notes,
+`scripts/topic_actions_presentation.py`. Do not show a "Before you approve"
+section, its notes, or a replacement warning section. Limitations and dependency
+impact remain available in structured diagnostics for technical questions.
+Read-only previews show the topic inventory, not an execution plan,
 and never ask for approval. Display the schema-name suffix after `.topic.`
 (for example, `WorkdayGetVisas`); keep full identities in structured evidence
 and mutation logic. Use "No change" rather than "Already correct" in plans.
@@ -90,7 +92,7 @@ Routine diagnostics such as service-enforced edit permission are not
 repeated as notices. Structured `warnings`, `blockers`, HTTP status and
 other evidence remain intact for callers and requested technical diagnosis;
 not displaying raw warning lists does not remove checks or establish trust.
-Unknown limitations receive a plain-language notice in execution reviews.
+Unknown limitations remain in structured diagnostics rather than review notices.
 Only when the maker explicitly requests diagnostics may safe reason codes
 and HTTP status accompany the fixed copy. Never expose private evidence,
 caller context, service bodies or credentials.
@@ -123,16 +125,22 @@ target, and distinguish these entry outcomes:
   cannot be validated. Do not assume `/setup` repairs it or recommend deleting
   setup state, switching targets or creating a replacement. State when the
   supported recovery route or installed-version support is unconfirmed.
-- **Selected package or topics missing:** distinguish verified absence of a
-  package from missing topics within an installed package. Name the affected
-  set and topics when known. Use an existing setup/recovery destination only
+- **Selected topics unavailable:** live agent inventory determines which
+  topics exist. For each requested set, use every present exact catalog
+  match; differing template counts are normal, not missing-topic warnings.
+  If no topics from a requested set are present, say
+  "<set-key> topics are not available in this agent."
+  Do not add administrator escalation or technical membership warnings.
+  No topics are changed and no approval is requested for an unavailable set.
+  Use an existing setup/recovery destination only
   when verified for that problem and installed version; otherwise state that
   the destination is unconfirmed. `/setup` does not install extension packs;
   `/connect` completion is not package or topic evidence.
 - **Evidence unavailable or ambiguous:** do not diagnose absence or access
   denial. Unverified installation does not mean a missing package; unresolved
-  topic identities can be missing or ambiguous. For unresolved membership,
-  ask the ADK administrator to investigate, then return here for a fresh check.
+  topic identities can be missing or ambiguous. Say "I couldn't identify all
+  the requested topics in this agent." Do not claim that ambiguous topics
+  are absent or add routine administrator escalation.
 - **Access denied:** describe the denied operation only. A denied read does
   not verify missing topic-edit permission. Only a verified edit denial may
   direct the maker to the administrator responsible for that agent and
@@ -161,7 +169,74 @@ the requested state was independently verified, using only the supported
 caller return. Closing the control or an ambiguous custom answer is not
 approval. No automatic retry or resume follows cancellation.
 
-## Selection and proposed catalog
+## Action, live set overview and selection
+
+When the action is unknown, ask just the action question first using the
+host's structured question tool:
+
+```json
+[
+  {
+    "header": "Topic actions",
+    "question": "What would you like to do?",
+    "options": [
+      { "label": "List topic sets/current states" },
+      { "label": "Enable topic sets" },
+      { "label": "Disable topic sets" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Do not include a set-key question in this first control. Reuse an action
+already supplied by the maker. Do not batch the action and set questions
+into one call: wait for the action answer before discovery and selection.
+After the action is chosen, if the request
+is a set listing or enable/disable without established sets, read the
+selected agent's inventory using:
+
+`python scripts/topic_actions.py --list-agent-sets`
+
+Pass one JSON request on standard input containing `contractVersion: 1`,
+`target: {tenantId, environmentId, agentId}` and `entry: "direct"`.
+Omit `action` and `setKeys`; do not invent an enable/disable request to list
+sets. Keep private caller context in the calling conversation as below.
+Parse `TOPIC_ACTIONS_RESULT_JSON:` and render `userMessage` verbatim.
+
+Run this fresh for the current invocation and selected target. Earlier chat
+lists, cached questions and source catalog definitions are not availability
+evidence. Only `status: "sets_listed"` supplies the live `sets` choices. The overview
+shows how many supported sets this agent has, each friendly integration/set
+name, its present topic count and aggregate state:
+**Enabled** means every present topic is On; **Disabled** means every present
+topic is Off; **Mixed** means both On and Off; **Unknown** means a state or
+membership could not be resolved. Absent sets are omitted. Do not populate
+the overview from the source catalog alone or expand it into individual
+topic rows unless the maker explicitly requests topic details.
+
+For **List topic sets/current states**, stop after this overview. Do not
+ask for set selection or approval. For **Enable** or **Disable**, when
+`discoveryComplete` is true and `sets` is nonempty, pass the helper's
+`selectionQuestion` unchanged as the sole next structured question. The
+helper supplies exactly one option per present set, with friendly name,
+state and topic count, multi-select enabled, no custom-answer field and
+no preselected choices. Map answered option labels to the `key` of each
+matching entry in the same response's `sets`; retain keys internally.
+Do not reconstruct, expand or supplement the helper's options, even if the
+catalog or earlier conversation lists additional integrations or HR/IT sets.
+Never use `--list-sets` to populate this control. If `selectionQuestion` is
+absent/null, do not invent a picker or use a catalog fallback.
+Empty/dismissed selection cancels without a
+review or write. Failed or incomplete discovery must not become an empty
+successful list or a guessed selection; render its result and stop.
+
+After selection, use the normal fresh `--review` flow. The overview is not
+approval or write evidence. If the maker already supplied an unambiguous
+enable/disable action and sets, skip the action/overview/selection detour
+and go directly to that fresh review.
+
+### Proposed source catalog
 
 Read `src/reference/topic-actions/catalog.provisional.json` or run
 `python scripts/topic_actions.py --list-sets` to list **source definitions**.
@@ -169,15 +244,20 @@ This is not installed availability. The catalog deliberately retains unknown
 required-topic classifications, package IDs and coverage, and provisional
 approval. Do not change those labels to make a plan pass.
 
-Explain the available names, establish exactly one action (`enable` or `disable`)
-and use the canonical selected target with explicit whole-set keys.
+For changes, establish exactly one action (`enable` or `disable`) and use
+the canonical selected target with the selected whole-set keys internally.
 Restore and undo of previous Topic Actions changes are not supported.
 Do not translate an undo request into the opposite action, since earlier
-topic states may have been mixed.
+topic states may have been mixed. Explain the limitation and ask for the
+desired action only when it is not established, then use live set selection
+above when sets are unknown.
 Never infer membership from names, merge source families, expand "all" without
-selection, silently narrow a partial set or authorize a topic individually.
-Discovery matches exact schema keys to installed component IDs and reports
-missing/ambiguous members. Legacy flat definitions remain read-only.
+selection or authorize a topic individually. Live inventory is the source
+of topics to enable/disable. The catalog maps exact schema keys to the
+requested sets; only members actually present in this agent enter the scope.
+An agent with 10 matching topics does not need the 15 topics another agent
+has. Absent template members are ignored, not reported as incomplete.
+Ambiguous identities still block. Legacy flat definitions remain read-only.
 
 ## Read-only preview or chat review and apply
 
@@ -198,11 +278,12 @@ bodies in terminal commands, chat output or files.
 Parse `TOPIC_ACTIONS_RESULT_JSON:` and render its `userMessage`.
 For preview, it presents the agent, environment, selected topics and observed
 current states in fixed plain language, plus any blocker preventing resolution.
-Execution reviews additionally present proposed changes, no-change topics,
-protections and material limitations.
+Execution reviews additionally present proposed changes, no-change topics
+and protections. Limitations remain in structured diagnostics.
 Observed differences in a blocked plan are **not eligible changes**. Report
-all requested sets; missing membership never
-becomes a smaller successful action. No user approval can override blockers.
+all requested sets using their present members. A requested set with no
+present members blocks rather than disappearing from the request.
+No user approval can override blockers.
 Preview returns `status: "preview"` and `writeStatus: "not_attempted"`. It
 does not acquire write scopes or collect executable consent.
 
@@ -214,9 +295,9 @@ This command finishes; it does not wait for terminal input. Parse
 `TOPIC_ACTIONS_RESULT_JSON:`. Only `status: "review_ready"` supplies a
 `reviewId` and permits asking for approval. Display its complete `userMessage`,
 including account, target, every selected set/member, proposed changes,
-no-change topics, protections and material limitations. Keep `reviewId` and
+no-change topics and protections. Do not append approval notes. Keep `reviewId` and
 expiry metadata internal. For any other status, render the returned
-`userMessage` and stop without asking for approval.
+`userMessage` without asking for approval and stop.
 
 Then use `vscode_askQuestions` (or the host's structured question tool):
 
@@ -287,13 +368,14 @@ before approval. Selected sets do not protect each other. For disable, a fully e
 outside set protects shared topics; a
 partly enabled outside set protects them only when it has an On member outside
 the selected union. This protection uses only the source-defined map; its
-completeness and custom dependencies remain unverified. Missing or ambiguous
-exact members, unknown states, unsupported source variants and a missing
-change token still block; no requested set is silently narrowed.
+completeness and custom dependencies remain unverified. Absent template members
+are excluded from both selected and outside sets. Ambiguous exact matches,
+unknown states of present members, unsupported source variants and a missing
+change token still block. Every requested set must have present members.
 
-The controller requires explicit approval for all three actions against the exact
-target, account, action, selection, memberships, revision, states, protections
-and delta. Approval lasts at most five minutes and is rechecked immediately
+The controller requires explicit approval for actual enable/disable changes
+against the exact target, account, action, selection, memberships, revision,
+states, protections and delta. Approval lasts at most five minutes and is rechecked immediately
 before dispatch. Denial/cancellation changes nothing. Any drift requires a
 fresh review. A nonempty eligible scope already in the desired state is
 different from empty scope or an all-protected action.
