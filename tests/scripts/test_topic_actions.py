@@ -276,6 +276,67 @@ def test_cancel_preserves_progress_without_setup_or_authentication(tmp_path, req
     assert result["writeStatus"] == "not_attempted"
     assert list(tmp_path.iterdir()) == []
 
+@pytest.mark.parametrize("context_only", [False, True])
+def test_cli_cancel_preserves_private_caller_context(
+    tmp_path, request_value, monkeypatch, capsys, context_only,
+):
+    value = {"callerContext": request_value["callerContext"]} if context_only else request_value
+    original = deepcopy(value)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(value)))
+    inspect = entry.inspect_request
+    results = []
+
+    def capture(*args, **kwargs):
+        result = inspect(*args, **kwargs)
+        results.append(result)
+        return result
+
+    monkeypatch.setattr(entry, "inspect_request", capture)
+
+    assert entry.main(["--cancel"]) == 0
+
+    assert len(results) == 1
+    assert results[0]["callerContext"] == original["callerContext"]
+    assert results[0]["status"] == "cancelled"
+    assert results[0]["writeStatus"] == "not_attempted"
+    assert not results[0]["completed"]
+    assert value == original
+    output = capsys.readouterr()
+    assert "do-not-emit" not in output.out + output.err
+    public = json.loads(output.out.removeprefix(entry.RESULT_MARKER))
+    assert "callerContext" not in public
+    assert public["reason"] == "cancelled"
+    assert list(tmp_path.iterdir()) == []
+
+@pytest.mark.parametrize("source", ["empty", "malformed", "unavailable", "terminal"])
+def test_cli_cancel_without_usable_input_still_stops(
+    tmp_path, monkeypatch, capsys, source,
+):
+    stream = io.StringIO('{"private-token": invalid}' if source == "malformed" else "")
+    if source == "unavailable":
+        def unavailable(*args, **kwargs):
+            raise OSError("private-input-error")
+        monkeypatch.setattr(stream, "read", unavailable)
+    elif source == "terminal":
+        monkeypatch.setattr(stream, "isatty", lambda: True)
+        monkeypatch.setattr(
+            stream, "read", lambda *args: pytest.fail("Cancellation must not wait for terminal input."),
+        )
+    monkeypatch.setattr("sys.stdin", stream)
+    monkeypatch.chdir(tmp_path)
+
+    assert entry.main(["--cancel"]) == 0
+
+    output = capsys.readouterr()
+    assert "private-token" not in output.out + output.err
+    assert "private-input-error" not in output.out + output.err
+    public = json.loads(output.out.removeprefix(entry.RESULT_MARKER))
+    assert public["status"] == "cancelled"
+    assert public["writeStatus"] == "not_attempted"
+    assert "callerContext" not in public
+    assert list(tmp_path.iterdir()) == []
+
 @responses.activate
 def test_cli_emits_only_public_result(workspace, request_value, monkeypatch, capsys):
     _auth(monkeypatch)
