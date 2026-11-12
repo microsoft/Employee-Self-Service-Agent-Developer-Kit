@@ -65,7 +65,8 @@ The selected entry point owns any metadata checks and missing-state handling.
   `userMessage` verbatim, not raw warning lists or internal codes. Material
   limitations remain in structured diagnostics, available on request.
   Do not add a "Before you approve" section or replace it with warning notes.
-  Ask only List/Enable/Disable first when the action is unknown. Then use
+  When the action is unknown, ask Enable/Disable/List in that order,
+  keeping "Enter custom answer" fourth. Then use
   `--list-agent-sets` to show the selected agent's live set count, friendly
   set names, present topic counts and Enabled/Disabled/Mixed/Unknown states.
   Listing stops without a set question or approval. For enable/disable with

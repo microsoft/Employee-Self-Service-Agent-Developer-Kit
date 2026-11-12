@@ -172,7 +172,8 @@ approval. No automatic retry or resume follows cancellation.
 ## Action, live set overview and selection
 
 When the action is unknown, ask just the action question first using the
-host's structured question tool:
+host's structured question tool. Keep Enable, Disable and List in that order,
+with the host's "Enter custom answer" fourth:
 
 ```json
 [
@@ -180,11 +181,11 @@ host's structured question tool:
     "header": "Topic actions",
     "question": "What would you like to do?",
     "options": [
-      { "label": "List topic sets/current states" },
       { "label": "Enable topic sets" },
-      { "label": "Disable topic sets" }
+      { "label": "Disable topic sets" },
+      { "label": "List topic sets/current states" }
     ],
-    "allowFreeformInput": false
+    "allowFreeformInput": true
   }
 ]
 ```

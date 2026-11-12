@@ -14,7 +14,8 @@ target and workspace-preparation gate; do not require connection health or
 ## Mandatory set-picker gate
 
 Never batch action and set selection into one question call. If the action
-is unknown, ask only List/Enable/Disable, wait for the answer, then run
+is unknown, ask Enable/Disable/List in that order, keeping the host's
+"Enter custom answer" fourth. Wait for the answer, then run
 `--list-agent-sets` for the currently selected agent before any set picker.
 If the action is already known but sets are unknown, run that same fresh
 discovery before asking for sets.
@@ -35,7 +36,8 @@ still go directly to fresh review.
 Follow its interaction and output contract: reuse known selections, keep
 routine checks quiet, show one complete fresh execution review and collect
 one explicit structured chat approval decision. If the action is unknown,
-ask only List/Enable/Disable first. Then use `--list-agent-sets` to show the
+ask Enable/Disable/List in that order, with "Enter custom answer" fourth.
+Then use `--list-agent-sets` to show the
 selected agent's live set count, friendly names, present topic counts and
 Enabled/Disabled/Mixed/Unknown states. Listing stops there, without a set
 question or approval. Enable/disable without known sets uses a structured
