@@ -11,8 +11,8 @@ live, satisfying the discovery crawler's ``PlatformSurface`` protocol
 
 Wired today
 -----------
-- ``Environment``     -> the single configured environment (identity from config's
-                         ``dataverseEndpoint``; no platform query)
+- ``Environment``     -> the single configured environment (identity from its
+                         Dataverse URL; no platform query)
 - ``EntraApp``        -> Microsoft Graph ``/applications`` (the kit's ``GraphClient``),
                          tenant-wide, with the agent's configured ``entraAppId`` pinned
                          to the front of the page when it is known
@@ -32,9 +32,11 @@ forward untouched instead of letting the sync retire them by omission (spec §7)
 
 Single-environment crawl
 ------------------------
-The kit's setup config binds **one** environment: ``.local/config.json`` stores its
-``dataverseEndpoint`` (no Power Platform environment GUID). The environment identity is
-therefore **derived from that config URL** (the org unique name) -- the skill never
+The kit's setup config binds **one** environment. Classic setup stores its
+``dataverseEndpoint`` in ``.local/config.json``; DA setup stores its Power Platform
+environment GUID, and ``discover_inventory`` resolves the Dataverse URL from saved setup
+state. The environment identity is therefore **derived from that URL** (the org unique
+name) -- the skill never
 "discovers" other environments. That narrowness is the whole reason
 :meth:`DataverseBackedPlatform.tenant_wide_kinds` declares only ``EntraApp``: under the
 whole-inventory contract absence is the delete verb, so a kind this bridge reads only
@@ -103,9 +105,10 @@ def _pack_flavor(markers: str) -> str | None:
 def _environment_id_from_url(env_url: str) -> str:
     """Derive a stable environment id from the Dataverse endpoint (org unique name).
 
-    The kit's setup writes only ``dataverseEndpoint`` to ``.local/config.json`` (no
-    Power Platform environment GUID), so -- like the kit's FlightCheck tooling -- the
-    single environment's identity is derived from that URL. The org unique name is the
+    Classic setup records only this URL (``dataverseEndpoint``); DA setup records the
+    Power Platform environment GUID, and the URL is resolved from its saved state. Both
+    reach the crawl as the same URL, so -- like the kit's FlightCheck tooling -- the
+    single environment's identity is derived from it. The org unique name is the
     first host label, e.g. ``https://org538df70b.crm.dynamics.com`` -> ``org538df70b``.
     It is stable across runs, so env-scoped natural keys compose identically every crawl.
     """
@@ -402,7 +405,7 @@ class DataverseBackedPlatform:
     # -- tenant-root surfaces ----------------------------------------------------------
 
     def list_environments(self, page_size: int) -> Iterator[Page]:
-        """The single configured environment (from config's ``dataverseEndpoint``).
+        """The single configured environment (from its configured Dataverse URL).
 
         Identity is taken from config, not discovered from the platform: there is
         exactly one configured environment and the skill must not enumerate others

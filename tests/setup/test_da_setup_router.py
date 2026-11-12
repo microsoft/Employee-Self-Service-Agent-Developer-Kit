@@ -690,6 +690,7 @@ def test_global_and_command_gates_require_canonical_da_foundation() -> None:
         "backup-template-configs.prompt.md",
         "create.prompt.md",
         "delete.prompt.md",
+        "discover.prompt.md",
         "evaluate.prompt.md",
         "restore-template-configs.prompt.md",
         "review.prompt.md",

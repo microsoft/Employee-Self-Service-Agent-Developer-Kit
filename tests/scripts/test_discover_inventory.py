@@ -411,6 +411,174 @@ class TestResolveEntraAppId:
         assert di._resolve_entra_app_id({}, str(tmp_path)) == "app-workday"
 
 
+class TestResolveDataverseEndpoint:
+    """Find the Dataverse URL of the one environment ``/setup`` configured.
+
+    Classic setup writes ``dataverseEndpoint``; DA setup writes only the Power Platform
+    ``environmentId`` and ``ring``. Reading only the classic key ended every DA crawl
+    before it started, so the URL is recovered from evidence setup and Workday connect
+    already saved -- and only when that evidence names this exact environment.
+    """
+
+    _URL = "https://org.crm.dynamics.com"
+
+    @staticmethod
+    def _write(root, *parts, payload):
+        path = os.path.join(str(root), *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+
+    def _environment_list(self, root, *records, ring="prod"):
+        self._write(
+            root, "setup", f"environment-list-{ring}.json",
+            payload={"tenantId": "tenant", "ring": ring, "environments": list(records)},
+        )
+
+    def _workday_scope(self, root, environment_id, url):
+        self._write(
+            root, "connect", "workday-da", "config.json",
+            payload={"scope": {"environmentId": environment_id, "dataverseUrl": url}},
+        )
+
+    def test_the_classic_key_wins(self, tmp_path):
+        self._environment_list(
+            tmp_path, {"id": "env-1", "url": "https://other.crm.dynamics.com"}
+        )
+        cfg = {"dataverseEndpoint": f" {self._URL}/ ", "environmentId": "env-1"}
+        assert di._resolve_dataverse_endpoint(cfg, str(tmp_path)) == self._URL
+
+    def test_a_da_environment_is_found_in_the_saved_environment_list(self, tmp_path):
+        # The list can name the default environment "Default-<guid>", in any case.
+        self._environment_list(
+            tmp_path,
+            {"id": "env-2", "url": "https://other.crm.dynamics.com"},
+            {"id": "Default-ENV-1", "url": f"{self._URL}/"},
+        )
+        cfg = {"environmentId": "env-1", "ring": "prod"}
+        assert di._resolve_dataverse_endpoint(cfg, str(tmp_path)) == self._URL
+
+    def test_a_bap_shaped_record_is_read_and_the_ring_defaults_to_prod(self, tmp_path):
+        self._environment_list(
+            tmp_path,
+            {
+                "id": "env-1",
+                "properties": {"linkedEnvironmentMetadata": {"instanceUrl": self._URL}},
+            },
+        )
+        assert (
+            di._resolve_dataverse_endpoint({"environmentId": "env-1"}, str(tmp_path))
+            == self._URL
+        )
+
+    def test_the_ring_selects_the_environment_list(self, tmp_path):
+        self._environment_list(
+            tmp_path, {"id": "env-1", "url": "https://prod.crm.dynamics.com"}
+        )
+        self._environment_list(
+            tmp_path, {"id": "env-1", "url": self._URL}, ring="preprod"
+        )
+        cfg = {"environmentId": "env-1", "ring": "preprod"}
+        assert di._resolve_dataverse_endpoint(cfg, str(tmp_path)) == self._URL
+
+    def test_an_unknown_ring_is_not_used_as_a_file_name(self, tmp_path):
+        self._environment_list(tmp_path, {"id": "env-1", "url": self._URL}, ring="dev")
+        cfg = {"environmentId": "env-1", "ring": "dev"}
+        assert di._resolve_dataverse_endpoint(cfg, str(tmp_path)) is None
+
+    @pytest.mark.parametrize(
+        "records",
+        [
+            # DA setup can select an environment that has no Dataverse database.
+            pytest.param([{"id": "env-1", "url": ""}], id="no-dataverse-database"),
+            pytest.param(
+                [
+                    {"id": "env-1", "url": "https://org.crm.dynamics.com"},
+                    {"id": "Default-env-1", "url": "https://other.crm.dynamics.com"},
+                ],
+                id="ambiguous",
+            ),
+            pytest.param(
+                [{"id": "env-2", "url": "https://org.crm.dynamics.com"}],
+                id="another-environment",
+            ),
+        ],
+    )
+    def test_the_list_must_name_one_url_for_this_environment(self, tmp_path, records):
+        self._environment_list(tmp_path, *records)
+        assert (
+            di._resolve_dataverse_endpoint({"environmentId": "env-1"}, str(tmp_path))
+            is None
+        )
+
+    def test_the_workday_connect_scope_is_used_for_the_same_environment(self, tmp_path):
+        self._workday_scope(tmp_path, "ENV-1", f"{self._URL}/")
+        assert (
+            di._resolve_dataverse_endpoint({"environmentId": "env-1"}, str(tmp_path))
+            == self._URL
+        )
+
+    def test_a_workday_connect_scope_for_another_environment_is_ignored(self, tmp_path):
+        self._workday_scope(tmp_path, "env-2", self._URL)
+        assert (
+            di._resolve_dataverse_endpoint({"environmentId": "env-1"}, str(tmp_path))
+            is None
+        )
+
+    def test_blank_evidence_ids_do_not_match_a_missing_environment_id(self, tmp_path):
+        self._environment_list(tmp_path, {"id": "", "url": self._URL})
+        self._workday_scope(tmp_path, "", self._URL)
+        assert di._resolve_dataverse_endpoint({}, str(tmp_path)) is None
+
+    def test_malformed_evidence_does_not_raise(self, tmp_path):
+        for parts in (
+            ("setup", "environment-list-prod.json"),
+            ("connect", "workday-da", "config.json"),
+        ):
+            path = os.path.join(str(tmp_path), *parts)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("{ this is not json")
+        assert (
+            di._resolve_dataverse_endpoint({"environmentId": "env-1"}, str(tmp_path))
+            is None
+        )
+
+    def test_the_live_crawl_targets_the_da_environment(self, tmp_path, monkeypatch):
+        import auth
+        from discover_dataverse_platform import DataverseBackedPlatform
+
+        self._environment_list(tmp_path / ".local", {"id": "env-1", "url": self._URL})
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(auth, "load_config", lambda: {"environmentId": "env-1"})
+
+        _platform, environment_id = di._live_platform()
+
+        assert environment_id == DataverseBackedPlatform(self._URL).environment_id
+
+    @pytest.mark.parametrize(
+        ("cfg", "named"),
+        [({"environmentId": "env-1"}, "env-1"), ({}, "/setup")],
+        ids=["da-environment", "no-environment"],
+    )
+    def test_an_unresolved_url_never_suggests_the_classic_key(
+        self, tmp_path, monkeypatch, cfg, named
+    ):
+        import auth
+
+        # Other skills treat a config carrying 'dataverseEndpoint' as classic
+        # (minimalbot_evaluation.is_minimalbot), so a DA maker must not be told to add it.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(auth, "load_config", lambda: cfg)
+
+        with pytest.raises(SystemExit) as excinfo:
+            di._live_platform()
+
+        message = str(excinfo.value)
+        assert named in message
+        assert "dataverseEndpoint" not in message
+
+
 class TestCapabilityTelemetry:
     """/discover must appear on the ADK "Capability Usage by Type" donut.
 

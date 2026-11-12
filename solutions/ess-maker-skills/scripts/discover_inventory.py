@@ -257,25 +257,137 @@ def _resolve_entra_app_id(cfg, local_state_dir=".local"):
     return None
 
 
+# Rings `/setup` saves an environment list for. The ring also names the evidence file,
+# so any other value is ignored rather than joined into a path.
+_SETUP_RINGS = frozenset({"prod", "preprod", "test"})
+
+# Where a Dataverse URL can sit on one raw environment-list record, in precedence order.
+_ENVIRONMENT_URL_PATHS = (
+    ("url",),
+    ("instanceUrl",),
+    ("properties", "linkedEnvironmentMetadata", "instanceUrl"),
+    ("properties", "linkedEnvironmentMetadata", "instanceApiUrl"),
+)
+
+
+def _read_json_object(path):
+    """Return the JSON object at ``path``, or ``None`` when it is missing or invalid."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:  # noqa: BLE001 - missing/invalid evidence -> no hint
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _bare_environment_id(value):
+    """Normalize a Power Platform environment id for comparison.
+
+    Setup stores the bare GUID, while the environment list can name the default
+    environment ``Default-<guid>``.
+    """
+    text = str(value or "").strip().casefold()
+    return text.removeprefix("default-")
+
+
+def _text(value):
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _url(value):
+    return _text(value).rstrip("/")
+
+
+def _resolve_dataverse_endpoint(cfg, local_state_dir=".local"):
+    """Find the Dataverse URL of the single environment `/setup` configured.
+
+    Classic setup writes it as ``dataverseEndpoint`` in `.local/config.json`, and that
+    key still wins. DA setup never writes it: it records the Power Platform
+    ``environmentId`` and ``ring`` instead. For a DA workspace the URL is recovered from
+    evidence already on disk, matched to that exact environment id:
+
+    1. the environment list `/setup` saved for the ring
+       (`.local/setup/environment-list-{ring}.json`), then
+    2. the Workday connect scope (`.local/connect/workday-da/config.json`), which records
+       the ``dataverseUrl`` it proved for its ``environmentId``.
+
+    This follows `workday_connect_preflight.resolve_target` without its live PAC lookup,
+    so finding the URL never needs another sign-in.
+
+    Returns ``None`` when no source names the URL. A read/parse failure, an ambiguous
+    environment list, or evidence for a different environment degrades to "not found"
+    rather than raising, so the caller can tell the maker what to fix.
+    """
+    documented = _url(_dig(cfg, "dataverseEndpoint"))
+    if documented:
+        return documented
+
+    environment_id = _bare_environment_id(_dig(cfg, "environmentId"))
+    if not environment_id:
+        return None
+
+    ring = _text(_dig(cfg, "ring")).casefold() or "prod"
+    if ring in _SETUP_RINGS:
+        listing = _read_json_object(
+            os.path.join(local_state_dir, "setup", f"environment-list-{ring}.json")
+        )
+        records = _dig(listing, "environments")
+        if isinstance(records, list):
+            matches = [
+                record
+                for record in records
+                if isinstance(record, dict)
+                and _bare_environment_id(record.get("id")) == environment_id
+            ]
+            if len(matches) == 1:
+                for path in _ENVIRONMENT_URL_PATHS:
+                    url = _url(_dig(matches[0], *path))
+                    if url:
+                        return url
+
+    scope = _dig(
+        _read_json_object(
+            os.path.join(local_state_dir, "connect", "workday-da", "config.json")
+        ),
+        "scope",
+    )
+    if _bare_environment_id(_dig(scope, "environmentId")) == environment_id:
+        return _url(_dig(scope, "dataverseUrl")) or None
+    return None
+
+
 def _live_platform():
     """Build the live Dataverse-backed platform (default crawl source).
 
     Reuses the kit's ``scripts/auth.py`` (delegated admin sign-in + paged Web API
-    queries) via :class:`DataverseBackedPlatform`. The setup config binds a **single**
-    environment (``dataverseEndpoint``); its identity is derived from that config URL
-    (no environment discovery). The crawl is **always** scoped to that one environment
-    -- there is no full-tenant crawl -- so the platform declares ``EntraApp`` as its
-    only genuinely tenant-wide kind (``tenant_wide_kinds``) and everything else is
-    carried forward rather than retired by absence.
+    queries) via :class:`DataverseBackedPlatform`. Setup binds a **single** environment;
+    :func:`_resolve_dataverse_endpoint` finds its Dataverse URL from the saved setup
+    state, and the environment's identity is derived from that URL (no live environment
+    discovery). The crawl is **always** scoped to that one environment -- there is no
+    full-tenant crawl -- so the platform declares ``EntraApp`` as its only genuinely
+    tenant-wide kind (``tenant_wide_kinds``) and everything else is carried forward
+    rather than retired by absence.
     """
     import auth
     from discover_dataverse_platform import DataverseBackedPlatform
 
     cfg = auth.load_config()
-    env_url = cfg.get("dataverseEndpoint")
+    env_url = _resolve_dataverse_endpoint(cfg)
     if not env_url:
+        environment_id = _text(_dig(cfg, "environmentId"))
+        if not environment_id:
+            raise SystemExit(
+                "Setup has not recorded an environment for this workspace. "
+                "Run /setup, then run /discover again."
+            )
+        # Never suggest adding 'dataverseEndpoint': a DA workspace with that key is
+        # treated as classic by other skills (minimalbot_evaluation.is_minimalbot).
         raise SystemExit(
-            "No 'dataverseEndpoint' in .local/config.json -- run /setup first."
+            f"Discover could not find a Dataverse URL for environment {environment_id}, "
+            "which /setup selected. Discover reads that environment's Dataverse "
+            "database, and DA setup can select an environment without one. Check in "
+            "the Power Platform admin center that the environment has a Dataverse "
+            "database."
         )
 
     platform = DataverseBackedPlatform(

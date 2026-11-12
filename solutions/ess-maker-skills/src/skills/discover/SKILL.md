@@ -17,17 +17,12 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ## Start
 
-Before checking the setup state, show:
-
-**Message:**
-
-First, I'll confirm that setup is complete and identify the Power Platform
-environment configured for discovery.
-
-**End message.**
-
-Read `.local/config.json` to confirm setup is complete and get the tenant/agent
-context. If setup is not complete, show:
+Check setup silently, in one pass: read `.local/setup/config.json` and
+`.local/config.json` without narrating the reads or their result. Setup is ready
+only when `.local/setup/config.json` has `schema_version: 4` and its `agents` entry
+matching the `.local/config.json` `activeAgent` workspace slug reports
+`connect_ready: true`. The `setup` field in `.local/config.json` is not a readiness
+signal. If setup is not ready, show:
 
 **Message:**
 
@@ -37,15 +32,19 @@ You need to run `/setup` first before discovering your tenant inventory.
 
 Stop here.
 
-If setup is complete, proceed.
+If setup is ready, take the tenant and agent context from `.local/config.json` and
+proceed.
 
 ---
 
 ## Step 1: Run the crawl
 
-Discovery always crawls the **single environment configured during `/setup`**
-(`dataverseEndpoint` in `.local/config.json`). There is no scope choice to make and
-no full-tenant crawl — do not ask the user which environments to crawl.
+Discovery always crawls the **single environment configured during `/setup`**. The
+script finds that environment's Dataverse URL in the state `/setup` (or
+`/connect workday`) already saved, so do not look the URL up, ask the user for it, or
+write it to `.local/config.json`. If the script cannot find it, show its error and
+stop. There is no scope choice to make and no full-tenant crawl — do not ask the user
+which environments to crawl.
 
 Before running the crawl, show:
 
