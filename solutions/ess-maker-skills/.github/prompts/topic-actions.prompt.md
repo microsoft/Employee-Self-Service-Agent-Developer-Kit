@@ -22,7 +22,9 @@ discovery before asking for sets.
 
 Render the returned `userMessage`. For enable/disable, pass the returned
 `selectionQuestion` unchanged as the sole next structured question. Its
-options are the complete allowed picker choices; map answered labels back
+options contain only friendly set names, without state/count suffixes or
+descriptions; keep counts and states in the overview only. This applies to
+all four supported sets. These are the complete allowed picker choices; map answered labels back
 to the keys in the same response's `sets`. Never add catalog entries,
 integration/HR/IT combinations, custom-answer fields or remembered choices.
 Do not use `--list-sets` or `catalog.provisional.json` as a picker source.

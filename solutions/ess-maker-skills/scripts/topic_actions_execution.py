@@ -191,10 +191,7 @@ def agent_set_overview(evidence: OperationEvidence, catalog: Catalog) -> dict:
             "header": "Topic sets",
             "question": "Which topic sets would you like to change?",
             "multiSelect": True,
-            "options": [
-                {"label": item["name"], "description": f"{item['state']}; {item['topicCount']} topics"}
-                for item in sets
-            ],
+            "options": [{"label": item["name"]} for item in sets],
             "allowFreeformInput": False,
         } if complete and sets else None,
         "warnings": list(snapshot.warnings),

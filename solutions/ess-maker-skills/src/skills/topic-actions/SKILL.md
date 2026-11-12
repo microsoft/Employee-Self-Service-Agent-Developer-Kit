@@ -220,9 +220,12 @@ For **List topic sets/current states**, stop after this overview. Do not
 ask for set selection or approval. For **Enable** or **Disable**, when
 `discoveryComplete` is true and `sets` is nonempty, pass the helper's
 `selectionQuestion` unchanged as the sole next structured question. The
-helper supplies exactly one option per present set, with friendly name,
-state and topic count, multi-select enabled, no custom-answer field and
-no preselected choices. Map answered option labels to the `key` of each
+helper supplies exactly one option per present set with only its friendly
+name, such as "Workday HR Topics" or "ServiceNow IT Topics". Use this
+name-only pattern for all four supported sets: no state/count suffix or
+description in picker options. Counts and states belong only in the overview.
+Multi-select is enabled, with no custom-answer field and no preselected
+choices. Map answered option labels to the `key` of each
 matching entry in the same response's `sets`; retain keys internally.
 Do not reconstruct, expand or supplement the helper's options, even if the
 catalog or earlier conversation lists additional integrations or HR/IT sets.

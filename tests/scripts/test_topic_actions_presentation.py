@@ -81,8 +81,8 @@ def test_agent_set_overview_aggregates_present_topics_without_a_topic_dump(state
         "question": "Which topic sets would you like to change?",
         "multiSelect": True,
         "options": [
-            {"label": "Synthetic alpha", "description": f"{expected[0]}; 2 topics"},
-            {"label": "Synthetic beta", "description": f"{expected[1]}; 2 topics"},
+            {"label": "Synthetic alpha"},
+            {"label": "Synthetic beta"},
         ],
         "allowFreeformInput": False,
     }
@@ -176,8 +176,8 @@ def test_agent_set_overview_uses_bundled_names_and_only_present_sets(agent_schem
     assert result["setCount"] == len(expected) and result["discoveryComplete"]
     assert [(item["key"], item["name"], item["state"]) for item in result["sets"]] == expected
     assert [item["topicCount"] for item in result["sets"]] == expected_counts
-    assert [item["label"] for item in result["selectionQuestion"]["options"]] == [
-        name for _, name, _ in expected
+    assert result["selectionQuestion"]["options"] == [
+        {"label": name} for _, name, _ in expected
     ]
     assert "not available" not in result["userMessage"]
     backend.components.submit_state_payload.assert_not_called()

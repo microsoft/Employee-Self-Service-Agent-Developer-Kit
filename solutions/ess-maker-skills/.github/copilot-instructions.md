@@ -71,7 +71,10 @@ The selected entry point owns any metadata checks and missing-state handling.
   set names, present topic counts and Enabled/Disabled/Mixed/Unknown states.
   Listing stops without a set question or approval. For enable/disable with
   unknown sets, pass that fresh result's `selectionQuestion` unchanged as
-  the sole next structured question. Never batch action and set questions,
+  the sole next structured question. Picker options show only friendly set
+  names for all four supported sets, without state/count suffixes or
+  descriptions; keep counts and states in the overview only.
+  Never batch action and set questions,
   reuse earlier choices, synthesize all catalog sets or add free-text keys.
   An absent/null question means no picker, not a catalog fallback. Reuse an already
   explicit action and sets without this detour. Incomplete/failed discovery
