@@ -597,15 +597,23 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr, flush=True,
         )
     try:
-        value = {} if args.cancel else (
+        value = {} if args.cancel and sys.stdin.isatty() else (
             json.loads(sys.stdin.readline()) if args.execute else json.load(sys.stdin)
         )
     except (OSError, ValueError):
         result = _result(
-            "invalid_request", "Provide one JSON request on standard input.", {}
+            "cancelled" if args.cancel else "invalid_request",
+            "Cancelled. No topic changes were attempted." if args.cancel
+            else "Provide one JSON request on standard input.",
+            {},
         )
     else:
-        if args.preview or args.execute:
+        if args.cancel:
+            result = inspect_request(
+                value, workspace_root=args.workspace_root,
+                account_hint=args.account, cancelled=True,
+            )
+        elif args.preview or args.execute:
             result = run_topic_actions(
                 value, workspace_root=args.workspace_root, confirm=_confirm_stdin,
                 account_hint=args.account, cancelled=args.cancel, preview=args.preview,
