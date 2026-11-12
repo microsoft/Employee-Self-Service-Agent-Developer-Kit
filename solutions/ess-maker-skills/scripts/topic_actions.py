@@ -656,15 +656,23 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr, flush=True,
         )
     try:
-        value = {} if args.cancel or args.apply_review else (
+        value = {} if args.apply_review or (args.cancel and sys.stdin.isatty()) else (
             json.loads(sys.stdin.readline()) if args.execute else json.load(sys.stdin)
         )
     except (OSError, ValueError):
         result = _result(
-            "invalid_request", "Provide one JSON request on standard input.", {}
+            "cancelled" if args.cancel else "invalid_request",
+            "Cancelled. No topic changes were attempted." if args.cancel
+            else "Provide one JSON request on standard input.",
+            {},
         )
     else:
-        if args.apply_review:
+        if args.cancel:
+            result = inspect_request(
+                value, workspace_root=args.workspace_root,
+                account_hint=args.account, cancelled=True,
+            )
+        elif args.apply_review:
             result = apply_topic_review(
                 args.apply_review, args.decision, workspace_root=args.workspace_root,
                 account_hint=args.account,
@@ -672,7 +680,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.review:
             result = review_topic_actions(
                 value, workspace_root=args.workspace_root, account_hint=args.account,
-            ) if not args.cancel else _result("cancelled", "Canceled. No topics were changed.", {})
+            )
         elif args.preview or args.execute:
             result = run_topic_actions(
                 value, workspace_root=args.workspace_root, confirm=_confirm_stdin,

@@ -444,6 +444,105 @@ def test_remote_identity_mismatch_is_not_success(workspace, request_value, monke
     assert result["completed"] is False
 
 
+@pytest.mark.parametrize("mode", [[], ["--preview"], ["--execute"], ["--review"]])
+@pytest.mark.parametrize("context_only", [False, True])
+def test_cli_cancel_preserves_private_caller_context(
+    tmp_path, request_value, monkeypatch, capsys, mode, context_only,
+):
+    value = {"callerContext": request_value["callerContext"]} if context_only else request_value
+    original = deepcopy(value)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(value) + "\n"))
+    make_result = entry._result
+    results = []
+
+    def capture(*args, **kwargs):
+        result = make_result(*args, **kwargs)
+        results.append(result)
+        return result
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Cancellation must not read evidence, create reviews or request approval.")
+
+    monkeypatch.setattr(entry, "_result", capture)
+    monkeypatch.setattr(entry, "_workspace_target", forbidden)
+    monkeypatch.setattr(entry, "review_topic_actions", forbidden)
+    monkeypatch.setattr(entry, "_confirm_stdin", forbidden)
+
+    assert entry.main([*mode, "--cancel"]) == 0
+
+    assert len(results) == 1
+    assert results[0]["callerContext"] == original["callerContext"]
+    assert results[0]["callerContext"] is not value["callerContext"]
+    assert results[0]["status"] == "cancelled"
+    assert results[0]["writeStatus"] == "not_attempted"
+    assert not results[0]["completed"]
+    assert value == original
+    output = capsys.readouterr()
+    assert "do-not-emit" not in output.out + output.err
+    public = json.loads(output.out.removeprefix(entry.RESULT_MARKER))
+    assert "callerContext" not in public
+    assert public["reason"] == "cancelled"
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("mode", [[], ["--preview"], ["--execute"], ["--review"]])
+@pytest.mark.parametrize("source", ["empty", "malformed", "unavailable", "terminal"])
+def test_cli_cancel_without_usable_input_still_stops(
+    tmp_path, monkeypatch, capsys, mode, source,
+):
+    stream = io.StringIO('{"private-token": invalid}' if source == "malformed" else "")
+
+    def fail_read(*args, **kwargs):
+        if source == "terminal":
+            pytest.fail("Cancellation must not wait for terminal input.")
+        raise OSError("private-input-error")
+
+    if source in ("unavailable", "terminal"):
+        monkeypatch.setattr(stream, "read", fail_read)
+        monkeypatch.setattr(stream, "readline", fail_read)
+    if source == "terminal":
+        monkeypatch.setattr(stream, "isatty", lambda: True)
+    monkeypatch.setattr("sys.stdin", stream)
+    monkeypatch.chdir(tmp_path)
+
+    assert entry.main([*mode, "--cancel"]) == 0
+
+    output = capsys.readouterr()
+    assert "private-token" not in output.out + output.err
+    assert "private-input-error" not in output.out + output.err
+    public = json.loads(output.out.removeprefix(entry.RESULT_MARKER))
+    assert public["status"] == "cancelled"
+    assert public["writeStatus"] == "not_attempted"
+    assert "callerContext" not in public
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_execute_cancel_reads_only_request_line(
+    tmp_path, request_value, monkeypatch, capsys,
+):
+    stream = io.StringIO(json.dumps(request_value) + "\napprove\n")
+    monkeypatch.setattr("sys.stdin", stream)
+    monkeypatch.chdir(tmp_path)
+    make_result = entry._result
+    results = []
+
+    def capture(*args, **kwargs):
+        result = make_result(*args, **kwargs)
+        results.append(result)
+        return result
+
+    monkeypatch.setattr(entry, "_result", capture)
+
+    assert entry.main(["--execute", "--cancel"]) == 0
+
+    assert results[0]["callerContext"] == request_value["callerContext"]
+    assert stream.readline() == "approve\n"
+    output = capsys.readouterr()
+    assert "do-not-emit" not in output.out + output.err
+    assert "callerContext" not in json.loads(output.out.removeprefix(entry.RESULT_MARKER))
+
+
 def test_cancel_preserves_progress_without_setup_or_authentication(tmp_path, request_value):
     result = entry.inspect_request(
         request_value, workspace_root=tmp_path, cancelled=True,
