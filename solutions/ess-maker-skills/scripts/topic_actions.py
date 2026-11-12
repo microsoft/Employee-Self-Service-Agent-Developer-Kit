@@ -1,22 +1,17 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Topic-set actions with fail-closed native preview and in-memory caller results."""
+"""Topic-set preview, explicit approval, single-attempt writes and readback."""
 
 from __future__ import annotations
 
 import argparse
-
 from copy import deepcopy
-
 import json
-
 from pathlib import Path
-
 import sys
-
+import time
 from typing import Any
-
 import uuid
 
 import requests
@@ -30,16 +25,18 @@ from agentbuilder import (
     environment_id_from_host,
     validate_environment_host,
 )
-
 from flightcheck.agent_scope import active_agent
+from topic_actions_client import TopicActionsClient
+from topic_actions_presentation import result_text
+
 
 RESULT_MARKER = "TOPIC_ACTIONS_RESULT_JSON:"
-
+REVIEW_MARKER = "TOPIC_ACTIONS_REVIEW_JSON:"
 TARGET_FIELDS = frozenset({"tenantId", "environmentId", "agentId"})
-
 REQUEST_FIELDS = frozenset(
-    {"contractVersion", "target", "action", "setKeys", "entry", "callerContext"}
+    {"contractVersion", "target", "action", "setKeys", "entry", "callerContext", "initializeBaseline"}
 )
+
 
 class TopicActionsError(ValueError):
     """A safe, structured entry failure without raw input or service bodies."""
@@ -48,10 +45,48 @@ class TopicActionsError(ValueError):
         super().__init__(message)
         self.reason = reason
 
+
 def _entry_message(reason: str, message: str) -> str:
     if reason == "cancelled":
         return "Canceled. No topics were changed."
-    if reason == "setup_not_run":
+    if reason == "original_baseline_missing":
+        message = (
+            "No saved original topic-state baseline is available. An already-modified "
+            "agent's original states cannot be reconstructed from today's states. "
+            "First-use initialization is only valid before any topic-actions changes; "
+            "recovery of an older original baseline is not automated."
+        )
+    elif reason == "restore_conflict":
+        message = (
+            "A topic affected by the skill no longer matches its recorded state or "
+            "content. Restore stopped to preserve intervening edits. Resolve the "
+            "conflict before requesting a fresh restore review."
+        )
+    elif reason in ("baseline_topic_identity_changed", "restore_membership_changed"):
+        message = (
+            "Topic identity or recorded set membership changed since the original "
+            "baseline. Restore cannot safely substitute or omit topics. Review the "
+            "changed membership before starting another request."
+        )
+    elif reason == "previous_write_uncertain_restore_required":
+        message = (
+            "A previous submission is uncertain and cannot be replayed as a normal "
+            "enable/disable action. Request a fresh review to restore the saved "
+            "original states; conflicting evidence will still block restore."
+        )
+    elif reason == "topic_operation_in_progress_or_interrupted":
+        message = (
+            "Another topic operation is running or stopped before its outcome was "
+            "recorded. No operation will be replayed automatically. Keep the saved "
+            "baseline; automatic recovery of an interrupted operation is unavailable."
+        )
+    elif reason in ("baseline_invalid", "baseline_storage_unavailable"):
+        message = (
+            "The original-state store could not be safely read or saved. Keep the "
+            "existing baseline; do not delete or replace it with current states. "
+            "Restore and further writes remain blocked until storage is usable."
+        )
+    elif reason == "setup_not_run":
         message = (
             "ADK setup has not established the account, agent and environment "
             "in this workspace. Run /setup here, then return to this conversation "
@@ -96,10 +131,31 @@ def _entry_message(reason: str, message: str) -> str:
         )
     return message if "No topics were changed." in message else message + " No topics were changed."
 
+
+def _entry_feedback(result: dict[str, Any]) -> dict[str, Any]:
+    if result["writeStatus"] != "not_attempted":
+        return result
+    result["message"] = _entry_message(result["reason"], result["message"])
+    if result["status"] == "blocked":
+        blockers = result.get("blockers", ())
+        if any(reason.startswith("installed_package_unverified:") for reason in blockers):
+            result["message"] += (
+                " Selected package installation could not be verified; this "
+                "does not establish that a package is missing."
+            )
+        if any(reason.startswith("unresolved_member:") for reason in blockers):
+            result["message"] += (
+                " Some topic identities could not be resolved exactly; they "
+                "may be missing or ambiguous. The selected scope was not narrowed."
+            )
+    return result
+
+
 def _guid(value: Any) -> str:
     if not isinstance(value, str):
         raise ValueError("An identity must be a GUID string.")
     return str(uuid.UUID(value))
+
 
 def validate_request(value: Any) -> dict[str, Any]:
     """Validate provisional logical inputs, not topic-set membership."""
@@ -117,14 +173,19 @@ def validate_request(value: Any) -> dict[str, Any]:
         raise TopicActionsError(
             "invalid_request", "Provide one tenant, environment and agent ID."
         ) from exc
-    if value.get("action") not in ("enable", "disable"):
+    action = value.get("action")
+    if action not in ("enable", "disable", "restore"):
         raise TopicActionsError(
-            "invalid_request", "Choose one action: enable or disable."
+            "invalid_request", "Choose one action: enable, disable or restore."
         )
-    keys = value.get("setKeys")
+    initialize = value.get("initializeBaseline", False)
+    if type(initialize) is not bool or (action == "restore" and initialize):
+        raise TopicActionsError("invalid_request", "Restore requires an existing original baseline.")
+    keys = value.get("setKeys", [] if action == "restore" else None)
     if (
         not isinstance(keys, list)
-        or not keys
+        or (not keys and action != "restore")
+        or (action == "restore" and keys)
         or any(
             not isinstance(key, str)
             or not key
@@ -158,9 +219,11 @@ def validate_request(value: Any) -> dict[str, Any]:
         "target": target,
         "action": value["action"],
         "setKeys": list(keys),
+        "initializeBaseline": initialize,
         "entry": entry,
         "callerContext": deepcopy(context),
     }
+
 
 def _read_object(path: Path, missing_reason: str) -> dict[str, Any]:
     try:
@@ -178,6 +241,7 @@ def _read_object(path: Path, missing_reason: str) -> dict[str, Any]:
             "setup_broken", "The existing setup information is malformed."
         )
     return value
+
 
 def _workspace_target(
     root: Path, target: dict[str, str], *, require_connect_ready: bool = True,
@@ -275,6 +339,7 @@ def _workspace_target(
         )
     return {"host": host, "ring": ring, "api_version": api_version}
 
+
 def _result(
     reason: str,
     message: str,
@@ -283,10 +348,13 @@ def _result(
     target: dict[str, str] | None = None,
     verified: bool = False,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "contractVersion": 1,
         "contractStatus": "provisional",
-        "status": "cancelled" if reason == "cancelled" else "blocked",
+        "status": (
+            "cancelled" if reason == "cancelled" else
+            "inspected" if reason == "inspection_only" else "blocked"
+        ),
         "reason": reason,
         "message": _entry_message(reason, message),
         "completed": False,
@@ -300,6 +368,9 @@ def _result(
         },
         "callerContext": deepcopy(context),
     }
+    result["userMessage"] = result_text(result)
+    return result
+
 
 def inspect_request(
     value: Any,
@@ -381,12 +452,170 @@ def inspect_request(
             context, target=target,
         )
     return _result(
-        "implementation_pending",
-        "Account and selected-agent read access verified. Topic-set actions are not "
-        "available yet; write authority and topic-set readiness remain unverified. "
-        "No topics were changed.",
+        "inspection_only",
+        "Account and selected-agent read access verified. This read-only inspection "
+        "does not execute topic actions; write authority and topic-set readiness "
+        "remain unverified. Use --preview or --execute for the topic-set flow.",
         context, target=target, verified=True,
     )
+
+
+def run_topic_actions(
+    value: Any, *, workspace_root: Path, confirm,
+    account_hint: str | None = None, cancelled: bool = False, preview: bool = False,
+    review_only: bool = False, approved_binding: str | None = None,
+    approval_deadline: float | None = None,
+) -> dict[str, Any]:
+    """Shared selected-agent entry; every write uses freshly verified evidence."""
+    from topic_actions_catalog import load_catalog
+    from topic_actions_discovery import DiscoveryError, DiscoveryTarget
+    from topic_actions_execution import TopicActionSession
+    from topic_actions_native import NativeActionBackend
+    from topic_actions_state import TopicStateError, TopicStateStore
+
+    context = value.get("callerContext", {}) if isinstance(value, dict) else {}
+    context = deepcopy(context) if isinstance(context, dict) else {}
+    if cancelled:
+        return _result("cancelled", "Cancelled. No changes were attempted.", context)
+    target = None
+    stage = "authentication_failed"
+    try:
+        request = validate_request(value)
+        target = request["target"]
+        connection = _workspace_target(workspace_root, target, require_connect_ready=False)
+        discovery_target = DiscoveryTarget(target["tenantId"], target["environmentId"], target["agentId"])
+        state_store = TopicStateStore(
+            workspace_root.resolve(), discovery_target, first_use=request["initializeBaseline"],
+        )
+        selected_keys = (
+            state_store.restore_keys() if request["action"] == "restore"
+            else tuple(request["setKeys"])
+        )
+        catalog = load_catalog()
+        token, tenant, account = authenticate_flightcheck(
+            connection["ring"],
+            cache_path=workspace_root / DEFAULT_TOKEN_CACHE,
+            account_hint=account_hint,
+            include_connectivity=False,
+            allow_write=not (preview or review_only),
+            emit_account_identity=False,
+            return_account_identity=True,
+        )
+        if (
+            _guid(tenant) != target["tenantId"]
+            or not isinstance(account, str) or not account.strip()
+            or (account_hint is not None and account.casefold() != account_hint.strip().casefold())
+        ):
+            raise TopicActionsError("account_mismatch", "The authenticated account or tenant could not be verified.")
+        components = TopicActionsClient(
+            target["environmentId"], target["agentId"], target["tenantId"],
+            ring=connection["ring"], host=connection["host"],
+            token=token, account=account, read_only=preview or review_only,
+        )
+        stage = "target_unverified"
+        client = AgentBuilderClient(
+            connection["host"], token, ring=connection["ring"],
+            tenant_id=tenant, api_version=connection["api_version"],
+        )
+        try:
+            backend = NativeActionBackend(
+                client, discovery_target, selected_keys, catalog, account, components,
+            )
+            if request["action"] == "restore":
+                backend.state_store = state_store
+                backend.restoring = True
+            result = TopicActionSession(
+                backend, request["action"], caller_context=request["callerContext"],
+                state_store=state_store,
+            ).run(
+                confirm, preview=preview, review_only=review_only,
+                approved_binding=approved_binding, approval_deadline=approval_deadline,
+            )
+            result["reason"] = next(iter(result["blockers"]), result["status"])
+            return _entry_feedback(result)
+        finally:
+            client.session.close()
+    except TopicStateError as error:
+        return _result(
+            error.reason, "Original topic-state evidence is missing, conflicting or unavailable.",
+            context, target=target,
+        )
+    except (TopicActionsError, DiscoveryError) as error:
+        return _result(error.reason, str(error), context, target=target)
+    except AgentBuilderHTTPError as error:
+        reason = "authentication_failed" if stage == "authentication_failed" else {
+            401: "authentication_failed",
+            403: "access_denied",
+            404: "target_not_found",
+        }.get(error.status_code, "evidence_read_failed")
+        return _result(
+            reason, "The selected agent could not be accessed.", context, target=target,
+        )
+    except (AgentBuilderError, requests.RequestException, OSError, ValueError):
+        return _result(
+            "authentication_or_evidence_failed",
+            "The account or topic-set evidence could not be verified. No changes were attempted.",
+            context, target=target,
+        )
+
+
+def review_topic_actions(value: Any, *, workspace_root: Path, account_hint=None) -> dict:
+    from topic_actions_approval import TopicReviewError, TopicReviewStore
+
+    try:
+        request = validate_request(value)
+        result = run_topic_actions(
+            request, workspace_root=workspace_root, account_hint=account_hint,
+            confirm=None, review_only=True,
+        )
+        binding = result.pop("_reviewBinding", None)
+        if result["status"] == "review_ready":
+            result.update(TopicReviewStore(workspace_root).create(request, binding))
+        return result
+    except (TopicActionsError, TopicReviewError) as error:
+        return _result(error.reason, str(error), {})
+
+
+def apply_topic_review(
+    review_id: str, decision: str, *, workspace_root: Path, account_hint=None,
+) -> dict:
+    from topic_actions_approval import TopicReviewError, TopicReviewStore
+
+    try:
+        pending = TopicReviewStore(workspace_root).consume(review_id)
+        if decision in ("deny", "cancel"):
+            result = _result("cancelled", "Canceled. No topics were changed.", {})
+            if decision == "deny":
+                result.update(status="denied", reason="denied", message="Not approved. No topics were changed.")
+                result["userMessage"] = result_text(result)
+            return result
+        if decision != "approve":
+            raise TopicReviewError("explicit_approval_required")
+        # Authentication and discovery must not extend the original review window.
+        deadline = min(
+            pending["createdMonotonic"] + 300, time.monotonic() + pending["remainingSeconds"],
+        )
+        return run_topic_actions(
+            pending["request"], workspace_root=workspace_root, account_hint=account_hint,
+            confirm=lambda _: decision, approved_binding=pending["binding"],
+            approval_deadline=deadline,
+        )
+    except TopicReviewError as error:
+        result = _result(error.reason, str(error), {})
+        result.update(status="review_required")
+        result["userMessage"] = result_text(result)
+        return result
+
+
+def _confirm_stdin(plan: dict[str, Any]) -> str:
+    print(REVIEW_MARKER + json.dumps(plan, sort_keys=True), flush=True)
+    print(plan["userMessage"], file=sys.stderr, flush=True)
+    print(
+        "Review the topic changes above. Enter approve, deny or cancel:",
+        file=sys.stderr, flush=True,
+    )
+    answer = sys.stdin.readline()
+    return answer.strip().casefold() if answer else "cancel"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -394,9 +623,42 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace-root", type=Path, default=Path.cwd())
     parser.add_argument("--account", help="Verify this Microsoft work account.")
     parser.add_argument("--cancel", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--preview", action="store_true", help="Read and plan without write scopes or executable approval.")
+    mode.add_argument("--execute", action="store_true", help="Read one JSON request line, then collect explicit approval on standard input.")
+    mode.add_argument("--review", action="store_true", help="Prepare a five-minute, single-use review for chat approval.")
+    mode.add_argument("--apply-review", metavar="REVIEW_ID", help="Consume a pending review using the maker's explicit decision.")
+    mode.add_argument("--list-sets", action="store_true", help="List provisional source definitions, not installed availability.")
+    parser.add_argument("--decision", choices=("approve", "deny", "cancel"), help="Actual maker decision for --apply-review; never preselected.")
     args = parser.parse_args(argv)
+    if bool(args.apply_review) != bool(args.decision) or (args.apply_review and args.cancel):
+        parser.error("--apply-review requires --decision and cannot be combined with --cancel.")
+    if args.list_sets:
+        from topic_actions_catalog import load_catalog
+        from topic_actions_discovery import DiscoveryError
+
+        try:
+            document = load_catalog().document()
+            result = {
+                "contractVersion": 1, "status": "source_catalog_only",
+                "authorityStatus": document["authorityStatus"],
+                "completed": False, "writeStatus": "not_attempted",
+                "sets": [{"key": item["key"], "name": item["name"]} for item in document["sets"]],
+            }
+            result["userMessage"] = result_text(result)
+        except DiscoveryError as error:
+            result = _result(error.reason, str(error), {})
+        print(RESULT_MARKER + json.dumps(result, sort_keys=True))
+        return 0 if result["status"] == "source_catalog_only" else 1
+    if args.execute and not args.cancel:
+        print(
+            "Enter one JSON request line. Approval follows the live topic review.",
+            file=sys.stderr, flush=True,
+        )
     try:
-        value = {} if args.cancel and sys.stdin.isatty() else json.load(sys.stdin)
+        value = {} if args.apply_review or (args.cancel and sys.stdin.isatty()) else (
+            json.loads(sys.stdin.readline()) if args.execute else json.load(sys.stdin)
+        )
     except (OSError, ValueError):
         result = _result(
             "cancelled" if args.cancel else "invalid_request",
@@ -405,13 +667,36 @@ def main(argv: list[str] | None = None) -> int:
             {},
         )
     else:
-        result = inspect_request(
-            value, workspace_root=args.workspace_root,
-            account_hint=args.account, cancelled=args.cancel,
-        )
+        if args.cancel:
+            result = inspect_request(
+                value, workspace_root=args.workspace_root,
+                account_hint=args.account, cancelled=True,
+            )
+        elif args.apply_review:
+            result = apply_topic_review(
+                args.apply_review, args.decision, workspace_root=args.workspace_root,
+                account_hint=args.account,
+            )
+        elif args.review:
+            result = review_topic_actions(
+                value, workspace_root=args.workspace_root, account_hint=args.account,
+            )
+        elif args.preview or args.execute:
+            result = run_topic_actions(
+                value, workspace_root=args.workspace_root, confirm=_confirm_stdin,
+                account_hint=args.account, cancelled=args.cancel, preview=args.preview,
+            )
+        else:
+            result = inspect_request(
+                value, workspace_root=args.workspace_root,
+                account_hint=args.account, cancelled=args.cancel,
+            )
     public = {key: item for key, item in result.items() if key != "callerContext"}
     print(RESULT_MARKER + json.dumps(public, sort_keys=True))
-    return 0 if result["reason"] in ("implementation_pending", "cancelled") else 1
+    return 0 if (
+        result["status"] in ("inspected", "preview", "review_ready", "cancelled", "denied")
+        or result.get("completed") is True
+    ) else 1
 
 
 if __name__ == "__main__":
