@@ -25,7 +25,7 @@ def _review():
             {"componentId": "shared", "state": "On"},
         ],
         "proposedChanges": [{"componentId": "a", "before": "Off", "after": "On"}],
-        "alreadyCorrect": ["shared"], "protected": [], "restoreStates": [],
+        "alreadyCorrect": ["shared"], "protected": [],
         "blockers": [], "warnings": ["write_permission_enforced_by_service"],
     }
 
@@ -63,19 +63,18 @@ def test_complete_review_has_exact_copy_without_routine_diagnostics():
     assert review == original
 
 
-def test_material_notes_are_fixed_deduplicated_and_keep_original_state_consent():
+def test_material_notes_are_fixed_deduplicated_without_original_state_consent():
     review = _review()
     review["warnings"] += [
         "catalog_release_untrusted", "catalog_review_pending",
         "native_draft_published_effects_unqualified", "unknown_protection",
     ]
-    review["baseline"] = {"status": "capture_before_first_write"}
     text = review_text(review)
     assert "### Before you approve" in text
     assert text.count("The source topic list has not completed release review.") == 1
     assert "Changes may affect published conversations; isolation has not been verified." in text
     assert "Additional required or shared topics may not be identified by the source list." in text
-    assert "Approval confirms these are the original topic states, before this skill made any changes" in text
+    assert "original topic states" not in text
     assert all(code not in text for code in review["warnings"])
     assert "warning" not in text.casefold()
     review["warnings"].reverse()
@@ -112,7 +111,7 @@ def test_preview_does_not_infer_membership_or_collect_approval():
     assert text.endswith("No topics were changed.")
 
 
-def test_preview_is_only_inventory_even_with_write_limitations_and_baseline():
+def test_preview_is_only_inventory_even_with_write_limitations():
     review = _review()
     review["warnings"] += [code for code in (
         "catalog_release_untrusted", "installed_package_unverified", "unknown_protection",
@@ -120,7 +119,6 @@ def test_preview_is_only_inventory_even_with_write_limitations_and_baseline():
         "native_draft_published_effects_unqualified", "future_limitation",
     )]
     review["action"] = "disable"
-    review["baseline"] = {"status": "capture_before_first_write"}
     original = deepcopy(review)
     assert review_text(review, preview=True) == (
         "## Topics\nAgent: agent\nEnvironment: environment\n\n"
@@ -164,10 +162,10 @@ def test_blocked_inventory_keeps_resolution_failure_without_showing_an_execution
 
 def test_entry_blockers_override_an_otherwise_executable_plan_in_display():
     result = _result("blocked", submitted=False)
-    result["blockers"] = ["original_baseline_missing"]
+    result["blockers"] = ["authentication_failed"]
     text = result_text(result)
     assert "Could not proceed. No topics were changed." in text
-    assert "No saved original topic states are available." in text
+    assert "The signed-in account could not be verified." in text
     assert "Eligible changes:" not in text
     assert "| alpha | alpha.topic | Off |" in text
     assert "Before you approve" not in text
@@ -225,9 +223,9 @@ def test_expired_review_and_storage_failure_are_plain_language_without_a_submiss
     result["topics"] = []
     result["blockers"] = ["approval_expired"]
     assert "Approval expired. A new review and approval are required." in result_text(result)
-    result.update(status="unverified", blockers=["state_journal_update_failed"])
+    result.update(status="review_required", blockers=["review_storage_unavailable"])
     text = result_text(result)
-    assert "Saved topic-state records could not be read or updated safely." in text
+    assert "The pending review could not be saved or read safely." in text
     assert "Changes submitted" not in text
     assert text.endswith("No topics were changed.")
 

@@ -28,7 +28,7 @@ REQUEST = {
         "tenantId": TARGET.tenant_id, "environmentId": TARGET.environment_id,
         "agentId": TARGET.agent_id,
     },
-    "action": "disable", "setKeys": ["alpha"], "entry": "direct", "initializeBaseline": True,
+    "action": "disable", "setKeys": ["alpha"], "entry": "direct",
 }
 
 # Each invocation imports the actual entry/controller in a new interpreter.
@@ -52,7 +52,7 @@ entry._workspace_target = lambda *a, **k: {{
 entry.authenticate_flightcheck = lambda *a, **k: ("private-token", TARGET.tenant_id, "synthetic-maker")
 before = {{}} if scenario == "noop" else {{"a": "On", "shared": "On"}}
 after = {{}}
-if scenario == "restore":
+if scenario == "enable":
     before = {{}}
     after = {{"a": "On", "shared": "On"}}
 backend = dev_native_backend(before=before, after=after)
@@ -101,7 +101,7 @@ def test_fresh_process_applies_only_the_explicit_chat_decision(tmp_path, decisio
     assert review["status"] == "review_ready"
     assert review["writeStatus"] == "not_attempted"
     assert "## Review topic changes" in review["userMessage"]
-    assert review["review"]["baseline"]["status"] == "capture_before_first_write"
+    assert "baseline" not in review["review"]
     assert not (tmp_path / "submissions.txt").exists()
     process, result = cli(
         tmp_path, ["--apply-review", review["reviewId"], "--decision", decision],
@@ -134,32 +134,94 @@ def test_changed_evidence_or_account_invalidates_cross_process_approval(tmp_path
     assert not (tmp_path / "submissions.txt").exists()
 
 
-def test_noop_still_requires_a_review_and_explicit_approval(tmp_path):
-    _, review = cli(tmp_path, ["--review"], request=REQUEST, scenario="noop")
-    assert review["status"] == "review_ready"
-    assert "No change" in review["userMessage"]
-    _, result = cli(
-        tmp_path, ["--apply-review", review["reviewId"], "--decision", "approve"], scenario="noop",
-    )
+def test_noop_finishes_without_pending_review_approval_or_baseline(tmp_path):
+    process, result = cli(tmp_path, ["--review"], request=REQUEST, scenario="noop")
+    assert process.returncode == 0
     assert result["status"] == "already_correct"
     assert result["completed"]
+    assert result["writeStatus"] == "not_attempted"
+    assert "reviewId" not in result
+    assert "No change needed." in result["userMessage"]
+    assert not (tmp_path / ".local" / "topic-actions").exists()
     assert not (tmp_path / "submissions.txt").exists()
 
 
-def test_original_state_restore_uses_the_same_chat_review_and_apply_flow(tmp_path):
-    _, review = cli(tmp_path, ["--review"], request=REQUEST)
-    _, disabled = cli(tmp_path, ["--apply-review", review["reviewId"], "--decision", "approve"])
-    assert disabled["completed"]
-    restore = {**REQUEST, "action": "restore", "setKeys": [], "initializeBaseline": False}
-    _, review = cli(tmp_path, ["--review"], request=restore, scenario="restore")
+@pytest.mark.parametrize(("action", "scenario", "state"), [
+    ("disable", "normal", "On"), ("enable", "enable", "Off"),
+])
+def test_enable_disable_review_uses_live_states_without_baseline_or_history_question(
+    tmp_path, action, scenario, state,
+):
+    request = {**REQUEST, "action": action}
+    process, result = cli(tmp_path, ["--review"], request=request, scenario=scenario)
+
+    assert process.returncode == 0
+    assert result["status"] == "review_ready"
+    assert result["writeStatus"] == "not_attempted"
+    assert not result["completed"]
+    assert result["reviewId"]
+    assert {item["state"] for item in result["plan"]["currentStates"]} == {state}
+    assert "baseline" not in result
+    assert "baseline" not in result["review"]
+    assert "original" not in result["userMessage"].lower()
+    assert "history" not in result["userMessage"].lower()
+    assert "Unknown" not in result["userMessage"]
+    assert list((tmp_path / ".local" / "topic-actions").iterdir()) == [
+        tmp_path / ".local" / "topic-actions" / "reviews.sqlite3",
+    ]
+    assert not (tmp_path / "submissions.txt").exists()
+
+
+def test_repeated_changes_and_another_workspace_need_no_original_records(tmp_path):
+    workspaces = [tmp_path / "first", tmp_path / "other"]
+    for workspace in workspaces:
+        workspace.mkdir()
+    for workspace, action, scenario in (
+        (workspaces[0], "disable", "normal"),
+        (workspaces[0], "enable", "enable"),
+        (workspaces[1], "disable", "normal"),
+    ):
+        _, review = cli(
+            workspace, ["--review"], request={**REQUEST, "action": action}, scenario=scenario,
+        )
+        assert review["status"] == "review_ready"
+        assert "baseline" not in review["review"]
+        _, result = cli(
+            workspace, ["--apply-review", review["reviewId"], "--decision", "approve"],
+            scenario=scenario,
+        )
+        assert result["completed"]
+    assert len((workspaces[0] / "submissions.txt").read_text().splitlines()) == 2
+    assert len((workspaces[1] / "submissions.txt").read_text().splitlines()) == 1
+
+
+def test_restore_is_rejected_without_review_or_write(tmp_path):
+    request = {**REQUEST, "action": "restore", "setKeys": []}
+    process, result = cli(tmp_path, ["--review"], request=request)
+    assert process.returncode == 1
+    assert result["reason"] == "invalid_request"
+    assert result["status"] == "blocked"
+    assert "reviewId" not in result
+    assert "Restore is not supported." in result["userMessage"]
+    assert not (tmp_path / ".local" / "topic-actions").exists()
+
+
+@pytest.mark.parametrize("action,scenario", [("disable", "normal"), ("enable", "enable")])
+def test_legacy_baseline_files_do_not_block_or_change_during_operations(tmp_path, action, scenario):
+    directory = tmp_path / ".local" / "topic-actions"
+    directory.mkdir(parents=True)
+    legacy = directory / f"{TARGET.tenant_id}_{TARGET.environment_id}_{TARGET.agent_id}.sqlite3"
+    legacy.write_bytes(b"corrupt legacy original-state record")
+    original = legacy.read_bytes()
+    request = {**REQUEST, "action": action}
+    _, review = cli(tmp_path, ["--review"], request=request, scenario=scenario)
     assert review["status"] == "review_ready"
-    assert review["review"]["baseline"]["status"] == "saved_original"
-    _, restored = cli(
-        tmp_path, ["--apply-review", review["reviewId"], "--decision", "approve"], scenario="restore",
+    _, result = cli(
+        tmp_path, ["--apply-review", review["reviewId"], "--decision", "approve"], scenario=scenario,
     )
-    assert restored["completed"]
-    assert restored["status"] == "completed"
-    assert len((tmp_path / "submissions.txt").read_text().splitlines()) == 2
+    assert result["completed"]
+    assert legacy.read_bytes() == original
+    assert (tmp_path / "submissions.txt").read_text().splitlines() == ["submitted"]
 
 
 def test_uncertain_write_consumes_review_and_cannot_replay(tmp_path):
@@ -271,6 +333,42 @@ def test_corrupt_pending_review_is_consumed_without_execution(tmp_path):
     assert result["writeStatus"] == "not_attempted"
     with pytest.raises(TopicReviewError):
         store.consume(review["reviewId"])
+
+
+def test_review_created_before_restore_removal_requires_a_new_review(tmp_path, monkeypatch):
+    from topic_actions_planning import _digest
+
+    store = TopicReviewStore(tmp_path)
+    review = store.create(REQUEST, "a" * 64)
+    with sqlite3.connect(store.path) as connection:
+        payload = json.loads(connection.execute("SELECT payload FROM pending_reviews").fetchone()[0])
+        payload["version"] = 1
+        payload["request"]["initializeBaseline"] = True
+        connection.execute(
+            "UPDATE pending_reviews SET payload=?, checksum=?",
+            (json.dumps(payload), _digest(payload)),
+        )
+    monkeypatch.setattr(entry, "run_topic_actions", lambda *a, **k: pytest.fail("Old review cannot execute"))
+    result = entry.apply_topic_review(review["reviewId"], "approve", workspace_root=tmp_path)
+    assert result["status"] == "review_required"
+    assert result["reason"] == "review_invalid"
+    assert result["writeStatus"] == "not_attempted"
+    with pytest.raises(TopicReviewError):
+        store.consume(review["reviewId"])
+
+
+def test_restore_is_rejected_by_controller_and_catalog_planner():
+    from topic_actions_catalog import plan_catalog_actions
+    from topic_actions_discovery import DiscoveryError
+
+    backend = SyntheticBackend([operation_evidence()])
+    with pytest.raises(ValueError, match="Unsupported action"):
+        TopicActionSession(backend, "restore")
+    assert backend.reads == 0
+    assert not backend.submissions
+    with pytest.raises(DiscoveryError) as error:
+        plan_catalog_actions(operation_evidence().snapshot, "restore")
+    assert error.value.reason == "invalid_plan"
 
 
 @pytest.mark.parametrize("change", ["account", "body", "state", "membership"])

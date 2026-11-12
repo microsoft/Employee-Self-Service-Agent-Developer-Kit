@@ -1,6 +1,6 @@
 ---
 mode: agent
-description: "Review and approve ESS topic-set changes or restore original topic states on the selected agent"
+description: "Review and approve enabling or disabling ESS topic sets on the selected agent"
 ---
 
 # Topic actions
@@ -26,19 +26,19 @@ diagnostic messages. Material limitations stay in the plain-language
 "Before you approve" notes; safe technical details are available on request.
 
 Use its source-inventory preview or Workday-style review/approval/apply flow.
-Explicit enable, disable and restore requests use `--review`, even for a
-no-change plan; never replace them with a read-only listing. Display the
+Once enable/disable sets are established, use `--review`; never replace
+the requested change with a read-only listing. For verified no-change enable/disable, display
+the `already_correct` result and stop without approval or `--apply-review`.
+Only `review_ready` permits approval. Display the
 returned review, collect an unset Approve/Deny/Cancel structured question, then
 send only the actual answer with `--apply-review` and `--decision`. A dismissed
 or ambiguous answer cancels. No waiting process, stdin continuation, computer
 control or generated approval bridge is needed. A review is single-use and
 expires after five minutes; changed evidence requires fresh review and consent.
-For restore requests, use the fixed original baseline and recorded sets rather
-than asking for a new selection. Restore only skill-affected topic states,
-not old content. Missing original evidence or intervening edits block restore;
-never silently replace the baseline with today's states. Initial baseline
-capture is part of the one full review, not a second approval or an automatic
-rollback policy.
+Restore and undo of earlier changes are not supported. Do not substitute
+the opposite action: earlier topic states may have been mixed.
+Enable/disable uses current live states without a baseline, history question
+or `initializeBaseline` input. Leave existing original-state files untouched.
 If prerequisite inspection or the helper
 fails, report the blocker and supported next step. Do not expose raw inputs,
 exceptions, caller context or service bodies.

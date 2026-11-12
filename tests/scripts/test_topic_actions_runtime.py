@@ -579,10 +579,12 @@ def test_protected_topic_is_not_reported_as_disabled_or_whole_set_complete():
     assert len(backend.submissions[0][1]["botComponentChanges"]) == 1
 
 
-def test_noop_is_approved_and_rechecked_but_never_submitted():
+def test_noop_is_rechecked_without_approval_or_submission():
     before = operation_evidence({"a": "On", "shared": "On"})
     backend = SyntheticBackend([before, before])
-    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    result = TopicActionSession(backend, "enable").run(
+        lambda _: pytest.fail("No changes must not ask for approval."),
+    )
     assert result["status"] == "already_correct" and result["completed"]
     assert backend.reads == 2 and not backend.submissions
     assert {item["status"] for item in result["topics"]} == {"already_correct"}
@@ -778,7 +780,7 @@ def test_payload_still_rejects_missing_or_foreign_parents_outside_bot_settings_o
         build_state_payload(packet, plan)
 
 
-def test_native_dev_noop_confirms_and_rereads_without_submission():
+def test_native_dev_noop_rereads_without_approval_or_submission():
     backend = dev_native_backend()
     reviews = []
 
@@ -788,9 +790,24 @@ def test_native_dev_noop_confirms_and_rereads_without_submission():
 
     result = TopicActionSession(backend, "disable").run(confirm)
     assert result["status"] == "already_correct" and result["completed"]
-    assert reviews[0]["alreadyCorrect"] == ["a", "shared"]
+    assert not reviews
     assert backend.components.read_components.call_count == 2
     backend.components.submit_state_payload.assert_not_called()
+
+
+def test_noop_state_drift_requires_new_review_and_never_automatically_writes():
+    before = operation_evidence({"a": "On", "shared": "On"})
+    drifted = operation_evidence({"a": "Off", "shared": "On"}, revision="r2")
+    backend = SyntheticBackend([before, drifted])
+    result = TopicActionSession(backend, "enable").run(
+        lambda _: pytest.fail("Drift must not trigger automatic approval."),
+        review_only=True,
+    )
+    assert result["status"] == "review_required"
+    assert result["blockers"] == ["evidence_changed"]
+    assert result["writeStatus"] == "not_attempted"
+    assert not result["completed"]
+    assert not backend.submissions
 
 
 @pytest.mark.parametrize("realm", ["dev", "test", "prod", None, 0, 1, 2])

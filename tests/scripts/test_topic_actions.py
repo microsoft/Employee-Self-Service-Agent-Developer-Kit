@@ -254,7 +254,6 @@ def test_execute_cli_reviews_then_uses_explicit_same_session_consent(
             packet, snapshot=replace(packet.snapshot, evidence=replace(packet.snapshot.evidence, target=target)),
         )
     before, after = bind(before), bind(after)
-    request_value["initializeBaseline"] = True
     backend = SyntheticBackend([before, before, after])
     monkeypatch.setattr("topic_actions_native.NativeActionBackend", lambda *args: backend)
     monkeypatch.setattr(entry.sys, "stdin", io.StringIO(json.dumps(request_value) + "\n" + answer))
@@ -283,7 +282,7 @@ def test_execute_cli_reviews_then_uses_explicit_same_session_consent(
     assert "callerContext" not in result
     assert "do-not-emit" not in output
     assert "private-token" not in output
-    assert review["baseline"]["status"] == "capture_before_first_write"
+    assert "baseline" not in review
 
 
 def test_preview_is_truthful_nonmutating_and_uses_read_only_auth(
@@ -309,26 +308,25 @@ def test_preview_is_truthful_nonmutating_and_uses_read_only_auth(
     assert backend.reads == 1 and not backend.submissions
 
 
-def test_restore_request_derives_scope_and_cannot_initialize_or_narrow_original(request_value):
+def test_restore_request_is_not_supported(request_value):
     value = {**request_value, "action": "restore"}
     value.pop("setKeys")
-    assert entry.validate_request(value)["setKeys"] == []
-    for update in (
-        {"setKeys": ["synthetic-set"]}, {"initializeBaseline": True},
-        {"initializeBaseline": "true"},
-    ):
+    for update in ({}, {"setKeys": []}, {"setKeys": ["synthetic-set"]}):
         with pytest.raises(entry.TopicActionsError):
             entry.validate_request({**value, **update})
 
 
-def test_restore_missing_original_stops_without_authentication(workspace, request_value):
-    value = {**request_value, "action": "restore", "setKeys": []}
+@pytest.mark.parametrize("update", [
+    {"action": "restore", "setKeys": []}, {"initializeBaseline": True},
+    {"initializeBaseline": False},
+])
+def test_removed_inputs_stop_without_authentication(workspace, request_value, update):
+    value = {**request_value, **update}
     result = entry.run_topic_actions(
         value, workspace_root=workspace,
-        confirm=lambda _: pytest.fail("Missing original evidence cannot ask for consent."),
+        confirm=lambda _: pytest.fail("Unsupported requests cannot ask for consent."),
     )
-    assert result["reason"] == "original_baseline_missing"
-    assert "cannot be reconstructed from today's states" in result["message"]
+    assert result["reason"] == "invalid_request"
     assert result["writeStatus"] == "not_attempted"
 
 
@@ -336,6 +334,7 @@ def test_restore_missing_original_stops_without_authentication(workspace, reques
     {"contractVersion": 2},
     {"contractVersion": True},
     {"action": "publish"},
+    {"action": "list"},
     {"setKeys": []},
     {"setKeys": ["duplicate", "duplicate"]},
     {"setKeys": ["unsafe\nkey"]},

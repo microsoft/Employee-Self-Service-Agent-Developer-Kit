@@ -53,7 +53,7 @@ The selected entry point owns any metadata checks and missing-state handling.
 - If the user typed `/flightcheck` or explicitly asked to validate setup or
   environment readiness, follow the **FlightCheck entry contract** below.
 - If the user typed `/topic-actions`, explicitly asked to enable or disable
-  whole ESS topic sets, or asked to restore their original topic states,
+  whole ESS topic sets, or asked to undo earlier Topic Actions changes,
   follow `src/skills/topic-actions/SKILL.md`.
   That entry verifies canonical selected-agent identity and workspace
   preparation without requiring connection health or `connect_ready: true`.
@@ -68,12 +68,18 @@ The selected entry point owns any metadata checks and missing-state handling.
   without a change plan or write-specific limitation notes. Keep unresolved
   topics and blockers visible. Execution plans use "No change", not
   "Already correct"; full schema identities remain internal.
-  Explicit enable/disable/restore requests use the packaged `--review` →
-  structured chat approval → `--apply-review` flow, even for a no-change plan.
+  Explicit enable/disable requests use the packaged `--review` →
+  structured chat approval → `--apply-review` flow for actual changes.
+  Verified no-change enable/disable returns `already_correct` from `--review`;
+  show its result and stop without approval or apply.
   Do not substitute preview, request computer control, build a bridge, or
   require a waiting terminal. Leave approval unset and pass only the maker's
   actual decision; dismissal cancels. Reviews expire after five minutes and
-  are single-use, with account, target, evidence and baseline rechecked on apply.
+  are single-use, with account, target and evidence rechecked on apply.
+  Restore is not supported. Enable/disable uses current live states without
+  an original baseline or a first-use/history question. Do not translate undo
+  into the opposite action: the previous configuration may have mixed states.
+  Existing original-state files are unused and must be left untouched.
 
 ### Setup gate for all other requests
 

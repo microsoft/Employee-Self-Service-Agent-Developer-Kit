@@ -56,8 +56,6 @@ class CatalogSnapshot:
     evidence_kind: str = "provided_inventory"
     source_inventory_only: bool = False
     warnings: tuple[str, ...] = ()
-    restore_states: tuple[tuple[str, str], ...] = ()
-    restore_revision: str | None = None
 
 
 def parse_catalog(document: dict) -> Catalog:
@@ -356,30 +354,20 @@ def snapshot_from_response(
 
 def plan_catalog_actions(snapshot: CatalogSnapshot, action: str) -> TopicPlan:
     """Compute eligibility and outside-set protection instead of accepting skips."""
-    if type(snapshot) is not CatalogSnapshot or action not in ("enable", "disable", "restore"):
+    if type(snapshot) is not CatalogSnapshot or action not in ("enable", "disable"):
         _fail("invalid_plan")
     evidence = snapshot.evidence
     topics = {topic.component_id: topic for topic in evidence.topics}
     union = set(evidence.selected_member_ids)
     reasons = list(evidence.blockers)
-    restore = dict(snapshot.restore_states)
-    if action == "restore" and (
-        not snapshot.restore_revision or not snapshot.source_inventory_only
-        or len(restore) != len(snapshot.restore_states) or set(restore) != union
-        or any(state not in ("On", "Off") for state in restore.values())
-    ):
-        _fail("original_baseline_missing")
     delta, satisfied, skips = [], [], []
     for identity in evidence.selected_member_ids:
         topic = topics.get(identity)
         if topic is None or topic.state == "Unknown":
             reasons.append(f"unknown_state:{identity}")
             continue
-        desired = restore[identity] if action == "restore" else ("On" if action == "enable" else "Off")
+        desired = "On" if action == "enable" else "Off"
         disabling = desired == "Off"
-        if action == "restore" and topic.state == desired:
-            satisfied.append(identity)
-            continue
         if topic.required is None and not snapshot.source_inventory_only:
             reasons.append(f"unknown_protection:{identity}")
             continue
@@ -425,6 +413,5 @@ def plan_catalog_actions(snapshot: CatalogSnapshot, action: str) -> TopicPlan:
         evidence_kind="catalog",
         execution_policy="source_inventory" if snapshot.source_inventory_only else "qualified_catalog",
         warnings=snapshot.warnings, members=snapshot.members,
-        desired_states=snapshot.restore_states if action == "restore" else (),
     )
     return replace(plan, approval_basis="catalog:" + _digest(asdict(plan)))

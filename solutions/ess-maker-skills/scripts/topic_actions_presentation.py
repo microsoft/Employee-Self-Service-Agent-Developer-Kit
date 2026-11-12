@@ -35,14 +35,6 @@ _LIMITATIONS = (
         {"native_draft_published_effects_unqualified"},
         "Changes may affect published conversations; isolation has not been verified.",
     ),
-    (
-        {"previous_submission_outcome_uncertain"},
-        "The previous submission could not be confirmed. Restore uses the saved original states.",
-    ),
-    (
-        {"unrelated_topic_states_differ_from_original_and_will_be_preserved"},
-        "Unrelated topic changes will be kept. Restore will not reset the entire agent.",
-    ),
 )
 
 _BLOCKERS = (
@@ -51,19 +43,12 @@ _BLOCKERS = (
     ({"review_storage_unavailable"},
      "The pending review could not be saved or read safely. A new review is required."),
     ({"approval_expired"}, "Approval expired. A new review and approval are required."),
-    ({"evidence_changed", "baseline_changed_review_required"},
+    ({"evidence_changed"},
      "The reviewed information changed. A new review and approval are required."),
-    ({"restore_conflict"}, "A previously changed topic was edited. Restore stopped to keep those edits."),
-    ({"baseline_topic_identity_changed", "restore_membership_changed"},
-     "The saved topics no longer match the current topic sets. Restore cannot safely continue."),
-    ({"original_baseline_missing"},
-     "No saved original topic states are available. Current states cannot establish an earlier original state."),
-    ({"baseline_invalid", "baseline_storage_unavailable", "state_journal_update_failed"},
-     "Saved topic-state records could not be read or updated safely. Keep the existing records."),
-    ({"topic_operation_in_progress_or_interrupted", "operation_in_progress"},
+    ({"operation_in_progress"},
      "Another topic operation is running or its result has not been recorded."),
-    ({"previous_write_uncertain_restore_required"},
-     "The previous change could not be confirmed. Request a review to restore the saved original states."),
+    ({"invalid_request"},
+     "Provide a valid enable or disable request with explicit whole topic-set keys. Restore is not supported."),
     ({"setup_not_run", "setup_incomplete"},
      "Workspace preparation is incomplete. Run /setup for the selected agent, then make a new request."),
     ({"setup_broken", "workspace_missing"},
@@ -122,7 +107,7 @@ def _blocker_messages(result: dict) -> list[str]:
 def review_text(review: dict, *, preview: bool = False) -> str:
     if preview:
         return _topic_list_text(review)
-    action = {"enable": "Enable", "disable": "Disable", "restore": "Restore"}[review["action"]]
+    action = {"enable": "Enable", "disable": "Disable"}[review["action"]]
     target = review["target"]
     lines = [
         "## Review topic changes",
@@ -140,7 +125,6 @@ def review_text(review: dict, *, preview: bool = False) -> str:
     changes = {item["componentId"]: item for item in review["proposedChanges"]}
     correct = set(review["alreadyCorrect"])
     protected = {item["componentId"]: item for item in review["protected"]}
-    restore = {item["componentId"]: item["state"] for item in review["restoreStates"]}
     blocked = bool(review["blockers"])
     lines.extend((
         "",
@@ -149,9 +133,7 @@ def review_text(review: dict, *, preview: bool = False) -> str:
     ))
     for member in review["members"]:
         identity = member["componentId"]
-        desired = restore.get(identity, "Unknown") if review["action"] == "restore" else (
-            "On" if review["action"] == "enable" else "Off"
-        )
+        desired = "On" if review["action"] == "enable" else "Off"
         change = changes.get(identity)
         state = current.get(identity, change["before"] if change else (
             desired if identity in correct else "Unknown"
@@ -176,15 +158,7 @@ def review_text(review: dict, *, preview: bool = False) -> str:
     if blocked:
         lines.extend(("", "Could not proceed. No topics were changed.", *_blocker_messages(review)))
     notes = []
-    baseline = review.get("baseline") or {}
-    if baseline.get("status") == "capture_before_first_write":
-        notes.append(
-            "Approval confirms these are the original topic states, before this skill made any changes, "
-            "and allows them to be saved for restore."
-        )
-    elif baseline.get("capturedAt"):
-        notes.append("Saved original states: " + _text(baseline["capturedAt"]) + ".")
-    if review["action"] == "disable" or any(item["state"] == "Off" for item in review["restoreStates"]):
+    if review["action"] == "disable":
         notes.append("Turning topics Off may make capabilities that depend on them unavailable.")
     codes = _codes(review.get("warnings", ()))
     notes.extend(message for keys, message in _LIMITATIONS if codes & keys)

@@ -34,7 +34,7 @@ RESULT_MARKER = "TOPIC_ACTIONS_RESULT_JSON:"
 REVIEW_MARKER = "TOPIC_ACTIONS_REVIEW_JSON:"
 TARGET_FIELDS = frozenset({"tenantId", "environmentId", "agentId"})
 REQUEST_FIELDS = frozenset(
-    {"contractVersion", "target", "action", "setKeys", "entry", "callerContext", "initializeBaseline"}
+    {"contractVersion", "target", "action", "setKeys", "entry", "callerContext"}
 )
 
 
@@ -49,43 +49,8 @@ class TopicActionsError(ValueError):
 def _entry_message(reason: str, message: str) -> str:
     if reason == "cancelled":
         return "Canceled. No topics were changed."
-    if reason == "original_baseline_missing":
-        message = (
-            "No saved original topic-state baseline is available. An already-modified "
-            "agent's original states cannot be reconstructed from today's states. "
-            "First-use initialization is only valid before any topic-actions changes; "
-            "recovery of an older original baseline is not automated."
-        )
-    elif reason == "restore_conflict":
-        message = (
-            "A topic affected by the skill no longer matches its recorded state or "
-            "content. Restore stopped to preserve intervening edits. Resolve the "
-            "conflict before requesting a fresh restore review."
-        )
-    elif reason in ("baseline_topic_identity_changed", "restore_membership_changed"):
-        message = (
-            "Topic identity or recorded set membership changed since the original "
-            "baseline. Restore cannot safely substitute or omit topics. Review the "
-            "changed membership before starting another request."
-        )
-    elif reason == "previous_write_uncertain_restore_required":
-        message = (
-            "A previous submission is uncertain and cannot be replayed as a normal "
-            "enable/disable action. Request a fresh review to restore the saved "
-            "original states; conflicting evidence will still block restore."
-        )
-    elif reason == "topic_operation_in_progress_or_interrupted":
-        message = (
-            "Another topic operation is running or stopped before its outcome was "
-            "recorded. No operation will be replayed automatically. Keep the saved "
-            "baseline; automatic recovery of an interrupted operation is unavailable."
-        )
-    elif reason in ("baseline_invalid", "baseline_storage_unavailable"):
-        message = (
-            "The original-state store could not be safely read or saved. Keep the "
-            "existing baseline; do not delete or replace it with current states. "
-            "Restore and further writes remain blocked until storage is usable."
-        )
+    if reason == "invalid_request":
+        message = "Provide a valid enable or disable request with explicit whole topic-set keys. Restore is not supported."
     elif reason == "setup_not_run":
         message = (
             "ADK setup has not established the account, agent and environment "
@@ -174,18 +139,14 @@ def validate_request(value: Any) -> dict[str, Any]:
             "invalid_request", "Provide one tenant, environment and agent ID."
         ) from exc
     action = value.get("action")
-    if action not in ("enable", "disable", "restore"):
+    if action not in ("enable", "disable"):
         raise TopicActionsError(
-            "invalid_request", "Choose one action: enable, disable or restore."
+            "invalid_request", "Choose one action: enable or disable. Restore is not supported."
         )
-    initialize = value.get("initializeBaseline", False)
-    if type(initialize) is not bool or (action == "restore" and initialize):
-        raise TopicActionsError("invalid_request", "Restore requires an existing original baseline.")
-    keys = value.get("setKeys", [] if action == "restore" else None)
+    keys = value.get("setKeys")
     if (
         not isinstance(keys, list)
-        or (not keys and action != "restore")
-        or (action == "restore" and keys)
+        or not keys
         or any(
             not isinstance(key, str)
             or not key
@@ -217,9 +178,8 @@ def validate_request(value: Any) -> dict[str, Any]:
     return {
         "contractVersion": version,
         "target": target,
-        "action": value["action"],
+        "action": action,
         "setKeys": list(keys),
-        "initializeBaseline": initialize,
         "entry": entry,
         "callerContext": deepcopy(context),
     }
@@ -471,7 +431,6 @@ def run_topic_actions(
     from topic_actions_discovery import DiscoveryError, DiscoveryTarget
     from topic_actions_execution import TopicActionSession
     from topic_actions_native import NativeActionBackend
-    from topic_actions_state import TopicStateError, TopicStateStore
 
     context = value.get("callerContext", {}) if isinstance(value, dict) else {}
     context = deepcopy(context) if isinstance(context, dict) else {}
@@ -484,14 +443,8 @@ def run_topic_actions(
         target = request["target"]
         connection = _workspace_target(workspace_root, target, require_connect_ready=False)
         discovery_target = DiscoveryTarget(target["tenantId"], target["environmentId"], target["agentId"])
-        state_store = TopicStateStore(
-            workspace_root.resolve(), discovery_target, first_use=request["initializeBaseline"],
-        )
-        selected_keys = (
-            state_store.restore_keys() if request["action"] == "restore"
-            else tuple(request["setKeys"])
-        )
         catalog = load_catalog()
+        selected_keys = tuple(request["setKeys"])
         token, tenant, account = authenticate_flightcheck(
             connection["ring"],
             cache_path=workspace_root / DEFAULT_TOKEN_CACHE,
@@ -521,12 +474,8 @@ def run_topic_actions(
             backend = NativeActionBackend(
                 client, discovery_target, selected_keys, catalog, account, components,
             )
-            if request["action"] == "restore":
-                backend.state_store = state_store
-                backend.restoring = True
             result = TopicActionSession(
                 backend, request["action"], caller_context=request["callerContext"],
-                state_store=state_store,
             ).run(
                 confirm, preview=preview, review_only=review_only,
                 approved_binding=approved_binding, approval_deadline=approval_deadline,
@@ -535,11 +484,6 @@ def run_topic_actions(
             return _entry_feedback(result)
         finally:
             client.session.close()
-    except TopicStateError as error:
-        return _result(
-            error.reason, "Original topic-state evidence is missing, conflicting or unavailable.",
-            context, target=target,
-        )
     except (TopicActionsError, DiscoveryError) as error:
         return _result(error.reason, str(error), context, target=target)
     except AgentBuilderHTTPError as error:

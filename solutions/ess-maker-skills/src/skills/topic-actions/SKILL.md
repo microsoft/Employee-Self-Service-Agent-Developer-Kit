@@ -1,7 +1,6 @@
 # Topic actions
 
-Enable or disable whole source-defined ESS topic sets, or restore the original
-states of topics changed by this skill, on one verified selected native
+Enable or disable whole source-defined ESS topic sets on one verified selected native
 agent using the computed planner, short-lived review, single-attempt executor
 and readback. **The source-inventory policy intentionally removes central
 release admission and prequalification gates.** Matching topics are not proof
@@ -35,9 +34,12 @@ enable/disable request, use the execution helper's fresh review directly;
 do not add a separate preview approval, a "start review" confirmation or a
 "ready to proceed" question before it. A previous preview is not executable
 approval and does not replace that fresh execution review.
-Explicit enable, disable and restore requests always enter this write-review
-flow, even when the computed plan has no changes. Never substitute a read-only
-list or preview because approval transport appears unavailable.
+Once sets are established, enable and disable requests always enter the `--review`
+helper. Verified no-change enable/disable returns `already_correct` after a
+fresh readback: render the final result and stop without approval or
+`--apply-review`.
+Never substitute a read-only list or preview because approval transport
+appears unavailable.
 
 Display the complete required review once, including every selected member,
 account, target, changes, no-change topics, protections and material
@@ -79,7 +81,7 @@ result into success. For multiple independent previews, render each returned
 
 The deterministic presentation is owned by
 `scripts/topic_actions_presentation.py`. Its "Before you approve" notes
-retain material limitations, dependency impact and original-state capture.
+retain material limitations and dependency impact.
 Read-only previews show the topic inventory, not the execution review notes,
 and never ask for approval. Display the schema-name suffix after `.topic.`
 (for example, `WorkdayGetVisas`); keep full identities in structured evidence
@@ -167,10 +169,11 @@ This is not installed availability. The catalog deliberately retains unknown
 required-topic classifications, package IDs and coverage, and provisional
 approval. Do not change those labels to make a plan pass.
 
-Explain the available names, establish exactly one action (`enable`, `disable`
-or `restore`) and use the canonical selected target. Enable/disable requires
-explicit whole-set keys. Restore derives the recorded sets from the original
-state store; do not ask the maker to repeat them or choose a partial restore.
+Explain the available names, establish exactly one action (`enable` or `disable`)
+and use the canonical selected target with explicit whole-set keys.
+Restore and undo of previous Topic Actions changes are not supported.
+Do not translate an undo request into the opposite action, since earlier
+topic states may have been mixed.
 Never infer membership from names, merge source families, expand "all" without
 selection, silently narrow a partial set or authorize a topic individually.
 Discovery matches exact schema keys to installed component IDs and reports
@@ -184,10 +187,9 @@ Pass one JSON request on standard input to:
 
 The request contains `contractVersion: 1`,
 `target: {tenantId, environmentId, agentId}`, `action`,
-`setKeys` (distinct exact keys for enable/disable), and `entry: "direct"`.
-For restore, omit `setKeys` or supply an empty array; nonempty selections and
-`initializeBaseline: true` are rejected for restore. Do not save an input
-file. For terminal execution omit private caller context; retain it with the
+`setKeys` (distinct exact keys), and `entry: "direct"`.
+Only enable/disable is accepted; `initializeBaseline` is no longer an input.
+Do not save an input file. For terminal execution omit private caller context; retain it with the
 calling conversation. An in-process caller can use
 `run_topic_actions(..., confirm=..., preview=True)` with `entry: "caller"` and
 a nonempty `callerContext` JSON object. Never put context, tokens or component
@@ -250,7 +252,7 @@ an apply command, or recreate a consumed review silently.
 The pending review expires after five minutes. Apply authenticates again,
 rechecks the selected target, full evidence and exact review, then performs
 the existing fresh pre-dispatch checks and readback. A changed account,
-target, catalog, membership, content, topic state or original-state journal
+target, catalog, membership, content or topic state
 invalidates the review. Expiry is not extended by authentication or discovery.
 An expired, missing, consumed or changed review requires a new complete review
 and explicit approval; do not treat an old answer as approval of a new plan.
@@ -296,63 +298,19 @@ before dispatch. Denial/cancellation changes nothing. Any drift requires a
 fresh review. A nonempty eligible scope already in the desired state is
 different from empty scope or an all-protected action.
 
-## Original state and explicit restore
+## Current-state operations
 
-The original baseline is fixed: the topic states before this skill's first
-write, not the states before its most recent operation. It is local to this
-workspace and exact tenant/environment/agent and survives new conversations
-and process restarts. Never overwrite, delete or reinitialize it to make an
-operation pass. Another workspace or a lost local store cannot establish
-this agent's original state.
+Every enable/disable request uses current live topic states. No original-state
+baseline is captured or required, and no first-use or previous-change question
+is needed. Earlier changes, a new workspace, and absent or corrupt legacy
+baseline files do not change this flow. Leave existing original-state files
+untouched; they are no longer read or updated. The skill cannot restore an
+earlier configuration.
 
-Before a new agent's first write, `initializeBaseline: true` permits a
-first-use review. This flag is not approval. Display the returned `baseline`
-section in the same complete review: approval explicitly confirms these
-states precede any topic-actions changes and authorizes saving them before
-dispatch. Do not add a separate baseline confirmation. Never supply the flag
-when earlier changes are known, or use it to bypass `original_baseline_missing`.
-When first use is materially uncertain, clarify it rather than assuming it.
-Later requests omit the flag and reuse the saved original. Preview,
-denial/cancellation and already-correct enable/disable do not create a baseline.
-
-The helper transactionally persists every topic's component ID, schema name,
-original On/Off state and non-state-content digest under the ignored
-`.local/topic-actions` directory before the first submission. It saves no
-dialogue bodies, authentication tokens, approval or caller context. A storage
-failure blocks dispatch. Minimal durable intent bookkeeping prevents another
-caller using this store from starting an overlapping write. An operation
-interrupted before its outcome is recorded remains blocked; do not clear its
-intent or promise automatic recovery.
-
-For `/topic-actions Restore the original topic states`, use `action: "restore"`
-through the same review/apply helper, selected-target checks, five-minute
-approval and one-submission flow. Display `restoreStates`, the baseline date,
-all recorded members, already-correct topics, protections and material
-limitations through the returned fixed wording.
-Treat an explicit request to revert the skill's changes or return to the
-initial topic states as restore, not as disabling every set.
-The computed delta may contain both On and Off changes. Restore only topics
-this skill changed, using current component definitions; do not restore old
-dialogue content, connections, membership or published versions.
-
-Missing/recreated identities, changed recorded membership, unknown states or
-intervening state/content edits on affected topics block restore. Preserve
-unrelated edits and report when unrelated topic states differ from the
-original; do not claim the entire agent is identical to its original state.
-Required/shared protections still apply. A protected or partially verified
-restore is not complete restoration.
-
-An uncertain recorded submission cannot be replayed as a normal action.
-A new explicit restore can review affected topics whose current state matches
-the recorded before or intended after state and whose content is unchanged.
-This does not attribute the previous outcome or reuse its approval.
-One approved restore submission is not a qualified atomic server rollback.
-Never restore automatically after a failed enable/disable.
-
-For agents already changed before baseline capture was implemented, current
-states are not the original. Report `original_baseline_missing`; historical
-baseline reconstruction/import is not automated. Do not invent a reset/import
-command, manually fabricate a store or silently label today's state original.
+After an uncertain submission, never retry or infer that the requested change
+succeeded. A later explicit request starts with new live evidence and requires
+a new approval for any actual changes. It is not a replay or recovery of the
+previous operation.
 
 ## Execution and truthful return
 
@@ -368,8 +326,8 @@ shared dependencies; this skill is not a standalone copy of the whole ADK.
 `AgentBuilderClient` is used for direct selected-agent identity verification,
 without requiring a particular realm or ALM enrollment.
 Dispatch and readback are serialized per target within the
-process, with durable intents preventing overlapping writes through the same
-local store. This does not protect against another workspace or maker or
+process. Independent processes, workspaces or makers can still overlap;
+there is no durable cross-process write lock. This does not
 establish server-side stale-write protection. The native adapter
 independently binds submission to its freshly read selected target and an exact
 computed state-only payload, and consumes at most one submission attempt.
@@ -401,9 +359,8 @@ completed, completed-with-protections, partial and unverified outcomes.
 Protected topics are never reported as disabled. Partial, protected or
 uncertain scope must not complete the caller's whole-set request.
 
-The local original-state baseline, minimal write bookkeeping and short-lived
-pending reviews are persisted under `.local/topic-actions`. Pending reviews
-contain only the non-secret target/request, evidence/review fingerprint and
+Only short-lived pending reviews are persisted under `.local/topic-actions`.
+Pending reviews contain only the non-secret target/request, evidence/review fingerprint and
 expiry metadata; they never contain an approval, caller context, token or full
 component inventory. A pending review is not permission to write. Its ID is
 atomically consumed before execution, and cannot resume or replay a write.
