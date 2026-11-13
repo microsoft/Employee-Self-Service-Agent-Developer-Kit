@@ -53,27 +53,97 @@ The selected entry point owns any metadata checks and missing-state handling.
 - If the user typed `/flightcheck` or explicitly asked to validate setup or
   environment readiness, follow the **FlightCheck entry contract** below.
 - If the user typed `/topic-actions`, explicitly asked to enable or disable
-  whole ESS topic sets, or asked to restore their original topic states,
-  follow `src/skills/topic-actions/SKILL.md`.
+  whole ESS topic sets, list their current states, or undo earlier Topic Actions changes,
+  re-read `src/skills/topic-actions/SKILL.md` from disk for this invocation.
   That entry verifies canonical selected-agent identity and workspace
   preparation without requiring connection health or `connect_ready: true`.
   It never starts setup or repairs a connection automatically. Native
-  writes use exact source-defined membership and explicit fresh-review
+  writes use the exact source-defined set members present in the live agent and explicit fresh-review
   approval, without requiring a Dev realm or ALM enrollment. The native
   service still enforces edit access. Catalog/package authority and platform qualification remain
   unverified diagnostics, not write-admission gates. Render the helper's
   `userMessage` verbatim, not raw warning lists or internal codes. Material
-  limitations remain in its plain-language approval notes.
-  Listing and read-only previews show short topic names and current states,
-  without a change plan or write-specific limitation notes. Keep unresolved
+  limitations remain in structured diagnostics, available on request.
+  Do not add a "Before you approve" section or replace it with warning notes.
+  When the action is unknown, ask Enable/Disable/List in that order,
+  keeping "Enter custom answer" fourth. For action, set-selection and approval
+  cards, use the actual question as both `header` and `question` so it appears
+  in the pinned top row without a generic title or repeated body text.
+  Do not add a separate question or option-summary paragraph. Read the answer
+  under the exact supplied `header`, not a hard-coded generic title. Then use
+  `--list-agent-sets` to show the selected agent's live overview with friendly
+  set names, present topic counts and Enabled/Disabled/Mixed/Unknown states.
+  Listing stops without a set question or approval. For enable/disable with
+  unknown sets, pass that fresh result's `selectionQuestion` unchanged as
+  the sole next structured question. Picker options show only friendly set
+  names for all four supported sets, without state/count suffixes or
+  descriptions; keep counts and states in the overview only.
+  Never batch action and set questions,
+  reuse earlier choices, synthesize all catalog sets or add free-text keys.
+  An absent/null question means no picker, not a catalog fallback. Reuse an already
+  explicit action and sets without this detour. Incomplete/failed discovery
+  is not an empty success. Only explicit per-topic previews show short topic
+  names and current states, without a change plan or write-specific notes. Keep unresolved
   topics and blockers visible. Execution plans use "No change", not
   "Already correct"; full schema identities remain internal.
-  Explicit enable/disable/restore requests use the packaged `--review` →
-  structured chat approval → `--apply-review` flow, even for a no-change plan.
+  Successful read-only responses show only the heading and requested tables,
+  without target identifiers, redundant set-total summaries, "No topics were
+  changed" footers or publishing commentary. Execution reviews retain complete
+  target and account details.
+  Agent inventories may have different topic counts. Enable/disable all
+  present members of each requested set without missing-topic warnings for
+  absent template members. Only when no members are present say
+  "<friendly topic-set name> are not available in this agent." Use the exact
+  key plus "topics" only when a display name is unavailable. Use Enable/Disable
+  for actions and Enabled/Disabled/Unknown for topic states. Reviews and results
+  use the helper's grouped Markdown tables; shared members appear once with all
+  associated selected sets. Review columns are # / Integration / Topic /
+  Current state / Planned change, with no separate Requested state column.
+  Planned change says Enable, Disable, No change - already enabled/disabled,
+  or the evidenced skip reason. Keep complete target/account and selected
+  scope visible. Omit the entire changed/no-change count summary line above
+  review tables; keep the exact change count in the approval question.
+  Keep result tables for verified no-change outcomes too, with zero changes
+  and already-matching counts; do not abbreviate them to
+  a paragraph. Execution results follow Chelsea's outcome-first layout: concise
+  verified counts, evidenced Agent/Environment/Account and numbered
+  # / Integration / Topic / Result tables grouped by topic-set name. Use
+  catalog integration names, without a protected-topics section or protection
+  counts in this scope. Preserve safeguards and any evidenced skipped rows
+  inline, with their actual state and reason. Preserve
+  uncertain-result and preservation qualifications, but omit routine submission
+  and publishing footers and zero unchanged/protected counts.
+  Cancellation says only "Canceled."; denial says only "Not approved."
+  Errors show the specific problem and one supported next step, not a generic
+  failure heading, repeated inventory or unchanged-topic footer.
+  Put that guidance under a standalone **NEXT STEPS** heading, not an inline
+  "Next step:" label; do not invent unrelated setup or connection suggestions.
+  Use this pattern for all Topic Actions next-step guidance, including partial
+  and unverified outcomes. Do not add unsolicited next steps to other responses.
+  Use explicit bold table headers. Normal listing, preview, review
+  and apply commands use `--chat-output`; capture its envelope without echoing
+  raw diagnostics or duplicating the message in terminal output.
+  Host styling, table width/padding, tool panels and question controls remain native.
+  Ambiguous matches,
+  unknown states, protections and freshness checks still apply.
+  Explicit enable/disable requests use the packaged `--review` →
+  structured chat approval → `--apply-review` flow for actual changes.
+  Verified no-change enable/disable returns `already_correct` from `--review`;
+  show its result and stop without approval or apply.
   Do not substitute preview, request computer control, build a bridge, or
-  require a waiting terminal. Leave approval unset and pass only the maker's
-  actual decision; dismissal cancels. Reviews expire after five minutes and
-  are single-use, with account, target, evidence and baseline rechecked on apply.
+  require a waiting terminal. Pass the fresh review's `approvalQuestion`
+  unchanged: action-specific Enable/Disable wording with the unique change
+  count and selected set names, plus Not now and the host custom-answer field.
+  Leave approval unset and not recommended. Only selection of the action option
+  maps to `approve`; Not now maps to `deny`; dismissal, custom text or an
+  ambiguous/multiple response maps to `cancel`, never approval. Do not invent a
+  missing question or add Cancel, Change integrations or a second confirmation.
+  Reviews expire after five minutes and
+  are single-use, with account, target and evidence rechecked on apply.
+  Restore is not supported. Enable/disable uses current live states without
+  an original baseline or a first-use/history question. Do not translate undo
+  into the opposite action: the previous configuration may have mixed states.
+  Existing original-state files are unused and must be left untouched.
 
 ### Setup gate for all other requests
 

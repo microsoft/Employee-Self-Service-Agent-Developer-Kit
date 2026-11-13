@@ -57,7 +57,6 @@ class TopicPlan:
     execution_policy: str = "provided_evidence"
     warnings: tuple[str, ...] = ()
     members: tuple[tuple[str, str, str | None], ...] = ()
-    desired_states: tuple[tuple[str, str], ...] = ()
 
     @property
     def live_actions_available(self) -> bool:

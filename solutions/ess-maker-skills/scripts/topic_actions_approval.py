@@ -56,12 +56,13 @@ class TopicReviewStore:
         # Caller progress belongs to the calling conversation, not durable storage.
         request = {
             key: request[key] for key in
-            ("contractVersion", "target", "action", "setKeys", "initializeBaseline")
+            ("contractVersion", "target", "action", "setKeys")
         }
         request["entry"] = "direct"
         now = self.clock()
+        # Older reviews included original-state capture and cannot authorize this contract.
         payload = {
-            "version": 1, "workspace": str(self.root), "request": request,
+            "version": 2, "workspace": str(self.root), "request": request,
             "binding": binding, "createdAt": now, "createdMonotonic": self.monotonic(),
         }
         review_id = uuid.uuid4().hex
@@ -91,7 +92,7 @@ class TopicReviewStore:
                 or set(payload) != {
                     "version", "workspace", "request", "binding", "createdAt", "createdMonotonic",
                 }
-                or type(payload["version"]) is not int or payload["version"] != 1
+                or type(payload["version"]) is not int or payload["version"] != 2
                 or payload["workspace"] != str(self.root)
                 or not isinstance(payload["request"], dict)
                 or not isinstance(payload["binding"], str)

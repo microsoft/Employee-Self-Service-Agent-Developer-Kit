@@ -1,7 +1,6 @@
 # Topic actions
 
-Enable or disable whole source-defined ESS topic sets, or restore the original
-states of topics changed by this skill, on one verified selected native
+Enable or disable whole source-defined ESS topic sets on one verified selected native
 agent using the computed planner, short-lived review, single-attempt executor
 and readback. **The source-inventory policy intentionally removes central
 release admission and prequalification gates.** Matching topics are not proof
@@ -24,35 +23,48 @@ clarifying question only when missing or ambiguous information prevents the
 requested operation; do not ask the maker to repeat known selections or
 confirm that routine checks should run.
 
-For listing or preview requests, perform the read-only work and show the
-result without approval or an unsolicited offer to execute. Show only the
-agent, environment, topic sets, short topic names and observed current states.
+For topic-set listing requests, show the live-agent set overview described
+below, without asking which sets to list. For explicit per-topic detail or
+preview requests, show the selected sets, short topic
+names and observed current states. Both are read-only and need no approval
+or unsolicited offer to execute.
+Successful read-only replies contain only the heading and requested tables.
+Omit agent/environment identifiers, redundant set-total summaries and
+"No topics were changed" or publishing commentary. Target identifiers and
+counts remain in structured results; execution reviews still show the complete
+required target and account.
 Do not turn a topic-list request into an enable/disable plan: omit requested
 states, plan columns, change counts and write-specific limitation notes.
 Keep unresolved topics and blockers visible; do not imply complete discovery.
 For an explicit
-enable/disable request, use the execution helper's fresh review directly;
+enable/disable request with established sets, use the execution helper's fresh review directly;
 do not add a separate preview approval, a "start review" confirmation or a
 "ready to proceed" question before it. A previous preview is not executable
 approval and does not replace that fresh execution review.
-Explicit enable, disable and restore requests always enter this write-review
-flow, even when the computed plan has no changes. Never substitute a read-only
-list or preview because approval transport appears unavailable.
+Once sets are established, enable and disable requests always enter the `--review`
+helper. Verified no-change enable/disable returns `already_correct` after a
+fresh readback: render the final result and stop without approval or
+`--apply-review`.
+Never substitute a read-only list or preview because approval transport
+appears unavailable.
 
 Display the complete required review once, including every selected member,
-account, target, changes, no-change topics, protections and material
-limitations in plain language. Then present one
-explicit decision control: **Approve**, **Deny** or **Cancel**, with no
+account, target, changes, no-change topics and protections. Then present one
+action-specific question card supplied by `approvalQuestion`, with no
 preselected approval. Use the structured VS Code question and separate
 review/apply commands below, as Connect Workday does;
-map explicit denial to `deny` and cancellation to `cancel`. Ambiguous text
+map the selected action option to `approve`, **Not now** to `deny`, and
+dismissal or custom text to `cancel`. Ambiguous text
 is never approval. Do not introduce a second confirmation after approval;
 continue with the mandatory fresh checks and readback. Changed evidence or
 expired approval still requires a new review and explicit approval.
 
 Keep routine authentication, prerequisite checks and execution bookkeeping
 out of the conversation. Use the existing entry/helper instead of inventing
-ad hoc shell orchestration for normal operations. Do not paste PowerShell,
+ad hoc shell orchestration for normal operations. Use `--chat-output` on the
+normal listing, preview, review and apply commands below. Capture and parse
+the single result envelope; do not echo it or print a second copy of its
+message in the terminal. Do not paste PowerShell,
 Python, shell commands, request JSON, helper source, raw stdout or polling
 transcripts into the review or final answer. Give terminal instructions only
 when the supported interactive-terminal fallback is necessary or the maker
@@ -60,11 +72,21 @@ explicitly requests commands. If diagnostics are requested, provide only
 safe supported details; never expose tokens, private context or raw service
 bodies.
 
-After the result, give one concise outcome with the selected sets, verified
-counts, whether a write was attempted, and any material blocker or
-preservation limitation. Distinguish observed state success from incomplete
+After execution, show the outcome and verified counts, target/account context,
+grouped per-topic results and any material blocker or preservation limitation.
+Do not append routine submission or publishing footers; submission evidence stays
+in structured diagnostics. Distinguish observed state success from incomplete
 preservation. Do not repeat the review, narrate routine steps, open another
 decision control or append an unsolicited follow-up menu.
+Cancellation says only "Canceled." Denial says only "Not approved."
+An error shows the specific problem and one supported next step, not a generic
+failure heading, unchanged-topic footer or repeated inventory. Put the supported
+guidance in a short paragraph under a standalone **NEXT STEPS** heading,
+not an inline "Next step:" label. Do not invent unrelated setup or connection
+recommendations. Use this same heading-and-paragraph pattern wherever next-step
+guidance appears, including partial and unverified outcomes, not only errors.
+Do not add next steps to responses that do not need them. Never automatically
+retry a submission or turn uncertain evidence into an assurance that nothing changed.
 
 ### Fixed maker-facing wording
 
@@ -78,9 +100,10 @@ result into success. For multiple independent previews, render each returned
 `userMessage`; do not combine them into a newly interpreted successful scope.
 
 The deterministic presentation is owned by
-`scripts/topic_actions_presentation.py`. Its "Before you approve" notes
-retain material limitations, dependency impact and original-state capture.
-Read-only previews show the topic inventory, not the execution review notes,
+`scripts/topic_actions_presentation.py`. Do not show a "Before you approve"
+section, its notes, or a replacement warning section. Limitations and dependency
+impact remain available in structured diagnostics for technical questions.
+Read-only previews show the topic inventory, not an execution plan,
 and never ask for approval. Display the schema-name suffix after `.topic.`
 (for example, `WorkdayGetVisas`); keep full identities in structured evidence
 and mutation logic. Use "No change" rather than "Already correct" in plans.
@@ -88,10 +111,74 @@ Routine diagnostics such as service-enforced edit permission are not
 repeated as notices. Structured `warnings`, `blockers`, HTTP status and
 other evidence remain intact for callers and requested technical diagnosis;
 not displaying raw warning lists does not remove checks or establish trust.
-Unknown limitations receive a plain-language notice in execution reviews.
+Unknown limitations remain in structured diagnostics rather than review notices.
 Only when the maker explicitly requests diagnostics may safe reason codes
 and HTTP status accompany the fixed copy. Never expose private evidence,
 caller context, service bodies or credentials.
+
+### Native-chat layout and terminology
+
+Use the deterministic Markdown layout, not a custom webview, HTML controls,
+screenshots or a hard-coded theme. VS Code owns fonts, colors, focus and the
+structured question controls. Use the existing action question, names-only
+multi-select and unset action-specific approval / Not now decision; add no progress screen,
+navigation, retry, rollback, restore or resume controls.
+
+Use **Enable** / **Disable** for actions and plans, and **Enabled** /
+**Disabled** / **Unknown** for topic states. Topic-set aggregates also use
+**Mixed**. Do not mix On/Off or turn-on/turn-off language into maker-facing
+topic-state copy; internal state/API values remain unchanged.
+
+The review shows action, account and exact target first, followed directly
+by tables grouped under friendly topic-set names. Do not add a separate
+changed/no-change count summary line above the tables.
+Match Chelsea's review table columns: **#**, **Integration**,
+**Topic**, **Current state** and **Planned change**. Number rows within each
+group and use catalog integration names, falling back to the full set name.
+Do not add a separate Requested state column: the planned change says
+**Enable**, **Disable**, **No change - already enabled/disabled**, or the
+evidenced reason a topic is kept unchanged. Keep unknown states and unresolved
+members explicit. Use **No change** for matching states and **Kept unchanged** with the evidenced
+reason for protections. Retain all selected scope, including unresolved members.
+Use catalog-provided display names only; never infer availability from them.
+Keep internal set keys for helper inputs and diagnostic evidence.
+
+Execution results follow Chelsea's result hierarchy: outcome heading, a concise
+sentence with changed/verified counts and nonzero unchanged counts,
+then Agent, Environment and Account when evidenced. Show numbered tables with
+**#**, **Integration**, **Topic** and **Result**, grouped by friendly topic-set
+name. Integration names come from catalog metadata, never from guessing or
+splitting labels; fall back to the full set name when unavailable.
+The Result cell includes the verified state or qualified observed state,
+so no redundant state column is needed. There is no separate protected-topics
+section or protection count in this scope. Retain the underlying safeguards:
+if evidence ever produces a skipped member, show its state and reason inline
+in the existing set table without claiming it was changed.
+A member shared by selected
+sets appears once in a shared-topic group naming every associated set; count
+and update it once. Distinguish newly enabled/disabled from already
+enabled/disabled and unchanged. Verified no-change results use the same grouped
+per-topic report with **0 topics changed**, already-matching counts and unchanged
+rows; do not replace them with a short paragraph. They still require no approval
+or submission. Observing the requested state after an uncertain submission
+does not establish that this request caused it. Unknown final states, protected
+topics, unverified preservation and a detected preservation violation must not
+be labeled successful changes. A rejected/consumed review reports no new
+submission only through structured evidence; never claim an earlier invocation
+changed nothing. Error copy instead explains that the review is unavailable or
+already used and asks for a fresh request and approval.
+
+Every table uses explicit bold Markdown header cells and blank lines around
+tables and group headings. Render tables directly in the chat message, not
+inside code fences, lists or blockquotes. Native chat controls table width,
+cell padding, header background and accent colors; the skill cannot set those
+with Markdown. Do not use HTML/CSS, nonbreaking-space padding, invisible
+characters or long filler text to simulate the HTML proposal's styling.
+Do not claim pixel-identical rendering of that proposal.
+
+The complete rendered review, approval question and their display names remain part of the approval
+binding. Any changed presentation requires a fresh review and explicit consent;
+never weaken binding to preserve approval collected against older copy.
 
 These rules govern generated conversation content, not host-rendered tool
 panels or permission controls. Do not promise to hide those panels, change
@@ -121,23 +208,31 @@ target, and distinguish these entry outcomes:
   cannot be validated. Do not assume `/setup` repairs it or recommend deleting
   setup state, switching targets or creating a replacement. State when the
   supported recovery route or installed-version support is unconfirmed.
-- **Selected package or topics missing:** distinguish verified absence of a
-  package from missing topics within an installed package. Name the affected
-  set and topics when known. Use an existing setup/recovery destination only
+- **Selected topics unavailable:** live agent inventory determines which
+  topics exist. For each requested set, use every present exact catalog
+  match; differing template counts are normal, not missing-topic warnings.
+  If no topics from a requested set are present, say
+  "<friendly topic-set name> are not available in this agent."
+  If a display name is unavailable, retain the exact set key plus "topics".
+  Do not add administrator escalation or technical membership warnings.
+  No topics are changed and no approval is requested for an unavailable set.
+  Use an existing setup/recovery destination only
   when verified for that problem and installed version; otherwise state that
   the destination is unconfirmed. `/setup` does not install extension packs;
   `/connect` completion is not package or topic evidence.
 - **Evidence unavailable or ambiguous:** do not diagnose absence or access
   denial. Unverified installation does not mean a missing package; unresolved
-  topic identities can be missing or ambiguous. For unresolved membership,
-  ask the ADK administrator to investigate, then return here for a fresh check.
+  topic identities can be missing or ambiguous. Say "I couldn't identify all
+  the requested topics in this agent." Do not claim that ambiguous topics
+  are absent or add routine administrator escalation.
 - **Access denied:** describe the denied operation only. A denied read does
   not verify missing topic-edit permission. Only a verified edit denial may
   direct the maker to the administrator responsible for that agent and
   environment to grant topic-edit access. Do not invent a permission-request
   command or infer denial from an unavailable permission check.
 
-For each remaining pre-write blocker show "No topics were changed." Never
+For each blocker show its specific problem and one supported next step. Do not
+append "No topics were changed." or repeat the complete inventory. Never
 automatically start setup, install packages, repair a connection, switch
 targets or resume topic changes after recovery. A new request performs fresh
 checks, review and applicable explicit approval. The helper rechecks identity
@@ -152,14 +247,92 @@ explain that automatic return is unavailable and keep the result in this
 conversation. Do not promise persistent resume, invent a destination, mark
 the topic step complete or start the caller's next mutation.
 
-Before writes, **Cancel** or **Not now** ends the request. Show "Canceled.
-No topics were changed." Direct entry remains in this conversation. Caller
+Before writes, **Cancel** or **Not now** ends the request. Show only "Canceled."
+Direct entry remains in this conversation. Caller
 entry preserves completed steps and leaves the topic step incomplete unless
 the requested state was independently verified, using only the supported
 caller return. Closing the control or an ambiguous custom answer is not
 approval. No automatic retry or resume follows cancellation.
 
-## Selection and proposed catalog
+## Action, live set overview and selection
+
+When the action is unknown, ask just the action question first using the
+host's structured question tool. Keep Enable, Disable and List in that order,
+with the host's "Enter custom answer" fourth:
+
+```json
+[
+  {
+    "header": "What would you like to do?",
+    "question": "What would you like to do?",
+    "options": [
+      { "label": "Enable topic sets" },
+      { "label": "Disable topic sets" },
+      { "label": "List topic sets/current states" }
+    ],
+    "allowFreeformInput": true
+  }
+]
+```
+
+Put the actual question in both `header` and `question`, not a generic
+"Topic actions", "Topic sets" or "Topic changes" heading. The native card
+uses `header` for the pinned top row and suppresses matching body text.
+Do not add a separate copy of the question or an option-summary paragraph.
+Read the tool answer under the exact supplied `header`, not a hard-coded
+generic heading. This applies to action, set-selection and approval cards.
+
+Do not include a set-key question in this first control. Reuse an action
+already supplied by the maker. Do not batch the action and set questions
+into one call: wait for the action answer before discovery and selection.
+After the action is chosen, if the request
+is a set listing or enable/disable without established sets, read the
+selected agent's inventory using:
+
+`python scripts/topic_actions.py --list-agent-sets --chat-output`
+
+Pass one JSON request on standard input containing `contractVersion: 1`,
+`target: {tenantId, environmentId, agentId}` and `entry: "direct"`.
+Omit `action` and `setKeys`; do not invent an enable/disable request to list
+sets. Keep private caller context in the calling conversation as below.
+Parse `TOPIC_ACTIONS_RESULT_JSON:` and render `userMessage` verbatim.
+
+Run this fresh for the current invocation and selected target. Earlier chat
+lists, cached questions and source catalog definitions are not availability
+evidence. Only `status: "sets_listed"` supplies the live `sets` choices. The overview
+shows each available set's friendly integration/set name, present topic count
+and aggregate state:
+**Enabled** means every present topic is enabled; **Disabled** means every present
+topic is disabled; **Mixed** means both enabled and disabled; **Unknown** means a state or
+membership could not be resolved. Absent sets are omitted. Do not populate
+the overview from the source catalog alone or expand it into individual
+topic rows unless the maker explicitly requests topic details.
+
+For **List topic sets/current states**, stop after this overview. Do not
+ask for set selection or approval. For **Enable** or **Disable**, when
+`discoveryComplete` is true and `sets` is nonempty, pass the helper's
+`selectionQuestion` unchanged as the sole next structured question. The
+helper supplies exactly one option per present set with only its friendly
+name, such as "Workday HR Topics" or "ServiceNow IT Topics". Use this
+name-only pattern for all four supported sets: no state/count suffix or
+description in picker options. Counts and states belong only in the overview.
+Multi-select is enabled, with no custom-answer field and no preselected
+choices. Map answered option labels to the `key` of each
+matching entry in the same response's `sets`; retain keys internally.
+Do not reconstruct, expand or supplement the helper's options, even if the
+catalog or earlier conversation lists additional integrations or HR/IT sets.
+Never use `--list-sets` to populate this control. If `selectionQuestion` is
+absent/null, do not invent a picker or use a catalog fallback.
+Empty/dismissed selection cancels without a
+review or write. Failed or incomplete discovery must not become an empty
+successful list or a guessed selection; render its result and stop.
+
+After selection, use the normal fresh `--review` flow. The overview is not
+approval or write evidence. If the maker already supplied an unambiguous
+enable/disable action and sets, skip the action/overview/selection detour
+and go directly to that fresh review.
+
+### Proposed source catalog
 
 Read `src/reference/topic-actions/catalog.provisional.json` or run
 `python scripts/topic_actions.py --list-sets` to list **source definitions**.
@@ -167,78 +340,98 @@ This is not installed availability. The catalog deliberately retains unknown
 required-topic classifications, package IDs and coverage, and provisional
 approval. Do not change those labels to make a plan pass.
 
-Explain the available names, establish exactly one action (`enable`, `disable`
-or `restore`) and use the canonical selected target. Enable/disable requires
-explicit whole-set keys. Restore derives the recorded sets from the original
-state store; do not ask the maker to repeat them or choose a partial restore.
+For changes, establish exactly one action (`enable` or `disable`) and use
+the canonical selected target with the selected whole-set keys internally.
+Restore and undo of previous Topic Actions changes are not supported.
+Do not translate an undo request into the opposite action, since earlier
+topic states may have been mixed. Explain the limitation and ask for the
+desired action only when it is not established, then use live set selection
+above when sets are unknown.
 Never infer membership from names, merge source families, expand "all" without
-selection, silently narrow a partial set or authorize a topic individually.
-Discovery matches exact schema keys to installed component IDs and reports
-missing/ambiguous members. Legacy flat definitions remain read-only.
+selection or authorize a topic individually. Live inventory is the source
+of topics to enable/disable. The catalog maps exact schema keys to the
+requested sets; only members actually present in this agent enter the scope.
+An agent with 10 matching topics does not need the 15 topics another agent
+has. Absent template members are ignored, not reported as incomplete.
+Ambiguous identities still block. Legacy flat definitions remain read-only.
 
 ## Read-only preview or chat review and apply
 
 Pass one JSON request on standard input to:
 
-`python scripts/topic_actions.py --preview`
+`python scripts/topic_actions.py --preview --chat-output`
 
 The request contains `contractVersion: 1`,
 `target: {tenantId, environmentId, agentId}`, `action`,
-`setKeys` (distinct exact keys for enable/disable), and `entry: "direct"`.
-For restore, omit `setKeys` or supply an empty array; nonempty selections and
-`initializeBaseline: true` are rejected for restore. Do not save an input
-file. For terminal execution omit private caller context; retain it with the
+`setKeys` (distinct exact keys), and `entry: "direct"`.
+Only enable/disable is accepted; `initializeBaseline` is no longer an input.
+Do not save an input file. For terminal execution omit private caller context; retain it with the
 calling conversation. An in-process caller can use
 `run_topic_actions(..., confirm=..., preview=True)` with `entry: "caller"` and
 a nonempty `callerContext` JSON object. Never put context, tokens or component
 bodies in terminal commands, chat output or files.
 
 Parse `TOPIC_ACTIONS_RESULT_JSON:` and render its `userMessage`.
-For preview, it presents the agent, environment, selected topics and observed
+For preview, it presents the selected topics and observed
 current states in fixed plain language, plus any blocker preventing resolution.
-Execution reviews additionally present proposed changes, no-change topics,
-protections and material limitations.
+Execution reviews additionally present proposed changes, no-change topics
+and protections. Limitations remain in structured diagnostics.
 Observed differences in a blocked plan are **not eligible changes**. Report
-all requested sets; missing membership never
-becomes a smaller successful action. No user approval can override blockers.
+all requested sets using their present members. A requested set with no
+present members blocks rather than disappearing from the request.
+No user approval can override blockers.
 Preview returns `status: "preview"` and `writeStatus: "not_attempted"`. It
 does not acquire write scopes or collect executable consent.
 
 For the normal write flow, pass the request on standard input to:
 
-`python scripts/topic_actions.py --review`
+`python scripts/topic_actions.py --review --chat-output`
 
 This command finishes; it does not wait for terminal input. Parse
 `TOPIC_ACTIONS_RESULT_JSON:`. Only `status: "review_ready"` supplies a
 `reviewId` and permits asking for approval. Display its complete `userMessage`,
 including account, target, every selected set/member, proposed changes,
-no-change topics, protections and material limitations. Keep `reviewId` and
+no-change topics and protections. Do not append approval notes. Keep `reviewId` and
 expiry metadata internal. For any other status, render the returned
-`userMessage` and stop without asking for approval.
+`userMessage` without asking for approval and stop.
 
-Then use `vscode_askQuestions` (or the host's structured question tool):
+Pass the returned `approvalQuestion` unchanged as the sole next question to
+`vscode_askQuestions` (or the host's structured question tool). The helper derives
+the exact unique change count and selected set names from this fresh review,
+not the total inventory, earlier lists or a guessed integration label.
+For example, a two-topic enable review for Workday HR Topics supplies:
 
 ```json
 [
   {
-    "header": "Topic changes",
-    "question": "Apply the topic changes shown above?",
+    "header": "Enable the 2 topics shown above?",
+    "question": "Enable the 2 topics shown above?",
+    "multiSelect": false,
     "options": [
-      { "label": "Approve" },
-      { "label": "Deny" },
-      { "label": "Cancel" }
+      {
+        "label": "Enable 2 topics for Workday HR Topics.",
+        "description": "Apply only the changes shown above."
+      },
+      { "label": "Not now", "description": "Leave topics unchanged." }
     ],
-    "allowFreeformInput": false
+    "allowFreeformInput": true
   }
 ]
 ```
 
-Leave every option initially unset. Only the maker's explicit **Approve**
-maps to `approve`; **Deny** maps to `deny`. **Cancel**, a dismissed question,
-or an ambiguous response maps to `cancel`, never approval. After the answer,
+Use Enable/Disable consistently, not Turn on/off. Leave every option initially
+unset and do not mark an option recommended. Only an explicit selection of the
+returned action-specific option maps to `approve`; selection of **Not now**
+maps to `deny`. Dismissal, custom text, an ambiguous or multiple-option response
+maps to `cancel`, even if free text says "yes", "approve" or copies the action
+label. The custom-answer field and Submit/dismiss controls belong to the host;
+do not add them as options. Do not add a separate Cancel option, Change
+integrations, reselection or a second confirmation. If the returned question is
+absent/null, do not invent one or collect approval.
+After the answer,
 run the fixed command with the returned ID and the actual decision:
 
-`python scripts/topic_actions.py --apply-review "{REVIEW_ID}" --decision "{DECISION}"`
+`python scripts/topic_actions.py --apply-review "{REVIEW_ID}" --decision "{DECISION}" --chat-output`
 
 This consumes the pending review exactly once, including denial or cancellation.
 It needs no stdin continuation, background terminal, named pipe, computer
@@ -250,11 +443,22 @@ an apply command, or recreate a consumed review silently.
 The pending review expires after five minutes. Apply authenticates again,
 rechecks the selected target, full evidence and exact review, then performs
 the existing fresh pre-dispatch checks and readback. A changed account,
-target, catalog, membership, content, topic state or original-state journal
+target, catalog, membership, content or topic state
 invalidates the review. Expiry is not extended by authentication or discovery.
 An expired, missing, consumed or changed review requires a new complete review
 and explicit approval; do not treat an old answer as approval of a new plan.
 Render the apply command's final `userMessage`; review creation is not completion.
+
+`--chat-output` emits only `userMessage` and the metadata needed to continue the
+chat flow, including review ID/expiry, the exact `approvalQuestion` and live
+selection options/key mapping.
+It omits raw plans, repeated review objects, per-topic diagnostic objects and
+warning lists from terminal output. It does not change validation, approval,
+exit status, writes or readback. Full results remain available to in-process
+callers and the default diagnostic CLI output. Never rerun an apply command to
+recover omitted diagnostics, or save private output files just to hide it.
+Host tool panels and required sign-in or permission controls remain visible;
+do not change editor settings or promise to suppress them.
 
 If a structured question tool is genuinely unavailable, report that specific
 blocker. Only then offer the existing interactive-terminal alternative, or use
@@ -285,74 +489,31 @@ before approval. Selected sets do not protect each other. For disable, a fully e
 outside set protects shared topics; a
 partly enabled outside set protects them only when it has an On member outside
 the selected union. This protection uses only the source-defined map; its
-completeness and custom dependencies remain unverified. Missing or ambiguous
-exact members, unknown states, unsupported source variants and a missing
-change token still block; no requested set is silently narrowed.
+completeness and custom dependencies remain unverified. Absent template members
+are excluded from both selected and outside sets. Ambiguous exact matches,
+unknown states of present members, unsupported source variants and a missing
+change token still block. Every requested set must have present members.
 
-The controller requires explicit approval for all three actions against the exact
-target, account, action, selection, memberships, revision, states, protections
-and delta. Approval lasts at most five minutes and is rechecked immediately
+The controller requires explicit approval for actual enable/disable changes
+against the exact target, account, action, selection, memberships, revision,
+states, protections and delta. Approval lasts at most five minutes and is rechecked immediately
 before dispatch. Denial/cancellation changes nothing. Any drift requires a
 fresh review. A nonempty eligible scope already in the desired state is
 different from empty scope or an all-protected action.
 
-## Original state and explicit restore
+## Current-state operations
 
-The original baseline is fixed: the topic states before this skill's first
-write, not the states before its most recent operation. It is local to this
-workspace and exact tenant/environment/agent and survives new conversations
-and process restarts. Never overwrite, delete or reinitialize it to make an
-operation pass. Another workspace or a lost local store cannot establish
-this agent's original state.
+Every enable/disable request uses current live topic states. No original-state
+baseline is captured or required, and no first-use or previous-change question
+is needed. Earlier changes, a new workspace, and absent or corrupt legacy
+baseline files do not change this flow. Leave existing original-state files
+untouched; they are no longer read or updated. The skill cannot restore an
+earlier configuration.
 
-Before a new agent's first write, `initializeBaseline: true` permits a
-first-use review. This flag is not approval. Display the returned `baseline`
-section in the same complete review: approval explicitly confirms these
-states precede any topic-actions changes and authorizes saving them before
-dispatch. Do not add a separate baseline confirmation. Never supply the flag
-when earlier changes are known, or use it to bypass `original_baseline_missing`.
-When first use is materially uncertain, clarify it rather than assuming it.
-Later requests omit the flag and reuse the saved original. Preview,
-denial/cancellation and already-correct enable/disable do not create a baseline.
-
-The helper transactionally persists every topic's component ID, schema name,
-original On/Off state and non-state-content digest under the ignored
-`.local/topic-actions` directory before the first submission. It saves no
-dialogue bodies, authentication tokens, approval or caller context. A storage
-failure blocks dispatch. Minimal durable intent bookkeeping prevents another
-caller using this store from starting an overlapping write. An operation
-interrupted before its outcome is recorded remains blocked; do not clear its
-intent or promise automatic recovery.
-
-For `/topic-actions Restore the original topic states`, use `action: "restore"`
-through the same review/apply helper, selected-target checks, five-minute
-approval and one-submission flow. Display `restoreStates`, the baseline date,
-all recorded members, already-correct topics, protections and material
-limitations through the returned fixed wording.
-Treat an explicit request to revert the skill's changes or return to the
-initial topic states as restore, not as disabling every set.
-The computed delta may contain both On and Off changes. Restore only topics
-this skill changed, using current component definitions; do not restore old
-dialogue content, connections, membership or published versions.
-
-Missing/recreated identities, changed recorded membership, unknown states or
-intervening state/content edits on affected topics block restore. Preserve
-unrelated edits and report when unrelated topic states differ from the
-original; do not claim the entire agent is identical to its original state.
-Required/shared protections still apply. A protected or partially verified
-restore is not complete restoration.
-
-An uncertain recorded submission cannot be replayed as a normal action.
-A new explicit restore can review affected topics whose current state matches
-the recorded before or intended after state and whose content is unchanged.
-This does not attribute the previous outcome or reuse its approval.
-One approved restore submission is not a qualified atomic server rollback.
-Never restore automatically after a failed enable/disable.
-
-For agents already changed before baseline capture was implemented, current
-states are not the original. Report `original_baseline_missing`; historical
-baseline reconstruction/import is not automated. Do not invent a reset/import
-command, manually fabricate a store or silently label today's state original.
+After an uncertain submission, never retry or infer that the requested change
+succeeded. A later explicit request starts with new live evidence and requires
+a new approval for any actual changes. It is not a replay or recovery of the
+previous operation.
 
 ## Execution and truthful return
 
@@ -368,8 +529,8 @@ shared dependencies; this skill is not a standalone copy of the whole ADK.
 `AgentBuilderClient` is used for direct selected-agent identity verification,
 without requiring a particular realm or ALM enrollment.
 Dispatch and readback are serialized per target within the
-process, with durable intents preventing overlapping writes through the same
-local store. This does not protect against another workspace or maker or
+process. Independent processes, workspaces or makers can still overlap;
+there is no durable cross-process write lock. This does not
 establish server-side stale-write protection. The native adapter
 independently binds submission to its freshly read selected target and an exact
 computed state-only payload, and consumes at most one submission attempt.
@@ -401,9 +562,8 @@ completed, completed-with-protections, partial and unverified outcomes.
 Protected topics are never reported as disabled. Partial, protected or
 uncertain scope must not complete the caller's whole-set request.
 
-The local original-state baseline, minimal write bookkeeping and short-lived
-pending reviews are persisted under `.local/topic-actions`. Pending reviews
-contain only the non-secret target/request, evidence/review fingerprint and
+Only short-lived pending reviews are persisted under `.local/topic-actions`.
+Pending reviews contain only the non-secret target/request, evidence/review fingerprint and
 expiry metadata; they never contain an approval, caller context, token or full
 component inventory. A pending review is not permission to write. Its ID is
 atomically consumed before execution, and cannot resume or replay a write.

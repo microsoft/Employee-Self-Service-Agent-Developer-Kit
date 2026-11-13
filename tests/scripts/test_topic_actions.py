@@ -230,6 +230,103 @@ def test_proposed_catalog_cli_does_not_authenticate_or_claim_installed_availabil
     assert result["writeStatus"] == "not_attempted"
 
 
+def test_chat_output_rejects_interactive_execution_before_reading_input(monkeypatch, capsys):
+    class NoInput:
+        def readline(self):
+            pytest.fail("Invalid chat/terminal mode must not consume input.")
+
+    monkeypatch.setattr(entry.sys, "stdin", NoInput())
+    with pytest.raises(SystemExit) as error:
+        entry.main(["--execute", "--chat-output"])
+    assert error.value.code == 2
+    output = capsys.readouterr()
+    assert not output.out
+    assert "structured chat, not interactive --execute" in output.err
+
+
+@pytest.mark.parametrize("chat_output", [False, True])
+def test_agent_set_listing_cli_uses_read_only_discovery_without_set_keys_or_approval(
+    workspace, request_value, monkeypatch, capsys, chat_output,
+):
+    from topic_actions_catalog import parse_catalog
+    from topic_actions_discovery import DiscoveryTarget
+    from tests.scripts.test_topic_actions_runtime import SyntheticBackend, catalog_document, operation_evidence
+
+    calls = _auth(monkeypatch)
+    catalog = parse_catalog(catalog_document())
+    packet = operation_evidence(
+        {"a": "On", "shared": "On", "b": "Off"}, selected=("alpha", "beta"),
+    )
+    target = DiscoveryTarget(TENANT_ID, ENVIRONMENT_ID, AGENT_ID)
+    packet = replace(
+        packet, snapshot=replace(packet.snapshot, evidence=replace(packet.snapshot.evidence, target=target)),
+    )
+    backend = SyntheticBackend([packet])
+    monkeypatch.setattr("topic_actions_catalog.load_catalog", lambda: catalog)
+    def adapter(*args):
+        assert args[2] == ("alpha", "beta")
+        assert args[-1].read_only
+        return backend
+    monkeypatch.setattr("topic_actions_native.NativeActionBackend", adapter)
+    value = {key: item for key, item in request_value.items() if key not in ("action", "setKeys")}
+    monkeypatch.setattr(entry.sys, "stdin", io.StringIO(json.dumps(value)))
+    args = ["--list-agent-sets", "--workspace-root", str(workspace)]
+    assert entry.main(args + (["--chat-output"] if chat_output else [])) == 0
+    output = capsys.readouterr().out
+    result = json.loads(output.removeprefix(entry.RESULT_MARKER))
+    assert result["status"] == "sets_listed"
+    assert result["setCount"] == 2
+    if chat_output:
+        assert result["sets"] == [
+            {"key": "alpha", "name": "Synthetic alpha"}, {"key": "beta", "name": "Synthetic beta"},
+        ]
+        assert "| Synthetic alpha | 2 | Enabled |" in result["userMessage"]
+        assert "| Synthetic beta | 2 | Mixed |" in result["userMessage"]
+        assert not {"target", "warnings", "blockers", "topics"} & result.keys()
+    else:
+        assert result["target"] == request_value["target"]
+        assert [item["state"] for item in result["sets"]] == ["Enabled", "Mixed"]
+    assert [item["label"] for item in result["selectionQuestion"]["options"]] == [
+        "Synthetic alpha", "Synthetic beta",
+    ]
+    assert not result["completed"]
+    assert result["writeStatus"] == "not_attempted"
+    assert calls[0][1]["allow_write"] is False
+    assert calls[0][1]["include_connectivity"] is False
+    assert backend.reads == 1 and not backend.submissions
+    assert "do-not-emit" not in output and "private-token" not in output
+    assert entry.REVIEW_MARKER not in output
+    assert not (workspace / ".local" / "topic-actions").exists()
+
+
+@pytest.mark.parametrize("update", [
+    {"action": "enable"}, {"action": "disable"}, {"action": "restore"}, {"setKeys": ["alpha"]},
+])
+def test_agent_set_listing_rejects_mutation_or_selection_inputs_before_auth(request_value, update):
+    value = {
+        key: item for key, item in request_value.items() if key not in ("action", "setKeys")
+    }
+    with pytest.raises(entry.TopicActionsError):
+        entry.validate_request({**value, **update}, list_sets=True)
+
+
+def test_failed_agent_set_read_is_not_reported_as_an_empty_agent(workspace, request_value, monkeypatch):
+    from tests.scripts.test_topic_actions_runtime import SyntheticBackend
+
+    _auth(monkeypatch)
+    backend = SyntheticBackend([entry.requests.Timeout("private-service-detail")])
+    monkeypatch.setattr("topic_actions_native.NativeActionBackend", lambda *args: backend)
+    value = {key: item for key, item in request_value.items() if key not in ("action", "setKeys")}
+    result = entry.run_topic_actions(
+        value, workspace_root=workspace, confirm=None, list_sets=True,
+    )
+    assert result["status"] == "blocked"
+    assert "sets" not in result
+    assert "not available" not in result["userMessage"]
+    assert "private-service-detail" not in result["userMessage"]
+    assert not backend.submissions
+
+
 @pytest.mark.parametrize(("answer", "status", "completed"), [
     ("approve\n", "completed", True),
     ("deny\n", "denied", False),
@@ -254,7 +351,6 @@ def test_execute_cli_reviews_then_uses_explicit_same_session_consent(
             packet, snapshot=replace(packet.snapshot, evidence=replace(packet.snapshot.evidence, target=target)),
         )
     before, after = bind(before), bind(after)
-    request_value["initializeBaseline"] = True
     backend = SyntheticBackend([before, before, after])
     monkeypatch.setattr("topic_actions_native.NativeActionBackend", lambda *args: backend)
     monkeypatch.setattr(entry.sys, "stdin", io.StringIO(json.dumps(request_value) + "\n" + answer))
@@ -283,7 +379,7 @@ def test_execute_cli_reviews_then_uses_explicit_same_session_consent(
     assert "callerContext" not in result
     assert "do-not-emit" not in output
     assert "private-token" not in output
-    assert review["baseline"]["status"] == "capture_before_first_write"
+    assert "baseline" not in review
 
 
 def test_preview_is_truthful_nonmutating_and_uses_read_only_auth(
@@ -309,26 +405,25 @@ def test_preview_is_truthful_nonmutating_and_uses_read_only_auth(
     assert backend.reads == 1 and not backend.submissions
 
 
-def test_restore_request_derives_scope_and_cannot_initialize_or_narrow_original(request_value):
+def test_restore_request_is_not_supported(request_value):
     value = {**request_value, "action": "restore"}
     value.pop("setKeys")
-    assert entry.validate_request(value)["setKeys"] == []
-    for update in (
-        {"setKeys": ["synthetic-set"]}, {"initializeBaseline": True},
-        {"initializeBaseline": "true"},
-    ):
+    for update in ({}, {"setKeys": []}, {"setKeys": ["synthetic-set"]}):
         with pytest.raises(entry.TopicActionsError):
             entry.validate_request({**value, **update})
 
 
-def test_restore_missing_original_stops_without_authentication(workspace, request_value):
-    value = {**request_value, "action": "restore", "setKeys": []}
+@pytest.mark.parametrize("update", [
+    {"action": "restore", "setKeys": []}, {"initializeBaseline": True},
+    {"initializeBaseline": False},
+])
+def test_removed_inputs_stop_without_authentication(workspace, request_value, update):
+    value = {**request_value, **update}
     result = entry.run_topic_actions(
         value, workspace_root=workspace,
-        confirm=lambda _: pytest.fail("Missing original evidence cannot ask for consent."),
+        confirm=lambda _: pytest.fail("Unsupported requests cannot ask for consent."),
     )
-    assert result["reason"] == "original_baseline_missing"
-    assert "cannot be reconstructed from today's states" in result["message"]
+    assert result["reason"] == "invalid_request"
     assert result["writeStatus"] == "not_attempted"
 
 
@@ -336,6 +431,7 @@ def test_restore_missing_original_stops_without_authentication(workspace, reques
     {"contractVersion": 2},
     {"contractVersion": True},
     {"action": "publish"},
+    {"action": "list"},
     {"setKeys": []},
     {"setKeys": ["duplicate", "duplicate"]},
     {"setKeys": ["unsafe\nkey"]},

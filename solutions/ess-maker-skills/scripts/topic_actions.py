@@ -34,7 +34,7 @@ RESULT_MARKER = "TOPIC_ACTIONS_RESULT_JSON:"
 REVIEW_MARKER = "TOPIC_ACTIONS_REVIEW_JSON:"
 TARGET_FIELDS = frozenset({"tenantId", "environmentId", "agentId"})
 REQUEST_FIELDS = frozenset(
-    {"contractVersion", "target", "action", "setKeys", "entry", "callerContext", "initializeBaseline"}
+    {"contractVersion", "target", "action", "setKeys", "entry", "callerContext"}
 )
 
 
@@ -49,43 +49,8 @@ class TopicActionsError(ValueError):
 def _entry_message(reason: str, message: str) -> str:
     if reason == "cancelled":
         return "Canceled. No topics were changed."
-    if reason == "original_baseline_missing":
-        message = (
-            "No saved original topic-state baseline is available. An already-modified "
-            "agent's original states cannot be reconstructed from today's states. "
-            "First-use initialization is only valid before any topic-actions changes; "
-            "recovery of an older original baseline is not automated."
-        )
-    elif reason == "restore_conflict":
-        message = (
-            "A topic affected by the skill no longer matches its recorded state or "
-            "content. Restore stopped to preserve intervening edits. Resolve the "
-            "conflict before requesting a fresh restore review."
-        )
-    elif reason in ("baseline_topic_identity_changed", "restore_membership_changed"):
-        message = (
-            "Topic identity or recorded set membership changed since the original "
-            "baseline. Restore cannot safely substitute or omit topics. Review the "
-            "changed membership before starting another request."
-        )
-    elif reason == "previous_write_uncertain_restore_required":
-        message = (
-            "A previous submission is uncertain and cannot be replayed as a normal "
-            "enable/disable action. Request a fresh review to restore the saved "
-            "original states; conflicting evidence will still block restore."
-        )
-    elif reason == "topic_operation_in_progress_or_interrupted":
-        message = (
-            "Another topic operation is running or stopped before its outcome was "
-            "recorded. No operation will be replayed automatically. Keep the saved "
-            "baseline; automatic recovery of an interrupted operation is unavailable."
-        )
-    elif reason in ("baseline_invalid", "baseline_storage_unavailable"):
-        message = (
-            "The original-state store could not be safely read or saved. Keep the "
-            "existing baseline; do not delete or replace it with current states. "
-            "Restore and further writes remain blocked until storage is usable."
-        )
+    if reason == "invalid_request":
+        message = "Provide a valid enable or disable request with explicit whole topic-set keys. Restore is not supported."
     elif reason == "setup_not_run":
         message = (
             "ADK setup has not established the account, agent and environment "
@@ -157,7 +122,7 @@ def _guid(value: Any) -> str:
     return str(uuid.UUID(value))
 
 
-def validate_request(value: Any) -> dict[str, Any]:
+def validate_request(value: Any, *, list_sets: bool = False) -> dict[str, Any]:
     """Validate provisional logical inputs, not topic-set membership."""
     if not isinstance(value, dict) or set(value) - REQUEST_FIELDS:
         raise TopicActionsError("invalid_request", "Unsupported request shape.")
@@ -173,19 +138,15 @@ def validate_request(value: Any) -> dict[str, Any]:
         raise TopicActionsError(
             "invalid_request", "Provide one tenant, environment and agent ID."
         ) from exc
-    action = value.get("action")
-    if action not in ("enable", "disable", "restore"):
+    action = value.get("action", "list" if list_sets else None)
+    if action not in (("list",) if list_sets else ("enable", "disable")):
         raise TopicActionsError(
-            "invalid_request", "Choose one action: enable, disable or restore."
+            "invalid_request", "Choose one action: enable or disable. Restore is not supported."
         )
-    initialize = value.get("initializeBaseline", False)
-    if type(initialize) is not bool or (action == "restore" and initialize):
-        raise TopicActionsError("invalid_request", "Restore requires an existing original baseline.")
-    keys = value.get("setKeys", [] if action == "restore" else None)
+    keys = value.get("setKeys", [] if list_sets else None)
     if (
         not isinstance(keys, list)
-        or (not keys and action != "restore")
-        or (action == "restore" and keys)
+        or (bool(keys) if list_sets else not keys)
         or any(
             not isinstance(key, str)
             or not key
@@ -217,9 +178,8 @@ def validate_request(value: Any) -> dict[str, Any]:
     return {
         "contractVersion": version,
         "target": target,
-        "action": value["action"],
+        "action": action,
         "setKeys": list(keys),
-        "initializeBaseline": initialize,
         "entry": entry,
         "callerContext": deepcopy(context),
     }
@@ -465,13 +425,13 @@ def run_topic_actions(
     account_hint: str | None = None, cancelled: bool = False, preview: bool = False,
     review_only: bool = False, approved_binding: str | None = None,
     approval_deadline: float | None = None,
+    list_sets: bool = False,
 ) -> dict[str, Any]:
     """Shared selected-agent entry; every write uses freshly verified evidence."""
     from topic_actions_catalog import load_catalog
     from topic_actions_discovery import DiscoveryError, DiscoveryTarget
-    from topic_actions_execution import TopicActionSession
+    from topic_actions_execution import TopicActionSession, agent_set_overview
     from topic_actions_native import NativeActionBackend
-    from topic_actions_state import TopicStateError, TopicStateStore
 
     context = value.get("callerContext", {}) if isinstance(value, dict) else {}
     context = deepcopy(context) if isinstance(context, dict) else {}
@@ -480,24 +440,22 @@ def run_topic_actions(
     target = None
     stage = "authentication_failed"
     try:
-        request = validate_request(value)
+        request = validate_request(value, list_sets=list_sets)
         target = request["target"]
         connection = _workspace_target(workspace_root, target, require_connect_ready=False)
         discovery_target = DiscoveryTarget(target["tenantId"], target["environmentId"], target["agentId"])
-        state_store = TopicStateStore(
-            workspace_root.resolve(), discovery_target, first_use=request["initializeBaseline"],
-        )
-        selected_keys = (
-            state_store.restore_keys() if request["action"] == "restore"
-            else tuple(request["setKeys"])
-        )
         catalog = load_catalog()
+        selected_keys = (
+            tuple(item["key"] for item in catalog.document()["sets"])
+            if list_sets else tuple(request["setKeys"])
+        )
+        read_only = preview or review_only or list_sets
         token, tenant, account = authenticate_flightcheck(
             connection["ring"],
             cache_path=workspace_root / DEFAULT_TOKEN_CACHE,
             account_hint=account_hint,
             include_connectivity=False,
-            allow_write=not (preview or review_only),
+            allow_write=not read_only,
             emit_account_identity=False,
             return_account_identity=True,
         )
@@ -510,7 +468,7 @@ def run_topic_actions(
         components = TopicActionsClient(
             target["environmentId"], target["agentId"], target["tenantId"],
             ring=connection["ring"], host=connection["host"],
-            token=token, account=account, read_only=preview or review_only,
+            token=token, account=account, read_only=read_only,
         )
         stage = "target_unverified"
         client = AgentBuilderClient(
@@ -521,12 +479,12 @@ def run_topic_actions(
             backend = NativeActionBackend(
                 client, discovery_target, selected_keys, catalog, account, components,
             )
-            if request["action"] == "restore":
-                backend.state_store = state_store
-                backend.restoring = True
+            if list_sets:
+                result = agent_set_overview(backend.read(), catalog)
+                result["callerContext"] = deepcopy(request["callerContext"])
+                return result
             result = TopicActionSession(
                 backend, request["action"], caller_context=request["callerContext"],
-                state_store=state_store,
             ).run(
                 confirm, preview=preview, review_only=review_only,
                 approved_binding=approved_binding, approval_deadline=approval_deadline,
@@ -535,11 +493,6 @@ def run_topic_actions(
             return _entry_feedback(result)
         finally:
             client.session.close()
-    except TopicStateError as error:
-        return _result(
-            error.reason, "Original topic-state evidence is missing, conflicting or unavailable.",
-            context, target=target,
-        )
     except (TopicActionsError, DiscoveryError) as error:
         return _result(error.reason, str(error), context, target=target)
     except AgentBuilderHTTPError as error:
@@ -618,19 +571,42 @@ def _confirm_stdin(plan: dict[str, Any]) -> str:
     return answer.strip().casefold() if answer else "cancel"
 
 
+def _print_result(result: dict[str, Any], *, chat_output: bool) -> None:
+    if chat_output:
+        public = {key: result[key] for key in (
+            "contractVersion", "status", "completed", "writeStatus", "userMessage",
+            "reviewId", "expiresAt", "expiresInSeconds", "setCount", "discoveryComplete",
+            "selectionQuestion", "approvalQuestion",
+        ) if key in result}
+        if "sets" in result:
+            public["sets"] = [
+                {"key": item["key"], "name": item["name"]} for item in result["sets"]
+            ]
+    else:
+        public = {key: item for key, item in result.items() if key != "callerContext"}
+    print(RESULT_MARKER + json.dumps(public, sort_keys=True))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace-root", type=Path, default=Path.cwd())
     parser.add_argument("--account", help="Verify this Microsoft work account.")
     parser.add_argument("--cancel", action="store_true")
+    parser.add_argument(
+        "--chat-output", action="store_true",
+        help="Emit only the rendered message and chat-flow metadata, without raw diagnostics.",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--preview", action="store_true", help="Read and plan without write scopes or executable approval.")
     mode.add_argument("--execute", action="store_true", help="Read one JSON request line, then collect explicit approval on standard input.")
     mode.add_argument("--review", action="store_true", help="Prepare a five-minute, single-use review for chat approval.")
     mode.add_argument("--apply-review", metavar="REVIEW_ID", help="Consume a pending review using the maker's explicit decision.")
     mode.add_argument("--list-sets", action="store_true", help="List provisional source definitions, not installed availability.")
+    mode.add_argument("--list-agent-sets", action="store_true", help="Read the selected agent's available topic sets and aggregate states.")
     parser.add_argument("--decision", choices=("approve", "deny", "cancel"), help="Actual maker decision for --apply-review; never preselected.")
     args = parser.parse_args(argv)
+    if args.chat_output and args.execute:
+        parser.error("--chat-output is for structured chat, not interactive --execute.")
     if bool(args.apply_review) != bool(args.decision) or (args.apply_review and args.cancel):
         parser.error("--apply-review requires --decision and cannot be combined with --cancel.")
     if args.list_sets:
@@ -648,7 +624,7 @@ def main(argv: list[str] | None = None) -> int:
             result["userMessage"] = result_text(result)
         except DiscoveryError as error:
             result = _result(error.reason, str(error), {})
-        print(RESULT_MARKER + json.dumps(result, sort_keys=True))
+        _print_result(result, chat_output=args.chat_output)
         return 0 if result["status"] == "source_catalog_only" else 1
     if args.execute and not args.cancel:
         print(
@@ -681,6 +657,11 @@ def main(argv: list[str] | None = None) -> int:
             result = review_topic_actions(
                 value, workspace_root=args.workspace_root, account_hint=args.account,
             )
+        elif args.list_agent_sets:
+            result = run_topic_actions(
+                value, workspace_root=args.workspace_root, confirm=None,
+                account_hint=args.account, list_sets=True,
+            )
         elif args.preview or args.execute:
             result = run_topic_actions(
                 value, workspace_root=args.workspace_root, confirm=_confirm_stdin,
@@ -691,10 +672,12 @@ def main(argv: list[str] | None = None) -> int:
                 value, workspace_root=args.workspace_root,
                 account_hint=args.account, cancelled=args.cancel,
             )
-    public = {key: item for key, item in result.items() if key != "callerContext"}
-    print(RESULT_MARKER + json.dumps(public, sort_keys=True))
+    _print_result(result, chat_output=args.chat_output)
     return 0 if (
-        result["status"] in ("inspected", "preview", "review_ready", "cancelled", "denied")
+        result["status"] in (
+            "inspected", "preview", "review_ready", "sets_listed",
+            "cancelled", "denied",
+        )
         or result.get("completed") is True
     ) else 1
 

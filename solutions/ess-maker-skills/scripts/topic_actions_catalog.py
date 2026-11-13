@@ -56,8 +56,6 @@ class CatalogSnapshot:
     evidence_kind: str = "provided_inventory"
     source_inventory_only: bool = False
     warnings: tuple[str, ...] = ()
-    restore_states: tuple[tuple[str, str], ...] = ()
-    restore_revision: str | None = None
 
 
 def parse_catalog(document: dict) -> Catalog:
@@ -139,10 +137,12 @@ def compare_catalog(
     installed_packages: tuple[InstalledPackage, ...] = (),
     trusted_catalog_revision: str | None = None,
     dependency_coverage_verified: bool = False,
+    available_topics_only: bool = False,
 ) -> CatalogSnapshot:
     """Resolve exact members and retain every blocker in the selected scope.
 
-    Package records and trust arguments are adapter inputs, not customer
+    Native current-state operations use only members present in the agent.
+    Package records and policy arguments are adapter inputs, not customer
     assertions. The native adapter currently has no qualified package source.
     """
     selected = _selection(selected_keys)
@@ -151,7 +151,7 @@ def compare_catalog(
     target = _target(inventory.target)
     if parse_catalog(catalog.document()) != catalog:
         _fail("invalid_catalog")
-    if type(dependency_coverage_verified) is not bool:
+    if type(dependency_coverage_verified) is not bool or type(available_topics_only) is not bool:
         _fail("invalid_evidence")
     if not isinstance(installed_packages, tuple) or any(type(item) is not InstalledPackage for item in installed_packages):
         _fail("invalid_package_evidence")
@@ -201,7 +201,15 @@ def compare_catalog(
         choices = bound or candidates
         if len(choices) != 1:
             if topic_set["key"] in selected:
-                reasons.append(f"ambiguous_or_unsupported_set:{topic_set['key']}")
+                if available_topics_only and not any(
+                    by_schema.get(name.casefold())
+                    for variant in topic_set["sourceVariants"]
+                    for name in variant["memberSchemaNames"]
+                ):
+                    reasons.append(f"set_absent:{topic_set['key']}")
+                    sets.append(TopicSet(topic_set["key"], (), None, None))
+                else:
+                    reasons.append(f"ambiguous_or_unsupported_set:{topic_set['key']}")
             resolved_sets[topic_set["key"]] = None
             continue
         variant = choices[0]
@@ -256,14 +264,19 @@ def compare_catalog(
         if variant["membershipStatus"] != "owner_approved" or variant["membershipComplete"] is not True:
             reasons.append(f"membership_review_pending:{key}")
         ids = []
+        if key in selected and not any(by_schema.get(name.casefold()) for name in names):
+            reasons.append(f"set_absent:{key}")
         for name in names:
             candidates = by_schema.get(name.casefold(), [])
+            if available_topics_only and not candidates:
+                continue
             matches = candidates if len(candidates) == 1 and candidates[0].schema_name == name else []
             identity = matches[0].component_id if len(matches) == 1 else f"unresolved:{package['key']}:{name}"
             state = matches[0].state if len(matches) == 1 else "Unknown"
             definition = registry[name]
             if len(matches) != 1:
-                reasons.append(f"unresolved_member:{key}:{name}")
+                reason = "missing_member" if not candidates else "ambiguous_member"
+                reasons.append(f"{reason}:{key}:{name}")
             if definition["classification"] != "isv_topic" or definition["required"] is not False:
                 reasons.append(f"classification_unverified:{key}:{name}")
             topic = TopicEvidence(identity, definition["required"], state)
@@ -321,7 +334,9 @@ def snapshot_from_response(
         for topic in inventory.topics
     ))
     snapshot = replace(
-        compare_catalog(catalog, inventory, selected_keys), evidence_kind="native_read",
+        compare_catalog(
+            catalog, inventory, selected_keys, available_topics_only=source_inventory_only,
+        ), evidence_kind="native_read",
     )
     if not source_inventory_only:
         return snapshot
@@ -356,30 +371,20 @@ def snapshot_from_response(
 
 def plan_catalog_actions(snapshot: CatalogSnapshot, action: str) -> TopicPlan:
     """Compute eligibility and outside-set protection instead of accepting skips."""
-    if type(snapshot) is not CatalogSnapshot or action not in ("enable", "disable", "restore"):
+    if type(snapshot) is not CatalogSnapshot or action not in ("enable", "disable"):
         _fail("invalid_plan")
     evidence = snapshot.evidence
     topics = {topic.component_id: topic for topic in evidence.topics}
     union = set(evidence.selected_member_ids)
     reasons = list(evidence.blockers)
-    restore = dict(snapshot.restore_states)
-    if action == "restore" and (
-        not snapshot.restore_revision or not snapshot.source_inventory_only
-        or len(restore) != len(snapshot.restore_states) or set(restore) != union
-        or any(state not in ("On", "Off") for state in restore.values())
-    ):
-        _fail("original_baseline_missing")
     delta, satisfied, skips = [], [], []
     for identity in evidence.selected_member_ids:
         topic = topics.get(identity)
         if topic is None or topic.state == "Unknown":
             reasons.append(f"unknown_state:{identity}")
             continue
-        desired = restore[identity] if action == "restore" else ("On" if action == "enable" else "Off")
+        desired = "On" if action == "enable" else "Off"
         disabling = desired == "Off"
-        if action == "restore" and topic.state == desired:
-            satisfied.append(identity)
-            continue
         if topic.required is None and not snapshot.source_inventory_only:
             reasons.append(f"unknown_protection:{identity}")
             continue
@@ -425,6 +430,5 @@ def plan_catalog_actions(snapshot: CatalogSnapshot, action: str) -> TopicPlan:
         evidence_kind="catalog",
         execution_policy="source_inventory" if snapshot.source_inventory_only else "qualified_catalog",
         warnings=snapshot.warnings, members=snapshot.members,
-        desired_states=snapshot.restore_states if action == "restore" else (),
     )
     return replace(plan, approval_basis="catalog:" + _digest(asdict(plan)))

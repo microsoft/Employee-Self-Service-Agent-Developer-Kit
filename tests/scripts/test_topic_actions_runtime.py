@@ -410,6 +410,7 @@ def test_generated_readback_does_not_mask_authored_identity_or_unselected_revisi
     result = TopicActionSession(backend, "enable").run(lambda _: "approve")
 
     assert result["status"] == "partial" and not result["completed"]
+    assert result["preservationStatus"] == "violated"
     assert {topic["status"] for topic in result["topics"]} == {"observed_desired"}
     assert "preservation could not be verified" in result["message"]
     assert result["blockers"] == ["verification_incomplete", "fresh_approval_required"]
@@ -563,6 +564,9 @@ def test_partial_or_out_of_scope_readback_is_not_success(change):
     backend = SyntheticBackend([before, before, after])
     result = TopicActionSession(backend, "enable").run(lambda _: "approve")
     assert result["status"] == ("unverified" if change == "read_failure" else "partial")
+    assert result["preservationStatus"] == (
+        "unverified" if change == "read_failure" else "verified" if change == "partial" else "violated"
+    )
     assert not result["completed"]
     assert len(backend.submissions) == 1
     assert "private-response" not in json.dumps(result)
@@ -574,15 +578,18 @@ def test_protected_topic_is_not_reported_as_disabled_or_whole_set_complete():
     backend = SyntheticBackend([before, before, after])
     result = TopicActionSession(backend, "disable").run(lambda _: "approve")
     assert result["status"] == "completed_with_protections"
+    assert result["preservationStatus"] == "verified"
     assert not result["completed"]
     assert next(item for item in result["topics"] if item["componentId"] == "shared")["status"] == "protected"
     assert len(backend.submissions[0][1]["botComponentChanges"]) == 1
 
 
-def test_noop_is_approved_and_rechecked_but_never_submitted():
+def test_noop_is_rechecked_without_approval_or_submission():
     before = operation_evidence({"a": "On", "shared": "On"})
     backend = SyntheticBackend([before, before])
-    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    result = TopicActionSession(backend, "enable").run(
+        lambda _: pytest.fail("No changes must not ask for approval."),
+    )
     assert result["status"] == "already_correct" and result["completed"]
     assert backend.reads == 2 and not backend.submissions
     assert {item["status"] for item in result["topics"]} == {"already_correct"}
@@ -778,7 +785,7 @@ def test_payload_still_rejects_missing_or_foreign_parents_outside_bot_settings_o
         build_state_payload(packet, plan)
 
 
-def test_native_dev_noop_confirms_and_rereads_without_submission():
+def test_native_dev_noop_rereads_without_approval_or_submission():
     backend = dev_native_backend()
     reviews = []
 
@@ -788,9 +795,24 @@ def test_native_dev_noop_confirms_and_rereads_without_submission():
 
     result = TopicActionSession(backend, "disable").run(confirm)
     assert result["status"] == "already_correct" and result["completed"]
-    assert reviews[0]["alreadyCorrect"] == ["a", "shared"]
+    assert not reviews
     assert backend.components.read_components.call_count == 2
     backend.components.submit_state_payload.assert_not_called()
+
+
+def test_noop_state_drift_requires_new_review_and_never_automatically_writes():
+    before = operation_evidence({"a": "On", "shared": "On"})
+    drifted = operation_evidence({"a": "Off", "shared": "On"}, revision="r2")
+    backend = SyntheticBackend([before, drifted])
+    result = TopicActionSession(backend, "enable").run(
+        lambda _: pytest.fail("Drift must not trigger automatic approval."),
+        review_only=True,
+    )
+    assert result["status"] == "review_required"
+    assert result["blockers"] == ["evidence_changed"]
+    assert result["writeStatus"] == "not_attempted"
+    assert not result["completed"]
+    assert not backend.submissions
 
 
 @pytest.mark.parametrize("realm", ["dev", "test", "prod", None, 0, 1, 2])
@@ -818,13 +840,11 @@ def test_native_direct_lookup_still_must_identify_the_selected_agent(returned_id
     backend.components.submit_state_payload.assert_not_called()
 
 
-@pytest.mark.parametrize("change", ["missing_member", "unknown_state", "wrong_parent"])
+@pytest.mark.parametrize("change", ["unknown_state", "wrong_parent"])
 def test_dev_policy_does_not_waive_identity_membership_or_state_failures(change):
     backend = dev_native_backend()
     body = deepcopy(next(backend.components.read_components.side_effect))
-    if change == "missing_member":
-        body["botComponentChanges"].pop(0)
-    elif change == "unknown_state":
+    if change == "unknown_state":
         body["botComponentChanges"][0]["component"]["status"] = "Active"
     else:
         body["botComponentChanges"][0]["component"]["parentBotId"] = TARGET.tenant_id
@@ -833,6 +853,90 @@ def test_dev_policy_does_not_waive_identity_membership_or_state_failures(change)
         lambda _: pytest.fail("Unresolved topics cannot request approval."),
     )
     assert result["status"] == "blocked"
+    backend.components.submit_state_payload.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["enable", "disable"])
+@pytest.mark.parametrize("absent", [{"a"}, {"shared"}, {"a", "b"}])
+def test_native_actions_use_all_present_set_members_regardless_of_template_count(action, absent):
+    desired = "On" if action == "enable" else "Off"
+    initial = "Off" if action == "enable" else "On"
+    backend = dev_native_backend(
+        selected=("alpha", "beta") if absent == {"a", "b"} else ("alpha",),
+        before={"a": initial, "shared": initial, "b": "Off"},
+        after={"a": desired, "shared": desired, "b": "Off"},
+    )
+    packets = list(backend.components.read_components.side_effect)
+    for packet in packets:
+        packet["botComponentChanges"] = [
+            row for row in packet["botComponentChanges"]
+            if row["component"]["id"] not in absent
+        ]
+    backend.components.read_components.side_effect = packets
+    reviews = []
+    result = TopicActionSession(backend, action).run(
+        lambda review: reviews.append(deepcopy(review)) or "approve",
+    )
+    assert result["status"] == "completed"
+    assert result["completed"]
+    expected = {"a", "shared"} - absent
+    assert {member["componentId"] for member in reviews[0]["members"]} == expected
+    assert "not available" not in reviews[0]["userMessage"]
+    assert not reviews[0]["blockers"]
+    payload = backend.components.submit_state_payload.call_args.args[0]
+    assert {row["component"]["id"] for row in payload["botComponentChanges"]} == expected
+    assert {item["componentId"] for item in result["topics"]} == expected
+    backend.components.submit_state_payload.assert_called_once()
+
+
+def test_absent_outside_members_do_not_remove_shared_topic_protection():
+    backend = dev_native_backend(before={"a": "On", "shared": "On", "b": "Off"})
+    body = deepcopy(next(backend.components.read_components.side_effect))
+    body["botComponentChanges"] = [
+        row for row in body["botComponentChanges"] if row["component"]["id"] not in {"a", "b"}
+    ]
+    backend.components.read_components.side_effect = [body]
+    result = TopicActionSession(backend, "disable").run(
+        lambda _: pytest.fail("A shared topic used by another enabled set stays protected."),
+    )
+    assert result["status"] == "blocked"
+    assert result["blockers"] == ["plan_all_protected"]
+    assert result["plan"]["protected"] == [
+        {"componentId": "shared", "reason": "shared", "protectingSets": ["beta"]},
+    ]
+    backend.components.submit_state_payload.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["enable", "disable"])
+def test_fewer_present_topics_already_matching_need_no_approval(action):
+    desired = "On" if action == "enable" else "Off"
+    backend = dev_native_backend(before={"shared": desired}, after={"shared": desired})
+    packets = list(backend.components.read_components.side_effect)
+    for packet in packets:
+        packet["botComponentChanges"] = [
+            row for row in packet["botComponentChanges"] if row["component"]["id"] != "a"
+        ]
+    backend.components.read_components.side_effect = packets
+    result = TopicActionSession(backend, action).run(
+        lambda _: pytest.fail("Already matching present topics do not need approval."),
+    )
+    assert result["status"] == "already_correct"
+    assert result["completed"]
+    assert not result["blockers"]
+    assert "not available" not in result["userMessage"]
+    backend.components.submit_state_payload.assert_not_called()
+
+
+def test_present_member_selection_is_rechecked_after_approval():
+    backend = dev_native_backend()
+    packets = list(backend.components.read_components.side_effect)
+    packets[0]["botComponentChanges"] = [
+        row for row in packets[0]["botComponentChanges"] if row["component"]["id"] != "a"
+    ]
+    backend.components.read_components.side_effect = packets
+    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    assert result["status"] == "review_required"
+    assert "evidence_changed" in result["blockers"]
     backend.components.submit_state_payload.assert_not_called()
 
 

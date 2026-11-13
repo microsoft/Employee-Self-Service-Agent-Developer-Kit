@@ -18,12 +18,11 @@ from typing import Callable, Protocol
 from requests import RequestException
 
 from agentbuilder import AgentBuilderError, AgentBuilderHTTPError
-from topic_actions_catalog import CatalogSnapshot, plan_catalog_actions
+from topic_actions_catalog import Catalog, CatalogSnapshot, plan_catalog_actions
 from topic_actions_components import normalize_state
 from topic_actions_discovery import _identity
 from topic_actions_planning import TopicPlan, _digest
-from topic_actions_presentation import result_text, review_text
-from topic_actions_state import TopicStateError, TopicStateStore
+from topic_actions_presentation import approval_question, result_text, review_text
 
 
 _LOCKS_GUARD = threading.Lock()
@@ -110,7 +109,9 @@ def build_state_payload(evidence: OperationEvidence, plan: TopicPlan) -> dict:
     }
 
 
-def public_plan(plan: TopicPlan, evidence: OperationEvidence | None = None) -> dict:
+def public_plan(
+    plan: TopicPlan, evidence: OperationEvidence | None = None, *, catalog: Catalog | None = None,
+) -> dict:
     def changes(items):
         return [
             {"componentId": item.component_id, "before": item.before, "after": item.after}
@@ -127,9 +128,6 @@ def public_plan(plan: TopicPlan, evidence: OperationEvidence | None = None) -> d
         "proposedChanges": changes(plan.delta),
         "observedDifferences": changes(plan.state_differences),
         "alreadyCorrect": list(plan.satisfied_member_ids),
-        "restoreStates": [
-            {"componentId": identity, "state": state} for identity, state in plan.desired_states
-        ],
         "protected": [{
             "componentId": item.component_id, "reason": item.reason,
             "protectingSets": list(item.protecting_sets),
@@ -142,6 +140,15 @@ def public_plan(plan: TopicPlan, evidence: OperationEvidence | None = None) -> d
             for key, schema, identity in plan.members
         ],
     }
+    if catalog is not None:
+        definitions = catalog.document()["sets"]
+        result["setNames"] = {
+            item["key"]: f"{item['integration']['name']} {item['name']}"
+            for item in definitions
+        }
+        result["setIntegrations"] = {
+            item["key"]: item["integration"]["name"] for item in definitions
+        }
     if evidence is not None:
         result["account"] = evidence.account_id
         result["currentStates"] = [
@@ -149,6 +156,59 @@ def public_plan(plan: TopicPlan, evidence: OperationEvidence | None = None) -> d
             for topic in evidence.snapshot.evidence.topics
             if topic.component_id in evidence.snapshot.evidence.selected_member_ids
         ]
+    return result
+
+
+def agent_set_overview(evidence: OperationEvidence, catalog: Catalog) -> dict:
+    """Summarize present sets from one verified read, without planning a write."""
+    snapshot = evidence.snapshot
+    topics = {item.component_id: item for item in snapshot.evidence.topics}
+    sets = []
+    complete = True
+    for definition in catalog.document()["sets"]:
+        key = definition["key"]
+        if f"set_absent:{key}" in snapshot.evidence.blockers:
+            continue
+        members = [identity for member_key, _, identity in snapshot.members if member_key == key]
+        unresolved = (
+            None in members
+            or f"ambiguous_or_unsupported_set:{key}" in snapshot.evidence.blockers
+        )
+        if not members and not unresolved:
+            continue
+        identities = {identity for identity in members if identity is not None}
+        states = {topics[identity].state for identity in identities}
+        state = "Unknown" if unresolved or "Unknown" in states or not states else (
+            "Enabled" if states == {"On"} else "Disabled" if states == {"Off"} else "Mixed"
+        )
+        complete = complete and not unresolved
+        sets.append({
+            "key": key,
+            "name": f"{definition['integration']['name']} {definition['name']}",
+            "topicCount": None if unresolved else len(identities),
+            "state": state,
+        })
+    result = {
+        "contractVersion": 1, "contractStatus": "provisional",
+        "status": "sets_listed", "reason": "sets_listed",
+        "completed": False, "writeStatus": "not_attempted",
+        "target": {
+            "tenantId": snapshot.evidence.target.tenant_id,
+            "environmentId": snapshot.evidence.target.environment_id,
+            "agentId": snapshot.evidence.target.agent_id,
+        },
+        "sets": sets, "setCount": len(sets), "discoveryComplete": complete,
+        "selectionQuestion": {
+            "header": "Which topic sets would you like to change?",
+            "question": "Which topic sets would you like to change?",
+            "multiSelect": True,
+            "options": [{"label": item["name"]} for item in sets],
+            "allowFreeformInput": False,
+        } if complete and sets else None,
+        "warnings": list(snapshot.warnings),
+        "availabilityDiagnostics": list(snapshot.evidence.blockers),
+    }
+    result["userMessage"] = result_text(result)
     return result
 
 
@@ -210,7 +270,9 @@ def _preservation_content(
     return content
 
 
-def _reconcile(before: OperationEvidence, after: OperationEvidence, plan: TopicPlan) -> tuple[list[dict], bool]:
+def _reconcile(
+    before: OperationEvidence, after: OperationEvidence, plan: TopicPlan,
+) -> tuple[list[dict], bool, str]:
     """Observed desired state after an uncertain submission is not attribution."""
     before_map = _component_map(before.body)
     after_map = _component_map(after.body)
@@ -255,14 +317,12 @@ def _reconcile(before: OperationEvidence, after: OperationEvidence, plan: TopicP
             )
             reason = "readback"
         else:
-            desired = (
-                dict(before.snapshot.restore_states)[identity] if plan.action == "restore"
-                else ("On" if plan.action == "enable" else "Off")
-            )
+            desired = "On" if plan.action == "enable" else "Off"
             status = "already_correct" if state == desired else "unverified"
             reason = "readback"
         results.append({"componentId": identity, "state": state, "status": status, "reason": reason})
-    return results, containment and stable_authority
+    preservation = "violated" if not containment else "verified" if stable_authority else "unverified"
+    return results, containment and stable_authority, preservation
 
 
 class TopicActionSession:
@@ -271,19 +331,13 @@ class TopicActionSession:
     def __init__(
         self, backend: ActionBackend, action: str, *, caller_context: dict | None = None,
         clock: Callable[[], float] = time.monotonic,
-        state_store: TopicStateStore | None = None,
     ) -> None:
-        if action not in ("enable", "disable", "restore"):
+        if action not in ("enable", "disable"):
             raise ValueError("Unsupported action.")
         self.backend = backend
         self.action = action
         self.caller_context = deepcopy(caller_context or {})
         self.clock = clock
-        self.state_store = state_store
-        self._state_revision = ""
-        self._baseline_review = None
-        self._state_operation = None
-        self._readback = None
         self._used = False
 
     def run(
@@ -296,8 +350,6 @@ class TopicActionSession:
         self._used = True
         try:
             evidence = self.backend.read()
-        except TopicStateError as error:
-            return self._result("blocked", blockers=(error.reason,))
         except AgentBuilderHTTPError as error:
             reason = {
                 401: "authentication_failed",
@@ -321,29 +373,24 @@ class TopicActionSession:
             )
         if preview:
             return self._result("preview", plan=plan, evidence=evidence)
-        if self.state_store is not None and (plan.delta or self.action == "restore"):
-            try:
-                self._state_revision, self._baseline_review = self.state_store.review(
-                    evidence, restoring=self.action == "restore",
-                )
-            except TopicStateError as error:
-                return self._result("blocked", plan=plan, blockers=(error.reason,))
+        if not plan.delta and approved_binding is None:
+            return self._execute(plan, evidence.fingerprint(), self.clock() + 300)
         # Freeze the basis before handing the public copy to the interaction.
         basis = evidence.fingerprint()
         deadline = self.clock() + 300
         if approval_deadline is not None:
             deadline = min(deadline, approval_deadline)
         try:
-            review = {**public_plan(plan, evidence), "account": evidence.account_id}
-            if self._baseline_review is not None:
-                review["baseline"] = deepcopy(self._baseline_review)
+            review = public_plan(plan, evidence, catalog=getattr(self.backend, "catalog", None))
             review["userMessage"] = review_text(review)
-            binding = _digest({
-                "evidence": basis, "review": review, "stateRevision": self._state_revision,
-            })
+            review["approvalQuestion"] = approval_question(review)
+            binding = _digest({"evidence": basis, "review": review})
             if review_only:
                 result = self._result("review_ready", plan=plan, evidence=evidence)
-                result.update(review=review, _reviewBinding=binding, userMessage=review["userMessage"])
+                result.update(
+                    review=review, _reviewBinding=binding, userMessage=review["userMessage"],
+                    approvalQuestion=review["approvalQuestion"],
+                )
                 return result
             if approved_binding is not None and approved_binding != binding:
                 return self._result("review_required", plan=plan, blockers=("evidence_changed",))
@@ -364,21 +411,7 @@ class TopicActionSession:
         if not lock.acquire(blocking=False):
             return self._result("review_required", plan=plan, blockers=("operation_in_progress",))
         try:
-            result = self._execute(plan, basis, deadline)
-            if self._state_operation is not None:
-                try:
-                    self.state_store.finish(
-                        self._state_operation, self._readback,
-                        verified=result["status"] in ("completed", "completed_with_protections"),
-                        attempted=result["writeStatus"] == "submitted",
-                    )
-                except Exception:
-                    return self._result(
-                        "unverified", plan=plan, write_status=result["writeStatus"],
-                        topics=result["topics"],
-                        blockers=("state_journal_update_failed", "fresh_approval_required"),
-                    )
-            return result
+            return self._execute(plan, basis, deadline)
         finally:
             lock.release()
 
@@ -397,23 +430,20 @@ class TopicActionSession:
                     blockers=tuple(dict.fromkeys(("evidence_changed", *fresh_blockers))),
                 )
             if not plan.delta:
-                topics, verified = _reconcile(fresh, fresh, plan)
+                topics, verified, preservation = _reconcile(fresh, fresh, plan)
                 if not verified or any(item["status"] == "unverified" for item in topics):
                     return self._result("review_required", plan=plan, blockers=("evidence_changed",))
-                if self.state_store is not None and self.action == "restore" and not plan.skips:
-                    self.state_store.finish_restore_noop(fresh, self._state_revision)
-                return self._result("already_correct", plan=plan, completed=not plan.skips, topics=topics)
+                return self._result(
+                    "already_correct", plan=plan, completed=not plan.skips, topics=topics,
+                    preservation_status=preservation,
+                )
             payload = build_state_payload(fresh, plan)
-            if self.state_store is not None:
-                self._state_operation = self.state_store.begin(fresh, plan, self._state_revision)
             final_blockers = self.backend.admission_blockers(fresh)
             if final_blockers or self.clock() >= deadline:
                 return self._result(
                     "review_required", plan=plan,
                     blockers=tuple(final_blockers) or ("approval_expired",),
                 )
-        except TopicStateError as error:
-            return self._result("review_required", plan=plan, blockers=(error.reason,))
         except Exception:
             return self._result("blocked", plan=plan, blockers=("pre_dispatch_check_failed",))
         # An error after entering submit is potentially applied, even on timeout.
@@ -445,13 +475,15 @@ class TopicActionSession:
             pass
         try:
             after = self.backend.read()
-            self._readback = after
-            topics, scope_verified = _reconcile(fresh, after, plan)
+            topics, scope_verified, preservation = _reconcile(fresh, after, plan)
             scope_verified = scope_verified and not self.backend.admission_blockers(after)
+            if not scope_verified and preservation == "verified":
+                preservation = "unverified"
         except (Exception, KeyboardInterrupt):
             return self._result(
                 "unverified", plan=plan, write_status="submitted",
                 submission_http_status=submission_http_status,
+                preservation_status="unverified",
                 blockers=("readback_failed", "fresh_approval_required"),
                 topics=[{
                     "componentId": identity, "state": "Unknown",
@@ -466,6 +498,7 @@ class TopicActionSession:
             return self._result(
                 "unverified", plan=plan, write_status="submitted", topics=topics,
                 submission_http_status=submission_http_status,
+                preservation_status=preservation,
                 blockers=tuple(dict.fromkeys((
                     submission_reason, "submission_outcome_uncertain", "fresh_approval_required",
                 ))),
@@ -478,6 +511,7 @@ class TopicActionSession:
             ("completed_with_protections" if plan.skips else "completed") if verified else "partial",
             plan=plan, write_status="submitted", topics=topics,
             completed=verified and not plan.skips,
+            preservation_status=preservation,
             blockers=() if verified else ("verification_incomplete", "fresh_approval_required"),
         )
 
@@ -487,6 +521,7 @@ class TopicActionSession:
         completed: bool = False, topics: list[dict] | None = None,
         submission_http_status: int | None = None,
         evidence: OperationEvidence | None = None,
+        preservation_status: str | None = None,
     ) -> dict:
         partial_message = "Not every result could be verified. No changes will be replayed automatically."
         if status == "partial" and topics and all(
@@ -501,10 +536,12 @@ class TopicActionSession:
             "contractVersion": 1, "contractStatus": "provisional",
             "status": status, "completed": completed, "writeStatus": write_status,
             "submissionHttpStatus": submission_http_status,
+            "preservationStatus": preservation_status,
             "blockers": list(dict.fromkeys(blockers)), "topics": topics or [],
             "warnings": list(plan.warnings) if plan else [],
-            "baseline": deepcopy(self._baseline_review),
-            "plan": public_plan(plan, evidence) if plan else None,
+            "plan": public_plan(
+                plan, evidence, catalog=getattr(self.backend, "catalog", None),
+            ) if plan else None,
             "callerContext": deepcopy(self.caller_context),
             "message": {
                 "blocked": "Topic actions are blocked. No changes were attempted.",
@@ -517,12 +554,7 @@ class TopicActionSession:
                 "completed": "The requested topic states were verified. No publish operation was requested.",
                 "completed_with_protections": "Eligible topic changes were verified; protected topics were left unchanged.",
                 "partial": partial_message,
-                "unverified": (
-                    "No topic submission was attempted, but local operation bookkeeping could not "
-                    "be finalized. Keep the saved baseline; further writes remain blocked."
-                    if write_status == "not_attempted" else
-                    "The submission outcome is uncertain. Observations are not proof that this request made the changes."
-                ),
+                "unverified": "The submission outcome is uncertain. Observations are not proof that this request made the changes.",
             }[status],
         }
         result["userMessage"] = result_text(result)

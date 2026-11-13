@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from copy import deepcopy
 import time
 
@@ -14,7 +14,6 @@ from topic_actions_client import TopicActionsClient, verify_native_target
 from topic_actions_catalog import Catalog, plan_catalog_actions, snapshot_from_response
 from topic_actions_discovery import DiscoveryTarget, _identity, _target
 from topic_actions_execution import OperationEvidence, build_state_payload
-from topic_actions_state import TopicStateStore
 
 
 @dataclass
@@ -25,8 +24,6 @@ class NativeActionBackend:
     catalog: Catalog
     account_id: str
     components: TopicActionsClient
-    state_store: TopicStateStore | None = field(default=None, repr=False)
-    restoring: bool = False
     _last_evidence: OperationEvidence | None = field(default=None, init=False, repr=False)
     _last_read_at: float = field(default=0, init=False, repr=False)
     _submitted: bool = field(default=False, init=False, repr=False)
@@ -49,7 +46,6 @@ class NativeActionBackend:
         return target
 
     def read(self) -> OperationEvidence:
-        previous = self._last_evidence
         self._last_evidence = None
         target = self._check_target()
         verify_native_target(self.client, target)
@@ -58,19 +54,6 @@ class NativeActionBackend:
             self.catalog, target, self.selected_keys, body, source_inventory_only=True,
         )
         evidence = OperationEvidence(snapshot, self.account_id, deepcopy(body))
-        if self.restoring:
-            if self.state_store is None:
-                raise ValueError("An original baseline is required.")
-            if self._submitted and previous is not None:
-                # Readback checks the approved restore, not its in-progress journal.
-                snapshot = replace(
-                    snapshot, restore_states=previous.snapshot.restore_states,
-                    restore_revision=previous.snapshot.restore_revision,
-                    warnings=tuple(dict.fromkeys((*snapshot.warnings, *previous.snapshot.warnings))),
-                )
-            else:
-                snapshot = self.state_store.restore_snapshot(evidence)
-            evidence = OperationEvidence(snapshot, self.account_id, deepcopy(body))
         self._last_evidence = evidence
         self._last_read_at = time.monotonic()
         return self._last_evidence
@@ -107,7 +90,7 @@ class NativeActionBackend:
             or _identity(target_agent_id) != _target(self.target).agent_id
         ):
             raise ValueError("Native topic writes are not admitted.")
-        for action in (("restore",) if self.restoring else ("enable", "disable")):
+        for action in ("enable", "disable"):
             plan = plan_catalog_actions(evidence.snapshot, action)
             if (
                 plan.delta and not plan.blockers
