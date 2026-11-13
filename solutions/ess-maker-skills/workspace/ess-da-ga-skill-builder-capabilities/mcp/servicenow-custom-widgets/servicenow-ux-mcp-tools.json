@@ -1,0 +1,292 @@
+{
+    "tools": [
+        {
+            "name": "ux__show_records",
+            "description": "Show ServiceNow records in an interactive table or detail card. Call it after reading records with a ServiceNow data tool (for example sn__list_records), passing those records unchanged. entity: one of catalog_item, change_request, hr_case, incident, problem, request, requested_item. records: the records as returned (any fields; display_value 'all' or 'true' gives readable values). view: 'list' (default) or 'detail' (exactly one record). total and has_more: paging info from the data tool. The view's own buttons (new, edit, add comment) save to ServiceNow themselves, through the same ServiceNow data tools; don't repeat those changes.",
+            "inputSchema": {
+                "properties": {
+                    "entity": {
+                        "type": "string"
+                    },
+                    "records": {
+                        "items": {
+                            "additionalProperties": true,
+                            "type": "object"
+                        },
+                        "type": "array"
+                    },
+                    "view": {
+                        "default": "list",
+                        "type": "string"
+                    },
+                    "total": {
+                        "type": "integer"
+                    },
+                    "has_more": {
+                        "default": false,
+                        "type": "boolean"
+                    },
+                    "title": {
+                        "default": "",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "entity",
+                    "records"
+                ],
+                "type": "object"
+            },
+            "title": "Show records",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                },
+                "ui": {
+                    "resourceUri": "ui://widget/servicenowux.html"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "ux__show_form",
+            "description": "Show a create or edit form for a ServiceNow record. entity: one of catalog_item, change_request, hr_case, incident, problem, request, requested_item. mode: 'create' (default) or 'edit'. values: fields to prefill. record: for 'edit', the record as returned by a ServiceNow data tool. Supported for hr_case and incident. The form saves to ServiceNow itself (through the same ServiceNow data tools) when the user submits it, so don't create or change the record yourself.",
+            "inputSchema": {
+                "properties": {
+                    "entity": {
+                        "type": "string"
+                    },
+                    "mode": {
+                        "default": "create",
+                        "type": "string"
+                    },
+                    "values": {
+                        "additionalProperties": true,
+                        "type": "object"
+                    },
+                    "record": {
+                        "additionalProperties": true,
+                        "type": "object"
+                    }
+                },
+                "required": [
+                    "entity"
+                ],
+                "type": "object"
+            },
+            "title": "Show form",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                },
+                "ui": {
+                    "resourceUri": "ui://widget/servicenowux.html"
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "ux__save_record",
+            "description": "Save a create or edit form from the ServiceNow view. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+            "inputSchema": {
+                "properties": {
+                    "entity": {
+                        "type": "string"
+                    },
+                    "mode": {
+                        "type": "string"
+                    },
+                    "values": {
+                        "additionalProperties": true,
+                        "type": "object"
+                    },
+                    "record_id": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "record_number": {
+                        "default": "",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "entity",
+                    "mode",
+                    "values"
+                ],
+                "type": "object"
+            },
+            "title": "Save record",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "write",
+                    "layer": "runtime"
+                },
+                "ui": {
+                    "resourceUri": "ui://widget/servicenowux.html",
+                    "visibility": [
+                        "app"
+                    ]
+                }
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false
+            }
+        },
+        {
+            "name": "ux__add_comment",
+            "description": "Add a comment to the user's record from the ServiceNow view. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+            "inputSchema": {
+                "properties": {
+                    "entity": {
+                        "type": "string"
+                    },
+                    "record_id": {
+                        "type": "string"
+                    },
+                    "comment": {
+                        "type": "string"
+                    },
+                    "record_number": {
+                        "default": "",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "entity",
+                    "record_id",
+                    "comment"
+                ],
+                "type": "object"
+            },
+            "title": "Add comment",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "write",
+                    "layer": "runtime"
+                },
+                "ui": {
+                    "resourceUri": "ui://widget/servicenowux.html",
+                    "visibility": [
+                        "app"
+                    ]
+                }
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false
+            }
+        },
+        {
+            "name": "ux__search_people",
+            "description": "Find people by name or email for a form field. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+            "inputSchema": {
+                "properties": {
+                    "name": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "limit": {
+                        "default": 8,
+                        "type": "integer"
+                    }
+                },
+                "type": "object",
+                "required": []
+            },
+            "title": "Search people",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                },
+                "ui": {
+                    "resourceUri": "ui://widget/servicenowux.html",
+                    "visibility": [
+                        "app"
+                    ]
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "ux__search_hr_services",
+            "description": "Find HR services by name for a form field. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+            "inputSchema": {
+                "properties": {
+                    "name": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "coe": {
+                        "default": "",
+                        "type": "string"
+                    },
+                    "limit": {
+                        "default": 8,
+                        "type": "integer"
+                    }
+                },
+                "type": "object",
+                "required": []
+            },
+            "title": "Search hr services",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                },
+                "ui": {
+                    "resourceUri": "ui://widget/servicenowux.html",
+                    "visibility": [
+                        "app"
+                    ]
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        },
+        {
+            "name": "ux__get_hr_coes",
+            "description": "List HR centers of excellence for a form field. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+            "inputSchema": {
+                "properties": {},
+                "type": "object",
+                "required": []
+            },
+            "title": "Get hr coes",
+            "_meta": {
+                "ess": {
+                    "audience": "user",
+                    "access": "read",
+                    "layer": "runtime"
+                },
+                "ui": {
+                    "resourceUri": "ui://widget/servicenowux.html",
+                    "visibility": [
+                        "app"
+                    ]
+                }
+            },
+            "annotations": {
+                "readOnlyHint": true
+            }
+        }
+    ]
+}

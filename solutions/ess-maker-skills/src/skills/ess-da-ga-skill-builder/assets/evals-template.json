@@ -1,0 +1,21 @@
+{
+  "skill_name": "<skill-name>",
+  "tools_from": "<app package folder or tool list file>",
+  "baseline": "no skill | path to the previous version",
+  "trigger_queries": [
+    { "query": "<a realistic message that should load the skill>", "should_trigger": true, "set": "train" },
+    { "query": "<a near miss that belongs to a neighbouring skill>", "should_trigger": false, "set": "validation" }
+  ],
+  "behavior_cases": [
+    {
+      "id": 1,
+      "prompt": "<what a user types, with realistic detail>",
+      "expected": "<what success looks like, in one sentence>",
+      "assertions": [
+        "<which tool is called, with which key arguments>",
+        "<what must not happen>",
+        "<what the reply contains>"
+      ]
+    }
+  ]
+}

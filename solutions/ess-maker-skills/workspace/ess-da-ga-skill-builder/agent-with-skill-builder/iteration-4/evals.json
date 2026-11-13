@@ -1,0 +1,95 @@
+{
+  "skill_name": "catalog-order",
+  "tools_from": "workspace/ess-da-ga-skill-builder-capabilities/ (inventory: iteration-1/inventory.json)",
+  "baseline": "no skill",
+  "trigger_queries": [
+    { "query": "What can I order from the service catalog?", "should_trigger": true, "set": "train" },
+    { "query": "I need a new laptop", "should_trigger": true, "set": "train" },
+    { "query": "Order a 27-inch monitor for Sam Lee", "should_trigger": true, "set": "train" },
+    { "query": "Can I get Visio installed?", "should_trigger": true, "set": "train" },
+    { "query": "do we have standing desks i can request", "should_trigger": true, "set": "train" },
+    { "query": "What hardware can I request?", "should_trigger": true, "set": "validation" },
+    { "query": "my new hire starts monday, can you get her a headset", "should_trigger": true, "set": "validation" },
+    { "query": "Find me a wireless keyboard and mouse", "should_trigger": true, "set": "validation" },
+    { "query": "Show me the software categories in the catalog", "should_trigger": true, "set": "validation" },
+    { "query": "What's the status of my laptop request RITM0010023?", "should_trigger": false, "set": "train" },
+    { "query": "Cancel my order for the monitor", "should_trigger": false, "set": "train" },
+    { "query": "Approve Sam's request for a new phone", "should_trigger": false, "set": "train" },
+    { "query": "My laptop screen is flickering, open a ticket", "should_trigger": false, "set": "train" },
+    { "query": "My payslip is wrong, I need HR to fix it", "should_trigger": false, "set": "train" },
+    { "query": "Add a new item to the catalog for ergonomic chairs", "should_trigger": false, "set": "validation" },
+    { "query": "Show me my open requests", "should_trigger": false, "set": "validation" },
+    { "query": "How do I reset my password?", "should_trigger": false, "set": "validation" },
+    { "query": "I need an employment verification letter", "should_trigger": false, "set": "validation" }
+  ],
+  "behavior_cases": [
+    {
+      "id": 1,
+      "prompt": "I need a new laptop, the standard developer one.",
+      "expected": "The agent finds the orderable item, asks only for missing mandatory answers, confirms every value, orders once for the user and replies with the REQ number.",
+      "assertions": [
+        "Searches with sn__get_catalog_items using text from the request, not sn__list_records on sc_cat_item",
+        "Reads the item with sn__get_catalog_item before asking anything",
+        "Asks only for mandatory questions without a usable default that the user hasn't answered",
+        "Lists the item, quantity, who it's for and every answer, and waits for yes before ordering",
+        "Calls sn__order_item once with variables keyed by question name, choice values rather than labels, sysparm_quantity \"1\" and no sysparm_requested_for",
+        "Reads the request back with sn__get_record on sc_request using the returned request_id",
+        "Replies in one sentence with the request number"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Order a 27-inch monitor for Sam Lee on my team.",
+      "expected": "The agent finds Sam Lee, sets him as the Requested For answer and sysparm_requested_for, confirms with his name and orders once.",
+      "assertions": [
+        "Calls sn__get_record_schema with table sys_user to find the name and email fields",
+        "Searches sys_user with sn__list_records using a LIKE condition on the name field and returns only sys_id, name and email",
+        "Checks that the item has a Requested For question (a sys_user reference) before ordering for Sam",
+        "Sends Sam's sys_id as the Requested For answer and as sysparm_requested_for in sn__order_item",
+        "Names Sam Lee in the confirmation and waits for yes"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "What can I order?",
+      "expected": "The agent walks catalogs and categories, then shows only orderable items in the catalog view with a one-sentence reply.",
+      "assertions": [
+        "Calls sn__get_catalogs, then sn__get_catalog_categories for the chosen catalog",
+        "Lists catalog or category names in one line and asks which, instead of dumping every item",
+        "Shows items with ux__show_records entity catalog_item, passing only items whose type is catalog_item with sys_class_name sc_cat_item, pc_hardware_cat_item or pc_software_cat_item",
+        "Doesn't restate the items listed in the view"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I want to request a parking permit.",
+      "expected": "The only match is a record producer, which no tool here can submit; the agent says it can't be ordered here and points to the service portal.",
+      "assertions": [
+        "Searches with sn__get_catalog_items",
+        "Recognises the match as a record_producer (sys_class_name sc_cat_item_producer) and doesn't offer it for ordering",
+        "Doesn't call sn__order_item or sn__create_record",
+        "Says in one sentence that this item can't be ordered here and to use the service portal"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Get me Visio. Just go ahead and order it.",
+      "expected": "The item's Requested For question defaults to javascript:gs.getUserID(); the agent sends the user's sys_id instead of the script and still asks for any missing mandatory answer before ordering.",
+      "assertions": [
+        "Calls sn__get_current_user_info and uses the user's sys_id for the Requested For answer",
+        "Never sends the text javascript:gs.getUserID() as a variable value",
+        "Asks for any mandatory answer still missing before calling sn__order_item",
+        "Calls sn__order_item only once"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Cancel my request REQ0010045, I don't need the monitor any more.",
+      "expected": "Cancelling an existing order isn't supported here; the agent says so in one sentence and changes nothing.",
+      "assertions": [
+        "Doesn't call sn__update_record, sn__order_item or any other write",
+        "Says it can only browse and place new orders here"
+      ]
+    }
+  ]
+}

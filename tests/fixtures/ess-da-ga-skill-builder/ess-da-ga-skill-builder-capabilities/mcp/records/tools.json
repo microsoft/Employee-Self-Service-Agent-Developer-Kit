@@ -1,0 +1,120 @@
+{
+  "tools": [
+    {
+      "name": "list_records",
+      "description": "Lists records from any table. The caller supplies the table, an encoded query and the fields to return.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "default": 10
+          }
+        },
+        "required": [
+          "table"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "get_record",
+      "description": "Reads one record from any table by sys_id.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table": {
+            "type": "string"
+          },
+          "sys_id": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "sys_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "create_record",
+      "description": "Creates a record in any table. The caller supplies the table and the field values in body.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table": {
+            "type": "string"
+          },
+          "body": {
+            "type": "object"
+          },
+          "fields": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "body"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false
+      }
+    },
+    {
+      "name": "update_record",
+      "description": "Updates fields on a record in any table, including comments and work_notes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table": {
+            "type": "string"
+          },
+          "sys_id": {
+            "type": "string"
+          },
+          "body": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "table",
+          "sys_id",
+          "body"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false
+      }
+    },
+    {
+      "name": "get_current_user",
+      "description": "Returns the signed-in user's sys_id, name and email.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,1854 @@
+{
+ "capabilities": "workspace/ess-da-ga-skill-builder-capabilities",
+ "package": "",
+ "agent_name": "",
+ "instructions_chars": 0,
+ "plugins": [],
+ "tools": [
+  {
+   "name": "ux__show_records",
+   "copilot_name": "snux_ux__show_records",
+   "server": "servicenow-custom-widgets",
+   "plugin": "snux",
+   "title": "Show records",
+   "description": "Show ServiceNow records in an interactive table or detail card. Call it after reading records with a ServiceNow data tool (for example sn__list_records), passing those records unchanged. entity: one of catalog_item, change_request, hr_case, incident, problem, request, requested_item. records: the records as returned (any fields; display_value 'all' or 'true' gives readable values). view: 'list' (default) or 'detail' (exactly one record). total and has_more: paging info from the data tool. The view's own buttons (new, edit, add comment) save to ServiceNow themselves, through the same ServiceNow data tools; don't repeat those changes.",
+   "description_chars": 640,
+   "access": "read",
+   "visibility": "model",
+   "kind": "widget",
+   "kind_reason": "shows records in a widget",
+   "operations": [
+    "read"
+   ],
+   "widget": true,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "entity",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "records",
+     "type": "array",
+     "required": true
+    },
+    {
+     "name": "view",
+     "type": "string",
+     "required": false,
+     "default": "list"
+    },
+    {
+     "name": "total",
+     "type": "integer",
+     "required": false
+    },
+    {
+     "name": "has_more",
+     "type": "boolean",
+     "required": false,
+     "default": false
+    },
+    {
+     "name": "title",
+     "type": "string",
+     "required": false,
+     "default": ""
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "entity": {
+      "type": "string"
+     },
+     "records": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "view": {
+      "default": "list",
+      "type": "string"
+     },
+     "total": {
+      "type": "integer"
+     },
+     "has_more": {
+      "default": false,
+      "type": "boolean"
+     },
+     "title": {
+      "default": "",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entity",
+     "records"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "ux__show_form",
+   "copilot_name": "snux_ux__show_form",
+   "server": "servicenow-custom-widgets",
+   "plugin": "snux",
+   "title": "Show form",
+   "description": "Show a create or edit form for a ServiceNow record. entity: one of catalog_item, change_request, hr_case, incident, problem, request, requested_item. mode: 'create' (default) or 'edit'. values: fields to prefill. record: for 'edit', the record as returned by a ServiceNow data tool. Supported for hr_case and incident. The form saves to ServiceNow itself (through the same ServiceNow data tools) when the user submits it, so don't create or change the record yourself.",
+   "description_chars": 468,
+   "access": "read",
+   "visibility": "model",
+   "kind": "form",
+   "kind_reason": "opens a form the user reviews and submits",
+   "operations": [
+    "create",
+    "update"
+   ],
+   "widget": true,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "entity",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "mode",
+     "type": "string",
+     "required": false,
+     "default": "create"
+    },
+    {
+     "name": "values",
+     "type": "object",
+     "required": false
+    },
+    {
+     "name": "record",
+     "type": "object",
+     "required": false
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "entity": {
+      "type": "string"
+     },
+     "mode": {
+      "default": "create",
+      "type": "string"
+     },
+     "values": {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     "record": {
+      "additionalProperties": true,
+      "type": "object"
+     }
+    },
+    "required": [
+     "entity"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "ux__save_record",
+   "copilot_name": "snux_ux__save_record",
+   "server": "servicenow-custom-widgets",
+   "plugin": "snux",
+   "title": "Save record",
+   "description": "Save a create or edit form from the ServiceNow view. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+   "description_chars": 123,
+   "access": "write",
+   "visibility": "app",
+   "kind": "widget-action",
+   "kind_reason": "app-only: called by the widget, hidden from the model",
+   "operations": [
+    "write"
+   ],
+   "widget": true,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "entity",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "mode",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "values",
+     "type": "object",
+     "required": true
+    },
+    {
+     "name": "record_id",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "record_number",
+     "type": "string",
+     "required": false,
+     "default": ""
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "entity": {
+      "type": "string"
+     },
+     "mode": {
+      "type": "string"
+     },
+     "values": {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     "record_id": {
+      "default": "",
+      "type": "string"
+     },
+     "record_number": {
+      "default": "",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entity",
+     "mode",
+     "values"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "ux__add_comment",
+   "copilot_name": "snux_ux__add_comment",
+   "server": "servicenow-custom-widgets",
+   "plugin": "snux",
+   "title": "Add comment",
+   "description": "Add a comment to the user's record from the ServiceNow view. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+   "description_chars": 131,
+   "access": "write",
+   "visibility": "app",
+   "kind": "widget-action",
+   "kind_reason": "app-only: called by the widget, hidden from the model",
+   "operations": [
+    "comment",
+    "create"
+   ],
+   "widget": true,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "entity",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "record_id",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "comment",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "record_number",
+     "type": "string",
+     "required": false,
+     "default": ""
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "entity": {
+      "type": "string"
+     },
+     "record_id": {
+      "type": "string"
+     },
+     "comment": {
+      "type": "string"
+     },
+     "record_number": {
+      "default": "",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entity",
+     "record_id",
+     "comment"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "ux__search_people",
+   "copilot_name": "snux_ux__search_people",
+   "server": "servicenow-custom-widgets",
+   "plugin": "snux",
+   "title": "Search people",
+   "description": "Find people by name or email for a form field. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+   "description_chars": 117,
+   "access": "read",
+   "visibility": "app",
+   "kind": "widget-action",
+   "kind_reason": "app-only: called by the widget, hidden from the model",
+   "operations": [
+    "read"
+   ],
+   "widget": true,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "name",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "limit",
+     "type": "integer",
+     "required": false,
+     "default": 8
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "name": {
+      "default": "",
+      "type": "string"
+     },
+     "limit": {
+      "default": 8,
+      "type": "integer"
+     }
+    },
+    "type": "object",
+    "required": []
+   }
+  },
+  {
+   "name": "ux__search_hr_services",
+   "copilot_name": "snux_ux__search_hr_services",
+   "server": "servicenow-custom-widgets",
+   "plugin": "snux",
+   "title": "Search hr services",
+   "description": "Find HR services by name for a form field. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+   "description_chars": 113,
+   "access": "read",
+   "visibility": "app",
+   "kind": "widget-action",
+   "kind_reason": "app-only: called by the widget, hidden from the model",
+   "operations": [
+    "read"
+   ],
+   "widget": true,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "name",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "coe",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "limit",
+     "type": "integer",
+     "required": false,
+     "default": 8
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "name": {
+      "default": "",
+      "type": "string"
+     },
+     "coe": {
+      "default": "",
+      "type": "string"
+     },
+     "limit": {
+      "default": 8,
+      "type": "integer"
+     }
+    },
+    "type": "object",
+    "required": []
+   }
+  },
+  {
+   "name": "ux__get_hr_coes",
+   "copilot_name": "snux_ux__get_hr_coes",
+   "server": "servicenow-custom-widgets",
+   "plugin": "snux",
+   "title": "Get hr coes",
+   "description": "List HR centers of excellence for a form field. Used by the ServiceNow view's buttons and pickers; not for direct use.",
+   "description_chars": 118,
+   "access": "read",
+   "visibility": "app",
+   "kind": "widget-action",
+   "kind_reason": "app-only: called by the widget, hidden from the model",
+   "operations": [
+    "read"
+   ],
+   "widget": true,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [],
+   "input_schema": {
+    "properties": {},
+    "type": "object",
+    "required": []
+   }
+  },
+  {
+   "name": "sn__list_records",
+   "copilot_name": "sngeneric_sn__list_records",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "List records",
+   "description": "List records from any ServiceNow table (Table API). table: table name, e.g. sn_hr_core_case, sc_req_item, incident. query: encoded query, e.g. 'active=true^opened_for=javascript:gs.getUserID()^ORDERBYDESCsys_created_on'. fields: comma-separated fields to return (default all). limit (default 20, max 100) and offset page through results. display_value: 'false' (raw values, the default), 'true' (labels, e.g. state 'Closed Complete' and people's names) or 'all' (both).",
+   "description_chars": 469,
+   "access": "read",
+   "visibility": "model",
+   "kind": "generic",
+   "kind_reason": "caller names the data with `table`",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "table",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "query",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "fields",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "limit",
+     "type": "integer",
+     "required": false,
+     "default": 20
+    },
+    {
+     "name": "offset",
+     "type": "integer",
+     "required": false,
+     "default": 0
+    },
+    {
+     "name": "display_value",
+     "type": "string",
+     "required": false,
+     "default": "false"
+    },
+    {
+     "name": "exclude_reference_link",
+     "type": "boolean",
+     "required": false,
+     "default": true
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "table": {
+      "type": "string"
+     },
+     "query": {
+      "default": "",
+      "type": "string"
+     },
+     "fields": {
+      "default": "",
+      "type": "string"
+     },
+     "limit": {
+      "default": 20,
+      "type": "integer"
+     },
+     "offset": {
+      "default": 0,
+      "type": "integer"
+     },
+     "display_value": {
+      "default": "false",
+      "type": "string"
+     },
+     "exclude_reference_link": {
+      "default": true,
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "table"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__get_record",
+   "copilot_name": "sngeneric_sn__get_record",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Get record",
+   "description": "Get one record from a ServiceNow table by sys_id. fields: comma-separated fields to return. display_value: 'false' (raw values, the default), 'true' (labels, e.g. state 'Closed Complete' and people's names) or 'all' (both).",
+   "description_chars": 223,
+   "access": "read",
+   "visibility": "model",
+   "kind": "generic",
+   "kind_reason": "caller names the data with `table`",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "table",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "sys_id",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "fields",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "display_value",
+     "type": "string",
+     "required": false,
+     "default": "false"
+    },
+    {
+     "name": "exclude_reference_link",
+     "type": "boolean",
+     "required": false,
+     "default": true
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "table": {
+      "type": "string"
+     },
+     "sys_id": {
+      "type": "string"
+     },
+     "fields": {
+      "default": "",
+      "type": "string"
+     },
+     "display_value": {
+      "default": "false",
+      "type": "string"
+     },
+     "exclude_reference_link": {
+      "default": true,
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "table",
+     "sys_id"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__create_record",
+   "copilot_name": "sngeneric_sn__create_record",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Create record",
+   "description": "Create a record in a ServiceNow table. body: JSON object of field names and values. input_display_value=true treats body values as labels (e.g. state 'In Progress') instead of raw values. Returns the created record (with sys_id and number). display_value: 'false' (raw values, the default), 'true' (labels, e.g. state 'Closed Complete' and people's names) or 'all' (both).",
+   "description_chars": 372,
+   "access": "write",
+   "visibility": "model",
+   "kind": "generic",
+   "kind_reason": "caller names the data with `table`",
+   "operations": [
+    "create"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "table",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "body",
+     "type": "object",
+     "required": true
+    },
+    {
+     "name": "input_display_value",
+     "type": "boolean",
+     "required": false,
+     "default": false
+    },
+    {
+     "name": "fields",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "display_value",
+     "type": "string",
+     "required": false,
+     "default": "false"
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "table": {
+      "type": "string"
+     },
+     "body": {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     "input_display_value": {
+      "default": false,
+      "type": "boolean"
+     },
+     "fields": {
+      "default": "",
+      "type": "string"
+     },
+     "display_value": {
+      "default": "false",
+      "type": "string"
+     }
+    },
+    "required": [
+     "table",
+     "body"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__update_record",
+   "copilot_name": "sngeneric_sn__update_record",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Update record",
+   "description": "Update fields of a record in a ServiceNow table by sys_id. body: JSON object of the fields to change; journal fields such as comments and work_notes append an entry. input_display_value=true treats body values as labels. Returns the record after the update. display_value: 'false' (raw values, the default), 'true' (labels, e.g. state 'Closed Complete' and people's names) or 'all' (both).",
+   "description_chars": 389,
+   "access": "write",
+   "visibility": "model",
+   "kind": "generic",
+   "kind_reason": "caller names the data with `table`",
+   "operations": [
+    "update"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "table",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "sys_id",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "body",
+     "type": "object",
+     "required": true
+    },
+    {
+     "name": "input_display_value",
+     "type": "boolean",
+     "required": false,
+     "default": false
+    },
+    {
+     "name": "fields",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "display_value",
+     "type": "string",
+     "required": false,
+     "default": "false"
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "table": {
+      "type": "string"
+     },
+     "sys_id": {
+      "type": "string"
+     },
+     "body": {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     "input_display_value": {
+      "default": false,
+      "type": "boolean"
+     },
+     "fields": {
+      "default": "",
+      "type": "string"
+     },
+     "display_value": {
+      "default": "false",
+      "type": "string"
+     }
+    },
+    "required": [
+     "table",
+     "sys_id",
+     "body"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__delete_record",
+   "copilot_name": "sngeneric_sn__delete_record",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Delete record",
+   "description": "Delete a record from a ServiceNow table by sys_id. This can't be undone.",
+   "description_chars": 72,
+   "access": "delete",
+   "visibility": "model",
+   "kind": "generic",
+   "kind_reason": "caller names the data with `table`",
+   "operations": [
+    "delete"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "table",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "sys_id",
+     "type": "string",
+     "required": true
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "table": {
+      "type": "string"
+     },
+     "sys_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "table",
+     "sys_id"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__get_record_types",
+   "copilot_name": "sngeneric_sn__get_record_types",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Get record types",
+   "description": "List the ServiceNow tables (record types) available to the user.",
+   "description_chars": 64,
+   "access": "read",
+   "visibility": "model",
+   "kind": "lookup",
+   "kind_reason": "read bound to one entity",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [],
+   "input_schema": {
+    "properties": {},
+    "type": "object",
+    "required": []
+   }
+  },
+  {
+   "name": "sn__get_record_schema",
+   "copilot_name": "sngeneric_sn__get_record_schema",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Get record schema",
+   "description": "Get a table's schema: its fields, their types, labels, choices and references.",
+   "description_chars": 78,
+   "access": "read",
+   "visibility": "model",
+   "kind": "generic",
+   "kind_reason": "caller names the data with `table`",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "table",
+     "type": "string",
+     "required": true
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "table": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "table"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__get_table_stats",
+   "copilot_name": "sngeneric_sn__get_table_stats",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Get table stats",
+   "description": "Aggregate statistics for a ServiceNow table (Aggregate API): count records matching an encoded query, optionally grouped (group_by) or with avg/min/max/sum of numeric fields.",
+   "description_chars": 174,
+   "access": "read",
+   "visibility": "model",
+   "kind": "generic",
+   "kind_reason": "caller names the data with `table`",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "table",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "query",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "count",
+     "type": "boolean",
+     "required": false,
+     "default": true
+    },
+    {
+     "name": "group_by",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "avg_fields",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "min_fields",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "max_fields",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "sum_fields",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "display_value",
+     "type": "string",
+     "required": false,
+     "default": "false"
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "table": {
+      "type": "string"
+     },
+     "query": {
+      "default": "",
+      "type": "string"
+     },
+     "count": {
+      "default": true,
+      "type": "boolean"
+     },
+     "group_by": {
+      "default": "",
+      "type": "string"
+     },
+     "avg_fields": {
+      "default": "",
+      "type": "string"
+     },
+     "min_fields": {
+      "default": "",
+      "type": "string"
+     },
+     "max_fields": {
+      "default": "",
+      "type": "string"
+     },
+     "sum_fields": {
+      "default": "",
+      "type": "string"
+     },
+     "display_value": {
+      "default": "false",
+      "type": "string"
+     }
+    },
+    "required": [
+     "table"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__get_current_user_info",
+   "copilot_name": "sngeneric_sn__get_current_user_info",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Get current user info",
+   "description": "Get the signed-in ServiceNow user's details: sys_id, user name, name and email.",
+   "description_chars": 79,
+   "access": "read",
+   "visibility": "model",
+   "kind": "lookup",
+   "kind_reason": "read bound to one entity",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [],
+   "input_schema": {
+    "properties": {},
+    "type": "object",
+    "required": []
+   }
+  },
+  {
+   "name": "sn__get_catalogs",
+   "copilot_name": "sngeneric_sn__get_catalogs",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Get catalogs",
+   "description": "List the service catalogs the user can see (Service Catalog API). text: optional search text.",
+   "description_chars": 93,
+   "access": "read",
+   "visibility": "model",
+   "kind": "lookup",
+   "kind_reason": "read bound to one entity",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "text",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "limit",
+     "type": "integer",
+     "required": false,
+     "default": 20
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "text": {
+      "default": "",
+      "type": "string"
+     },
+     "limit": {
+      "default": 20,
+      "type": "integer"
+     }
+    },
+    "type": "object",
+    "required": []
+   }
+  },
+  {
+   "name": "sn__get_catalog_categories",
+   "copilot_name": "sngeneric_sn__get_catalog_categories",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Get catalog categories",
+   "description": "List the categories of a service catalog (catalog_id: the catalog's sys_id).",
+   "description_chars": 76,
+   "access": "read",
+   "visibility": "model",
+   "kind": "lookup",
+   "kind_reason": "read bound to one entity",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "catalog_id",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "top_level_only",
+     "type": "boolean",
+     "required": false,
+     "default": false
+    },
+    {
+     "name": "limit",
+     "type": "integer",
+     "required": false,
+     "default": 20
+    },
+    {
+     "name": "offset",
+     "type": "integer",
+     "required": false,
+     "default": 0
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "catalog_id": {
+      "type": "string"
+     },
+     "top_level_only": {
+      "default": false,
+      "type": "boolean"
+     },
+     "limit": {
+      "default": 20,
+      "type": "integer"
+     },
+     "offset": {
+      "default": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "catalog_id"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__get_catalog_items",
+   "copilot_name": "sngeneric_sn__get_catalog_items",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Get catalog items",
+   "description": "List or search the service catalog items the user can order (Service Catalog API). text: search text; category / catalog: sys_ids to filter by; limit and offset page through results.",
+   "description_chars": 182,
+   "access": "read",
+   "visibility": "model",
+   "kind": "lookup",
+   "kind_reason": "read bound to one entity",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "limit",
+     "type": "integer",
+     "required": false,
+     "default": 20
+    },
+    {
+     "name": "text",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "category",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "catalog",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "offset",
+     "type": "integer",
+     "required": false,
+     "default": 0
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "limit": {
+      "default": 20,
+      "type": "integer"
+     },
+     "text": {
+      "default": "",
+      "type": "string"
+     },
+     "category": {
+      "default": "",
+      "type": "string"
+     },
+     "catalog": {
+      "default": "",
+      "type": "string"
+     },
+     "offset": {
+      "default": 0,
+      "type": "integer"
+     }
+    },
+    "type": "object",
+    "required": []
+   }
+  },
+  {
+   "name": "sn__get_catalog_item",
+   "copilot_name": "sngeneric_sn__get_catalog_item",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Get catalog item",
+   "description": "Get one catalog item by sys_id, including its variables (the questions its order form asks: names, types, mandatory flags, choices).",
+   "description_chars": 132,
+   "access": "read",
+   "visibility": "model",
+   "kind": "lookup",
+   "kind_reason": "read bound to one entity",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "sys_id",
+     "type": "string",
+     "required": true
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "sys_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "sys_id"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__order_item",
+   "copilot_name": "sngeneric_sn__order_item",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Order item",
+   "description": "Order a catalog item now (Service Catalog API order_now). body: {\"sysparm_quantity\": \"1\", \"variables\": {question_name: value}, \"sysparm_requested_for\": user sys_id (optional)}. Returns the request number and sys_id.",
+   "description_chars": 215,
+   "access": "write",
+   "visibility": "model",
+   "kind": "scenario-write",
+   "kind_reason": "write bound to one entity or process",
+   "operations": [
+    "create"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "sys_id",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "body",
+     "type": "object",
+     "required": true
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "sys_id": {
+      "type": "string"
+     },
+     "body": {
+      "additionalProperties": true,
+      "type": "object"
+     }
+    },
+    "required": [
+     "sys_id",
+     "body"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__get_knowledge_articles",
+   "copilot_name": "sngeneric_sn__get_knowledge_articles",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Get knowledge articles",
+   "description": "Search ServiceNow knowledge articles (Knowledge API). query: text to search for; filter: encoded query; kb: knowledge base sys_ids; fields; limit.",
+   "description_chars": 146,
+   "access": "read",
+   "visibility": "model",
+   "kind": "lookup",
+   "kind_reason": "read bound to one entity",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "query",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "filter",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "limit",
+     "type": "integer",
+     "required": false,
+     "default": 20
+    },
+    {
+     "name": "fields",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "kb",
+     "type": "string",
+     "required": false,
+     "default": ""
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "query": {
+      "type": "string"
+     },
+     "filter": {
+      "default": "",
+      "type": "string"
+     },
+     "limit": {
+      "default": 20,
+      "type": "integer"
+     },
+     "fields": {
+      "default": "",
+      "type": "string"
+     },
+     "kb": {
+      "default": "",
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__get_knowledge_article",
+   "copilot_name": "sngeneric_sn__get_knowledge_article",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Get knowledge article",
+   "description": "Get one knowledge article by sys_id, including its text.",
+   "description_chars": 56,
+   "access": "read",
+   "visibility": "model",
+   "kind": "lookup",
+   "kind_reason": "read bound to one entity",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "sys_id",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "fields",
+     "type": "string",
+     "required": false,
+     "default": ""
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "sys_id": {
+      "type": "string"
+     },
+     "fields": {
+      "default": "",
+      "type": "string"
+     }
+    },
+    "required": [
+     "sys_id"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__get_attachment_metadata",
+   "copilot_name": "sngeneric_sn__get_attachment_metadata",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Get attachment metadata",
+   "description": "List attachment metadata. query: encoded query on sys_attachment, e.g. 'table_name=sn_hr_core_case^table_sys_id=<sys_id>'.",
+   "description_chars": 122,
+   "access": "read",
+   "visibility": "model",
+   "kind": "lookup",
+   "kind_reason": "read bound to one entity",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "query",
+     "type": "string",
+     "required": false,
+     "default": ""
+    },
+    {
+     "name": "limit",
+     "type": "integer",
+     "required": false,
+     "default": 20
+    },
+    {
+     "name": "offset",
+     "type": "integer",
+     "required": false,
+     "default": 0
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "query": {
+      "default": "",
+      "type": "string"
+     },
+     "limit": {
+      "default": 20,
+      "type": "integer"
+     },
+     "offset": {
+      "default": 0,
+      "type": "integer"
+     }
+    },
+    "type": "object",
+    "required": []
+   }
+  },
+  {
+   "name": "sn__retrieve_attachment_metadata",
+   "copilot_name": "sngeneric_sn__retrieve_attachment_metadata",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Retrieve attachment metadata",
+   "description": "Get one attachment's metadata (file name, size, type, record it belongs to) by sys_id.",
+   "description_chars": 86,
+   "access": "read",
+   "visibility": "model",
+   "kind": "lookup",
+   "kind_reason": "read bound to one entity",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "sys_id",
+     "type": "string",
+     "required": true
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "sys_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "sys_id"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__retrieve_attachment_content",
+   "copilot_name": "sngeneric_sn__retrieve_attachment_content",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Retrieve attachment content",
+   "description": "Download an attachment's content as base64 (files up to 1048576 bytes).",
+   "description_chars": 71,
+   "access": "read",
+   "visibility": "model",
+   "kind": "lookup",
+   "kind_reason": "read bound to one entity",
+   "operations": [
+    "read"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "sys_id",
+     "type": "string",
+     "required": true
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "sys_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "sys_id"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__upload_attachment_file",
+   "copilot_name": "sngeneric_sn__upload_attachment_file",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Upload attachment file",
+   "description": "Attach a file to a record. table_name and table_sys_id identify the record; file_name; content_base64: the file's content; content_type. Max 5242880 bytes.",
+   "description_chars": 155,
+   "access": "write",
+   "visibility": "model",
+   "kind": "generic",
+   "kind_reason": "caller names the data with `table_name`",
+   "operations": [
+    "update"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "table_name",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "table_sys_id",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "file_name",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "content_base64",
+     "type": "string",
+     "required": true
+    },
+    {
+     "name": "content_type",
+     "type": "string",
+     "required": false,
+     "default": "application/octet-stream"
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "table_name": {
+      "type": "string"
+     },
+     "table_sys_id": {
+      "type": "string"
+     },
+     "file_name": {
+      "type": "string"
+     },
+     "content_base64": {
+      "type": "string"
+     },
+     "content_type": {
+      "default": "application/octet-stream",
+      "type": "string"
+     }
+    },
+    "required": [
+     "table_name",
+     "table_sys_id",
+     "file_name",
+     "content_base64"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "sn__delete_attachment",
+   "copilot_name": "sngeneric_sn__delete_attachment",
+   "server": "servicenow-fcc",
+   "plugin": "sngeneric",
+   "title": "Delete attachment",
+   "description": "Delete an attachment by sys_id. This can't be undone.",
+   "description_chars": 53,
+   "access": "delete",
+   "visibility": "model",
+   "kind": "scenario-write",
+   "kind_reason": "write bound to one entity or process",
+   "operations": [
+    "delete"
+   ],
+   "widget": false,
+   "listed_in_plugin": true,
+   "confirmation": {
+    "isNonConsequential": true
+   },
+   "params": [
+    {
+     "name": "sys_id",
+     "type": "string",
+     "required": true
+    }
+   ],
+   "input_schema": {
+    "properties": {
+     "sys_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "sys_id"
+    ],
+    "type": "object"
+   }
+  }
+ ],
+ "skills": {
+  "max": 8,
+  "used": 0,
+  "free": 8,
+  "excluded": [],
+  "items": []
+ },
+ "knowledge": {
+  "provided": false,
+  "sources": 0,
+  "code_interpreter": false,
+  "capabilities": []
+ },
+ "not_used": [],
+ "problems": [],
+ "summary": {
+  "tools": 28,
+  "by_kind": {
+   "widget": 1,
+   "form": 1,
+   "widget-action": 5,
+   "generic": 8,
+   "lookup": 11,
+   "scenario-write": 2
+  },
+  "write_paths": {
+   "form": [
+    "ux__show_form"
+   ],
+   "generic": [
+    "sn__create_record",
+    "sn__update_record",
+    "sn__delete_record",
+    "sn__upload_attachment_file"
+   ],
+   "scenario-write": [
+    "sn__order_item",
+    "sn__delete_attachment"
+   ]
+  },
+  "operations": {
+   "create": [
+    "ux__show_form",
+    "sn__create_record",
+    "sn__order_item"
+   ],
+   "delete": [
+    "sn__delete_record",
+    "sn__delete_attachment"
+   ],
+   "read": [
+    "ux__show_records",
+    "sn__list_records",
+    "sn__get_record",
+    "sn__get_record_types",
+    "sn__get_record_schema",
+    "sn__get_table_stats",
+    "sn__get_current_user_info",
+    "sn__get_catalogs",
+    "sn__get_catalog_categories",
+    "sn__get_catalog_items",
+    "sn__get_catalog_item",
+    "sn__get_knowledge_articles",
+    "sn__get_knowledge_article",
+    "sn__get_attachment_metadata",
+    "sn__retrieve_attachment_metadata",
+    "sn__retrieve_attachment_content"
+   ],
+   "update": [
+    "ux__show_form",
+    "sn__update_record",
+    "sn__upload_attachment_file"
+   ]
+  },
+  "servers": [
+   {
+    "name": "servicenow-custom-widgets",
+    "tools": 7,
+    "by_kind": {
+     "widget": 1,
+     "form": 1,
+     "widget-action": 5
+    },
+    "operations": {
+     "create": [
+      "ux__show_form"
+     ],
+     "read": [
+      "ux__show_records"
+     ],
+     "update": [
+      "ux__show_form"
+     ]
+    }
+   },
+   {
+    "name": "servicenow-fcc",
+    "tools": 21,
+    "by_kind": {
+     "generic": 8,
+     "lookup": 11,
+     "scenario-write": 2
+    },
+    "operations": {
+     "create": [
+      "sn__create_record",
+      "sn__order_item"
+     ],
+     "delete": [
+      "sn__delete_record",
+      "sn__delete_attachment"
+     ],
+     "read": [
+      "sn__list_records",
+      "sn__get_record",
+      "sn__get_record_types",
+      "sn__get_record_schema",
+      "sn__get_table_stats",
+      "sn__get_current_user_info",
+      "sn__get_catalogs",
+      "sn__get_catalog_categories",
+      "sn__get_catalog_items",
+      "sn__get_catalog_item",
+      "sn__get_knowledge_articles",
+      "sn__get_knowledge_article",
+      "sn__get_attachment_metadata",
+      "sn__retrieve_attachment_metadata",
+      "sn__retrieve_attachment_content"
+     ],
+     "update": [
+      "sn__update_record",
+      "sn__upload_attachment_file"
+     ]
+    }
+   }
+  ]
+ }
+}
