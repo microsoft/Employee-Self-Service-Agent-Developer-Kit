@@ -14,14 +14,14 @@ Top-level areas under `samples/` today:
 |---|---|---|
 | `Facilities/` | flat (`<TopicFolder>/` directly) | Office/dining/guest/vehicle topics. |
 | `WorkdayCustomEngineAgent/` | `Employee/`, `Manager/`, `Extended/` | Workday Custom Engine Agent (CEA) topics. |
-| `WorkdayDeclarativeAgent/` | `Employee/`, `Manager/` | Workday Declarative Agent (DA) topics. |
+| `WorkdayDeclarativeAgentPreview/` | `Employee/`, `Manager/` | Workday Declarative Agent (DA) topics. |
 | `ServiceNow/` | empty placeholder | Currently empty. Only add a ServiceNow topic when an issue explicitly requests one and provides enough details. |
 
 Topic path patterns:
 
 - `samples/Facilities/<TopicFolder>/`
 - `samples/WorkdayCustomEngineAgent/{Employee|Manager|Extended}/<TopicFolder>/`
-- `samples/WorkdayDeclarativeAgent/{Employee|Manager}/<TopicFolder>/`
+- `samples/WorkdayDeclarativeAgentPreview/{Employee|Manager}/<TopicFolder>/`
 
 ## A topic folder typically contains
 
@@ -62,7 +62,7 @@ For **existing topics** without a README, do not retrofit one as part of an unre
 - Folders: PascalCase, action-oriented (`EmployeeGetVacationBalance`, `EmployeeInviteGuest`).
 - XML: `msdyn_<Area><Action>.xml`.
 - **Documented inconsistencies — do NOT "fix" these:**
-  - Some `WorkdayDeclarativeAgent/Employee` folders use lowercase / run-together names (e.g., `WorkdayEmployeesviewtheirjobtaxonomy`).
+  - Some `WorkdayDeclarativeAgentPreview/Employee` folders use lowercase / run-together names (e.g., `WorkdayEmployeesviewtheirjobtaxonomy`).
   - One Facilities file has a trailing dot (`msdyn_DiningGetMenusQuery..xml`).
   - Some XML files use lowercase prefixes (`msdyn_copilotforemployeeselfservice...`).
 

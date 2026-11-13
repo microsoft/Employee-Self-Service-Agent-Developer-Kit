@@ -88,10 +88,10 @@ def _topic_folder_for(path: str) -> str | None:
         return None
     # samples/<Area>/<Topic>/...  (Facilities — flat)
     # samples/<Area>/<Sub>/<Topic>/...  (Workday*, ServiceNow)
-    if parts[1] in {"WorkdayCustomEngineAgent", "WorkdayDeclarativeAgent", "ServiceNow"}:
+    if parts[1] in {"WorkdayCustomEngineAgent", "WorkdayDeclarativeAgentPreview", "ServiceNow"}:
         # Require a file *inside* the topic folder, i.e. at least
         # samples/<Area>/<Sub>/<Topic>/<file>. Otherwise a subgroup-level
-        # file such as samples/WorkdayDeclarativeAgent/Employee/README.md
+        # file such as samples/WorkdayDeclarativeAgentPreview/Employee/README.md
         # would be misidentified as its own topic folder.
         if len(parts) < 5:
             return None
