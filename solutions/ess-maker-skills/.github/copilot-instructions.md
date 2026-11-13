@@ -431,15 +431,15 @@ integration setup retains its own Connect owner and approvals.
 
 When helping a customer, match their request to one of these patterns:
 
-| Customer says...                                       | Pattern               | How to handle                                                                                                                             |
-| ------------------------------------------------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| "I need to look up X from ServiceNow/Workday"          | Live lookup           | Use the normal Create or Update owner and the selected agent's relevant integration contracts                                            |
-| "I need to create a ticket/case/request"               | Business action       | Use the normal Create or Update owner and the selected agent's relevant integration contracts                                            |
-| "I need to show the user their X data"                 | Source clarification  | Establish whether the request requires live data and read the relevant integration contracts; do not invent employee data                |
-| "I need to call a non-ESS system (Jira, custom API)"   | External action       | Use the normal Create or Update owner and the selected agent's relevant integration contracts                                            |
-| "I need to add a step to an existing flow"             | Power Automate update | Direct the maker outside ADK                                                                                                              |
-| "I need to change how the agent responds to X"         | Topic update          | Read `src/skills/topics/update/SKILL.md` and apply the shared authoring scope and wording review                                          |
-| "I need to show a dropdown of options from our system" | Live lookup           | Use the normal Create or Update owner and the selected agent's relevant integration contracts                                            |
+| Customer says...                                       | Pattern               | How to handle                                                                                                             |
+| ------------------------------------------------------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| "I need to look up X from ServiceNow/Workday"          | Live lookup           | Use the normal Create or Update owner and the selected agent's relevant integration contracts                             |
+| "I need to create a ticket/case/request"               | Business action       | Use the normal Create or Update owner and the selected agent's relevant integration contracts                             |
+| "I need to show the user their X data"                 | Source clarification  | Establish whether the request requires live data and read the relevant integration contracts; do not invent employee data |
+| "I need to call a non-ESS system (Jira, custom API)"   | External action       | Use the normal Create or Update owner and the selected agent's relevant integration contracts                             |
+| "I need to add a step to an existing flow"             | Power Automate update | Direct the maker outside ADK                                                                                              |
+| "I need to change how the agent responds to X"         | Topic update          | Read `src/skills/topics/update/SKILL.md` and apply the shared authoring scope and wording review                          |
+| "I need to show a dropdown of options from our system" | Live lookup           | Use the normal Create or Update owner and the selected agent's relevant integration contracts                             |
 
 For detailed patterns, see `src/reference/ess-docs/customization/customize.md`.
 

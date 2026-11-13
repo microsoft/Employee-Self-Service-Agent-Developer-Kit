@@ -149,8 +149,8 @@ Render `{compact_change_comparison}` in normal chat, separately from the short d
 >
 > **Agent:** {Destination agent}
 >
-> | Item | Current | Proposed |
-> | --- | --- | --- |
+> | Item             | Current                     | Proposed                     |
+> | ---------------- | --------------------------- | ---------------------------- |
 > | {Changed aspect} | {Current value or behavior} | {Proposed value or behavior} |
 >
 > **Unchanged**
@@ -248,11 +248,11 @@ Dispatch the approved save through its owner. Do not add an initial `push` usage
 
 Use observed owner results, not exit code alone. Maker-facing Pushed / Failed / Unconfirmed / Pushed with local issue remain separate from the coarse telemetry outcomes.
 
-| Observed execution result | BuildOutcome | DeployOutcome | BuildErrorCode | DeployErrorCode | ErrorCategory |
-| --- | --- | --- | --- | --- | --- |
-| Approved operations completed successfully, saved state verified, with at least one confirmed remote change | `success` | `success` | empty | empty | empty |
-| Approved operations completed successfully and all verified already-current content without writing | `success` | not emitted | empty | empty | empty |
-| One or more dispatched component operations ended in error | `failure` | `server_error` | `PUSH_PARTIAL_FAILURE` | `DEPLOY_PARTIAL_FAILURE` | `runtime` |
+| Observed execution result                                                                                   | BuildOutcome | DeployOutcome  | BuildErrorCode         | DeployErrorCode          | ErrorCategory |
+| ----------------------------------------------------------------------------------------------------------- | ------------ | -------------- | ---------------------- | ------------------------ | ------------- |
+| Approved operations completed successfully, saved state verified, with at least one confirmed remote change | `success`    | `success`      | empty                  | empty                    | empty         |
+| Approved operations completed successfully and all verified already-current content without writing         | `success`    | not emitted    | empty                  | empty                    | empty         |
+| One or more dispatched component operations ended in error                                                  | `failure`    | `server_error` | `PUSH_PARTIAL_FAILURE` | `DEPLOY_PARTIAL_FAILURE` | `runtime`     |
 
 A returned write error counts as operation failure even when its remote effect remains unconfirmed. `server_error` is the existing aggregate deploy label, not a claim that the service rejected every write. Preserve uncertainty and any confirmed saves in the maker-facing report; never replay a write merely to improve telemetry.
 
