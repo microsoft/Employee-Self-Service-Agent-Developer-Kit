@@ -21,7 +21,7 @@ body:
     id: area
     attributes:
       label: Area / ISV
-      description: e.g. WorkdayCustomEngineAgent, WorkdayDeclarativeAgent, Facilities, ServiceNow
+      description: e.g. WorkdayCustomEngineAgent, WorkdayDeclarativeAgentPreview, Facilities, ServiceNow
     validations:
       required: true
   - type: dropdown

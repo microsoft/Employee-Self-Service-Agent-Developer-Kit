@@ -7,7 +7,7 @@ nav_order: 4
 
 This folder contains sample **Custom Engine Agent (CEA)** topic definitions and ESS Template Configuration XMLs that customers can use to extend the functionality of their ESS Agent. Use the topic definitions (`topic.yaml`) and the accompanying Template Configuration XML file to create new topics in your environment or to customize the behavior of existing topics for the scenarios listed below.
 
-> Looking for the Declarative Agent variant? See [../WorkdayDeclarativeAgent/](../WorkdayDeclarativeAgent/).
+> Looking for the Declarative Agent variant? See [../WorkdayDeclarativeAgentPreview/](../WorkdayDeclarativeAgentPreview/).
 
 ## Folder layout
 

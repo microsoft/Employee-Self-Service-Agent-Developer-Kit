@@ -12,13 +12,13 @@ When the extension activates inside the ESS Maker workspace it:
 2. **Opens GitHub Copilot Chat in the editor area** — chat lives in the center of the window, not tucked into a side panel.
 3. **Pins a "Quick actions" button rail in the primary sidebar** — a custom Webview view with big icon-labeled buttons:
    - **Connect** → `/setup`
-   - **Customize landing page** → guided landing-page configuration
    - **Create a topic** → `/create`
    - **Update a topic** → `/update`
    - **Scan for issues** → `/scan`
    - **Run a flightcheck** → `/flightcheck`
    - **Generate tests** → `/evaluate` (available after setup)
    - **Push to Copilot Studio** → `/push` (available after setup)
+   - **Customize landing page** → `/landing-page` (available after setup)
    - plus: *View tutorial*, *Switch to standard VS Code / lite mode*
 4. **Routes every button click into Copilot Chat** with its guided query pre-filled.
 5. **Provides a "View tutorial"** button that opens a custom webview panel beside chat explaining how each button works.
@@ -53,8 +53,12 @@ The standard installer (`bootstrap.ps1` / `bootstrap-mac.sh`) does NOT install t
 
 Requires Node.js 18+ and VS Code 1.86+.
 
+Every extension behavior change must include a version increment in `extension/package.json`, an entry in `extension/CHANGELOG.md`, and a rebuilt `extension/ess-maker-profile-<version>.vsix` in the same PR. Run the extension checks, package the current source, and confirm the archive's manifest version and `extension.js` match the working tree. Remove the superseded VSIX so the installers select the current package. Build each mirrored branch's VSIX from that branch's source to preserve its setup behavior.
+
 ```pwsh
 cd tools\ess-maker-profile\extension
+npm test
+npm run validate
 npx @vscode/vsce package --no-dependencies
 code --install-extension ess-maker-profile-*.vsix --force
 ```
