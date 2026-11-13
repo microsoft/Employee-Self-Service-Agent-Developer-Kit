@@ -55,6 +55,10 @@
     diagnostics without /setup. Legacy/custom-engine agents are not supported
     by this standalone mode.
 
+.PARAMETER Checkpoint
+    With -FlightCheckOnly, run only this checkpoint ID or family (for example
+    WD-RUN-001). When omitted, runs the full DA setup diagnostics.
+
 .PARAMETER InstallMode
     Selects the VS Code experience: 'maker' (guided rail layout - was
     'lite'), 'developer' (default VS Code layout with the rendered README
@@ -99,8 +103,14 @@ param(
     [string] $Ring = 'prod',
     [ValidateSet('maker', 'developer', 'prompt', 'lite', 'standard')]
     [string] $InstallMode = 'prompt',
-    [switch] $SkipMakerProfile
+    [switch] $SkipMakerProfile,
+    [ValidateNotNullOrEmpty()]
+    [string] $Checkpoint
 )
+
+if ($Checkpoint -and -not $FlightCheckOnly) {
+    throw '-Checkpoint requires -FlightCheckOnly.'
+}
 
 # Back-compat: -SkipMakerProfile forces developer mode even when
 # -InstallMode is passed. This preserves the old behaviour where the
@@ -1259,15 +1269,21 @@ if ($FlightCheckOnly) {
         if ($configState.releaseLine -ne 'da' -or -not $configState.agent.botId -or -not $configState.activeAgent) {
             throw 'Standalone FlightCheck requires a verified selected DA; legacy diagnostics were not started.'
         }
-        Write-Step 'Running FlightCheck DA setup diagnostics'
         $cliArgs = @(
-            'scripts\flightcheck\cli.py', '--scope', 'full',
+            'scripts\flightcheck\cli.py',
             '--invocation-source', 'installer', '--select-targets', 'never',
             '--agent-slug', $configState.activeAgent,
             '--tenant-id', $configState.tenantId,
             '--preferred-username', $configState.account,
             '--ring', $configState.ring
         )
+        if ($Checkpoint) {
+            Write-Step "Running FlightCheck checkpoint $Checkpoint"
+            $cliArgs += @('--checkpoint', $Checkpoint)
+        } else {
+            Write-Step 'Running FlightCheck DA setup diagnostics'
+            $cliArgs += @('--scope', 'full')
+        }
         $ErrorActionPreference = 'Continue'
         & $pyCmd @pyBaseArgs @cliArgs
         $flightCheckExit = $LASTEXITCODE

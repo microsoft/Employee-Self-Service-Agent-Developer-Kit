@@ -232,6 +232,17 @@ For a focused Workday litmus, use `/flightcheck WD-RUN-001` or
 python scripts/flightcheck/cli.py --checkpoint WD-RUN-001
 ```
 
+For the same focused check through the Windows standalone script (no manual
+Python invocation):
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1))) -Checkpoint WD-RUN-001
+```
+
+Omit `-Checkpoint` for the full suite. The focused Workday report is saved to
+`workspace\flightcheck\workday-litmus\report.html`, separately from the full
+report. Supporting prerequisites still run to verify the selected target.
+
 This reads recent Workday flow history. If there is no recent response to
 inspect, the report guides you through a read-only question in the Copilot
 Studio Test pane and a rerun. A passed observation is not a guarantee that
@@ -477,6 +488,11 @@ capabilities are used and where they fail, so we can improve the product. It is
   `other`, or `unknown` — so raw branch names (which could otherwise carry
   personal / customer labels) are never emitted.
 - Scrubbed, non-sensitive **error categories** when something fails.
+- For unhandled exceptions in supported **DA scripts**, a fixed script/module
+  identifier, numeric source line, random error-event ID, and a bounded error
+  code/category with a developer-authored diagnostic sentence. The original
+  exception message, traceback text, source text, paths, arguments, and locals
+  are **not emitted**. See the [investigation queries](scripts/telemetry_queries.kql).
 - Bounded **Connect lifecycle transitions** for instrumented providers:
   connector, lifecycle event, broad phase, outcome, duration, retry/resume
   counts, blocker category, bounded remediation/checkpoint ID, correlation ID,

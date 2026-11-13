@@ -60,6 +60,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Any, Iterator, Literal, TypedDict
 
@@ -83,6 +84,8 @@ from flightcheck import telemetry as _fc  # noqa: E402
 # 1.6.0: added ``adk.connect.lifecycle`` for provider lifecycle transitions.
 # 1.7.0: added derived ``agent_type`` common dimension (custom_agent |
 #        declarative_agent | unknown) — ADO 7830949.
+# 1.8.0: privacy-safe DA script crash diagnostics (ADO 8169047).
+# 1.9.0: added optional MCP, usage, correlation, and HTTP attempt fields.
 SCHEMA_VERSION = "1.9.0"
 
 
@@ -131,6 +134,64 @@ EVENT_FLIGHTCHECK_RESULT = "adk.flightcheck.result"
 EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
 EVENT_CONNECT_LIFECYCLE = "adk.connect.lifecycle"
 EVENT_CLIENT = "adk.client.event"
+EVENT_SCRIPT_ERROR = "adk.script.error"
+
+# Explicit entry-point coverage; never derive telemetry labels from argv or paths.
+SCRIPT_ERROR_ENTRY_POINTS = {
+    "analytics_pointer": "analytics",
+    "checkpoint": "",
+    "connect_servicenow_da": "connect",
+    "drive_topic": "topic_test",
+    "eval_scenario": "evaluation_validate",
+    "evaluate_evals": "evaluation_validate",
+    "evaluation_authoring": "evaluation_create",
+    "evaluation_csv": "evaluation_validate",
+    "evaluation_deployment": "evaluation_update",
+    "evaluation_method_policy": "evaluation_validate",
+    "evaluation_presentation": "evaluation_validate",
+    "evaluation_promotion": "evaluation_update",
+    "evaluation_runs": "evaluation_validate",
+    "flow_run_inspect": "workflow_test",
+    "flightcheck.cli": "flightcheck",
+    "install_workday_da_extension": "connect",
+    "mcp_config": "setup",
+    "plant_debug": "topic_test",
+    "prepare_fresh_workspace": "setup",
+    "publish": "publishing",
+    "push": "push",
+    "reconcile_setup_agent": "setup",
+    "scan_bindings": "cleanup",
+    "scan_config": "cleanup",
+    "scan_globals": "cleanup",
+    "setup_alm_export": "setup",
+    "setup_alm_import": "setup",
+    "setup_existing_da": "setup",
+    "setup_mos_starter": "setup",
+    "strip_debug": "topic_test",
+    "validate_branding": "",
+    "workday_connect": "connect",
+}
+_SCRIPT_ERROR_MODULES = tuple(SCRIPT_ERROR_ENTRY_POINTS) + (
+    "agentbuilder", "auth", "setup_state", "adk_telemetry",
+    "connect_lifecycle", "da_product_registry",
+    "flightcheck.runner", "flightcheck.da_execution",
+)
+_SCRIPT_ERROR_FILES = {
+    os.path.normcase(os.path.realpath(os.path.join(
+        os.path.dirname(__file__), *name.split("."),
+    ) + ".py")): name
+    for name in _SCRIPT_ERROR_MODULES
+}
+_SCRIPT_ERROR_ACTIVE: ContextVar[bool] = ContextVar("adk_script_error_active", default=False)
+_SCRIPT_ERROR_TYPES = {
+    TypeError: ("type", "UNHANDLED_TYPE_ERROR", "An unexpected value type caused the script to fail."),
+    ValueError: ("value", "UNHANDLED_VALUE_ERROR", "An unexpected value caused the script to fail."),
+    KeyError: ("lookup", "UNHANDLED_KEY_ERROR", "An expected key was unavailable."),
+    IndexError: ("lookup", "UNHANDLED_INDEX_ERROR", "An expected sequence element was unavailable."),
+    AttributeError: ("attribute", "UNHANDLED_ATTRIBUTE_ERROR", "An expected attribute was unavailable."),
+    OSError: ("io", "UNHANDLED_OS_ERROR", "An operating-system operation failed."),
+    RuntimeError: ("runtime", "UNHANDLED_RUNTIME_ERROR", "An unexpected runtime error caused the script to fail."),
+}
 
 CLIENT_EVENTS_SCHEMA_VERSION = 2
 # An out-of-memory guard set well above client batcher sizes, so client-side
@@ -2183,6 +2244,67 @@ def flush(timeout: float = 5.0) -> None:
 
 
 # --- Public event emitters (spec Event Catalog) ---------------------------
+def emit_script_error(
+    script_id: str, error: Exception, *, block: bool = False,
+) -> dict[str, Any]:
+    """Emit only allow-listed code metadata, never exception-derived text."""
+    try:
+        if not telemetry_enabled():
+            return {"sent": False, "reason": "disabled"}
+        if script_id not in SCRIPT_ERROR_ENTRY_POINTS:
+            return {"sent": False, "reason": "unsupported-script"}
+        if _fc.get_toolkit_git_branch() == "main-ca":
+            return {"sent": False, "reason": "unsupported-agent-type"}
+        category, code, message = _SCRIPT_ERROR_TYPES.get(
+            type(error),
+            ("unexpected", "UNHANDLED_EXCEPTION", "An unexpected exception caused the script to fail."),
+        )
+        failure_module, failure_line = "unknown", 0
+        tb = error.__traceback__
+        while tb is not None:
+            filename = os.path.normcase(os.path.realpath(tb.tb_frame.f_code.co_filename))
+            if filename in _SCRIPT_ERROR_FILES:
+                failure_module, failure_line = _SCRIPT_ERROR_FILES[filename], tb.tb_lineno
+            tb = tb.tb_next
+        sid, _ = get_session(SURFACE_CLI)
+        data = common_dimensions(SURFACE_CLI, session_id=sid)
+        # These entry points ship only in DA main; feature branches remain DA.
+        data.update({
+            "agent_type": AGENT_TYPE_DECLARATIVE,
+            "script_error_schema_version": "1",
+            "event_id": str(uuid.uuid4()),
+            "script_id": script_id,
+            "adk_capability": normalize_capability(SCRIPT_ERROR_ENTRY_POINTS[script_id]),
+            "failure_module": failure_module,
+            "failure_line": failure_line,
+            "error_category": category,
+            "error_code": code,
+            "error_message": message,
+        })
+        return _emit(EVENT_SCRIPT_ERROR, data, block=block)
+    except Exception:  # noqa: BLE001 — reporting must not replace the script failure
+        return {"sent": False, "reason": "telemetry-error"}
+
+
+@contextmanager
+def script_error_boundary(script_id: str) -> Iterator[None]:
+    """Observe escaping exceptions once; leave cancellation and exit codes alone."""
+    outermost = not _SCRIPT_ERROR_ACTIVE.get()
+    token = _SCRIPT_ERROR_ACTIVE.set(True)
+    try:
+        yield
+    except Exception as error:
+        if outermost:
+            try:
+                emit_script_error(script_id, error)
+                flush(timeout=1.0)
+            except Exception:  # noqa: BLE001 — preserve the original traceback
+                pass
+        raise
+    finally:
+        _SCRIPT_ERROR_ACTIVE.reset(token)
+
+
 def start_session(
     surface: str = SURFACE_CLI,
     *,
