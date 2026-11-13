@@ -69,6 +69,33 @@ The toolkit's scripts call the following services on your behalf. With telemetry
 
 Aside from the services listed above, the toolkit does not call other Microsoft or third-party services on your behalf.
 
+## Branches and agent versions
+
+| Branch | Agent versions it supports |
+| ------ | -------------------------- |
+| `main` | Declarative Agent (DA) general availability only. Legacy/custom-engine (CA) guidance is not maintained here. |
+| `main-ca` | Legacy/custom-engine Agent (CA). It also carries DA preview content, so DA changes can land here before they reach `main`. |
+
+Open your PR against the branch that matches the agent version your change
+affects. A change that applies to both versions needs a PR on each branch.
+
+## FlightCheck contributor tooling
+
+Run these from `solutions/ess-maker-skills/scripts`.
+
+- **Find an existing check before adding one:** `python -m flightcheck.catalog <word> [<word> ...]`
+  (add `--release da` or `--release legacy` to narrow). A close match means reuse or update that check.
+  Only DA checks record a purpose; legacy checks match on ID, category and module name.
+- **Record documentation sources:** when you change `da_inventory.csv` or a page under
+  `src/reference/ess-docs/flightcheck/`, update `doc-sources.csv` in the same folder with the source
+  version you used and whether it applies to `CA`, `DA`, or `both`.
+- **Find gaps before review:** `python -m flightcheck.gap_report --base origin/main` lists checks no test
+  mentions and guidance changed without a manifest update. It only reports; it never edits guidance.
+  CI runs it and shows the findings as warnings.
+- **Test every status:** `tests/flightcheck/test_check_outcomes.py` proves each status
+  (Passed, Warning, Failed, Manual, and the rest) is counted and rendered. Live-tenant validation stays
+  separate from these offline tests.
+
 ## Validating your changes
 
 This is a sample/learning toolkit with no formal unit-test suite - the inputs (Copilot Studio topic YAML, Power Automate JSON) are validated end-to-end by `/flightcheck` rather than via unit tests. Before opening a PR:
