@@ -410,6 +410,7 @@ def test_generated_readback_does_not_mask_authored_identity_or_unselected_revisi
     result = TopicActionSession(backend, "enable").run(lambda _: "approve")
 
     assert result["status"] == "partial" and not result["completed"]
+    assert result["preservationStatus"] == "violated"
     assert {topic["status"] for topic in result["topics"]} == {"observed_desired"}
     assert "preservation could not be verified" in result["message"]
     assert result["blockers"] == ["verification_incomplete", "fresh_approval_required"]
@@ -563,6 +564,9 @@ def test_partial_or_out_of_scope_readback_is_not_success(change):
     backend = SyntheticBackend([before, before, after])
     result = TopicActionSession(backend, "enable").run(lambda _: "approve")
     assert result["status"] == ("unverified" if change == "read_failure" else "partial")
+    assert result["preservationStatus"] == (
+        "unverified" if change == "read_failure" else "verified" if change == "partial" else "violated"
+    )
     assert not result["completed"]
     assert len(backend.submissions) == 1
     assert "private-response" not in json.dumps(result)
@@ -574,6 +578,7 @@ def test_protected_topic_is_not_reported_as_disabled_or_whole_set_complete():
     backend = SyntheticBackend([before, before, after])
     result = TopicActionSession(backend, "disable").run(lambda _: "approve")
     assert result["status"] == "completed_with_protections"
+    assert result["preservationStatus"] == "verified"
     assert not result["completed"]
     assert next(item for item in result["topics"] if item["componentId"] == "shared")["status"] == "protected"
     assert len(backend.submissions[0][1]["botComponentChanges"]) == 1
