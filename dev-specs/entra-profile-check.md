@@ -16,7 +16,7 @@ Manager relationships, custom attributes, and HR-source comparison/applicability
 
 ## Access, fallback and limits
 
-FlightCheck uses its own Graph client, not the agent's runtime permissions. Tenant reads require existing app consent for `User.Read.All`; the maker need not hold an administrator role.
+FlightCheck uses its own Graph client, not the agent's runtime permissions. Tenant reads require existing app consent for `User.Read.All`; the maker need not hold an administrator role. Both modes verify the signed-in account and token tenant before reading profiles.
 
 If that consent is unavailable or a tenant read is denied, read the same nine attributes from `/me` using `$select` and delegated `User.Read`, for the same verified account and tenant. Self-profile sign-in or consent follows tenant policy; never request new directory-read consent or broader permissions.
 
@@ -25,6 +25,8 @@ Fallback is access-driven, not role-driven, and affects only this checkpoint. It
 Tenant mode reads Member accounts, including disabled and service accounts, not an employee roster. Sequential **999-account pages** stop at completion or **10,000 accounts**; unused final-page records are discarded. Reports label **Tenant coverage** or **Sample coverage**, with the checked count, `isSample`, and `populationComplete`. Graph page order is not random sampling.
 
 The **30-second total data-read budget** spans tenant and fallback requests, retries and aggregation; authentication is excluded and fallback does not reset it. Each page shares three retries across retryable HTTP and transport failures, honoring backoff and `Retry-After` within the remaining budget.
+
+Both read paths isolate OS DNS resolution in a cancellable helper process. Deadline expiry terminates and reaps that process; event-loop shutdown does not wait for a blocked DNS thread. No partial coverage is reported.
 
 ## Coverage and outcomes
 
@@ -65,6 +67,6 @@ python scripts\check_entra_profile.py --scope me --tenant-id '<tenant-guid>' --p
 
 Commands run from `solutions\ess-maker-skills`. Standalone exit codes are `0` for passed checks, `1` for either warning, and `2` for errors; `--output` saves its JSON report.
 
-Tests cover tenant thresholds and limits; fallback after consent/read denial; populated, empty and omitted self-profile fields; both reads denied; identity/error guards; shared deadlines; unchanged standalone behavior; and full/checkpoint/profile parity. Live validation covers tenant and own-profile fallback HTML/JSON; mocked tests cover both reads denied.
+Tests cover tenant thresholds and limits; fallback after consent/read denial; populated, empty and omitted self-profile fields; both reads denied; identity/error guards; shared deadlines including blocked DNS and worker cleanup; unchanged standalone behavior; and full/checkpoint/profile parity. Live validation covers tenant and own-profile fallback HTML/JSON; mocked tests cover both reads denied.
 
 API contracts: [Graph schema](https://graph.microsoft.com/v1.0/$metadata), [Get user](https://learn.microsoft.com/en-us/graph/api/user-get?view=graph-rest-1.0), [List users](https://learn.microsoft.com/en-us/graph/api/user-list?view=graph-rest-1.0).

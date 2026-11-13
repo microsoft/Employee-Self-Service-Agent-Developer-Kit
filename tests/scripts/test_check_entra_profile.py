@@ -6,6 +6,8 @@
 import asyncio
 import base64
 import json
+import socket
+import threading
 from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -32,7 +34,8 @@ def _token(tenant=graph.MOCK_TENANT_ID):
 def client():
     require_validated_mock(graph)
     value = GraphClient(graph.MOCK_TENANT_ID, strict_reads=True)
-    value._token = "test-token"
+    value._token = _token()
+    value.signed_in_username = "maker@example.test"
     return value
 
 
@@ -710,10 +713,11 @@ def test_self_profile_authentication_verifies_account_and_tenant(monkeypatch, id
         client.signed_in_username = {
             "other_account": "other@example.test", "missing_account": None,
         }.get(identity, preferred_username)
-        return _token(
+        client._token = _token(
             "00000000-0000-4000-8000-000000009999" if identity == "other_tenant"
             else "" if identity == "missing_tenant" else graph.MOCK_TENANT_ID,
         )
+        return client._token
 
     monkeypatch.setattr(GraphClient, "authenticate", authenticate)
     runner = FlightCheckRunner()
@@ -724,7 +728,7 @@ def test_self_profile_authentication_verifies_account_and_tenant(monkeypatch, id
     if identity == "matching":
         assert runner.self_profile_graph().signed_in_username == "maker@example.test"
     else:
-        with pytest.raises(ValueError, match="different or unverifiable|unreadable tenant identity"):
+        with pytest.raises(ValueError, match="different|unreadable tenant identity"):
             runner.self_profile_graph()
     assert runner.graph is original
 
@@ -737,6 +741,135 @@ def test_self_profile_retry_after_is_cancelled_by_its_remaining_deadline(client)
         client.get_bounded_profile(params={}, time_budget=0.5)
     assert monotonic() - started < 2
     assert route.call_count == 1
+
+
+@pytest.mark.parametrize("scope", ["tenant", "me"])
+def test_slow_dns_does_not_delay_bounded_read_shutdown(client, monkeypatch, scope):
+    """Cancellation must include DNS and event-loop shutdown, not just HTTP I/O."""
+    from flightcheck import graph_client
+
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(key, raising=False)
+    dns_started = threading.Event()
+    processes = []
+    create_process = asyncio.create_subprocess_exec
+
+    async def record_process(*args, **kwargs):
+        process = await create_process(*args, **kwargs)
+        processes.append(process)
+        dns_started.set()
+        return process
+
+    def slow_dns(*_args, **_kwargs):
+        dns_started.set()
+        threading.Event().wait(3)
+        raise socket.gaierror(socket.EAI_AGAIN, "Simulated slow DNS")
+
+    monkeypatch.setattr(
+        graph_client, "_DNS_LOOKUP", "import time; time.sleep(10)\n" + graph_client._DNS_LOOKUP,
+    )
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", record_process)
+    monkeypatch.setattr(socket, "getaddrinfo", slow_dns)
+    started = monotonic()
+    with pytest.raises(TimeoutError, match="budget expired; no partial coverage"):
+        if scope == "tenant":
+            client.get_bounded_collection("/users", params={}, limit=10_000, time_budget=0.5)
+        else:
+            client.get_bounded_profile(params={}, time_budget=0.5)
+    elapsed = monotonic() - started
+    assert dns_started.is_set()
+    assert elapsed < 2, f"The 0.5-second budget took {elapsed:.2f}s including shutdown."
+    assert processes and all(process.returncode is not None for process in processes)
+
+
+@pytest.mark.parametrize("host,family", [
+    ("127.0.0.1", socket.AF_INET), ("::1", socket.AF_INET6),
+])
+def test_bounded_dns_preserves_address_families_and_reaps_worker(host, family, monkeypatch):
+    from flightcheck import graph_client
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("Bounded reads must not use the parent process's DNS thread pool.")
+
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
+    with asyncio.Runner(loop_factory=graph_client._bounded_event_loop) as runner:
+        addresses = runner.run(asyncio.wait_for(
+            graph_client._bounded_getaddrinfo(
+                host.encode("ascii"), 443, family=family,
+                type=socket.SOCK_STREAM, flags=socket.AI_NUMERICHOST,
+            ),
+            timeout=5,
+        ))
+    assert addresses
+    assert all(row[0] == family and row[1] == socket.SOCK_STREAM for row in addresses)
+    assert all(row[4][0] == host and row[4][1] == 443 for row in addresses)
+
+
+def test_bounded_dns_failure_preserves_transport_error_semantics(monkeypatch):
+    from flightcheck import graph_client
+
+    monkeypatch.setattr(graph_client, "_DNS_LOOKUP", (
+        f"import json; json.dump({{'error': {socket.EAI_AGAIN}}}, __import__('sys').stdout)"
+    ))
+    with asyncio.Runner(loop_factory=graph_client._bounded_event_loop) as runner:
+        with pytest.raises(socket.gaierror) as failed:
+            runner.run(graph_client._bounded_getaddrinfo("example.test", 443))
+    assert failed.value.errno == socket.EAI_AGAIN
+
+
+def test_failed_dns_worker_is_an_explicit_error(monkeypatch):
+    from flightcheck import graph_client
+
+    monkeypatch.setattr(graph_client, "_DNS_LOOKUP", "raise SystemExit(1)")
+    with asyncio.Runner(loop_factory=graph_client._bounded_event_loop) as runner:
+        with pytest.raises(RuntimeError, match="DNS resolver process failed"):
+            runner.run(graph_client._bounded_getaddrinfo("example.test", 443))
+
+
+@pytest.mark.parametrize("entrypoint", ["checkpoint", "profile", "standalone-me", "standalone-tenant"])
+def test_coverage_rejects_another_tenant_before_reading_profiles(monkeypatch, tmp_path, capsys, entrypoint):
+    from flightcheck import cli, registry
+
+    monkeypatch.chdir(tmp_path)
+    tenant_read = Mock(return_value=CollectionRead([graph.profile_user()], True))
+    own_read = Mock(return_value=graph.profile_user())
+
+    def authenticate(client, preferred_username=None, **_kwargs):
+        client.signed_in_username = preferred_username
+        client._token = _token("00000000-0000-4000-8000-000000009999")
+        return client._token
+
+    monkeypatch.setattr(GraphClient, "authenticate", authenticate)
+    monkeypatch.setattr(GraphClient, "get_bounded_collection", tenant_read)
+    monkeypatch.setattr(GraphClient, "get", own_read)
+    common = ["--tenant-id", graph.MOCK_TENANT_ID, "--preferred-username", "maker@example.test"]
+    if entrypoint.startswith("standalone-"):
+        assert check.main(["--scope", entrypoint.partition("-")[2], *common]) == 2
+        assert "different tenant" in json.loads(capsys.readouterr().out)["error"]
+    else:
+        key = "AUTH-PROFILE-001"
+        profile = "entra:test-identity"
+        monkeypatch.setitem(registry.PROFILES, profile, registry.ProfileSpec(
+            profile, (key,), "Coverage identity verification.",
+        ))
+        target = ["--checkpoint", key] if entrypoint == "checkpoint" else [
+            "--profile", profile, "--validation-realm", "dev",
+        ]
+        output = tmp_path / "report"
+        monkeypatch.setattr("sys.argv", [
+            "flightcheck", *target, *common, "--output", str(output), "--no-open", "--no-telemetry",
+        ])
+        with pytest.raises(SystemExit) as exited:
+            cli.main()
+        assert exited.value.code == 1
+        payload = json.loads((output / "results.json").read_text(encoding="utf-8"))
+        row = next(item for item in payload["results"] if item["checkpoint_id"] == key)
+        assert row["status"] == "Error"
+        assert "different tenant" in row["result"]
+        assert "Restore the Graph read" in row["remediation"]
+        assert "results" not in row["evidence"]
+    tenant_read.assert_not_called()
+    own_read.assert_not_called()
 
 
 @respx.mock

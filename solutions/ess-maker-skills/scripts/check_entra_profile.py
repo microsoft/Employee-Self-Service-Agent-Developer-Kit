@@ -49,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
             or client.signed_in_username.casefold() != args.preferred_username.casefold()
         ):
             raise ValueError("Authentication selected a different or unverifiable account; no profile was read.")
+        client.verify_identity(args.preferred_username)
         report = check_attributes(client, args.scope, args.attributes)
         code = int(report["status"] == "Warning")
     except GraphPermissionError:

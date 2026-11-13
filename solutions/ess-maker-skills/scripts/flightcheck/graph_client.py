@@ -13,7 +13,9 @@ Reuses the same MSAL token cache as auth.py so users don't sign in twice.
 import asyncio
 from contextlib import contextmanager
 from dataclasses import dataclass
+import json
 import os
+import socket
 import sys
 from urllib.parse import urlsplit
 
@@ -88,6 +90,55 @@ _RETRY = Retry(
 )
 _SESSION = requests.Session()
 _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
+
+# Keep the OS resolver in a killable process: cancelling getaddrinfo() in
+# asyncio's thread pool otherwise leaves Runner.close() waiting on DNS.
+_DNS_LOOKUP = """
+import json
+import socket
+import sys
+
+try:
+    addresses = socket.getaddrinfo(**json.load(sys.stdin))
+except OSError as exc:
+    json.dump({"error": exc.errno}, sys.stdout)
+else:
+    json.dump({"addresses": addresses}, sys.stdout)
+"""
+
+
+async def _bounded_getaddrinfo(host, port, *, family=0, type=0, proto=0, flags=0):
+    options = {
+        "host": host.decode("ascii") if isinstance(host, bytes) else host,
+        "port": port.decode("ascii") if isinstance(port, bytes) else port,
+        "family": family, "type": type, "proto": proto, "flags": flags,
+    }
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-I", "-S", "-c", _DNS_LOOKUP,
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        output, _ = await process.communicate(json.dumps(options).encode("utf-8"))
+    finally:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+    if process.returncode != 0:
+        raise RuntimeError("Graph DNS resolver process failed.")
+    result = json.loads(output)
+    if "error" in result:
+        raise socket.gaierror(result["error"], "Graph DNS resolution failed.")
+    return [
+        (family, kind, proto, canonical, tuple(address))
+        for family, kind, proto, canonical, address in result["addresses"]
+    ]
+
+
+def _bounded_event_loop():
+    loop = asyncio.new_event_loop()
+    loop.getaddrinfo = _bounded_getaddrinfo
+    return loop
 
 
 class GraphPermissionError(PermissionError):
@@ -426,6 +477,21 @@ class GraphClient:
         )
         return self._token
 
+    def verify_identity(self, preferred_username: str | None = None) -> str:
+        """Bind profile reads to the authenticated account and issuing tenant."""
+        from agentbuilder import AgentBuilderError, tenant_id_from_access_token
+
+        account = self.signed_in_username
+        if not account or (preferred_username and account.casefold() != preferred_username.casefold()):
+            raise ValueError("Graph authentication selected a different or unverifiable account.")
+        try:
+            tenant = tenant_id_from_access_token(self._token or "")
+        except AgentBuilderError as exc:
+            raise ValueError("Graph authentication returned an unreadable tenant identity.") from exc
+        if self.tenant_id != "organizations" and tenant.casefold() != self.tenant_id.casefold():
+            raise ValueError("Graph authentication selected a different tenant.")
+        return tenant
+
     @property
     def headers(self) -> dict:
         if not self._token:
@@ -505,15 +571,15 @@ class GraphClient:
         """Read sequential pages with a cancellable budget, including retry sleeps."""
         if limit <= 0 or time_budget <= 0:
             raise ValueError("Collection limit and time budget must be positive.")
-        with self._bounded_errors(time_budget):
-            return asyncio.run(self._bounded_collection(path, params, limit, time_budget))
+        with self._bounded_errors(time_budget), asyncio.Runner(loop_factory=_bounded_event_loop) as runner:
+            return runner.run(self._bounded_collection(path, params, limit, time_budget))
 
     def get_bounded_profile(self, *, params: dict, time_budget: float) -> dict:
         """Read the signed-in profile using the collection retry/deadline policy."""
         if time_budget <= 0:
             raise ValueError("Profile time budget must be positive.")
-        with self._bounded_errors(time_budget):
-            return asyncio.run(self._bounded_profile(params, time_budget))
+        with self._bounded_errors(time_budget), asyncio.Runner(loop_factory=_bounded_event_loop) as runner:
+            return runner.run(self._bounded_profile(params, time_budget))
 
     @contextmanager
     def _bounded_errors(self, time_budget):

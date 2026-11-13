@@ -23,6 +23,7 @@ def _read_attributes(runner) -> dict:
             if availability.get("permissionUnavailable") is True:
                 raise GraphPermissionError("Graph permission is unavailable.")
             raise RuntimeError("Graph authentication is unavailable; coverage was not checked.")
+        client.verify_identity(getattr(runner, "authenticated_account", None))
         started = monotonic()
         return check_attributes(client, "tenant", list(ATTRIBUTES))
     except (GraphPermissionError, GraphConsentError):
