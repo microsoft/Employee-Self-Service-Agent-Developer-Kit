@@ -83,7 +83,7 @@ Use at least these headings, followed by factual details naming the topic and ag
 | --------------------------------------------------------- | ----------------------------------------------- |
 | Deletion and local reconciliation confirmed               | **Topic deleted from agent.**                   |
 | Cancelled before execution                                | **Deletion cancelled.**                         |
-| Protection or unresolved ownership prevents proceeding    | **Topic deletion not started.**                 |
+| Template protection or another safety check blocks action | **Topic deletion not started.**                 |
 | No write attempted, or deletion authoritatively rejected  | **Topic was not deleted.**                      |
 | Remote effect remains uncertain                           | **Topic deletion could not be confirmed.**      |
 | Remote absence confirmed, local reconciliation incomplete | **Topic deleted; workspace update incomplete.** |

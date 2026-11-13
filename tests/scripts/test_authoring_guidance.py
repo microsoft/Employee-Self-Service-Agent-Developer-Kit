@@ -86,15 +86,20 @@ def test_topic_actions_companion_artifacts_remain_byte_identical():
     Draft202012Validator(schema).validate(primary)
 
 
-def test_topic_mutation_routes_consume_the_central_inventory_policy():
+def test_topic_routes_share_policy_and_inventory_protection_is_deletion_only():
     contract = _read("src/skills/topics/experience-contract.md")
     policy = contract.split("## Authoring policy for this release\n", 1)[1].split(
         "## Authorization and recovery\n", 1
     )[0]
-    assert "src/reference/topic-actions/catalog.*.json" in policy
-    assert "excluding `catalog.schema.json`" in policy
-    assert "sources/dev/AgentTemplates" in policy
-    assert "Do not include those rows in DA-GA coverage" in policy
+    authoring, deletion = policy.split("### Template protection for deletion\n", 1)
+    assert "catalog.*.json" not in authoring
+    assert "src/reference/topic-actions/catalog.*.json" in deletion
+    assert "excluding `catalog.schema.json`" in deletion
+    assert "sources/dev/AgentTemplates" in deletion
+    assert "Do not include those rows in DA-GA coverage" in deletion
+    assert "Before deleting a local topic or dispatching its remote deletion" in deletion
+    assert "Do not delete template-provided topics" in deletion
+    assert "protected from deletion, including examples, helpers and integration topics" in deletion
     assert "A nonmatch is not proof of customer ownership." in policy
     assert "Preserve an existing draft unchanged." in policy
     for relative in (
@@ -118,6 +123,45 @@ def test_create_blocks_name_conflicts_but_keeps_intent_overlap_advisory():
     assert "case-insensitively after trimming surrounding whitespace" in contract
     assert "Stop if the requested display name already exists." in create
     assert "meaningful intent overlap under a different name as advisory" in create
+
+
+def test_missing_topic_origin_does_not_gate_mutation_or_claim_customer_ownership():
+    contract = _read("src/skills/topics/experience-contract.md")
+    policy = contract.split("## Authoring policy for this release\n", 1)[1].split(
+        "## Authorization and recovery\n", 1
+    )[0]
+    assert "A nonmatch is not proof of customer ownership." in policy
+    assert "Missing customer-origin evidence does not block authoring or deletion" in policy
+    assert "topics created by another author or in another workspace" in policy
+    assert (
+        "Do not require creation receipts, shared provenance metadata or maker "
+        "attestation as an eligibility prerequisite."
+    ) in policy
+    assert "Retain unknown origin as unknown" in policy
+    assert "establish customer-authored origin independently" not in policy
+    assert "no independent origin evidence settles it" not in policy
+    assert "For a template-protected deletion" in policy
+    assert "unavailable required reads and conflicting edits" in policy
+
+
+def test_deletion_and_cleanup_do_not_reintroduce_the_topic_origin_gate():
+    for relative in (
+        ".github/copilot-instructions.md",
+        ".github/prompts/push.prompt.md",
+        "src/skills/topics/deletion-experience.md",
+        "src/skills/topics/delete/SKILL.md",
+        "src/skills/cleanup/SKILL.md",
+    ):
+        guidance = _read(relative)
+        assert "Authoring policy for this release" in guidance, relative
+        assert "unresolved ownership" not in guidance, relative
+        assert "protected or unresolved" not in guidance, relative
+        assert "customer-authored topic" not in guidance, relative
+    deletion = _read("src/skills/topics/deletion-experience.md")
+    assert "If its remote status is unknown, resolve that uncertainty first." in deletion
+    assert "Selection is not deletion approval." in deletion
+    cleanup = _read("src/skills/cleanup/SKILL.md")
+    assert "template-protected deletions" in cleanup
 
 
 def test_create_and_update_prompts_route_to_normal_topic_owners():
@@ -172,29 +216,83 @@ def test_testing_usage_counts_attempted_passes_and_post_fix_retests():
     assert "count as two passes" in skill
 
 
-def test_text_response_scope_is_shared_without_narrowing_yaml_admission():
+def test_supported_authoring_scope_is_not_an_admission_restriction():
     contract = _read("src/skills/topics/experience-contract.md")
-    scope = contract.split("## Text-response authoring scope\n", 1)[1].split(
+    scope = contract.split("## Supported authoring scope\n", 1)[1].split(
         "## Authoring policy for this release\n", 1
     )[0]
-    instructions = " ".join(_read(".github/copilot-instructions.md").split())
-    for guidance in (scope, instructions):
-        assert "one employee intent" in guidance
-        assert "every authored response ending" in guidance
-        assert (
-            "Cross-topic calls or routing, live lookups, flow invocations "
-            "and business/ISV actions are prohibited."
-        ) in guidance
-    assert "must be a text message" in scope
-    assert "not just the last serialized YAML node" in scope
+    assert "one employee intent" in scope
+    assert "optional input collection and local conditional logic" in scope
+    assert "ending in approved text" in scope
+    assert "Makers may author outside this scope with an explicit disclaimer" in scope
+    assert "permitted but unsupported in this release" in scope
+    assert (
+        "Examples include cross-topic calls, live lookups, business actions "
+        "and modifications to shipped topics."
+    ) in scope
+    assert "The support boundary is not an authoring restriction." in scope
     assert "Do not silently remove requested or existing behavior" in scope
     assert "optional exact-response compatibility as a universal admission requirement" in scope
-    assert "When a topic needs an existing external flow" not in instructions
-    assert "Backend-backed topic" not in instructions
-    for owner in ("create", "update"):
-        assert "Text-response authoring scope" in _read(
-            f"src/skills/topics/{owner}/SKILL.md"
-        )
+    for relative in (
+        ".github/copilot-instructions.md",
+        ".github/prompts/push.prompt.md",
+        "src/skills/topics/create/SKILL.md",
+        "src/skills/topics/update/SKILL.md",
+        "src/skills/topics/test/SKILL.md",
+        "src/skills/topics/push-experience.md",
+        "src/skills/topics/testing-experience.md",
+    ):
+        assert "Supported authoring scope" in _read(relative), relative
+
+
+def test_unsupported_authoring_disclaimer_leads_the_response_once():
+    contract = _read("src/skills/topics/experience-contract.md")
+    scope = contract.split("## Supported authoring scope\n", 1)[1].split(
+        "## Authoring policy for this release\n", 1
+    )[0]
+    assert "For a request outside the supported scope above" in scope
+    assert (
+        "begin the first authoring review, clarification or outcome response in normal chat "
+        "with the following callout, once per request"
+    ) in scope
+    assert "Keep it in that response, not in an interim progress message." in scope
+    assert "Do not repeat it in revisions or continuations, or show it for supported requests." in scope
+    assert scope.count("> > **Important**") == 1
+    assert (
+        "> > **Important**\n> >\n"
+        "> > This release only supports text-response topic authoring. "
+        "Customizations to shipped topics and more complex topic behavior may be attempted, "
+        "but are outside this release's supported scope."
+    ) in scope
+
+
+def test_create_update_and_push_do_not_reintroduce_the_support_scope_gate():
+    for relative in (
+        ".github/copilot-instructions.md",
+        ".github/prompts/push.prompt.md",
+        ".github/prompts/test.prompt.md",
+        "src/skills/topics/experience-contract.md",
+        "src/skills/topics/create/SKILL.md",
+        "src/skills/topics/update/SKILL.md",
+        "src/skills/topics/test/SKILL.md",
+        "src/skills/topics/push-experience.md",
+        "src/skills/topics/testing-experience.md",
+    ):
+        guidance = " ".join(_read(relative).split())
+        for restriction in (
+            "business/ISV actions are prohibited",
+            "seek an in-scope request",
+            "without importing prohibited behavior",
+            "not as permission to author backend-backed topics",
+            "backend-backed topic authoring is outside ADK",
+            "action-backed topic authoring is outside ADK",
+            "do not author a live lookup",
+            "do not edit, overwrite or delete it",
+            "Do not route backend conversations through the bounded topic test",
+        ):
+            assert restriction not in guidance, (relative, restriction)
+    push = _read("src/skills/topics/push-experience.md")
+    assert "outside this push's scope or support boundary" not in push
 
 
 def test_wording_review_preserves_supplied_text_and_distinguishes_local_drafts():
@@ -269,7 +367,7 @@ def test_debugging_preserves_wording_without_claiming_verbatim_runtime_delivery(
     testing = _read("src/skills/topics/test/SKILL.md")
     assert "Preserve supplied or accepted response wording and links" in testing
     assert "Distinguish literal saved content from observed runtime delivery" in testing
-    assert "Apply the shared Text-response authoring scope to proposed topic fixes" in testing
+    assert "Apply the shared Supported authoring scope to proposed topic fixes" in testing
 
 
 def test_eval_driven_aliases_are_thin_and_scenario_lifecycle_is_retired():

@@ -22,7 +22,7 @@ Debug and fix the topic under test so its observed runtime behavior meets the la
 
 Use relevant existing cases and useful probes as advisory intent checks, not a graded eval run or a mandatory case-by-case coverage exercise. A fixable in-scope mismatch calls for further investigation and correction, not merely a recommendation to the maker. Do not weaken the authoring goal or edit evals to manufacture agreement.
 
-Preserve supplied or accepted response wording and links during debugging unless the maker authorizes a wording change. Do not replace wording merely to obtain a passing test. Text-message output, literal saved content and verbatim runtime delivery are distinct claims; a save alone does not establish the last. Apply Text-response authoring scope to proposed topic fixes without restricting read-only inspection of existing topics.
+Preserve supplied or accepted response wording and links during debugging unless the maker authorizes a wording change. Do not replace wording merely to obtain a passing test. Text-message output, literal saved content and verbatim runtime delivery are distinct claims; a save alone does not establish the last. Apply Supported authoring scope to proposed topic fixes without restricting read-only inspection of existing topics.
 
 ### Topic debugging outcome: `{topic_test_results}`
 

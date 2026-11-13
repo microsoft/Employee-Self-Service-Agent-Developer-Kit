@@ -2,7 +2,7 @@
 
 Create one ordinary Copilot Studio topic in the selected editable Dev agent. The normal output is a `.mcs.yml` draft followed by an approved AgentBuilder save. Do not activate or publish as a save side effect.
 
-Read the [shared foundation](../experience-contract.md) before interacting with the maker. Apply its Text-response authoring scope, authoring policy and authorization rules. Before drafting, read [Response wording and local drafts](../authoring-experience.md#response-wording-and-local-drafts). Load the other linked references at the steps that need them, not all upfront.
+Read the [shared foundation](../experience-contract.md) before interacting with the maker. Apply its Supported authoring scope, authoring policy and authorization rules. Before drafting, read [Response wording and local drafts](../authoring-experience.md#response-wording-and-local-drafts). Load the other linked references at the steps that need them, not all upfront.
 
 ## Boundaries
 
@@ -16,7 +16,7 @@ Read the [shared foundation](../experience-contract.md) before interacting with 
 
 ## 1. Resolve the request and inspect current topics
 
-Understand the intended employee intent and response, and check the requested behavior against the shared authoring scope before drafting. Read relevant examples from `{agent.folder}/topics/`.
+Understand the intended behavior, inputs and outputs before drafting. Read relevant examples from `{agent.folder}/topics/`.
 
 Run:
 
@@ -38,7 +38,7 @@ Telemetry is best-effort and must not block authoring. Previewing, saving or rec
 
 Create `{agent.folder}/topics/{ExactFileStem}.mcs.yml`. The filename stem becomes the final schema suffix with spelling and case preserved.
 
-Use the existing Object Model-compatible YAML shape for the in-scope request. Review every response ending against the shared authoring boundary; do not use the optional exact-response helper as a universal admission validator. Preserve expressions and unknown supported fields from any selected pattern without importing prohibited behavior. Do not add authoring-origin tags or a mandatory preview artifact.
+Use the existing Object Model-compatible YAML shape for the requested behavior. Do not use the optional exact-response helper as a universal admission validator. Preserve expressions and unknown supported fields from any selected pattern. Do not add authoring-origin tags or a mandatory preview artifact.
 
 Prepare the [Create summary](../authoring-experience.md#create-summary). Cover relevant triggering intent, response/grounding, collected inputs, returned values and employee-visible outputs, confirmation, fallback, error behavior and dependencies. Render the completed summary after the current instruction-alignment assessment and save preview, before the separate short decision control.
 

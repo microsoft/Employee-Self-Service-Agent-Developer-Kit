@@ -1,6 +1,6 @@
 # Delete Topic
 
-Delete one customer-authored topic from the selected editable Dev agent, keep its deletion local for a later Push, or discard an established unsaved local draft.
+Delete one eligible topic from the selected editable Dev agent, keep its deletion local for a later Push, or discard an established unsaved local draft.
 
 Read the [shared foundation](../experience-contract.md) and [Deletion experience](../deletion-experience.md) before reviewing the request. Apply **Authoring policy for this release** and the deletion reference's summaries, local-only variations, scoped consent and outcome heads. Template protection cannot be overridden by approval or a cleanup request.
 

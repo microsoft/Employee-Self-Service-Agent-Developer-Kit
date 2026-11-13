@@ -2,7 +2,7 @@
 
 Update one mapped topic in the selected editable Dev agent from an ordinary `.mcs.yml` draft. Preserve component identity, unrelated behavior, active state, and newer non-overlapping remote content. Do not activate or publish as a save side effect.
 
-Read the [shared foundation](../experience-contract.md) before interacting with the maker. Apply its Text-response authoring scope, authoring policy and authorization rules. Before drafting, read [Response wording and local drafts](../authoring-experience.md#response-wording-and-local-drafts). Load the other linked references at the steps that need them, not all upfront.
+Read the [shared foundation](../experience-contract.md) before interacting with the maker. Apply its Supported authoring scope, authoring policy and authorization rules. Before drafting, read [Response wording and local drafts](../authoring-experience.md#response-wording-and-local-drafts). Load the other linked references at the steps that need them, not all upfront.
 
 ## Boundaries
 
@@ -27,7 +27,7 @@ python scripts\topic_authoring.py read --topic "{agent.folder}\topics\{Topic}.mc
 
 The returned component is authoritative current state. The optional projection is evidence, not permission to overwrite the working draft. Read the full local draft and surrounding components whose contracts matter.
 
-Apply the shared **Authoring policy for this release** to this component identity before editing and again before saving. Check the requested and resulting topic against the shared authoring scope before editing. If preserving existing behavior would leave it outside that boundary, explain the limitation and seek an in-scope request rather than silently deleting or rewriting that behavior.
+Apply the shared **Authoring policy for this release** to this component identity before editing and again before saving.
 
 ## 2. Draft and review the change
 

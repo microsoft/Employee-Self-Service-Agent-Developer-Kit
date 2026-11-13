@@ -23,4 +23,4 @@ When installed, read `src/skills/topics/test/SKILL.md` and follow its phase-spec
 
 ## Workflow requests
 
-Power Automate authoring and runtime changes take place outside ADK. For separately requested read-only run inspection, follow `src/skills/workflows/test/SKILL.md` and its independent target/authentication prerequisites. Do not route backend conversations through the bounded topic test.
+Power Automate authoring and runtime changes take place outside ADK. For separately requested read-only run inspection, follow `src/skills/workflows/test/SKILL.md` and its independent target/authentication prerequisites.

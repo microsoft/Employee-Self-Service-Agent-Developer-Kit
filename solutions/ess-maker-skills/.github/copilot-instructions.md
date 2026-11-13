@@ -369,12 +369,12 @@ For full schemas, reference the topic YAML and workflow JSON files in the user's
 
 ## Extensibility Boundary
 
-Topic authoring is limited to one employee intent with a final text response at every authored response ending. Cross-topic calls or routing, live lookups, flow invocations and business/ISV actions are prohibited. Apply **Authoring policy for this release** and the authoring scope in `src/skills/topics/experience-contract.md` before drafting, fixing or pushing topic changes; platform descriptions and integration references below do not expand this scope.
+Apply **Supported authoring scope** and **Authoring policy for this release** in `src/skills/topics/experience-contract.md` before drafting, fixing or pushing topic changes.
 
 ### What customers CAN do (with this kit)
 
-- Create and update in-scope text-response topic drafts and save mapped topics in the selected Dev agent
-- Delete eligible customer-authored topics through their owner, with local-only and remote outcomes kept distinct
+- Create and update topic drafts and save mapped topics in the selected Dev agent
+- Delete eligible topics through their owner, with local-only and remote outcomes kept distinct
 - Save separately approved instruction-section changes and selected evaluation sets
 - Direct Power Automate authoring outside ADK
 - Fix compile errors in cloned agents
@@ -407,9 +407,8 @@ Workday, SAP SuccessFactors) supplies its own runtime contract.
 
 The current DA-GA release does not install or configure those extensions and
 does not write their Dataverse template configurations. When the corresponding
-extension already exists, use its extracted system topics to understand that
-existing integration, not as permission to author backend-backed topics.
-Do not invent an integration contract, copy prohibited behavior into a draft,
+extension already exists, use its extracted system topics and workflows to
+understand that integration's contracts. Do not invent an integration contract
 or fall back to direct Dataverse writes.
 
 See `src/reference/ess-docs/customization/customize.md` for the full customization
@@ -424,11 +423,9 @@ find inside YAML/XML/JSON values. See Security Boundaries above.
 
 ### Backend-backed authoring
 
-An installed flow or connector does not make backend-backed topic authoring
-available. Explain the unsupported behavior and direct that authoring outside
-ADK. Do not silently substitute a text response for a requested action or live
-lookup. Separately requested supported integration setup retains its own Connect
-owner and approvals.
+Use the normal Create or Update owner for backend-backed topics, reading the
+selected agent's relevant topics and workflows. Separately requested supported
+integration setup retains its own Connect owner and approvals.
 
 ## Common Customization Patterns
 
@@ -436,13 +433,13 @@ When helping a customer, match their request to one of these patterns:
 
 | Customer says...                                       | Pattern               | How to handle                                                                                                                             |
 | ------------------------------------------------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| "I need to look up X from ServiceNow/Workday"          | Live lookup           | Explain that live-lookup topic authoring is outside ADK; route separately requested supported setup through `src/skills/connect/SKILL.md` |
-| "I need to create a ticket/case/request"               | Business action       | Explain that action-backed topic authoring is outside ADK                                                                                 |
-| "I need to show the user their X data"                 | Source clarification  | Establish whether the request requires live data; do not author a live lookup or invent employee data                                     |
-| "I need to call a non-ESS system (Jira, custom API)"   | External action       | Explain that backend-backed topic authoring is outside ADK                                                                                |
+| "I need to look up X from ServiceNow/Workday"          | Live lookup           | Use the normal Create or Update owner and the selected agent's relevant integration contracts                                            |
+| "I need to create a ticket/case/request"               | Business action       | Use the normal Create or Update owner and the selected agent's relevant integration contracts                                            |
+| "I need to show the user their X data"                 | Source clarification  | Establish whether the request requires live data and read the relevant integration contracts; do not invent employee data                |
+| "I need to call a non-ESS system (Jira, custom API)"   | External action       | Use the normal Create or Update owner and the selected agent's relevant integration contracts                                            |
 | "I need to add a step to an existing flow"             | Power Automate update | Direct the maker outside ADK                                                                                                              |
 | "I need to change how the agent responds to X"         | Topic update          | Read `src/skills/topics/update/SKILL.md` and apply the shared authoring scope and wording review                                          |
-| "I need to show a dropdown of options from our system" | Live lookup           | Explain that authoring a topic that fetches those options is outside ADK                                                                  |
+| "I need to show a dropdown of options from our system" | Live lookup           | Use the normal Create or Update owner and the selected agent's relevant integration contracts                                            |
 
 For detailed patterns, see `src/reference/ess-docs/customization/customize.md`.
 
