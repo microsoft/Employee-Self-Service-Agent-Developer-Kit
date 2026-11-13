@@ -118,7 +118,7 @@ def encode_item_id(kind: Kind, natural_key: str) -> str:
 
 @dataclass(frozen=True)
 class ScopeKey:
-    """One unit of crawl bookkeeping: ``(EnvironmentId, Kind)``.
+    """One unit of crawl bookkeeping: environment, kind, and optional knowledge bot.
 
     Tenant-root kinds use :data:`TENANT_ROOT_ENVIRONMENT_ID` (empty string) for the
     environment component.
@@ -126,6 +126,7 @@ class ScopeKey:
 
     environment_id: str
     kind: Kind
+    bot_id: str = ""
 
     @classmethod
     def for_kind(cls, kind: Kind, environment_id: str | None = None) -> ScopeKey:

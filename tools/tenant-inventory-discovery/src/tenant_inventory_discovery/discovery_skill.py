@@ -136,13 +136,13 @@ class DiscoverySkill:
             self._lock.acquire(tenant_id, correlation_id)
 
         summary = RunSummary(correlation_id=correlation_id)
-        self._progress.run_started(tenant_id, environment_ids)
         # Per-run state, cleared here rather than only in _carry_forward: a crash
         # before that point must not leave the next run judging its payload against a
         # previous run's picture of the tenant.
         self._carry_forward_error = ""
         self._server_state = None
         try:
+            self._progress.run_started(tenant_id, environment_ids)
             summary = runner.run(environment_ids=environment_ids, run_id=correlation_id)
             self._carry_forward(summary)
             self._sync(summary)
@@ -156,9 +156,11 @@ class DiscoverySkill:
             self._progress.run_finished(summary)
             raise
         finally:
-            self._telemetry.emit_run_summary(summary)
-            if self._lock is not None:
-                self._lock.release(tenant_id, correlation_id)
+            try:
+                self._telemetry.emit_run_summary(summary)
+            finally:
+                if self._lock is not None:
+                    self._lock.release(tenant_id, correlation_id)
 
         self._progress.run_finished(summary)
         return summary
@@ -230,9 +232,16 @@ class DiscoverySkill:
             server_state[(kind, natural_key)] = _item_from_row(kind, natural_key, row)
             if (kind, natural_key) in present:
                 continue
-            if ScopeKey(str(row.get("environmentId") or ""), kind) in authoritative:
+            scope = ScopeKey(str(row.get("environmentId") or ""), kind)
+            item = server_state[(kind, natural_key)]
+            bot_scope = ScopeKey(
+                scope.environment_id, kind, str(item.attributes.get("botId") or "")
+            )
+            if scope in authoritative or (
+                kind is Kind.KNOWLEDGE_SOURCE and bot_scope in authoritative
+            ):
                 continue  # the crawl looked here; absence means deleted
-            carried.append(_item_from_row(kind, natural_key, row))
+            carried.append(item)
             present.add((kind, natural_key))
 
         self._server_state = server_state

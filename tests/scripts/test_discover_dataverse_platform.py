@@ -14,6 +14,8 @@ no external API), so the cassette rule in tests/AGENTS.md does not apply.
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import sys
 
@@ -246,6 +248,42 @@ def platform(monkeypatch):
 
 
 class TestEnvironmentIdentity:
+    def test_authenticated_tenant_must_match_the_source_environment(self, monkeypatch):
+        tenant = "11111111-2222-3333-4444-555555555555"
+        payload = base64.urlsafe_b64encode(
+            json.dumps({"tid": tenant}).encode()
+        ).decode().rstrip("=")
+        monkeypatch.setattr(auth, "discover_tenant", lambda _url: tenant.upper())
+        platform = DataverseBackedPlatform(
+            _ENV_URL, token_provider=lambda: f"header.{payload}.signature"
+        )
+        assert platform.authenticated_tenant_id() == tenant
+        assert platform._get_tenant_id() == tenant
+
+    @pytest.mark.parametrize("token", [
+        "unreadable", "header.e30.signature",
+        "header.eyJ0aWQiOiJvdGhlci10ZW5hbnQifQ.signature",
+    ])
+    def test_unknown_or_wrong_source_sign_in_is_rejected(self, monkeypatch, token):
+        monkeypatch.setattr(auth, "discover_tenant", lambda _url: _TENANT_ID)
+        platform = DataverseBackedPlatform(_ENV_URL, token_provider=lambda: token)
+        with pytest.raises((ValueError, PlatformError)):
+            platform.authenticated_tenant_id()
+
+    def test_knowledge_coverage_is_bot_scoped(self, platform):
+        from tenant_inventory_discovery.config import DiscoveryConfig
+        from tenant_inventory_discovery.in_memory_inventory import InMemoryInventoryClient
+        from tenant_inventory_discovery.runner import DiscoveryRunner
+
+        summary = DiscoveryRunner(
+            platform, InMemoryInventoryClient(), DiscoveryConfig()
+        ).run(environment_ids=[_ENV_ID])
+        report = next(
+            r for r in summary.scopes if r.scope.kind is Kind.KNOWLEDGE_SOURCE
+        )
+        assert report.scope.bot_id == _BOT_ID
+        assert report.authoritative
+
     def test_environment_id_derives_from_config_url(self, platform):
         # No Dataverse query -- identity comes from the endpoint (org unique name).
         assert platform.environment_id == _ENV_ID

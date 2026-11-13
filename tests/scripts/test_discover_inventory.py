@@ -174,14 +174,18 @@ class _StubMcpClient:
     def __init__(self, *, info=None, probe_error=None, start_error=None):
         if start_error is not None:
             raise start_error
-        self._info = info or {"baseUrl": "https://localhost:444/weveb2"}
+        self._info = info if info is not None else {
+            "baseUrl": "https://localhost:444/weveb2", "tenantId": "contoso"
+        }
         self._probe_error = probe_error
         self.closed = False
+        self.probed = False
 
     def server_info(self):
         return self._info
 
     def probe(self):
+        self.probed = True
         if self._probe_error is not None:
             raise self._probe_error
 
@@ -218,7 +222,8 @@ class TestBuildMcpClient:
 
     def test_success_labels_the_write_path_with_the_servers_target(self, monkeypatch):
         captured = _patch_mcp_client(
-            monkeypatch, info={"baseUrl": "https://localhost:444/weveb2"}
+            monkeypatch,
+            info={"baseUrl": "https://localhost:444/weveb2", "tenantId": "contoso"},
         )
         client, label, degraded = di._build_inventory_client(
             False, "contoso", DiscoveryConfig(), False, None
@@ -227,6 +232,29 @@ class TestBuildMcpClient:
         # Reporting the server's own target, not the bridge's guess, is what makes a
         # run auditable after the fact.
         assert label == "mcp:https://localhost:444/weveb2"
+        assert degraded is None
+
+    @pytest.mark.parametrize("tenant", ["another-tenant", None, "", "organizations"])
+    def test_an_unverified_mcp_tenant_blocks_access(self, monkeypatch, tenant):
+        captured = _patch_mcp_client(
+            monkeypatch, info={"baseUrl": _HOST, "tenantId": tenant}
+        )
+        _, label, degraded = di._build_inventory_client(
+            False, "contoso", DiscoveryConfig()
+        )
+        assert label == "local-only"
+        assert "tenant identity mismatch" in degraded
+        assert captured["instance"].closed
+        assert not captured["instance"].probed
+
+    def test_tenant_comparison_ignores_case_and_surrounding_whitespace(self, monkeypatch):
+        captured = _patch_mcp_client(
+            monkeypatch, info={"baseUrl": _HOST, "tenantId": " CONTOSO "}
+        )
+        client, _, degraded = di._build_inventory_client(
+            False, "contoso", DiscoveryConfig()
+        )
+        assert client is captured["instance"]
         assert degraded is None
 
     def test_an_explicit_base_url_is_forwarded(self, monkeypatch):
@@ -688,3 +716,85 @@ class TestUnchangedRerun:
         doc = json.loads(mirror.read_text(encoding="utf-8"))
         states = {rec["state"] for recs in doc["resources"].values() for rec in recs}
         assert states == {"Active"}
+
+
+class TestDiscoverySafetyWiring:
+    @pytest.mark.parametrize("source", ["another-tenant", None, "", "organizations"])
+    def test_source_mismatch_never_builds_a_shared_client(
+        self, tmp_path, monkeypatch, source
+    ):
+        from tenant_inventory_discovery.in_memory_inventory import InMemoryInventoryClient
+
+        platform, env_id = di._demo_platform_and_inventory()
+        monkeypatch.setattr(
+            platform, "authenticated_tenant_id", lambda: source, raising=False
+        )
+        monkeypatch.setattr(di, "_live_platform", lambda: (platform, env_id))
+        shared_calls = []
+
+        def build(local_only, *_args):
+            shared_calls.append(not local_only)
+            assert local_only
+            return InMemoryInventoryClient(), "local-only", None
+
+        monkeypatch.setattr(di, "_build_inventory_client", build)
+        monkeypatch.chdir(tmp_path)
+        assert di.main(["--tenant-id", "contoso", "--quiet"]) == 2
+        assert shared_calls == [False]
+        result = json.loads((tmp_path / "workspace/discover/results.json").read_text())
+        assert result["writeDegraded"]
+        assert "source tenant" in result["writePathNote"]
+
+    def test_unreadable_source_identity_disables_writes(self):
+        class Source:
+            def authenticated_tenant_id(self):
+                raise ValueError("unreadable token")
+
+        assert "unreadable token" in di._source_tenant_error(Source(), "contoso")
+
+    @pytest.mark.parametrize("fail_sync", [False, True])
+    def test_live_run_holds_one_shared_lock_through_read_and_write(
+        self, tmp_path, monkeypatch, fail_sync
+    ):
+        from tenant_inventory_discovery.errors import RunLockError
+        from tenant_inventory_discovery.in_memory_inventory import InMemoryInventoryClient
+
+        platform, env_id = di._demo_platform_and_inventory()
+        monkeypatch.setattr(
+            platform, "authenticated_tenant_id", lambda: "contoso", raising=False
+        )
+        monkeypatch.setattr(di, "_live_platform", lambda: (platform, env_id))
+        lock_dir = tmp_path / "locks"
+        monkeypatch.setattr(di, "_run_lock_dir", lambda: lock_dir)
+        other = di.FileRunLock(lock_dir, ttl_seconds=3600)
+        calls = []
+
+        class Service(InMemoryInventoryClient):
+            def list_items(self, **kwargs):
+                with pytest.raises(RunLockError):
+                    other.acquire("contoso", "competitor")
+                calls.append("read")
+                return super().list_items(**kwargs)
+
+            def sync_inventory(self, items, *, run_id=""):
+                with pytest.raises(RunLockError):
+                    other.acquire("contoso", "competitor")
+                calls.append("write")
+                if fail_sync:
+                    raise RuntimeError("injected sync failure")
+                return super().sync_inventory(items, run_id=run_id)
+
+        service = Service()
+        monkeypatch.setattr(
+            di, "_build_inventory_client", lambda *_a: (service, "mcp:test", None)
+        )
+        monkeypatch.chdir(tmp_path)
+        assert di.main(["--tenant-id", "CONTOSO", "--quiet"]) == (1 if fail_sync else 0)
+        assert calls == ["read", "write"]
+        other.acquire("contoso", "competitor")
+        other.release("contoso", "competitor")
+
+    def test_lock_location_is_independent_of_checkout(self, tmp_path, monkeypatch):
+        original = di._run_lock_dir()
+        monkeypatch.chdir(tmp_path)
+        assert di._run_lock_dir() == original

@@ -114,6 +114,7 @@ from tenant_inventory_discovery.config import (  # noqa: E402
 )
 from tenant_inventory_discovery.discovery_skill import DiscoverySkill  # noqa: E402
 from tenant_inventory_discovery.local_store import build_document  # noqa: E402
+from tenant_inventory_discovery.lock import FileRunLock  # noqa: E402
 from tenant_inventory_discovery.models import RunSummary  # noqa: E402
 from tenant_inventory_discovery.progress import (  # noqa: E402
     DEFAULT_HEARTBEAT_SECONDS,
@@ -464,6 +465,12 @@ def _build_mcp_client(explicit_base, tenant_id, config, insecure):
 
     try:
         info = client.server_info()
+        if not _same_tenant(info.get("tenantId"), tenant_id):
+            raise ValueError(
+                "tenant identity mismatch or missing MCP tenant: "
+                f"requested {tenant_id!r}, MCP {info.get('tenantId')!r}; "
+                "shared inventory writes are disabled"
+            )
         client.probe()
     except Exception as exc:  # noqa: BLE001 - degrade, never abort the crawl
         client.close()
@@ -475,6 +482,33 @@ def _build_mcp_client(explicit_base, tenant_id, config, insecure):
         )
 
     return client, f"mcp:{info.get('baseUrl', explicit_base or 'unknown')}", None
+
+
+def _same_tenant(actual, requested):
+    """Unknown authorities are not tenant identities."""
+    if not isinstance(actual, str) or not isinstance(requested, str):
+        return False
+    actual, requested = actual.strip().casefold(), requested.strip().casefold()
+    return bool(actual) and actual not in {"organizations", "common", "consumers"} and (
+        actual == requested
+    )
+
+
+def _source_tenant_error(platform, requested):
+    try:
+        source = platform.authenticated_tenant_id()
+        if not _same_tenant(source, requested):
+            raise ValueError(
+                f"source tenant {source!r} does not match requested tenant {requested!r}"
+            )
+    except Exception as exc:
+        return f"source tenant could not be verified ({exc}); shared inventory writes are disabled"
+    return None
+
+
+def _run_lock_dir():
+    # All checkouts for this OS user must contend on the same tenant lock.
+    return os.path.join(os.path.expanduser("~"), ".ess-adk", "discovery-locks")
 
 
 def _tls_hint(exc, insecure):
@@ -548,17 +582,24 @@ def _summary_to_dict(summary: RunSummary) -> dict:
         },
         # Scopes this run vouched for: absence here was allowed to mean deletion.
         "authoritativeScopes": [
-            {"environmentId": s.environment_id, "kind": s.kind.discriminator}
+            {
+                "environmentId": s.environment_id, "kind": s.kind.discriminator,
+                **({"botId": s.bot_id} if s.bot_id else {}),
+            }
             for s in summary.authoritative_scopes
         ],
         "completedScopes": [
-            {"environmentId": s.environment_id, "kind": s.kind.discriminator}
+            {
+                "environmentId": s.environment_id, "kind": s.kind.discriminator,
+                **({"botId": s.bot_id} if s.bot_id else {}),
+            }
             for s in summary.completed_scopes
         ],
         "scopes": [
             {
                 "environmentId": r.scope.environment_id,
                 "kind": r.scope.kind.discriminator,
+                **({"botId": r.scope.bot_id} if r.scope.bot_id else {}),
                 "enumerated": r.enumerated,
                 "mapped": r.mapped,
                 "skippedInvalid": r.skipped_invalid,
@@ -822,13 +863,19 @@ def main(argv=None) -> int:
         environment_ids = [env_id]
 
         progress.phase("Checking where the inventory will be recorded")
+        source_error = (
+            _source_tenant_error(platform, args.tenant_id)
+            if not args.demo and not local_only
+            else None
+        )
         inner, write_path, degraded_reason = _build_inventory_client(
-            local_only,
+            local_only or bool(source_error),
             args.tenant_id,
             config,
             args.insecure_skip_tls_verify,
             args.base_url or os.environ.get(ENV_BASE_URL),
         )
+        degraded_reason = source_error or degraded_reason
         if degraded_reason:
             progress.phase(
                 "The inventory service is unavailable; recording locally only"
@@ -836,12 +883,18 @@ def main(argv=None) -> int:
         inventory = RecordingInventoryClient(inner)
 
         skill = DiscoverySkill(
-            platform, inventory, config=config, progress=progress
+            platform, inventory, config=config, progress=progress,
+            run_lock=(
+                FileRunLock(_run_lock_dir(), ttl_seconds=config.run_lock_ttl_seconds)
+                if not local_only and not degraded_reason else None
+            ),
         )
 
         aborted = False
         try:
-            summary = skill.discover(args.tenant_id, environment_ids=environment_ids)
+            summary = skill.discover(
+                args.tenant_id.strip().casefold(), environment_ids=environment_ids
+            )
         except Exception as exc:  # crash path: nothing synced (crawler guarantees this)
             aborted = True
             summary = RunSummary(correlation_id="unknown")

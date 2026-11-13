@@ -74,9 +74,8 @@ class DiscoveryRunner:
         summary = RunSummary(correlation_id=run_id or f"run-{uuid.uuid4()}")
         summary.full_crawl = full_crawl
         self._run_id = summary.correlation_id
-        # Which tenant-root kinds this platform sees in full. Env-scoped kinds are
-        # always covered for an environment the run actually visited: the surface is
-        # asked for that environment by id, so "everything in it" is what it returns.
+        # Tenant-root coverage is declared by the platform. Knowledge-source coverage
+        # may be narrower still: the live surface reads only one bot.
         coverage = coverage_of(self._platform)
         reports: dict[ScopeKey, ScopeReport] = {}
         discovered_env_ids: list[str] = []
@@ -149,6 +148,9 @@ class DiscoveryRunner:
         self, crawler: Crawler, environment_id: str
     ) -> tuple[ScopeReport, list[InventoryItem]]:
         scope = ScopeKey.for_kind(crawler.kind, environment_id)
+        bot_scope = getattr(self._platform, "knowledge_source_bot_id", None)
+        if crawler.kind is Kind.KNOWLEDGE_SOURCE and bot_scope is not None:
+            scope = ScopeKey(environment_id, crawler.kind, bot_scope(environment_id) or "")
         report = ScopeReport(scope=scope)
         assert crawler.env_scoped is not None
         self._progress.scope_started(crawler.kind, environment_id)

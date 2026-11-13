@@ -243,6 +243,25 @@ class DataverseBackedPlatform:
         """The environment id (from config) used to scope the subset crawl (spec §4)."""
         return self._env_id
 
+    def knowledge_source_bot_id(self, environment_id: str) -> str | None:
+        """Knowledge enumeration covers this bot, not every bot in the environment."""
+        return self._bot_id
+
+    def authenticated_tenant_id(self) -> str:
+        """Verify the source token belongs to the configured Dataverse tenant."""
+        from list_environments import tenant_id_from_access_token
+
+        tenant = auth.discover_tenant(self._env_url)
+        signed_in = tenant_id_from_access_token(self._get_token())
+        if not tenant or tenant.strip().casefold() in {"organizations", "common", "consumers"}:
+            raise PlatformError("The source environment tenant could not be verified.")
+        if tenant.strip().casefold() != signed_in.strip().casefold():
+            raise PlatformError(
+                "The source sign-in tenant does not match the Dataverse environment tenant."
+            )
+        self._tenant_id = signed_in
+        return signed_in
+
     def tenant_wide_kinds(self) -> set[Kind]:
         """Which tenant-root kinds this surface reads across the *whole* tenant.
 

@@ -9,9 +9,12 @@ safely still terminates cleanly rather than half-writing.
 
 from __future__ import annotations
 
+import pytest
+
 from conftest import ENV_A, ENV_B, build_platform
 from tenant_inventory_discovery.config import DiscoveryConfig
 from tenant_inventory_discovery.discovery_skill import DiscoverySkill
+from tenant_inventory_discovery.lock import FileRunLock
 from tenant_inventory_discovery.models import Kind
 from tenant_inventory_discovery.runner import DiscoveryRunner
 
@@ -105,3 +108,29 @@ class TestTheSummaryDescribesTheRun:
     def test_a_fully_covered_run_vouches_for_every_scope(self, platform, inventory):
         summary = DiscoverySkill(platform, inventory).discover("t1")
         assert set(summary.authoritative_scopes) == set(summary.completed_scopes)
+
+
+@pytest.mark.parametrize("failure", ["progress", "telemetry"])
+def test_reporting_failures_still_release_the_run_lock(
+    platform, inventory, tmp_path, failure
+):
+    from tenant_inventory_discovery.progress import NullProgressReporter
+
+    class Progress(NullProgressReporter):
+        def run_started(self, tenant_id, environment_ids):
+            if failure == "progress":
+                raise RuntimeError("progress failed")
+
+    class Telemetry:
+        def emit_run_summary(self, summary):
+            if failure == "telemetry":
+                raise RuntimeError("telemetry failed")
+
+    lock = FileRunLock(tmp_path, ttl_seconds=3600)
+    skill = DiscoverySkill(
+        platform, inventory, run_lock=lock, progress=Progress(), telemetry=Telemetry()
+    )
+    with pytest.raises(RuntimeError, match=failure):
+        skill.discover("t1")
+    lock.acquire("t1", "next-run")
+    lock.release("t1", "next-run")

@@ -20,6 +20,8 @@ tenant's inventory, so it is pinned here.
 
 from __future__ import annotations
 
+import pytest
+
 from conftest import ENV_A, ENV_B, build_platform
 from spies import SpyInventoryClient
 from tenant_inventory_discovery.discovery_skill import DiscoverySkill
@@ -125,6 +127,38 @@ class TestCoveredScopesStillRetire:
 
         assert summary.carried_forward == 0
         assert inventory.get(Kind.CONNECTOR, "conn-catalog-1").state == "Retired"
+
+
+class TestAgentScopedKnowledge:
+    @pytest.mark.parametrize("failed", [False, True])
+    def test_only_the_inspected_bots_absences_can_retire(
+        self, inventory, monkeypatch, failed
+    ):
+        platform = build_platform()
+        other = {
+            "environmentId": ENV_A, "botId": "bot-2", "sourceId": "ks-2"
+        }
+        platform.knowledge_sources[ENV_A].append(other)
+        DiscoverySkill(platform, inventory).discover("t1")
+
+        platform.knowledge_sources[ENV_A] = []
+        monkeypatch.setattr(
+            platform, "knowledge_source_bot_id", lambda _env: "bot-1", raising=False
+        )
+        if failed:
+            platform.fail_on = {"list_knowledge_sources"}
+        summary = DiscoverySkill(platform, inventory).discover(
+            "t1", environment_ids=[ENV_A]
+        )
+
+        assert summary.synced_ok
+        assert inventory.get(
+            Kind.KNOWLEDGE_SOURCE, f"{ENV_A}:bot-2:ks-2"
+        ).state == "Active"
+        assert inventory.get(
+            Kind.KNOWLEDGE_SOURCE, f"{ENV_A}:bot-1:ks-1"
+        ).state == ("Active" if failed else "Retired")
+        assert summary.carried_forward >= 1
 
 
 # -- a scope that failed is a scope that cannot vouch --------------------------------
