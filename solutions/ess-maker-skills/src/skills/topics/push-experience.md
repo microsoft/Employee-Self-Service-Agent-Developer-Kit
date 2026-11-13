@@ -4,6 +4,7 @@ Apply the [shared foundation](experience-contract.md). Use this reference for in
 
 ## Contents
 
+- [Push progress](#push-progress)
 - [Component inventory: `{component_inventory}`](#component-inventory-component_inventory)
 - [Inventory outcomes](#inventory-outcomes)
 - [Entry inventory and choices](#entry-inventory-and-choices)
@@ -16,6 +17,18 @@ Apply the [shared foundation](experience-contract.md). Use this reference for in
 - [Start the approved execution](#start-the-approved-execution)
 - [Interpret the terminal result](#interpret-the-terminal-result)
 - [Emit the terminal sequence once](#emit-the-terminal-sequence-once)
+
+## Push progress
+
+Apply the shared native task-progress rules. For a direct Push request, track **Inspect pending changes** through successful inventory discovery. Reuse a still-current inventory and completed preparation when arriving from authoring; do not repeat work solely to populate progress.
+
+After scoped approval, append one **Push and verify {Component name}** milestone per approved operation, using the inventory's human-readable names. For a deletion, use **Push deletion and verify {Topic title}**. Do not add excluded, kept-pending or unapproved components. Preserve the existing review controls and reuse valid unchanged batch consent without another progress-related approval.
+
+Start each milestone immediately before dispatching its owning operation. Complete it only after authoritative verification and required local recording succeed. The topic and instruction adapters return save and readback together; keep them in one milestone rather than inventing intermediate tool progress. Authoritatively verified already-current content can complete the milestone, but the result must disclose that no new write was needed.
+
+For a new topic and a dependent routing correction, keep the instruction milestone pending until the topic is saved and verified. Pause dependent work after a failed or uncertain prerequisite; continue only independently safe, already-approved work. On a confirmed remote save with unfinished local recording, retain the remote success in the results and make the remaining workspace action explicit without claiming the whole milestone succeeded or replaying the save.
+
+Finish with the existing composed report or standalone outcome, not a todo summary. Keep telemetry out of the checklist. Append testing work only after its own authorization through [Testing progress](testing-experience.md#testing-progress).
 
 ## Component inventory: `{component_inventory}`
 
@@ -136,8 +149,8 @@ Render `{compact_change_comparison}` in normal chat, separately from the short d
 >
 > **Agent:** {Destination agent}
 >
-> | Item             | Current                     | Proposed                     |
-> | ---------------- | --------------------------- | ---------------------------- |
+> | Item | Current | Proposed |
+> | --- | --- | --- |
 > | {Changed aspect} | {Current value or behavior} | {Proposed value or behavior} |
 >
 > **Unchanged**
@@ -205,6 +218,8 @@ Preserve required owner links/reminders once in the composed response, without d
 
 ## Push telemetry
 
+Apply [Push progress](#push-progress) for this approved execution, including standalone saves. Native progress does not create another batch or change the lifecycle below.
+
 The session owns one lifecycle for each approved save batch. **Push all listed changes** and **Push selected changes** each define one batch; **Push this change** defines a one-component batch. A standalone approved topic or instruction save is also one batch. A topic and instruction correction approved together share a batch. Keep the approved scope, lifecycle ownership, observed times and emitted calls in session context. Nested component owners reuse that context and must not emit their own lifecycle. Separate later approvals start separate batches; recovery of the same approved operation does not.
 
 An approved topic deletion pushed to the agent uses this same lifecycle. Local-only deletion and draft discard emit no Push lifecycle.
@@ -233,11 +248,11 @@ Dispatch the approved save through its owner. Do not add an initial `push` usage
 
 Use observed owner results, not exit code alone. Maker-facing Pushed / Failed / Unconfirmed / Pushed with local issue remain separate from the coarse telemetry outcomes.
 
-| Observed execution result                                                                                   | BuildOutcome | DeployOutcome  | BuildErrorCode         | DeployErrorCode          | ErrorCategory |
-| ----------------------------------------------------------------------------------------------------------- | ------------ | -------------- | ---------------------- | ------------------------ | ------------- |
-| Approved operations completed successfully, saved state verified, with at least one confirmed remote change | `success`    | `success`      | empty                  | empty                    | empty         |
-| Approved operations completed successfully and all verified already-current content without writing         | `success`    | not emitted    | empty                  | empty                    | empty         |
-| One or more dispatched component operations ended in error                                                  | `failure`    | `server_error` | `PUSH_PARTIAL_FAILURE` | `DEPLOY_PARTIAL_FAILURE` | `runtime`     |
+| Observed execution result | BuildOutcome | DeployOutcome | BuildErrorCode | DeployErrorCode | ErrorCategory |
+| --- | --- | --- | --- | --- | --- |
+| Approved operations completed successfully, saved state verified, with at least one confirmed remote change | `success` | `success` | empty | empty | empty |
+| Approved operations completed successfully and all verified already-current content without writing | `success` | not emitted | empty | empty | empty |
+| One or more dispatched component operations ended in error | `failure` | `server_error` | `PUSH_PARTIAL_FAILURE` | `DEPLOY_PARTIAL_FAILURE` | `runtime` |
 
 A returned write error counts as operation failure even when its remote effect remains unconfirmed. `server_error` is the existing aggregate deploy label, not a claim that the service rejected every write. Preserve uncertainty and any confirmed saves in the maker-facing report; never replay a write merely to improve telemetry.
 

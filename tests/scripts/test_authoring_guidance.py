@@ -340,7 +340,19 @@ def test_suggested_response_revision_returns_to_review_without_save_consent():
         "Then show the revised summary and wording"
     )
     assert "Keep as draft retains the suggestion locally without accepting it." in decision
-    assert "saved locally in your VS Code workspace" in decision
+    assert "[Topic outcomes](#topic-outcomes)" in decision
+    outcomes = contract.split("### Topic outcomes\n", 1)[1].split(
+        "### Combined routing-conflict and testing follow-up\n", 1
+    )[0]
+    assert (
+        "For a retained draft with unaccepted suggested wording, "
+        "`{Contextual trailer}` begins with the following fixed block."
+    ) in outcomes
+    assert (
+        "> {Topic title} is saved locally in your VS Code workspace. "
+        "The suggested response remains available for review or revision."
+    ) in outcomes
+    assert "put additional factual context after a blank line" in outcomes
     for owner in ("create", "update"):
         guidance = _read(f"src/skills/topics/{owner}/SKILL.md")
         assert "../authoring-experience.md#topic-save-decision" in guidance
@@ -473,6 +485,200 @@ def test_focused_experience_and_review_links_resolve():
                     for heading in headings
                 }
                 assert anchor in anchors, (document, destination)
+
+
+def test_native_progress_preserves_other_operations_and_setup():
+    foundation = _read("src/skills/topics/experience-contract.md")
+    assert "../../reference/ui-formatting-guidelines.md#native-task-progress" in foundation
+    formatting = _read("src/reference/ui-formatting-guidelines.md")
+    native = " ".join(
+        formatting.split("## Native task progress\n", 1)[1]
+        .split("## Progress checklists\n", 1)[0].split()
+    )
+    assert "native todo tool exposed by the current chat" in native
+    assert "Use its actual schema and supported states" in native
+    assert "If no native todo tool is available, continue" in native
+    assert "Do not substitute Markdown progress checklists" in native
+    assert "send the full current list rather than only changed items" in native
+    assert "A todo is not consent." in native
+    assert "only when its stated completion condition is observed" in native
+    assert "remove unattempted work from the active plan" in native
+    assert "report it as cancelled, not completed" in native
+    markdown = " ".join(formatting.split("## Progress checklists\n", 1)[1].split())
+    assert "only when an operation explicitly defines its own progress-checklist Message block" in markdown
+    assert "Send each progress snapshot as its own complete chat message" in markdown
+
+
+def test_create_completion_updates_bind_draft_and_review_to_distinct_steps():
+    formatting = _read("src/reference/ui-formatting-guidelines.md")
+    assert "For Create, from preparation through the topic outcome and testing offer" in formatting
+    assert "../skills/topics/authoring-experience.md#create-completion-updates" in formatting
+    authoring = _read("src/skills/topics/authoring-experience.md")
+    progress = authoring.split("### Create completion updates\n", 1)[1].split(
+        "## Authoring summaries\n", 1
+    )[0]
+    assert "not a native todo list or a progress checklist" in progress
+    assert "After saving or verifying the unchanged local draft" in progress
+    assert (
+        "standalone completion message immediately before the next required "
+        "instruction-alignment or non-writing save-preview operation"
+    ) in progress
+    assert "> ✅ Prepared the draft for **{Topic title}**." in progress
+    assert "After those checks complete, show the full Create summary in a later chat message" in progress
+    assert "after the revised local draft is saved, then run its required checks" in progress
+    create = _read("src/skills/topics/create/SKILL.md")
+    drafting = create.split("## 2. Draft ordinary topic YAML\n", 1)[1].split(
+        "## 3. Assess agent-instruction alignment\n", 1
+    )[0]
+    assert "../authoring-experience.md#create-completion-updates" in drafting
+    assert "send the standalone prepared-draft message" in drafting
+    assert "The full review follows those checks." in drafting
+    assert "approved topic save and authoritative readback both succeed" in progress
+    assert "> ✅ Pushed and verified **{Topic title}**." in progress
+    assert "Do not suppress a completion update" in progress
+    assert "a retained draft, an already-current no-write result, a failed operation" in progress
+    assert "an unconfirmed outcome" in progress
+    assert "Do not prepopulate activation, testing or publication." in progress
+
+
+def test_create_review_uses_h5_fields_nested_h6_headings_and_explained_choices():
+    authoring = _read("src/skills/topics/authoring-experience.md")
+    summary = authoring.split("### Create summary\n", 1)[1].split(
+        "### Update summary\n", 1
+    )[0]
+    labels = re.findall(r"^> ##### (.+)\n>", summary, re.MULTILINE)
+    assert labels == [
+        "TITLE", "AGENT", "BEHAVIOR", "INPUTS", "OUTPUTS",
+        "STARTS WHEN", "NOTES", "SUGGESTED ACTION",
+        "ROUTING CONFLICTS",
+    ]
+    assert "Suggested action labels in Notes" in summary
+    assert "Preserve the response quotation" in summary
+    assert "> **Title:**" not in summary
+    assert not re.search(r"^>\s{2,}##### ", summary, re.MULTILINE)
+    assert not re.search(r"^>\s*(?:---|\*\*\*)\s*$", summary, re.MULTILINE)
+    outputs = summary.split("> ##### OUTPUTS\n", 1)[1].split(
+        "> ##### STARTS WHEN\n", 1
+    )[0]
+    assert (
+        "> - {Output description}\n>\n"
+        ">   ###### RESPONSE TEXT\n>\n"
+        ">   > {Response text}"
+    ) in outputs
+    assert "including Response text and Suggested response" in summary
+    assert "indented level-six headings in ALL CAPS within the corresponding output bullet" in summary
+    assert "use SUGGESTED RESPONSE for newly generated wording that has not been accepted" in summary
+    assert "Omit the response heading and quotation for outputs without literal response wording" in summary
+    assert "Other operations retain their existing response-label treatment." in summary
+    wording = authoring.split("### Response wording and local drafts\n", 1)[1].split(
+        "### Advisory entries in Notes\n", 1
+    )[0]
+    assert "> **Response text**" in wording
+    assert "> **Suggested response**" in wording
+    conflicts = summary.split("> ##### ROUTING CONFLICTS\n", 1)[1].split(
+        "> [Full draft]", 1
+    )[0]
+    assert re.findall(r"^>   ###### (.+)$", conflicts, re.MULTILINE) == [
+        "SUGGESTED ACTIONS",
+    ]
+    assert (
+        "> - {Routing conflict}. This routing conflict will likely block topic execution.\n>\n"
+        ">   ###### SUGGESTED ACTIONS\n"
+        ">   - {Concrete next action}."
+    ) in conflicts
+    assert "Follow the complete conflict list with exactly one indented level-six" in summary
+    assert "even when there is only one action" in summary
+    assert "Do not repeat this block for each conflict." in summary
+    assert "Other operations retain the shared Routing Conflicts format." in summary
+    decision = authoring.split("### Topic save decision\n", 1)[1].split(
+        "### Suggested-response decision\n", 1
+    )[0]
+    assert "> ##### YOUR CHOICES" in decision
+    assert "immediately before that control" in decision
+    assert "Retain the existing short picker labels" in decision
+    assert "> **Push topic to agent** / **Keep as draft**" in decision
+    testing = _read("src/skills/topics/testing-experience.md")
+    assert "When offering this continuation after Create" in testing
+    assert "> ##### YOUR CHOICES" in testing
+    for section, title, choices in (
+        (decision, "Topic save", ["Push topic to agent", "Keep as draft"]),
+        (testing, "Topic testing", ["Activate and test", "Not now"]),
+    ):
+        question = json.loads(re.search(r"```json\n(.*?)\n```", section, re.DOTALL)[1])
+        assert question["message"] == ""
+        field = question["requestedSchema"]["properties"]["action"]
+        assert field["title"] == title
+        assert field["description"] == "How would you like to continue?"
+        assert field["enum"] == choices
+        assert "allow custom text" in section
+
+
+def test_create_save_control_preserves_question_metadata_across_branches():
+    authoring = _read("src/skills/topics/authoring-experience.md")
+    decision = authoring.split("### Topic save decision\n", 1)[1].split(
+        "### Suggested-response decision\n", 1
+    )[0]
+    assert "For every Create topic-save decision" in decision
+    assert "replace only `enum` with that branch's applicable choices" in decision
+    assert "including any conditional response-revision choice" in decision
+    for heading, following, legacy_question in (
+        (
+            "Suggested-response decision", "Initial routing-conflict decision",
+            "> **Use this suggested response and push {Topic title} to {Destination agent}?**",
+        ),
+        (
+            "Initial routing-conflict decision", "Topic outcomes",
+            "> **How would you like to continue with {Topic title}?**",
+        ),
+    ):
+        branch = authoring.split(f"### {heading}\n", 1)[1].split(
+            f"### {following}\n", 1
+        )[0]
+        assert "For Create, use the [Create save control](#topic-save-decision)" in branch
+        assert f"For Update, use:\n\n{legacy_question}" in branch
+    assert (
+        "When suggested wording remains unaccepted, include "
+        "**I want to update the response** before Keep as draft"
+    ) in branch
+
+
+def test_authoring_progress_adds_only_selected_branches():
+    authoring = _read("src/skills/topics/authoring-experience.md")
+    progress = authoring.split("## Authoring progress\n", 1)[1].split(
+        "## Authoring summaries\n", 1
+    )[0]
+    assert "Check the request and topic availability" in progress
+    assert "Prepare the {Topic title} draft" in progress
+    assert "Check instruction alignment and save readiness" in progress
+    assert "Only after the maker selects routing-conflict resolution" in progress
+    assert "preparation does not approve either save" in progress
+    assert "Keep as draft adds no Push milestone." in progress
+    assert "Push topic anyway adds only the topic save" in progress
+    assert "Do not prepopulate activation, testing or publication." in progress
+    assert "Preserve earlier confirmed saves as completed work" in progress
+
+
+def test_push_and_testing_progress_preserve_evidence_and_consent_boundaries():
+    push = _read("src/skills/topics/push-experience.md")
+    progress = push.split("## Push progress\n", 1)[1].split(
+        "## Component inventory:", 1
+    )[0]
+    assert "After scoped approval, append one" in progress
+    assert "Do not add excluded, kept-pending or unapproved components." in progress
+    assert "return save and readback together; keep them in one milestone" in progress
+    assert "until the topic is saved and verified" in progress
+    assert "result must disclose that no new write was needed" in progress
+    assert "without claiming the whole milestone succeeded or replaying the save" in progress
+    assert "[Push progress](#push-progress)" in push.split("## Push telemetry\n", 1)[1]
+    testing = _read("src/skills/topics/testing-experience.md").split(
+        "## Testing progress\n", 1
+    )[1].split("## Topic testing continuation\n", 1)[0]
+    assert "only after testing is requested or selected" in testing
+    assert "Not now adds no testing work." in testing
+    assert "only when activation is needed and explicitly authorized" in testing
+    assert "before sending any test message" in testing
+    assert "A completed capture alone does not establish" in testing
+    assert "Pause and stop take effect immediately." in testing
 
 
 def test_shared_experience_preserves_approved_copy_and_template_boundary():
@@ -638,7 +844,12 @@ def test_advisories_have_structured_issue_effect_and_own_action_line():
         "> - {Advisory issue}. {Practical effect}.\n>\n"
         ">   **Suggested action:** {Concrete next action}."
     )
-    assert contract.count(advisory) == 3
+    assert contract.count(advisory) == 2
+    assert (
+        "> - {Advisory issue}. {Practical effect}.\n>\n"
+        "> ##### SUGGESTED ACTION\n>\n"
+        "> {Concrete next action}."
+    ) in contract
     assert (
         "`{Concrete next action}` is a specific, relevant recommended step "
         "to investigate or address the issue, identifying what to inspect, "

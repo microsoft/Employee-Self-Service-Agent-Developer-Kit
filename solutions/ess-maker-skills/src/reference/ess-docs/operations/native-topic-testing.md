@@ -51,6 +51,15 @@ The operation checks target/content again, changes only the selected topic's sta
 
 Reuse a valid dedicated browser and its connection facts when available.
 
+Before calling `prepare-browser`, recover existing connection facts from the session or this workspace's `.local/topic-tests/` evidence. When the record is not already known, use filesystem discovery that includes ignored folders:
+
+```powershell
+Get-ChildItem -LiteralPath '.local\topic-tests' -Filter result.json -File -Recurse |
+    Select-Object -ExpandProperty FullName | ConvertTo-Json
+```
+
+An absent evidence folder means there are no workspace-local records to inspect. Read results whose `operation` is `prepare-browser`; directories may be caller-named, not just `prepare-browser-*`. Match the recorded target's environment, tenant, ring, agent and realm to the selected context. Recover `pid`, `profile`, `cdp` and `url` from matching records, then check their live state. One stale record does not make all matching browsers unavailable. When several are usable, prefer an already signed-in browser for the selected test identity rather than simply the newest record.
+
 Check the recorded browser PID and CDP endpoint separately. Emit JSON, not mixed formatted tables. These are read-only detection checks, not Test-pane readiness checks.
 
 ```powershell

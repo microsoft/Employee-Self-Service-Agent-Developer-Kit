@@ -17,6 +17,8 @@ These references own the literal UX copy. Operation owners link directly to the 
 
 ## Presentation and scope
 
+Read and apply [Native task progress](../../reference/ui-formatting-guidelines.md#native-task-progress) before starting work. Use the current operation's progress milestones without replacing its previews, decisions or results.
+
 Read and apply [Authoring pattern](../../reference/ui-formatting-guidelines.md#authoring-pattern) before rendering a template. The focused references own its literal copy, placeholder bindings and applicable omission, repetition and conditional-choice rules.
 
 Every UX instruction list is an **at-least baseline**, not an exhaustive closed list. This includes component types, summary fields, formatting guidance, choices, outcome heads, statuses, readiness cases and examples.
@@ -27,7 +29,7 @@ Extensibility does not reintroduce explicitly excluded rules or options, invent 
 
 Use ordinary chat for open-ended requirements and revisions. Do not put a free-text-only exchange in a structured question. Retain structured controls for genuine choices; render summaries and previews in normal chat before a separate short control, not inside a long question description.
 
-Use terse, external, semi-technical language about behavior and interfaces, without internal node labels. Use bold labels with whitespace between sections, short bullets for multiple inputs/outputs and required/optional markings where useful, inline code only for technical names the developer needs, and a link to the full draft for detail.
+Use terse, external, semi-technical language about behavior and interfaces, without internal node labels. Use bold labels with whitespace between sections, except for the [Create summary](authoring-experience.md#create-summary), which uses uppercase level-five headings without horizontal rules, nested level-six child headings under Outputs and a nested level-six Suggested actions block under Routing Conflicts. Use short bullets for multiple inputs/outputs and required/optional markings where useful, inline code only for technical names the developer needs, and a link to the full draft for detail.
 
 Omit genuinely empty sections. Unresolved information is not absence: identify it as unresolved rather than omitting it or calling it absent. Apply [Response wording and local drafts](authoring-experience.md#response-wording-and-local-drafts) when presenting literal response text. Describe dynamic content without inventing its rendered response. For lengthy wording, provide a clearly labeled excerpt and access to the full text.
 

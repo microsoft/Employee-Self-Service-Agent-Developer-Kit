@@ -4,6 +4,7 @@ Apply the [shared foundation](experience-contract.md). Use this reference when o
 
 ## Contents
 
+- [Testing progress](#testing-progress)
 - [Topic testing continuation](#topic-testing-continuation)
 - [Scoped runtime correctness goal](#scoped-runtime-correctness-goal)
 - [Topic debugging outcome: `{topic_test_results}`](#topic-debugging-outcome-topic_test_results)
@@ -11,6 +12,18 @@ Apply the [shared foundation](experience-contract.md). Use this reference when o
 - [Browser readiness and testing goal](#browser-readiness-and-testing-goal)
 - [Pause, stop and resume](#pause-stop-and-resume)
 - [Unresolved prerequisites](#unresolved-prerequisites)
+
+## Testing progress
+
+Apply the shared native task-progress rules only after testing is requested or selected. Carry forward completed authoring and Push milestones; Not now adds no testing work.
+
+Track **Check {Topic title} testing readiness**, **Prepare the test browser**, and **Test {Topic title}**, following the testing owner's operation order. Complete readiness only when the saved target, intended behavior, available capability and applicable permissions are established. Complete browser preparation only after the correct browser and required human readiness are confirmed; while awaiting the maker, make the readiness condition explicit and do not imply that testing is running.
+
+Add **Activate {Topic title} for testing** only when activation is needed and explicitly authorized. Complete it only after authoritative Active state is confirmed, before sending any test message. Do not add publication.
+
+For test-and-fix scope, use **Test {Topic title} and fix scoped issues** instead of the test-only title. Keep that milestone open through necessary in-scope fixes and retests; reuse the authoring and Push owners for their actual operations without repeating unchanged approvals. A completed capture alone does not establish that the intended behavior was observed. If the goal remains unmet or unobserved, report it through the existing outcome contract rather than marking it successful.
+
+Pause and stop take effect immediately. Preserve completed activation and saves, reconcile uncertain effects without replay, and apply the shared pending/cancellation rules to unfinished work. Finish with the existing debugging outcome and available evidence, not a checklist-based pass claim.
 
 ## Topic testing continuation
 
@@ -79,6 +92,39 @@ For an active topic:
 > **Test topic now** / **Not now**
 
 For an inactive topic:
+
+When offering this continuation after Create, explain the choices in normal chat immediately before the separate control:
+
+<!-- markdownlint-disable MD001 -->
+
+> ##### YOUR CHOICES
+>
+> | Choice            | What happens                                                                                            |
+> | ----------------- | ------------------------------------------------------------------------------------------------------- |
+> | Activate and test | Activate the topic in Dev, test its behavior, and fix issues within the selected scope. Do not publish. |
+> | Not now           | Leave the topic saved and inactive. Defer conversation testing.                                         |
+
+<!-- markdownlint-enable MD001 -->
+
+Keep these explanations outside the picker. After Create, call `ask_user` with this JSON. Keep the top message empty, use the contextual panel title and fixed inner question below, and allow custom text. The JSON defines the control; do not print it in chat. Submit, keyboard hints and close/collapse controls belong to the host.
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Topic testing",
+        "description": "How would you like to continue?",
+        "enum": ["Activate and test", "Not now"]
+      }
+    }
+  }
+}
+```
+
+For other inactive-topic continuations, use the existing control:
 
 > **Activate {Topic title}, test it and fix any issues found?**
 >

@@ -4,6 +4,8 @@ Apply the [shared foundation](experience-contract.md). Use this reference for Cr
 
 ## Contents
 
+- [Authoring progress](#authoring-progress)
+- [Create completion updates](#create-completion-updates)
 - [Authoring summaries](#authoring-summaries)
 - [Response wording and local drafts](#response-wording-and-local-drafts)
 - [Advisory entries in Notes](#advisory-entries-in-notes)
@@ -17,6 +19,42 @@ Apply the [shared foundation](experience-contract.md). Use this reference for Cr
 - [Combined routing-conflict and testing follow-up](#combined-routing-conflict-and-testing-follow-up)
 - [Targeted instruction-change preview and approval](#targeted-instruction-change-preview-and-approval)
 - [Instruction-push outcomes and testing](#instruction-push-outcomes-and-testing)
+
+## Authoring progress
+
+For Create, apply [Create completion updates](#create-completion-updates). For Update, apply the shared native task-progress rules below. Before the first authoring operation, start these preparation milestones in the owning operation's order. Bind `{Topic title}` to the selected title; use `topic` until the title is established.
+
+| Milestone                                                                                                    | Completion condition                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Check the request and topic availability** for Create, or **Check the request and saved topic** for Update | Resolve the target and requested scope, establish current inventory or saved content, and pass applicable naming and authoring-policy checks.                                        |
+| **Prepare the {Topic title} draft**                                                                          | The actual local draft contains the proposed behavior and wording, preserving unrelated content.                                                                                     |
+| **Check instruction alignment and save readiness**                                                           | Assess current saved instructions and the non-writing save preview. A known routing conflict is a review finding, not a resolved conflict; missing evidence remains unfinished work. |
+
+After preparation, render the existing summary and applicable decision control. Preparation completion does not mean the topic was pushed or its wording accepted.
+
+Only after the maker selects routing-conflict resolution, or existing explicit scope authorizes it, append **Prepare the routing correction**. Complete it when the isolated correction and its non-writing preview are ready with unrelated content preserved. Then show the existing instruction preview and applicable scoped Push review; preparation does not approve either save.
+
+Use [Push progress](push-experience.md#push-progress) only for approved saves. Keep as draft adds no Push milestone. Push topic anyway adds only the topic save and leaves the correction excluded. Do not prepopulate activation, testing or publication.
+
+On a requested revision, reopen only affected preparation milestones and refresh their preview before the applicable decision. Preserve earlier confirmed saves as completed work; a later change is a new proposal, not a reversal of those saves. Reuse valid unchanged scoped consent.
+
+### Create completion updates
+
+From Create preparation through its topic outcome and testing offer, use completion-only Markdown updates in normal chat, not a native todo list or a progress checklist. Each update is a separate short message in the past tense. Resolve `{Topic title}` from the selected topic.
+
+After saving or verifying the unchanged local draft with the requested behavior and wording, send the following standalone completion message immediately before the next required instruction-alignment or non-writing save-preview operation:
+
+> ✅ Prepared the draft for **{Topic title}**.
+
+Continue with the remaining instruction-alignment assessment and non-writing save preview. After those checks complete, show the full Create summary in a later chat message, followed by its separate decision control. Draft preparation confirms the local draft is ready; alignment and save readiness are established by the subsequent checks. Draft preparation does not imply wording acceptance, a remote save, or resolution of a reported routing conflict.
+
+After an approved topic save and authoritative readback both succeed, send:
+
+> ✅ Pushed and verified **{Topic title}**.
+
+Keep the existing outcome report after the update, even when it repeats the completed milestone. Do not suppress a completion update because the review or outcome repeats the same fact. Do not emit a successful save update for a retained draft, an already-current no-write result, a failed operation, or an unconfirmed outcome; use the existing truthful outcome report.
+
+Do not announce work that is starting or still running. For a revision, send a new prepared-draft update after the revised local draft is saved, then run its required checks before showing the revised review. Preserve existing approval, uncertainty and recovery boundaries. Do not prepopulate activation, testing or publication. If the maker selects testing, continue with the testing owner's progress rules.
 
 ## Authoring summaries
 
@@ -76,38 +114,63 @@ Put instruction-routing conflicts in Routing Conflicts, separate from topic stat
 
 ### Create summary
 
-For Create, state that creation is inactive and unpublished; activation is a separate choice in the testing follow-up. Render:
+For Create, state that creation is inactive and unpublished; activation is a separate choice in the testing follow-up. Render top-level review field labels as own-line level-five Markdown headings in ALL CAPS, followed by a blank line and the field content. Use no horizontal rules or trailing colons. Apply this treatment to Suggested action labels in Notes. Keep Notes' Suggested action headings and their text outside list indentation, aligned with the other review fields and immediately after the associated issue. Preserve the response quotation and all applicable omission rules. Do not turn field content, outcome sentences or picker options into uppercase headings.
 
-> **Title:** {Topic title}
+Under Outputs, render child labels, including Response text and Suggested response, as indented level-six headings in ALL CAPS within the corresponding output bullet. Nest the response quotation at the same content indentation. Use RESPONSE TEXT for supplied or explicitly accepted wording, as shown below; use SUGGESTED RESPONSE for newly generated wording that has not been accepted. Omit the response heading and quotation for outputs without literal response wording. Other operations retain their existing response-label treatment.
+
+List all applicable routing conflicts first, repeating the conflict bullet as needed. Follow the complete conflict list with exactly one indented level-six SUGGESTED ACTIONS block, even when there is only one action. Nest the heading and action bullets as shown below. Repeat the action bullet as needed, making clear which conflicts each action addresses. Do not repeat this block for each conflict. Other operations retain the shared Routing Conflicts format.
+
+Render:
+
+<!-- markdownlint-disable MD001 -->
+
+> ##### TITLE
 >
-> **Agent:** {Destination agent}
+> {Topic title}
 >
-> **Behavior:** {Concise behavior description}
+> ##### AGENT
 >
-> **Inputs**
+> {Destination agent}
+>
+> ##### BEHAVIOR
+>
+> {Concise behavior description}
+>
+> ##### INPUTS
 >
 > - {Input}: {Input description}
 >
-> **Outputs**
+> ##### OUTPUTS
 >
 > - {Output description}
 >
-> **Starts when:** {Triggering scope}
+>   ###### RESPONSE TEXT
 >
-> **Notes**
+>   > {Response text}
+>
+> ##### STARTS WHEN
+>
+> {Triggering scope}
+>
+> ##### NOTES
 >
 > - {Note}
 > - {Advisory issue}. {Practical effect}.
 >
->   **Suggested action:** {Concrete next action}.
+> ##### SUGGESTED ACTION
 >
-> **Routing Conflicts**
+> {Concrete next action}.
+>
+> ##### ROUTING CONFLICTS
 >
 > - {Routing conflict}. This routing conflict will likely block topic execution.
 >
->   **Suggested action:** {Concrete next action}.
+>   ###### SUGGESTED ACTIONS
+>   - {Concrete next action}.
 >
 > [Full draft]({Draft link})
+
+<!-- markdownlint-enable MD001 -->
 
 ### Update summary
 
@@ -148,13 +211,52 @@ For Update, include only affected fields, concise before/after details where use
 
 Follow either summary with the [initial routing-conflict decision](#initial-routing-conflict-decision) when an instruction-routing conflict is known. Otherwise use the [suggested-response decision](#suggested-response-decision) for unaccepted suggested wording, or this separate short choice control for supplied or accepted wording:
 
+For Create without a routing conflict, explain the choices in normal chat immediately before that control:
+
+<!-- markdownlint-disable MD001 -->
+
+> ##### YOUR CHOICES
+>
+> | Choice              | What happens                                                         |
+> | ------------------- | -------------------------------------------------------------------- |
+> | Push topic to agent | Save and verify the topic in Dev. Leave it inactive and unpublished. |
+> | Keep as draft       | Keep the local draft without changing the agent.                     |
+
+<!-- markdownlint-enable MD001 -->
+
+When suggested wording is unaccepted, the Push explanation also states that it accepts the displayed response. Add the applicable I want to update the response row, explaining that it revises the draft without pushing it. Retain the existing short picker labels; do not put these explanations in option labels or replace the separate decision control with the table.
+
+For every Create topic-save decision, call `ask_user` with this JSON shape. Keep the top message empty, use the contextual panel title and fixed inner question below, and allow custom text. The shown `enum` applies to supplied or accepted wording without a routing conflict. For the suggested-response or initial routing-conflict branch, replace only `enum` with that branch's applicable choices, including any conditional response-revision choice. The JSON defines the control; do not print it in chat. Submit, keyboard hints and close/collapse controls belong to the host.
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Topic save",
+        "description": "How would you like to continue?",
+        "enum": ["Push topic to agent", "Keep as draft"]
+      }
+    }
+  }
+}
+```
+
+For Update with supplied or accepted wording and no routing conflict, use the existing control:
+
 > **Push topic to agent** / **Keep as draft**
 
 Keep as draft leaves the draft saved locally in the VS Code workspace without a remote write. Do not offer a runnable remote test for a draft-only outcome.
 
 ### Suggested-response decision
 
-After displaying the suggested wording and completed summary, use:
+After displaying the suggested wording and completed summary, present the applicable control.
+
+For Create, use the [Create save control](#topic-save-decision) with **Push topic to agent**, **I want to update the response** and **Keep as draft**, in that order.
+
+For Update, use:
 
 > **Use this suggested response and push {Topic title} to {Destination agent}?**
 >
@@ -168,13 +270,15 @@ I want to update the response does not accept the suggestion or authorize a remo
 
 Apply the requested revision to the local draft, preserving supplied replacement text. Obtain a fresh save preview and reassess any affected instruction alignment. Then show the revised summary and wording and return to the applicable decision control before any save. When the maker describes edits rather than supplies replacement text, label newly generated wording Suggested response until accepted.
 
-Keep as draft retains the suggestion locally without accepting it. Use the truthful draft-only outcome, with a trailer that explicitly identifies the VS Code workspace. For an unaccepted suggestion, use:
-
-> {Topic title} is saved locally in your VS Code workspace. The suggested response remains available for review or revision.
+Keep as draft retains the suggestion locally without accepting it. Use the draft-only result in [Topic outcomes](#topic-outcomes), including its fixed unaccepted-suggestion trailer.
 
 ### Initial routing-conflict decision
 
-When the initial Create or Update review identifies an instruction-routing conflict, offer resolution before any topic or instruction push. Follow the completed summary with:
+When the initial Create or Update review identifies an instruction-routing conflict, offer resolution before any topic or instruction push. Follow the completed summary with the applicable control.
+
+For Create, use the [Create save control](#topic-save-decision) with **Resolve the routing conflict in the Agent Instructions**, **Push topic anyway** and **Keep as draft**, in that order.
+
+For Update, use:
 
 > **How would you like to continue with {Topic title}?**
 >
@@ -212,6 +316,10 @@ The flexible trailer carries relevant identity, observed state, draft link, caus
 > **{Outcome head}**
 >
 > {Contextual trailer}
+
+For a retained draft with unaccepted suggested wording, `{Contextual trailer}` begins with the following fixed block. Resolve `{Topic title}` from the selected draft; put additional factual context after a blank line.
+
+> {Topic title} is saved locally in your VS Code workspace. The suggested response remains available for review or revision.
 
 During composed Push, contribute these known facts to the single composed report instead of stacking owner reports.
 

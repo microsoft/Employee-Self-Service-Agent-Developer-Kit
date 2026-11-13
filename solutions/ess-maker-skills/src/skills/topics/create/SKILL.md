@@ -42,6 +42,8 @@ Use the existing Object Model-compatible YAML shape for the requested behavior. 
 
 Prepare the [Create summary](../authoring-experience.md#create-summary). Cover relevant triggering intent, response/grounding, collected inputs, returned values and employee-visible outputs, confirmation, fallback, error behavior and dependencies. Render the completed summary after the current instruction-alignment assessment and save preview, before the separate short decision control.
 
+Once the requested local draft is saved or verified unchanged, send the standalone prepared-draft message from [Create completion updates](../authoring-experience.md#create-completion-updates), then continue with the remaining alignment and save-preview operations below. The full review follows those checks.
+
 ## 3. Assess agent-instruction alignment
 
 Read current saved instructions:
