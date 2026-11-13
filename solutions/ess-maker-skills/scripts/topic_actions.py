@@ -571,11 +571,31 @@ def _confirm_stdin(plan: dict[str, Any]) -> str:
     return answer.strip().casefold() if answer else "cancel"
 
 
+def _print_result(result: dict[str, Any], *, chat_output: bool) -> None:
+    if chat_output:
+        public = {key: result[key] for key in (
+            "contractVersion", "status", "completed", "writeStatus", "userMessage",
+            "reviewId", "expiresAt", "expiresInSeconds", "setCount", "discoveryComplete",
+            "selectionQuestion", "approvalQuestion",
+        ) if key in result}
+        if "sets" in result:
+            public["sets"] = [
+                {"key": item["key"], "name": item["name"]} for item in result["sets"]
+            ]
+    else:
+        public = {key: item for key, item in result.items() if key != "callerContext"}
+    print(RESULT_MARKER + json.dumps(public, sort_keys=True))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace-root", type=Path, default=Path.cwd())
     parser.add_argument("--account", help="Verify this Microsoft work account.")
     parser.add_argument("--cancel", action="store_true")
+    parser.add_argument(
+        "--chat-output", action="store_true",
+        help="Emit only the rendered message and chat-flow metadata, without raw diagnostics.",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--preview", action="store_true", help="Read and plan without write scopes or executable approval.")
     mode.add_argument("--execute", action="store_true", help="Read one JSON request line, then collect explicit approval on standard input.")
@@ -585,6 +605,8 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--list-agent-sets", action="store_true", help="Read the selected agent's available topic sets and aggregate states.")
     parser.add_argument("--decision", choices=("approve", "deny", "cancel"), help="Actual maker decision for --apply-review; never preselected.")
     args = parser.parse_args(argv)
+    if args.chat_output and args.execute:
+        parser.error("--chat-output is for structured chat, not interactive --execute.")
     if bool(args.apply_review) != bool(args.decision) or (args.apply_review and args.cancel):
         parser.error("--apply-review requires --decision and cannot be combined with --cancel.")
     if args.list_sets:
@@ -602,7 +624,7 @@ def main(argv: list[str] | None = None) -> int:
             result["userMessage"] = result_text(result)
         except DiscoveryError as error:
             result = _result(error.reason, str(error), {})
-        print(RESULT_MARKER + json.dumps(result, sort_keys=True))
+        _print_result(result, chat_output=args.chat_output)
         return 0 if result["status"] == "source_catalog_only" else 1
     if args.execute and not args.cancel:
         print(
@@ -650,8 +672,7 @@ def main(argv: list[str] | None = None) -> int:
                 value, workspace_root=args.workspace_root,
                 account_hint=args.account, cancelled=args.cancel,
             )
-    public = {key: item for key, item in result.items() if key != "callerContext"}
-    print(RESULT_MARKER + json.dumps(public, sort_keys=True))
+    _print_result(result, chat_output=args.chat_output)
     return 0 if (
         result["status"] in (
             "inspected", "preview", "review_ready", "sets_listed",

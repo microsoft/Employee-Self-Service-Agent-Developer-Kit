@@ -230,8 +230,23 @@ def test_proposed_catalog_cli_does_not_authenticate_or_claim_installed_availabil
     assert result["writeStatus"] == "not_attempted"
 
 
+def test_chat_output_rejects_interactive_execution_before_reading_input(monkeypatch, capsys):
+    class NoInput:
+        def readline(self):
+            pytest.fail("Invalid chat/terminal mode must not consume input.")
+
+    monkeypatch.setattr(entry.sys, "stdin", NoInput())
+    with pytest.raises(SystemExit) as error:
+        entry.main(["--execute", "--chat-output"])
+    assert error.value.code == 2
+    output = capsys.readouterr()
+    assert not output.out
+    assert "structured chat, not interactive --execute" in output.err
+
+
+@pytest.mark.parametrize("chat_output", [False, True])
 def test_agent_set_listing_cli_uses_read_only_discovery_without_set_keys_or_approval(
-    workspace, request_value, monkeypatch, capsys,
+    workspace, request_value, monkeypatch, capsys, chat_output,
 ):
     from topic_actions_catalog import parse_catalog
     from topic_actions_discovery import DiscoveryTarget
@@ -255,13 +270,22 @@ def test_agent_set_listing_cli_uses_read_only_discovery_without_set_keys_or_appr
     monkeypatch.setattr("topic_actions_native.NativeActionBackend", adapter)
     value = {key: item for key, item in request_value.items() if key not in ("action", "setKeys")}
     monkeypatch.setattr(entry.sys, "stdin", io.StringIO(json.dumps(value)))
-    assert entry.main(["--list-agent-sets", "--workspace-root", str(workspace)]) == 0
+    args = ["--list-agent-sets", "--workspace-root", str(workspace)]
+    assert entry.main(args + (["--chat-output"] if chat_output else [])) == 0
     output = capsys.readouterr().out
     result = json.loads(output.removeprefix(entry.RESULT_MARKER))
     assert result["status"] == "sets_listed"
-    assert result["target"] == request_value["target"]
     assert result["setCount"] == 2
-    assert [item["state"] for item in result["sets"]] == ["Enabled", "Mixed"]
+    if chat_output:
+        assert result["sets"] == [
+            {"key": "alpha", "name": "Synthetic alpha"}, {"key": "beta", "name": "Synthetic beta"},
+        ]
+        assert "| Synthetic alpha | 2 | Enabled |" in result["userMessage"]
+        assert "| Synthetic beta | 2 | Mixed |" in result["userMessage"]
+        assert not {"target", "warnings", "blockers", "topics"} & result.keys()
+    else:
+        assert result["target"] == request_value["target"]
+        assert [item["state"] for item in result["sets"]] == ["Enabled", "Mixed"]
     assert [item["label"] for item in result["selectionQuestion"]["options"]] == [
         "Synthetic alpha", "Synthetic beta",
     ]

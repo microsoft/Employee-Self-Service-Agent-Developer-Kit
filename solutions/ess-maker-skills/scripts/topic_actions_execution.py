@@ -22,7 +22,7 @@ from topic_actions_catalog import Catalog, CatalogSnapshot, plan_catalog_actions
 from topic_actions_components import normalize_state
 from topic_actions_discovery import _identity
 from topic_actions_planning import TopicPlan, _digest
-from topic_actions_presentation import result_text, review_text
+from topic_actions_presentation import approval_question, result_text, review_text
 
 
 _LOCKS_GUARD = threading.Lock()
@@ -109,7 +109,9 @@ def build_state_payload(evidence: OperationEvidence, plan: TopicPlan) -> dict:
     }
 
 
-def public_plan(plan: TopicPlan, evidence: OperationEvidence | None = None) -> dict:
+def public_plan(
+    plan: TopicPlan, evidence: OperationEvidence | None = None, *, catalog: Catalog | None = None,
+) -> dict:
     def changes(items):
         return [
             {"componentId": item.component_id, "before": item.before, "after": item.after}
@@ -138,6 +140,15 @@ def public_plan(plan: TopicPlan, evidence: OperationEvidence | None = None) -> d
             for key, schema, identity in plan.members
         ],
     }
+    if catalog is not None:
+        definitions = catalog.document()["sets"]
+        result["setNames"] = {
+            item["key"]: f"{item['integration']['name']} {item['name']}"
+            for item in definitions
+        }
+        result["setIntegrations"] = {
+            item["key"]: item["integration"]["name"] for item in definitions
+        }
     if evidence is not None:
         result["account"] = evidence.account_id
         result["currentStates"] = [
@@ -188,7 +199,7 @@ def agent_set_overview(evidence: OperationEvidence, catalog: Catalog) -> dict:
         },
         "sets": sets, "setCount": len(sets), "discoveryComplete": complete,
         "selectionQuestion": {
-            "header": "Topic sets",
+            "header": "Which topic sets would you like to change?",
             "question": "Which topic sets would you like to change?",
             "multiSelect": True,
             "options": [{"label": item["name"]} for item in sets],
@@ -259,7 +270,9 @@ def _preservation_content(
     return content
 
 
-def _reconcile(before: OperationEvidence, after: OperationEvidence, plan: TopicPlan) -> tuple[list[dict], bool]:
+def _reconcile(
+    before: OperationEvidence, after: OperationEvidence, plan: TopicPlan,
+) -> tuple[list[dict], bool, str]:
     """Observed desired state after an uncertain submission is not attribution."""
     before_map = _component_map(before.body)
     after_map = _component_map(after.body)
@@ -308,7 +321,8 @@ def _reconcile(before: OperationEvidence, after: OperationEvidence, plan: TopicP
             status = "already_correct" if state == desired else "unverified"
             reason = "readback"
         results.append({"componentId": identity, "state": state, "status": status, "reason": reason})
-    return results, containment and stable_authority
+    preservation = "violated" if not containment else "verified" if stable_authority else "unverified"
+    return results, containment and stable_authority, preservation
 
 
 class TopicActionSession:
@@ -367,12 +381,16 @@ class TopicActionSession:
         if approval_deadline is not None:
             deadline = min(deadline, approval_deadline)
         try:
-            review = {**public_plan(plan, evidence), "account": evidence.account_id}
+            review = public_plan(plan, evidence, catalog=getattr(self.backend, "catalog", None))
             review["userMessage"] = review_text(review)
+            review["approvalQuestion"] = approval_question(review)
             binding = _digest({"evidence": basis, "review": review})
             if review_only:
                 result = self._result("review_ready", plan=plan, evidence=evidence)
-                result.update(review=review, _reviewBinding=binding, userMessage=review["userMessage"])
+                result.update(
+                    review=review, _reviewBinding=binding, userMessage=review["userMessage"],
+                    approvalQuestion=review["approvalQuestion"],
+                )
                 return result
             if approved_binding is not None and approved_binding != binding:
                 return self._result("review_required", plan=plan, blockers=("evidence_changed",))
@@ -412,10 +430,13 @@ class TopicActionSession:
                     blockers=tuple(dict.fromkeys(("evidence_changed", *fresh_blockers))),
                 )
             if not plan.delta:
-                topics, verified = _reconcile(fresh, fresh, plan)
+                topics, verified, preservation = _reconcile(fresh, fresh, plan)
                 if not verified or any(item["status"] == "unverified" for item in topics):
                     return self._result("review_required", plan=plan, blockers=("evidence_changed",))
-                return self._result("already_correct", plan=plan, completed=not plan.skips, topics=topics)
+                return self._result(
+                    "already_correct", plan=plan, completed=not plan.skips, topics=topics,
+                    preservation_status=preservation,
+                )
             payload = build_state_payload(fresh, plan)
             final_blockers = self.backend.admission_blockers(fresh)
             if final_blockers or self.clock() >= deadline:
@@ -454,12 +475,15 @@ class TopicActionSession:
             pass
         try:
             after = self.backend.read()
-            topics, scope_verified = _reconcile(fresh, after, plan)
+            topics, scope_verified, preservation = _reconcile(fresh, after, plan)
             scope_verified = scope_verified and not self.backend.admission_blockers(after)
+            if not scope_verified and preservation == "verified":
+                preservation = "unverified"
         except (Exception, KeyboardInterrupt):
             return self._result(
                 "unverified", plan=plan, write_status="submitted",
                 submission_http_status=submission_http_status,
+                preservation_status="unverified",
                 blockers=("readback_failed", "fresh_approval_required"),
                 topics=[{
                     "componentId": identity, "state": "Unknown",
@@ -474,6 +498,7 @@ class TopicActionSession:
             return self._result(
                 "unverified", plan=plan, write_status="submitted", topics=topics,
                 submission_http_status=submission_http_status,
+                preservation_status=preservation,
                 blockers=tuple(dict.fromkeys((
                     submission_reason, "submission_outcome_uncertain", "fresh_approval_required",
                 ))),
@@ -486,6 +511,7 @@ class TopicActionSession:
             ("completed_with_protections" if plan.skips else "completed") if verified else "partial",
             plan=plan, write_status="submitted", topics=topics,
             completed=verified and not plan.skips,
+            preservation_status=preservation,
             blockers=() if verified else ("verification_incomplete", "fresh_approval_required"),
         )
 
@@ -495,6 +521,7 @@ class TopicActionSession:
         completed: bool = False, topics: list[dict] | None = None,
         submission_http_status: int | None = None,
         evidence: OperationEvidence | None = None,
+        preservation_status: str | None = None,
     ) -> dict:
         partial_message = "Not every result could be verified. No changes will be replayed automatically."
         if status == "partial" and topics and all(
@@ -509,9 +536,12 @@ class TopicActionSession:
             "contractVersion": 1, "contractStatus": "provisional",
             "status": status, "completed": completed, "writeStatus": write_status,
             "submissionHttpStatus": submission_http_status,
+            "preservationStatus": preservation_status,
             "blockers": list(dict.fromkeys(blockers)), "topics": topics or [],
             "warnings": list(plan.warnings) if plan else [],
-            "plan": public_plan(plan, evidence) if plan else None,
+            "plan": public_plan(
+                plan, evidence, catalog=getattr(self.backend, "catalog", None),
+            ) if plan else None,
             "callerContext": deepcopy(self.caller_context),
             "message": {
                 "blocked": "Topic actions are blocked. No changes were attempted.",

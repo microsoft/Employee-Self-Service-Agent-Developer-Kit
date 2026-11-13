@@ -102,6 +102,7 @@ def test_fresh_process_applies_only_the_explicit_chat_decision(tmp_path, decisio
     assert review["writeStatus"] == "not_attempted"
     assert "## Review topic changes" in review["userMessage"]
     assert "baseline" not in review["review"]
+    assert review["approvalQuestion"] == review["review"]["approvalQuestion"]
     assert not (tmp_path / "submissions.txt").exists()
     process, result = cli(
         tmp_path, ["--apply-review", review["reviewId"], "--decision", decision],
@@ -134,16 +135,75 @@ def test_changed_evidence_or_account_invalidates_cross_process_approval(tmp_path
     assert not (tmp_path / "submissions.txt").exists()
 
 
-def test_noop_finishes_without_pending_review_approval_or_baseline(tmp_path):
-    process, result = cli(tmp_path, ["--review"], request=REQUEST, scenario="noop")
+@pytest.mark.parametrize("chat_output", [False, True])
+def test_noop_finishes_without_pending_review_approval_or_baseline(tmp_path, chat_output):
+    args = ["--review"] + (["--chat-output"] if chat_output else [])
+    process, result = cli(tmp_path, args, request=REQUEST, scenario="noop")
     assert process.returncode == 0
     assert result["status"] == "already_correct"
     assert result["completed"]
     assert result["writeStatus"] == "not_attempted"
     assert "reviewId" not in result
+    assert "approvalQuestion" not in result
     assert "No change needed." in result["userMessage"]
+    assert "| **#** | **Integration** | **Topic** | **Result** |" in result["userMessage"]
     assert not (tmp_path / ".local" / "topic-actions").exists()
     assert not (tmp_path / "submissions.txt").exists()
+
+
+@pytest.mark.parametrize("decision,status,writes", [
+    ("approve", "completed", 1), ("deny", "denied", 0), ("cancel", "cancelled", 0),
+])
+def test_chat_output_omits_raw_diagnostics_but_preserves_cross_process_consent(
+    tmp_path, decision, status, writes,
+):
+    process, review = cli(tmp_path, ["--review", "--chat-output"], request=REQUEST)
+    assert process.returncode == 0
+    assert len(process.stdout.splitlines()) == 1 and not process.stderr
+    assert review["status"] == "review_ready" and review["expiresInSeconds"] == 300
+    assert "## Review topic changes" in review["userMessage"]
+    assert not {"review", "plan", "warnings", "topics", "callerContext"} & review.keys()
+    assert review["approvalQuestion"] == {
+        "header": "Disable the 2 topics shown above?",
+        "question": "Disable the 2 topics shown above?",
+        "multiSelect": False,
+        "options": [
+            {
+                "label": "Disable 2 topics for Synthetic alpha.",
+                "description": "Apply only the changes shown above.",
+            },
+            {"label": "Not now", "description": "Leave topics unchanged."},
+        ],
+        "allowFreeformInput": True,
+    }
+    process, result = cli(
+        tmp_path, ["--apply-review", review["reviewId"], "--decision", decision, "--chat-output"],
+    )
+    assert process.returncode == 0 and result["status"] == status
+    assert len(process.stdout.splitlines()) == 1 and not process.stderr
+    assert "userMessage" in result and "topics" not in result
+    submissions = tmp_path / "submissions.txt"
+    assert (len(submissions.read_text().splitlines()) if submissions.exists() else 0) == writes
+    _, replay = cli(
+        tmp_path, ["--apply-review", review["reviewId"], "--decision", "approve", "--chat-output"],
+    )
+    assert replay["status"] == "review_required" and replay["writeStatus"] == "not_attempted"
+    assert "already been used" in replay["userMessage"]
+    assert (len(submissions.read_text().splitlines()) if submissions.exists() else 0) == writes
+
+
+def test_chat_output_keeps_uncertain_submission_truthful_without_replaying(tmp_path):
+    _, review = cli(tmp_path, ["--review", "--chat-output"], request=REQUEST)
+    process, result = cli(
+        tmp_path, ["--apply-review", review["reviewId"], "--decision", "approve", "--chat-output"],
+        scenario="failure",
+    )
+    assert process.returncode == 1
+    assert result["status"] == "unverified" and not result["completed"]
+    assert result["writeStatus"] == "submitted"
+    assert "Observed states do not confirm" in result["userMessage"]
+    assert "No topics were changed." not in result["userMessage"]
+    assert (tmp_path / "submissions.txt").read_text().splitlines() == ["submitted"]
 
 
 @pytest.mark.parametrize(("action", "scenario", "state"), [
@@ -271,7 +331,9 @@ def test_review_preparation_has_no_write_scope_and_no_baseline_mutation(tmp_path
     assert (tmp_path / ".local" / "topic-actions" / "reviews.sqlite3").exists()
 
 
-@pytest.mark.parametrize("decision", ["yes", "", None])
+@pytest.mark.parametrize("decision", [
+    "yes", "", None, "Not now", "Disable 2 topics for Synthetic alpha.",
+])
 def test_ambiguous_decision_consumes_review_without_auth_or_write(tmp_path, decision, monkeypatch):
     store = TopicReviewStore(tmp_path)
     review = store.create(REQUEST, "a" * 64)
@@ -401,4 +463,51 @@ def test_original_deadline_is_not_reset_during_authentication_or_discovery():
         lambda _: "approve", approved_binding=review["_reviewBinding"], approval_deadline=300,
     )
     assert result["blockers"] == ["approval_expired"]
+    assert not backend.submissions
+
+
+def test_changed_rendered_review_invalidates_consent_without_weakening_binding(monkeypatch):
+    import topic_actions_execution
+
+    before = operation_evidence({"a": "On", "shared": "On"})
+    review = TopicActionSession(SyntheticBackend([before]), "disable").run(None, review_only=True)
+    original_renderer = topic_actions_execution.review_text
+    monkeypatch.setattr(
+        topic_actions_execution, "review_text",
+        lambda value: original_renderer(value) + "\nChanged presentation",
+    )
+    backend = SyntheticBackend([before])
+    result = TopicActionSession(backend, "disable").run(
+        lambda _: pytest.fail("Consent to older presentation must not authorize this review."),
+        approved_binding=review["_reviewBinding"],
+    )
+    assert result["status"] == "review_required"
+    assert result["blockers"] == ["evidence_changed"]
+    assert not backend.submissions
+
+
+@pytest.mark.parametrize("field", ["header", "option"])
+def test_changed_approval_card_invalidates_consent_without_weakening_binding(monkeypatch, field):
+    import topic_actions_execution
+
+    before = operation_evidence({"a": "On", "shared": "On"})
+    review = TopicActionSession(SyntheticBackend([before]), "disable").run(None, review_only=True)
+    original_question = topic_actions_execution.approval_question
+
+    def changed_question(value):
+        question = original_question(value)
+        if field == "header":
+            question["header"] += " Changed wording"
+        else:
+            question["options"][0]["label"] += " Changed wording"
+        return question
+
+    monkeypatch.setattr(topic_actions_execution, "approval_question", changed_question)
+    backend = SyntheticBackend([before])
+    result = TopicActionSession(backend, "disable").run(
+        lambda _: pytest.fail("Consent to an older card must not authorize this review."),
+        approved_binding=review["_reviewBinding"],
+    )
+    assert result["status"] == "review_required"
+    assert result["blockers"] == ["evidence_changed"]
     assert not backend.submissions
