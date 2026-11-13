@@ -599,7 +599,34 @@ In-progress states can exist internally. Do not add new final labels for the cal
 
 OQ-16 must decide the exact format, including how to show pending or unknown starts. Freshness is "unknown" if there is no fair comparison. No new release gate is added.
 
+### 12.4 Offer a source-backed regression test (FR-51)
+
+After a confirmed answer problem or an identified coverage gap, offer to add a test that can catch the problem in future runs. Missing replies or grading alone do not prove an answer problem.
+
+1. Check the selected tests for existing coverage. If an unchanged test already covers the problem, keep it for future reruns rather than creating a duplicate.
+2. Where coverage is missing, explain the gap and ask whether the maker wants to add a source-backed regression test. Declining leaves the saved tests unchanged.
+3. Only after the maker requests it, reuse the policy-input, test-writing, and confirmation flow in sections 7-9. Use approved text and its source reference, or ask for them if they are missing.
+4. Show the proposed formal and everyday questions, expected answers, policy basis, and reason for the test. Get maker confirmation before treating the successfully saved tests as accepted.
+5. Add only the requested, confirmed cases to the maker-selected compatible set, or propose a new set when none fits. Do not edit unrelated cases or rewrite an existing expectation to excuse a failed answer.
+6. Do not run the new tests automatically. Running still needs a separate request and the normal safety checks. Adding a test does not change the earlier run or its outcome.
+
+The results/recovery work item (8147419) owns the offer and hands authoring to the existing policy-based test-creation flow (8147415). No separate regression-test generator, automatic repair, or new reply archive is needed. A newly added test has no earlier result to compare until it has actually run.
+
 ## 13. Rerun the same tests after a fix
+
+### 13.1 Explain how to select the first run later (FR-50)
+
+When the first run has a usable returned run ID, show its test-set name, run ID, and known target alongside the results or partial status. Explain that the maker can find this run through existing evaluation history and select it as the baseline for a later rerun.
+
+Example guidance, with the placeholder replaced only by the actual returned ID:
+
+> Keep these questions and expected answers unchanged while the agent is corrected elsewhere. When ready, ask: "Rerun these tests and compare with run `<run ID>`." You can also select this run later from evaluation history.
+
+This guidance does not start a run or prove that the first run is complete. A failed baseline is valid; a partial baseline contributes only completed tests with enough evidence. If there is no usable run ID, explain the recovery steps in section 11.4 instead of inventing a baseline reference.
+
+Use the saved test definitions and existing service history, not a new baseline file, run-mapping file, or reply archive. Explain that expired or inaccessible results cannot support a comparison and that another run will not be substituted silently.
+
+### 13.2 Run and compare the unchanged tests
 
 1. The maker picks the earlier run.
 2. Recover its original set, tests, grading settings, target, and context from existing records we are allowed to read.
@@ -702,7 +729,8 @@ Extend existing test files for changed behavior. Add new test files only for new
 | Quality | Real score source, score not available, edited test clears old score, never mixed with agent pass/fail. |
 | Deploy/run | New copy vs. reuse, changed preview token, disconnected profile, no-write status unknown, accepted with no ID, lost start reply, no duplicate retry, no false cancel. |
 | Results | All pass; all clear with a failure; known failure plus missing reply; requested tests missing; empty results; run not finished; no made-up link or judgment. |
-| Rerun | Unchanged failed "before", fix made elsewhere, changed test, new test, missing link, expired/denied evidence, partial "before". |
+| Regression-test offer | Confirmed answer problem or coverage gap; missing evidence is not a confirmed failure; existing coverage avoids duplicates; declining makes no edits; requested cases reuse policy authoring and confirmation; no automatic run or expectation rewrite. |
+| Rerun | First-run guidance uses the real run ID and existing history without starting a run; no ID means recovery guidance, not an invented baseline; unchanged failed "before", fix made elsewhere, changed test, new test, missing link, expired/denied evidence, partial "before". |
 | Existing features | Custom-agent test writing, exports, review gates, push-only, and unrelated setup/connect flows still work. |
 
 Existing test files include `tests\scripts\test_evaluation_authoring.py`, `test_evaluation_csv.py`, `test_evaluation_presentation.py`, `test_evaluation_method_policy.py`, `test_evaluation_promotion.py`, `test_evaluation_deployment.py`, `test_evaluation_runs.py`, and `test_evaluation_experience_contract.py`.
@@ -762,8 +790,8 @@ We can start now on local formats, pasting excerpts, policy-based test writing, 
 | Writing, confirming, and saving (sections 8-9) | FR-1, FR-13 to FR-18, FR-41, FR-51, FR-55/FR-56; PR-1. |
 | Quality (section 10) | FR-19 to FR-21; PR-2. |
 | Running (section 11) | FR-2/FR-3/FR-5/FR-6/FR-9/FR-10/FR-22/FR-23/FR-32 to FR-37; PR-3/PR-6. |
-| Results and handback (section 12) | FR-25 to FR-27/FR-31/FR-38/FR-42/FR-49/FR-57 to FR-59; PR-4/PR-7. |
-| Rerun (section 13) | FR-28/FR-39/FR-40/FR-43/FR-50/FR-51/FR-54/FR-56; PR-5. |
+| Results, handback, and regression-test offer (section 12) | FR-25 to FR-27/FR-31/FR-38/FR-42/FR-49/FR-51/FR-57 to FR-59; PR-4/PR-7. |
+| Rerun and first-run guidance (section 13) | FR-28/FR-39/FR-40/FR-43/FR-50/FR-54/FR-56; PR-5. |
 | Data, operations, and verification (sections 14, 17, 18) | FR-9/FR-10/FR-32 to FR-35; PR-6; M1/M3; GR-1 to GR-7. |
 
 ## 20. Sources
