@@ -15,6 +15,16 @@ Read only the reference needed for the current operation or next step. Load its 
 
 These references own the literal UX copy. Operation owners link directly to the needed references and retain their execution guards; routing prompts carry context to those owners rather than repeat the shared procedures.
 
+## Status update markers
+
+An `{EMIT_STATUS_UPDATE: point}` marker identifies where to report the outcome of the preceding work, not a successful result or literal text to display. Before the marked work, load the point's completion condition and message from the experience section linked by the operation. Reuse those definitions while they remain available in context.
+
+At the marker, assess the available evidence. Emit the defined completion message only when its completion condition is satisfied. Otherwise, select or compose a concise status update appropriate to the observed result using the owning experience's outcome guidance. Explain what failed, remains incomplete, required no change, or cannot be confirmed. Preserve known successful effects and distinguish an observed cause from an unknown one.
+
+Send the update as a standalone normal-chat message before proceeding to the next step. Keep required reviews, outcome reports and questions in separate subsequent messages, even when they repeat the same fact. Emit once for the observed result at that point; assess and report a revised result anew. Then follow the operation's applicable continuation, pause or recovery instructions without expanding its authorization.
+
+Apply markers at their defined reporting points, including failed or incomplete attempts, rather than after every tool call. Operations without markers retain their own progress rules.
+
 ## Presentation and scope
 
 Read and apply [Native task progress](../../reference/ui-formatting-guidelines.md#native-task-progress) before starting work. Use the current operation's progress milestones without replacing its previews, decisions or results.

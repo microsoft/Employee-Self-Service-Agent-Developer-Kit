@@ -509,36 +509,80 @@ def test_native_progress_preserves_other_operations_and_setup():
     assert "Send each progress snapshot as its own complete chat message" in markdown
 
 
-def test_create_completion_updates_bind_draft_and_review_to_distinct_steps():
+def test_status_update_markers_interpret_outcomes_without_assuming_success():
+    foundation = _read("src/skills/topics/experience-contract.md")
+    markers = foundation.split("## Status update markers\n", 1)[1].split(
+        "## Presentation and scope\n", 1
+    )[0]
+    assert "{EMIT_STATUS_UPDATE: point}" in markers
+    assert "Before the marked work, load the point's completion condition and message" in markers
+    assert "Reuse those definitions while they remain available in context." in markers
+    assert "only when its completion condition is satisfied" in markers
+    assert "select or compose a concise status update appropriate to the observed result" in markers
+    assert "failed, remains incomplete, required no change, or cannot be confirmed" in markers
+    assert "Preserve known successful effects" in markers
+    assert "standalone normal-chat message before proceeding to the next step" in markers
+    assert "Keep required reviews, outcome reports and questions in separate subsequent messages" in markers
+    assert "continuation, pause or recovery instructions without expanding its authorization" in markers
+    assert "including failed or incomplete attempts, rather than after every tool call" in markers
+    assert "Operations without markers retain their own progress rules." in markers
+
+
+def test_create_status_markers_resolve_local_copy_at_the_existing_reporting_points():
     formatting = _read("src/reference/ui-formatting-guidelines.md")
     assert "For Create, from preparation through the topic outcome and testing offer" in formatting
-    assert "../skills/topics/authoring-experience.md#create-completion-updates" in formatting
+    assert "../skills/topics/authoring-experience.md#create-status-updates" in formatting
     authoring = _read("src/skills/topics/authoring-experience.md")
-    progress = authoring.split("### Create completion updates\n", 1)[1].split(
+    progress = authoring.split("### Create status updates\n", 1)[1].split(
         "## Authoring summaries\n", 1
     )[0]
     assert "not a native todo list or a progress checklist" in progress
-    assert "After saving or verifying the unchanged local draft" in progress
-    assert (
-        "standalone completion message immediately before the next required "
-        "instruction-alignment or non-writing save-preview operation"
-    ) in progress
-    assert "> ✅ Prepared the draft for **{Topic title}**." in progress
-    assert "After those checks complete, show the full Create summary in a later chat message" in progress
-    assert "after the revised local draft is saved, then run its required checks" in progress
+    assert "experience-contract.md#status-update-markers" in progress
+    definitions = {
+        point: (condition.strip(), message.strip())
+        for point, condition, message in re.findall(
+            r"^\|\s*`([^`]+)`\s*\|([^|]+)\|([^|]+)\|", progress, re.MULTILINE
+        )
+    }
+    assert set(definitions) == {"draft-preparation", "topic-save"}
+    assert "saved or verified unchanged" in definitions["draft-preparation"][0]
+    assert definitions["draft-preparation"][1] == "✅ Prepared the draft for **{Topic title}**."
+    assert "approved topic save and authoritative readback both succeed" in definitions["topic-save"][0]
+    assert "a new remote write is confirmed" in definitions["topic-save"][0]
+    assert "required local recording is complete" in definitions["topic-save"][0]
+    assert definitions["topic-save"][1] == "✅ Pushed and verified **{Topic title}**."
+    assert "failed or incomplete local draft" in progress
+    assert "[Topic outcomes](#topic-outcomes)" in progress
+    assert "already-current no-write result" in progress
+    assert "rejected or unconfirmed save" in progress
+    assert "confirmed remote success with an incomplete workspace update" in progress
+    assert "A retained draft does not enter this reporting point." in progress
+    assert "Keep the full Create review and existing outcome report" in progress
+    assert "Do not prepopulate activation, testing or publication." in progress
     create = _read("src/skills/topics/create/SKILL.md")
+    entry = create.split("## Boundaries\n", 1)[0]
+    assert "../authoring-experience.md#create-status-updates" in entry
+    assert "Reuse those status definitions at the marked reporting points below." in entry
+    points = re.findall(r"\{EMIT_STATUS_UPDATE: ([^}]+)\}", create)
+    assert points == list(definitions)
     drafting = create.split("## 2. Draft ordinary topic YAML\n", 1)[1].split(
         "## 3. Assess agent-instruction alignment\n", 1
     )[0]
-    assert "../authoring-experience.md#create-completion-updates" in drafting
-    assert "send the standalone prepared-draft message" in drafting
-    assert "The full review follows those checks." in drafting
-    assert "approved topic save and authoritative readback both succeed" in progress
-    assert "> ✅ Pushed and verified **{Topic title}**." in progress
-    assert "Do not suppress a completion update" in progress
-    assert "a retained draft, an already-current no-write result, a failed operation" in progress
-    assert "an unconfirmed outcome" in progress
-    assert "Do not prepopulate activation, testing or publication." in progress
+    assert "including a failed or incomplete attempt" in drafting
+    assert "For a revision, return to this reporting point" in drafting
+    assert "{EMIT_STATUS_UPDATE: draft-preparation}" in drafting
+    assert "Render the completed summary after the current instruction-alignment assessment and save preview" in drafting
+    saving = create.split("## 5. Save and report authoritative results\n", 1)[1].split(
+        "## 6. Testing and evaluation handoff\n", 1
+    )[0]
+    assert "including rejected, no-write, partial or unconfirmed outcomes" in saving
+    assert (
+        saving.index('--yes --output ".local\\topic-authoring\\topic-result.json"')
+        < saving.index("{EMIT_STATUS_UPDATE: topic-save}")
+        < saving.index("After the applicable instruction approval")
+    )
+    for _, message in definitions.values():
+        assert message not in create
 
 
 def test_create_review_uses_h5_fields_nested_h6_headings_and_explained_choices():

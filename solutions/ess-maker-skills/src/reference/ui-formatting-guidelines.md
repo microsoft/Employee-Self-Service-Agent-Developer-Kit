@@ -51,7 +51,7 @@ Use actual values from setup state or discovery whenever available. Render a kno
 
 ## Native task progress
 
-For Create, from preparation through the topic outcome and testing offer, use [Create completion updates](../skills/topics/authoring-experience.md#create-completion-updates) instead of native task progress. Other operations retain the rules below.
+For Create, from preparation through the topic outcome and testing offer, use [Create status updates](../skills/topics/authoring-experience.md#create-status-updates) instead of native task progress. Other operations retain the rules below.
 
 For topic authoring, deletion, Push and testing, use the native todo tool exposed by the current chat, such as `manage_todo_list`. Use its actual schema and supported states; do not assume that another harness exposes the same tool. If no native todo tool is available, continue with the operation's normal previews, decisions and outcome reports. Do not substitute Markdown progress checklists, shell output or a progress-only tool.
 

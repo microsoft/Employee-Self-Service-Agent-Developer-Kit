@@ -5,7 +5,7 @@ Apply the [shared foundation](experience-contract.md). Use this reference for Cr
 ## Contents
 
 - [Authoring progress](#authoring-progress)
-- [Create completion updates](#create-completion-updates)
+- [Create status updates](#create-status-updates)
 - [Authoring summaries](#authoring-summaries)
 - [Response wording and local drafts](#response-wording-and-local-drafts)
 - [Advisory entries in Notes](#advisory-entries-in-notes)
@@ -22,7 +22,7 @@ Apply the [shared foundation](experience-contract.md). Use this reference for Cr
 
 ## Authoring progress
 
-For Create, apply [Create completion updates](#create-completion-updates). For Update, apply the shared native task-progress rules below. Before the first authoring operation, start these preparation milestones in the owning operation's order. Bind `{Topic title}` to the selected title; use `topic` until the title is established.
+For Create, apply [Create status updates](#create-status-updates). For Update, apply the shared native task-progress rules below. Before the first authoring operation, start these preparation milestones in the owning operation's order. Bind `{Topic title}` to the selected title; use `topic` until the title is established.
 
 | Milestone                                                                                                    | Completion condition                                                                                                                                                                 |
 | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -38,23 +38,20 @@ Use [Push progress](push-experience.md#push-progress) only for approved saves. K
 
 On a requested revision, reopen only affected preparation milestones and refresh their preview before the applicable decision. Preserve earlier confirmed saves as completed work; a later change is a new proposal, not a reversal of those saves. Reuse valid unchanged scoped consent.
 
-### Create completion updates
+### Create status updates
 
-From Create preparation through its topic outcome and testing offer, use completion-only Markdown updates in normal chat, not a native todo list or a progress checklist. Each update is a separate short message in the past tense. Resolve `{Topic title}` from the selected topic.
+From Create preparation through its topic outcome and testing offer, apply [Status update markers](experience-contract.md#status-update-markers) using the definitions below, not a native todo list or a progress checklist. Resolve `{Topic title}` from the selected topic. Each completion message is short and in the past tense.
 
-After saving or verifying the unchanged local draft with the requested behavior and wording, send the following standalone completion message immediately before the next required instruction-alignment or non-writing save-preview operation:
+| Reporting point     | Completion condition                                                                                                                        | Completion message                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `draft-preparation` | The requested local draft is saved or verified unchanged with the requested behavior and wording.                                           | ✅ Prepared the draft for **{Topic title}**. |
+| `topic-save`        | The approved topic save and authoritative readback both succeed, a new remote write is confirmed, and required local recording is complete. | ✅ Pushed and verified **{Topic title}**.    |
 
-> ✅ Prepared the draft for **{Topic title}**.
+For `draft-preparation`, describe a failed or incomplete local draft using the observed evidence and applicable next safe action. Draft readiness does not establish wording acceptance, instruction alignment, save readiness, a remote save or resolution of a routing conflict.
 
-Continue with the remaining instruction-alignment assessment and non-writing save preview. After those checks complete, show the full Create summary in a later chat message, followed by its separate decision control. Draft preparation confirms the local draft is ready; alignment and save readiness are established by the subsequent checks. Draft preparation does not imply wording acceptance, a remote save, or resolution of a reported routing conflict.
+For `topic-save`, use [Topic outcomes](#topic-outcomes) to interpret an already-current no-write result, a rejected or unconfirmed save, or confirmed remote success with an incomplete workspace update. Compose the short status update from those known facts rather than using the completion message. A retained draft does not enter this reporting point.
 
-After an approved topic save and authoritative readback both succeed, send:
-
-> ✅ Pushed and verified **{Topic title}**.
-
-Keep the existing outcome report after the update, even when it repeats the completed milestone. Do not suppress a completion update because the review or outcome repeats the same fact. Do not emit a successful save update for a retained draft, an already-current no-write result, a failed operation, or an unconfirmed outcome; use the existing truthful outcome report.
-
-Do not announce work that is starting or still running. For a revision, send a new prepared-draft update after the revised local draft is saved, then run its required checks before showing the revised review. Preserve existing approval, uncertainty and recovery boundaries. Do not prepopulate activation, testing or publication. If the maker selects testing, continue with the testing owner's progress rules.
+Keep the full Create review and existing outcome report after the applicable update. Do not announce work that is starting or still running. Preserve existing approval, uncertainty and recovery boundaries. Do not prepopulate activation, testing or publication. If the maker selects testing, continue with the testing owner's progress rules.
 
 ## Authoring summaries
 

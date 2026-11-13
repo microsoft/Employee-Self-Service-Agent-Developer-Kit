@@ -2,7 +2,7 @@
 
 Create one ordinary Copilot Studio topic in the selected editable Dev agent. The normal output is a `.mcs.yml` draft followed by an approved AgentBuilder save. Do not activate or publish as a save side effect.
 
-Read the [shared foundation](../experience-contract.md) before interacting with the maker. Apply its Supported authoring scope, authoring policy and authorization rules. Before drafting, read [Response wording and local drafts](../authoring-experience.md#response-wording-and-local-drafts). Load the other linked references at the steps that need them, not all upfront.
+Read the [shared foundation](../experience-contract.md) before interacting with the maker. Apply its Supported authoring scope, authoring policy and authorization rules. Before drafting, read [Response wording and local drafts](../authoring-experience.md#response-wording-and-local-drafts) and [Create status updates](../authoring-experience.md#create-status-updates). Reuse those status definitions at the marked reporting points below. Load the other linked references at the steps that need them, not all upfront.
 
 ## Boundaries
 
@@ -42,7 +42,9 @@ Use the existing Object Model-compatible YAML shape for the requested behavior. 
 
 Prepare the [Create summary](../authoring-experience.md#create-summary). Cover relevant triggering intent, response/grounding, collected inputs, returned values and employee-visible outputs, confirmation, fallback, error behavior and dependencies. Render the completed summary after the current instruction-alignment assessment and save preview, before the separate short decision control.
 
-Once the requested local draft is saved or verified unchanged, send the standalone prepared-draft message from [Create completion updates](../authoring-experience.md#create-completion-updates), then continue with the remaining alignment and save-preview operations below. The full review follows those checks.
+Assess the outcome of preparing or reusing the local draft, including a failed or incomplete attempt. For a revision, return to this reporting point after assessing the revised draft.
+
+`{EMIT_STATUS_UPDATE: draft-preparation}`
 
 ## 3. Assess agent-instruction alignment
 
@@ -94,6 +96,10 @@ python scripts\topic_authoring.py create --draft "{agent.folder}\topics\{ExactFi
 ```
 
 The adapter captures submitted YAML once, creates one inactive component, verifies AgentBuilder readback and diagnostics, registers the verified identity in `.component-map.json`, and acknowledges only the captured YAML in `.baseline`. A later disk edit remains pending.
+
+Assess the topic-save attempt, including rejected, no-write, partial or unconfirmed outcomes.
+
+`{EMIT_STATUS_UPDATE: topic-save}`
 
 After the applicable instruction approval, including valid scoped batch/debugging consent:
 
