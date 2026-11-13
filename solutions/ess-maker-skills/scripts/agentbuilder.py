@@ -15,7 +15,7 @@ import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import msal
 import requests
@@ -60,6 +60,14 @@ class AgentBuilderError(RuntimeError):
     """Raised when an AgentBuilder operation cannot complete safely."""
 
 
+class AgentBuilderAccountMismatch(AgentBuilderError):
+    """Raised when sign-in used a different account than the one required."""
+
+    def __init__(self, message: str, *, actual_account: str | None = None):
+        super().__init__(message)
+        self.actual_account = actual_account
+
+
 class AgentBuilderHTTPError(AgentBuilderError):
     """Raised for an unsuccessful AgentBuilder HTTP response."""
 
@@ -70,6 +78,8 @@ class AgentBuilderHTTPError(AgentBuilderError):
         *,
         error_code: str | None = None,
         request_id: str | None = None,
+        correlation_id: str | None = None,
+        retry_after: str | None = None,
         response: requests.Response | None = None,
     ) -> None:
         detail = f"{operation} failed with HTTP {status_code}"
@@ -79,10 +89,16 @@ class AgentBuilderHTTPError(AgentBuilderError):
             detail += "; the signed-in account is not authorized"
         if request_id:
             detail += f" [request {request_id}]"
+        if correlation_id:
+            detail += f" [correlation {correlation_id}]"
+        if retry_after:
+            detail += f" [retry-after {retry_after}]"
         super().__init__(detail)
         self.status_code = status_code
         self.error_code = error_code
         self.request_id = request_id
+        self.correlation_id = correlation_id
+        self.retry_after = retry_after
         self.response = response
 
 
@@ -443,13 +459,94 @@ def cached_account_names(
     cache_path: Path = DEFAULT_TOKEN_CACHE,
 ) -> list[str]:
     """Return distinct cached sign-in names without acquiring a token."""
-    cache = _load_token_cache(cache_path)
+    return _cached_account_names(_load_token_cache(cache_path))
+
+
+def _cached_account_names(cache: msal.SerializableTokenCache) -> list[str]:
     names: dict[str, str] = {}
     for account in cache.find(msal.TokenCache.CredentialType.ACCOUNT):
         username = str(account.get("username") or "").strip()
         if username:
             names.setdefault(username.casefold(), username)
     return sorted(names.values(), key=str.casefold)
+
+
+def seed_shared_token_cache(
+    account_hint: str,
+    *,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    shared_cache_path: Path = Path(".local/.token_cache.bin"),
+) -> dict[str, Any]:
+    """Copy a selected account's cache once, without auth or replacement."""
+    wanted = str(account_hint or "").strip()
+    if not wanted:
+        raise ValueError("Account sign-in name is required.")
+    existing = {
+        "outcome": "already-exists",
+        "sharedCache": str(shared_cache_path),
+    }
+    if os.path.lexists(shared_cache_path):
+        return existing
+
+    content = cache_path.read_bytes()
+    cache = msal.SerializableTokenCache()
+    cache.deserialize(content.decode("utf-8"))
+    account = next(
+        (
+            name
+            for name in _cached_account_names(cache)
+            if name.casefold() == wanted.casefold()
+        ),
+        None,
+    )
+    if account is None:
+        raise ValueError("Selected account is absent from the AgentBuilder cache.")
+
+    shared_cache_path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(
+        prefix=f"{shared_cache_path.name}.",
+        suffix=".tmp",
+        dir=shared_cache_path.parent,
+    )
+    temporary_path = Path(temporary)
+    failure: BaseException | None = None
+    copied = False
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            # Publish complete bytes without replacing a competing cache.
+            os.link(temporary_path, shared_cache_path)
+        except FileExistsError:
+            return existing
+        copied = True
+        return {
+            "outcome": "copied",
+            "account": account,
+            "sourceCache": str(cache_path),
+            "sharedCache": str(shared_cache_path),
+        }
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        try:
+            temporary_path.unlink()
+        except OSError as cleanup_error:
+            if failure is not None:
+                failure.add_note(
+                    f"Temporary cache cleanup failed: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            else:
+                if copied:
+                    cleanup_error.add_note(
+                        f"Shared cache was copied to {shared_cache_path} "
+                        "before temporary cache cleanup failed."
+                    )
+                raise
 
 
 def _interactive_token(
@@ -496,6 +593,7 @@ def _acquire_token(
     scopes: tuple[str, ...] | None = None,
     emit_account_identity: bool = True,
     return_account_identity: bool = False,
+    require_account_identity: bool = False,
 ) -> str | tuple[str, str | None]:
     cache = _load_token_cache(cache_path)
     app = msal.PublicClientApplication(
@@ -535,15 +633,37 @@ def _acquire_token(
     token = result.get("access_token") if result else None
     if not token:
         error = result.get("error", "unknown_error") if result else "unknown_error"
-        raise AgentBuilderError(
-            f"AgentBuilder authentication failed ({error})."
+        description = (
+            str(result.get("error_description", "")).strip()
+            if result
+            else ""
         )
-    if cache.has_state_changed:
-        _persist_token_cache(cache, cache_path)
+        detail = f": {description}" if description else ""
+        raise AgentBuilderError(
+            f"AgentBuilder authentication failed ({error}){detail}"
+        )
     account_name = _authenticated_account_name(
         result,
         selected_account,
     )
+    # Opt-in; other callers treat account_hint as a preference only.
+    if require_account_identity:
+        if not account_name:
+            raise AgentBuilderError(
+                "AgentBuilder authentication could not verify the actual "
+                "signed-in account identity."
+            )
+        if (
+            account_hint
+            and account_name.casefold() != account_hint.strip().casefold()
+        ):
+            raise AgentBuilderAccountMismatch(
+                "AgentBuilder authenticated a different account than the "
+                "requested setup account.",
+                actual_account=account_name,
+            )
+    if cache.has_state_changed:
+        _persist_token_cache(cache, cache_path)
     if account_name and emit_account_identity:
         print(
             "DA_AGENTBUILDER_AUTH_JSON:"
@@ -561,7 +681,10 @@ def authenticate(
     cache_path: Path = DEFAULT_TOKEN_CACHE,
     force_account_selection: bool = False,
     account_hint: str | None = None,
-) -> str:
+    scopes: tuple[str, ...] | None = None,
+    return_account_identity: bool = False,
+    require_account_identity: bool = False,
+) -> str | tuple[str, str | None]:
     """Acquire an ESS ADK delegated token without contacting Dataverse."""
     try:
         normalized_tenant = str(uuid.UUID(tenant_id))
@@ -574,6 +697,9 @@ def authenticate(
         cache_path=cache_path,
         force_account_selection=force_account_selection,
         account_hint=account_hint,
+        scopes=scopes,
+        return_account_identity=return_account_identity,
+        require_account_identity=require_account_identity,
     )
 
 
@@ -583,16 +709,59 @@ def authenticate_selected_tenant(
     cache_path: Path = DEFAULT_TOKEN_CACHE,
     force_account_selection: bool = False,
     account_hint: str | None = None,
-) -> tuple[str, str]:
+    return_account_identity: bool = False,
+    require_account_identity: bool = False,
+) -> tuple[str, str] | tuple[str, str, str | None]:
     """Reuse or select an account and return its token and tenant."""
-    token = _acquire_token(
+    acquired = _acquire_token(
         authority="https://login.microsoftonline.com/organizations",
         ring=ring,
         cache_path=cache_path,
         force_account_selection=force_account_selection,
         account_hint=account_hint,
+        return_account_identity=return_account_identity,
+        require_account_identity=require_account_identity,
     )
+    if return_account_identity:
+        token, account_name = acquired
+        return token, tenant_id_from_access_token(token), account_name
+    token = acquired
     return token, tenant_id_from_access_token(token)
+
+
+def authenticate_flightcheck_dependency(
+    scope: str,
+    *,
+    tenant_id: str,
+    ring: str,
+    account_hint: str,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+) -> str:
+    """Acquire one dependency-read audience for the already selected operator.
+
+    ENV-004 requests Flow or Dataverse access only after discovering an active
+    flow dependency. A different or unverifiable account must not satisfy that
+    dependency on behalf of the selected agent.
+    """
+    if not account_hint:
+        raise ValueError("Dependency reads require a verified account identity.")
+    tenant_id = str(uuid.UUID(tenant_id))
+    token, account = _acquire_token(
+        authority=f"https://login.microsoftonline.com/{tenant_id}",
+        ring=ring,
+        cache_path=cache_path,
+        force_account_selection=False,
+        account_hint=account_hint,
+        scopes=(scope,),
+        emit_account_identity=False,
+        return_account_identity=True,
+        require_account_identity=True,
+    )
+    if not account or account.casefold() != account_hint.casefold():
+        raise AgentBuilderError("Dependency authentication selected a different or unverifiable account.")
+    if tenant_id_from_access_token(token).casefold() != tenant_id.casefold():
+        raise AgentBuilderError("Dependency authentication selected a different tenant.")
+    return token
 
 
 def authenticate_agent_inventory(
@@ -602,7 +771,9 @@ def authenticate_agent_inventory(
     cache_path: Path = DEFAULT_TOKEN_CACHE,
     force_account_selection: bool = False,
     account_hint: str | None = None,
-) -> tuple[str, str]:
+    return_account_identity: bool = False,
+    require_account_identity: bool = False,
+) -> tuple[str, str] | tuple[str, str, str | None]:
     """Acquire read-only scopes for agent collection and direct inspection."""
     if tenant_id:
         try:
@@ -613,14 +784,24 @@ def authenticate_agent_inventory(
     else:
         normalized_tenant = None
         authority = "https://login.microsoftonline.com/organizations"
-    token = _acquire_token(
+    acquired = _acquire_token(
         authority=authority,
         ring=ring,
         cache_path=cache_path,
         force_account_selection=force_account_selection,
         account_hint=account_hint,
         scopes=agent_inventory_read_scopes(ring),
+        return_account_identity=return_account_identity,
+        require_account_identity=require_account_identity,
     )
+    if return_account_identity:
+        token, account_name = acquired
+        return (
+            token,
+            normalized_tenant or tenant_id_from_access_token(token),
+            account_name,
+        )
+    token = acquired
     return token, normalized_tenant or tenant_id_from_access_token(token)
 
 
@@ -634,6 +815,7 @@ def authenticate_flightcheck(
     allow_write: bool = False,
     emit_account_identity: bool = True,
     return_account_identity: bool = False,
+    require_account_identity: bool = False,
 ) -> tuple[str, str] | tuple[str, str, str | None]:
     """Acquire a least-privilege token for native AgentBuilder FlightCheck."""
     scopes = flightcheck_scopes(
@@ -650,6 +832,7 @@ def authenticate_flightcheck(
         scopes=scopes,
         emit_account_identity=emit_account_identity,
         return_account_identity=return_account_identity,
+        require_account_identity=require_account_identity,
     )
     if return_account_identity:
         token, account_name = acquired
@@ -684,11 +867,26 @@ def _response_error(response: requests.Response, operation: str) -> None:
         ),
         None,
     )
+    correlation_id = next(
+        (
+            response.headers.get(name)
+            for name in (
+                "x-ms-correlation-request-id",
+                "x-ms-correlation-id",
+                "correlation-id",
+            )
+            if response.headers.get(name)
+        ),
+        None,
+    )
+    retry_after = response.headers.get("Retry-After")
     raise AgentBuilderHTTPError(
         operation,
         response.status_code,
         error_code=error_code,
         request_id=request_id,
+        correlation_id=correlation_id,
+        retry_after=retry_after,
         response=response,
     )
 
@@ -702,12 +900,21 @@ class ConnectivityClient:
         *,
         ring: str,
         api_version: str = DEFAULT_API_VERSION,
+        environment_host: str | None = None,
         session: requests.Session | None = None,
     ) -> None:
         self.host = _ring_api_host(ring)
+        self.environment_host = (
+            validate_environment_host(environment_host, ring)
+            if environment_host
+            else None
+        )
         self.ring = ring
         self.api_version = api_version
         self.session = session or requests.Session()
+        self._single_attempt_session = (
+            self.session if session is not None else requests.Session()
+        )
         retry = Retry(
             total=3,
             backoff_factor=1,
@@ -750,6 +957,93 @@ class ConnectivityClient:
             raise AgentBuilderError(
                 "Connection listing returned an invalid shape."
             )
+        return values
+
+    def list_connector_connections(
+        self,
+        environment_id: str,
+        connector_name: str,
+    ) -> list[dict[str, Any]]:
+        """List one connector's connections with one logical HTTP attempt."""
+        if not self.environment_host:
+            raise AgentBuilderError(
+                "Connector-scoped connection listing requires an environment host."
+            )
+        normalized_environment_id = str(uuid.UUID(environment_id))
+        normalized_connector_name = connector_name.strip()
+        if not normalized_connector_name:
+            raise ValueError("connector_name must not be empty")
+        response = self._single_attempt_session.request(
+            "GET",
+            (
+                f"{self.environment_host}/connectivity/connectors/"
+                f"{quote(normalized_connector_name, safe='')}/connections"
+            ),
+            params={
+                "api-version": "1",
+                "$filter": (
+                    f"environment eq '{normalized_environment_id}'"
+                ),
+            },
+            headers=self.headers,
+            timeout=120,
+        )
+        if not response.ok:
+            _response_error(response, "Connector-scoped connection listing")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AgentBuilderError(
+                "Connector-scoped connection listing returned a non-JSON response."
+            ) from exc
+        values = body.get("value") if isinstance(body, dict) else None
+        if not isinstance(values, list) or not all(
+            isinstance(value, dict) for value in values
+        ):
+            raise AgentBuilderError(
+                "Connector-scoped connection listing returned an invalid shape."
+            )
+        if body.get("nextLink") or body.get("@odata.nextLink"):
+            raise AgentBuilderError(
+                "Connector-scoped connection listing returned an unsupported "
+                "continuation page."
+            )
+        for value in values:
+            properties = value.get("properties")
+            properties = properties if isinstance(properties, dict) else {}
+            api_id = str(properties.get("apiId") or "")
+            if (
+                api_id
+                and api_id.rstrip("/").rsplit("/", 1)[-1].casefold()
+                != normalized_connector_name.casefold()
+            ):
+                raise AgentBuilderError(
+                    "Connector-scoped connection listing returned a different "
+                    "connector identity."
+                )
+            environment = properties.get("environment")
+            if environment:
+                if isinstance(environment, dict):
+                    raw_environment = str(
+                        environment.get("name")
+                        or environment.get("id")
+                        or ""
+                    )
+                else:
+                    raw_environment = str(environment)
+                raw_environment = raw_environment.rstrip("/").rsplit("/", 1)[-1]
+                try:
+                    returned_environment_id = str(uuid.UUID(raw_environment))
+                except ValueError as exc:
+                    raise AgentBuilderError(
+                        "Connector-scoped connection listing returned an "
+                        "invalid environment identity."
+                    ) from exc
+                if returned_environment_id != normalized_environment_id:
+                    raise AgentBuilderError(
+                        "Connector-scoped connection listing returned a "
+                        "different environment identity."
+                    )
         return values
 
 
@@ -880,6 +1174,18 @@ class AgentBuilderClient:
         raise AgentBuilderError(
             f"Agent listing exceeded {max_pages} pages."
         )
+
+    def list_agents(
+        self,
+        *,
+        max_pages: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return the agent entities from every listing page."""
+        return [
+            agent
+            for page in self.list_agent_pages(max_pages=max_pages)
+            for agent in page["Entities"]
+        ]
 
     def list_minimal_bots(
         self,
@@ -1065,6 +1371,20 @@ class AgentBuilderClient:
             raise AgentBuilderError(
                 "Native agent publish returned an invalid shape."
             )
+        upper = body.get("ValidationPending")
+        lower = body.get("validationPending")
+        if (
+            upper is not None
+            and lower is not None
+            and upper is not lower
+            and upper != lower
+        ):
+            raise AgentBuilderError(
+                "Native agent publish returned conflicting "
+                "ValidationPending values."
+            )
+        if lower is None and upper is not None:
+            body["validationPending"] = upper
         return body
 
     def get_realms(self, agent_id: str) -> dict[str, Any]:
@@ -1111,6 +1431,26 @@ class AgentBuilderClient:
         )
         if not isinstance(body, dict):
             raise AgentBuilderError("Component fetch returned an invalid shape.")
+        return body
+
+    def update_components(
+        self,
+        agent_id: str,
+        change_set: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Apply one caller-supplied MinimalBot component change set."""
+        if not isinstance(change_set, dict):
+            raise ValueError("Component change set must be a JSON object.")
+        body = self._json(
+            "PUT",
+            f"/copilotstudio/minimalBots/api/{agent_id}/components",
+            "Component update",
+            params={"api-version": NATIVE_ALM_API_VERSION},
+            body=change_set,
+            timeout=180,
+        )
+        if not isinstance(body, dict):
+            raise AgentBuilderError("Component update returned an invalid shape.")
         return body
 
     def update_bot_entity(

@@ -31,6 +31,8 @@ from __future__ import annotations
 import json
 import re
 import sys
+from copy import deepcopy
+from html import escape
 from pathlib import Path
 
 import pytest
@@ -69,6 +71,54 @@ def _make_result(checkpoint_id, status, priority="High", category="Test"):
             else ""
         ),
     )
+
+
+@pytest.mark.parametrize("output", [None, "reports with spaces/nested", "absolute"])
+def test_saved_result_messages_show_full_native_paths(tmp_path, monkeypatch, capsys, output):
+    from flightcheck.runner import FlightCheckRunner, save_results
+
+    monkeypatch.chdir(tmp_path)
+    runner = FlightCheckRunner()
+    result = runner.run()
+    capsys.readouterr()
+    if output is None:
+        destination = tmp_path / "workspace" / "flightcheck"
+        save_results(result)
+    else:
+        destination = tmp_path / output
+        save_results(result, str(destination) if output == "absolute" else output)
+    messages = capsys.readouterr().out
+    for filename, label in (("results.json", "Results"), ("report.html", "Report")):
+        path = destination / filename
+        assert path.is_file()
+        assert f"{label} saved to {path}\n" in messages
+
+
+@pytest.mark.parametrize("diagnostic_only", [False, True])
+@pytest.mark.parametrize("tags", [
+    [], ["Workday Litmus Test"], ["Customer alias", '<script>alert("tag")</script>'],
+])
+def test_check_defined_custom_tags_render_safely_and_round_trip(tmp_path, diagnostic_only, tags):
+    from flightcheck.runner import CheckResult, FlightCheckRunner, save_results
+
+    row = _make_result("CUSTOM-001", "Manual")
+    row.custom_tags = tags
+    runner = FlightCheckRunner()
+    runner.register("Test", lambda _: [row])
+    result = runner.run()
+    result.diagnostic_only = diagnostic_only
+    before = deepcopy(result)
+    save_results(result, str(tmp_path))
+
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert re.findall(r'<li class="custom-tag">(.*?)</li>', html) == [escape(tag) for tag in tags]
+    assert ('aria-label="Custom tags"' in html) is bool(tags)
+    assert '<script>alert("tag")</script>' not in html
+    payload = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+    assert payload["results"][0]["custom_tags"] == tags
+    assert payload["contract"]["results"][0]["customTags"] == tags
+    assert CheckResult(**payload["results"][0]) == row
+    assert result == before
 
 
 # ---------------------------------------------------------------------------

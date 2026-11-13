@@ -594,8 +594,75 @@ def _check_rest_base_url(runner) -> list[CheckResult]:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# WD-REST-002 — user-context redirect wired (S5.7, PASS/FAIL, local YAML).
+# WD-REST-002 — local Development or native promoted user-context redirect.
 # ─────────────────────────────────────────────────────────────────────
+
+
+def _check_native_user_context_redirect(runner) -> list[CheckResult]:
+    from .workday_da import _begin_dialog_targets, _fetch_selected_components
+
+    _slug, schema, bot_id, components = _fetch_selected_components(runner)
+    target_schema = f"{schema}.topic.WorkdaySystemGetUserContextV2"
+    setup_matches = [
+        component
+        for matches in components.values()
+        for component in matches
+        if str(component.get("displayName") or "").strip().casefold()
+        == _SETUP_TOPIC_DISPLAY.casefold()
+    ]
+    target_matches = components.get(target_schema.casefold()) or []
+    issues = []
+    for label, matches in (
+        (_SETUP_TOPIC_DISPLAY, setup_matches),
+        (target_schema, target_matches),
+    ):
+        if len(matches) != 1:
+            issues.append(f"{label}: expected one native topic, found {len(matches)}")
+    evidence = {
+        "evidenceBoundary": "selected_promoted_native_content",
+        "agentId": bot_id,
+        "environmentId": runner.env_id,
+        "targetTopic": target_schema,
+    }
+    if len(setup_matches) == 1 and len(target_matches) == 1:
+        setup = setup_matches[0]
+        setup_schema = str(setup.get("schemaName") or "")
+        evidence["setupTopic"] = setup_schema
+        dialog = setup.get("dialog")
+        if not isinstance(dialog, dict):
+            raise ValueError("The native User Context setup dialog is not an object.")
+        begin = dialog.get("beginDialog")
+        if not isinstance(begin, dict):
+            raise ValueError("The native User Context setup beginDialog is not an object.")
+        if not setup_schema.casefold().startswith(f"{schema}.topic.".casefold()):
+            issues.append("The setup topic belongs to a different agent namespace")
+        if (
+            str(begin.get("$kind") or begin.get("kind") or "") != "OnRedirect"
+            or target_schema not in _begin_dialog_targets(begin)
+        ):
+            issues.append("User Context OnRedirect does not call the selected Workday UserContextV2 topic")
+        if any(
+            str(component.get("status") or "").casefold() != "active"
+            for component in (setup, target_matches[0])
+        ):
+            issues.append("The setup and Workday UserContextV2 topics must both be active")
+    return [CheckResult(
+        roles=_MAKER_ROLES,
+        checkpoint_id="WD-REST-002", category=_CATEGORY,
+        priority=Priority.HIGH.value,
+        status=Status.FAILED.value if issues else Status.PASSED.value,
+        description=_REDIRECT_DESC,
+        result="; ".join(issues) + "." if issues else (
+            f"The selected promoted agent's User Context OnRedirect calls {target_schema}. "
+            "This verifies native authored content, not publication or employee runtime success."
+        ),
+        remediation=(
+            "Correct the User Context redirect in Development and promote the corrected agent, "
+            "then rerun Workday Connect. Do not push Development-local files into Test or Production."
+        ) if issues else "",
+        doc_link=_DOC_SIMPLIFIED,
+        evidence=evidence,
+    )]
 
 
 def _check_user_context_redirect(runner) -> list[CheckResult]:

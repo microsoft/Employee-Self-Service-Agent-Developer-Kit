@@ -2848,6 +2848,9 @@ def main(argv=None, *, config=None, verify=None):
 
 
 if __name__ == "__main__":
-    outcome = main()
-    if isinstance(outcome, dict) and outcome.get("status") in {"blocked", "failed"}:
-        raise SystemExit(1)
+    from adk_telemetry import script_error_boundary
+
+    with script_error_boundary("push"):
+        outcome = main()
+        if isinstance(outcome, dict) and outcome.get("status") in {"blocked", "failed"}:
+            raise SystemExit(1)

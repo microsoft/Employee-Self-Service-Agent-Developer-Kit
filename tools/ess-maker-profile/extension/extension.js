@@ -674,7 +674,6 @@ function getTutorialHtml() {
             <li><strong>Accent colors</strong> style buttons, links, chat bubbles, and loading indicators for light and dark themes.</li>
             <li><strong>Quick links</strong> surface important tenant resources directly on the landing page.</li>
             <li><strong>Stay up to date</strong> shows personalized ticket status, required follow-ups, and time-sensitive tasks.</li>
-            <li><strong>Quick Access</strong> shows personal information such as time-off balances, paid holidays, and service anniversaries.</li>
         </ul>
     </section>
 <script>

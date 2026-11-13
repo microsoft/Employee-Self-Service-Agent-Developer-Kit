@@ -24,8 +24,7 @@ operation that needs them:
 | List accessible environments                                                             | The selected Microsoft login must be able to access the environment. Do not name an administrator role unless the service identifies one.                                                                                                                  |
 | Read an existing agent for setup                                                         | Use the Microsoft login that created the exact agent. Setup reads the agent's metadata and content but does not edit or publish it. Sharing, another editor, an environment role, or an administrator role does not establish equivalent retrieval access. |
 | Create a fresh agent                                                                     | The selected Microsoft login needs the **Environment Maker** security role in the target environment.                                                                                                                                                      |
-| Create an environment, assign **Environment Maker**, or allocate Copilot Studio capacity | Hand the action to a **Power Platform administrator**. A Global Administrator may also be authorized, but do not present that broader role as the preferred path.                                                                                          |
-| Verify environment capacity                                                              | Attempt verification with the selected account. Do not require an administrator role before the read and do not infer missing capacity when the read is unavailable.                                                                                       |
+| Create an environment or assign **Environment Maker**                                     | Hand the action to a **Power Platform administrator**. A Global Administrator may also be authorized, but do not present that broader role as the preferred path.                                                                                          |
 
 Do not use **System Administrator** as a general Foundation Setup prerequisite. Do not call the maker a **capacity administrator** or **environment administrator**.
 
@@ -106,7 +105,6 @@ For **Help me decide**, follow the shared contract in `SKILL.md`. Explain which 
 | Person or access                               | Why setup may need them                                                             | When         |
 | ---------------------------------------------- | ----------------------------------------------------------------------------------- | ------------ |
 | Microsoft login used to create the exact agent | Verify the Dev-agent route and retrieve its content for the local workspace         | Required now |
-| **Power Platform administrator**               | Change Copilot Studio capacity if setup confirms that a capacity change is required | Conditional  |
 
 **Environment Maker**, another editor, and an administrator role do not replace
 the Microsoft login used to create the exact agent. Setup will verify that login
@@ -124,7 +122,7 @@ existing-agent operation and say:
 **Message:**
 
 Setup paused before checking the existing agent. No environment, agent, role,
-capacity, or local workspace change was made.
+or local workspace change was made.
 
 Use the Microsoft login that created the exact agent, choose another agent, or
 return when that login is available. Setup cannot grant equivalent retrieval
@@ -146,7 +144,7 @@ access.
 | Person or access                                                                     | Why setup may need them                                                                                                    | When         |
 | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | ------------ |
 | Microsoft login with the **Environment Maker** security role in `{ENVIRONMENT_NAME}` | Create the fresh agent                                                                                                     | Required now |
-| **Power Platform administrator**                                                     | Create an environment, assign **Environment Maker**, or change Copilot Studio capacity if setup reaches one of those needs | Conditional  |
+| **Power Platform administrator**                                                     | Create an environment or assign **Environment Maker** if setup reaches one of those needs                                  | Conditional  |
 
 Setup will let the creation operation verify the selected account. Confirming
 that someone is available does not grant the role or prove authorization.
@@ -161,7 +159,7 @@ creation and say:
 
 **Message:**
 
-Setup paused before creating a fresh agent. No agent, role, capacity, or local
+Setup paused before creating a fresh agent. No agent, role, or local
 workspace change was made.
 
 A **Power Platform administrator** can assign **Environment Maker** to
@@ -293,7 +291,7 @@ After the maker selects a specific agent to create and before dispatching the cr
 
 **Message:**
 
-Creating a fresh agent in `{ENVIRONMENT_NAME}` requires the **Environment Maker** security role. This role is used only for agent creation; by itself, it does not grant capacity-administration access or access to agents owned by another account.
+Creating a fresh agent in `{ENVIRONMENT_NAME}` requires the **Environment Maker** security role. This role is used only for agent creation; by itself, it does not grant access to agents owned by another account.
 
 **End message.**
 
@@ -333,26 +331,3 @@ Render the shared **Forwardable administrator request** with:
 Tell the maker to return after the administrator grants the access, then retry
 creation. Present **Use another account**, **Choose a different environment**,
 and **Go back**.
-
-## Capacity verification and administration
-
-Before running `ENV-CAPACITY-001` for the first time in an invocation, say:
-
-**Message:**
-
-**Capacity check:** Setup will attempt a read-only verification for `{ENVIRONMENT_NAME}`. Setup does not require an administrator role for this read. Administrator help is needed only if verified evidence requires a capacity change or the maker cannot access manual verification.
-
-**End message.**
-
-The `ENV-CAPACITY-001` state machine, exact maker-facing messages,
-ring-specific administrator instructions, choices, evidence-application
-commands, and render position belong to `da-existing-dev.md`. Do not reproduce
-or append another capacity interaction from this file.
-
-Apply the first matching outcome:
-
-1. A successful read with a positive allocation needs no role guidance.
-2. A successful read with no allocation proves that capacity is currently blocked. A **Power Platform administrator** can allocate capacity. Explain that local authoring remains available and keep the checkpoint unresolved until a recheck passes or an appropriate administrator explicitly attests that Setup may skip the capacity check after a second successful zero-allocation result.
-3. An unavailable or denied read is **capacity not verified**. It is not proof that capacity is missing and must not trigger allocation instructions. Use the owning route's `Manual` path. An appropriate administrator may attest that Setup should skip the capacity check without claiming that capacity is allocated.
-4. Administrator attestation records that an appropriate administrator was present and attested that the capacity check was skipped. It does not change the source result, verify capacity, or convert an unavailable, denied, or zero-allocation result into an automated pass. Preserve completed authoring work and the source evidence.
-5. `Failed` and `Error` are not eligible for administrator-attested skip. Resolve an unavailable target environment identity or check-execution failure, then rerun the check. Classify a future read-availability problem for a validated target as `Manual` rather than weakening these integrity states.

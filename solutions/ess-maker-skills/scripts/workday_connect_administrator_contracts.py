@@ -21,8 +21,8 @@ from workday_connect_contract_common import (
     required_text as _required_text,
 )
 from workday_connect_entra_contracts import (
+    _ENTRA_ACCEPTED_CHECKS,
     ENTRA_PRESERVATION_OUTCOMES,
-    _ENTRA_CHECKS,
     _normalize_entra_check,
 )
 from workday_connect_model import (
@@ -120,7 +120,9 @@ def validate_administrator_partial_evidence(
                     raise WorkdayConnectContractError(
                         "entraChecks must contain an object."
                     )
-                unexpected_checks = sorted(set(value) - _ENTRA_CHECKS)
+                unexpected_checks = sorted(
+                    set(value) - _ENTRA_ACCEPTED_CHECKS
+                )
                 if unexpected_checks:
                     raise WorkdayConnectContractError(
                         "entraChecks contains unsupported checks: "

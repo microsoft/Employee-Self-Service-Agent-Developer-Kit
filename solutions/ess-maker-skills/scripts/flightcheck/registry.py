@@ -24,26 +24,26 @@ family) it records:
   first to hydrate shared state.
 
 ``cli.py`` reads this registry to (a) implement ``--list-checkpoints``
-without any broad run, and (b) for ``--checkpoint <ID>``, initialise only
-the clients the target's transitive prerequisite closure declares, run the
+without any broad run, and (b) for ``--checkpoint <ID>``, initialise the
+effective clients declared by the target and its prerequisite policy, run the
 owning functions in canonical order, then filter results down to the
 target.
 
-**Scope:** the ESS + Workday *setup* checkpoints only — not the entire
-FlightCheck surface. Other integrations (ServiceNow ``SN-*``, graph
-connector ``EXT-*``, ``SAP-*``) and the pre-existing ``ENV-003`` row stay
-validated by the existing ``--scope`` runs and are deliberately out of
-registry scope. ``ENV-004`` was re-pointed to the Declarative Agent
-minimalBots components + ALM API and is now registered here (clients
-``AGENTBUILDER``) so it can run via the plan/``--checkpoint`` path like the
-other DA checks. See
+**Scope:** setup-owned ESS/Workday checkpoints plus provider-owned lifecycle
+checkpoints that must support exact ``--checkpoint`` execution, including
+``SN-DA-HRSD-*``. Legacy generic ServiceNow ``SN-*``, graph connector
+``EXT-*``, and ``SAP-*`` remain validated by their existing ``--scope`` runs.
+``ENV-004`` is registered here after moving to the Declarative Agent
+minimalBots components + ALM API (client ``AGENTBUILDER``). See
 ``plans/workday-setup/flightcheck-single-checkpoint.md``.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
+
+from .da_checks import DAValidation, attach_inventory, validate_da_definitions
 
 from flightcheck.runner import Priority, Role
 from flightcheck.checks.entra_app import run_entra_app_checks
@@ -53,10 +53,16 @@ from flightcheck.checks.environment import (
     run_preferred_solution_check,
 )
 from flightcheck.checks.native_agent import run_native_agent_checks
+from flightcheck.checks.servicenow_da_hrsd import (
+    run_servicenow_da_hrsd_checks,
+)
+from flightcheck.checks.servicenow_da_itsm import (
+    run_servicenow_da_itsm_checks,
+)
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
-from flightcheck.checks.workday import run_workday_checks
+from flightcheck.checks.workday import WORKDAY_LITMUS_TAG, run_workday_checks
 from flightcheck.checks.workday_da import run_workday_da_checks
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
@@ -102,6 +108,8 @@ CATEGORY_ORDER = [
     "Infrastructure",
     "Environment",
     "Native Agent",
+    "ServiceNow DA HRSD",
+    "ServiceNow DA ITSM",
     "Solution",
     "Authentication",
     "Entra App",
@@ -129,6 +137,10 @@ class CheckpointSpec:
     checkpoints whose exact IDs cannot be enumerated ahead of time
     (``WD-FLOW-001``, ``WD-FLOW-002``, ...). When ``is_family`` is True the
     key matches any emitted ID of the form ``"{key}-..."``.
+
+    ``inherit_prereq_clients`` defaults to the historical transitive union.
+    Providers that evaluate genuine prerequisites inside their target row may
+    opt out and initialize only the target's declared clients.
     """
 
     key: str
@@ -142,12 +154,18 @@ class CheckpointSpec:
     priority: str = Priority.HIGH.value
     roles: tuple = ()
     is_family: bool = False
+    inherit_prereq_clients: bool = True
+    provider: str = ""
+    profile: str = ""
     # listable=False registers a checkpoint so it can satisfy another
     # checkpoint's prerequisite resolution, while hiding it from
     # --list-checkpoints (it belongs to another scope's surface — e.g.
     # WD-001 is an External-Systems checkpoint we only register because the
     # below-early-return Workday checks need it to hydrate _workday_flows).
     listable: bool = True
+    da: DAValidation | None = None
+    legacy_family: str = ""
+    custom_tags: tuple[str, ...] = ()
 
 
 @dataclass
@@ -254,6 +272,151 @@ _SPECS: list[CheckpointSpec] = [
         is_family=True,
     ),
     CheckpointSpec(
+        key="SN-DA-HRSD-PKG-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-ADMIN-PREFLIGHT-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-PKG-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-PLUGIN-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-ADMIN-PREFLIGHT-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.SERVICENOW_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-ENTRA-SETUP-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-PLUGIN-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ENTRA_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-OIDC-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-ENTRA-SETUP-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.SERVICENOW_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-TOPICS-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-CREDENTIAL-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-CREDENTIAL-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, CONNECTIVITY}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-OIDC-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value, Role.SERVICENOW_ADMIN.value),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-PORTAL-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-TOPICS-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value, Role.SERVICENOW_ADMIN.value),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-AGENT-CONNECTION-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, CONNECTIVITY}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=(
+            "SN-DA-HRSD-CREDENTIAL-001",
+            "SN-DA-HRSD-PORTAL-001",
+        ),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-TEST-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, CONNECTIVITY}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=(
+            "SN-DA-HRSD-TOPICS-001",
+            "SN-DA-HRSD-AGENT-CONNECTION-001",
+        ),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
         key="PUB-001",
         category_fn=run_publishing_checks,
         category_label="Publishing",
@@ -297,7 +460,7 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.CRITICAL.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # ---- Workday DA: WD-DA-PKG-001 (setup/workday-da skill, step DA1.1) ----
+    # ---- Workday DA: WD-DA-PKG-001 (connect/workday lifecycle) ----
     # WD-DA-PKG-001: the Workday extension package for the Declarative Agent
     # (DA) flavor of ESS is installed in the target env. Queries the
     # Dataverse `solutions` table for the DA parent (HR/IT) plus its Workday
@@ -448,6 +611,7 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("WD-001",),
         priority=Priority.HIGH.value,
         roles=(Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value),
+        custom_tags=(WORKDAY_LITMUS_TAG,),
     ),
     # ---- Workday: connection-reference binding completeness ----
     # Reads cached refs from WD-PKG-001 and needs _workday_flows (WD-001).
@@ -754,6 +918,38 @@ _SPECS: list[CheckpointSpec] = [
     ),
 ]
 
+
+def _itsm_specs_from_hrsd() -> list[CheckpointSpec]:
+    specs = []
+    for spec in _SPECS:
+        if not spec.key.startswith("SN-DA-HRSD"):
+            continue
+        if spec.key == "SN-DA-HRSD-PLUGIN-001":
+            continue
+        prereqs = tuple(
+            prereq.replace("SN-DA-HRSD", "SN-DA-ITSM")
+            for prereq in spec.prereqs
+            if prereq != "SN-DA-HRSD-PLUGIN-001"
+        )
+        if spec.key == "SN-DA-HRSD-ENTRA-SETUP-001":
+            prereqs = ("SN-DA-ITSM-ADMIN-PREFLIGHT-001",)
+        specs.append(
+            replace(
+                spec,
+                key=spec.key.replace("SN-DA-HRSD", "SN-DA-ITSM"),
+                category_fn=run_servicenow_da_itsm_checks,
+                category_label="ServiceNow DA ITSM",
+                prereqs=prereqs,
+                provider="servicenow-da-itsm",
+                profile="itsm",
+            )
+        )
+    return specs
+
+
+_SPECS.extend(_itsm_specs_from_hrsd())
+
+_SPECS = attach_inventory(_SPECS, CheckpointSpec)
 REGISTRY: dict[str, CheckpointSpec] = {spec.key: spec for spec in _SPECS}
 
 
@@ -797,7 +993,6 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             # "WD-CONN-102",
             "WD-API-CLIENT-001",
             "WD-TENANT-001",
-            "WD-NET-001",
         ),
     ),
     ProfileSpec(
@@ -853,7 +1048,6 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             "DV-CONN-001",
             "WD-REST-001",
             "WD-REST-002",
-            "WD-NET-001",
             "WD-DA-TOPIC-001",
             "WD-DA-WIRING-001",
             "WD-DA-ATTACH-001",
@@ -918,6 +1112,8 @@ OWNED_PREFIXES: tuple = (
     "PUB",
     "TOPIC-TRIGGER",
     "TOPIC-INTEGRATION",
+    "SN-DA-HRSD",
+    "SN-DA-ITSM",
 )
 
 
@@ -1013,15 +1209,24 @@ def transitive_requirements(checkpoint_id: str) -> ResolvedPlan:
     target_spec = _resolve_or_raise(checkpoint_id)
     closure = _closure(checkpoint_id)
 
-    clients: frozenset = frozenset()
-    pp_admin_flow_required = False
+    clients: frozenset = (
+        frozenset()
+        if target_spec.inherit_prereq_clients
+        else target_spec.clients
+    )
+    pp_admin_flow_required = (
+        False
+        if target_spec.inherit_prereq_clients
+        else target_spec.pp_admin_flow_required
+    )
     requires_config = False
     requires_dataverse_endpoint = False
     for spec in closure:
-        clients = clients | spec.clients
-        pp_admin_flow_required = (
-            pp_admin_flow_required or spec.pp_admin_flow_required
-        )
+        if target_spec.inherit_prereq_clients:
+            clients = clients | spec.clients
+            pp_admin_flow_required = (
+                pp_admin_flow_required or spec.pp_admin_flow_required
+            )
         requires_config = requires_config or spec.requires_config
         requires_dataverse_endpoint = (
             requires_dataverse_endpoint or spec.requires_dataverse_endpoint
@@ -1169,6 +1374,7 @@ def matches(target: str, emitted_id: str) -> bool:
             emitted_spec is not None
             and not emitted_spec.is_family
             and emitted_spec.key != fam_key
+            and emitted_spec.legacy_family != fam_key
         ):
             return False
         return emitted_id == fam_key or emitted_id.startswith(fam_key + "-")
@@ -1209,6 +1415,10 @@ def validate_registry() -> None:
     # deliberately stubbed/narrowed REGISTRY in a unit test doesn't trip on
     # profiles referencing checkpoints it left out.
     if _SHIPPED_REGISTRY_KEYS <= frozenset(REGISTRY):
+        try:
+            validate_da_definitions(REGISTRY)
+        except ValueError as exc:
+            raise RegistryError(str(exc)) from exc
         for profile in PROFILES.values():
             for checkpoint_id in profile.checkpoint_ids:
                 if resolve(checkpoint_id) is None:

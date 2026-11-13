@@ -35,6 +35,7 @@ from workday_connect_model import (
     TARGET_REALMS,
     PhaseStatus,
     WorkdayConnectModelError,
+    canonical_plan,
     default_administrator_state,
     default_state,
     next_phase_summary,
@@ -55,7 +56,6 @@ from workday_connect_state_policy import (
     foundation_matches_current_entra as _foundation_matches_current_entra,
     invalidate_after_phase as _invalidate_after_phase,
     invalidate_from_phase as _invalidate_from_phase,
-    legacy_administrator_partial_evidence,
     normalize_lifecycle_history,
     reset_phase as _reset_phase,
     tenant_foundation_from_state as _tenant_foundation_from_state,
@@ -118,6 +118,47 @@ class WorkdayConnectStoreError(RuntimeError):
 
 class WorkdayConnectPlanChangedError(WorkdayConnectStoreError):
     """Raised when an approved plan no longer matches the current plan."""
+
+
+def _is_runtime_creation_progress(
+    plan: Mapping[str, Any],
+    approved_plan: Mapping[str, Any] | None,
+    approved_hash: str | None,
+) -> bool:
+    """Allow newly assigned IDs only within an unchanged approved runtime scope."""
+    if not isinstance(approved_plan, Mapping):
+        return False
+    if plan_hash(approved_plan) != approved_hash:
+        return False
+    current = canonical_plan(plan)
+    approved = canonical_plan(approved_plan)
+    if current["phase"] != "runtime" or approved["phase"] != "runtime":
+        return False
+    current_authorization = current.get("delegatedAuthorization")
+    approved_authorization = approved.get("delegatedAuthorization")
+    if not isinstance(current_authorization, Mapping) or not isinstance(
+        approved_authorization, Mapping
+    ):
+        return False
+    if current_authorization.get("teamId") is not None and not current_authorization.get(
+        "authorizationId"
+    ):
+        return False
+    authorization = dict(current_authorization)
+    changed = False
+    for key in ("authorizationId", "teamId"):
+        value = authorization.get(key)
+        if approved_authorization.get(key) is None and value is not None:
+            if not isinstance(value, str):
+                return False
+            try:
+                uuid.UUID(value)
+            except ValueError:
+                return False
+            authorization[key] = None
+            changed = True
+    current["delegatedAuthorization"] = authorization
+    return changed and plan_hash(current) == approved_hash
 
 
 def _remediation_id(blocker: Mapping[str, Any] | None) -> str:
@@ -310,17 +351,39 @@ def _rotate_lifecycle(state: dict[str, Any]) -> None:
         _append_lifecycle_event(state, "invoked")
 
 
+def _reopen_unconfirmed_workday_administrator(state: dict[str, Any]) -> None:
+    phase = (state.get("phases") or {}).get("workday-admin") or {}
+    reuse = next(
+        (
+            record
+            for record in reversed(phase.get("evidence") or [])
+            if isinstance(record, Mapping)
+            and record.get("action") == "tenant-foundation-reused"
+        ),
+        {},
+    )
+    if reuse.get("provenance") != "stored-tenant-foundation":
+        return
+    _invalidate_from_phase(state, "workday-admin")
+    state["status"] = "in-progress"
+    if "deploymentStatus" in state:
+        state["deploymentStatus"] = "partially-configured"
+    state["updatedAt"] = utc_now()
+
+
 def _normalize_current_state(
     document: Mapping[str, Any],
 ) -> dict[str, Any]:
     state = copy.deepcopy(dict(document))
     discard_legacy_workday_admin_authorization(state)
     normalize_lifecycle_history(state)
+    _reopen_unconfirmed_workday_administrator(state)
     targets = state.get("targets")
     if isinstance(targets, dict):
         for target in targets.values():
             if isinstance(target, dict):
                 normalize_lifecycle_history(target)
+                _reopen_unconfirmed_workday_administrator(target)
     synchronize_active_target(state)
     return state
 
@@ -757,7 +820,7 @@ def _upgrade_or_migrate_state(
     workspace_root: Path,
 ) -> dict[str, Any]:
     try:
-        state = migrate_state(document)
+        state = _normalize_current_state(migrate_state(document))
         _refresh_migrated_profile_fingerprints(
             workspace_root,
             document,
@@ -1558,71 +1621,55 @@ class WorkdayConnectStore:
         state = self._mutate(mutation)
         return state, reused
 
-    def restore_workday_foundation(self) -> tuple[dict[str, Any], bool]:
-        """Reuse Workday administrator evidence after a fresh Entra reread."""
-        reused = False
-
+    def record_preflight_checks(
+        self,
+        checks: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Persist local compatibility results without discarding target work."""
         def mutation(state: dict[str, Any]) -> None:
-            nonlocal reused
-            foundation = state.get("tenantFoundation")
-            if not isinstance(foundation, Mapping):
-                return
-            if (
-                state["phases"]["preflight"]["status"] != PhaseStatus.COMPLETE.value
-                or state["phases"]["entra"]["status"] != PhaseStatus.COMPLETE.value
-            ):
-                return
-            if not _foundation_matches_current_entra(state, foundation):
-                return
-            foundation_identifiers = foundation.get("identifiers") or {}
-            for key in _WORKDAY_IDENTIFIER_KEYS:
-                if foundation_identifiers.get(key) is not None:
-                    state["identifiers"][key] = copy.deepcopy(
-                        foundation_identifiers[key]
-                    )
-            state["endpoints"].update(
-                copy.deepcopy(dict(foundation.get("endpoints") or {}))
+            state["phases"]["preflight"]["prerequisiteChecks"] = copy.deepcopy(checks)
+            blocked = [check for check in checks if check["status"] == "blocked"]
+            phase_id = next(
+                (
+                    definition.identifier.value
+                    for definition in PHASE_DEFINITIONS
+                    if state["phases"][definition.identifier.value]["status"]
+                    != PhaseStatus.COMPLETE.value
+                ),
+                PHASE_DEFINITIONS[-1].identifier.value,
             )
-            snapshot = (foundation.get("phases") or {}).get("workday-admin")
-            if not isinstance(snapshot, Mapping):
-                return
-            phase = state["phases"]["workday-admin"]
-            _reset_phase(phase)
-            phase["status"] = PhaseStatus.ACTIVE.value
-            phase["completedActions"] = copy.deepcopy(
-                list(snapshot.get("completedActions") or [])
+            phase = state["phases"][phase_id]
+            previous = phase.get("blocker") or {}
+            is_prerequisite_blocker = (
+                previous.get("errorType") == "WorkdayConnectPrerequisiteError"
             )
-            phase["evidence"] = copy.deepcopy(list(snapshot.get("evidence") or []))
-            snapshot_administrator = snapshot.get("administrator")
-            if isinstance(snapshot_administrator, Mapping):
-                phase["administrator"] = copy.deepcopy(
-                    dict(snapshot_administrator)
+            if blocked:
+                _transition_phase_state(
+                    state, phase_id, PhaseStatus.BLOCKED.value,
+                    blocker={
+                        "operation": "preflight",
+                        "errorType": "WorkdayConnectPrerequisiteError",
+                        "message": "; ".join(check["name"] for check in blocked),
+                        "details": {"verificationChecks": copy.deepcopy(checks)},
+                        "resumeStatus": (
+                            previous["resumeStatus"] if is_prerequisite_blocker
+                            else phase["status"]
+                        ),
+                        "previousBlocker": copy.deepcopy(
+                            previous.get("previousBlocker") if is_prerequisite_blocker
+                            else phase.get("blocker")
+                        ),
+                    },
+                    invalidate_downstream=False,
                 )
-            else:
-                phase["administrator"] = default_administrator_state()
-                phase["administrator"]["partialEvidence"] = (
-                    legacy_administrator_partial_evidence(
-                        state,
-                        "workday-admin",
-                    )
+            elif is_prerequisite_blocker:
+                _transition_phase_state(
+                    state, phase_id, previous["resumeStatus"],
+                    blocker=previous.get("previousBlocker"),
+                    invalidate_downstream=False,
                 )
-            phase["administrator"]["substage"] = "collecting-evidence"
-            phase["administrator"]["invalidFields"] = []
-            phase["administrator"]["updatedAt"] = utc_now()
-            phase["evidence"].append(
-                {
-                    "action": "tenant-foundation-reused",
-                    "outcome": "verified",
-                    "provenance": "stored-tenant-foundation",
-                    "foundationCapturedAt": foundation["capturedAt"],
-                    "capturedAt": utc_now(),
-                }
-            )
-            phase["updatedAt"] = utc_now()
-            reused = True
 
-        state = self._mutate(mutation)
-        return state, reused
+        return self._mutate(mutation)
 
     def set_phase_status(
         self,
@@ -1974,12 +2021,19 @@ class WorkdayConnectStore:
             phase = state["phases"][phase_id]
             previous_status = phase["status"]
             plan_changed = phase.get("approvedPlanHash") != approved_hash
+            creation_progress = (
+                phase_id == "runtime"
+                and plan_changed
+                and _is_runtime_creation_progress(
+                    plan, phase.get("approvedPlan"), phase.get("approvedPlanHash")
+                )
+            )
             if (
                 phase["status"] == PhaseStatus.COMPLETE.value
-                or plan_changed
+                or (plan_changed and not creation_progress)
             ):
                 _invalidate_after_phase(state, phase_id)
-            if plan_changed:
+            if plan_changed and not creation_progress:
                 _reset_phase(phase)
             phase["approvedPlan"] = dict(plan)
             phase["approvedPlanHash"] = approved_hash
@@ -2015,12 +2069,20 @@ class WorkdayConnectStore:
             raise WorkdayConnectStoreError(f"Unknown Workday phase: {phase_id}.")
         current_hash = plan_hash(current_plan)
         stored_hash = phase.get("approvedPlanHash")
-        if current_hash != approved_hash or stored_hash != approved_hash:
+        if stored_hash != approved_hash or (
+            current_hash != approved_hash
+            and not (
+                phase_id == "runtime"
+                and _is_runtime_creation_progress(
+                    current_plan, phase.get("approvedPlan"), stored_hash
+                )
+            )
+        ):
             raise WorkdayConnectPlanChangedError(
                 "The Workday change plan or target changed after approval. "
                 "Review and approve the current plan before applying it."
             )
-        return current_hash
+        return approved_hash
 
     def status(self) -> dict[str, Any]:
         from workday_connect_flightcheck import (

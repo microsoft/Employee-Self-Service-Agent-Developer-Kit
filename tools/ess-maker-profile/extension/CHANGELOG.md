@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.37 (POC)
+
+- The landing-page tutorial presents accent colors, categorized starter prompts, quick links, and Stay up to date. ([PR 392 - Stay up to date-only configuration](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/pull/392))
+
 ## 0.4.36 (POC)
 
 - Start the Maker guided experience earlier during VS Code startup and retain

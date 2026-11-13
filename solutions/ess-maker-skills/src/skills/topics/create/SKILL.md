@@ -249,14 +249,6 @@ let the maker decide; never refuse to proceed or treat a finding as a hard
 failure. Do NOT continue to 6.6 until the review has run and its report is
 displayed.
 
-**Exception — invoked by the Workday setup flow.** When this skill is being run
-as the P6.1 authoring delegation of
-`src/skills/setup/workday/create-new-topic.md`, **do NOT run this review sub-step
-at all**. The tenant reference IDs aren't wired yet at that point, so a review
-now would false-flag unresolved placeholders; the setup flow runs its one and
-only topic review after the wiring is verified (its S6.3). Run this review
-normally only when `/create` is invoked directly by the maker.
-
 1. Invoke the review by calling `runSubagent` (the VS Code Copilot Chat tool) —
    do not run its detectors yourself. Point the subagent to read
    `src/skills/topics/review/SKILL.md` as its first action, and tell it this is a

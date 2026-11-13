@@ -31,10 +31,59 @@
 //    essmakerkit_installer_start / _complete
 //    adk_session_start, adk_capability_use, adk_agent_create, adk_agent_deploy,
 //    adk_build_complete, adk_api_call, adk_client_event,
-//    adk_connect_lifecycle                              (ADK platform family)
+//    adk_connect_lifecycle, adk_script_error            (ADK platform family)
 //  Time column on every table: EventInfo_Time (UTC).
 // =============================================================================
 
+// CUSTOMER-ONLY QUERY GUARD
+// `tenantClass` / `tenant_class` is assigned by the emitting clone. Historical
+// rows and older clones can therefore label these known test/demo tenants as
+// customers. Include this declaration with customer-only queries and exclude
+// the IDs even when filtering on the derived class.
+let knownNonCustomerTenantIds = dynamic([
+    "142b48c2-943c-4d07-ad6b-b0eb5cd0e5f2",
+    "440d6412-bc8e-49a0-9913-9f8be786b89e",
+    "4636dd08-fdd9-4610-a443-762fb320fb4e",
+    "6936469c-696e-4fe2-a0c8-dd16f54b1b45",
+    "4345eb96-df8a-464a-9eb8-72253571a621",
+    "2d5577b0-a83c-436c-9582-1c3bcd2ab0d3",
+    "811c4ca4-538a-4a66-8c4b-d29ab413b37f"
+]);
+
+// -----------------------------------------------------------------------------
+// DA SCRIPT ERRORS (ADO 8169047) — counts, NOT a skill failure rate.
+// Include knownNonCustomerTenantIds above when running either query separately.
+// The table appears only after first ingestion. Only supported schema-1.8+
+// clones and unhandled entry-point exceptions are covered. Do not union this
+// with API/build/FlightCheck errors: the same underlying failure may appear there.
+// -----------------------------------------------------------------------------
+// Customer-only daily errors by script; this raw query deduplicates
+// transport retries with their stable per-error event_id.
+adk_script_error
+| where EventInfo_Time > ago(30d)
+| where agent_type == "declarative_agent" and tenant_class == "customer"
+| where tolower(tenant_id) !in (knownNonCustomerTenantIds)
+| where isnotempty(event_id)
+| summarize arg_max(EventInfo_Time, *) by event_id
+| summarize Errors = count() by bin(EventInfo_Time, 1d), script_id
+| order by EventInfo_Time asc, script_id asc
+
+// Safe WSR investigation/action-item candidates: exact ADK location and bounded
+// diagnostic, never arbitrary exception text. Resolve line against the emitted
+// SHA; it does not reflect uncommitted edits.
+adk_script_error
+| where EventInfo_Time > ago(7d)
+| where agent_type == "declarative_agent" and tenant_class == "customer"
+| where tolower(tenant_id) !in (knownNonCustomerTenantIds)
+| where isnotempty(event_id)
+| summarize arg_max(EventInfo_Time, *) by event_id
+| summarize Errors = count(),
+            AffectedInstalls = dcountif(instance_id, isnotempty(instance_id)),
+            AffectedTenants = dcountif(tenant_id, isnotempty(tenant_id)),
+            FirstSeen = min(EventInfo_Time), LastSeen = max(EventInfo_Time)
+    by script_id, failure_module, failure_line, error_code, error_message,
+       toolkit_git_sha, adk_version
+| order by Errors desc
 
 // -----------------------------------------------------------------------------
 // 1) USAGE — total runs, DAU/WAU/MAU, active tenants (last 30 days)
@@ -57,7 +106,7 @@ essmakerkit_flightcheck_run
 // -----------------------------------------------------------------------------
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(30d)
-| summarize Runs = count() by overall            // READY / READY_WITH_WARNINGS / NOT_READY
+| summarize Runs = count() by overall            // Readiness and diagnostic outcomes remain distinct.
 | extend Pct = round(100.0 * Runs / toscalar(
       essmakerkit_flightcheck_run | where EventInfo_Time > ago(30d) | count), 1)
 | order by Runs desc
@@ -110,6 +159,7 @@ essmakerkit_flightcheck_check
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(90d)
 | where tenantClass == "customer" and isnotempty(tenantId)
+| where tenantId !in (knownNonCustomerTenantIds)
 | where blockReason == "adminApiAuthorization"
 | summarize BlockedRuns = count(), BlockedCustomers = dcount(tenantId)
           by bin(EventInfo_Time, 7d)
@@ -119,6 +169,7 @@ essmakerkit_flightcheck_run
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(30d)
 | where tenantClass == "customer" and isnotempty(tenantId)
+| where tenantId !in (knownNonCustomerTenantIds)
 | where isnotempty(blockReason)
 | summarize Runs = count(), Customers = dcount(tenantId) by blockReason
 | order by Runs desc
@@ -127,6 +178,7 @@ essmakerkit_flightcheck_run
 essmakerkit_flightcheck_check
 | where EventInfo_Time > ago(30d)
 | where tenantClass == "customer" and isnotempty(tenantId)
+| where tenantId !in (knownNonCustomerTenantIds)
 | where blockReason == "adminApiAuthorization"
 | summarize Checks = count(), Customers = dcount(tenantId) by checkpointId, category
 | order by Checks desc
@@ -167,9 +219,12 @@ chk
 // 5) TIME-TO-GREEN, EXCLUDING WEEKENDS  (ADO 7590588)
 //    Median (and p90) hours from a series' first NOT_READY run to its first
 //    subsequent READY run, subtracting whole weekend days (Sat/Sun).
+//    Excludes diagnostic overalls: even SETUP_CHECKS_PASSED is inspection,
+//    not release readiness, and must neither start nor finish this clock.
 // -----------------------------------------------------------------------------
 let runs = essmakerkit_flightcheck_run
     | where EventInfo_Time > ago(90d)
+    | where overall in ("READY", "READY_WITH_WARNINGS", "NOT_READY")
     | extend grp = strcat(env, "|", agentId, "|", instanceId)
     | extend ready = overall in ("READY", "READY_WITH_WARNINGS")
     | project grp, t = EventInfo_Time, ready;
@@ -191,16 +246,18 @@ pairs
 
 
 // -----------------------------------------------------------------------------
-// 6) PER-TENANT breakdown (ADO 7590589)
+// 6) PER-TENANT READINESS breakdown (ADO 7590589)
 //    tenantName is now emitted on run + check events (privacy-reviewed org
 //    display name). Falls back to "(unknown)" for events emitted before the
 //    tenant_name change shipped — those carry tenantId (GUID) only.
+//    Runs and ReadyRate include readiness verdicts only, not diagnostics.
 // -----------------------------------------------------------------------------
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(30d)
+| where overall in ("READY", "READY_WITH_WARNINGS", "NOT_READY")
 | extend Tenant = iff(isempty(tenantName), "(unknown)", tenantName)
 | summarize Runs = count(), Users = dcount(instanceId),
-            ReadyRate = round(100.0 * countif(overall != "NOT_READY") / count(), 1)
+            ReadyRate = round(100.0 * countif(overall in ("READY", "READY_WITH_WARNINGS")) / count(), 1)
     by Tenant
 | order by Runs desc
 

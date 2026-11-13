@@ -32,6 +32,27 @@ def _state():
     return state
 
 
+@pytest.mark.parametrize("broken", [False, True])
+def test_local_prerequisite_workspace_validates_required_runtime_mappings(
+    tmp_path, broken,
+):
+    import workday_connect_agent as agent
+
+    _write_workspace(tmp_path)
+    _write_runtime_wiring(tmp_path)
+    if broken:
+        (
+            tmp_path / "workspace" / "agents" / "ess-hr"
+            / "topics" / "runtime-template.mcs.yml"
+        ).unlink()
+        with pytest.raises(agent.WorkdayConnectAgentError, match="Mapped topic file is missing"):
+            agent.verify_local_runtime_workspace(tmp_path, _state())
+    else:
+        assert agent.verify_local_runtime_workspace(tmp_path, _state()) == {
+            "verifiedTopics": 3,
+        }
+
+
 def _complete_preflight(store) -> None:
     store.complete_action(
         "preflight",
@@ -325,6 +346,400 @@ class _VerifiedClient:
             "activeComponents": len(expectations),
             "blockingDiagnostics": [],
         }
+
+
+@pytest.fixture
+def promoted_verification(tmp_path, monkeypatch):
+    import workday_connect_agent as agent
+    from minimalbot_evaluation import reviewed_workday_topic_schemas
+    from tests.conftest import require_validated_mock
+    from tests.mocks import agentbuilder_connectivity as ab
+
+    require_validated_mock(ab)
+    _write_workspace(tmp_path)
+    source_schema = "gptagent_copilotforemployeeselfservicehr"
+    source_identity = {
+        "environmentId": "00000000-0000-4000-8000-000000001111",
+        "environmentUrl": "https://source.crm.dynamics.com",
+        "tenantId": "00000000-0000-4000-8000-000000002222",
+        "agentId": "00000000-0000-4000-8000-000000003333",
+        "agentSchemaName": source_schema, "agentSlug": "ess-hr",
+        "almFamilyId": "family-id", "commitSha": "dev123",
+    }
+    foundation_path = tmp_path / ".local" / "config.json"
+    foundation = json.loads(foundation_path.read_text(encoding="utf-8"))
+    foundation["environmentId"] = source_identity["environmentId"]
+    foundation["tenantId"] = source_identity["tenantId"]
+    for selected in (foundation["agent"], *foundation["agents"]):
+        selected.update(botId=source_identity["agentId"], schemaName=source_schema)
+    foundation_path.write_text(json.dumps(foundation), encoding="utf-8")
+    target_identity = {
+        **source_identity,
+        "environmentId": "00000000-0000-4000-8000-000000004444",
+        "environmentUrl": "https://target.crm.dynamics.com",
+        "agentId": "00000000-0000-4000-8000-000000005555",
+        "sourceAgentId": source_identity["agentId"],
+        "agentSchemaName": f"{source_schema}_test", "commitSha": "test123",
+    }
+    state = _state()
+    state["activeTargetRealm"] = "test"
+    state["targets"]["dev"] = {"identity": source_identity}
+    state["targets"]["test"] = {
+        "identity": target_identity, "deploymentStatus": "blocked",
+    }
+    state["scope"].update(
+        environmentId=target_identity["environmentId"],
+        dataverseUrl=target_identity["environmentUrl"],
+        entraTenantId=target_identity["tenantId"], ring="prod",
+        agent={
+            "slug": "ess-hr", "botId": target_identity["agentId"],
+            "schemaName": target_identity["agentSchemaName"],
+        },
+    )
+    payload = ab.dialog_components([
+        ab.dialog_component_change(schema_name=schema)
+        for schema in sorted(reviewed_workday_topic_schemas(
+            target_identity["agentSchemaName"], realm="test",
+        ))
+    ])
+    target_schema = target_identity["agentSchemaName"]
+    runtime = f"{target_schema}.topic.WorkdaySystemSetRuntimeTemplateConfigurations"
+    validation = f"{target_schema}.topic.System-UserContext-Validate"
+    payload["botComponentChanges"].append(ab.dialog_component_change(
+        schema_name=f"{target_schema}.topic.ConversationStart",
+        dialog={
+            "$kind": "AdaptiveDialog",
+            "beginDialog": {"$kind": "OnConversationStart", "actions": [
+                {"$kind": "BeginDialog", "dialog": {"literalValue": runtime}},
+                {"$kind": "BeginDialog", "dialog": {"literalValue": validation}},
+            ]},
+        },
+    ))
+    for change in payload["botComponentChanges"]:
+        change["component"]["state"] = "Active"
+    observed = {"reads": [], "auth": []}
+
+    def authenticate(ring, **kwargs):
+        observed["auth"].append((ring, kwargs))
+        return "token", target_identity["tenantId"], "maker@example.com"
+
+    class ReadOnlyClient:
+        def __init__(self, host, token, **kwargs):
+            observed["host"] = host
+            observed["client"] = kwargs
+
+        def fetch_components(self, bot_id):
+            observed["reads"].append(bot_id)
+            return payload
+
+    monkeypatch.setattr(agent, "authenticate_flightcheck", authenticate)
+    monkeypatch.setattr(agent, "AgentBuilderClient", ReadOnlyClient)
+    return state, payload, observed, foundation_path
+
+
+@pytest.mark.parametrize("realm", ["test", "prod"])
+@pytest.mark.parametrize("same_environment", [False, True])
+@pytest.mark.parametrize("operation", [
+    "verify_topic_activation", "verify_agent_binding", "verify_runtime_template_wiring",
+])
+def test_promoted_verification_reads_actual_target_without_local_topic_ids(
+    tmp_path, promoted_verification, realm, same_environment, operation,
+):
+    import workday_connect_agent as agent
+    from agentbuilder import derive_environment_host
+
+    state, payload, observed, foundation_path = promoted_verification
+    target = state["targets"].pop("test")
+    old_schema = target["identity"]["agentSchemaName"]
+    new_schema = old_schema.removesuffix("_test") + f"_{realm}"
+    target["identity"]["agentSchemaName"] = new_schema
+    state["activeTargetRealm"] = realm
+    state["targets"][realm] = target
+    state["scope"]["agent"]["schemaName"] = new_schema
+    if same_environment:
+        source = state["targets"]["dev"]["identity"]
+        target["identity"].update(
+            environmentId=source["environmentId"], environmentUrl=source["environmentUrl"],
+        )
+        state["scope"].update(
+            environmentId=source["environmentId"], dataverseUrl=source["environmentUrl"],
+        )
+    payload.update(json.loads(json.dumps(payload).replace(old_schema, new_schema)))
+    before = foundation_path.read_bytes()
+    state_before = json.dumps(state, sort_keys=True)
+
+    evidence = getattr(agent, operation)(tmp_path, state)
+
+    assert evidence["botId"] == target["identity"]["agentId"]
+    assert evidence["environmentId"] == target["identity"]["environmentId"]
+    assert observed["reads"] == [target["identity"]["agentId"]]
+    assert observed["host"] == derive_environment_host(
+        target["identity"]["environmentId"], "prod",
+    )
+    assert observed["client"]["tenant_id"] == target["identity"]["tenantId"]
+    auth = observed["auth"][0][1]
+    assert auth["allow_write"] is False
+    assert auth["include_connectivity"] is False
+    assert auth["account_hint"] == "maker@example.com"
+    assert foundation_path.read_bytes() == before
+    assert json.dumps(state, sort_keys=True) == state_before
+    if operation == "verify_runtime_template_wiring":
+        assert evidence["runtimeTemplate"].startswith(new_schema + ".topic.")
+        assert evidence["verifiedComponents"] == 3
+    else:
+        assert evidence["workdayTopics"]["active"] == 22
+
+
+@pytest.mark.parametrize("defect", [
+    "scope-agent", "scope-environment", "scope-tenant", "source-agent",
+    "source-tenant", "family", "commit", "wrong-realm-schema", "account",
+    "authenticated-tenant", "missing-topic", "inactive-topic", "inactive-state",
+    "duplicate-topic", "malformed-payload", "misplaced-wiring",
+])
+def test_promoted_verification_rejects_mismatched_or_unready_target(
+    tmp_path, promoted_verification, monkeypatch, defect,
+):
+    import workday_connect_agent as agent
+
+    state, payload, observed, foundation_path = promoted_verification
+    identity = state["targets"]["test"]["identity"]
+    if defect == "scope-agent":
+        state["scope"]["agent"]["botId"] = "different-agent"
+    elif defect == "scope-environment":
+        state["scope"]["environmentId"] = "different-environment"
+    elif defect == "scope-tenant":
+        state["scope"]["entraTenantId"] = "different-tenant"
+    elif defect == "source-agent":
+        identity["sourceAgentId"] = "different-source"
+    elif defect == "source-tenant":
+        source = json.loads(foundation_path.read_bytes())
+        source["tenantId"] = "different-source-tenant"
+        foundation_path.write_text(json.dumps(source), encoding="utf-8")
+    elif defect == "family":
+        identity["almFamilyId"] = "different-family"
+    elif defect == "commit":
+        identity["commitSha"] = ""
+    elif defect == "wrong-realm-schema":
+        schema = identity["agentSchemaName"].removesuffix("_test") + "_prod"
+        identity["agentSchemaName"] = state["scope"]["agent"]["schemaName"] = schema
+    elif defect in {"account", "authenticated-tenant"}:
+        monkeypatch.setattr(agent, "authenticate_flightcheck", lambda *_a, **_k: (
+            "token",
+            "different-tenant" if defect == "authenticated-tenant" else identity["tenantId"],
+            "different@example.com" if defect == "account" else "maker@example.com",
+        ))
+    elif defect == "missing-topic":
+        payload["botComponentChanges"].pop(0)
+    elif defect == "inactive-topic":
+        payload["botComponentChanges"][0]["component"]["status"] = "Inactive"
+    elif defect == "inactive-state":
+        payload["botComponentChanges"][0]["component"]["state"] = "Inactive"
+    elif defect == "duplicate-topic":
+        payload["botComponentChanges"].append(payload["botComponentChanges"][0])
+    elif defect == "malformed-payload":
+        payload.pop("botComponentChanges")
+    else:
+        actions = payload["botComponentChanges"][-1]["component"]["dialog"]["beginDialog"]["actions"]
+        actions.reverse()
+    before = foundation_path.read_bytes()
+    state_before = json.dumps(state, sort_keys=True)
+
+    operation = (
+        agent.verify_runtime_template_wiring
+        if defect == "misplaced-wiring" else agent.verify_topic_activation
+    )
+    with pytest.raises(agent.WorkdayConnectAgentError):
+        operation(tmp_path, state)
+
+    assert foundation_path.read_bytes() == before
+    assert json.dumps(state, sort_keys=True) == state_before
+    if defect == "inactive-topic":
+        assert observed["reads"] == [identity["agentId"]]
+
+
+def test_same_environment_test_completes_native_verification_without_touching_dev(
+    tmp_path, promoted_verification, monkeypatch,
+):
+    """Isolate unrelated profile gates; use real discovery, verifiers and state writes."""
+    import workday_connect as controller
+    import workday_connect_model as model
+    import workday_connect_realms as realms
+    from workday_connect_store import WorkdayConnectStore
+
+    state, _payload, observed, foundation_path = promoted_verification
+    source = state["targets"]["dev"]["identity"]
+    source["sourceAgentId"] = source["agentId"]
+    target = state["targets"]["test"]["identity"]
+    target.update(
+        environmentId=source["environmentId"], environmentUrl=source["environmentUrl"],
+    )
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section("scope", {
+        "environmentId": source["environmentId"], "dataverseUrl": source["environmentUrl"],
+        "entraTenantId": source["tenantId"], "ring": "prod", "packageFlavor": "runtime",
+        "agent": {
+            "slug": source["agentSlug"], "botId": source["agentId"],
+            "schemaName": source["agentSchemaName"],
+        },
+    })
+    store.merge_section("operators", state["operators"])
+    store.record_target_discovery("dev", source, ring="prod")
+    for phase_id, actions in model.PHASE_REQUIRED_ACTIONS.items():
+        for action in actions:
+            store.complete_action(phase_id, action, evidence={"outcome": "verified"})
+        store.set_phase_status(phase_id, "complete")
+    dev_before = store.load()["targets"]["dev"]
+    foundation_before = foundation_path.read_bytes()
+
+    class RealmReadClient:
+        tenant_id = source["tenantId"]
+        api_version = realms.DEFAULT_API_VERSION
+
+        def get_realms(self, agent_id):
+            assert agent_id == source["agentId"]
+            return {"routeRealm": 0, "siblingRealms": [
+                {"realm": 1, "botId": target["agentId"]},
+            ]}
+
+        def get_agent(self, agent_id):
+            identity = source if agent_id == source["agentId"] else target
+            assert agent_id == identity["agentId"]
+            return {"botId": agent_id, "schemaName": identity["agentSchemaName"]}
+
+        def get_realm_configuration(self, agent_id, realm):
+            identity = source if realm == 0 else target
+            assert agent_id == identity["agentId"]
+            return {
+                "realm": realm, "cdsBotId": agent_id,
+                "schemaName": identity["agentSchemaName"],
+                "grsRepositoryId": identity["almFamilyId"],
+                "commitSha": identity["commitSha"],
+            }
+
+    discovery_options = {
+        "authenticator": lambda *_a, **_k: ("token", source["tenantId"]),
+        "client_factory": lambda *_a, **_k: RealmReadClient(),
+        "environment_loader": lambda *_a, **_k: [{
+            "id": source["environmentId"], "instanceUrl": source["environmentUrl"],
+        }],
+    }
+    discovery = realms.discover_and_record_realm_target(
+        tmp_path, store, realm="test",
+        environment_id=source["environmentId"],
+        environment_url=source["environmentUrl"], **discovery_options,
+    )
+    assert discovery["realm"] == "test"
+    assert store.load()["scope"]["agent"]["botId"] == target["agentId"]
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(phase_id, action, evidence={"outcome": "verified"})
+        store.set_phase_status(phase_id, "complete")
+    for action in (
+        "connection-references-bound", "runtime-flows-active",
+        "delegated-authorization-configured",
+    ):
+        store.complete_action("runtime", action, evidence={"outcome": "verified"})
+    monkeypatch.setattr(
+        controller, "revalidate_active_realm_target",
+        lambda root, actual_store: realms.revalidate_active_realm_target(
+            root, actual_store, **discovery_options,
+        ),
+    )
+    monkeypatch.setattr(controller, "_run_profile_gate", lambda *_a: {})
+    monkeypatch.setattr(controller, "_run_final_readiness", lambda *_a: {})
+
+    assert controller._record_topic_activation(SimpleNamespace(), store)["verified"]
+    assert controller._record_runtime_template_wiring(SimpleNamespace(), store)["verified"]
+    flow_names = model.load_catalog()["packages"]["runtime"]["agentConnectionFlowNames"]
+    assert controller._record_agent_binding(SimpleNamespace(
+        attachment_json=json.dumps({
+            "outcome": "maker-confirmed", "botId": target["agentId"],
+            "flowNames": flow_names,
+            "parameterSharingOutcome": "enabled-for-exposed-connections",
+        }),
+    ), store)["verified"]
+    completion = controller._record_validation(SimpleNamespace(
+        evidence_json=json.dumps({
+            "testUserCategory": "maker", "timestamp": "2026-10-26T18:00:00Z",
+            "outcome": "passed",
+        }),
+    ), store)
+
+    final = store.load()
+    assert completion["lifecycleComplete"] is True
+    assert final["status"] == "ready"
+    assert final["targets"]["test"]["deploymentStatus"] == "ready"
+    assert final["targets"]["dev"] == dev_before
+    assert foundation_path.read_bytes() == foundation_before
+    assert observed["reads"] == [target["agentId"]] * 3
+    assert all(kwargs["allow_write"] is False for _ring, kwargs in observed["auth"])
+
+
+def test_promoted_verification_retains_correlated_diagnostics_without_failing_activation(
+    tmp_path, promoted_verification,
+):
+    from workday_connect_agent import verify_topic_activation
+
+    state, payload, _observed, _foundation = promoted_verification
+    component = payload["botComponentChanges"][0]["component"]
+    component["dialog"]["diagnostics"] = [{
+        "errorCode": "NotFound", "errorMessage": "CloudFlow not found",
+        "referenceType": "CloudFlow",
+    }]
+
+    topics = verify_topic_activation(tmp_path, state)["workdayTopics"]
+
+    assert topics["active"] == 22
+    diagnostic, = topics["blockingDiagnostics"]
+    assert diagnostic["componentId"] == component["id"]
+    assert diagnostic["schemaName"] == component["schemaName"]
+    assert diagnostic["errorCode"] == "NotFound"
+    assert diagnostic["referenceType"] == "CloudFlow"
+
+
+def test_promoted_verification_uses_verified_tenant_when_foundation_omits_it(
+    tmp_path, promoted_verification,
+):
+    from workday_connect_agent import verify_topic_activation
+
+    state, _payload, _observed, path = promoted_verification
+    foundation = json.loads(path.read_bytes())
+    foundation.pop("tenantId")
+    state["targets"]["dev"]["identity"].pop("almFamilyId")
+    path.write_text(json.dumps(foundation), encoding="utf-8")
+    before = path.read_bytes()
+
+    assert verify_topic_activation(tmp_path, state)["workdayTopics"]["active"] == 22
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("operation", [
+    "_record_topic_activation", "_record_runtime_template_wiring", "_record_agent_binding",
+])
+def test_promoted_recording_revalidates_identity_before_reads_or_evidence(
+    tmp_path, promoted_verification, monkeypatch, operation,
+):
+    import workday_connect
+    from workday_connect_realms import WorkdayConnectRealmError
+
+    state, _payload, observed, _foundation = promoted_verification
+    state["phases"]["runtime"]["completedActions"] = ["workday-topics-activated"]
+    store = SimpleNamespace(workspace_root=tmp_path, load=lambda: state)
+    args = SimpleNamespace(attachment_json=json.dumps({"outcome": "maker-confirmed"}))
+
+    def reject(root, actual_store):
+        assert root == tmp_path
+        assert actual_store is store
+        raise WorkdayConnectRealmError("The promoted identity changed.")
+
+    monkeypatch.setattr(workday_connect, "revalidate_active_realm_target", reject)
+
+    with pytest.raises(WorkdayConnectRealmError, match="identity changed"):
+        getattr(workday_connect, operation)(args, store)
+
+    assert observed["reads"] == []
+    assert observed["auth"] == []
 
 
 def test_agent_binding_is_built_from_live_checks_and_components(
@@ -784,6 +1199,103 @@ def test_controller_parser_accepts_labeled_worksheet_files() -> None:
     assert workday.response_worksheet_file == Path("workday.txt")
 
 
+@pytest.mark.parametrize(
+    ("command", "option", "input_name"),
+    [
+        ("record-entra", "--verification-worksheet-file", "verification"),
+        ("record-workday-admin", "--response-worksheet-file", "response"),
+    ],
+)
+def test_controller_reads_completed_xlsx_worksheet(
+    tmp_path: Path,
+    command: str,
+    option: str,
+    input_name: str,
+) -> None:
+    import workday_connect
+    from workday_connect_workbook import write_administrator_workbook
+
+    path = write_administrator_workbook(
+        tmp_path / "completed administrator workbook.xlsx",
+        title="Microsoft Entra administrator handoff",
+        administrator_role="Microsoft Entra administrator",
+        actions=["Complete the required configuration."],
+        capture_instructions=[
+            {
+                "information": "Application ID",
+                "portalLocation": "Microsoft Entra admin center",
+                "instruction": "Record the Application ID.",
+                "exampleValue": "XXXX",
+            }
+        ],
+        answers={"Application ID": "44444444-4444-4444-4444-444444444444"},
+    )
+    args = workday_connect.build_parser().parse_args([command, option, str(path)])
+
+    result = workday_connect._json_input(
+        args,
+        input_name,
+        "Entra verification",
+        worksheet_parser=lambda _state, worksheet: {
+            "worksheet": worksheet,
+        },
+        worksheet_state={},
+    )
+
+    assert result == {
+        "worksheet": (
+            "Application ID: 44444444-4444-4444-4444-444444444444\n"
+        )
+    }
+
+
+def test_controller_returns_workbook_corrections_without_reopening_entra(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    import workday_connect
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+    from workday_connect_workbook import WORKDAY_ADMIN_WORKBOOK_PATH
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section("scope", {"workdayTenant": "contoso"})
+    for phase_id in ("preflight", "entra"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id, action, evidence={"outcome": "verified"}
+            )
+        store.set_phase_status(phase_id, "complete")
+    _advance_administrator_to_completion(store, "workday-admin")
+    before = store.load()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "workday_connect.py", "--root", str(tmp_path),
+            "record-workday-admin",
+            "--response-worksheet-file", str(WORKDAY_ADMIN_WORKBOOK_PATH),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as caught:
+        workday_connect.main()
+
+    assert caught.value.code == 1
+    payload = json.loads(
+        capsys.readouterr().err.split(workday_connect.ERROR_MARKER, maxsplit=1)[1]
+    )
+    labels = {error["label"] for error in payload["details"]["fieldErrors"]}
+    assert {"SAML row settings", "REST base URL", "SOAP base URL"} <= labels
+    after = store.load()
+    assert after["phases"]["entra"] == before["phases"]["entra"]
+    assert after["phases"]["preflight"] == before["phases"]["preflight"]
+    assert after["phases"]["workday-admin"]["status"] == "blocked"
+    assert after["phases"]["connections"]["status"] == "pending"
+
+
 def test_controller_parser_accepts_guided_entra_handoff() -> None:
     import workday_connect
 
@@ -950,6 +1462,8 @@ def test_entra_handoff_rediscovery_and_replay_return_actionable_packet(
     )
     assert guided["packet"]["target"]["mode"] == "administrator-selection"
     assert guided["rediscoveryRequired"] is False
+    assert Path(guided["workbookFile"]).name == "entra-admin-workbook.xlsx"
+    assert Path(guided["workbookFile"]).is_file()
 
     creation = workday_connect._entra_handoff(
         SimpleNamespace(
@@ -1105,13 +1619,108 @@ def test_entra_finalization_uses_retained_partial_evidence_and_replays(
     )
 
     assert result["verified"] is True
+    assert result["tenantFoundationReused"] is False
     assert replay["replayed"] is True
+    assert replay["tenantFoundationReused"] is False
     assert drift["driftDetected"] is True
     state = store.load()
     assert state["phases"]["entra"]["status"] == "pending"
     assert state["identifiers"]["entraAppId"] == (
         "88888888-8888-8888-8888-888888888888"
     )
+
+
+def test_entra_signoff_requires_fresh_workday_handoff_despite_matching_foundation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import workday_connect
+    from workday_connect_contract_common import WorkdayConnectContractError
+    from workday_connect_store import (
+        WorkdayConnectStore,
+        WorkdayConnectStoreError,
+    )
+
+    profile_calls = []
+    monkeypatch.setattr(
+        workday_connect,
+        "_run_profile_gate",
+        lambda _store, profile: profile_calls.append(profile),
+    )
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "scope",
+        {
+            "entraTenantId": "00000000-0000-0000-0000-000000000000",
+            "workdayTenant": "contoso_impl",
+            "environmentId": "environment-a",
+        },
+    )
+    args = SimpleNamespace(verification_file=None, verification_json="{}")
+    workday_args = SimpleNamespace(response_file=None, response_json="{}")
+    _complete_preflight(store)
+    _advance_administrator_to_completion(store, "entra")
+    store.record_administrator_progress(
+        "entra",
+        "collecting-evidence",
+        valid_fields=_entra_partial_evidence(),
+    )
+    workday_connect._record_entra(args, store)
+    _advance_administrator_to_completion(store, "workday-admin")
+    store.record_administrator_progress(
+        "workday-admin",
+        "collecting-evidence",
+        valid_fields=_workday_partial_evidence(),
+    )
+    workday_connect._record_workday_admin(workday_args, store)
+    foundation = store.load()["tenantFoundation"]
+    profile_calls.clear()
+
+    store.merge_section("scope", {"environmentId": "environment-b"})
+    _complete_preflight(store)
+    _advance_administrator_to_completion(store, "entra")
+    store.record_administrator_progress(
+        "entra",
+        "collecting-evidence",
+        valid_fields=_entra_partial_evidence(),
+    )
+    result = workday_connect._record_entra(args, store)
+    replay = workday_connect._record_entra(args, store)
+
+    assert result["verified"] is True
+    assert result["tenantFoundationReused"] is False
+    assert replay["replayed"] is True
+    assert replay["tenantFoundationReused"] is False
+    assert result["status"]["nextPhaseId"] == "workday-admin"
+    state = store.load()
+    assert state["tenantFoundation"] == foundation
+    assert state["phases"]["entra"]["status"] == "complete"
+    assert state["phases"]["workday-admin"]["status"] == "pending"
+    assert state["phases"]["workday-admin"]["completedActions"] == []
+    assert state["phases"]["workday-admin"]["evidence"] == []
+    administrator = state["phases"]["workday-admin"]["administrator"]
+    assert administrator["partialEvidence"] == {}
+    assert profile_calls == []
+    with pytest.raises(WorkdayConnectStoreError, match="completed the presented"):
+        workday_connect._record_workday_admin(workday_args, store)
+
+    _advance_administrator_to_completion(store, "workday-admin")
+    with pytest.raises(WorkdayConnectContractError, match="identityProviderOutcome"):
+        workday_connect._record_workday_admin(workday_args, store)
+    store.record_administrator_progress(
+        "workday-admin",
+        "collecting-evidence",
+        valid_fields=_workday_partial_evidence(),
+    )
+    workday_result = workday_connect._record_workday_admin(workday_args, store)
+
+    assert workday_result["verified"] is True
+    assert workday_result["status"]["nextPhaseId"] == "connections"
+    assert profile_calls == ["workday-da:external-prerequisites"]
+    replay_after_workday = workday_connect._record_entra(args, store)
+    assert replay_after_workday["tenantFoundationReused"] is False
+    assert store.load()["phases"]["workday-admin"]["status"] == "complete"
 
 
 def test_workday_finalization_uses_retained_partial_evidence_and_replays(
@@ -1360,6 +1969,120 @@ def test_controller_emits_structured_runtime_error_details(
     assert payload["details"] == details
 
 
+def test_authorization_recovery_survives_controller_error_and_later_status(
+    tmp_path, monkeypatch, capsys,
+):
+    import workday_connect
+    import workday_connect_model as model
+    import workday_connect_runtime as runtime
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(phase_id, action, evidence={"outcome": "verified"})
+        store.set_phase_status(phase_id, "complete")
+
+    def fail_authorization(_args, active_store):
+        for action in ("connection-references-bound", "runtime-flows-active"):
+            active_store.complete_action("runtime", action, evidence={"outcome": "verified"})
+        raise runtime._authorization_failure("ndx_TeamName_BusinessUnitId")
+
+    monkeypatch.setitem(
+        workday_connect._COMMAND_HANDLERS, "runtime-apply", fail_authorization,
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "workday_connect.py", "--root", str(tmp_path),
+        "runtime-apply", "--plan-hash", "approved",
+    ])
+
+    with pytest.raises(SystemExit) as error:
+        workday_connect.main()
+
+    assert error.value.code == 1
+    payload = json.loads(
+        capsys.readouterr().err.split(workday_connect.ERROR_MARKER, maxsplit=1)[1]
+    )
+    assert payload["details"]["cause"] == "team-name-conflict"
+    resumed = WorkdayConnectStore(tmp_path).status()
+    assert resumed["nextPhaseId"] == "runtime"
+    guidance = resumed["blocker"]["nextAction"]
+    assert "access-team name is already in use" in guidance
+    assert "Refresh the runtime plan" in guidance
+    assert "do not delete, rename, or adopt another agent's records" in guidance
+    assert "Earlier verified runtime stages remain saved" in guidance
+    assert resumed["status"] != "ready"
+    saved = WorkdayConnectStore(tmp_path).load()
+    assert saved["phases"]["runtime"]["status"] == "blocked"
+    assert {
+        item["action"] for item in saved["phases"]["runtime"]["evidence"]
+    } == {"connection-references-bound", "runtime-flows-active"}
+
+
+@pytest.mark.parametrize("failure", ["read-failed", "duplicate-authorization"])
+def test_authorization_preflight_recovery_survives_controller_and_status(
+    tmp_path, monkeypatch, capsys, failure,
+):
+    import requests
+    import workday_connect
+    import workday_connect_model as model
+    import workday_connect_runtime as runtime
+    from workday_connect_store import WorkdayConnectStore
+    from tests.scripts import test_workday_connect_runtime as fixtures
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(phase_id, action, evidence={"outcome": "verified"})
+        store.set_phase_status(phase_id, "complete")
+    before = store.load()
+
+    def fail_preflight(_args, _store):
+        records = fixtures._authorization_records()
+        records["authorizations"] *= 2
+
+        def denied(*_args, **_kwargs):
+            raise requests.HTTPError("403 confidential response body")
+
+        return runtime._authorization_target(
+            "https://org.crm.dynamics.com", "token", "dev", fixtures.BOT_ID,
+            query=denied if failure == "read-failed" else fixtures._query_for(records),
+        )
+
+    monkeypatch.setitem(
+        workday_connect._COMMAND_HANDLERS, "runtime-plan", fail_preflight,
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "workday_connect.py", "--root", str(tmp_path), "runtime-plan",
+    ])
+    with pytest.raises(SystemExit) as error:
+        workday_connect.main()
+
+    assert error.value.code == 1
+    payload = json.loads(
+        capsys.readouterr().err.split(workday_connect.ERROR_MARKER, maxsplit=1)[1]
+    )
+    assert payload["details"]["nextAction"]
+    assert "confidential" not in json.dumps(payload)
+    resumed_store = WorkdayConnectStore(tmp_path)
+    status = resumed_store.status()
+    guidance = status["blocker"]["nextAction"]
+    assert payload["details"]["nextAction"] in guidance
+    assert "No runtime changes were made" in guidance
+    if failure == "read-failed":
+        assert "verify read access" in guidance
+    else:
+        assert "resolve these duplicates" in guidance
+        assert "Do not delete another agent's records" in guidance
+    saved = resumed_store.load()
+    assert status["nextPhaseId"] == "runtime"
+    assert saved["phases"]["runtime"]["status"] == "blocked"
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        assert saved["phases"][phase_id] == before["phases"][phase_id]
+
+
 def test_record_connections_uses_live_verification(
     tmp_path: Path,
     monkeypatch,
@@ -1370,6 +2093,8 @@ def test_record_connections_uses_live_verification(
 
     store = WorkdayConnectStore(tmp_path)
     store.initialize()
+    store.merge_section("scope", {"environmentId": "environment-id", "workdayTenant": "contoso"})
+    store.merge_section("endpoints", {"restBaseUrl": "https://example.workday.com/ccx/api"})
     for phase_id in ("preflight", "entra", "workday-admin"):
         for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
             store.complete_action(
@@ -1425,6 +2150,12 @@ def test_record_connections_uses_live_verification(
     assert connections["evidence"][1]["connectionIds"] == {
         "workday": "workday-id",
         "dataverse": "dataverse-id",
+    }
+    assert connections["evidence"][1]["workdayTarget"] == {
+        "environmentId": "environment-id",
+        "workdayTenant": "contoso",
+        "restBaseUrl": "https://example.workday.com/ccx/api",
+        "connectionId": "workday-id",
     }
 
 
@@ -2255,17 +2986,31 @@ def test_maker_success_completes_without_run_history_correlation(
     assert result["verified"] is True
     assert result["lifecycleComplete"] is True
     assert result["activeTargetRealm"] == "dev"
+    assert result["completionMessage"] == (
+        "Workday Connect is complete in Development. "
+        "The maker Test pane validation passed. "
+        "No further Workday Connect action is required in this realm."
+    )
     assert result["postSkillNextSteps"] == [
-        "Promote the agent from Development to Test when ready.",
         (
-            "Return to Connect Workday and say that the agent was promoted "
-            "to Test."
+            "Promote the agent from Development to Test when ready. "
+            "Open the source agent in Copilot Studio and use your "
+            "organization's approved promotion process. Ask the maker "
+            "responsible for agent deployment if you need access or "
+            "instructions."
+        ),
+        (
+            "After promotion is complete, return to Connect Workday and "
+            "say that the agent was promoted to Test."
         ),
     ]
     assert "non-maker employee" not in " ".join(
         result["postSkillNextSteps"]
     )
     assert state["status"] == "ready"
+    ready_status = workday_connect._status(SimpleNamespace(), store)
+    for field in ("lifecycleComplete", "completionMessage", "postSkillNextSteps"):
+        assert ready_status[field] == result[field]
     assert "employeeTestAttempt" not in state["phases"]["maker-validation"]
     assert set(
         state["phases"]["maker-validation"]["validationProfiles"]
@@ -2288,6 +3033,57 @@ def test_maker_success_completes_without_run_history_correlation(
     assert evidence["testUserCategory"] == "maker"
     assert evidence["timestamp"] == "2026-10-06T01:00:00Z"
 
+    replay = workday_connect._record_validation(
+        SimpleNamespace(evidence_file=evidence_file),
+        store,
+    )
+    assert replay["replayed"] is True
+    for field in ("lifecycleComplete", "completionMessage", "postSkillNextSteps"):
+        assert replay[field] == result[field]
+    assert store.load()["phases"]["maker-validation"]["evidence"] == (
+        state["phases"]["maker-validation"]["evidence"]
+    )
+
+
+@pytest.mark.parametrize(
+    "realm,display_name",
+    [("dev", "Development"), ("test", "Test"), ("prod", "Production")],
+)
+def test_ready_status_confirms_current_realm_completion(realm, display_name) -> None:
+    import workday_connect
+
+    store = SimpleNamespace(
+        status=lambda: {"status": "ready", "activeTargetRealm": realm},
+    )
+    result = workday_connect._status(SimpleNamespace(), store)
+
+    assert result["lifecycleComplete"] is True
+    assert result["completionMessage"] == (
+        f"Workday Connect is complete in {display_name}. "
+        "The maker Test pane validation passed. "
+        "No further Workday Connect action is required in this realm."
+    )
+    assert result["postSkillNextSteps"][0].startswith(
+        "Publish and deploy" if realm == "prod" else "Promote the agent"
+    )
+    if realm != "prod":
+        assert result["postSkillNextSteps"][1].startswith(
+            "After promotion is complete,"
+        )
+
+
+def test_unfinished_status_does_not_claim_completion() -> None:
+    import workday_connect
+
+    store = SimpleNamespace(
+        status=lambda: {"status": "blocked", "activeTargetRealm": "dev"},
+    )
+    result = workday_connect._status(SimpleNamespace(), store)
+
+    assert "lifecycleComplete" not in result
+    assert "completionMessage" not in result
+    assert "postSkillNextSteps" not in result
+
 
 def test_post_skill_next_steps_are_realm_specific() -> None:
     import workday_connect
@@ -2303,11 +3099,11 @@ def test_post_skill_next_steps_are_realm_specific() -> None:
     assert prod_steps == [
         "Publish and deploy the Production agent when ready.",
         (
-            "Have each non-maker employee establish their own Workday "
+            "After deployment, have each non-maker employee establish their own Workday "
             "connections in Microsoft 365 Chat."
         ),
         (
-            "Validate an enabled Workday scenario with the published "
+            "After deployment, validate an enabled Workday scenario with the published "
             "Production agent."
         ),
     ]

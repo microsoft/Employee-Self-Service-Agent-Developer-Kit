@@ -37,6 +37,7 @@ AGENT_URL = (
 )
 
 
+
 def _normalize_object_model_keys(value: Any) -> Any:
     if isinstance(value, dict):
         if value.get("$kind") == "Message":
@@ -232,6 +233,7 @@ class FakeClient:
         include_collection_schema: bool = True,
         published_config_available: bool = True,
         changeset: dict[str, Any] | None = None,
+        authenticated_account: str | None = None,
     ) -> None:
         self.agent_name = agent_name
         self.agent_id = agent_id
@@ -242,6 +244,7 @@ class FakeClient:
         self.include_agent_schema = include_agent_schema
         self.include_collection_schema = include_collection_schema
         self.published_config_available = published_config_available
+        self.authenticated_account = authenticated_account
         self.changeset = changeset or _changeset(
             agent_id=agent_id,
             schema_name=schema_name,
@@ -373,10 +376,29 @@ def _write_flightcheck_results(
         }
         for index, status in enumerate(statuses, start=1)
     ]
+    state = _setup_state(root)
+    agent = state["agents"][agent_id]["agent"]
+    context = {
+        "agentId": agent_id,
+        "environmentId": state["environment"]["id"],
+        "agentSlug": agent["workspace_slug"],
+        "agentSchemaName": agent["schema_name"],
+        "tenantId": state["environment"]["tenant_id"],
+        "serviceRing": state["environment"]["ring"],
+        "realm": agent.get("realm"),
+    }
     path.write_text(
         json.dumps(
             {
-                "scope": f"checkpoint:{checkpoint}",
+                "schema_version": "flightcheck.result.v2",
+                "scope": "checkpoint",
+                "coverage": {"requested": [checkpoint]},
+                "validation_context": context,
+                "requested_validation_context": {
+                    **context,
+                    "tenantId": "",
+                    "realm": "",
+                },
                 "failed": sum(status == "Failed" for status in statuses),
                 "errors": sum(status == "Error" for status in statuses),
                 "results": rows,
@@ -398,7 +420,6 @@ def _write_flightcheck_results(
 def _complete_setup_flightchecks(root: Path) -> None:
     for checkpoint, statuses in (
         ("DA-AGENT-001", ("Passed",)),
-        ("ENV-CAPACITY-001", ("Passed",)),
         ("DA-CONTENT-001", ("Passed",)),
     ):
         setup_existing_da.maintain_setup_flightcheck(
@@ -451,6 +472,8 @@ def test_production_and_preview_hosts_resolve_to_prod_ring(host: str) -> None:
     assert target["agentId"] == AGENT_ID
     assert target["ring"] == "prod"
     assert target["agentSelection"] == "copilot-studio-url"
+    assert target["source"] == "copilot-studio-url"
+
 
 
 def test_target_rejects_conflicting_ring() -> None:
@@ -607,7 +630,11 @@ def test_print_exception_includes_type_and_notes(
 
 
 def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
-    result = _attach(FakeClient(), tmp_path)
+    account = "maker@example.test"
+    result = _attach(
+        FakeClient(authenticated_account=account),
+        tmp_path,
+    )
     agent_root = _agent_root(tmp_path)
 
     assert result["status"] == "created"
@@ -647,6 +674,8 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     )
     assert config["setup"] == "complete"
     assert config["ring"] == "test"
+    assert config["tenantId"] == TENANT_ID
+    assert config["account"] == account
     assert config["agent"]["botId"] == AGENT_ID
     assert "environmentName" not in config
     assert "environmentDisplayName" not in config
@@ -655,6 +684,11 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     setup_state = _agent_setup_state(tmp_path)
     assert canonical_state["schema_version"] == 4
     assert canonical_state["environment"]["id"] == ENVIRONMENT_ID
+    assert canonical_state["environment"]["account"] == account
+    assert "authoring_ready" not in setup_state
+    assert not setup_existing_da.is_authoring_ready(
+        setup_state["steps"], setup_state["workspace"]
+    )
     assert (
         canonical_state["environment"]["display_name"]
         == ENVIRONMENT_DISPLAY_NAME
@@ -667,9 +701,13 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     assert setup_state["steps"]["SETUP-01"]["mode"] == "automated"
     assert setup_state["steps"]["SETUP-03"]["mode"] == "automated"
     assert setup_state["steps"]["SETUP-07"]["mode"] == "automated"
-    for step_id in ("SETUP-02.1", "SETUP-02.2", "SETUP-06"):
+    for step_id in ("SETUP-02.1", "SETUP-06"):
         assert setup_state["steps"][step_id]["state"] == "pending"
         assert setup_state["steps"][step_id]["mode"] is None
+    assert setup_state["steps"]["SETUP-02.2"]["state"] == "done"
+    assert setup_state["steps"]["SETUP-02.2"]["mode"] == "skipped"
+    assert setup_state["steps"]["SETUP-02.2"]["checkpoint"] is None
+    assert "was not verified" in setup_state["steps"]["SETUP-02.2"]["note"]
     assert setup_state["steps"]["SETUP-05"]["state"] == "done"
     assert setup_state["steps"]["SETUP-05"]["mode"] == "skipped"
     assert "declares no foundation connection requirement" in (
@@ -767,7 +805,15 @@ def test_same_environment_agents_keep_independent_state_and_folders(
     canonical = _setup_state(tmp_path)
     assert set(canonical["agents"]) == {AGENT_ID, OTHER_AGENT_ID}
     assert canonical["agents"][AGENT_ID] == first_ready
+    assert setup_existing_da.is_authoring_ready(
+        canonical["agents"][AGENT_ID]["steps"],
+        canonical["agents"][AGENT_ID]["workspace"],
+    )
     assert canonical["agents"][AGENT_ID]["connect_ready"] is True
+    assert not setup_existing_da.is_authoring_ready(
+        canonical["agents"][OTHER_AGENT_ID]["steps"],
+        canonical["agents"][OTHER_AGENT_ID]["workspace"],
+    )
     assert canonical["agents"][OTHER_AGENT_ID]["connect_ready"] is False
     second_slug = canonical["agents"][OTHER_AGENT_ID]["agent"]["workspace_slug"]
     assert second_slug == "employee-self-service-hr-00000000"
@@ -1304,19 +1350,101 @@ def test_flightcheck_maintenance_completes_setup(tmp_path: Path) -> None:
     loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
     assert loaded is not None
     loaded_agent = loaded["agents"][AGENT_ID]
+    assert setup_existing_da.is_authoring_ready(
+        loaded_agent["steps"], loaded_agent["workspace"]
+    )
     assert loaded_agent["connect_ready"] is True
     assert loaded_agent["completed_at"]
     assert loaded_agent["steps"]["SETUP-02.1"]["checkpoint"] == "DA-AGENT-001"
-    assert (
-        loaded_agent["steps"]["SETUP-02.2"]["checkpoint"]
-        == "ENV-CAPACITY-001"
-    )
+    assert loaded_agent["steps"]["SETUP-02.2"]["mode"] == "skipped"
+    assert loaded_agent["steps"]["SETUP-02.2"]["checkpoint"] is None
     assert loaded_agent["steps"]["SETUP-05"]["checkpoint"] is None
     assert loaded_agent["steps"]["SETUP-05"]["mode"] == "skipped"
     assert (
         loaded_agent["steps"]["SETUP-06"]["checkpoint"]
         == "DA-CONTENT-001"
     )
+
+
+@pytest.mark.parametrize(
+    "fields,value,message",
+    [
+        (("schema_version",), "flightcheck.result.v1", "Unsupported setup FlightCheck report format"),
+        (("scope",), "checkpoint:DA-AGENT-001", "Unsupported setup FlightCheck report format"),
+        (("scope",), "full", "Unsupported setup FlightCheck report format"),
+        (("scope",), "profile", "Unsupported setup FlightCheck report format"),
+        (("coverage", "requested"), ["DA-CONTENT-001"], "did not request DA-AGENT-001"),
+        (("coverage", "requested"), "DA-AGENT-001", "invalid coverage.requested"),
+        (("validation_context", "agentId"), OTHER_AGENT_ID, "validation_context.agentId"),
+        (("validation_context", "environmentId"), OTHER_AGENT_ID, "validation_context.environmentId"),
+        (("validation_context", "agentId"), "", "agentId is required"),
+        (("validation_context", "serviceRing"), "prod", "validation_context.serviceRing"),
+        (("validation_context", "realm"), "prod", "validation_context.realm"),
+        (("requested_validation_context", "agentId"), OTHER_AGENT_ID, "requested_validation_context.agentId"),
+        (("requested_validation_context", "tenantId"), OTHER_AGENT_ID, "requested_validation_context.tenantId"),
+    ],
+)
+def test_flightcheck_rejects_unrelated_or_obsolete_reports_without_writes(
+    tmp_path: Path,
+    fields: tuple[str, ...],
+    value: Any,
+    message: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    path = _write_flightcheck_results(tmp_path, "DA-AGENT-001", "Passed")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    container = payload
+    for field in fields[:-1]:
+        container = container[field]
+    container[fields[-1]] = value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    before = state_path.read_bytes()
+    report_before = path.read_bytes()
+    modified_before = path.stat().st_mtime_ns
+
+    with pytest.raises(setup_existing_da.ExistingDASetupError, match=message):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            agent_id=AGENT_ID,
+            checkpoint="DA-AGENT-001",
+            results_path=path,
+        )
+
+    assert state_path.read_bytes() == before
+    assert path.read_bytes() == report_before
+    assert path.stat().st_mtime_ns == modified_before
+
+
+@pytest.mark.parametrize(
+    "status", ["Failed", "Error", "Manual", "Blocked", "Skipped", "Warning", "NotConfigured"],
+)
+def test_flightcheck_records_unresolved_results_without_verified_target(
+    tmp_path: Path,
+    status: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    path = _write_flightcheck_results(tmp_path, "DA-AGENT-001", status)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["validation_context"]["targetVerified"] = False
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    step_started = datetime.fromisoformat(
+        _agent_setup_state(tmp_path)["steps"]["SETUP-02.1"]["updated_at"]
+    ).timestamp()
+    fresh_time = max(path.stat().st_mtime, step_started + 1)
+    os.utime(path, (fresh_time, fresh_time))
+
+    result = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="DA-AGENT-001",
+        results_path=path,
+    )
+
+    assert result["state"] == "blocked"
+    assert result["evidenceStatuses"] == [status]
+    assert result["connectReady"] is False
+    assert _agent_setup_state(tmp_path)["steps"]["SETUP-02.1"]["mode"] is None
 
 
 def test_setup_rerun_requires_fresh_flightcheck_evidence(
@@ -1502,6 +1630,132 @@ def test_product_registry_resolves_exact_it_requirement() -> None:
         catalog_name="Employee Self-Service",
         agent_schema_name="gptagent_copilotforemployeeselfservicecore",
     )["productKey"] == "employee-self-service-hub"
+
+
+def test_authoring_ready_allows_incomplete_runtime_readiness(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "DA-AGENT-001",
+        "Passed",
+    )
+    result = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="DA-AGENT-001",
+        results_path=results_path,
+    )
+
+    assert result["authoringReady"] is True
+    assert result["connectReady"] is False
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+    assert loaded is not None
+    agent_state = loaded["agents"][AGENT_ID]
+    assert setup_existing_da.is_authoring_ready(
+        agent_state["steps"], agent_state["workspace"]
+    )
+    assert agent_state["steps"]["SETUP-05"]["state"] == "done"
+    assert agent_state["steps"]["SETUP-05"]["mode"] == "skipped"
+    assert agent_state["steps"]["SETUP-02.2"]["state"] == "done"
+    assert agent_state["steps"]["SETUP-02.2"]["mode"] == "skipped"
+
+
+MAIN_V4_AGENT_FIELDS = {
+    "setup_source",
+    "agent",
+    "workspace",
+    "steps",
+    "active_step",
+    "connect_ready",
+    "open_issues",
+    "created_at",
+    "updated_at",
+    "completed_at",
+}
+
+
+def test_written_state_matches_main_v4_agent_shape(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert persisted["schema_version"] == 4
+    assert setup_existing_da.CANONICAL_SETUP_SCHEMA_VERSION == 4
+    for agent_state in persisted["agents"].values():
+        assert set(agent_state) == MAIN_V4_AGENT_FIELDS
+    assert setup_existing_da._load_canonical_setup_state(tmp_path) == persisted
+
+
+def test_main_shaped_v4_state_loads_and_validates_unchanged(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    before = state_path.read_text(encoding="utf-8")
+    state = json.loads(before)
+    assert set(state["agents"][AGENT_ID]) == MAIN_V4_AGENT_FIELDS
+
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+
+    assert loaded == state
+    assert state_path.read_text(encoding="utf-8") == before
+
+
+def test_loader_still_rejects_unknown_agent_fields_like_main(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["agents"][AGENT_ID]["authoring_ready"] = True
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(setup_existing_da.ExistingDASetupError, match="malformed"):
+        setup_existing_da._load_canonical_setup_state(tmp_path)
+
+
+def _steps(done: tuple[str, ...]) -> dict[str, dict[str, str]]:
+    return {
+        step_id: {"state": "done" if step_id in done else "pending"}
+        for step_id in setup_existing_da.SETUP_STEP_ORDER
+    }
+
+
+_WORKSPACE = {"folder": "agents/a", "agent_path": "agents/a/agent.mcs.yml"}
+
+
+def test_authoring_readiness_is_derived_from_steps_and_workspace() -> None:
+    five = setup_existing_da.AUTHORING_READY_STEPS
+    assert set(five) == {
+        "SETUP-01",
+        "SETUP-02.1",
+        "SETUP-03",
+        "SETUP-04",
+        "SETUP-07",
+    }
+
+    # Ready even though SETUP-05/06 are still pending.
+    steps = _steps(five)
+    assert steps["SETUP-05"]["state"] == "pending"
+    assert steps["SETUP-06"]["state"] == "pending"
+    assert setup_existing_da.is_authoring_ready(steps, _WORKSPACE) is True
+
+    for missing in five:
+        remaining = tuple(step for step in five if step != missing)
+        assert (
+            setup_existing_da.is_authoring_ready(_steps(remaining), _WORKSPACE)
+            is False
+        )
+    assert setup_existing_da.is_authoring_ready(steps, {}) is False
+    assert (
+        setup_existing_da.is_authoring_ready(steps, {"folder": "agents/a"})
+        is False
+    )
+    assert setup_existing_da.is_authoring_ready(None, _WORKSPACE) is False
+    assert setup_existing_da.is_authoring_ready(steps, None) is False
 
 
 def test_connect_ready_rejects_incomplete_steps(tmp_path: Path) -> None:
@@ -2080,6 +2334,7 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
         "list-environments",
         "list-agents",
         "maintain-flightcheck",
+        "seed-shared-cache",
         "select-agent",
         "validate-agent",
     }
@@ -2115,7 +2370,11 @@ def test_list_environments_emits_visible_non_dataverse_targets(
     monkeypatch.setattr(
         setup_existing_da,
         "_authentication_from_args",
-        lambda _args, _ring: ("token", TENANT_ID),
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
     )
     monkeypatch.setattr(
         setup_existing_da,
@@ -2156,6 +2415,7 @@ def test_list_environments_emits_visible_non_dataverse_targets(
     assert result == {
         "tenantId": TENANT_ID,
         "ring": "test",
+        "account": "test.user@example.test",
         "evidencePath": str(evidence_path.resolve()),
         "environments": [
             {
@@ -2192,7 +2452,11 @@ def test_list_environments_preserves_empty_result(
     monkeypatch.setattr(
         setup_existing_da,
         "_authentication_from_args",
-        lambda _args, _ring: ("token", TENANT_ID),
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
     )
     monkeypatch.setattr(
         setup_existing_da,
@@ -2218,6 +2482,61 @@ def test_list_environments_preserves_empty_result(
     assert result["ring"] == "prod"
 
 
+def test_list_environments_preserves_multiple_guid_service_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    service_id = "00000000-0000-4000-8000-000000004444"
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        lambda token, ring, *, api_version: [
+            {
+                "id": ENVIRONMENT_ID,
+                "displayName": "Standard Environment",
+                "type": "Sandbox",
+                "state": "Ready",
+            },
+            {
+                "id": service_id,
+                "displayName": "Service Environment",
+                "type": "Production",
+                "state": "Ready",
+            },
+        ],
+    )
+
+    assert setup_existing_da.main(
+        [
+            "list-environments",
+            "--ring",
+            "prod",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+    result = json.loads(
+        capsys.readouterr().out.removeprefix(
+            "DA_ENVIRONMENT_LIST_JSON:"
+        )
+    )
+
+    assert [item["id"] for item in result["environments"]] == [
+        service_id,
+        ENVIRONMENT_ID,
+    ]
+
+
 @pytest.mark.parametrize("status_code", [401, 403])
 def test_list_environments_preserves_authorization_failure(
     status_code: int,
@@ -2228,7 +2547,11 @@ def test_list_environments_preserves_authorization_failure(
     monkeypatch.setattr(
         setup_existing_da,
         "_authentication_from_args",
-        lambda _args, _ring: ("token", TENANT_ID),
+        lambda _args, _ring: (
+            "token",
+            TENANT_ID,
+            "test.user@example.test",
+        ),
     )
     response = SimpleNamespace(
         json=lambda: {"error": {"code": "AuthorizationFailed"}},
@@ -2354,195 +2677,105 @@ def test_maintain_flightcheck_command_accepts_connection_family(
     assert '"state": "done"' in output
 
 
-def test_capacity_manual_result_requires_explicit_administrator_skip(
+def test_capacity_is_not_a_supported_setup_flightcheck(
     tmp_path: Path,
 ) -> None:
     _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "ENV-CAPACITY-001",
-        "Manual",
-    )
-
-    blocked = setup_existing_da.maintain_setup_flightcheck(
-        tmp_path,
-        agent_id=AGENT_ID,
-        checkpoint="ENV-CAPACITY-001",
-        results_path=results_path,
-    )
-
-    assert blocked["state"] == "blocked"
-    assert blocked["evidenceStatuses"] == ["Manual"]
-    assert blocked["mode"] is None
-
-
-def test_capacity_warning_requires_explicit_administrator_skip(
-    tmp_path: Path,
-) -> None:
-    _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "ENV-CAPACITY-001",
-        "Warning",
-    )
-
-    result = setup_existing_da.maintain_setup_flightcheck(
-        tmp_path,
-        agent_id=AGENT_ID,
-        checkpoint="ENV-CAPACITY-001",
-        results_path=results_path,
-    )
-
-    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
-    assert result["state"] == "blocked"
-    assert result["mode"] is None
-    assert result["evidenceStatuses"] == ["Warning"]
-    assert result["failureCauses"] == [
-        "ENV-CAPACITY-001 returned Warning"
-    ]
-    assert step["state"] == "blocked"
-
-
-def test_capacity_warning_accepts_administrator_attested_skip(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "ENV-CAPACITY-001",
-        "Warning",
-    )
-    blocked = setup_existing_da.maintain_setup_flightcheck(
-        tmp_path,
-        agent_id=AGENT_ID,
-        checkpoint="ENV-CAPACITY-001",
-        results_path=results_path,
-    )
-    assert blocked["state"] == "blocked"
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "ENV-CAPACITY-001",
-        "Warning",
-    )
-
-    exit_code = setup_existing_da.main(
-        [
-            "maintain-flightcheck",
-            "--checkpoint",
-            "ENV-CAPACITY-001",
-            "--agent-id",
-            AGENT_ID,
-            "--results",
-            str(results_path),
-            "--administrator-attested-skip",
-            "--kit-root",
-            str(tmp_path),
-        ]
-    )
-
-    assert exit_code == 0
-    output = capsys.readouterr().out
-    assert '"state": "done"' in output
-    assert '"mode": "administrator-attested-skip"' in output
-    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
-    assert step["state"] == "done"
-    assert step["mode"] == "administrator-attested-skip"
-    assert "A Power Platform administrator was present" in step["note"]
-    assert "consented to override" in step["note"]
-    assert "did not verify" in step["note"]
-
-
-def test_capacity_warning_rejects_administrator_skip_without_recorded_zero(
-    tmp_path: Path,
-) -> None:
-    _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "ENV-CAPACITY-001",
-        "Warning",
-    )
+    state_before = (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes()
 
     with pytest.raises(
         setup_existing_da.ExistingDASetupError,
-        match="previously recorded zero allocation",
+        match="Unsupported setup FlightCheck checkpoint: ENV-CAPACITY-001",
     ):
         setup_existing_da.maintain_setup_flightcheck(
             tmp_path,
             agent_id=AGENT_ID,
             checkpoint="ENV-CAPACITY-001",
-            results_path=results_path,
-            administrator_attested_skip=True,
+            results_path=tmp_path / "ENV-CAPACITY-001.json",
         )
+    assert (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes() == state_before
 
 
-def test_capacity_manual_result_accepts_administrator_attested_skip(
+@pytest.mark.parametrize("state", ["pending", "in-progress", "blocked"])
+def test_resume_skips_unfinished_capacity_without_bypassing_other_checks(
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
+    state: str,
 ) -> None:
     _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "ENV-CAPACITY-001",
-        "Manual",
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    canonical = _setup_state(tmp_path)
+    agent = canonical["agents"][AGENT_ID]
+    agent["steps"]["SETUP-02.2"] = setup_existing_da._step_record(
+        state,
+        checkpoint="ENV-CAPACITY-001",
+        failure_causes=["Capacity could not be verified"] if state == "blocked" else [],
+        recorded_at=agent["created_at"],
     )
+    state_path.write_text(json.dumps(canonical), encoding="utf-8")
 
-    exit_code = setup_existing_da.main(
-        [
-            "maintain-flightcheck",
-            "--checkpoint",
-            "ENV-CAPACITY-001",
-            "--agent-id",
-            AGENT_ID,
-            "--results",
-            str(results_path),
-            "--administrator-attested-skip",
-            "--kit-root",
-            str(tmp_path),
-        ]
-    )
+    result = _attach(FakeClient(), tmp_path)
+    loaded = _agent_setup_state(tmp_path)
+    capacity = loaded["steps"]["SETUP-02.2"]
 
-    assert exit_code == 0
-    output = capsys.readouterr().out
-    assert '"state": "done"' in output
-    assert '"mode": "administrator-attested-skip"' in output
-    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
-    assert step["state"] == "done"
-    assert step["mode"] == "administrator-attested-skip"
-    assert "A Power Platform administrator was present" in step["note"]
-    assert "consented to override" in step["note"]
-    assert "did not verify" in step["note"]
+    assert capacity["state"] == "done"
+    assert capacity["mode"] == "skipped"
+    assert capacity["checkpoint"] is None
+    assert capacity["failure_causes"] == []
+    assert "was not verified" in capacity["note"]
+    assert result["connectReady"] is False
+    assert loaded["active_step"] == "SETUP-02.1"
+    assert loaded["steps"]["SETUP-02.1"]["state"] == "pending"
+    assert loaded["steps"]["SETUP-06"]["state"] == "pending"
+
+    _complete_setup_flightchecks(tmp_path)
+    assert _agent_setup_state(tmp_path)["connect_ready"] is True
 
 
-@pytest.mark.parametrize(
-    ("checkpoint", "status"),
-    [
-        ("ENV-CAPACITY-001", "Failed"),
-        ("ENV-CAPACITY-001", "Error"),
-        ("ENV-CAPACITY-001", "Passed"),
-        ("DA-AGENT-001", "Manual"),
-    ],
-)
-def test_administrator_attested_skip_rejects_unsupported_evidence(
+@pytest.mark.parametrize("mode", ["automated", "administrator-attested-skip"])
+def test_resume_preserves_completed_capacity_history_and_report(
     tmp_path: Path,
-    checkpoint: str,
-    status: str,
+    mode: str,
 ) -> None:
     _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        checkpoint,
-        status,
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    canonical = _setup_state(tmp_path)
+    agent = canonical["agents"][AGENT_ID]
+    historical_capacity = setup_existing_da._step_record(
+        "done",
+        mode=mode,
+        note="Historical capacity observation or administrator attestation.",
+        checkpoint="ENV-CAPACITY-001",
+        recorded_at=agent["created_at"],
     )
+    agent["steps"]["SETUP-02.2"] = historical_capacity
+    state_path.write_text(json.dumps(canonical), encoding="utf-8")
+    report_path = (
+        tmp_path / ".local" / "setup" / "agents" / AGENT_ID
+        / "flightcheck" / "ENV-CAPACITY-001" / "results.json"
+    )
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text(
+        json.dumps({
+            "scope": "checkpoint:ENV-CAPACITY-001",
+            "results": [{
+                "checkpoint_id": "ENV-CAPACITY-001",
+                "status": "Passed" if mode == "automated" else "Manual",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    original_report = report_path.read_bytes()
+    original_mtime = report_path.stat().st_mtime_ns
 
-    with pytest.raises(setup_existing_da.ExistingDASetupError):
-        setup_existing_da.maintain_setup_flightcheck(
-            tmp_path,
-            agent_id=AGENT_ID,
-            checkpoint=checkpoint,
-            results_path=results_path,
-            administrator_attested_skip=True,
-        )
+    _attach(FakeClient(), tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+
+    assert loaded is not None
+    assert loaded["agents"][AGENT_ID]["connect_ready"] is True
+    assert loaded["agents"][AGENT_ID]["steps"]["SETUP-02.2"] == historical_capacity
+    assert report_path.read_bytes() == original_report
+    assert report_path.stat().st_mtime_ns == original_mtime
 
 
 def test_authentication_uses_workspace_cache_and_account_hint(
@@ -2557,16 +2790,20 @@ def test_authentication_uses_workspace_cache_and_account_hint(
         cache_path: Path,
         force_account_selection: bool,
         account_hint: str,
-    ) -> tuple[str, str]:
+            return_account_identity: bool,
+            require_account_identity: bool,
+        ) -> tuple[str, str, str]:
         observed.update(
             {
                 "ring": ring,
                 "cache_path": cache_path,
                 "force_account_selection": force_account_selection,
                 "account_hint": account_hint,
+                "return_account_identity": return_account_identity,
+                "require_account_identity": require_account_identity,
             }
         )
-        return "token", TENANT_ID
+        return "token", TENANT_ID, account_hint
 
     monkeypatch.setattr(
         setup_existing_da,
@@ -2583,12 +2820,15 @@ def test_authentication_uses_workspace_cache_and_account_hint(
     assert setup_existing_da._authentication_from_args(args, "test") == (
         "token",
         TENANT_ID,
+        "test.user@example.test",
     )
     assert observed == {
         "ring": "test",
         "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
         "force_account_selection": False,
         "account_hint": "test.user@example.test",
+        "return_account_identity": True,
+        "require_account_identity": True,
     }
 
 
@@ -2605,7 +2845,9 @@ def test_list_agents_authentication_uses_read_only_inventory_scopes(
         cache_path: Path,
         force_account_selection: bool,
         account_hint: str,
-    ) -> tuple[str, str]:
+            return_account_identity: bool,
+            require_account_identity: bool,
+        ) -> tuple[str, str, str]:
         observed.update(
             {
                 "ring": ring,
@@ -2613,9 +2855,11 @@ def test_list_agents_authentication_uses_read_only_inventory_scopes(
                 "cache_path": cache_path,
                 "force_account_selection": force_account_selection,
                 "account_hint": account_hint,
+                "return_account_identity": return_account_identity,
+                "require_account_identity": require_account_identity,
             }
         )
-        return "token", TENANT_ID
+        return "token", TENANT_ID, account_hint
 
     monkeypatch.setattr(
         setup_existing_da,
@@ -2633,6 +2877,7 @@ def test_list_agents_authentication_uses_read_only_inventory_scopes(
     assert setup_existing_da._authentication_from_args(args, "test") == (
         "token",
         TENANT_ID,
+        "test.user@example.test",
     )
     assert observed == {
         "ring": "test",
@@ -2640,7 +2885,36 @@ def test_list_agents_authentication_uses_read_only_inventory_scopes(
         "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
         "force_account_selection": False,
         "account_hint": "test.user@example.test",
+        "return_account_identity": True,
+        "require_account_identity": True,
     }
+
+
+def test_list_agents_authentication_rejects_unknown_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def authenticate_inventory(*_args, **_kwargs):
+        return "token", TENANT_ID, None
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "authenticate_agent_inventory",
+        authenticate_inventory,
+    )
+    args = SimpleNamespace(
+        command="list-agents",
+        tenant_id=TENANT_ID,
+        select_account=False,
+        account=None,
+        kit_root=tmp_path,
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="could not verify the selected Microsoft account",
+    ):
+        setup_existing_da._authentication_from_args(args, "test")
 
 
 def test_cached_accounts_command_reads_workspace_cache(
@@ -2667,6 +2941,63 @@ def test_cached_accounts_command_reads_workspace_cache(
     assert json.loads(
         output.removeprefix("DA_AGENTBUILDER_ACCOUNTS_JSON:")
     ) == {"accounts": ["test.user@example.test"]}
+
+
+def test_seed_shared_cache_command_reports_bounded_local_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed: dict[str, Any] = {}
+    result = {"outcome": "already-exists", "sharedCache": "existing.bin"}
+
+    def seed(account: str, **kwargs: Any) -> dict[str, Any]:
+        observed.update(account=account, **kwargs)
+        return result
+
+    monkeypatch.setattr(setup_existing_da, "seed_shared_token_cache", seed)
+
+    assert setup_existing_da.main(
+        [
+            "seed-shared-cache",
+            "--account",
+            "maker@example.test",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+    assert observed == {
+        "account": "maker@example.test",
+        "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
+        "shared_cache_path": tmp_path / ".local" / ".token_cache.bin",
+    }
+    assert json.loads(
+        capsys.readouterr().out.removeprefix("DA_AUTH_CACHE_SEED_JSON:")
+    ) == result
+
+
+def test_seed_shared_cache_command_reports_failure_without_success_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def seed(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise PermissionError("cache publication denied")
+
+    monkeypatch.setattr(setup_existing_da, "seed_shared_token_cache", seed)
+
+    assert setup_existing_da.main(
+        [
+            "seed-shared-cache",
+            "--account",
+            "maker@example.test",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 1
+    captured = capsys.readouterr()
+    assert "PermissionError: cache publication denied" in captured.err
+    assert "DA_AUTH_CACHE_SEED_JSON:" not in captured.out
 
 
 def test_unknown_setup_state_uses_format_language(tmp_path: Path) -> None:
