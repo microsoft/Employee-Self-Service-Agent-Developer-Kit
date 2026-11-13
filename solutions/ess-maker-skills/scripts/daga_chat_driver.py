@@ -30,6 +30,20 @@ _USER = '[data-testid="chatQuestion"] [data-testid="chatOutput"]'
 _REPLY = '[data-testid="copilot-message-reply-div"] .fai-CopilotMessage__content'
 
 
+class NewChatError(RuntimeError):
+    def __init__(self, evidence: dict[str, Any]):
+        super().__init__(
+            "Could not confirm the New chat action. Fresh browser loads or browser "
+            "resets may not show the direct New chat button (tooltip: Start a new chat). "
+            "Button availability depends on the current chat and navigation state; "
+            "absence alone does not prove a broken browser or a fresh conversation. "
+            "Inspect the current Test pane and navigation before ad hoc recovery. "
+            "If newChatClickAttempted is true, the click may have taken effect; "
+            "inspect without replaying it. No message was sent."
+        )
+        self.evidence = evidence
+
+
 def validate_cdp_endpoint(value: str) -> str:
     parsed = urlsplit(value)
     if (
@@ -352,12 +366,47 @@ class DagaChatDriver:
         turns = self._root().locator(_TURN)
         turns.nth(turns.count() - 1).screenshot(path=str(path), timeout=5_000)
 
-    def reset(self) -> bool:
-        control = self._unique(
-            self._root().get_by_role("button", name="New chat", exact=True),
-            "New chat control",
-        )
-        control.click(timeout=5_000)
+    def newChat(self) -> bool:
+        evidence: dict[str, Any] = {
+            "phase": "locate",
+            "navigationExpansionAttempted": False,
+            "navigationExpansionCompleted": False,
+            "newChatClickAttempted": False,
+        }
+        try:
+            root = self._root()
+            buttons = self._visible(root.get_by_role("button", name="New chat", exact=True))
+            if len(buttons) > 1:
+                raise RuntimeError(f"Expected at most one visible New chat button; found {len(buttons)}.")
+            control = None
+            if buttons:
+                try:
+                    buttons[0].click(trial=True, timeout=5_000)
+                    control = buttons[0]
+                except PlaywrightError as error:
+                    evidence["directButtonError"] = {
+                        "type": type(error).__name__, "message": str(error),
+                    }
+            if control is None:
+                evidence["phase"] = "navigation"
+                links = root.get_by_role("navigation").get_by_role(
+                    "link", name="New chat", exact=True,
+                )
+                if not self._visible(links):
+                    toggle = self._unique(
+                        root.get_by_role("button", name="Expand navigation", exact=True),
+                        "Expand navigation control",
+                    )
+                    evidence["navigationExpansionAttempted"] = True
+                    toggle.click(timeout=5_000)
+                    evidence["navigationExpansionCompleted"] = True
+                links.wait_for(state="visible", timeout=5_000)
+                control = self._unique(links, "New chat navigation link")
+            evidence["phase"] = "new-chat-click"
+            evidence["newChatClickAttempted"] = True
+            control.click(timeout=5_000)
+        except (RuntimeError, PlaywrightError) as error:
+            raise NewChatError(evidence) from error
         self._boundary = self._confirmed = self._last_observed = None
         self._identity_transitions.clear()
         return True

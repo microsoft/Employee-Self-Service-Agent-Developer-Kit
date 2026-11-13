@@ -727,7 +727,7 @@ def _new_conversation(args, target: dict[str, Any]) -> tuple[dict[str, Any], int
     driver = DagaChatDriver(cdp=args.cdp, expected_url=url)
     driver.start()
     try:
-        driver.reset()
+        driver.newChat()
     finally:
         driver.close()
     return {

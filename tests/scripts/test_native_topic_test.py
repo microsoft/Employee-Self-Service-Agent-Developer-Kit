@@ -162,8 +162,8 @@ def exercise(tmp_path, component, monkeypatch):
         def start(self):
             calls.append("start")
 
-        def reset(self):
-            calls.append("reset")
+        def newChat(self):
+            calls.append("newChat")
             return True
 
         def prepare(self):
@@ -209,10 +209,15 @@ def test_new_conversation_cli_clicks_without_capture_or_component_changes(
     monkeypatch.setattr(client, "fetch_components", unexpected_components)
     if failure == "click":
         def failed_click(_self):
-            calls.append("reset")
-            raise RuntimeError("New chat click failed")
+            calls.append("newChat")
+            try:
+                raise RuntimeError("New chat click failed")
+            except RuntimeError as error:
+                raise daga_chat_driver.NewChatError({
+                    "newChatClickAttempted": True,
+                }) from error
 
-        monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "reset", failed_click)
+        monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "newChat", failed_click)
     url = URL.replace(AGENT_ID, COMPONENT_ID) if failure == "target" else URL
     code = native.main([
         "new-conversation", "--kit-root", str(tmp_path), "--cdp", args.cdp, "--url", url,
@@ -222,15 +227,21 @@ def test_new_conversation_cli_clicks_without_capture_or_component_changes(
     if failure:
         assert code == 2
         error = json.loads(output.err)["error"]
-        assert error["type"] == ("ValueError" if failure == "target" else "RuntimeError")
-        assert ("selected agent" if failure == "target" else "New chat click failed") in error["message"]
+        assert error["type"] == ("ValueError" if failure == "target" else "NewChatError")
+        if failure == "target":
+            assert "selected agent" in error["message"]
+        else:
+            assert "Fresh browser loads or browser resets" in error["message"]
+            assert "Start a new chat" in error["message"]
+            assert error["evidence"]["newChatClickAttempted"] is True
+            assert error["cause"]["message"] == "New chat click failed"
     else:
         assert code == 0
         result = json.loads(output.out)
         assert result["operation"] == "new-conversation"
         assert result["outcome"] == "clicked"
         assert result["target"] == TARGET
-    assert calls == ([] if failure == "target" else ["start", "reset", "close"])
+    assert calls == ([] if failure == "target" else ["start", "newChat", "close"])
     assert not args.output.exists()
 
 

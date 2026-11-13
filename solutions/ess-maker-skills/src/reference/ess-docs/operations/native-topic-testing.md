@@ -127,7 +127,9 @@ python scripts\native_topic_test.py new-conversation `
   --url "<confirmed full Studio URL>"
 ```
 
-The operation validates the selected agent and browser target, clicks **New chat** in the supported Test frame, and detaches without closing the browser or its profile. `outcome: clicked` means the click completed, not proof of server-side conversation identity or execution of the saved version. It does not capture or send a message.
+The operation validates the selected agent and browser target, calls `DagaChatDriver.newChat()` in the supported Test frame, and detaches without closing the browser or its profile. It first tries the **New chat** button with the **Start a new chat** tooltip. If that button is absent or not actionable before clicking, it uses the **New chat** navigation link, opening **Expand navigation** when the link is not already visible. `outcome: clicked` means the click completed, not proof of server-side conversation identity or execution of the saved version. It does not capture or send a message.
+
+Fresh browser loads or browser resets may not show the direct New chat button. Absence alone does not establish a broken browser or a fresh conversation. Failure output retains the original cause, navigation-expansion facts and `newChatClickAttempted`; inspect those facts and the current pane before ad hoc recovery. After an attempted New chat click with an uncertain outcome, inspect without replaying it. Do not send a message merely to make the button appear.
 
 The session chooses when to call this operation and how to continue after its result or error. Reuse valid readiness and test-and-fix permission; starting a new conversation does not itself require another readiness question. Follow [post-save conversation freshness](native-topic-debugging.md#establish-post-save-conversation-freshness) for the next capture, and preserve conversation context between related turns.
 

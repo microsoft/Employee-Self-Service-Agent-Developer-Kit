@@ -112,7 +112,7 @@ class Driver(Protocol):
 
     def start(self) -> None: ...
     def send(self, text: str, timeout_s: int) -> tuple[list[Bubble], bool]: ...
-    def reset(self) -> bool: ...
+    def newChat(self) -> bool: ...
     def close(self) -> None: ...
 
 
@@ -120,7 +120,7 @@ class DriveSurface:
     """Orchestrates a ``Driver`` into ``DriveResult``s.
 
     Lifecycle: ``start`` (idempotent) -> ``drive`` (one turn -> aggregated
-    result) -> optional ``reset`` -> ``close``. ``drive`` before ``start`` is a
+    result) -> optional ``newChat`` -> ``close``. ``drive`` before ``start`` is a
     programming error (raises); ``close`` before ``start`` is a safe no-op.
     """
 
@@ -140,10 +140,10 @@ class DriveSurface:
         bubbles, timed_out = self._driver.send(text, timeout_s)
         return aggregate_turn(bubbles, timed_out=timed_out)
 
-    def reset(self) -> bool:
+    def newChat(self) -> bool:
         if not self._started:
             raise RuntimeError("DriveSurface not started; call start() first")
-        return self._driver.reset()
+        return self._driver.newChat()
 
     def close(self) -> None:
         if not self._started:
