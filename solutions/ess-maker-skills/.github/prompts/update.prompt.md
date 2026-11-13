@@ -17,7 +17,7 @@ not require setup.
 
 For any explicit or implicit topic change, read `src/skills/topics/update/SKILL.md` and follow it completely. Carry the exact selected topic and any supplied evaluation cases or findings. Do not use a separate eval-driven save/materialization workflow.
 
-Carry the selected target, intended behavior, supplied wording/cases, valid Push/debugging authorization and any declined corrections to the owner. It loads the shared foundation and operation-specific experience references at the relevant steps. Do not add a parallel approval or testing lifecycle in this prompt.
+Carry the selected target, intended behavior, supplied wording/cases, valid Push/debugging authorization, declined corrections and reporting context to the owner. It loads the shared foundation and operation-specific experience references at the relevant steps. Reuse its status updates, reviews and decisions without emitting a second copy. Do not add a parallel approval or testing lifecycle in this prompt.
 
 ## Evaluation
 

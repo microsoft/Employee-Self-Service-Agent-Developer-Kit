@@ -44,7 +44,12 @@ Use noninteractive execution only after the shared flow obtains chat approval;
 its authorized `--yes` does not bypass that consent. Never launch an
 interactive evaluation push waiting for unattended stdin.
 If evaluation scope is ambiguous, ask rather than pushing all components.
-Return after this branch; do not also execute the general push below.
+
+After each selected deployment attempt returns, interpret its result using Push status updates:
+
+{EMIT_STATUS_UPDATE: evaluation-save}
+
+Finish this branch after its applicable reminder; do not also execute the general push below.
 
 After the shared deployment flow reports a verified successful deployment,
 run the one-time DA post-deployment analytics reminder:
@@ -69,8 +74,10 @@ python scripts/push.py --dry-run
 
 This operation only compares working files with `.baseline`. It does not authenticate, save, activate, publish, or verify remote state. The baseline records acknowledged submitted content, not a remote mirror or concurrency token.
 
-Build one `{component_inventory}` in session context from the discovered
-changes. Use the evaluation owner's selected-set discovery for applicable
+Build one `{component_inventory}` in session context from all discovered
+agent changes. For a request naming specific components, mark other discovered
+pending components Not included rather than dropping them from the inventory.
+Use the evaluation owner's selected-set discovery for applicable
 changed evaluation sets not represented by the agent baseline. Preserve each
 entry's type, name, exact identity, proposed change and applicability. An
 `agent.mcs.yml` change is not necessarily an instruction change: compare its
@@ -81,6 +88,8 @@ rename as Display name, retaining the proposed value and save limitation.
 For a Create/Update routing-correction handoff, scope this inventory to the
 carried topic draft and isolated instruction correction. Leave unrelated
 pending edits outside that displayed scope; do not include them implicitly.
+
+{EMIT_STATUS_UPDATE: push-inventory}
 
 Read current remote state and obtain the exact non-mutating previews through
 the selected owners before asking for Push approval. Include material
@@ -140,6 +149,16 @@ For instructions, read current saved instructions and preview only the
 instruction-section change. Preserve unrelated draft fields. Ordinary
 authoring has separate approvals; the shared Push consent below covers an
 unchanged displayed batch without another owner approval.
+
+Carry single-owner status reporting into dispatch. Topic owners emit their own result updates. For an instruction save performed here without an emitting authoring owner, load [Authoring status updates](../../src/skills/topics/authoring-experience.md#authoring-status-updates) before execution. After that approved instruction operation returns:
+
+{EMIT_STATUS_UPDATE: instruction-save}
+
+For each selected evaluation deployment performed here, use Push status updates after its deployment flow returns:
+
+{EMIT_STATUS_UPDATE: evaluation-save}
+
+These are conditional post-operation points, not approval or immediate dispatch. Use them only for the corresponding approved operation; do not echo a delegated owner's update.
 
 **Push all listed changes** approves every displayed applicable change for the
 identified agent; **Push selected changes** approves only the displayed

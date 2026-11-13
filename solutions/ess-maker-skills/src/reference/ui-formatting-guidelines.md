@@ -51,9 +51,9 @@ Use actual values from setup state or discovery whenever available. Render a kno
 
 ## Native task progress
 
-For Create, from preparation through the topic outcome and testing offer, use [Create status updates](../skills/topics/authoring-experience.md#create-status-updates) instead of native task progress. Other operations retain the rules below.
+For topic authoring, deletion, Push, testing and cleanup, use [Status update markers](../skills/topics/experience-contract.md#status-update-markers) and the operation-linked definitions instead of native task progress. Delegated entry points reuse the performing owner's updates. Other operations retain the rules below when their owner calls for native progress.
 
-For topic authoring, deletion, Push and testing, use the native todo tool exposed by the current chat, such as `manage_todo_list`. Use its actual schema and supported states; do not assume that another harness exposes the same tool. If no native todo tool is available, continue with the operation's normal previews, decisions and outcome reports. Do not substitute Markdown progress checklists, shell output or a progress-only tool.
+Use the native todo tool exposed by the current chat, such as `manage_todo_list`. Use its actual schema and supported states; do not assume that another harness exposes the same tool. If no native todo tool is available, continue with the operation's normal previews, decisions and outcome reports. Do not substitute Markdown progress checklists, shell output or a progress-only tool.
 
 Track user-visible milestones, not every file read, command or telemetry call. Resolve titles from the selected topic, agent and approved work; never display unresolved placeholders. Keep stable item IDs and earlier completed milestones within the current request. When the tool replaces the list, send the full current list rather than only changed items.
 
@@ -67,7 +67,7 @@ Native progress supplements the owning outcome report; it never replaces per-com
 
 ## Progress checklists
 
-Use this Markdown mechanism only when an operation explicitly defines its own progress-checklist Message block, such as foundation setup. Topic authoring, deletion, Push and testing use Native task progress instead.
+Use this Markdown mechanism only when an operation explicitly defines its own progress-checklist Message block, such as foundation setup. Topic authoring, deletion, Push, testing and cleanup use their status update markers instead.
 
 Render a maker-facing progress snapshot as an ordinary, single-level Markdown bullet list. Every item begins with exactly one status emoji in the same position so completed, current, blocked, and pending stages retain one consistent visual shape:
 
@@ -88,7 +88,7 @@ Use normal chat for open-ended requirements and revisions, not free-text-only st
 
 Template quote blocks contain only literal response/control copy and simple substitution placeholders. Keep definitions, conditions, omission/repetition rules and rendering instructions outside them. Resolve every displayed placeholder from actual context; unresolved information is not an empty section.
 
-Render the contents of an applicable template quote block or exact **Message** block verbatim after resolving its documented placeholders. Preserve wording, labels, punctuation, emphasis, quotation structure, order and paragraph breaks. Apply an owning reference's explicitly defined label treatment, including the [Create summary](../skills/topics/authoring-experience.md#create-summary) uppercase level-five headings, nested level-six child headings under Outputs and nested level-six Suggested actions block under Routing Conflicts.
+Render the contents of an applicable template quote block or exact **Message** block verbatim after resolving its documented placeholders. Preserve wording, labels, punctuation, emphasis, quotation structure, order and paragraph breaks. Apply an owning reference's explicitly defined label treatment. The [topic-workflow presentation contract](../skills/topics/experience-contract.md#presentation-and-scope) uses uppercase level-five fields and nested level-six child labels, while preserving literal response and outcome text. Setup and other operations retain their owning presentation.
 
 Resolve each placeholder according to its binding and insert the resolved value verbatim. Referenced template blocks retain their own copy and bindings. Compose text only where a binding calls for it, such as a behavior description or contextual trailer, and keep that composition within its slot. Apply the documented omission, repetition and conditional-choice rules.
 

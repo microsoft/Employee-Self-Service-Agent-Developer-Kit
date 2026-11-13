@@ -20,7 +20,7 @@ NOT silently route anywhere. Ask the user what they want to delete first.**
 ## Flow
 
 1. Infer the component type from the request when unambiguous. Otherwise ask what the maker wants to delete.
-2. Resolve a missing selection before continuing.
+2. Carry a known selection forward. For topics, let the delete owner resolve missing or ambiguous identity through its shared selection control. For other components, resolve a missing selection before continuing.
 3. Route based on their answer:
    - **topic**
      -> Read `src/skills/topics/delete/SKILL.md` and follow its instructions.
@@ -30,6 +30,8 @@ NOT silently route anywhere. Ask the user what they want to delete first.**
      -> Read `src/skills/evaluations/delete/SKILL.md` and follow its instructions.
 
 Do NOT proceed without reading the appropriate skill file first.
+
+For topics, carry existing scoped authorization and reporting context to the delete owner. Reuse its status updates, reviews and decisions without emitting a second copy.
 
 Topic support does not enable deployed workflow or evaluation-set deletion.
 Preserve those owners' availability boundaries and do not fall back to Dataverse.

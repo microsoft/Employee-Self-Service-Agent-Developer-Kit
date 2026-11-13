@@ -1,5 +1,7 @@
 # Cleanup Skill
 
+<!-- markdownlint-disable MD001 -->
+
 This skill scans a cloned ESS agent for compile errors and walks the user through fixing them.
 
 Distinguish local fixes from changes pushed to the agent. Use the normal topic
@@ -13,9 +15,20 @@ a selected batch. Carry scoped approval forward without repeating it.
 - Do NOT fix errors automatically without user confirmation. Present each group of errors and ask the user before making changes.
 - Do NOT modify the source template files in `src/`. Only modify files inside the agent folder (the cloned agent at the workspace root).
 - After fixing errors, re-scan to verify the fix worked. Show the updated error count.
-- **Communication**: Follow the communication rules in `copilot-instructions.md`. Do NOT mention patches, deltas, diagnostics tools, stale caches, skill files, or any internal terminology. Speak in plain terms: "Fixing...", "Fixed.", "Scanning again...", "X errors remaining."
+- **Communication**: Follow the communication rules in `copilot-instructions.md`. Use the status definitions below for observed results. Keep internal tooling terms out of maker-facing messages.
 - **Pending verification**: Preserve a completed edit without repeatedly applying it when diagnostics have not refreshed. Report the edit and verification state separately; do not count an unconfirmed diagnostic result as resolved.
-- **TRACK PROGRESS**: Use the todo list tool to track your progress through this skill's steps. Create a todo list at the start with all the steps, mark each in-progress as you start it, and mark completed when done.
+
+## Cleanup status updates
+
+Read the [shared foundation](../topics/experience-contract.md), including Status update markers and Presentation and scope, before scanning. Use the local definitions below, not a native todo list or progress checklist. Bind counts to the current deduplicated local scan. Delegated topic edits and deletions emit through their performing owners; cleanup does not repeat their updates.
+
+| Reporting point        | Completion condition                                                                                              | Completion message                                                       |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `cleanup-scan`         | Both local error sources have been read for the selected agent and their current results merged and deduplicated. | ✅ Checked the local agent files: **{Error count}** errors found.        |
+| `cleanup-checkpoint`   | The checkpoint operation confirms a saved snapshot before any approved edit.                                      | ✅ Saved a checkpoint of your agent files.                               |
+| `cleanup-verification` | A fresh combined scan reflects the post-change files and establishes the remaining local error count.             | ✅ Rechecked the local agent files: **{Remaining count}** errors remain. |
+
+For missing, failed or stale scan evidence, state what remains unverified rather than claiming zero errors or resolved findings. Preserve confirmed edits and remote outcomes separately. A failed checkpoint leaves fixes unstarted. For partial work, name completed changes and the remaining issue in the [Final Report](#step-6-final-report). A local scan does not verify remote behavior.
 
 ## Step 1: Read Config
 
@@ -33,6 +46,8 @@ there are any errors at all. Gather errors from both sources described in
 Step 3 below (VS Code Problems panel + agent folder scan), merge and
 deduplicate.
 
+{EMIT_STATUS_UPDATE: cleanup-scan}
+
 If the error count is **zero**, skip the checkpoint entirely and jump
 straight to Step 6 (Final Report) with 0 errors before / 0 fixed / 0
 remaining. Do NOT ask the user to confirm a checkpoint — there's nothing
@@ -44,17 +59,46 @@ If the error count is **greater than zero**, continue to Step 2b.
 
 Tell the user:
 
-> "I found {count} errors. Before making any changes, I'll save a checkpoint of your agent files. This way you can always restore them if needed. **Ready to proceed?**"
+> I found {count} errors. Before making any changes, I'll save a checkpoint of your agent files. This lets you restore the local files if needed; it does not restore changes already pushed to the agent.
+>
+> ##### YOUR CHOICES
+>
+> | Choice          | What happens                                                                                     |
+> | --------------- | ------------------------------------------------------------------------------------------------ |
+> | Save checkpoint | Save a local snapshot, then review proposed fixes. This does not approve edits or a remote Push. |
+> | Not now         | Leave files unchanged and stop before fixing errors.                                             |
 
-Wait for the user to confirm.
+Use the shared native-question conventions. Call `ask_user`:
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Cleanup checkpoint",
+        "description": "How would you like to continue?",
+        "enum": ["Save checkpoint", "Not now"]
+      }
+    }
+  }
+}
+```
+
+Wait for Save checkpoint before continuing. Not now stops without edits.
 
 When confirmed:
 
 - Run in the terminal: `python scripts/checkpoint.py "pre-scan-fixes"`
 - This saves a full snapshot of all working files before any modifications.
+
+{EMIT_STATUS_UPDATE: cleanup-checkpoint}
+
+Continue only after the checkpoint is confirmed.
+
 - Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
   message, and it never fails the step): `python scripts/emit_capability.py cleanup`
-- Tell the user: "Checkpoint saved. Let me walk you through the fixes."
 
 ## Step 3: Scan for Errors (detailed categorization)
 
@@ -63,7 +107,9 @@ Gather errors from TWO sources and combine them into a single list:
 1. **VS Code Problems panel** — Use the error/diagnostics tool with NO file path filter (get all errors across the workspace). Filter the results to only include errors from files inside `{agent.folder}/`.
 2. **Agent folder scan** — Use the error/diagnostics tool specifically on `{agent.folder}/`.
 
-Merge both lists and deduplicate (the same error may appear in both). Use the combined list for the rest of this flow.
+Merge both lists and deduplicate (the same error may appear in both). Use the combined list for the rest of this flow. Reuse the quick scan while still current; report only a new scan assessment here.
+
+{EMIT_STATUS_UPDATE: cleanup-scan}
 
 After scanning, group the errors into these categories:
 
@@ -96,15 +142,15 @@ If you find errors that don't match any of the above categories, list them separ
 
 Show the user a summary table:
 
-```text
-I found {total} errors across {file_count} files:
-
-| Error Type | Files Affected | Fix |
-|-----------|---------------|-----|
-| ModelDescription too long | {count} topics | Truncate to fit 1024-char limit |
-| Missing CloudFlow | {count} topics | Delete topic or skip |
-| Missing Dialog reference | {count} topics | Correct the schema name |
-```
+> ##### SCAN RESULTS
+>
+> I found {total} errors across {file_count} files:
+>
+> | Error Type                | Files Affected | Fix                             |
+> | ------------------------- | -------------- | ------------------------------- |
+> | ModelDescription too long | {count} topics | Truncate to fit 1024-char limit |
+> | Missing CloudFlow         | {count} topics | Review topic deletion or skip   |
+> | Missing Dialog reference  | {count} topics | Correct the schema name         |
 
 Then say: "Let's walk through each file. I'll explain what's wrong and propose fixes for your approval before making any changes."
 
@@ -114,9 +160,9 @@ Work through errors **one file at a time**. If a single file has multiple error 
 
 For each file with errors:
 
-1. Tell the user which topic has issues and list ALL errors in that file.
-2. Read the full topic file.
-3. For each error in the file, propose a fix:
+1. Read the full topic file.
+2. Name the topic under an H5 TOPIC heading and list all its errors under H5 ERRORS.
+3. Propose fixes under H5 PROPOSED FIXES using the applicable guidance below, then show the corresponding choice explanations and native control.
 
 ### ModelDescription Too Long
 
@@ -137,43 +183,127 @@ For each file with errors:
 
 - Tell the user the topic references a workflow that wasn't included in the clone. Include the topic's `componentName` and what it appears to do.
 - Offer to review deletion or skip. A choice to review enters `src/skills/topics/delete/SKILL.md`; it is not destructive approval. Use that owner's policy, impact review, choices and scoped execution.
-- If the file ALSO has other fixable errors (ModelDescription, Dialog), ask about the delete/skip decision first — if they choose delete, the other fixes are unnecessary.
+- If the file also has other fixable errors, use this review/skip decision first. Skip the other fixes only after the delete owner confirms removal; selecting a deletion review alone does not remove anything.
 
-4. After presenting all proposed fixes for the file, ask: "Apply these fixes?" (or "Apply this fix?" if only one).
-5. If confirmed:
-   - Apply all approved fixes to the file (checkpoint already saved all originals).
-   - For deletions: follow the delete owner and preserve its actual local or remote outcome.
-   - Report what changed and where. Count a diagnostic as fixed only after the relevant re-scan confirms it.
-6. Move to the next file with errors.
+> ##### YOUR CHOICES
+>
+> | Choice                | What happens                                                                                                        |
+> | --------------------- | ------------------------------------------------------------------------------------------------------------------- |
+> | Review topic deletion | Inspect deletion eligibility and effects, then review the available removal options. This does not approve removal. |
+> | Skip                  | Leave this issue unchanged and continue to other proposed fixes.                                                    |
 
-After fixing all files, re-scan the agent folder to confirm the errors are resolved.
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Missing workflow reference",
+        "description": "How would you like to continue?",
+        "enum": ["Review topic deletion", "Skip"]
+      }
+    }
+  }
+}
+```
+
+After presenting all remaining proposed fixes for the file, explain the choices and call `ask_user`:
+
+> ##### YOUR CHOICES
+>
+> | Choice               | What happens                                                                                          |
+> | -------------------- | ----------------------------------------------------------------------------------------------------- |
+> | Apply proposed fixes | Apply only the displayed local changes, then check their effect. This does not approve a remote Push. |
+> | Skip                 | Leave these proposed changes unapplied and continue.                                                  |
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Topic fixes",
+        "description": "How would you like to continue?",
+        "enum": ["Apply proposed fixes", "Skip"]
+      }
+    }
+  }
+}
+```
+
+If confirmed:
+
+- Use the normal topic update owner for the approved fixes. Carry the local-only edit scope and existing checkpoint; do not infer remote-save approval. If no checkpoint has been saved for these files, return to Step 2b before editing.
+- For deletions, follow the delete owner and preserve its actual local or remote outcome.
+- Reuse the owner's update for what changed and where. Count a diagnostic as fixed only after the relevant re-scan confirms it.
+
+Move to the next file with errors.
+
+After processing all files, proceed to the final combined scan below.
 
 ## Step 6: Final Report
 
-After all groups are processed:
+After all groups are processed, re-scan both error sources for the entire agent folder and deduplicate. For the initial zero-error path, reuse the still-current quick scan and proceed directly to the report without another status update.
 
-1. Re-scan the entire agent folder for errors.
-2. Show a final summary:
+After a new final scan assessment, before the report:
 
-```text
-Scan complete!
+{EMIT_STATUS_UPDATE: cleanup-verification}
 
-- Errors before: {original_count}
-- Errors fixed: {fixed_count}
-- Errors remaining: {remaining_count}
-```
+Show a final summary:
 
-3. If zero local errors remain, report that scope without claiming remote validation or completed Push.
-4. If errors remain, report their known effects and unresolved evidence. Do not promise that skipped items cannot affect other topics.
-5. After showing the results, add this note:
+> ##### CLEANUP RESULTS
+>
+> ##### ERRORS BEFORE
+>
+> {original_count}
+>
+> ##### ERRORS FIXED
+>
+> {fixed_count}
+>
+> ##### ERRORS REMAINING
+>
+> {remaining_count}
+
+Use only observed counts; if verification is unavailable or stale, replace the affected count with the actual unresolved state rather than a guessed number. Include actual owner save outcomes separately when any changes were pushed.
+
+If zero local errors remain, report that scope without claiming remote validation or completed Push. If errors remain, report their known effects and unresolved evidence. Do not promise that skipped items cannot affect other topics.
+
+After showing the results, add this note:
 
 > Local changes have not been pushed to the agent. Use `/push` to review and approve them.
 
 Show this note only for changes that remain local. If an owner already pushed
 a change, retain its confirmed or uncertain outcome instead.
 
-6. Ask the user: "Would you like me to **run the scan again** to make sure everything is clean, or are you good to go?"
-   - If they want to scan again, go back to **Step 3** and repeat the full flow.
-   - If they're done, tell the user: "Type `/menu` to see what else you can do, or just describe what you'd like to work on next."
+Explain these choices and use the native control:
+
+> ##### YOUR CHOICES
+>
+> | Choice         | What happens                                                                                  |
+> | -------------- | --------------------------------------------------------------------------------------------- |
+> | Run scan again | Inspect the local files again. Any additional fixes still need their own review and approval. |
+> | Done           | Finish cleanup with the reported changes and unresolved issues unchanged.                     |
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Cleanup follow-up",
+        "description": "How would you like to continue?",
+        "enum": ["Run scan again", "Done"]
+      }
+    }
+  }
+}
+```
+
+- If they want to scan again, go back to **Step 3** and repeat the full flow.
+- If they're done, tell the user: "Type `/menu` to see what else you can do, or just describe what you'd like to work on next."
 
 **Do NOT ask additional questions beyond the re-scan offer. End the cleanup flow here.**

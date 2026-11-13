@@ -304,8 +304,8 @@ def test_wording_review_preserves_supplied_text_and_distinguishes_local_drafts()
     assert "Do not polish or paraphrase it unless requested." in wording
     assert "Distinguish intended response text from background material" in wording
     assert "Ask for missing essential facts rather than inventing them." in wording
-    assert "> **Response text**\n>\n> > {Response text}" in wording
-    assert "> **Suggested response**\n>\n> > {Suggested response}" in wording
+    assert ">   ###### RESPONSE TEXT\n>\n>   > {Response text}" in wording
+    assert ">   ###### SUGGESTED RESPONSE\n>\n>   > {Suggested response}" in wording
     assert "`.mcs.yml` file saved locally" in wording
     assert (
         "> The proposed changes are saved locally in your VS Code workspace. "
@@ -326,8 +326,8 @@ def test_suggested_response_revision_returns_to_review_without_save_consent():
         "### Initial routing-conflict decision\n", 1
     )[0]
     assert (
-        "> **Use this suggested response and push {Topic title} to {Destination agent}?**\n>\n"
-        "> **Push topic to agent** / **I want to update the response** / **Keep as draft**"
+        "For Create and Update, use the [Topic save control](#topic-save-decision) with "
+        "**Push topic to agent**, **I want to update the response** and **Keep as draft**"
     ) in decision
     assert "accepts the displayed suggested wording and approves the topic save together" in decision
     assert "Do not add a separate mandatory wording-approval step." in decision
@@ -489,12 +489,16 @@ def test_focused_experience_and_review_links_resolve():
 
 def test_native_progress_preserves_other_operations_and_setup():
     foundation = _read("src/skills/topics/experience-contract.md")
-    assert "../../reference/ui-formatting-guidelines.md#native-task-progress" in foundation
+    assert "not native todo lists or Markdown progress checklists" in foundation
+    assert "Setup and other operations retain their own progress rules." in foundation
     formatting = _read("src/reference/ui-formatting-guidelines.md")
     native = " ".join(
         formatting.split("## Native task progress\n", 1)[1]
         .split("## Progress checklists\n", 1)[0].split()
     )
+    assert "For topic authoring, deletion, Push, testing and cleanup" in native
+    assert "../skills/topics/experience-contract.md#status-update-markers" in native
+    assert "Delegated entry points reuse the performing owner's updates." in native
     assert "native todo tool exposed by the current chat" in native
     assert "Use its actual schema and supported states" in native
     assert "If no native todo tool is available, continue" in native
@@ -525,18 +529,26 @@ def test_status_update_markers_interpret_outcomes_without_assuming_success():
     assert "Keep required reviews, outcome reports and questions in separate subsequent messages" in markers
     assert "continuation, pause or recovery instructions without expanding its authorization" in markers
     assert "including failed or incomplete attempts, rather than after every tool call" in markers
-    assert "Operations without markers retain their own progress rules." in markers
+    assert "If the marked work stops before its normal reporting point" in markers
+    assert "emit its observed outcome before pausing or returning" in markers
+    assert "Do not enter reporting points for work that was never requested or selected." in markers
+    assert "Reuse an existing still-current assessment" in markers
+    assert "The operation performing the work owns its status update." in markers
+    assert "reuses the owner's update without emitting it again" in markers
+    assert "Required composed reports remain separate." in markers
+    assert "When the caller performs work without an emitting owner" in markers
+    assert "Pause and stop acknowledgements take precedence" in markers
 
 
-def test_create_status_markers_resolve_local_copy_at_the_existing_reporting_points():
+def test_authoring_status_markers_resolve_local_copy_at_the_reporting_points():
     formatting = _read("src/reference/ui-formatting-guidelines.md")
-    assert "For Create, from preparation through the topic outcome and testing offer" in formatting
-    assert "../skills/topics/authoring-experience.md#create-status-updates" in formatting
+    assert "For topic authoring, deletion, Push, testing and cleanup" in formatting
+    assert "../skills/topics/experience-contract.md#status-update-markers" in formatting
     authoring = _read("src/skills/topics/authoring-experience.md")
-    progress = authoring.split("### Create status updates\n", 1)[1].split(
+    progress = authoring.split("## Authoring status updates\n", 1)[1].split(
         "## Authoring summaries\n", 1
     )[0]
-    assert "not a native todo list or a progress checklist" in progress
+    assert "For Create, Update and related instruction corrections" in progress
     assert "experience-contract.md#status-update-markers" in progress
     definitions = {
         point: (condition.strip(), message.strip())
@@ -544,7 +556,9 @@ def test_create_status_markers_resolve_local_copy_at_the_existing_reporting_poin
             r"^\|\s*`([^`]+)`\s*\|([^|]+)\|([^|]+)\|", progress, re.MULTILINE
         )
     }
-    assert set(definitions) == {"draft-preparation", "topic-save"}
+    assert set(definitions) == {
+        "draft-preparation", "instruction-preparation", "topic-save", "instruction-save",
+    }
     assert "saved or verified unchanged" in definitions["draft-preparation"][0]
     assert definitions["draft-preparation"][1] == "✅ Prepared the draft for **{Topic title}**."
     assert "approved topic save and authoritative readback both succeed" in definitions["topic-save"][0]
@@ -557,11 +571,11 @@ def test_create_status_markers_resolve_local_copy_at_the_existing_reporting_poin
     assert "rejected or unconfirmed save" in progress
     assert "confirmed remote success with an incomplete workspace update" in progress
     assert "A retained draft does not enter this reporting point." in progress
-    assert "Keep the full Create review and existing outcome report" in progress
+    assert "Keep the full Create or Update review and existing outcome report" in progress
     assert "Do not prepopulate activation, testing or publication." in progress
     create = _read("src/skills/topics/create/SKILL.md")
     entry = create.split("## Boundaries\n", 1)[0]
-    assert "../authoring-experience.md#create-status-updates" in entry
+    assert "../authoring-experience.md#authoring-status-updates" in entry
     assert "Reuse those status definitions at the marked reporting points below." in entry
     points = re.findall(r"\{EMIT_STATUS_UPDATE: ([^}]+)\}", create)
     assert points == list(definitions)
@@ -613,12 +627,12 @@ def test_create_review_uses_h5_fields_nested_h6_headings_and_explained_choices()
     assert "indented level-six headings in ALL CAPS within the corresponding output bullet" in summary
     assert "use SUGGESTED RESPONSE for newly generated wording that has not been accepted" in summary
     assert "Omit the response heading and quotation for outputs without literal response wording" in summary
-    assert "Other operations retain their existing response-label treatment." in summary
+    assert "Apply the same treatment in Update and component reviews." in summary
     wording = authoring.split("### Response wording and local drafts\n", 1)[1].split(
         "### Advisory entries in Notes\n", 1
     )[0]
-    assert "> **Response text**" in wording
-    assert "> **Suggested response**" in wording
+    assert ">   ###### RESPONSE TEXT" in wording
+    assert ">   ###### SUGGESTED RESPONSE" in wording
     conflicts = summary.split("> ##### ROUTING CONFLICTS\n", 1)[1].split(
         "> [Full draft]", 1
     )[0]
@@ -633,16 +647,16 @@ def test_create_review_uses_h5_fields_nested_h6_headings_and_explained_choices()
     assert "Follow the complete conflict list with exactly one indented level-six" in summary
     assert "even when there is only one action" in summary
     assert "Do not repeat this block for each conflict." in summary
-    assert "Other operations retain the shared Routing Conflicts format." in summary
+    assert "Other operations retain" not in summary
     decision = authoring.split("### Topic save decision\n", 1)[1].split(
         "### Suggested-response decision\n", 1
     )[0]
     assert "> ##### YOUR CHOICES" in decision
     assert "immediately before that control" in decision
     assert "Retain the existing short picker labels" in decision
-    assert "> **Push topic to agent** / **Keep as draft**" in decision
+    assert '"enum": ["Push topic to agent", "Keep as draft"]' in decision
     testing = _read("src/skills/topics/testing-experience.md")
-    assert "When offering this continuation after Create" in testing
+    assert "For an inactive topic after any confirmed authoring or Push outcome" in testing
     assert "> ##### YOUR CHOICES" in testing
     for section, title, choices in (
         (decision, "Topic save", ["Push topic to agent", "Keep as draft"]),
@@ -657,12 +671,12 @@ def test_create_review_uses_h5_fields_nested_h6_headings_and_explained_choices()
         assert "allow custom text" in section
 
 
-def test_create_save_control_preserves_question_metadata_across_branches():
+def test_authoring_save_control_preserves_question_metadata_across_branches():
     authoring = _read("src/skills/topics/authoring-experience.md")
     decision = authoring.split("### Topic save decision\n", 1)[1].split(
         "### Suggested-response decision\n", 1
     )[0]
-    assert "For every Create topic-save decision" in decision
+    assert "For every Create or Update topic-save decision" in decision
     assert "replace only `enum` with that branch's applicable choices" in decision
     assert "including any conditional response-revision choice" in decision
     for heading, following, legacy_question in (
@@ -678,51 +692,144 @@ def test_create_save_control_preserves_question_metadata_across_branches():
         branch = authoring.split(f"### {heading}\n", 1)[1].split(
             f"### {following}\n", 1
         )[0]
-        assert "For Create, use the [Create save control](#topic-save-decision)" in branch
-        assert f"For Update, use:\n\n{legacy_question}" in branch
+        assert "For Create and Update, use the [Topic save control](#topic-save-decision)" in branch
+        assert legacy_question not in branch
     assert (
         "When suggested wording remains unaccepted, include "
         "**I want to update the response** before Keep as draft"
     ) in branch
 
 
-def test_authoring_progress_adds_only_selected_branches():
+def test_authoring_status_updates_preserve_selected_work_and_known_outcomes():
     authoring = _read("src/skills/topics/authoring-experience.md")
-    progress = authoring.split("## Authoring progress\n", 1)[1].split(
+    status = authoring.split("## Authoring status updates\n", 1)[1].split(
         "## Authoring summaries\n", 1
     )[0]
-    assert "Check the request and topic availability" in progress
-    assert "Prepare the {Topic title} draft" in progress
-    assert "Check instruction alignment and save readiness" in progress
-    assert "Only after the maker selects routing-conflict resolution" in progress
-    assert "preparation does not approve either save" in progress
-    assert "Keep as draft adds no Push milestone." in progress
-    assert "Push topic anyway adds only the topic save" in progress
-    assert "Do not prepopulate activation, testing or publication." in progress
-    assert "Preserve earlier confirmed saves as completed work" in progress
+    assert "Preparation does not authorize either save." in status
+    assert "A retained draft does not enter this reporting point." in status
+    assert "Instruction readback does not establish topic execution or a topic save." in status
+    assert "earlier confirmed saves remain completed work" in status
+    assert "Do not prepopulate activation, testing or publication." in status
+    assert "Do not announce work that is starting or still running." in status
+    update = _read("src/skills/topics/update/SKILL.md")
+    assert "Do not prepare it merely because a topic is being authored" in update
+    assert "When the caller has already selected local-only changes" in update
+    assert "without offering or executing a remote save" in update
+    assert "including valid unchanged batch/debugging consent" in update
 
 
-def test_push_and_testing_progress_preserve_evidence_and_consent_boundaries():
+def test_push_and_testing_statuses_preserve_evidence_and_consent_boundaries():
     push = _read("src/skills/topics/push-experience.md")
-    progress = push.split("## Push progress\n", 1)[1].split(
+    status = push.split("## Push status updates\n", 1)[1].split(
         "## Component inventory:", 1
     )[0]
-    assert "After scoped approval, append one" in progress
-    assert "Do not add excluded, kept-pending or unapproved components." in progress
-    assert "return save and readback together; keep them in one milestone" in progress
-    assert "until the topic is saved and verified" in progress
-    assert "result must disclose that no new write was needed" in progress
-    assert "without claiming the whole milestone succeeded or replaying the save" in progress
-    assert "[Push progress](#push-progress)" in push.split("## Push telemetry\n", 1)[1]
+    assert "Inventory discovery is not remote validation or save approval." in status
+    assert "reuse the performing owner's update without a second caller update" in status
+    assert "already-current, failed, unconfirmed or partially completed saves" in status
+    assert "Preserve confirmed remote effects when local recording fails." in status
+    assert "Pause dependent work after a failed or uncertain prerequisite" in status
+    assert "continue only independently safe approved operations" in status
+    telemetry = push.split("## Push telemetry\n", 1)[1]
+    assert "Status updates and telemetry have separate ownership." in telemetry
+    assert "Reporting a result does not create another batch" in telemetry
     testing = _read("src/skills/topics/testing-experience.md").split(
-        "## Testing progress\n", 1
+        "## Testing status updates\n", 1
     )[1].split("## Topic testing continuation\n", 1)[0]
     assert "only after testing is requested or selected" in testing
     assert "Not now adds no testing work." in testing
-    assert "only when activation is needed and explicitly authorized" in testing
-    assert "before sending any test message" in testing
-    assert "A completed capture alone does not establish" in testing
-    assert "Pause and stop take effect immediately." in testing
+    assert "explicitly approved activation is confirmed" in testing
+    assert "authoritative readback shows Active state" in testing
+    assert "a completed capture is not correctness" in testing
+    assert "already-Active no-write result" in testing
+    assert "not universal runtime correctness" in testing
+    assert "Report a revised assessment after a post-fix retest" in testing
+    assert "Stop sending immediately; do not finish more work to reach a marker." in testing
+
+
+def test_rollout_markers_resolve_owned_definitions_without_duplicate_caller_updates():
+    for owner, reference, heading in (
+        ("topics/update", "topics/authoring-experience.md", "Authoring"),
+        ("topics/delete", "topics/deletion-experience.md", "Deletion"),
+        ("topics/test", "topics/testing-experience.md", "Testing"),
+        ("cleanup", "cleanup/SKILL.md", "Cleanup"),
+    ):
+        guidance = _read(f"src/skills/{owner}/SKILL.md")
+        experience = _read(f"src/skills/{reference}")
+        status = experience.split(f"## {heading} status updates\n", 1)[1].split(
+            "\n## ", 1
+        )[0]
+        definitions = {
+            point: (condition.strip(), message.strip())
+            for point, condition, message in re.findall(
+                r"^\|\s*`([^`]+)`\s*\|([^|]+)\|([^|]+)\|", status, re.MULTILINE
+            )
+        }
+        points = re.findall(r"\{EMIT_STATUS_UPDATE: ([^}]+)\}", guidance)
+        assert definitions and set(points) == set(definitions), owner
+        for condition, message in definitions.values():
+            assert condition and message, owner
+            if owner != "cleanup":
+                assert message not in guidance, owner
+
+    push = _read(".github/prompts/push.prompt.md")
+    assert set(re.findall(r"\{EMIT_STATUS_UPDATE: ([^}]+)\}", push)) == {
+        "push-inventory", "instruction-save", "evaluation-save",
+    }
+    assert "do not echo a delegated owner's update" in push
+    assert "before execution" in push.split("without an emitting authoring owner", 1)[1]
+    for relative in (
+        ".github/prompts/create.prompt.md",
+        ".github/prompts/update.prompt.md",
+        ".github/prompts/delete.prompt.md",
+        ".github/prompts/test.prompt.md",
+        ".github/prompts/scan.prompt.md",
+        "src/skills/topics/create-eval-driven/SKILL.md",
+        "src/skills/topics/update-eval-driven/SKILL.md",
+    ):
+        assert "{EMIT_STATUS_UPDATE:" not in _read(relative), relative
+
+
+def test_rollout_reviews_and_native_choices_keep_the_shared_presentation_contract():
+    for relative in (
+        "topics/experience-contract.md",
+        "topics/authoring-experience.md",
+        "topics/deletion-experience.md",
+        "topics/push-experience.md",
+        "topics/testing-experience.md",
+        "cleanup/SKILL.md",
+    ):
+        guidance = _read(f"src/skills/{relative}")
+        headings = re.findall(r"^>\s*(#{1,6}) (.+)$", guidance, re.MULTILINE)
+        assert headings, relative
+        for level, label in headings:
+            assert level in {"#####", "######"}, (relative, label)
+            literal_label = re.sub(r"\{[^}]+\}", "", label)
+            assert literal_label == literal_label.upper(), (relative, label)
+            assert not label.endswith(":"), (relative, label)
+
+        controls = list(re.finditer(r"```json\n(.*?)\n```", guidance, re.DOTALL))
+        assert controls, relative
+        for control in controls:
+            question = json.loads(control[1])
+            assert question["message"] == "", relative
+            explanation = guidance[:control.start()].rsplit("> ##### YOUR CHOICES", 1)[1]
+            rows = {
+                label.strip(): meaning.strip()
+                for label, meaning in re.findall(
+                    r"^> \|\s*([^|]+)\|\s*([^|]+)\|", explanation, re.MULTILINE
+                )
+            }
+            for field in question["requestedSchema"]["properties"].values():
+                assert field["title"], relative
+                assert field["description"] == "How would you like to continue?", relative
+                if field["type"] == "array":
+                    assert field["default"] == [], relative
+                    choices = field["items"]["enum"]
+                else:
+                    choices = field["enum"]
+                for choice in choices:
+                    assert rows.get(choice), (relative, choice)
+                    assert rows[choice] != choice, (relative, choice)
 
 
 def test_shared_experience_preserves_approved_copy_and_template_boundary():
@@ -738,27 +845,27 @@ def test_shared_experience_preserves_approved_copy_and_template_boundary():
         )
     )
     for literal in (
-        "> **Push topic to agent** / **Keep as draft**",
-        "**Topic pushed to agent.**",
-        "**Draft kept locally. Agent unchanged.**",
-        "**Topic was not pushed.**",
-        "**Topic push could not be confirmed.**",
-        "**Topic pushed; workspace update incomplete.**",
-        "> **Push this change** / **Keep pending** / **Cancel remaining push**",
+        '"enum": ["Push topic to agent", "Keep as draft"]',
+        "> ##### TOPIC PUSHED TO AGENT",
+        "**DRAFT KEPT LOCALLY AGENT UNCHANGED**",
+        "**TOPIC WAS NOT PUSHED**",
+        "**TOPIC PUSH COULD NOT BE CONFIRMED**",
+        "**TOPIC PUSHED WORKSPACE UPDATE INCOMPLETE**",
+        "Cancel remaining push",
         "> | Item | Current | Proposed |",
         "> - {Verified preservation fact summary}",
         "> | Component | Outcome | Details |",
-        "> **Test {Topic title} and fix any issues found?**",
-        "> **Activate {Topic title}, test it and fix any issues found?**",
+        '["Test topic now", "Not now"]',
+        '"enum": ["Activate and test", "Not now"]',
         "> After you confirm readiness, I will test {Topic title} against its "
         "intended behavior, investigate and fix issues observed during execution, "
         "and retest the affected behavior.",
         "> I will summarize the outcome and recommend any next action needed.",
-        "> **Goal:** {Latest authoring goal}",
-        "> **Outcome:** {Observed runtime outcome}",
-        "> **Recommendation:** {Concrete tweak or next action}",
-        "> **Testing paused.**\n>\n> Let me know when the test browser is ready.",
-        "> **Testing stopped.**",
+        "> ##### GOAL\n>\n> {Latest authoring goal}",
+        "> ##### OUTCOME\n>\n> {Observed runtime outcome}",
+        "> ##### RECOMMENDATION\n>\n> {Concrete tweak or next action}",
+        "> ##### TESTING PAUSED\n>\n> Let me know when the test browser is ready.",
+        "> ##### TESTING STOPPED",
     ):
         if literal.startswith("> |"):
             assert " ".join(literal.split()) in " ".join(contract.split())
@@ -796,7 +903,7 @@ def test_push_uses_one_inventory_scoped_consent_and_composed_results():
     )[0]
     assert "> [Full draft]" not in comparison
     assert (
-        "> **Not included**\n>\n> **{Component type}**\n>\n"
+        "> ##### NOT INCLUDED\n>\n> ###### {COMPONENT TYPE}\n>\n"
         "> - {Component name}: {Exclusion reason}"
     ) in comparison
     assert "even when those entries appeared earlier in the conversation" in comparison
@@ -804,12 +911,19 @@ def test_push_uses_one_inventory_scoped_consent_and_composed_results():
     assert "parsed instruction section with the baseline separately from metadata" in push
     assert "unchanged instructions out of pending and excluded changes" in push
     assert "rename as Display name" in push
+    assert "from all discovered agent changes" in push
+    assert (
+        "mark other discovered pending components Not included rather than "
+        "dropping them from the inventory"
+    ) in push
+    assert "entry review, compact comparison and results" in contract
+    assert "Do not collapse exclusions into prose" in contract
 
 
 def test_already_satisfied_topic_outcome_does_not_claim_a_new_push():
     contract = _read("src/skills/topics/authoring-experience.md")
     update = _read("src/skills/topics/update/SKILL.md")
-    assert "**Topic already up to date. No push needed.**" in contract
+    assert "**TOPIC ALREADY UP TO DATE NO PUSH NEEDED**" in contract
     assert "`writeAttempted: false`" in contract
     assert "`updatedComponents: 0`" in contract
     assert "Do not attribute the existing change to this operation." in contract
@@ -886,14 +1000,11 @@ def test_advisories_have_structured_issue_effect_and_own_action_line():
     contract = _read("src/skills/topics/authoring-experience.md")
     advisory = (
         "> - {Advisory issue}. {Practical effect}.\n>\n"
-        ">   **Suggested action:** {Concrete next action}."
-    )
-    assert contract.count(advisory) == 2
-    assert (
-        "> - {Advisory issue}. {Practical effect}.\n>\n"
         "> ##### SUGGESTED ACTION\n>\n"
         "> {Concrete next action}."
-    ) in contract
+    )
+    assert contract.count(advisory) == 3
+    assert ">   **Suggested action:**" not in contract
     assert (
         "`{Concrete next action}` is a specific, relevant recommended step "
         "to investigate or address the issue, identifying what to inspect, "
@@ -908,8 +1019,8 @@ def test_initial_routing_conflict_decision_precedes_push_and_preserves_exact_sco
         "### Topic outcomes\n", 1
     )[0]
     assert (
-        "> **Resolve the routing conflict in the Agent Instructions** / "
-        "**Push topic anyway** / **Keep as draft**"
+        "**Resolve the routing conflict in the Agent Instructions**, "
+        "**Push topic anyway** and **Keep as draft**"
     ) in initial
     assert "before any topic or instruction push" in initial
     assert "does not approve a topic push, instruction push, activation or testing" in initial
@@ -927,11 +1038,11 @@ def test_new_conflict_after_push_combines_state_aware_testing_without_instructio
     follow_up = contract.split(
         "### Combined routing-conflict and testing follow-up\n", 1
     )[1].split("### Targeted instruction-change preview and approval\n", 1)[0]
-    assert (
-        "> **How would you like to continue with {Topic title}?**\n>\n"
-        "> **Resolve the routing conflict in the Agent Instructions** / "
-        "**Not now, Activate and test anyway.**"
-    ) in follow_up
+    question = json.loads(re.search(r"```json\n(.*?)\n```", follow_up, re.DOTALL)[1])
+    assert question["requestedSchema"]["properties"]["action"]["enum"] == [
+        "Resolve the routing conflict in the Agent Instructions",
+        "Not now, Activate and test anyway.",
+    ]
     assert "**Not now, Test anyway.**" in follow_up
     assert "does not approve an instruction push, activation or testing" in follow_up
     assert "Confirm authoritative Active state before sending a test message" in follow_up
@@ -941,7 +1052,7 @@ def test_new_conflict_after_push_combines_state_aware_testing_without_instructio
     assert "only when a routing conflict is newly discovered or materially changed" in follow_up
     assert "Do not repeat the resolution choice for the same conflict" in follow_up
     assert "Prepare instruction change for review" not in contract
-    assert "> **Routing Conflicts**" in follow_up
+    assert "> ##### ROUTING CONFLICTS" in follow_up
     assert "This routing conflict will likely block topic execution." in follow_up
     assert "Check the installed testing capability before offering a runnable test" in follow_up
     testing = _read("src/skills/topics/test/SKILL.md")
@@ -956,14 +1067,14 @@ def test_instruction_correction_has_separate_preview_approval_and_truthful_outco
     preview = contract.split(
         "### Targeted instruction-change preview and approval\n", 1
     )[1].split("### Instruction-push outcomes and testing\n", 1)[0]
-    assert "> **Current wording**" in preview
-    assert "> **Proposed wording**" in preview
-    assert "> **Push instruction change** / **Keep as draft**" in preview
+    assert "> ##### CURRENT WORDING" in preview
+    assert "> ##### PROPOSED WORDING" in preview
+    assert '"enum": ["Push instruction change", "Keep as draft"]' in preview
     assert "It does not authorize activation, testing or publication." in preview
     assert "concurrency and readback safeguards" in preview
-    assert "**Instruction draft kept locally.**" in preview
-    assert "Agent instructions already up to date." in contract
-    assert "Instruction push could not be confirmed." in contract
+    assert "> ##### INSTRUCTION DRAFT KEPT LOCALLY" in preview
+    assert "AGENT INSTRUCTIONS ALREADY UP TO DATE" in contract
+    assert "INSTRUCTION PUSH COULD NOT BE CONFIRMED" in contract
     assert "Topic execution has not yet been verified." in contract
     assert "complete `{Verified instruction-save result}` statement" in contract
 
@@ -974,7 +1085,7 @@ def test_draft_and_partial_instruction_results_do_not_assume_a_topic_push():
         "### Targeted instruction-change preview and approval\n", 1
     )[1].split("### Instruction-push outcomes and testing\n", 1)[0]
     outcomes = contract.split("### Instruction-push outcomes and testing\n", 1)[1].split(
-        "## ", 1
+        "\n## ", 1
     )[0]
     assert "{topic_save_state}" in preview
     assert "The new topic remains local and has not been pushed." in preview
@@ -1023,17 +1134,20 @@ def test_topic_and_push_handoffs_honor_initial_decisions_and_limit_fallbacks():
 def test_readiness_message_has_maker_actions_and_a_separate_readiness_control():
     contract = _read("src/skills/topics/testing-experience.md")
     assert (
-        "> **Test browser readiness**\n>\n"
-        "> **Topic:** {Topic title}\n>\n"
-        "> **Target:** {Agent name}, {Environment name}\n>\n"
+        "> ##### TEST BROWSER READINESS\n>\n"
+        "> ##### TOPIC\n>\n> {Topic title}\n>\n"
+        "> ##### TARGET\n>\n> {Agent name}, {Environment name}\n>\n"
         "> In the prepared test browser, sign in with a test account.\n>\n"
         "> Open the Test chat pane and leave its message box empty and idle.\n>\n"
         "> After you confirm readiness,"
     ) in contract
-    assert (
-        "> **Is the test browser ready?**\n>\n"
-        "> **Ready to test** / **Not ready, keep paused** / **Stop without sending**"
-    ) in contract
+    readiness = contract.split("### Browser readiness and testing goal\n", 1)[1].split(
+        "### Pause, stop and resume\n", 1
+    )[0]
+    question = json.loads(re.search(r"```json\n(.*?)\n```", readiness, re.DOTALL)[1])
+    assert question["requestedSchema"]["properties"]["action"]["enum"] == [
+        "Ready to test", "Not ready, keep paused", "Stop without sending",
+    ]
     assert (
         "> I will summarize the outcome and recommend any next action needed.\n\n"
         "Render the readiness message using the quoted wording, emphasis and paragraph breaks. "
@@ -1056,15 +1170,14 @@ def test_testing_reports_and_missing_permissions_reuse_scoped_contracts():
     ) in instructions
     assert "retrieving topic results does not start new testing or authorize changes" in instructions
     assert "### Topic debugging outcome: `{topic_test_results}`" in contract
-    assert "> **Evidence:** {Available evidence links}" in contract
+    assert "> ##### EVIDENCE\n>\n> {Available evidence links}" in contract
     assert "including `evidenceDirectory` for topic tests" in contract
     assert "A missing screenshot does not make a saved result file unavailable." in contract
     assert "For pause/stop, keep the fixed acknowledgement separate" in contract
     assert "unfinished or unobserved behavior and material uncertainty" in contract
-    assert (
-        "> **Activate {Topic title} for testing?**\n>\n"
-        "> **Activate and test** / **Not now**"
-    ) in contract
+    assert "activation-only explanations and control" in contract
+    assert "activation permission adds no edit permission" in contract
+    assert '"title": "Topic activation"' in contract
     assert "Preserve completed work and report it separately using `{topic_test_results}`." in contract
     assert "reusing valid context and permissions" in contract
     assert "This is an informational report, not another approval gate." in contract
@@ -1076,17 +1189,17 @@ def test_debugging_outcome_has_goal_and_only_needed_recommendation_without_loop_
         "### Testing offers", 1
     )[0]
     prefix = (
-        "> **Topic debugging outcome**\n>\n"
-        "> **Topic:** {Topic title}\n>\n"
-        "> **Target:** {Agent name}, {Environment name}\n>\n"
-        "> **Goal:** {Latest authoring goal}\n>\n"
+        "> ##### TOPIC DEBUGGING OUTCOME\n>\n"
+        "> ##### TOPIC\n>\n> {Topic title}\n>\n"
+        "> ##### TARGET\n>\n> {Agent name}, {Environment name}\n>\n"
+        "> ##### GOAL\n>\n> {Latest authoring goal}\n>\n"
     )
-    assert prefix + "> **Outcome:** {Observed runtime outcome}\n\n" in report
+    assert prefix + "> ##### OUTCOME\n>\n> {Observed runtime outcome}\n\n" in report
     assert (
-        prefix + "> **Outcome:** {Current outcome and obstacle}\n>\n"
-        "> **Recommendation:** {Concrete tweak or next action}\n\n"
+        prefix + "> ##### OUTCOME\n>\n> {Current outcome and obstacle}\n>\n"
+        "> ##### RECOMMENDATION\n>\n> {Concrete tweak or next action}\n\n"
     ) in report
-    assert report.count("> **Recommendation:**") == 1
+    assert report.count("> ##### RECOMMENDATION") == 1
     for retired in ("| Test |", "**Fixes made**", "**Remaining issues**", "Retest:", "fn:"):
         assert retired not in report
     assert "When the requested behavior is observed, render:" in report
@@ -1115,7 +1228,9 @@ def test_authoring_carries_context_and_honors_scoped_debugging():
     update = _read("src/skills/topics/update/SKILL.md")
     contract = _read("src/skills/topics/experience-contract.md")
     assert "Topic selection is a fallback, not a mandatory question" in update
-    assert "discovered titles with short purposes plus free text" in update
+    assert "../experience-contract.md#topic-selection" in update
+    assert "candidate titles and short purposes" in contract
+    assert "Accept a free-text name or description without requiring name recall" in contract
     assert "re-render the change-focused Update summary from step 2" in update
     assert "Do not reduce the re-review to conflicting reply excerpts alone." in update
     assert "the freshly read current wording versus the proposal" in contract

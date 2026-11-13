@@ -1,10 +1,12 @@
 # Push experience
 
+<!-- markdownlint-disable MD001 -->
+
 Apply the [shared foundation](experience-contract.md). Use this reference for inventory, scoped Push consent and composed results. Every approved save owner uses [Push telemetry](#push-telemetry). Read [Authoring experience](authoring-experience.md) for topic wording review, [Deletion experience](deletion-experience.md) before destructive consent, and [Testing experience](testing-experience.md) only when reaching a testing continuation.
 
 ## Contents
 
-- [Push progress](#push-progress)
+- [Push status updates](#push-status-updates)
 - [Component inventory: `{component_inventory}`](#component-inventory-component_inventory)
 - [Inventory outcomes](#inventory-outcomes)
 - [Entry inventory and choices](#entry-inventory-and-choices)
@@ -18,17 +20,20 @@ Apply the [shared foundation](experience-contract.md). Use this reference for in
 - [Interpret the terminal result](#interpret-the-terminal-result)
 - [Emit the terminal sequence once](#emit-the-terminal-sequence-once)
 
-## Push progress
+## Push status updates
 
-Apply the shared native task-progress rules. For a direct Push request, track **Inspect pending changes** through successful inventory discovery. Reuse a still-current inventory and completed preparation when arriving from authoring; do not repeat work solely to populate progress.
+Apply [Status update markers](experience-contract.md#status-update-markers). Bind `{Agent name}` to the selected agent and `{Set name}` to the selected evaluation set. Reuse a still-current inventory and earlier preparation when arriving from authoring.
 
-After scoped approval, append one **Push and verify {Component name}** milestone per approved operation, using the inventory's human-readable names. For a deletion, use **Push deletion and verify {Topic title}**. Do not add excluded, kept-pending or unapproved components. Preserve the existing review controls and reuse valid unchanged batch consent without another progress-related approval.
+| Reporting point   | Completion condition                                                                                                                       | Completion message                                 |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
+| `push-inventory`  | Local discovery completes for the requested scope, including applicable evaluation sets, and finds at least one applicable pending change. | ✅ Inspected pending changes for **{Agent name}**. |
+| `evaluation-save` | The selected deployment owner confirms a new approved deployment, its verification and required local recording.                           | ✅ Pushed and verified **{Set name}**.             |
 
-Start each milestone immediately before dispatching its owning operation. Complete it only after authoritative verification and required local recording succeed. The topic and instruction adapters return save and readback together; keep them in one milestone rather than inventing intermediate tool progress. Authoritatively verified already-current content can complete the milestone, but the result must disclose that no new write was needed.
+For `push-inventory`, use [Inventory outcomes](#inventory-outcomes) for an empty or failed inspection. For excluded-only changes, name the actual exclusions and leave them pending. Inventory discovery is not remote validation or save approval.
 
-For a new topic and a dependent routing correction, keep the instruction milestone pending until the topic is saved and verified. Pause dependent work after a failed or uncertain prerequisite; continue only independently safe, already-approved work. On a confirmed remote save with unfinished local recording, retain the remote success in the results and make the remaining workspace action explicit without claiming the whole milestone succeeded or replaying the save.
+For each dispatched topic save or deletion, reuse the performing owner's update without a second caller update. Before an instruction save performed here without an emitting authoring owner, load [Authoring status updates](authoring-experience.md#authoring-status-updates) and use its `instruction-save` definition. The Push caller owns `evaluation-save` after the selected deployment flow returns; preserve its native new-copy/reuse and review-state facts without changing evaluation internals.
 
-Finish with the existing composed report or standalone outcome, not a todo summary. Keep telemetry out of the checklist. Append testing work only after its own authorization through [Testing progress](testing-experience.md#testing-progress).
+Use [Push statuses](#push-statuses-push_statuses) for already-current, failed, unconfirmed or partially completed saves. Preserve confirmed remote effects when local recording fails. Pause dependent work after a failed or uncertain prerequisite; continue only independently safe approved operations. Finish with the existing composed report or standalone outcome, not a checklist. Testing uses [Testing status updates](testing-experience.md#testing-status-updates) only after its own authorization.
 
 ## Component inventory: `{component_inventory}`
 
@@ -46,11 +51,11 @@ The list is semi-fixed, not exhaustive. Include other discovered types when appl
 
 Use `{component_inventory}` for the entry list, type selector, component-level review, results table and Not included section. Derive displayed names, types and counts from its applicable entries.
 
-Not included is a filtered view of `{component_inventory}`: discovered components outside this push's scope or without an available save operation. Reuse their component types and human-readable names throughout entry review, compact comparison and results. Keep the **Not included** heading, labeled component-type sections and one named bullet with its reason per component. Do not collapse exclusions into prose, combine several component names in one bullet, or substitute filename stems for discovered display titles. Do not duplicate entries already represented in the results table.
+Not included is a filtered view of `{component_inventory}`: discovered components outside this push's scope or without an available save operation. Reuse their component types and human-readable names throughout entry review, compact comparison and results. Keep the NOT INCLUDED H5 heading, uppercase H6 component-type labels and one named bullet with its reason per component. Do not collapse exclusions into prose, combine several component names in one bullet, or substitute filename stems for discovered display titles. Do not duplicate entries already represented in the results table.
 
 Show exclusions only when actual discovered changes require an explanation, naming the specific limitation. Do not make unsupported Push a routine branch or advertise retired functionality as an option.
 
-Render each component type as a labeled section with bulleted contents. Omit empty sections. Inventory discovery alone does not establish remote validation.
+Render each component type as an uppercase H5 labeled section with bulleted contents, or H6 within Not included. Bind `{COMPONENT TYPE}` to that type's uppercase label, not its component names. Omit empty sections. Inventory discovery alone does not establish remote validation.
 
 ### Inventory outcomes
 
@@ -58,11 +63,11 @@ Handle at least these cases after observation and appropriate in-scope recovery.
 
 When inspection succeeds and finds nothing to push:
 
-> **No changes to push.**
+> ##### NO CHANGES TO PUSH
 
 When inspection still cannot complete:
 
-> **Could not inspect local changes.**
+> ##### COULD NOT INSPECT LOCAL CHANGES
 >
 > {Cause}
 >
@@ -76,30 +81,55 @@ Render applicable entries from `{component_inventory}`:
 
 > **There are unpushed changes for {Agent}:**
 >
-> **Topics ({count})**
+> ##### TOPICS ({count})
 >
 > - {Topic title}
 >
-> **Agent instructions**
+> ##### AGENT INSTRUCTIONS
 >
 > - {Short description of the instruction-section change}
 >
-> **Evaluation test sets ({count})**
+> ##### EVALUATION TEST SETS ({count})
 >
 > - {Set name}
 >
-> **Not included**
+> ##### NOT INCLUDED
 >
-> **{Component type}**
+> ###### {COMPONENT TYPE}
 >
 > - {Component name}: {Exclusion reason}
 
 Disclose material consequences, including actual evaluation new-copy/reuse and local-replacement effects, before the maker selects a Push action. For topic creation or update, apply Supported authoring scope and show unaccepted or acceptance-unknown response wording using the labels and quotations in [Response wording and local drafts](authoring-experience.md#response-wording-and-local-drafts) before any batch Push approval. Explain that Push accepts the displayed wording for the approved topics as well as authorizing their saves. For topic deletion, show the [deletion summary](deletion-experience.md#deletion-summary-delete_summary) `{delete_summary}`, including contained content and reference effects, rather than requesting response-wording acceptance. Do not require a separate wording approval or repeat owner gates for unchanged reviewed content. Then use:
 
-> - **Summarize each change**
-> - **Push all listed changes**
-> - **Choose what to push**
-> - **Cancel**
+> ##### YOUR CHOICES
+>
+> | Choice                  | What happens                                                                                            |
+> | ----------------------- | ------------------------------------------------------------------------------------------------------- |
+> | Summarize each change   | Review one displayed component at a time before deciding what to push.                                  |
+> | Push all listed changes | Approve and push every displayed applicable change, with the disclosed consequences.                    |
+> | Choose what to push     | Select component types; all displayed changes of each selected type are included for the next decision. |
+> | Cancel                  | Leave all unattempted changes pending.                                                                  |
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Pending changes",
+        "description": "How would you like to continue?",
+        "enum": [
+          "Summarize each change",
+          "Push all listed changes",
+          "Choose what to push",
+          "Cancel"
+        ]
+      }
+    }
+  }
+}
+```
 
 Selecting Push all listed changes approves every change in the displayed inventory for the identified agent. No additional approval is required for each component owner. A materially changed scope, intended behavior or consequence requires a revised summary and fresh approval. Cancel leaves all unattempted changes pending.
 
@@ -109,17 +139,60 @@ If inspection finds only excluded changes, explain those actual limitations and 
 
 Select applicable component types from `{component_inventory}`, starting with nothing selected. Each selected type includes all its changes listed in the inventory. This does not select individual fields or diff hunks.
 
-> **Choose what to push**
+> ##### YOUR CHOICES
 >
-> - {Component type}
+> | Choice           | What happens                                                                                       |
+> | ---------------- | -------------------------------------------------------------------------------------------------- |
+> | {Component type} | Include all displayed changes of this type in the next review or Push decision: {Component names}. |
+
+Repeat the explanation row and `items.enum` entry for each actual applicable type. Keep `default` empty; selecting types alone does not authorize saving.
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "componentTypes": {
+        "type": "array",
+        "title": "Changes to include",
+        "description": "How would you like to continue?",
+        "items": { "type": "string", "enum": ["{Component type}"] },
+        "default": []
+      }
+    }
+  }
+}
+```
 
 After selection, use this choice control:
 
-> **For the selected changes:**
+> ##### YOUR CHOICES
 >
-> - **Summarize selected changes**
-> - **Push selected changes**
-> - **Cancel**
+> | Choice                     | What happens                                                                         |
+> | -------------------------- | ------------------------------------------------------------------------------------ |
+> | Summarize selected changes | Review the displayed selection one component at a time before deciding what to push. |
+> | Push selected changes      | Approve and push only this displayed selection, with the disclosed consequences.     |
+> | Cancel                     | Leave the selected unattempted changes pending.                                      |
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Selected changes",
+        "description": "How would you like to continue?",
+        "enum": [
+          "Summarize selected changes",
+          "Push selected changes",
+          "Cancel"
+        ]
+      }
+    }
+  }
+}
+```
 
 Push selected changes approves only the displayed selection, using the same batch-consent rule. Empty selection never means push everything.
 
@@ -127,15 +200,39 @@ Push selected changes approves only the displayed selection, using the same batc
 
 Review each applicable entry of `{component_inventory}` in turn, either across the full inventory or within the selected component types. Populate the summary using the relevant owner's agreed format.
 
-> **{Component type}: {Name}**
+> ##### COMPONENT
+>
+> {Component type}: {Name}
 >
 > {Change summary}
 
-Follow with a short choice control:
+Follow with the applicable explanations and short native control:
 
-> **Push this change** / **Keep pending** / **Cancel remaining push**
+> ##### YOUR CHOICES
+>
+> | Choice                | What happens                                                                          |
+> | --------------------- | ------------------------------------------------------------------------------------- |
+> | Push this change      | Approve and push this displayed component change, then continue.                      |
+> | Keep pending          | Leave this change unpushed, then continue.                                            |
+> | Cancel remaining push | Stop remaining work. Preserve completed pushes and leave unprocessed changes pending. |
 
-For a topic with unaccepted suggested wording, include **I want to update the response** before Keep pending. Use the [Suggested-response decision](authoring-experience.md#suggested-response-decision) normal-chat revision continuation and return to this component's refreshed review before saving. Keep pending retains the local draft without accepting the suggestion.
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Component save",
+        "description": "How would you like to continue?",
+        "enum": ["Push this change", "Keep pending", "Cancel remaining push"]
+      }
+    }
+  }
+}
+```
+
+For a topic with unaccepted suggested wording, include **I want to update the response** before Keep pending in both `enum` and the explanation table. Explain that it revises the local draft without pushing it, and that Push this change accepts the displayed wording as well as approving the save. Use the [Suggested-response decision](authoring-experience.md#suggested-response-decision) normal-chat revision continuation and return to this component's refreshed review before saving. Keep pending retains the local draft without accepting the suggestion.
 
 Push this change approves and pushes this item, then continues. Keep pending leaves this item unpushed, then continues. Cancel remaining push stops, preserves completed pushes and leaves unprocessed changes pending.
 
@@ -145,25 +242,29 @@ One review item is one component-level push: the proposed edits to one topic, th
 
 Render `{compact_change_comparison}` in normal chat, separately from the short decision control:
 
-> **Title:** {Topic title}
+> ##### TITLE
 >
-> **Agent:** {Destination agent}
+> {Topic title}
+>
+> ##### AGENT
+>
+> {Destination agent}
 >
 > | Item             | Current                     | Proposed                     |
 > | ---------------- | --------------------------- | ---------------------------- |
 > | {Changed aspect} | {Current value or behavior} | {Proposed value or behavior} |
 >
-> **Unchanged**
+> ##### UNCHANGED
 >
 > - {Verified preservation fact summary}
 >
-> **Notes**
+> ##### NOTES
 >
 > - {Note}
 >
-> **Not included**
+> ##### NOT INCLUDED
 >
-> **{Component type}**
+> ###### {COMPONENT TYPE}
 >
 > - {Component name}: {Exclusion reason}
 
@@ -192,15 +293,15 @@ If an observed prerequisite prevents the write, use Failed and explain that no w
 
 ### Composed Push report: `{composed_push_report}`
 
-> **Push results**
+> ##### PUSH RESULTS
 >
 > | Component      | Outcome  | Details                          |
 > | -------------- | -------- | -------------------------------- |
 > | {Type}: {Name} | {Status} | {Relevant detail or useful link} |
 >
-> **Not included**
+> ##### NOT INCLUDED
 >
-> **{Component type}**
+> ###### {COMPONENT TYPE}
 >
 > - {Component name}: {Exclusion reason}
 >
@@ -218,7 +319,7 @@ Preserve required owner links/reminders once in the composed response, without d
 
 ## Push telemetry
 
-Apply [Push progress](#push-progress) for this approved execution, including standalone saves. Native progress does not create another batch or change the lifecycle below.
+Status updates and telemetry have separate ownership. Reporting a result does not create another batch or change the lifecycle below.
 
 The session owns one lifecycle for each approved save batch. **Push all listed changes** and **Push selected changes** each define one batch; **Push this change** defines a one-component batch. A standalone approved topic or instruction save is also one batch. A topic and instruction correction approved together share a batch. Keep the approved scope, lifecycle ownership, observed times and emitted calls in session context. Nested component owners reuse that context and must not emit their own lifecycle. Separate later approvals start separate batches; recovery of the same approved operation does not.
 

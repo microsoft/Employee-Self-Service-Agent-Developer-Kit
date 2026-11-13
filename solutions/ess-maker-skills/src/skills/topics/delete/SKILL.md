@@ -6,7 +6,7 @@ Read the [shared foundation](../experience-contract.md) and [Deletion experience
 
 ## 1. Resolve the topic and effects
 
-Require completed canonical setup for the selected Dev agent. Read `.local/config.json` and resolve the intended topic from the request and context. Use `topic_authoring.py list` and the selected workspace's component mapping. Clarify ambiguity with discovered titles and purposes; do not silently retarget by display name.
+Require completed canonical setup for the selected Dev agent. Read `.local/config.json` and resolve the intended topic from the request and context. Use `topic_authoring.py list` and the selected workspace's component mapping. Clarify ambiguity using the shared [Topic selection](../experience-contract.md#topic-selection) explanations and native control; do not silently retarget by display name.
 
 For an existing mapped topic, preview without mutation:
 
@@ -20,9 +20,13 @@ Read relevant current topics and instructions to assess references and practical
 
 For an unmapped local draft, establish that it was never pushed before using the shared discard variation. Resolve ambiguous or uncertain remote state rather than treating missing tracking as absence.
 
+{EMIT_STATUS_UPDATE: deletion-review}
+
 ## 2. Review and obtain scoped approval
 
-Render `{delete_summary}` in normal chat, then the separate **Push deletion to agent** / **Keep deletion locally** / **Not now** control. For an unsaved draft, use **Discard local draft** / **Keep draft** instead.
+Render `{delete_summary}` and its choice explanations in normal chat, then use Deletion experience's separate native control. For an unsaved draft, use its draft-discard explanations and control instead.
+
+Not now and Keep draft leave the selected state unchanged and return without checkpointing or deletion.
 
 An unchanged approved Push batch may already supply deletion consent when its displayed scope explicitly includes this topic and contained content. Do not request the same approval again. A general cleanup/debugging objective, selection or missing local file alone does not supply destructive consent.
 
@@ -31,6 +35,10 @@ After approval and before changing files or the agent, checkpoint:
 ```powershell
 python scripts/checkpoint.py "pre-delete-{Topic}"
 ```
+
+{EMIT_STATUS_UPDATE: deletion-checkpoint}
+
+Continue only after the checkpoint is confirmed.
 
 Record this deletion invocation once:
 
@@ -46,9 +54,13 @@ Telemetry is best-effort. Preview, cancellation and recovery add no authoring co
 
 Use file tools to remove only the approved working files. Recheck their contents against the reviewed scope before removal; preserve later edits and obtain a revised decision when needed.
 
-For an existing topic, retain `.baseline` and `.component-map.json` unchanged. Report **Deletion kept locally. Agent unchanged.** Do not run a remote write or automatically proceed to Push.
+For an existing topic, retain `.baseline` and `.component-map.json` unchanged. Use **DELETION KEPT LOCALLY AGENT UNCHANGED** after the status update below. Do not run a remote write or automatically proceed to Push.
 
-For an established unsaved draft, remove only that draft and report **Local draft discarded. Agent unchanged.** No remote deletion or pending deletion tracking is created.
+For an established unsaved draft, remove only that draft and use **LOCAL DRAFT DISCARDED AGENT UNCHANGED** after the status update below. No remote deletion or pending deletion tracking is created.
+
+After the selected local removal attempt and before its outcome report:
+
+{EMIT_STATUS_UPDATE: local-removal}
 
 ### Push deletion to agent
 
@@ -61,6 +73,8 @@ python scripts\topic_authoring.py delete --topic "{agent.folder}\topics\{Topic}.
 The operation rereads current state, compares the complete reviewed deletion scope, submits the deletion through the AgentBuilder components API and verifies absence. The pre-write comparison is not an atomic compare-and-delete guarantee. If content or containment changed, return to review rather than silently accepting the new scope. Do not rely on the submitted component version to prevent concurrent changes.
 
 Only verified absence permits local working-file, baseline and mapping cleanup. Later local edits are preserved and reported as incomplete reconciliation. This operation does not use Dataverse, `push.py --force-delete`, or the existing-topic update planner.
+
+{EMIT_STATUS_UPDATE: topic-deletion}
 
 ## 4. Interpret the outcome and recover
 

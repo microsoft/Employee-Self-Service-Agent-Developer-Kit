@@ -1,11 +1,12 @@
 # Topic authoring experience
 
+<!-- markdownlint-disable MD001 -->
+
 Apply the [shared foundation](experience-contract.md). Use this reference for Create/Update review and outcomes. Load [Push experience](push-experience.md) for a composed review or result, and [Testing experience](testing-experience.md) only when reaching the testing continuation.
 
 ## Contents
 
-- [Authoring progress](#authoring-progress)
-- [Create status updates](#create-status-updates)
+- [Authoring status updates](#authoring-status-updates)
 - [Authoring summaries](#authoring-summaries)
 - [Response wording and local drafts](#response-wording-and-local-drafts)
 - [Advisory entries in Notes](#advisory-entries-in-notes)
@@ -20,38 +21,24 @@ Apply the [shared foundation](experience-contract.md). Use this reference for Cr
 - [Targeted instruction-change preview and approval](#targeted-instruction-change-preview-and-approval)
 - [Instruction-push outcomes and testing](#instruction-push-outcomes-and-testing)
 
-## Authoring progress
+## Authoring status updates
 
-For Create, apply [Create status updates](#create-status-updates). For Update, apply the shared native task-progress rules below. Before the first authoring operation, start these preparation milestones in the owning operation's order. Bind `{Topic title}` to the selected title; use `topic` until the title is established.
+For Create, Update and related instruction corrections, apply [Status update markers](experience-contract.md#status-update-markers) using the definitions below. Resolve `{Topic title}` and `{Agent name}` from the selected target. Load these definitions before preparation or an approved save; a delegated caller reuses the performing owner's update.
 
-| Milestone                                                                                                    | Completion condition                                                                                                                                                                 |
-| ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Check the request and topic availability** for Create, or **Check the request and saved topic** for Update | Resolve the target and requested scope, establish current inventory or saved content, and pass applicable naming and authoring-policy checks.                                        |
-| **Prepare the {Topic title} draft**                                                                          | The actual local draft contains the proposed behavior and wording, preserving unrelated content.                                                                                     |
-| **Check instruction alignment and save readiness**                                                           | Assess current saved instructions and the non-writing save preview. A known routing conflict is a review finding, not a resolved conflict; missing evidence remains unfinished work. |
-
-After preparation, render the existing summary and applicable decision control. Preparation completion does not mean the topic was pushed or its wording accepted.
-
-Only after the maker selects routing-conflict resolution, or existing explicit scope authorizes it, append **Prepare the routing correction**. Complete it when the isolated correction and its non-writing preview are ready with unrelated content preserved. Then show the existing instruction preview and applicable scoped Push review; preparation does not approve either save.
-
-Use [Push progress](push-experience.md#push-progress) only for approved saves. Keep as draft adds no Push milestone. Push topic anyway adds only the topic save and leaves the correction excluded. Do not prepopulate activation, testing or publication.
-
-On a requested revision, reopen only affected preparation milestones and refresh their preview before the applicable decision. Preserve earlier confirmed saves as completed work; a later change is a new proposal, not a reversal of those saves. Reuse valid unchanged scoped consent.
-
-### Create status updates
-
-From Create preparation through its topic outcome and testing offer, apply [Status update markers](experience-contract.md#status-update-markers) using the definitions below, not a native todo list or a progress checklist. Resolve `{Topic title}` from the selected topic. Each completion message is short and in the past tense.
-
-| Reporting point     | Completion condition                                                                                                                        | Completion message                           |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| `draft-preparation` | The requested local draft is saved or verified unchanged with the requested behavior and wording.                                           | ✅ Prepared the draft for **{Topic title}**. |
-| `topic-save`        | The approved topic save and authoritative readback both succeed, a new remote write is confirmed, and required local recording is complete. | ✅ Pushed and verified **{Topic title}**.    |
+| Reporting point           | Completion condition                                                                                                                          | Completion message                                                  |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `draft-preparation`       | The requested local draft is saved or verified unchanged with the requested behavior and wording.                                             | ✅ Prepared the draft for **{Topic title}**.                        |
+| `instruction-preparation` | The requested isolated correction is saved locally, unrelated content is preserved, and its non-writing preview is ready for review.          | ✅ Prepared the instruction change for **{Agent name}**.            |
+| `topic-save`              | The approved topic save and authoritative readback both succeed, a new remote write is confirmed, and required local recording is complete.   | ✅ Pushed and verified **{Topic title}**.                           |
+| `instruction-save`        | The approved instruction write and authoritative readback succeed, a new remote write is confirmed, and required local recording is complete. | ✅ Pushed and verified the instruction change for **{Agent name}**. |
 
 For `draft-preparation`, describe a failed or incomplete local draft using the observed evidence and applicable next safe action. Draft readiness does not establish wording acceptance, instruction alignment, save readiness, a remote save or resolution of a routing conflict.
 
 For `topic-save`, use [Topic outcomes](#topic-outcomes) to interpret an already-current no-write result, a rejected or unconfirmed save, or confirmed remote success with an incomplete workspace update. Compose the short status update from those known facts rather than using the completion message. A retained draft does not enter this reporting point.
 
-Keep the full Create review and existing outcome report after the applicable update. Do not announce work that is starting or still running. Preserve existing approval, uncertainty and recovery boundaries. Do not prepopulate activation, testing or publication. If the maker selects testing, continue with the testing owner's progress rules.
+For `instruction-preparation`, report missing evidence, an incomplete correction or an already-present correction without claiming a new draft is ready. Preparation does not authorize either save. For `instruction-save`, use [Instruction-push outcomes and testing](#instruction-push-outcomes-and-testing) to distinguish new writes, already-current content, rejection, uncertainty and local issues. Instruction readback does not establish topic execution or a topic save.
+
+Keep the full Create or Update review and existing outcome report after the applicable update. Do not announce work that is starting or still running. Preserve existing approval, uncertainty and recovery boundaries. Revisions return to the affected preparation point and fresh review; earlier confirmed saves remain completed work. Do not prepopulate activation, testing or publication. If the maker selects testing, continue with [Testing status updates](testing-experience.md#testing-status-updates).
 
 ## Authoring summaries
 
@@ -65,15 +52,19 @@ Preserve wording supplied as the intended response, including links. Do not poli
 
 Under Outputs, show supplied or explicitly accepted wording with this label and quotation:
 
-> **Response text**
+> - {Output description}
 >
-> > {Response text}
+>   ###### RESPONSE TEXT
+>
+>   > {Response text}
 
 Show newly generated wording that has not been accepted with this label and quotation:
 
-> **Suggested response**
+> - {Output description}
 >
-> > {Suggested response}
+>   ###### SUGGESTED RESPONSE
+>
+>   > {Suggested response}
 
 Bind each quotation to the actual local draft, identifying the relevant response ending when needed. For Update, distinguish current wording from the proposed wording and preserve accepted wording and links outside the authorized change. A change to wording requires a revised preview.
 
@@ -89,11 +80,13 @@ Keeping a draft locally does not accept a suggestion or authorize a remote save.
 
 Present non-routing advisories within Notes using the following structure. Repeat the advisory bullet as needed. Ordinary factual notes retain their existing form.
 
-> **Notes**
+> ##### NOTES
 >
 > - {Advisory issue}. {Practical effect}.
 >
->   **Suggested action:** {Concrete next action}.
+> ##### SUGGESTED ACTION
+>
+> {Concrete next action}.
 
 `{Concrete next action}` is a specific, relevant recommended step to investigate or address the issue, identifying what to inspect, test or change and its purpose. `{Note}` in the summaries below represents an ordinary factual note. Include factual notes and advisory entries only when applicable.
 
@@ -101,25 +94,26 @@ Present non-routing advisories within Notes using the following structure. Repea
 
 Put instruction-routing conflicts in Routing Conflicts, separate from topic state and pending testing, rather than in Notes. Do not duplicate the conflict in both sections. Omit empty sections; ordinary factual notes and unrelated advisories retain their existing form.
 
-> **Routing Conflicts**
+> ##### ROUTING CONFLICTS
 >
 > - {Routing conflict}. This routing conflict will likely block topic execution.
 >
->   **Suggested action:** {Concrete next action}.
+>   ###### SUGGESTED ACTIONS
+>   - {Concrete next action}.
+
+List all applicable conflicts first, then include this single grouped action block. Repeat action bullets as needed, identifying which conflicts they address.
 
 `{Routing conflict}` identifies the observed instruction constraint and affected topic behavior. The execution-impact statement describes a likely consequence, not a confirmed conversation-test failure. Recommend a targeted instruction correction before testing.
 
 ### Create summary
 
-For Create, state that creation is inactive and unpublished; activation is a separate choice in the testing follow-up. Render top-level review field labels as own-line level-five Markdown headings in ALL CAPS, followed by a blank line and the field content. Use no horizontal rules or trailing colons. Apply this treatment to Suggested action labels in Notes. Keep Notes' Suggested action headings and their text outside list indentation, aligned with the other review fields and immediately after the associated issue. Preserve the response quotation and all applicable omission rules. Do not turn field content, outcome sentences or picker options into uppercase headings.
+For Create, state that creation is inactive and unpublished; activation is a separate choice in the testing follow-up. Apply the shared heading treatment, including Suggested action labels in Notes outside list indentation. Preserve the response quotation and all applicable omission rules. Do not turn field content, outcome sentences or picker options into uppercase headings.
 
-Under Outputs, render child labels, including Response text and Suggested response, as indented level-six headings in ALL CAPS within the corresponding output bullet. Nest the response quotation at the same content indentation. Use RESPONSE TEXT for supplied or explicitly accepted wording, as shown below; use SUGGESTED RESPONSE for newly generated wording that has not been accepted. Omit the response heading and quotation for outputs without literal response wording. Other operations retain their existing response-label treatment.
+Under Outputs, render child labels, including Response text and Suggested response, as indented level-six headings in ALL CAPS within the corresponding output bullet. Nest the response quotation at the same content indentation. Use RESPONSE TEXT for supplied or explicitly accepted wording, as shown below; use SUGGESTED RESPONSE for newly generated wording that has not been accepted. Omit the response heading and quotation for outputs without literal response wording. Apply the same treatment in Update and component reviews.
 
-List all applicable routing conflicts first, repeating the conflict bullet as needed. Follow the complete conflict list with exactly one indented level-six SUGGESTED ACTIONS block, even when there is only one action. Nest the heading and action bullets as shown below. Repeat the action bullet as needed, making clear which conflicts each action addresses. Do not repeat this block for each conflict. Other operations retain the shared Routing Conflicts format.
+List all applicable routing conflicts first, repeating the conflict bullet as needed. Follow the complete conflict list with exactly one indented level-six SUGGESTED ACTIONS block, even when there is only one action. Nest the heading and action bullets as shown below. Repeat the action bullet as needed, making clear which conflicts each action addresses. Do not repeat this block for each conflict.
 
 Render:
-
-<!-- markdownlint-disable MD001 -->
 
 > ##### TITLE
 >
@@ -167,40 +161,61 @@ Render:
 >
 > [Full draft]({Draft link})
 
-<!-- markdownlint-enable MD001 -->
-
 ### Update summary
 
-For Update, include only affected fields, concise before/after details where useful, and important verified preservation points. Preserve the existing active state. Render:
+For Update, include only affected fields, concise before/after details where useful, and important verified preservation points. Preserve the existing active state. Within an affected response output, show CURRENT RESPONSE and PROPOSED RESPONSE as indented H6 labels; use SUGGESTED RESPONSE for unaccepted generated wording. Quote the actual respective wording at that same indentation. Omit the literal-response children when inapplicable. Render:
 
-> **Title:** {Topic title}
+> ##### TITLE
 >
-> **Agent:** {Destination agent}
+> {Topic title}
 >
-> **Behavior:** {Behavior change}
+> ##### AGENT
 >
-> **Inputs:** {Input changes}
+> {Destination agent}
 >
-> **Outputs:** {Output changes}
+> ##### BEHAVIOR
 >
-> **Starts when:** {Trigger changes}
+> {Behavior change}
 >
-> **Unchanged**
+> ##### INPUTS
+>
+> {Input changes}
+>
+> ##### OUTPUTS
+>
+> - {Output changes}
+>
+>   ###### CURRENT RESPONSE
+>
+>   > {Current response}
+>
+>   ###### PROPOSED RESPONSE
+>
+>   > {Proposed response}
+>
+> ##### STARTS WHEN
+>
+> {Trigger changes}
+>
+> ##### UNCHANGED
 >
 > - {Preserved behavior}
 >
-> **Notes**
+> ##### NOTES
 >
 > - {Note}
 > - {Advisory issue}. {Practical effect}.
 >
->   **Suggested action:** {Concrete next action}.
+> ##### SUGGESTED ACTION
 >
-> **Routing Conflicts**
+> {Concrete next action}.
+>
+> ##### ROUTING CONFLICTS
 >
 > - {Routing conflict}. This routing conflict will likely block topic execution.
 >
->   **Suggested action:** {Concrete next action}.
+>   ###### SUGGESTED ACTIONS
+>   - {Concrete next action}.
 >
 > [Full draft]({Draft link})
 
@@ -208,9 +223,7 @@ For Update, include only affected fields, concise before/after details where use
 
 Follow either summary with the [initial routing-conflict decision](#initial-routing-conflict-decision) when an instruction-routing conflict is known. Otherwise use the [suggested-response decision](#suggested-response-decision) for unaccepted suggested wording, or this separate short choice control for supplied or accepted wording:
 
-For Create without a routing conflict, explain the choices in normal chat immediately before that control:
-
-<!-- markdownlint-disable MD001 -->
+For Create or Update without a routing conflict, explain the choices in normal chat immediately before that control:
 
 > ##### YOUR CHOICES
 >
@@ -219,11 +232,11 @@ For Create without a routing conflict, explain the choices in normal chat immedi
 > | Push topic to agent | Save and verify the topic in Dev. Leave it inactive and unpublished. |
 > | Keep as draft       | Keep the local draft without changing the agent.                     |
 
-<!-- markdownlint-enable MD001 -->
+For Update, replace the Push explanation with `Save and verify the displayed topic changes in Dev. Preserve its active state; do not publish.` When suggested wording is unaccepted, the Push explanation also states that it accepts the displayed response. Add the applicable I want to update the response row, explaining that it revises the draft without pushing it. Retain the existing short picker labels; do not put these explanations in option labels or replace the separate decision control with the table.
 
-When suggested wording is unaccepted, the Push explanation also states that it accepts the displayed response. Add the applicable I want to update the response row, explaining that it revises the draft without pushing it. Retain the existing short picker labels; do not put these explanations in option labels or replace the separate decision control with the table.
+For a conflicting-save re-review, use the same control after the complete Update summary. The Push explanation names the conflicting content that the reviewed proposal would replace and the unrelated content preserved. Keep as draft retains the proposal locally without replacing the saved content. Retain the owner's concurrency checks; a revised approval does not bypass them.
 
-For every Create topic-save decision, call `ask_user` with this JSON shape. Keep the top message empty, use the contextual panel title and fixed inner question below, and allow custom text. The shown `enum` applies to supplied or accepted wording without a routing conflict. For the suggested-response or initial routing-conflict branch, replace only `enum` with that branch's applicable choices, including any conditional response-revision choice. The JSON defines the control; do not print it in chat. Submit, keyboard hints and close/collapse controls belong to the host.
+For every Create or Update topic-save decision, call `ask_user` with this JSON shape. Keep the top message empty, use the contextual panel title and fixed inner question below, and allow custom text. The shown `enum` applies to supplied or accepted wording without a routing conflict. For the suggested-response or initial routing-conflict branch, replace only `enum` with that branch's applicable choices, including any conditional response-revision choice. The JSON defines the control; do not print it in chat. Submit, keyboard hints and close/collapse controls belong to the host.
 
 ```json
 {
@@ -241,23 +254,13 @@ For every Create topic-save decision, call `ask_user` with this JSON shape. Keep
 }
 ```
 
-For Update with supplied or accepted wording and no routing conflict, use the existing control:
-
-> **Push topic to agent** / **Keep as draft**
-
 Keep as draft leaves the draft saved locally in the VS Code workspace without a remote write. Do not offer a runnable remote test for a draft-only outcome.
 
 ### Suggested-response decision
 
 After displaying the suggested wording and completed summary, present the applicable control.
 
-For Create, use the [Create save control](#topic-save-decision) with **Push topic to agent**, **I want to update the response** and **Keep as draft**, in that order.
-
-For Update, use:
-
-> **Use this suggested response and push {Topic title} to {Destination agent}?**
->
-> **Push topic to agent** / **I want to update the response** / **Keep as draft**
+For Create and Update, use the [Topic save control](#topic-save-decision) with **Push topic to agent**, **I want to update the response** and **Keep as draft**, in that order, and its corresponding explanation rows.
 
 Push topic to agent accepts the displayed suggested wording and approves the topic save together. Do not add a separate mandatory wording-approval step. Activation, testing and publication retain their separate permission requirements.
 
@@ -273,13 +276,15 @@ Keep as draft retains the suggestion locally without accepting it. Use the draft
 
 When the initial Create or Update review identifies an instruction-routing conflict, offer resolution before any topic or instruction push. Follow the completed summary with the applicable control.
 
-For Create, use the [Create save control](#topic-save-decision) with **Resolve the routing conflict in the Agent Instructions**, **Push topic anyway** and **Keep as draft**, in that order.
+For Create and Update, use the [Topic save control](#topic-save-decision) with **Resolve the routing conflict in the Agent Instructions**, **Push topic anyway** and **Keep as draft**, in that order. Explain these choices immediately before that control:
 
-For Update, use:
-
-> **How would you like to continue with {Topic title}?**
+> ##### YOUR CHOICES
 >
-> **Resolve the routing conflict in the Agent Instructions** / **Push topic anyway** / **Keep as draft**
+> | Choice                                                 | What happens                                                                         |
+> | ------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+> | Resolve the routing conflict in the Agent Instructions | Prepare a targeted instruction correction for review. Push neither change yet.       |
+> | Push topic anyway                                      | Save only the displayed topic changes. Leave the conflicting instructions unchanged. |
+> | Keep as draft                                          | Keep the local topic draft without a remote save.                                    |
 
 When suggested wording remains unaccepted, include **I want to update the response** before Keep as draft and use the response-revision continuation above. Explain before the control that Push topic anyway also accepts the displayed suggestion; resolving the instruction conflict alone does not accept it.
 
@@ -295,12 +300,12 @@ Keep as draft performs no remote save. Retain the proposed changes locally and d
 
 The head catalog `{topic_outcome_heads}` covers at least these resulting outcomes:
 
-- Confirmed remote push: **Topic pushed to agent.**
-- Requested content verified already present without a new remote write: **Topic already up to date. No push needed.**
-- Draft retained locally without a remote change: **Draft kept locally. Agent unchanged.**
-- Blocked before saving, or confirmed rejection: **Topic was not pushed.**
-- Remote outcome remains uncertain: **Topic push could not be confirmed.**
-- Remote save confirmed, but a subsequent local write failed: **Topic pushed; workspace update incomplete.**
+- Confirmed remote push: **TOPIC PUSHED TO AGENT**
+- Requested content verified already present without a new remote write: **TOPIC ALREADY UP TO DATE NO PUSH NEEDED**
+- Draft retained locally without a remote change: **DRAFT KEPT LOCALLY AGENT UNCHANGED**
+- Blocked before saving, or confirmed rejection: **TOPIC WAS NOT PUSHED**
+- Remote outcome remains uncertain: **TOPIC PUSH COULD NOT BE CONFIRMED**
+- Remote save confirmed, but a subsequent local write failed: **TOPIC PUSHED WORKSPACE UPDATE INCOMPLETE**
 
 Select the head from the resulting known state after observation and appropriate session-led recovery. Add the flexible factual trailer. Preserve known remote success after a local failure; do not claim the agent is unchanged when its remote outcome is uncertain.
 
@@ -310,7 +315,7 @@ When authoritative verification succeeds with `writeAttempted: false` and `updat
 
 The flexible trailer carries relevant identity, observed state, draft link, cause, pending work or next safe action. Render:
 
-> **{Outcome head}**
+> ##### {Outcome head}
 >
 > {Contextual trailer}
 
@@ -328,33 +333,52 @@ Use this combined decision only when a routing conflict is newly discovered or m
 
 For a newly discovered or materially changed conflict after a confirmed topic push, present the saved result, verified topic state and pending testing separately from Routing Conflicts:
 
-> **Topic pushed to agent.**
+> ##### TOPIC PUSHED TO AGENT
 >
 > Saved **{Topic title}** to **{Destination agent}**.
 >
 > {Verified topic state}. Conversation testing is pending.
 >
-> **Routing Conflicts**
+> ##### ROUTING CONFLICTS
 >
 > - {Routing conflict}. This routing conflict will likely block topic execution.
 >
->   **Suggested action:** {Concrete next action}.
+>   ###### SUGGESTED ACTIONS
+>   - {Concrete next action}.
 
 For a verified no-write result or a confirmed save with a local issue, retain the corresponding truthful `{topic_outcome_heads}` head and factual trailer rather than claiming a new push. `{Verified topic state}` comes from observed remote state, not the save itself.
 
 Follow with one combined decision, not a routing-resolution offer followed by another testing offer. Check the installed testing capability before offering a runnable test; report an actual capability gap rather than advertising unavailable testing. Without a routing conflict, use the ordinary state-aware testing offer.
 
-For an inactive topic:
+For an inactive topic, explain the following choices and use the JSON below:
 
-> **How would you like to continue with {Topic title}?**
+> ##### YOUR CHOICES
 >
-> **Resolve the routing conflict in the Agent Instructions** / **Not now, Activate and test anyway.**
+> | Choice                                                 | What happens                                                                                                |
+> | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+> | Resolve the routing conflict in the Agent Instructions | Prepare a targeted correction for review. Do not push it, activate or test yet.                             |
+> | Not now, Activate and test anyway.                     | Leave the conflict unchanged; activate and test this saved topic within the existing scope. Do not publish. |
 
-For an active topic:
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Routing conflict and testing",
+        "description": "How would you like to continue?",
+        "enum": [
+          "Resolve the routing conflict in the Agent Instructions",
+          "Not now, Activate and test anyway."
+        ]
+      }
+    }
+  }
+}
+```
 
-> **How would you like to continue with {Topic title}?**
->
-> **Resolve the routing conflict in the Agent Instructions** / **Not now, Test anyway.**
+For an active topic, replace the second `enum` entry and its explanation row with **Not now, Test anyway.** Explain that it leaves the conflict unchanged and tests the saved topic within the existing scope, without activation or publication. Keep the other control metadata unchanged.
 
 Resolve the routing conflict in the Agent Instructions prepares the targeted preview below. This choice does not approve an instruction push, activation or testing.
 
@@ -374,7 +398,7 @@ Preserve unrelated live instructions and pending local edits. Isolate the correc
 
 If current instructions cannot be established or the correction cannot be isolated, explain the missing evidence or scope issue and offer the next safe action. Do not present a runnable Push choice.
 
-If the desired correction is already authoritatively present, report **Agent instructions already up to date.** using the existing no-write outcome. Preserve the actual topic-save state; do not offer an unnecessary instruction push.
+If the desired correction is already authoritatively present, report **AGENT INSTRUCTIONS ALREADY UP TO DATE** using the existing no-write outcome. Preserve the actual topic-save state; do not offer an unnecessary instruction push.
 
 #### Show the preview
 
@@ -382,23 +406,33 @@ Use actual instruction text. Show the affected current wording, exact proposed w
 
 > **Instruction change ready for review.**
 >
-> **Agent:** {agent_name}
+> ##### AGENT
 >
-> **Related topic:** {topic_title}
+> {agent_name}
 >
-> **Routing conflict:** {routing_conflict}
+> ##### RELATED TOPIC
 >
-> **Proposed change:** {proposed_change}
+> {topic_title}
 >
-> **Current wording**
+> ##### ROUTING CONFLICT
+>
+> {routing_conflict}
+>
+> ##### PROPOSED CHANGE
+>
+> {proposed_change}
+>
+> ##### CURRENT WORDING
 >
 > > {current_affected_wording}
 >
-> **Proposed wording**
+> ##### PROPOSED WORDING
 >
 > > {proposed_affected_wording}
 >
-> **Unchanged:** {verified_preservation_facts}
+> ##### UNCHANGED
+>
+> {verified_preservation_facts}
 >
 > This instruction change has not been pushed. This preview does not authorize activation or testing.
 >
@@ -426,9 +460,28 @@ Include concise factual detail and preserve earlier confirmed saves. Do not desc
 
 **Only when the proposed topic content is already authoritatively saved:** use this two-item control for the instruction correction:
 
-> **Push this instruction change to {agent_name}?**
+> ##### YOUR CHOICES
 >
-> **Push instruction change** / **Keep as draft**
+> | Choice                  | What happens                                                                                   |
+> | ----------------------- | ---------------------------------------------------------------------------------------------- |
+> | Push instruction change | Save and verify only this correction for the selected agent. Do not activate, test or publish. |
+> | Keep as draft           | Retain the instruction correction locally without pushing it.                                  |
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Instruction save",
+        "description": "How would you like to continue?",
+        "enum": ["Push instruction change", "Keep as draft"]
+      }
+    }
+  }
+}
+```
 
 Reuse valid scoped consent for unchanged operations. During composed Push, reuse its component-level decision rather than adding another approval control.
 
@@ -448,7 +501,7 @@ Report each component's actual result. An instruction save does not establish th
 
 Keep as draft retains the correction locally without an instruction push, activation or testing.
 
-> **Instruction draft kept locally.**
+> ##### INSTRUCTION DRAFT KEPT LOCALLY
 >
 > No instruction change was pushed. {topic_save_state} The routing conflict remains unresolved.
 
@@ -464,15 +517,15 @@ For composed Push, including a topic and routing correction approved together, u
 
 Outside composed Push, use the head matching the resulting known facts:
 
-- Confirmed instruction write and authoritative readback: **Instructions pushed to agent.**
-- Desired correction authoritatively verified without a write: **Agent instructions already up to date.**
-- Confirmed non-save: **Instructions were not pushed.**
-- Remote outcome remains uncertain: **Instruction push could not be confirmed.**
-- Remote save confirmed but subsequent local recording remains incomplete: **Instructions pushed; workspace update incomplete.**
+- Confirmed instruction write and authoritative readback: **INSTRUCTIONS PUSHED TO AGENT**
+- Desired correction authoritatively verified without a write: **AGENT INSTRUCTIONS ALREADY UP TO DATE**
+- Confirmed non-save: **INSTRUCTIONS WERE NOT PUSHED**
+- Remote outcome remains uncertain: **INSTRUCTION PUSH COULD NOT BE CONFIRMED**
+- Remote save confirmed but subsequent local recording remains incomplete: **INSTRUCTIONS PUSHED WORKSPACE UPDATE INCOMPLETE**
 
 Outside composed Push, when the saved wording addresses the identified conflict, render:
 
-> **{Instruction outcome head}**
+> ##### {Instruction outcome head}
 >
 > {Verified instruction-save result}
 >
@@ -484,18 +537,18 @@ Outside composed Push, when the saved wording addresses the identified conflict,
 
 `{Verified instruction-save result}` uses the applicable complete statement below, including the named correction, agent and related topic even when those identities also appear elsewhere. Preserve the standalone block's paragraph breaks. In a composed report, use the statement in Details without adding an instruction outcome head.
 
-**Saved in this operation:** outside composed Push, use the **Instructions pushed to agent.** head.
+**Saved in this operation:** outside composed Push, use the **INSTRUCTIONS PUSHED TO AGENT** head.
 
 > {Instruction correction} was saved in **{Agent name}** for **{Topic title}** and confirmed by instruction readback.
 
-**Already present; no write:** outside composed Push, use the **Agent instructions already up to date.** head.
+**Already present; no write:** outside composed Push, use the **AGENT INSTRUCTIONS ALREADY UP TO DATE** head.
 
 > Instruction readback confirmed that {Instruction correction} was already present in **{Agent name}** for **{Topic title}**. No instruction write was needed.
 
-For a confirmed save followed by a local recording issue, retain the confirmed-save statement and describe the unfinished local work. Use **Pushed with local issue** in a composed report or the **Instructions pushed; workspace update incomplete.** standalone head. Failed or uncertain instruction saves use their corresponding status or standalone head and do not use either confirmed-state statement.
+For a confirmed save followed by a local recording issue, retain the confirmed-save statement and describe the unfinished local work. Use **Pushed with local issue** in a composed report or the **INSTRUCTIONS PUSHED WORKSPACE UPDATE INCOMPLETE** standalone head. Failed or uncertain instruction saves use their corresponding status or standalone head and do not use either confirmed-state statement.
 
 `{Testing readiness}` gives the verified active or inactive state and pending testing only when the proposed topic content is authoritatively saved or verified already current. Otherwise state that topic Push is still pending and do not offer runnable conversation testing. For partial saves, report each component's actual result rather than claiming the whole agent is unchanged.
 
-Omit the resolved Routing Conflicts advisory. For authoritatively saved topic content, reuse [Testing offers](testing-experience.md#testing-offers). Render the applicable quoted control verbatim and follow its consent, continuation and deferral rules. Use [Scoped runtime correctness goal](testing-experience.md#scoped-runtime-correctness-goal) for the authorized testing, fixes and retesting. Reuse existing authorization rather than presenting another offer. Instruction-push approval does not supply topic-push, testing or activation consent.
+Omit the resolved Routing Conflicts advisory. For authoritatively saved topic content, reuse [Testing offers](testing-experience.md#testing-offers). Render the applicable choice explanations and native control, following their consent, continuation and deferral rules. Use [Scoped runtime correctness goal](testing-experience.md#scoped-runtime-correctness-goal) for the authorized testing, fixes and retesting. Reuse existing authorization rather than presenting another offer. Instruction-push approval does not supply topic-push, testing or activation consent.
 
 For a failed or uncertain instruction push, or a remaining conflict after readback, preserve the actual result and uncertainty. Recover within the approved scope without blindly repeating an uncertain write. Do not claim resolution or enter the resolved-conflict testing path. If the maker explicitly requests testing despite the remaining conflict, require authoritatively saved topic content, obtain only missing testing or activation permission and carry the declined correction as an explicit exclusion. Do not automatically repeat resolution for the same conflict. No publication is authorized.

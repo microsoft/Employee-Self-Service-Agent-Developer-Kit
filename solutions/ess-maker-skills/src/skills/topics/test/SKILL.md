@@ -12,13 +12,17 @@ Read [Resolve and inspect](../../../reference/ess-docs/operations/native-topic-t
 
 Require canonical setup schema version `4`, with the entry matching `.local/config.json`'s `activeAgent` workspace slug marked `connect_ready: true`. If setup or the selected Dev identity is unavailable, report the prerequisite and pause. Do not borrow another workspace's authentication or change global profiles.
 
-Carry forward the selected topic from the current authoring or testing request. Do not ask the maker to select it again. Resolve any unknown component identity through the topic list operation, then inspect the selected component freshly. A missing local YAML file does not establish remote absence. Confirm genuinely ambiguous identity or changed saved content with the maker.
+Carry forward the selected topic from the current authoring or testing request. Do not ask the maker to select it again. Resolve any unknown component identity through the topic list operation, then inspect the selected component freshly. A missing local YAML file does not establish remote absence. Use the shared [Topic selection](../experience-contract.md#topic-selection) control only for genuinely ambiguous identity; confirm materially changed saved content with the maker.
 
 Establish intended behavior from the latest authoring request and context, with matching eval intent as a read-only guardrail. Use the freshly read saved topic as current implementation evidence. General inspection supports ordinary saved dialogs; optional exact-response compatibility is not admission to all testing. Do not change intended behavior, narrow the topic or weaken expectations merely to obtain a passing check.
 
 Preserve supplied or accepted response wording and links unless the maker authorizes a wording change. Distinguish literal saved content from observed runtime delivery; do not replace wording merely to obtain a passing test. Apply the shared **Authoring policy for this release** before any proposed topic edit or save, including temporary instrumentation. Apply the shared Supported authoring scope to proposed topic fixes, without restricting read-only inspection of existing topics.
 
-Carry the explicit test/fix objective and editable scope. An explicit test-only request remains test-only. When testing is already requested and only activation permission is missing, use the shared Activate {Topic title} for testing? question. For an inactive topic, read [Explicit activation](../../../reference/ess-docs/operations/native-topic-testing.md#explicit-activation) before its separate preview and authorized activation operation. Confirm authoritative Active state before sending; honor no-activation requests and report any unresolved prerequisite using `{topic_test_results}`. Creation itself stays inactive and updates preserve state. Never publish or change unrelated routing.
+Carry the explicit test/fix objective and editable scope. An explicit test-only request remains test-only. When testing is already requested and only activation permission is missing, use the shared activation-only explanations and native control. For an inactive topic, read [Explicit activation](../../../reference/ess-docs/operations/native-topic-testing.md#explicit-activation) before its separate preview and authorized activation operation. Confirm authoritative Active state before sending; honor no-activation requests and report any unresolved prerequisite using `{topic_test_results}`. Creation itself stays inactive and updates preserve state. Never publish or change unrelated routing.
+
+Only after an explicitly authorized activation attempt:
+
+{EMIT_STATUS_UPDATE: topic-activation}
 
 For a selected test-anyway continuation, or later authorized testing after Push topic anyway, carry the declined routing correction as an explicit exclusion. Push topic anyway authorizes only the topic save, not testing; obtain the later testing choice before entering this owner. Leave the declined instructions unchanged even if the conflict blocks topic execution; report the observed limitation rather than silently resolving it through the debugging loop. Do not repeat an already-authorized testing offer. Preserve the stated testing objective and existing editable scope; a test-anyway selection is not blanket debugging consent.
 
@@ -30,17 +34,25 @@ This procedure is not a graded evaluation-set execution. Route separately reques
 
 Read [Build the probe set](../../../reference/ess-docs/operations/native-topic-debugging.md#build-the-probe-set). Build a useful probe set from intended behavior, actual inputs/backend contracts and matching eval intent, including safe applicable negative cases as well as a happy path. Explain the scope so the maker can adjust it, without inserting another routine approval gate. Exercise informative failure cases first when safe and within the approved resources. Do not invent a mandatory case matrix or force real outages, permission changes or malformed writes.
 
+{EMIT_STATUS_UPDATE: testing-readiness}
+
 ## Prepare the browser separately
 
 Read [Prepare the test browser](../../../reference/ess-docs/operations/native-topic-testing.md#prepare-the-test-browser) and [Confirm browser readiness](../../../reference/ess-docs/operations/native-topic-testing.md#confirm-browser-readiness) before preparation or reuse.
 
 Prepare or reuse the test browser and open the selected agent. Resolve the trusted selected-agent Studio URL and numeric-loopback connection internally from the selected context and preparation result. Use the reference's bounded browser preparation operation when a new browser is needed. Browser preparation ends before human sign-in, Test-pane preparation or any conversation Send. SDK sign-in does not establish browser identity.
 
+{EMIT_STATUS_UPDATE: browser-preparation}
+
 Keep the browser and its profile available for follow-ups, including after a completed check or pause/stop. Leave normal closure to the maker, not routine test cleanup. Prepare a fresh window when the existing one is unavailable or unusable; reconcile an uncertain Send before replacement and retain the prior browser identities and evidence. Follow the reference for requested closure and exact-profile cleanup.
 
 Present the full shared readiness message in normal chat, followed by its separate readiness-only control. The maker signs in with a test account if necessary and opens the Test chat pane with an empty, idle composer. Omit the sign-in paragraph when already signed in with a test account; reuse valid readiness. Keep the existing test-only or test-and-fix scope.
 
 Apply Not ready, keep paused or Stop without sending immediately using the shared exact acknowledgement, reporting any completed work separately using `{topic_test_results}`. Resume within the existing objective and permissions, resolving only changed or missing prerequisites. Pause until the maker confirms the correct Test pane is open with an empty, idle composer. Do not inspect credentials, unrelated tabs or shared authentication stores. Browser preparation is not recovery from an uncertain Send: do not automatically launch, navigate, reset, reload or resend.
+
+After assessing the readiness response or reusing valid readiness, apply the testing reference's pause/stop precedence:
+
+{EMIT_STATUS_UPDATE: browser-readiness}
 
 ## Execute and interpret tests
 
@@ -65,6 +77,12 @@ Read [Optional exact-response assertion](../../../reference/ess-docs/operations/
 If a send times out or has an uncertain outcome, retain the original prompt, intended expectation, boundary and evidence. Use the independent `observe` operation against that original capture/run without sending again. Keep later observations separate and distinguish them from the original result. Do not replay a failed or uncertain send by choosing a new directory. A planned retest after a verified fix is distinct from blindly replaying an uncertain attempt.
 
 If local evidence output fails after capture or readback, retain the returned known facts and report the output failure separately. Do not treat it as permission to resend.
+
+After interpreting the current pass, including an incomplete or uncertain pass, and before its next fix or final report:
+
+{EMIT_STATUS_UPDATE: test-assessment}
+
+Return to this assessment point after each post-fix retest. A delegated save reports its own outcome, not a second testing-owner save update.
 
 ## Diagnose and report within scope
 

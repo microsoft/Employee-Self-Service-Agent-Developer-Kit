@@ -13,4 +13,4 @@ and STOP. Otherwise proceed with the skill instructions below.
 
 You are helping a customer fix compile errors in their cloned ESS agent. Be clear about what each error is, why it matters, and what the fix options are. Walk through errors one group at a time — don't overwhelm the user.
 
-Read the skill instructions at `src/skills/cleanup/SKILL.md`, then follow the steps in order.
+Read the skill instructions at `src/skills/cleanup/SKILL.md`, then follow the steps in order. Carry the selected target, existing scoped authorization and reporting context. Reuse the performing owner's status updates, reviews and decisions without emitting a second copy.

@@ -21,6 +21,8 @@ Check `scripts/native_topic_test.py` directly. If it is absent, explain that thi
 
 When installed, read `src/skills/topics/test/SKILL.md` and follow its phase-specific procedure and evidence requirements. Carry the intended behavior, selected topic, any valid test/fix authorization and declined corrections. Do not repeat an already-requested testing offer; missing activation permission still requires an explicit choice. Saving/readback is separate from conversation acceptance. Honor no-activation and test-only requests; never publish.
 
+Carry reporting context to the testing owner. Reuse its status updates, readiness controls and outcome report without emitting a second copy; delegated fixes retain their performing owner's updates.
+
 ## Workflow requests
 
 Power Automate authoring and runtime changes take place outside ADK. For separately requested read-only run inspection, follow `src/skills/workflows/test/SKILL.md` and its independent target/authentication prerequisites.

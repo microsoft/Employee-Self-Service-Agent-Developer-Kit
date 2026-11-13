@@ -39,7 +39,7 @@ Saving a topic does not activate or publish it. For an inactive selected topic, 
 python scripts/native_topic_test.py activate --inspection "<inspection file>"
 ```
 
-Show the effect and use the shared Activate and test choice when activation permission is missing. For already-requested testing, use Activate {Topic title} for testing? to obtain only the missing activation permission and retain test-only or test-and-fix scope. Honor no-activation requests. Only after explicit authorization for this selected topic:
+Show the effect and use the shared [Testing offers](../../../skills/topics/testing-experience.md#testing-offers) explanations and native control when activation permission is missing. For already-requested testing, use its activation-only variation to obtain only the missing activation permission and retain test-only or test-and-fix scope. Honor no-activation requests. Only after explicit authorization for this selected topic:
 
 ```powershell
 python scripts/native_topic_test.py activate --inspection "<inspection file>" --yes

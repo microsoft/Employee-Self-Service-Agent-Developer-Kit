@@ -1,5 +1,7 @@
 # Shared topic experience
 
+<!-- markdownlint-disable MD001 -->
+
 Read this shared foundation before topic authoring, deletion, Push or testing. It owns common presentation, supported authoring coverage, deletion protection and authorization. Use the owning operation for execution and authoritative readback.
 
 ## Read by operation
@@ -23,11 +25,13 @@ At the marker, assess the available evidence. Emit the defined completion messag
 
 Send the update as a standalone normal-chat message before proceeding to the next step. Keep required reviews, outcome reports and questions in separate subsequent messages, even when they repeat the same fact. Emit once for the observed result at that point; assess and report a revised result anew. Then follow the operation's applicable continuation, pause or recovery instructions without expanding its authorization.
 
-Apply markers at their defined reporting points, including failed or incomplete attempts, rather than after every tool call. Operations without markers retain their own progress rules.
+Apply markers at their defined reporting points, including failed or incomplete attempts, rather than after every tool call. If the marked work stops before its normal reporting point, emit its observed outcome before pausing or returning. Do not enter reporting points for work that was never requested or selected. Reuse an existing still-current assessment rather than repeating work only to emit an update.
+
+The operation performing the work owns its status update. A delegating caller carries the reporting context and reuses the owner's update without emitting it again. Required composed reports remain separate. When the caller performs work without an emitting owner, it uses the definition and marker specified at that dispatch point. Pause and stop acknowledgements take precedence over a generic status message for the same result.
 
 ## Presentation and scope
 
-Read and apply [Native task progress](../../reference/ui-formatting-guidelines.md#native-task-progress) before starting work. Use the current operation's progress milestones without replacing its previews, decisions or results.
+For topic authoring, deletion, Push, testing and cleanup, use the operation-linked status definitions and markers, not native todo lists or Markdown progress checklists. Keep previews, decisions and results separate. Setup and other operations retain their own progress rules.
 
 Read and apply [Authoring pattern](../../reference/ui-formatting-guidelines.md#authoring-pattern) before rendering a template. The focused references own its literal copy, placeholder bindings and applicable omission, repetition and conditional-choice rules.
 
@@ -39,9 +43,39 @@ Extensibility does not reintroduce explicitly excluded rules or options, invent 
 
 Use ordinary chat for open-ended requirements and revisions. Do not put a free-text-only exchange in a structured question. Retain structured controls for genuine choices; render summaries and previews in normal chat before a separate short control, not inside a long question description.
 
-Use terse, external, semi-technical language about behavior and interfaces, without internal node labels. Use bold labels with whitespace between sections, except for the [Create summary](authoring-experience.md#create-summary), which uses uppercase level-five headings without horizontal rules, nested level-six child headings under Outputs and a nested level-six Suggested actions block under Routing Conflicts. Use short bullets for multiple inputs/outputs and required/optional markings where useful, inline code only for technical names the developer needs, and a link to the full draft for detail.
+Use terse, external, semi-technical language about behavior and interfaces, without internal node labels. For topic-workflow reviews, previews, reports and choice explanations, render field labels as own-line level-five Markdown headings in ALL CAPS, followed by a blank line and content, without horizontal rules or trailing colons. Under Outputs, nest child labels and literal quotations within their output bullet using indented level-six headings. After the complete Routing Conflicts list, use one indented level-six SUGGESTED ACTIONS block with action bullets. Notes' SUGGESTED ACTION headings remain level five outside list indentation, immediately after their issue. Nested component-type labels under Not included use level six. Keep status/outcome sentences, literal responses, field values and picker options in their original casing and wording. Use short bullets for multiple inputs/outputs and required/optional markings where useful, inline code only for technical names the developer needs, and a link to the full draft where its template defines one.
 
 Omit genuinely empty sections. Unresolved information is not absence: identify it as unresolved rather than omitting it or calling it absent. Apply [Response wording and local drafts](authoring-experience.md#response-wording-and-local-drafts) when presenting literal response text. Describe dynamic content without inventing its rendered response. For lengthy wording, provide a clearly labeled excerpt and access to the full text.
+
+Before each genuine choice control, render the applicable YOUR CHOICES table in normal chat with one concise explanation per offered option. Keep it separate from the control. Use the owning JSON with an empty top message, contextual title and fixed inner question, allowing custom text. Substitute discovered values and documented conditional choices only; never display JSON or unresolved placeholders to the maker. Submit, keyboard hints and close/collapse controls belong to the host. A table explains the decision but does not replace consent.
+
+## Topic selection
+
+Carry a known topic forward without another question. When identity is genuinely ambiguous, use the operation's current discovery and readback to show candidate titles and short purposes. Bind each option to its exact discovered identity; distinguish duplicate titles with useful target context. Accept a free-text name or description without requiring name recall, then resolve identity before proceeding. Selection alone authorizes no edit, save, deletion, activation or test.
+
+> ##### YOUR CHOICES
+>
+> | Choice                   | What happens                        |
+> | ------------------------ | ----------------------------------- |
+> | {Discovered topic title} | Select this topic: {Short purpose}. |
+
+Repeat the row and `enum` entry for each actual candidate. Call `ask_user`:
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "topic": {
+        "type": "string",
+        "title": "Topic selection",
+        "description": "How would you like to continue?",
+        "enum": ["{Discovered topic title}"]
+      }
+    }
+  }
+}
+```
 
 ## Supported authoring scope
 

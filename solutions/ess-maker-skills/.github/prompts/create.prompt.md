@@ -17,7 +17,7 @@ require setup.
 
 For any explicit or implicit topic creation request, read `src/skills/topics/create/SKILL.md` and follow it completely. This includes requests based on evaluation files or intended scenarios. Carry supplied intent, cases, wording, and thresholds as context; do not start a separate scenario/materializer lifecycle.
 
-Carry the selected target, intended behavior, supplied wording/cases, valid Push/debugging authorization and any declined corrections to the owner. It loads the shared foundation and operation-specific experience references at the relevant steps. Do not add a parallel approval or testing lifecycle in this prompt.
+Carry the selected target, intended behavior, supplied wording/cases, valid Push/debugging authorization, declined corrections and reporting context to the owner. It loads the shared foundation and operation-specific experience references at the relevant steps. Reuse its status updates, reviews and decisions without emitting a second copy. Do not add a parallel approval or testing lifecycle in this prompt.
 
 ## Evaluation
 

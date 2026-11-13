@@ -2,7 +2,7 @@
 
 Create one ordinary Copilot Studio topic in the selected editable Dev agent. The normal output is a `.mcs.yml` draft followed by an approved AgentBuilder save. Do not activate or publish as a save side effect.
 
-Read the [shared foundation](../experience-contract.md) before interacting with the maker. Apply its Supported authoring scope, authoring policy and authorization rules. Before drafting, read [Response wording and local drafts](../authoring-experience.md#response-wording-and-local-drafts) and [Create status updates](../authoring-experience.md#create-status-updates). Reuse those status definitions at the marked reporting points below. Load the other linked references at the steps that need them, not all upfront.
+Read the [shared foundation](../experience-contract.md) before interacting with the maker. Apply its Supported authoring scope, authoring policy and authorization rules. Before drafting or saving, read [Response wording and local drafts](../authoring-experience.md#response-wording-and-local-drafts) and [Authoring status updates](../authoring-experience.md#authoring-status-updates). Reuse those status definitions at the marked reporting points below. Load the other linked references at the steps that need them, not all upfront.
 
 ## Boundaries
 
@@ -71,6 +71,10 @@ When the maker selects Resolve the routing conflict in the Agent Instructions, o
 python scripts\agent_instructions.py update --draft "{agent.folder}\agent.mcs.yml" --expected ".local\topic-authoring\instructions-before.json" --output ".local\topic-authoring\instructions-preview.json"
 ```
 
+For this selected correction attempt:
+
+{EMIT_STATUS_UPDATE: instruction-preparation}
+
 Ordinary topic and instruction changes require separate approvals. For a known mismatch, read [Routing Conflicts](../authoring-experience.md#routing-conflicts) and the [initial routing-conflict decision](../authoring-experience.md#initial-routing-conflict-decision). Allow a deliberate topic-only save while reporting unresolved alignment. When preparing a correction, use the [targeted instruction-change preview](../authoring-experience.md#targeted-instruction-change-preview-and-approval) and [Push review](../push-experience.md#entry-inventory-and-choices) before saving either proposed change. Reuse unchanged scoped batch/debugging consent from the shared foundation.
 
 ## 4. Preview and approve the topic save
@@ -106,6 +110,8 @@ After the applicable instruction approval, including valid scoped batch/debuggin
 ```powershell
 python scripts\agent_instructions.py update --draft "{agent.folder}\agent.mcs.yml" --expected ".local\topic-authoring\instructions-before.json" --yes --output ".local\topic-authoring\instructions-result.json"
 ```
+
+{EMIT_STATUS_UPDATE: instruction-save}
 
 Report through [Topic outcomes](../authoring-experience.md#topic-outcomes) and, when applicable, [Instruction-push outcomes and testing](../authoring-experience.md#instruction-push-outcomes-and-testing). A joint approval uses the [composed Push report](../push-experience.md#composed-push-report-composed_push_report), not stacked owner blocks. Preserve known remote success when local result-file or bookkeeping output fails. Do not blind-retry an uncertain create.
 

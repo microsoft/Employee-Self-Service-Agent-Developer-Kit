@@ -3,7 +3,7 @@
 This is a provisional compatibility alias. It does not own a separate scenario, materialization, approval, deployment, or testing lifecycle.
 
 1. Carry the exact selected topic, user intent, supplied evaluation files or cases, valid thresholds, and approved source content.
-2. Read `src/skills/topics/update/SKILL.md` and use it as the sole topic-update owner.
+2. Read `src/skills/topics/update/SKILL.md` and use it as the sole topic-update owner. Carry its status-reporting context through delegation; reuse its updates, reviews and decisions without emitting a second copy.
 3. Preserve user evaluation data. A topic-only save may leave disclosed case mismatches.
 4. When separate evaluation editing is requested, hand the exact selected sources and thresholds to the applicable evaluation skill through `src/skills/evaluations/dispatcher/SKILL.md`.
 5. Do not create or refresh a scenario document, runtime manifest, or custom materialized evaluation folder.
