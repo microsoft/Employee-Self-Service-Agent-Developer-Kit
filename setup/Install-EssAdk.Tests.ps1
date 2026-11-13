@@ -686,7 +686,12 @@ Test 'install-ess-adk.sh filters JSON marker lines from both env-list and agent-
     }
 }
 
-function Invoke-DaHandoffFixture([int]$SelectionExit, [string]$SelectedRing) {
+function Invoke-DaHandoffFixture(
+    [int]$SelectionExit,
+    [string]$SelectedRing,
+    [string]$Checkpoint,
+    [int]$DiagnosticExit = 7
+) {
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) "ess-da-smoke-$([guid]::NewGuid().ToString('N'))"
     $scriptsDir = Join-Path $tempRoot 'scripts'
     $localDir = Join-Path $tempRoot '.local'
@@ -732,7 +737,7 @@ function Invoke-DaHandoffFixture([int]$SelectionExit, [string]$SelectedRing) {
             if ($args[0] -eq $selectorPath) {
                 $global:LASTEXITCODE = $SelectionExit
             } else {
-                $global:LASTEXITCODE = 7
+                $global:LASTEXITCODE = $DiagnosticExit
             }
         }
         $failure = ''
@@ -770,6 +775,9 @@ foreach ($selectedRing in @('prod', 'preprod', 'test')) {
             throw 'The selector must receive the requested ring'
         }
         $cliArgs = $actual.calls[1]
+        if ($cliArgs -contains '--checkpoint') {
+            throw 'Default standalone diagnostics must not select a checkpoint'
+        }
         if ($cliArgs[0] -ne 'scripts\flightcheck\cli.py') {
             throw 'The verified target must reach the shared FlightCheck CLI'
         }
@@ -798,9 +806,45 @@ foreach ($selectedRing in @('prod', 'preprod', 'test')) {
     }
 }
 
+foreach ($checkpoint in @('WD-RUN-001', 'ENV-004', 'WD-FLOW-*', 'UNKNOWN-CHECKPOINT')) {
+    Test "DA handoff forwards only the requested checkpoint $checkpoint" {
+        $actual = Invoke-DaHandoffFixture -SelectionExit 0 -SelectedRing 'preprod' -Checkpoint $checkpoint -DiagnosticExit 2
+        if ($actual.failure) { throw $actual.failure }
+        if ($actual.calls.Count -ne 2) { throw 'Expected one selector and one shared CLI invocation' }
+        $cliArgs = $actual.calls[1]
+        $index = [array]::IndexOf($cliArgs, '--checkpoint')
+        if ($index -lt 0 -or $cliArgs[$index + 1] -cne $checkpoint) {
+            throw 'The requested checkpoint must reach the shared CLI unchanged'
+        }
+        if ($cliArgs -contains '--scope' -or $cliArgs -contains '--profile') {
+            throw 'Checkpoint runs must not also request a scope or profile'
+        }
+        $expected = @{
+            '--agent-slug' = $actual.target.activeAgent
+            '--preferred-username' = $actual.target.account
+            '--tenant-id' = $actual.target.tenantId
+            '--ring' = 'preprod'
+            '--invocation-source' = 'installer'
+            '--select-targets' = 'never'
+        }
+        foreach ($flag in $expected.Keys) {
+            $index = [array]::IndexOf($cliArgs, $flag)
+            if ($index -lt 0 -or $cliArgs[$index + 1] -cne $expected[$flag]) {
+                throw "Checkpoint handoff lost the verified $flag value"
+            }
+        }
+        if (-not $actual.configUnchanged -or -not $actual.restoredPath -or -not $actual.restoredPreference) {
+            throw 'Checkpoint handoff must preserve configuration and restore the caller'
+        }
+        if ($actual.outcome -ne 'success' -or $actual.exitCode -ne 2) {
+            throw 'The shared CLI exit code must be preserved without a full-suite retry'
+        }
+    }
+}
+
 foreach ($selectionExit in @(1, 130)) {
     Test "DA handoff blocks diagnostics after failed/cancelled selection (exit $selectionExit)" {
-        $actual = Invoke-DaHandoffFixture -SelectionExit $selectionExit -SelectedRing 'test'
+        $actual = Invoke-DaHandoffFixture -SelectionExit $selectionExit -SelectedRing 'test' -Checkpoint 'WD-RUN-001'
         if ($actual.calls.Count -ne 1 -or $actual.failure -notmatch 'FlightCheck was not started') {
             throw 'Failed/cancelled selection must stop before invoking the shared CLI'
         }
@@ -939,6 +983,55 @@ Test 'bootstrap-flightcheck.ps1 accepts -Ring and forwards it to Install-EssAdk.
     if ($bsSrc -notmatch 'Ring\s*=\s*\$Ring') {
         throw "bootstrap-flightcheck.ps1 must forward -Ring in the installer args hashtable"
     }
+}
+
+foreach ($checkpoint in @($null, 'WD-RUN-001')) {
+    Test "bootstrap-flightcheck.ps1 binds and forwards optional checkpoint '$checkpoint'" {
+        $path = Join-Path $PSScriptRoot 'bootstrap-flightcheck.ps1'
+        $tokens = $null; $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+        if ($errors.Count -gt 0) { throw "Bootstrap parse error: $($errors[0].Message)" }
+        $source = Get-Content -LiteralPath $path -Raw
+        $start = $source.IndexOf('$installerArgs =')
+        if ($start -lt 0) { throw 'Bootstrap installer handoff is missing' }
+        $handoff = [scriptblock]::Create($ast.ParamBlock.Extent.Text + "`n" + $source.Substring($start))
+        $fixture = @{ bound = $null }
+        $scriptBlock = {
+            param($Branch, [switch]$FlightCheckOnly, $Ring, $InstallRoot, $Checkpoint)
+            $fixture.bound = $PSBoundParameters
+        }
+        $arguments = @{ Branch = 'test-branch'; Ring = 'preprod'; InstallRoot = 'C:\fixture with spaces' }
+        if ($null -ne $checkpoint) { $arguments.Checkpoint = $checkpoint }
+        & $handoff @arguments
+        if ($fixture.bound.Branch -cne $arguments.Branch -or
+            $fixture.bound.Ring -cne $arguments.Ring -or
+            $fixture.bound.InstallRoot -cne $arguments.InstallRoot -or
+            -not $fixture.bound.FlightCheckOnly) {
+            throw 'Bootstrap lost its existing installer arguments'
+        }
+        if ($null -eq $checkpoint) {
+            if ($fixture.bound.ContainsKey('Checkpoint')) {
+                throw 'Default bootstrap must not bind an empty checkpoint'
+            }
+        } elseif ($fixture.bound.Checkpoint -cne $checkpoint) {
+            throw 'Bootstrap did not forward the requested checkpoint'
+        }
+    }
+}
+
+Test 'Install-EssAdk.ps1 rejects Checkpoint without FlightCheckOnly before installing tools' {
+    $tokens = $null; $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($installerPath, [ref]$tokens, [ref]$errors)
+    $end = $src.IndexOf('# Back-compat: -SkipMakerProfile')
+    if ($end -lt 0) { throw 'Installer initialization boundary is missing' }
+    $guard = $src.Substring($ast.ParamBlock.Extent.EndOffset, $end - $ast.ParamBlock.Extent.EndOffset)
+    $entry = [scriptblock]::Create($ast.ParamBlock.Extent.Text + $guard)
+    $failure = ''
+    try { & $entry -InstallRoot ([IO.Path]::GetTempPath()) -Checkpoint 'WD-RUN-001' } catch { $failure = $_.Exception.Message }
+    if ($failure -notmatch '\-Checkpoint requires \-FlightCheckOnly') {
+        throw 'A checkpoint outside standalone mode must fail before installation'
+    }
+    & $entry -InstallRoot ([IO.Path]::GetTempPath()) -FlightCheckOnly -Checkpoint 'WD-RUN-001'
 }
 
 Test 'bootstrap-flightcheck-mac.sh accepts --ring and exports RING for install-ess-adk.sh' {

@@ -125,6 +125,32 @@ an agent workspace; the installer does not export a Dataverse solution.
 For DA diagnostics on macOS, use the direct command below from an already
 configured DA workspace.
 
+### Running a specific check on Windows
+
+Pass `-Checkpoint` to run a single check instead of the full suite. For the
+Workday litmus test:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1))) -Checkpoint WD-RUN-001
+```
+
+The script still refreshes the code, installs missing dependencies, and verifies
+your selected DA. It runs only the requested check and its supporting
+prerequisites, not the full suite. Unknown or unsupported IDs fail explicitly;
+they do not fall back to a full run. Omit `-Checkpoint` for the existing full
+diagnostics.
+
+The Workday litmus reads recent flow history; it does not execute employee
+tasks. Its report is saved separately to
+`solutions\ess-maker-skills\workspace\flightcheck\workday-litmus\report.html`,
+preserving the full-suite report. The terminal prints the full artifact paths.
+If there is no recent run to inspect, follow the report's Test-pane guidance
+and rerun the same command.
+
+For a local installer invocation, use
+`.\setup\Install-EssAdk.ps1 -FlightCheckOnly -Checkpoint WD-RUN-001`
+from the repository root.
+
 ### Changing your environment or agent
 
 Re-run the same Windows command and select the intended DA. Older
