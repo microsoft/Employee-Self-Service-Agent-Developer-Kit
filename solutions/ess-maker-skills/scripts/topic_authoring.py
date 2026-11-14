@@ -611,10 +611,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--yaml-output is valid only for read.")
 
     root = args.kit_root.resolve()
-    client, target = connect_selected_dev_workspace(root, args.account)
+    client, target, component_payload = connect_selected_dev_workspace(root, args.account)
     agent_folder = _active_agent_folder(root)
     component_map = _load_component_map(agent_folder)
-    component_payload = client.fetch_components(target["agent"]["id"])
     live_components = _components(component_payload)
     mapped_paths = {
         str(entry.get("componentId") or "").casefold(): path

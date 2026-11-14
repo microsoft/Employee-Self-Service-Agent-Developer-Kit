@@ -288,7 +288,6 @@ def test_create_update_and_push_do_not_reintroduce_the_support_scope_gate():
             "action-backed topic authoring is outside ADK",
             "do not author a live lookup",
             "do not edit, overwrite or delete it",
-            "Do not route backend conversations through the bounded topic test",
         ):
             assert restriction not in guidance, (relative, restriction)
     push = _read("src/skills/topics/push-experience.md")
@@ -1016,6 +1015,51 @@ def test_already_satisfied_topic_outcome_does_not_claim_a_new_push():
     assert "verified saved content" in update
 
 
+def test_push_cancellation_paths_use_the_composed_report():
+    contract = _read("src/skills/topics/push-experience.md")
+    for heading, exclusions in (
+        ("### Entry inventory and choices", "including the named exclusions"),
+        ("### Type-level subset", "previously excluded entries under Not included"),
+        ("### Component-level review", "retain named exclusions"),
+    ):
+        section = contract.split(heading, 1)[1].split("\n### ", 1)[0]
+        assert "{composed_push_report}" in section
+        assert exclusions in section
+    report = contract.split("### Composed Push report:", 1)[1].split(
+        "## Push telemetry", 1
+    )[0]
+    assert "even when no save was attempted" in report
+    assert "every entry in the retained inventory exactly once" in report
+    assert "Do not replace the report with a cancellation sentence" in report
+
+
+def test_push_handoffs_and_selections_retain_named_exclusions():
+    push = " ".join(_read(".github/prompts/push.prompt.md").split())
+    contract = _read("src/skills/topics/push-experience.md")
+    assert "Create/Update/Delete routing-correction handoff" in push
+    assert "Narrowing save scope does not narrow the inventory" in push
+    assert "Repeat the reason on each component's bullet" in contract
+    subset = contract.split("### Type-level subset", 1)[1].split(
+        "### Component-level review", 1
+    )[0]
+    assert "every unselected component and existing exclusion" in subset
+    component = contract.split("### Component-level review", 1)[1].split(
+        "### Compact change comparison", 1
+    )[0]
+    assert (
+        "> ##### NOT INCLUDED\n>\n> ###### {COMPONENT TYPE}\n>\n"
+        "> - {Component name}: {Exclusion reason}"
+    ) in component
+    for relative in (
+        "src/skills/topics/authoring-experience.md",
+        "src/skills/topics/deletion-experience.md",
+    ):
+        assert "retain them in the inventory as named Not included entries" in _read(relative)
+    assert "including any changed Display name" in _read(
+        "src/skills/topics/deletion-experience.md"
+    )
+
+
 def test_push_owners_share_batch_telemetry_without_changing_other_evaluation_actions():
     push = _read(".github/prompts/push.prompt.md")
     assert "nested owners without duplicate events" in push
@@ -1110,7 +1154,7 @@ def test_initial_routing_conflict_decision_precedes_push_and_preserves_exact_sco
     assert "before any topic or instruction push" in initial
     assert "does not approve a topic push, instruction push, activation or testing" in initial
     assert "Review the topic draft and targeted instruction correction together" in initial
-    assert "exclude unrelated pending edits" in initial
+    assert "exclude unrelated pending edits from save scope" in initial.casefold()
     assert "pause dependent work" in initial
     assert "Push topic anyway approves only the displayed topic save" in initial
     assert "declined routing correction as an explicit exclusion" in initial

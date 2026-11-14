@@ -1646,8 +1646,8 @@ def _validate_setup_target(
 def connect_selected_dev_workspace(
     kit_root: Path,
     account: str | None = None,
-) -> tuple[AgentBuilderClient, dict[str, Any]]:
-    """Authenticate and validate the canonical, ready workspace's Dev target."""
+) -> tuple[AgentBuilderClient, dict[str, Any], dict[str, Any]]:
+    """Return the validated Dev client, target and initial component snapshot."""
     config = _load_json(kit_root / ".local" / "config.json")
     state = _load_canonical_setup_state(kit_root)
     selected = [
@@ -1707,9 +1707,15 @@ def connect_selected_dev_workspace(
     target = validate_existing_dev_connection(
         client, environment_id=environment["id"], agent_id=agent["botId"],
         expected_schema_name=agent["schemaName"],
+        allow_missing_schema=True,
+    )
+    components = client.fetch_components(target["agent"]["id"])
+    target["agent"]["schemaName"] = _validate_changeset_identity(
+        components, target["agent"]["id"],
+        expected_schema_name=agent["schemaName"],
     )
     _validate_setup_target(kit_root, target)
-    return client, target
+    return client, target, components
 
 
 def _changeset_sha256(changeset: dict[str, Any]) -> str:

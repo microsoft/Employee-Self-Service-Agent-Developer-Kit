@@ -323,7 +323,7 @@ def instruction_cli(component, monkeypatch, tmp_path, fake_tenant_id):
             "unchangedOtherComponents": 1,
         }
     )
-    connect = Mock(return_value=(connection, target))
+    connect = Mock(return_value=(connection, target, _payload(component)))
     monkeypatch.setattr(cli, "connect_selected_dev_workspace", connect)
     monkeypatch.setattr(cli, "MinimalBotEvaluationClient", Mock(return_value=transport))
     monkeypatch.setattr(

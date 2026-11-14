@@ -51,7 +51,11 @@ The list is semi-fixed, not exhaustive. Include other discovered types when appl
 
 Use `{component_inventory}` for the entry list, type selector, component-level review, results table and Not included section. Derive displayed names, types and counts from its applicable entries.
 
+Retain the complete discovered inventory in session context through handoffs, subset selection, component decisions and cancellation. Change each entry's applicability or outcome without replacing the inventory with only the selected entries. A topic-and-instruction handoff narrows save scope, not the inventory: retain unrelated topic drafts, evaluation sets and changed metadata, including Display name, as named exclusions.
+
 Not included is a filtered view of `{component_inventory}`: discovered components outside this push's scope or without an available save operation. Reuse their component types and human-readable names throughout entry review, compact comparison and results. Keep the NOT INCLUDED H5 heading, uppercase H6 component-type labels and one named bullet with its reason per component. Do not collapse exclusions into prose, combine several component names in one bullet, or substitute filename stems for discovered display titles. Do not duplicate entries already represented in the results table.
+
+Repeat the reason on each component's bullet even when several components share it. A type heading, shared introductory reason or collective pending-changes sentence does not replace those individual name/reason bullets.
 
 Show exclusions only when actual discovered changes require an explanation, naming the specific limitation. Do not make unsupported Push a routine branch or advertise retired functionality as an option.
 
@@ -131,7 +135,7 @@ Disclose material consequences, including actual evaluation new-copy/reuse and l
 }
 ```
 
-Selecting Push all listed changes approves every change in the displayed inventory for the identified agent. No additional approval is required for each component owner. A materially changed scope, intended behavior or consequence requires a revised summary and fresh approval. Cancel leaves all unattempted changes pending.
+Selecting Push all listed changes approves every applicable change in the displayed inventory for the identified agent, not its Not included entries. No additional approval is required for each component owner. A materially changed scope, intended behavior or consequence requires a revised summary and fresh approval. Cancel leaves all unattempted changes pending and finishes with `{composed_push_report}`, including the named exclusions.
 
 If inspection finds only excluded changes, explain those actual limitations and leave the changes pending without runnable Push choices. Do not call that an empty inspection or add a routine unsupported-Push response template.
 
@@ -164,7 +168,9 @@ Repeat the explanation row and `items.enum` entry for each actual applicable typ
 }
 ```
 
-After selection, use this choice control:
+After a nonempty selection, render the selected inventory entries and the Not included block before the choice control. Include every unselected component and existing exclusion, with one name/reason bullet per component. Keep their identities in `{component_inventory}` rather than replacing it with the selection. With an empty selection, explain that nothing is selected and offer the selector again without runnable Push choices.
+
+Then use this choice control:
 
 > ##### YOUR CHOICES
 >
@@ -194,7 +200,7 @@ After selection, use this choice control:
 }
 ```
 
-Push selected changes approves only the displayed selection, using the same batch-consent rule. Empty selection never means push everything.
+Push selected changes approves only the displayed selection, using the same batch-consent rule. Empty selection never means push everything. Cancel finishes with `{composed_push_report}`: mark selected unattempted entries Cancelled and retain unselected and previously excluded entries under Not included.
 
 ### Component-level review
 
@@ -205,6 +211,14 @@ Review each applicable entry of `{component_inventory}` in turn, either across t
 > {Component type}: {Name}
 >
 > {Change summary}
+>
+> ##### NOT INCLUDED
+>
+> ###### {COMPONENT TYPE}
+>
+> - {Component name}: {Exclusion reason}
+
+Populate Not included from the retained inventory and current Push scope, even when the owner summary is used instead of the compact comparison. Omit only an empty block. Components still awaiting review within the selected scope are not exclusions merely because another component is being reviewed.
 
 Follow with the applicable explanations and short native control:
 
@@ -234,7 +248,7 @@ Follow with the applicable explanations and short native control:
 
 For a topic with unaccepted suggested wording, include **I want to update the response** before Keep pending in both `enum` and the explanation table. Explain that it revises the local draft without pushing it, and that Push this change accepts the displayed wording as well as approving the save. Use the [Suggested-response decision](authoring-experience.md#suggested-response-decision) normal-chat revision continuation and return to this component's refreshed review before saving. Keep pending retains the local draft without accepting the suggestion.
 
-Push this change approves and pushes this item, then continues. Keep pending leaves this item unpushed, then continues. Cancel remaining push stops, preserves completed pushes and leaves unprocessed changes pending.
+Push this change approves and pushes this item, then continues. Keep pending leaves this item unpushed, then continues. Cancel remaining push stops and finishes with `{composed_push_report}`. Preserve completed and Kept pending outcomes, mark the remaining in-scope unattempted entries Cancelled, and retain named exclusions.
 
 One review item is one component-level push: the proposed edits to one topic, the selected agent's instruction-section edits, or one evaluation test-set deployment even if several cases changed. Two changed topics are two review items even when Topics was selected once. A review item is not a field edit, diff hunk or whole component-type group.
 
@@ -308,6 +322,10 @@ If an observed prerequisite prevents the write, use Failed and explain that no w
 > {Contextual trailer}
 
 Resolve component rows and Not included entries from `{component_inventory}`. Select each Status from `{push_statuses}`. Repeat rows and component-type sections as needed, omit an empty Not included section, and do not duplicate table entries there.
+
+Render this report after entry Cancel, subset Cancel or Cancel remaining push, even when no save was attempted. Include the reviewed or selected components in the table, not just components with write results. Preserve prior outcomes and give remaining unattempted in-scope entries the Cancelled status. Retain unselected, out-of-scope and unsupported entries under Not included with their individual reasons. Do not replace the report with a cancellation sentence.
+
+Before sending the report, account for every entry in the retained inventory exactly once, either as a result row or a named Not included bullet. Keep the component's readable name and type in both paths. Cancellation and an empty write-results list do not make discovered exclusions empty.
 
 Preserve material owner facts, including known remote success, local recording issues and consequential evaluation-copy/review-state details. A topic and routing correction approved together use this report, with the complete instruction-save statement in its row rather than a second owner outcome block. The trailer carries useful context, including saved-wording conflict assessment and testing readiness, without repeating the table or stacking owner menus. Omit it when no additional context is needed.
 

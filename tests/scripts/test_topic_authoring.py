@@ -92,7 +92,9 @@ def topic_cli(monkeypatch, tmp_path, fake_tenant_id):
         }
 
     transport.update_dialog_components.side_effect = update_components
-    connect = Mock(return_value=(client, target))
+    connect = Mock(side_effect=lambda *_args: (
+        client, target, client.fetch_components(target["agent"]["id"]),
+    ))
     monkeypatch.setattr(authoring, "connect_selected_dev_workspace", connect)
     monkeypatch.setattr(
         authoring,

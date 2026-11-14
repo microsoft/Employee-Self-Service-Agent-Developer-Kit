@@ -200,7 +200,7 @@ def test_new_conversation_cli_clicks_without_capture_or_component_changes(
 ):
     args, client, calls = exercise
     monkeypatch.setattr(
-        native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET),
+        native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET, {}),
     )
 
     def unexpected_components(*_args):
@@ -226,7 +226,12 @@ def test_new_conversation_cli_clicks_without_capture_or_component_changes(
 
     if failure:
         assert code == 2
-        error = json.loads(output.err)["error"]
+        if failure == "target":
+            error = json.loads(output.err)["error"]
+        else:
+            result = json.loads(output.out)
+            assert result["newChatOutcome"] == "unconfirmed"
+            error = result["error"]["newChatError"]
         assert error["type"] == ("ValueError" if failure == "target" else "NewChatError")
         if failure == "target":
             assert "selected agent" in error["message"]
@@ -242,6 +247,63 @@ def test_new_conversation_cli_clicks_without_capture_or_component_changes(
         assert result["outcome"] == "clicked"
         assert result["target"] == TARGET
     assert calls == ([] if failure == "target" else ["start", "newChat", "close"])
+    assert not args.output.exists()
+
+
+@pytest.mark.parametrize("cleanup_error", [RuntimeError, daga_chat_driver.PlaywrightError])
+@pytest.mark.parametrize("failure", [None, "start", "click"])
+def test_new_conversation_preserves_action_facts_when_cleanup_fails(
+    exercise, tmp_path, monkeypatch, capsys, cleanup_error, failure,
+):
+    args, client, calls = exercise
+    monkeypatch.setattr(
+        native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET, {}),
+    )
+
+    def failed_action(_self):
+        calls.append("start" if failure == "start" else "newChat")
+        try:
+            raise RuntimeError("Browser action cause")
+        except RuntimeError as cause:
+            raise daga_chat_driver.NewChatError({
+                "newChatClickAttempted": failure == "click",
+            }) from cause
+
+    def failed_close(_self):
+        calls.append("close")
+        try:
+            raise OSError("Browser cleanup cause")
+        except OSError as cause:
+            raise cleanup_error("Browser cleanup failed") from cause
+
+    if failure:
+        monkeypatch.setattr(
+            daga_chat_driver.DagaChatDriver,
+            "start" if failure == "start" else "newChat", failed_action,
+        )
+    monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "close", failed_close)
+
+    code = native.main([
+        "new-conversation", "--kit-root", str(tmp_path), "--cdp", args.cdp, "--url", URL,
+    ])
+    output = capsys.readouterr()
+    result = json.loads(output.out)
+    assert code == 2 and not output.err
+    assert result["outcome"] == ("blocked" if failure else "incomplete")
+    assert result["newChatOutcome"] == (
+        "not-started" if failure == "start" else "unconfirmed" if failure else "clicked"
+    )
+    assert result["error"]["cleanupError"] == {
+        "type": cleanup_error.__name__, "message": "Browser cleanup failed",
+        "cause": {"type": "OSError", "message": "Browser cleanup cause"},
+    }
+    if failure:
+        primary = result["error"]["newChatError"]
+        assert primary["evidence"]["newChatClickAttempted"] is (failure == "click")
+        assert primary["cause"]["message"] == "Browser action cause"
+    else:
+        assert "newChatError" not in result["error"]
+    assert calls == (["start", "close"] if failure == "start" else ["start", "newChat", "close"])
     assert not args.output.exists()
 
 
@@ -522,7 +584,9 @@ def test_result_output_failure_returns_known_facts_through_cli(
         write(path, value)
 
     monkeypatch.setattr(native, "_write", failed_write)
-    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (
+        client, TARGET, client.fetch_components(AGENT_ID),
+    ))
     code = native.main([
         "run", "--kit-root", str(tmp_path), "--inspection", str(args.inspection),
         "--prompt", PROMPT, "--cdp", args.cdp, "--url", URL, "--output", str(args.output),
@@ -586,7 +650,9 @@ def test_inspect_returns_authoritative_topic_without_requiring_exact_mode(
     args, client, calls = exercise
     if not literal:
         component["dialog"]["beginDialog"]["actions"].append({"$kind": "BeginDialog"})
-    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (
+        client, TARGET, client.fetch_components(AGENT_ID),
+    ))
     assert native.main([
         "inspect", "--kit-root", str(tmp_path), "--component-id", COMPONENT_ID,
         "--output", str(args.output),
@@ -756,7 +822,9 @@ def test_empty_conversation_cli_gate_runs_before_send(
     general_exercise, tmp_path, monkeypatch, capsys,
 ):
     args, client, calls = general_exercise
-    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (
+        client, TARGET, client.fetch_components(AGENT_ID),
+    ))
     monkeypatch.setattr(daga_chat_driver.DagaChatDriver, "prepare", lambda _self: {
         "renderedTurnsBefore": 2, "expectedTurnIndex": 2,
     })
@@ -851,17 +919,35 @@ def test_capture_output_failure_does_not_replace_known_facts_with_a_grade(
     assert "assessmentOutcome" not in result
 
 
+@pytest.mark.parametrize("drift", [False, True])
 def test_capture_cli_returns_observations_without_counting_a_pass(
-    general_exercise, tmp_path, monkeypatch, capsys,
+    general_exercise, tmp_path, monkeypatch, capsys, drift,
 ):
     args, client, calls = general_exercise
-    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    initial = client.fetch_components(AGENT_ID)
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (
+        client, TARGET, initial,
+    ))
+    latest = deepcopy(initial)
+    if drift:
+        latest["botComponentChanges"][0]["component"]["state"] = "Inactive"
+    read_calls = []
+
+    def read_after_action(agent_id):
+        read_calls.append(agent_id)
+        assert ("send", args.prompt) in calls
+        return latest
+
+    monkeypatch.setattr(client, "fetch_components", read_after_action)
     code = native.main([
         "capture", "--kit-root", str(tmp_path), "--inspection", str(args.inspection),
         "--prompt", args.prompt, "--cdp", args.cdp, "--url", URL, "--output", str(args.output),
     ])
     result = json.loads(capsys.readouterr().out)
-    assert code == 0 and result["graded"] is False
+    assert code == (1 if drift else 0) and result["graded"] is False
+    assert result["outcome"] == ("incomplete" if drift else "captured")
+    assert result["selectedTopicUnchanged"] is not drift
+    assert read_calls == [AGENT_ID]
     assert calls.count(("send", args.prompt)) == 1
 
 
@@ -869,7 +955,9 @@ def test_basic_only_browser_testing_is_explicitly_unsupported(
     general_exercise, tmp_path, monkeypatch, capsys,
 ):
     args, client, calls = general_exercise
-    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (
+        client, TARGET, client.fetch_components(AGENT_ID),
+    ))
     import_module = builtins.__import__
 
     def missing_driver(name, *import_args, **kwargs):
@@ -1145,7 +1233,9 @@ def test_activation_must_record_intent_before_any_write(activation, tmp_path, mo
 @pytest.mark.parametrize("confirmed", [False, True])
 def test_activation_cli_confirmation_without_counting_a_pass(activation, tmp_path, monkeypatch, capsys, confirmed):
     args, client, _calls, _runtime, writes = activation
-    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (
+        client, TARGET, client.fetch_components(AGENT_ID),
+    ))
     code = native.main([
         "activate", "--kit-root", str(tmp_path), "--inspection", str(args.inspection),
         "--output", str(args.output), *(["--yes"] if confirmed else []),
@@ -1159,7 +1249,9 @@ def test_activation_cli_keeps_known_remote_success_when_result_file_fails(
     activation, tmp_path, monkeypatch, capsys,
 ):
     args, client, _calls, _runtime, writes = activation
-    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (client, TARGET))
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (
+        client, TARGET, client.fetch_components(AGENT_ID),
+    ))
     write = native._write
 
     def failed_write(path, value):
@@ -1222,7 +1314,7 @@ def test_browser_preparation_cli_returns_connection_without_human_readiness_or_s
     browser_preparation, tmp_path, monkeypatch, capsys,
 ):
     args, process, launches, metadata = browser_preparation
-    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (object(), TARGET))
+    monkeypatch.setattr(native, "connect_selected_dev_workspace", lambda *_args: (object(), TARGET, {}))
     code = native.main([
         "prepare-browser", "--kit-root", str(tmp_path), "--url", URL,
         "--output", str(args.output),

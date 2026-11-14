@@ -2986,14 +2986,81 @@ def test_selected_dev_connection_enforces_workspace_and_identity(
         if condition in {"not-ready", "multiple-accounts", "environment-mismatch"}:
             auth.assert_not_called()
         return
-    connected, target = setup_existing_da.connect_selected_dev_workspace(tmp_path)
+    client.fetch_calls = 0
+    connected, target, components = setup_existing_da.connect_selected_dev_workspace(tmp_path)
     assert connected is client
+    assert components is client.changeset
+    assert client.fetch_calls == 1
     assert target["agent"]["id"] == AGENT_ID
     assert target["agent"]["realm"] == "dev"
     assert auth.call_args.kwargs["authority"] == f"https://login.microsoftonline.com/{TENANT_ID}"
     assert auth.call_args.kwargs["account_hint"] == accounts[0]
     assert auth.call_args.kwargs["cache_path"] == tmp_path / ".local" / ".agentbuilder_token_cache.bin"
     assert auth.call_args.kwargs["emit_account_identity"] is False
+
+
+@pytest.mark.parametrize("operation", ["topic-list", "native-list", "prepare-browser"])
+def test_topic_operations_reuse_the_validated_connection_inventory(
+    tmp_path, monkeypatch, capsys, operation,
+):
+    import native_topic_test
+    import topic_authoring
+
+    client = FakeClient()
+    _attach(client, tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    client.fetch_calls = 0
+    monkeypatch.setattr(
+        setup_existing_da, "cached_account_names", lambda _path: ["maker@example.test"],
+    )
+    monkeypatch.setattr(
+        setup_existing_da, "_acquire_token",
+        lambda **_kwargs: ("test-token", "maker@example.test"),
+    )
+    monkeypatch.setattr(setup_existing_da, "tenant_id_from_access_token", lambda _token: TENANT_ID)
+    monkeypatch.setattr(setup_existing_da, "AgentBuilderClient", lambda *_args, **_kwargs: client)
+    if operation == "topic-list":
+        code = topic_authoring.main(["list", "--kit-root", str(tmp_path)])
+    elif operation == "native-list":
+        code = native_topic_test.main(["list", "--kit-root", str(tmp_path)])
+    else:
+        monkeypatch.setattr(
+            native_topic_test, "_prepare_browser",
+            lambda *_args: ({"outcome": "prepared"}, 0),
+        )
+        code = native_topic_test.main([
+            "prepare-browser", "--kit-root", str(tmp_path), "--url", AGENT_URL,
+        ])
+    assert code == 0
+    assert client.fetch_calls == 1
+    if operation != "prepare-browser":
+        output = capsys.readouterr().out
+        assert '"topics":' in output
+        assert '"botComponentChanges":' not in output
+
+
+@pytest.mark.parametrize("mismatch", ["agent", "schema"])
+def test_reused_connection_inventory_still_rejects_another_identity(
+    tmp_path, monkeypatch, mismatch,
+):
+    client = FakeClient()
+    _attach(client, tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    monkeypatch.setattr(
+        setup_existing_da, "cached_account_names", lambda _path: ["maker@example.test"],
+    )
+    monkeypatch.setattr(
+        setup_existing_da, "_acquire_token",
+        lambda **_kwargs: ("test-token", "maker@example.test"),
+    )
+    monkeypatch.setattr(setup_existing_da, "tenant_id_from_access_token", lambda _token: TENANT_ID)
+    monkeypatch.setattr(setup_existing_da, "AgentBuilderClient", lambda *_args, **_kwargs: client)
+    client.changeset = _changeset(
+        agent_id=OTHER_AGENT_ID if mismatch == "agent" else AGENT_ID,
+        schema_name="another_agent" if mismatch == "schema" else client.schema_name,
+    )
+    with pytest.raises(setup_existing_da.ExistingDASetupError):
+        setup_existing_da.connect_selected_dev_workspace(tmp_path)
 
 
 def test_seed_shared_cache_command_reports_bounded_local_result(

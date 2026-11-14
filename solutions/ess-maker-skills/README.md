@@ -59,15 +59,16 @@ The kit ships with a complete reference library that the AI agent reads at task 
 
 The agent uses this knowledge when drafting topics or evaluation sets and inspecting existing integration contracts.
 
-### ✏️ Create and Update Topics
+### ✏️ Create, Update and Delete Topics
 
 Describe the intended conversation or supply relevant evaluation cases. Copilot reads current topics, drafts ordinary `.mcs.yml` content, and previews the proposed behavior for approval.
 
 - **Create** (`/create`): save one new inactive topic to the selected editable Dev agent after approval.
 - **Update** (`/update`): read and save the selected mapped topic while preserving its identity, active state, and unrelated behavior.
+- **Delete** (`/delete`): review and approve deletion of a selected editable Dev topic, keep its deletion local for a later Push, or discard a never-pushed local draft. Review any routing-instruction correction separately before approving its save.
 - **Instructions**: preview and approve matching instruction-section changes separately from topic changes.
 
-Save/readback verification is not activation, publication, or conversation acceptance. Supported conversation testing is offered when installed and the saved topic meets its conditions; otherwise acceptance remains pending. Deployed-topic deletion is not supported.
+Save/readback verification is not activation, publication, or conversation acceptance. Supported conversation testing is offered when installed and the saved topic meets its conditions; otherwise acceptance remains pending.
 
 Existing evaluation intent and thresholds remain unchanged by a topic save. Separately requested evaluation work retains its own authoring, review, deployment, and execution flow.
 
@@ -369,7 +370,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | `/connect-workday`          | Connect the ESS HR agent to Workday                                                                           |
 | `/create`                   | Draft and approve a topic save, or separately author evaluation sets; flow authoring is outside ADK           |
 | `/update`                   | Read and approve a mapped topic save, or separately edit evaluation sets                                      |
-| `/delete`                   | Report that DA-GA deletion is not yet available                                                               |
+| `/delete`                   | Review and approve a selected Dev topic deletion, stage it locally, or discard a never-pushed local draft     |
 | `/scan`                     | Scan your agent for compile errors and fix them                                                               |
 | `/review`                   | Review local topics or evaluation test sets tagged for review                                                 |
 | `/evaluate`                 | Generate evaluation test sets for your agent                                                                  |
@@ -387,7 +388,7 @@ You can also describe what you want in plain English — the agent will figure o
 
 ## How It Works
 
-```
+```text
 You describe what you need
         ↓
 GitHub Copilot reads the kit's reference docs and templates
@@ -401,7 +402,7 @@ Review and approve a supported save, then inspect its verified outcome
 
 ## Repository Structure
 
-```
+```text
 solutions/ess-maker-skills/
   .github/             Per-solution copilot-instructions and prompt files
   .vscode/             VS Code workspace settings + recommended extensions

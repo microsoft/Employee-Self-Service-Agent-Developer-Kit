@@ -223,8 +223,13 @@ def _prepare_browser(
     return result, 0 if result["outcome"] == "prepared" else 2
 
 
-def _components(client: AgentBuilderClient, target: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    changes = client.fetch_components(target["agent"]["id"]).get("botComponentChanges")
+def _components(
+    client: AgentBuilderClient, target: dict[str, Any],
+    *, payload: dict[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    if payload is None:
+        payload = client.fetch_components(target["agent"]["id"])
+    changes = payload.get("botComponentChanges")
     if not isinstance(changes, list):
         raise ValueError("AgentBuilder read did not return component changes.")
     result = {}
@@ -403,6 +408,8 @@ def _exercise(
     root: Path,
     client: AgentBuilderClient,
     target: dict[str, Any],
+    *,
+    initial_components: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int]:
     try:
         from daga_chat_driver import DagaChatDriver, PlaywrightError, validate_studio_url
@@ -433,7 +440,7 @@ def _exercise(
         cdp, url = execution["cdp"], execution["url"]
         original_baseline = _read(original / "native-before.json")
         require_empty_conversation = execution.get("requireEmptyConversation", False)
-    before = _components(client, target)
+    before = _components(client, target, payload=initial_components)
     component_id, component = _selected(inspection, target, before)
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("Supply one non-empty approved message.")
@@ -633,9 +640,11 @@ def _activate(
     root: Path,
     client: AgentBuilderClient,
     target: dict[str, Any],
+    *,
+    initial_components: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int]:
     inspection = _load_inspection(root, args.inspection)
-    before = _components(client, target)
+    before = _components(client, target, payload=initial_components)
     component_id, component = _selected(inspection, target, before)
     if not isinstance(component.get("schemaName"), str) or not component["schemaName"].strip():
         raise ValueError("Topic activation requires the inspected topic's schema name.")
@@ -721,18 +730,31 @@ def _activate(
 
 
 def _new_conversation(args, target: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    from daga_chat_driver import DagaChatDriver, validate_studio_url
+    from daga_chat_driver import DagaChatDriver, PlaywrightError, validate_studio_url
 
     url = validate_studio_url(args.url, target)
     driver = DagaChatDriver(cdp=args.cdp, expected_url=url)
-    driver.start()
+    result: dict[str, Any] = {
+        "operation": "new-conversation", "target": _identity(target),
+        "outcome": "blocked", "newChatOutcome": "not-started",
+    }
+    errors = {}
     try:
+        driver.start()
+        result["newChatOutcome"] = "unconfirmed"
         driver.newChat()
+        result.update({"outcome": "clicked", "newChatOutcome": "clicked"})
+    except (RuntimeError, PlaywrightError, OSError) as exc:
+        errors["newChatError"] = _error_facts(exc)
     finally:
-        driver.close()
-    return {
-        "operation": "new-conversation", "target": _identity(target), "outcome": "clicked",
-    }, 0
+        try:
+            driver.close()
+        except (RuntimeError, PlaywrightError, OSError) as exc:
+            errors["cleanupError"] = _error_facts(exc)
+    if errors:
+        result["error"] = errors
+        result["outcome"] = "incomplete" if result["newChatOutcome"] == "clicked" else "blocked"
+    return result, 2 if errors else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -777,17 +799,21 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--require-empty-conversation is valid only for run or capture.")
     try:
         root = args.kit_root.resolve()
-        client, target = connect_selected_dev_workspace(root, args.account)
+        client, target, component_payload = connect_selected_dev_workspace(root, args.account)
         if args.operation == "prepare-browser":
             result, code = _prepare_browser(args, root, target)
         elif args.operation == "new-conversation":
             result, code = _new_conversation(args, target)
         elif args.operation in {"run", "capture", "observe"}:
-            result, code = _exercise(args, root, client, target)
+            result, code = _exercise(
+                args, root, client, target, initial_components=component_payload,
+            )
         elif args.operation == "activate":
-            result, code = _activate(args, root, client, target)
+            result, code = _activate(
+                args, root, client, target, initial_components=component_payload,
+            )
         else:
-            components = _components(client, target)
+            components = _components(client, target, payload=component_payload)
             if args.operation == "list":
                 result = {
                     "operation": "list", "target": _identity(target),

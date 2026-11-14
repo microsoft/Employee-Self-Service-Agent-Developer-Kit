@@ -85,9 +85,11 @@ parsed instruction section with the baseline separately from metadata. Keep
 unchanged instructions out of pending and excluded changes. Classify an actual
 rename as Display name, retaining the proposed value and save limitation.
 
-For a Create/Update routing-correction handoff, scope this inventory to the
-carried topic draft and isolated instruction correction. Leave unrelated
-pending edits outside that displayed scope; do not include them implicitly.
+For a Create/Update/Delete routing-correction handoff, limit the applicable
+save scope to the carried topic change and isolated instruction correction.
+Retain all other discovered pending edits in `{component_inventory}` and render
+them as named Not included entries. Narrowing save scope does not narrow the
+inventory or authorize unrelated changes.
 
 {EMIT_STATUS_UPDATE: push-inventory}
 
@@ -114,7 +116,9 @@ different implicit scope after approval.
 Choose what to push selects component types, initially none. Each type includes
 all its displayed changes. Follow selection with **Summarize selected
 changes**, **Push selected changes** or **Cancel**. Empty selection never means
-all changes.
+all changes. Before that decision, show the selected entries and named
+Not included entries for unselected types and existing exclusions. With no
+selection, offer the type selector again without a runnable Push choice.
 
 Summarize each change and Summarize selected changes review one component-level
 operation at a time: one topic, one agent instruction-section update, or one
@@ -196,6 +200,12 @@ Details table and any actual **Not included** entries, all drawn from
 Failed / Unconfirmed / Pushed with local issue labels. A known prerequisite
 failure uses Failed with its cause and states that no write was attempted;
 there is no separate Blocked Push status.
+
+Use this report after entry Cancel, subset Cancel and Cancel remaining push,
+including cancellation before any save. Retain prior outcomes, mark the
+remaining in-scope unattempted entries Cancelled, and render the original
+named exclusions with one reason per component. Cancellation does not erase
+the inventory or turn excluded components into attempted saves.
 
 For a topic and routing correction approved together, retain the complete
 instruction-save statement in the instruction row's Details, with conflict

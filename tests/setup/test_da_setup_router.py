@@ -2580,7 +2580,6 @@ def test_da_workflow_authoring_routes_are_notice_only() -> None:
     assert "conversation acceptance as pending" in normalized_test
     assert "power automate authoring and runtime changes take place outside adk" in normalized_test
     assert "independent target/authentication prerequisites" in normalized_test
-    assert "do not route backend conversations" in normalized_test
 
     for name in ("create.prompt.md", "update.prompt.md"):
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")

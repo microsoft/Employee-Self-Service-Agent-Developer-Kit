@@ -2,7 +2,7 @@
 
 When a flow-backed topic misbehaves — a generic error reply, a blank field, a branch that seems not to fire — the **per-action run history** is the decisive "why" surface. The bot reply tells you _what the user saw_; the flow source tells you _what was authored_; only the run-action view tells you _what actually happened, action by action_.
 
-This doc teaches you to read that cascade. The read is performed by `scripts/flow_run_inspect.py` (read-only — it never invokes, patches, or deletes anything). Consult this doc when a topic that calls a custom flow returns a wrong or generic result and you need to localize the fault. It is Step 3 of the `topics/test` skill (`src/skills/topics/test/SKILL.md`); this doc is the interpretation reference that step points at.
+This doc teaches you to read that cascade. The read is performed by `scripts/flow_run_inspect.py` (read-only: it never invokes, patches, or deletes anything). Consult this doc for separately requested run-history inspection through `workflows/test` (`src/skills/workflows/test/SKILL.md`). That skill establishes the target and authentication prerequisites; this doc guides interpretation of the returned run actions.
 
 ## What the tooling gives you
 

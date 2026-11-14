@@ -290,7 +290,7 @@ When suggested wording remains unaccepted, include **I want to update the respon
 
 Resolve the routing conflict in the Agent Instructions prepares the targeted correction below while the proposed topic changes remain local. This choice does not approve a topic push, instruction push, activation or testing. Do not draft an instruction correction merely because a topic is being authored unless the correction is already within an explicitly authorized scope.
 
-Review the topic draft and targeted instruction correction together before saving either. Use the existing component-level or scoped batch Push review and consent for exactly those displayed changes; exclude unrelated pending edits. Do not repeat owner approval for unchanged operations covered by that consent. Save and verify a new topic before an instruction correction that depends on its existence; pause dependent work if the prerequisite result is failed or uncertain.
+Review the topic draft and targeted instruction correction together before saving either. Use the existing component-level or scoped batch Push review and consent for exactly those displayed applicable changes. Exclude unrelated pending edits from save scope, but retain them in the inventory as named Not included entries with individual reasons. Do not repeat owner approval for unchanged operations covered by that consent. Save and verify a new topic before an instruction correction that depends on its existence; pause dependent work if the prerequisite result is failed or uncertain.
 
 Push topic anyway approves only the displayed topic save and leaves the conflicting instructions unchanged. It does not authorize activation, testing or publication. Carry the declined routing correction as an explicit exclusion into any later authorized testing. Do not immediately offer the same resolution decision again after saving.
 
@@ -458,7 +458,7 @@ Include concise factual detail and preserve earlier confirmed saves. Do not desc
 
 #### Review and approve the save
 
-**When topic changes remain local:** review the topic and isolated instruction correction together using [Entry inventory and choices](push-experience.md#entry-inventory-and-choices). Render its applicable inventory entries and reuse its full four-item choice block verbatim: **Summarize each change**, **Push all listed changes**, **Choose what to push**, and **Cancel**. Include exactly those displayed changes, excluding unrelated pending edits.
+**When topic changes remain local:** review the topic and isolated instruction correction together using [Entry inventory and choices](push-experience.md#entry-inventory-and-choices). Render its applicable inventory entries and named Not included entries, then reuse its full four-item choice block verbatim: **Summarize each change**, **Push all listed changes**, **Choose what to push**, and **Cancel**. Approval includes exactly the displayed applicable changes; unrelated pending edits remain excluded, not omitted.
 
 **Only when the proposed topic content is already authoritatively saved:** use this two-item control for the instruction correction:
 
