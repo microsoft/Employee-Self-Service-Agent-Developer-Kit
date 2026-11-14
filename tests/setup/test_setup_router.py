@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Structural guards for DA-only Workday Connect ownership and routing."""
+"""Structural guards for setup admission and integration routing."""
 
 from __future__ import annotations
 
@@ -119,6 +119,160 @@ def test_connect_route_precedes_setup_probe_and_terminal_welcome() -> None:
     assert "**STOP.**" in gate
     assert "Hey! Welcome to the ESS Maker Kit." in gate
     assert "YOUR VERY FIRST ACTION on every new conversation" not in instructions
+
+
+def test_agent_basics_prompt_delegates_name_logo_authoring_to_skill() -> None:
+    prompt = " ".join(
+        (_SOLUTION / ".github" / "prompts" / "agent-basics.prompt.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    skill = " ".join(
+        (_SOLUTION / "src" / "skills" / "agent-basics" / "SKILL.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    instructions = (_SOLUTION / ".github" / "copilot-instructions.md").read_text(
+        encoding="utf-8"
+    )
+    routes, gate = instructions.split("### Setup gate for all other requests", 1)
+    normalized_gate = " ".join(gate.split())
+
+    assert "`/agent-basics`" not in routes
+    assert "`src/skills/agent-basics/SKILL.md`" not in routes
+    assert "This gate applies to `/agent-basics`" in normalized_gate
+    assert "Read `src/skills/agent-basics/SKILL.md` and follow it." in prompt
+    assert prompt.index("shared completed-setup gate") < prompt.index(
+        "Read `src/skills/agent-basics/SKILL.md`"
+    )
+    assert "selected target and requested name/logo changes" in prompt
+    assert "Require explicit approval before saving" in prompt
+    assert "For rename-only requests, review the name only" in prompt
+    assert "No separate image-processing consent is required" in prompt
+    assert "Logo edits use one source PNG; the platform derives outlines" in prompt
+    assert "Do not publish, edit agent instructions or other settings" in prompt
+    assert "Completed setup is mandatory" in skill
+    assert "Require canonical `schema_version: 4` and `connect_ready: true`" in skill
+    assert "Materialization alone is not completed setup" in skill
+    assert (
+        "Missing or incomplete setup uses the shared setup-required message and stops"
+        in skill
+    )
+    assert "matching `botId`/`id` and `schemaName`/`schema_name`" in skill
+    assert "the recorded workspace folder and `agent_path` must exist" in skill
+    assert "For a bare `/agent-basics`" in skill
+    assert "separate structured clarification with free-form input" in skill
+    assert "never a separate image-processing question" in skill
+    assert "these are not part of rename validation or recovery" in skill
+    assert "--accept-service-icon-processing" not in skill
+    assert "no outline upload is required" in skill
+    assert (
+        "Do not offer or promise an independently customized published outline" in skill
+    )
+    assert (
+        "Collect a revised supported proposal instead of silently dropping the outline"
+        in skill
+    )
+    assert "--outline" not in skill
+
+
+def test_agent_basics_setup_return_requires_completed_setup() -> None:
+    foundation = " ".join(
+        (_SOLUTION / "src" / "skills" / "foundation-setup" / "SKILL.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    handoff = foundation.split(
+        "When setup was entered for an explicit Agent Basics request", 1
+    )[1].split("When `connectReady` is false", 1)[0]
+    preparation = foundation.split("## Prepare the workspace for an integration", 1)[
+        1
+    ].split("## Start", 1)[0]
+
+    assert "`connectReady` equal to `true`" in handoff
+    assert "`src/skills/agent-basics/SKILL.md`" in handoff
+    assert "Preserve the original target and requested values" in handoff
+    assert "do not start Agent Basics" in handoff
+    assert "Agent Basics" not in preparation
+    for guide in (
+        "da-existing-dev.md",
+        "da-mos-starter.md",
+        "da-prod-to-dev.md",
+        "da-alm-import.md",
+    ):
+        text = (_SOLUTION / "src" / "skills" / "foundation-setup" / guide).read_text(
+            encoding="utf-8"
+        )
+        assert "Agent Basics' entry-only preparation request" not in text, guide
+
+
+def test_agent_basics_fresh_chat_rename_retains_gate_and_asks_only_for_name() -> None:
+    instructions = " ".join(
+        (_SOLUTION / ".github" / "copilot-instructions.md")
+        .read_text(encoding="utf-8").split()
+    )
+    prompt = " ".join(
+        (_SOLUTION / ".github" / "prompts" / "agent-basics.prompt.md")
+        .read_text(encoding="utf-8").split()
+    )
+    skill = " ".join(
+        (_SOLUTION / "src" / "skills" / "agent-basics" / "SKILL.md")
+        .read_text(encoding="utf-8").split()
+    )
+
+    assert "After completed setup" in instructions
+    assert "agent name, display name and displayName as the same rename intent" in instructions
+    assert '"Rename the test quality gate agent"' in instructions
+    assert "retain Test and ask only for the missing display name" in instructions
+    assert "new chat" in prompt
+    assert "reuse completed saved Dev setup" in prompt
+    assert "ask only for the new display name" in prompt
+    assert '"Rename the test quality gate agent"' in skill
+    assert "do not show the operation menu or ask for the gate again" in skill
+    assert "Do not replace the request with a generic help response" in skill
+    assert "Present a single **Display name**" in skill
+
+
+def test_persona_fallback_does_not_reject_ess_agent_rename_requests() -> None:
+    instructions = " ".join(
+        (_SOLUTION / ".github" / "copilot-instructions.md")
+        .read_text(encoding="utf-8").split()
+    )
+    persona = instructions.split("## Persona Boundary", 1)[1].split(
+        "## Communication Rules", 1
+    )[0]
+    communication = instructions.split("## Communication Rules", 1)[1].split(
+        "## Security Boundaries", 1
+    )[0]
+
+    assert "**Only for the prohibited questions above**" in persona
+    assert "**If someone asks**" not in persona
+    assert "Never use this fallback for ESS name/logo customization" in persona
+    assert "Missing rename input requires a targeted question" in persona
+    assert "internal automation agents" in communication
+    assert "The maker's ESS agent and Dev/Test/Prod quality gates are customer concepts" in communication
+    assert "single display-name label is presentation only" in communication
+
+
+def test_agent_basics_recovery_preserves_gate_and_requires_explicit_baseline_review() -> None:
+    skill = " ".join(
+        (_SOLUTION / "src" / "skills" / "agent-basics" / "SKILL.md")
+        .read_text(encoding="utf-8").split()
+    )
+    recovery = skill.split("### Stop and reviewed recovery", 1)[1].split(
+        "After an authoring save", 1
+    )[0]
+
+    assert "Restricted configuration authoring or unavailable Test/Prod UI" in skill
+    assert "Use authorized APIs for the current-state review" in recovery
+    assert "not a prerequisite for a name-only recovery" in recovery
+    assert "owner may explicitly accept the current API-verified state" in recovery
+    assert "does not retrospectively verify the earlier operation" in recovery
+    assert "Do not silently accept that baseline" in recovery
+    assert "approval **to resume writes**, distinct from" in recovery
+    assert "resume-writes --quality-gate test --approval REVIEW_ID" in recovery
+    assert "Retain the exact `--quality-gate` from the fresh `view`" in recovery
+    assert "Never use a rename preview's digest as recovery approval" in recovery
 
 
 def test_clean_workspace_handoff_handles_missing_metadata_at_each_entry() -> None:

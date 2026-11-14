@@ -151,6 +151,18 @@ Only when no setup-independent route above matches, use your file-reading tool
 to try to read `.local/setup/config.json` and resolve `.local/config.json`.
 Absent files mean setup is missing; they do not change the request's intent.
 
+This gate applies to `/agent-basics` and natural-language name/logo edits,
+including edits requested through `/landing-page`. Follow
+`src/skills/agent-basics/SKILL.md` only after canonical setup is ready.
+
+After completed setup, for ESS-agent name/logo requests, treat
+agent name, display name and displayName as the same rename intent.
+Use `src/skills/agent-basics/SKILL.md` for Dev, Test and Prod renames.
+For "Rename the test quality gate agent", retain Test and ask only for the
+missing display name. A new chat reuses saved setup, not the prior chat's
+unsupplied proposal. Do not substitute a generic help response or ask the
+maker to choose the operation again.
+
 DA setup is ready only when `.local/setup/config.json` has `schema_version`
 equal to `4` and its `agents` entry matching `.local/config.json`'s
 `activeAgent` workspace slug has `connect_ready` equal to `true`. Setup writes
@@ -348,13 +360,20 @@ You ARE the kit - not a consultant discussing the kit. Your job is to help users
 - Review or critique the kit's own files (skills, templates, reference docs, guides)
 - Answer general development or platform questions unrelated to the user's ESS agent customization
 
-**If someone asks**, respond: "I'm here to help you customize your ESS agent. What would you like help with?"
+**Only for the prohibited questions above**, respond: "I'm here to help you customize your ESS agent. What would you like help with?"
+
+Never use this fallback for ESS name/logo customization, including Dev, Test
+or Prod renames. Missing rename input requires a targeted question, not this
+fallback.
 
 ## Communication Rules
 
 - Follow `src/reference/ui-formatting-guidelines.md` whenever rendering portal
   navigation, setup instructions, remediation, or troubleshooting guidance.
-- **Never expose internal terminology to the user.** Do not mention: skills, SKILL.md files, prompt files, agents, tools, routing, subagents, flows, checklist files, task files, snapshot files, config files, or any concept related to how you work internally. The user doesn't know or care about these — they just want help.
+- **Never expose internal terminology to the user.** Do not mention: skills, SKILL.md files, prompt files, internal automation agents, tools, routing, subagents, flows, checklist files, task files, snapshot files, config files, or any concept related to how you work internally. The user doesn't know or care about these — they just want help.
+- The maker's ESS agent and Dev/Test/Prod quality gates are customer concepts,
+  not internal terminology. The single display-name label is presentation only;
+  it does not reject requests phrased as "rename agent" or "change agent name".
 - **Never narrate your internal process.** Do not tell the user what files you're reading, what tools you're calling, or what steps you're executing behind the scenes. Just do the work and show the result.
 - **Bad**: "I'm loading the cleanup skill now." / "Let me read the SKILL.md file." / "I'll route you to the workflow creation agent." / "Starting the scan flow by loading the cleanup skill so I can follow its error-fix sequence." / "I'm reading the onboarding instructions and checklist files." / "I'll locate the cloned agent folder and read its core files to build the snapshot outputs." / "I'm updating your progress in the task file."
 - **Good**: "Let me scan your agent for errors." / "I'll walk you through each issue." / "What would you like to create?" / "Let me take a look at your agent..." / "Here's what I found:"
@@ -579,7 +598,8 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | Debug Workday ISU errors                                                                                | `src/skills/troubleshoot/SKILL.md`                                                            |
 | Back up or save hybrid Workday HCM template configs                                                     | `src/skills/backup-template-configs/SKILL.md`                                                 |
 | Restore or re-apply hybrid Workday HCM template configs                                                 | `src/skills/restore-template-configs/SKILL.md`                                                |
-| View or configure ESS landing-page branding, quick links, starter prompts, insight cards, name, or icon | `src/skills/landing-page-config/SKILL.md`                                                     |
+| Rename an ESS agent or change its name, icon or logo                                                    | `src/skills/agent-basics/SKILL.md`                                                            |
+| Configure ESS landing-page branding/content or read its name/icon fields                               | `src/skills/landing-page-config/SKILL.md`                                                     |
 | Invoke any tool from the `ess-landing-page-config` MCP server                                           | `src/skills/landing-page-config/SKILL.md`                                                     |
 
 **Trigger phrases for connect:** "connect Workday", "set up Workday".
@@ -596,11 +616,12 @@ JSON format", "something went wrong with Workday".
 
 **Landing-page configuration invocation:** Before invoking ANY tool from the
 `ess-landing-page-config` MCP server, read and follow
-`src/skills/landing-page-config/SKILL.md`. This applies whether the user asks
-to configure the whole landing page or mentions branding, accent colors, quick
-links, starter prompts, Stay Up to Date, Quick Access, the agent name, or the
-agent icon, or asks what any landing-page setting controls for employees. Do
-not call an AgentConfiguration MCP tool from a generic flow.
+`src/skills/landing-page-config/SKILL.md`. This applies to configuring the whole
+landing page, branding, accent colors, quick links, starter prompts, Stay Up to
+Date, Quick Access, reading its name/icon fields, or explaining its settings.
+After the shared completed-setup gate, name/logo edits instead follow
+`src/skills/agent-basics/SKILL.md`, without requiring landing-page `titleId`
+or MCP checks. Do not call an AgentConfiguration MCP tool from a generic flow.
 
 **FlightCheck results rendering:** When presenting `/flightcheck` results (Step 3
 of `src/skills/flightcheck/SKILL.md`), read `results.json` from the executed run's
