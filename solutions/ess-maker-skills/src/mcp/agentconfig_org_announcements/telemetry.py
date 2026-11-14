@@ -1,27 +1,15 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Content-free telemetry for the Org Announcements MCP server.
+"""Content-free diagnostics for Org Announcements operation telemetry.
 
-This is a thin, deliberately narrow adapter over the kit's existing
-``scripts/adk_telemetry.py`` conventions. It emits one ``adk.api.call`` event
-per tool invocation carrying exactly four things:
+Native MCP calls annotate the shared request-local operation; direct callers
+emit a bounded ``adk.api.call`` record. Diagnostic codes and error sources use
+fixed allowlists. Shared telemetry supplies correlation, HTTP accounting,
+authenticated tenant context, and content-free usage measurements.
 
-* ``operation`` — the MCP tool name, from a fixed allowlist;
-* ``outcome`` — ``success`` or ``failure``;
-* ``latency_ms`` — wall-clock duration of the operation;
-* ``error_code`` — one of this server's stable discriminated codes;
-* ``error_category`` — a broad source bucket (``backend``/``graph``/``mcp``).
-
-Nothing else. In particular this module never emits, and has no parameter that
-could carry, announcement content (title, description, action label, URL, or
-prompt), audience group identifiers or names, the tenant's API endpoint, tokens,
-claims, or the opener request payload. ``error_message`` is deliberately never
-populated: backend messages can echo authored content back, and the stable code
-is what a dashboard or a support engineer actually needs.
-
-Every path fails open. Telemetry must never turn a working save into a failed
-tool call, so import errors, missing config, and emit errors are all swallowed.
+Announcement content, audience identifiers, credentials, endpoint URLs, and
+request payloads are excluded. Every emit and shutdown path fails open.
 """
 
 from __future__ import annotations
@@ -30,6 +18,8 @@ import logging
 import os
 import sys
 from typing import Any, Optional
+
+from operation_telemetry import current_operation
 
 
 _LOGGER = logging.getLogger("ess-org-announcements.telemetry")
@@ -88,6 +78,8 @@ _SCRIPTS_DIR = os.path.abspath(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "scripts"
     )
 )
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.append(_SCRIPTS_DIR)
 
 
 def normalize_operation(operation: str) -> str:
@@ -156,6 +148,12 @@ def record_operation(
     is environment-specific and is never reported. Failure adds only the stable
     code and the broad source bucket; ``error_message`` is left empty on purpose.
     """
+    if operation_context := current_operation.get():
+        if outcome != "success":
+            operation_context.error_code = normalize_error_code(error_code)
+            operation_context.error_category = normalize_source(error_source)
+        return
+
     telemetry = _adk_telemetry()
     if telemetry is None:
         return
@@ -176,3 +174,23 @@ def record_operation(
         telemetry.emit_api_call(**fields)
     except Exception:  # noqa: BLE001 — fail open, never break the tool call
         _LOGGER.debug("Org Announcements telemetry emit failed", exc_info=False)
+
+
+def flush_telemetry() -> None:
+    """Bound shutdown delivery without making telemetry availability mandatory."""
+    telemetry = _adk_telemetry()
+    if telemetry is not None:
+        try:
+            telemetry.flush(timeout=2.0)
+        except Exception:
+            _LOGGER.debug("Org Announcements telemetry flush failed", exc_info=False)
+
+
+def initialize_telemetry_identity(tenant_id: str, *, local_dir: str) -> None:
+    """Bind widget telemetry to the authenticated client's tenant."""
+    telemetry = _adk_telemetry()
+    if telemetry is not None:
+        try:
+            telemetry.initialize_tenant_identity(tenant_id, local_dir=local_dir)
+        except Exception:
+            _LOGGER.debug("Org Announcements telemetry identity unavailable", exc_info=False)

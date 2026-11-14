@@ -20,14 +20,19 @@ _MCP_ROOT = (
     / "src"
     / "mcp"
 )
+sys.path.insert(0, str(Path(__file__).resolve().parent / "mcp"))
+from _mcp_modules import (  # noqa: E402
+    load_landing_page_modules,
+    load_org_announcements_modules,
+)
 
 
 def _load_server(folder: str, alias: str):
-    """Import one of the kit's MCP servers by folder name.
-
-    Each server does a sibling-relative ``sys.path.insert`` for ``client`` /
-    ``auth``, so its own directory has to be importable while it executes.
-    """
+    """Import a server with isolated flat-module siblings."""
+    if folder == "agentconfig_landing_page":
+        return load_landing_page_modules()["server"]
+    if folder == "agentconfig_org_announcements":
+        return load_org_announcements_modules()["server"]
     server_path = _MCP_ROOT / folder / "server.py"
     sys.path.insert(0, str(_MCP_ROOT / folder))
     try:
@@ -45,13 +50,14 @@ def _load_adk_server():
     return _load_server("agentconfig_landing_page", "landing_page_mcp_server_under_test")
 
 
-def test_bridge_is_colocated_with_the_widget_resources():
+@pytest.mark.parametrize("folder", ["agentconfig_landing_page", "agentconfig_org_announcements"])
+def test_bridge_is_colocated_with_the_widget_resources(folder):
     """The bridge must live on whichever server serves the widgets.
 
     MCP Apps routes a widget's tool calls through its originating connection.
     Resource and tool registration must therefore agree on the server.
     """
-    agentconfig = _load_server("agentconfig_landing_page", "landing_page_colocation_check")
+    agentconfig = _load_server(folder, "widget_colocation_check")
     adk = _load_server("adk", "adk_colocation_check")
 
     def has_widgets(mod) -> bool:
