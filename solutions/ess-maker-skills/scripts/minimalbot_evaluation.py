@@ -1371,7 +1371,7 @@ class MinimalBotEvaluationClient:
     def delete_dialog_component(
         self, expected_components: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """Delete one reviewed topic subtree, then verify absence without retry."""
+        """Delete one reviewed topic subtree, accepting HTTP success without retry."""
         if not isinstance(expected_components, list) or not expected_components or any(
             not isinstance(component, dict)
             or not isinstance(component.get("id"), str) or not component["id"]
@@ -1395,7 +1395,6 @@ class MinimalBotEvaluationClient:
         }
         try:
             before = self.read_components()
-            evidence["readback"] = before
             components = self._deletion_inventory(before)
         except Exception as exc:
             raise ComponentEditError(
@@ -1417,12 +1416,11 @@ class MinimalBotEvaluationClient:
                 raise ComponentEditError(
                     "The topic is absent, but related or replacement content remains. "
                     "Inspect it before local reconciliation.",
-                    {**evidence, "readback": before},
+                    {**evidence, "currentComponents": remaining},
                 )
             return {
                 **evidence, "verified": True, "alreadyAbsent": True,
                 "deletedComponents": 0, "absentComponentIds": evidence["componentIds"],
-                "readback": _redact_evidence(before),
             }
         current = self.dialog_deletion_scope(before, root["id"])
         if {str(component["id"]).casefold(): component for component in current} != expected:
@@ -1459,29 +1457,9 @@ class MinimalBotEvaluationClient:
         evidence = self._submit_component_edit(
             payload, "topic deletion", evidence["componentIds"],
         )
-        try:
-            after = self.read_components()
-            evidence["readback"] = after
-            actual = self._deletion_inventory(after)
-            remaining_ids = sorted(expected.keys() & actual.keys())
-            remaining_related = [
-                component for component in actual.values()
-                if str(component.get("parentBotComponentId") or "").casefold() in expected
-                or str(component.get("schemaName") or "").casefold() in schema_names
-            ]
-            if remaining_ids or remaining_related:
-                raise MinimalBotEvaluationError(
-                    "Readback still contains selected, contained or replacement components."
-                )
-        except Exception as exc:
-            raise ComponentEditError(
-                "Topic deletion returned HTTP 200, but absence could not be verified. "
-                "Inspect current state before any further write.",
-                evidence,
-            ) from exc
         return {
-            **_redact_evidence(evidence), "verified": True, "alreadyAbsent": False,
-            "deletedComponents": len(current), "absentComponentIds": evidence["componentIds"],
+            **_redact_evidence(evidence), "alreadyAbsent": False,
+            "deletedComponents": len(current),
         }
 
     def update_dialog_components(

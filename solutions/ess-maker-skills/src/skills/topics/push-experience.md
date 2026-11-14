@@ -99,7 +99,7 @@ Render applicable entries from `{component_inventory}`:
 >
 > - {Component name}: {Exclusion reason}
 
-Disclose material consequences, including actual evaluation new-copy/reuse and local-replacement effects, before the maker selects a Push action. For topic creation or update, apply Supported authoring scope and show unaccepted or acceptance-unknown response wording using the labels and quotations in [Response wording and local drafts](authoring-experience.md#response-wording-and-local-drafts) before any batch Push approval. Explain that Push accepts the displayed wording for the approved topics as well as authorizing their saves. For topic deletion, show the [deletion summary](deletion-experience.md#deletion-summary-delete_summary) `{delete_summary}`, including contained content and reference effects, rather than requesting response-wording acceptance. Do not require a separate wording approval or repeat owner gates for unchanged reviewed content. Then use:
+Disclose material consequences, including actual evaluation new-copy/reuse and local-replacement effects, before the maker selects a Push action. For topic creation or update, apply Supported authoring scope and show unaccepted or acceptance-unknown response wording using the labels and quotations in [Response wording and local drafts](authoring-experience.md#response-wording-and-local-drafts) before any batch Push approval. Explain that Push accepts the displayed wording for the approved topics as well as authorizing their saves. For topic deletion, show the [deletion summary](deletion-experience.md#deletion-summary-delete_summary) `{delete_summary}`, including contained content and reference effects, rather than requesting response-wording acceptance. For a deletion routing conflict not already covered by an unchanged reviewed approval or explicit exclusion, use the [routing-conflict decision](deletion-experience.md#routing-conflict-decision) and carry its selected scope back into this inventory. Do not require a separate wording approval or repeat owner gates for unchanged reviewed content. Then use:
 
 > ##### YOUR CHOICES
 >
@@ -349,15 +349,17 @@ Dispatch the approved save through its owner. Do not add an initial `push` usage
 
 Use observed owner results, not exit code alone. Maker-facing Pushed / Failed / Unconfirmed / Pushed with local issue remain separate from the coarse telemetry outcomes.
 
-| Observed execution result                                                                                   | BuildOutcome | DeployOutcome  | BuildErrorCode         | DeployErrorCode          | ErrorCategory |
-| ----------------------------------------------------------------------------------------------------------- | ------------ | -------------- | ---------------------- | ------------------------ | ------------- |
-| Approved operations completed successfully, saved state verified, with at least one confirmed remote change | `success`    | `success`      | empty                  | empty                    | empty         |
-| Approved operations completed successfully and all verified already-current content without writing         | `success`    | not emitted    | empty                  | empty                    | empty         |
-| One or more dispatched component operations ended in error                                                  | `failure`    | `server_error` | `PUSH_PARTIAL_FAILURE` | `DEPLOY_PARTIAL_FAILURE` | `runtime`     |
+For deletion, the owner's HTTP-success result confirms the remote change without a post-write read. Required local reconciliation must still complete.
+
+| Observed execution result                                                                                                  | BuildOutcome | DeployOutcome  | BuildErrorCode         | DeployErrorCode          | ErrorCategory |
+| -------------------------------------------------------------------------------------------------------------------------- | ------------ | -------------- | ---------------------- | ------------------------ | ------------- |
+| Approved operations completed successfully with their owners' completion evidence and at least one confirmed remote change | `success`    | `success`      | empty                  | empty                    | empty         |
+| Approved operations completed successfully and all verified already-current content without writing                        | `success`    | not emitted    | empty                  | empty                    | empty         |
+| One or more dispatched component operations ended in error                                                                 | `failure`    | `server_error` | `PUSH_PARTIAL_FAILURE` | `DEPLOY_PARTIAL_FAILURE` | `runtime`     |
 
 A returned write error counts as operation failure even when its remote effect remains unconfirmed. `server_error` is the existing aggregate deploy label, not a claim that the service rejected every write. Preserve uncertainty and any confirmed saves in the maker-facing report; never replay a write merely to improve telemetry.
 
-A successful owner result with only a non-fatal baseline-refresh or cleanup warning remains telemetry success. Report the local issue truthfully. If verified remote saves are followed by a hard local persistence or output failure that prevents owner completion, omit the terminal sequence while that failure remains. Do not relabel it as remote failure, downgrade an owner error to a warning, or change save/recovery behavior to produce a telemetry result.
+A successful owner result with only a non-fatal baseline-refresh or cleanup warning remains telemetry success. Report the local issue truthfully. If confirmed remote changes are followed by a hard local persistence or output failure that prevents owner completion, omit the terminal sequence while that failure remains. Do not relabel it as remote failure, downgrade an owner error to a warning, or change save/recovery behavior to produce a telemetry result.
 
 Keep a paused or still-running batch open. On cancellation after execution starts, omit completion, deploy and usage events for that batch, including when some components were already saved. Preserve those confirmed saves and report the remaining cancellations. Separately completed batches retain their events. If execution context or timing is lost, do not fabricate completion.
 

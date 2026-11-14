@@ -263,7 +263,7 @@ def _emit_mutation_result(result: dict[str, Any], output: Path | None) -> None:
         if result.get("saved") is True or result.get("deleted") is True:
             result["outputComplete"] = False
             raise TopicBookkeepingError(
-                "The topic result was verified, but reusable output writing failed.",
+                "The topic operation completed, but reusable output writing failed.",
                 {"remoteResult": result, "localError": _exception_chain(exc)},
             ) from exc
         raise
@@ -362,7 +362,7 @@ def _delete_topic(
         save_component_map(agent_folder, current_map)
     except (OSError, ValueError) as exc:
         raise TopicBookkeepingError(
-            "Topic absence is verified, but local cleanup is incomplete. "
+            "The deletion outcome is confirmed, but local cleanup is incomplete. "
             "Do not repeat the remote deletion to repair local tracking.",
             {"remoteResult": result, "workspace": workspace, "localError": _exception_chain(exc)},
         ) from exc

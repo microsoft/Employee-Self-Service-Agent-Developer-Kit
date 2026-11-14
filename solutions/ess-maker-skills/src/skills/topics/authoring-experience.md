@@ -390,6 +390,8 @@ Resolve unverified topic state or report its blocker rather than guessing which 
 
 ### Targeted instruction-change preview and approval
 
+For deletion-related routing corrections, reuse this preview and the instruction-only save control with the state, consent and outcome bindings in [Deletion-related instruction correction](deletion-experience.md#deletion-related-instruction-correction). That path does not use Create/Update's topic-save sequencing or testing continuation.
+
 #### Prepare the correction
 
 Carry forward the selected agent, topic, identified conflict and actual topic-save state. Use current saved instruction evidence to prepare the smallest targeted correction through the normal instruction owner.

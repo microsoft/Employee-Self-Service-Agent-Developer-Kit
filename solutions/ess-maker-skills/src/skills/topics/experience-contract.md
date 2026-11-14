@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD001 -->
 
-Read this shared foundation before topic authoring, deletion, Push or testing. It owns common presentation, supported authoring coverage, deletion protection and authorization. Use the owning operation for execution and authoritative readback.
+Read this shared foundation before topic authoring, deletion, Push or testing. It owns common presentation, supported authoring coverage, deletion protection and authorization. Use the owning operation for execution and completion evidence.
 
 ## Read by operation
 

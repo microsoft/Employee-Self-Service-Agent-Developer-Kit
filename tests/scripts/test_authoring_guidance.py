@@ -764,6 +764,18 @@ def test_rollout_markers_resolve_owned_definitions_without_duplicate_caller_upda
                 r"^\|\s*`([^`]+)`\s*\|([^|]+)\|([^|]+)\|", status, re.MULTILINE
             )
         }
+        if owner == "topics/delete":
+            assert "../authoring-experience.md#authoring-status-updates" in guidance
+            shared_status = _read("src/skills/topics/authoring-experience.md").split(
+                "## Authoring status updates\n", 1
+            )[1].split("## Authoring summaries\n", 1)[0]
+            definitions.update({
+                point: (condition.strip(), message.strip())
+                for point, condition, message in re.findall(
+                    r"^\|\s*`([^`]+)`\s*\|([^|]+)\|([^|]+)\|", shared_status, re.MULTILINE
+                )
+                if point in {"instruction-preparation", "instruction-save"}
+            })
         points = re.findall(r"\{EMIT_STATUS_UPDATE: ([^}]+)\}", guidance)
         assert definitions and set(points) == set(definitions), owner
         for condition, message in definitions.values():
@@ -787,6 +799,79 @@ def test_rollout_markers_resolve_owned_definitions_without_duplicate_caller_upda
         "src/skills/topics/update-eval-driven/SKILL.md",
     ):
         assert "{EMIT_STATUS_UPDATE:" not in _read(relative), relative
+
+
+def test_deletion_routing_conflict_matches_authoring_wording_and_control_position():
+    authoring = _read("src/skills/topics/authoring-experience.md")
+    initial = authoring.split("### Initial routing-conflict decision\n", 1)[1].split(
+        "### Topic outcomes\n", 1
+    )[0]
+    resolution = re.findall(r"^> \|\s*(Resolve[^|]+)\|", initial, re.MULTILINE)[0].strip()
+    deletion = _read("src/skills/topics/deletion-experience.md")
+    summary = deletion.split("### Deletion summary:", 1)[1].split(
+        "### Deletion decision\n", 1
+    )[0]
+    assert summary.index("> ##### REFERENCES NEEDING ATTENTION") < summary.index(
+        "> ##### ROUTING CONFLICTS"
+    )
+    assert summary.count(">   ###### SUGGESTED ACTIONS") == 1
+    assert "{Deletion routing impact}" in summary
+    assert "This routing conflict will likely block topic execution." not in summary
+    for heading, following, choices in (
+        ("Deletion decision", "Routing-conflict decision",
+         ["Push deletion to agent", "Keep deletion locally", "Not now"]),
+        ("Routing-conflict decision", "Deletion-related instruction correction",
+         [resolution, "Push deletion anyway", "Keep deletion locally", "Not now"]),
+    ):
+        section = deletion.split(f"### {heading}\n", 1)[1].split(
+            f"### {following}\n", 1
+        )[0]
+        question = json.loads(re.search(r"```json\n(.*?)\n```", section, re.DOTALL)[1])
+        assert question["message"] == ""
+        field = question["requestedSchema"]["properties"]["action"]
+        assert field["title"] == "Topic deletion"
+        assert field["description"] == "How would you like to continue?"
+        assert field["enum"] == choices
+        rows = re.findall(r"^> \|\s*([^|]+)\|", section, re.MULTILINE)[2:]
+        assert [row.strip() for row in rows] == choices
+    assert "Prepare a targeted instruction correction for review. Push neither change yet." in section
+    assert "Do not immediately offer the same resolution decision again" in section
+
+
+def test_deletion_instruction_correction_preserves_scope_states_and_owner_boundaries():
+    deletion = _read("src/skills/topics/deletion-experience.md")
+    correction = deletion.split("### Deletion-related instruction correction\n", 1)[1].split(
+        "### Routing cleanup after deletion\n", 1
+    )[0]
+    assert "authoring-experience.md#targeted-instruction-change-preview-and-approval" in correction
+    assert "Preserve other topics in shared routing rules" in correction
+    assert "Do not present a runnable instruction Push choice." in correction
+    assert "without removing working files merely to populate the inventory" in correction
+    assert "selection of a type or resolution option alone is not write consent" in correction
+    assert "Pause dependent work after a failed or uncertain prerequisite." in correction
+    assert "do not replay, roll back or recreate the topic automatically" in correction
+    assert "do not offer activation or testing of the deleted topic" in correction
+    assert "A successful instruction save does not establish successful deletion." in correction
+    cleanup = deletion.split("### Routing cleanup after deletion\n", 1)[1].split(
+        "### Local-only variations\n", 1
+    )[0]
+    question = json.loads(re.search(r"```json\n(.*?)\n```", cleanup, re.DOTALL)[1])
+    assert question["requestedSchema"]["properties"]["action"]["enum"] == [
+        "Resolve the routing conflict in the Agent Instructions", "Not now",
+    ]
+    assert "Do not re-offer a correction already declined" in cleanup
+    assert "without requiring a current local topic file or issuing another deletion" in cleanup
+    owner = _read("src/skills/topics/delete/SKILL.md")
+    assert "--draft" in owner and '--expected ".local\\topic-authoring\\instructions-before.json"' in owner
+    assert owner.index("instructions-preview.json") < owner.index(
+        "{EMIT_STATUS_UPDATE: instruction-preparation}"
+    )
+    assert owner.index("instructions-result.json") < owner.index(
+        "{EMIT_STATUS_UPDATE: instruction-save}"
+    )
+    assert "Instruction-only cleanup skips this deletion checkpoint and capability event" in owner
+    push = _read("src/skills/topics/push-experience.md")
+    assert "deletion-experience.md#routing-conflict-decision" in push
 
 
 def test_rollout_reviews_and_native_choices_keep_the_shared_presentation_contract():

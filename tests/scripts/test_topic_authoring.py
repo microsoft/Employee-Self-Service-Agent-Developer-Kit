@@ -740,7 +740,7 @@ def _delete_client(topic_cli, monkeypatch):
     )
     before = topic_cli.client.fetch_components(topic_cli.target["agent"]["id"])
     after = {**before, "changeToken": "after", "botComponentChanges": []}
-    client.read_components = Mock(side_effect=[before, after])
+    client.read_components = Mock(side_effect=[before])
     client._request = Mock(return_value=(
         SimpleNamespace(status_code=200, headers={"x-ms-request-id": "deletion-id"}),
         {"serviceDetail": {"keep": True}},
@@ -757,7 +757,7 @@ def _deletion_preview(topic_cli):
 
 
 @pytest.mark.parametrize("staged", [False, True])
-def test_delete_preview_and_execution_reconcile_only_verified_scope(
+def test_delete_http_success_reconciles_reviewed_scope_without_readback(
     topic_cli, monkeypatch, capsys, staged,
 ):
     root = _register_existing(topic_cli)
@@ -798,8 +798,11 @@ def test_delete_preview_and_execution_reconcile_only_verified_scope(
     result = json.loads(capsys.readouterr().out)
 
     assert result["deleted"] is True and result["bookkeepingComplete"] is True
-    assert result["verified"] is True and result["requestId"] == "deletion-id"
+    assert result["writeAccepted"] is True and result["httpStatus"] == 200
+    assert result["verified"] is False and "readback" not in result
+    assert result["requestId"] == "deletion-id"
     assert result["response"] == {"serviceDetail": {"keep": True}}
+    client.read_components.assert_called_once()
     assert _map(topic_cli) == {"topics/untouched.mcs.yml": {"componentId": "unrelated"}}
     for relative in preview["workspace"]:
         assert not (topic_cli.agent_folder / relative).exists()
@@ -846,36 +849,23 @@ def test_deletion_rejects_changed_approval_scope_before_write(
     assert topic_cli.draft.read_bytes() == local and _map(topic_cli) == mapping
 
 
-@pytest.mark.parametrize("failure", [
-    403, 409, 503, "transport", "readback", "present", "malformed", "replacement",
-])
+@pytest.mark.parametrize("failure", [403, 409, 503, "transport"])
 def test_deletion_failure_keeps_files_and_exposes_uncertainty_without_replay(
     topic_cli, monkeypatch, failure,
 ):
     _register_existing(topic_cli)
-    client, before, after = _delete_client(topic_cli, monkeypatch)
+    client, _, _ = _delete_client(topic_cli, monkeypatch)
     args = _deletion_preview(topic_cli)
     mapping = _map(topic_cli)
     content = topic_cli.draft.read_bytes()
-    cause = RuntimeError("Readback unavailable")
     if isinstance(failure, int):
         client._request.return_value = (
             SimpleNamespace(status_code=failure, headers={"x-ms-request-id": "failure-id"}),
             {"unexpected": {"keep": True}, "access_token": "do-not-emit"},
         )
-    elif failure == "transport":
+    else:
         cause = native.MinimalBotEvaluationError("Transport failed")
         client._request.side_effect = cause
-    elif failure == "readback":
-        client.read_components.side_effect = [before, cause]
-    elif failure == "present":
-        client.read_components.side_effect = [before, before]
-    elif failure == "replacement":
-        after["botComponentChanges"] = [{"component": {
-            **before["botComponentChanges"][0]["component"], "id": "replacement",
-        }}]
-    else:
-        del after["botComponentChanges"]
 
     with pytest.raises(native.ComponentEditError) as error:
         authoring.main(args)
@@ -884,11 +874,12 @@ def test_deletion_failure_keeps_files_and_exposes_uncertainty_without_replay(
     assert error.value.evidence["verified"] is False
     assert topic_cli.draft.read_bytes() == content and _map(topic_cli) == mapping
     client._request.assert_called_once()
+    client.read_components.assert_called_once()
     if isinstance(failure, int):
         assert error.value.evidence["httpStatus"] == failure
         assert error.value.evidence["response"]["unexpected"] == {"keep": True}
         assert "do-not-emit" not in json.dumps(error.value.evidence)
-    elif failure in {"transport", "readback"}:
+    else:
         assert error.value.__cause__ is cause
 
 
@@ -920,9 +911,11 @@ def test_deletion_preserves_remote_success_when_local_work_fails(
         authoring.main(args)
 
     remote = error.value.evidence["remoteResult"]
-    assert remote["deleted"] is True and remote["verified"] is True
+    assert remote["deleted"] is True and remote["writeAccepted"] is True
+    assert remote["verified"] is False and "readback" not in remote
     assert remote["bookkeepingComplete"] is (local_failure == "output")
     client._request.assert_called_once()
+    client.read_components.assert_called_once()
     if local_failure == "later-edit":
         assert topic_cli.draft.read_text(encoding="utf-8") == "Newer edit"
         assert "topics/CaseSensitiveName.mcs.yml" in _map(topic_cli)
@@ -942,8 +935,10 @@ def test_already_absent_deletion_reconciles_without_a_new_remote_write(
     result = json.loads(capsys.readouterr().out)
     assert result["alreadyAbsent"] is True and result["writeAttempted"] is False
     assert result["deletedComponents"] == 0 and result["bookkeepingComplete"] is True
+    assert result["verified"] is True and "readback" not in result
     assert not topic_cli.draft.exists() and not _map(topic_cli)
     client._request.assert_not_called()
+    client.read_components.assert_called_once()
 
 
 def test_absent_topic_with_replacement_is_not_reconciled(topic_cli, monkeypatch):

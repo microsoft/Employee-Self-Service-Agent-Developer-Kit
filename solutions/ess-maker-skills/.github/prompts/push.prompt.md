@@ -202,7 +202,7 @@ instruction-save statement in the instruction row's Details, with conflict
 assessment and testing readiness in the trailer, not separate owner outcome
 blocks. Preserve known remote results, uncertainty, subsequent local
 output/bookkeeping failures, actual evaluation-copy/review facts and required links/reminders.
-Each owner acknowledges only captured submitted content or verified deletion scope. Later disk edits
+Each owner acknowledges only captured submitted content or approved deletion scope. Later disk edits
 remain pending. Do not concatenate owner reports or menus, blindly replay an
 uncertain write, refresh setup automatically or reset the whole baseline.
 
