@@ -3,10 +3,11 @@
 # ESS ADK — macOS One-Shot Installer
 #
 # Installs the full ESS Maker Kit toolchain on macOS:
-#   Homebrew, Python 3.12, Git, GitHub CLI, VS Code, the .NET 10 runtime,
-#   NuGet, Copilot extensions, pip and Object Model dependencies, clones
-#   the repo, and launches VS Code. /setup is user-driven — run it yourself
-#   in Copilot Chat when ready (requires VS Code 1.102+).
+#   Homebrew, Python 3.12, Git, VS Code, the .NET 10 runtime, NuGet,
+#   Copilot extensions, pip and Object Model dependencies, clones the repo,
+#   and launches VS Code. It also attempts to install the optional GitHub CLI
+#   used by automated evaluation scoring. /setup is user-driven — run it
+#   yourself in Copilot Chat when ready (requires VS Code 1.102+).
 #
 # Usage (full maker kit):
 #   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
@@ -352,6 +353,24 @@ install_optional_brew_cask() {
     fi
 }
 
+install_optional_cli_tool() {
+    local pkg="$1"
+    local command="$2"
+    local name="$3"
+    if command -v "$command" &>/dev/null; then
+        ok "$name (already installed at $(command -v "$command"))"
+    elif brew list "$pkg" &>/dev/null; then
+        ok "$name (already installed)"
+    elif brew install "$pkg"; then
+        ok "$name"
+    else
+        warn "$name was not installed."
+        warn "/setup and /connect workday can continue without it."
+        warn "Automated /evaluate scoring requires GitHub CLI and a Copilot-enabled GitHub account."
+        warn "Install it later with: brew install $pkg"
+    fi
+}
+
 # Core tools (always needed)
 install_brew_pkg "python@3.12" "Python 3.12"
 
@@ -364,7 +383,7 @@ fi
 
 if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     # Full maker kit tools
-    install_brew_pkg "gh" "GitHub CLI"
+    install_optional_cli_tool "gh" "gh" "GitHub CLI"
     install_brew_cask "visual-studio-code" "Visual Studio Code" "/Applications/Visual Studio Code.app"
     if command -v dotnet &>/dev/null && dotnet --list-runtimes 2>/dev/null | grep -q '^Microsoft\.NETCore\.App 10\.'; then
         ok ".NET 10 Runtime (already installed)"

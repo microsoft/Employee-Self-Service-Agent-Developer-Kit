@@ -66,13 +66,3 @@ properties:
         id: Git.Git
         source: winget
         Ensure: Present
-
-    - resource: Microsoft.WinGet.DSC/WinGetPackage
-      id: gh
-      directives:
-        description: Install GitHub CLI (used for the device-code clone flow)
-        allowPrerelease: false
-      settings:
-        id: GitHub.cli
-        source: winget
-        Ensure: Present
