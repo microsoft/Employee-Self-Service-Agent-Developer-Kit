@@ -11,6 +11,8 @@ helpers are thin and live-only; this suite covers the offline consumer contract.
 """
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 from flow_run_inspect import _extract_status_code, summarize_actions
 
 # A recorded cascade mirroring the scope-vs-handler trap: the connector call
@@ -91,9 +93,31 @@ def test_cli_falls_back_to_acquire_when_no_env_token(capsys, monkeypatch):
     assert "FLOW_API_TOKEN" in out
 
 
-def test_resolve_token_prefers_env_token():
+def test_resolve_token_prefers_env_token(monkeypatch):
+    import auth
     import flow_run_inspect
+
+    acquire = Mock(side_effect=AssertionError("explicit token must bypass MSAL"))
+    config = Mock(side_effect=AssertionError("explicit token must bypass config"))
+    monkeypatch.setattr(auth, "get_flow_token", acquire)
+    monkeypatch.setattr(flow_run_inspect, "load_config", config)
     assert flow_run_inspect._resolve_token("explicit-tok") == "explicit-tok"
+    acquire.assert_not_called()
+    config.assert_not_called()
+
+
+def test_resolve_token_acquires_for_configured_environment(monkeypatch):
+    import auth
+    import flow_run_inspect
+
+    acquire = Mock(return_value="acquired-flow-token")
+    monkeypatch.setattr(auth, "get_flow_token", acquire)
+    monkeypatch.setattr(flow_run_inspect, "load_config", lambda: {
+        "dataverseEndpoint": "https://orgexample.crm.dynamics.com",
+    })
+
+    assert flow_run_inspect._resolve_token("") == "acquired-flow-token"
+    acquire.assert_called_once_with("https://orgexample.crm.dynamics.com")
 
 
 def test_cli_renders_cascade(capsys, monkeypatch):
@@ -284,4 +308,3 @@ def test_outgoing_request_carries_bearer_token(monkeypatch):
     monkeypatch.setattr(flow_run_inspect.requests, "get", _fake_get)
     flow_run_inspect.get_latest_run("e" * 32, "f" * 32, token)
     assert captured["headers"]["Authorization"] == "Bearer " + token
-
