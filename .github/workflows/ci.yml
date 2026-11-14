@@ -152,6 +152,8 @@ jobs:
     # separate, networked concern kept out of this deterministic job.
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -168,6 +170,15 @@ jobs:
 
     - name: Run FlightCheck offline test suite
       run: python -m pytest tests/flightcheck -q
+
+    # Warnings only: flags checks without test evidence and guidance changed
+    # without a doc-sources.csv update. Reviewers decide; nothing is rewritten.
+    - name: FlightCheck gap report
+      if: github.event_name == 'pull_request'
+      working-directory: solutions/ess-maker-skills/scripts
+      env:
+        BASE_REF: ${{ github.base_ref }}
+      run: python -m flightcheck.gap_report --base "origin/$BASE_REF"
 
   script-tests:
     name: Lifecycle script test suite
