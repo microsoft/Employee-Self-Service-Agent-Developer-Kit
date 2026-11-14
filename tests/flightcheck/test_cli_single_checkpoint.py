@@ -36,7 +36,7 @@ from pathlib import Path
 import pytest
 
 from flightcheck import cli, registry
-from flightcheck.runner import CheckResult, Priority, Status
+from flightcheck.runner import CheckResult, Priority, RunResult, Status
 
 
 def _args(
@@ -80,6 +80,22 @@ def _row(checkpoint_id: str, status: str) -> CheckResult:
         description="fake",
         result="fake",
     )
+
+
+@pytest.mark.parametrize("mode", ("checkpoint", "profile"))
+def test_targeted_cli_defaults_to_cli_source(mode, monkeypatch):
+    captured = {}
+
+    def capture(args):
+        captured["source"] = args.invocation_source
+
+    handler = "_run_single_checkpoint" if mode == "checkpoint" else "_run_profile"
+    monkeypatch.setattr(cli, handler, capture)
+    monkeypatch.setattr(sys, "argv", ["flightcheck", f"--{mode}", "FAKE-001"])
+
+    cli.main()
+
+    assert captured["source"] == "cli"
 
 
 @pytest.mark.parametrize(
@@ -1621,11 +1637,13 @@ class TestHermeticRun:
         assert "Single Checkpoint" not in output
         assert "Running checkpoint" not in output
 
+    @pytest.mark.parametrize("invocation_source", (None, "connect"))
     def test_compact_result_is_pure_stdout_and_writes_no_report(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
+        invocation_source: str | None,
     ) -> None:
         target = "FAKE-001"
 
@@ -1687,6 +1705,7 @@ class TestHermeticRun:
                     compact_result=True,
                     invocation_id="invocation-123",
                     quiet_auth=True,
+                    invocation_source=invocation_source,
                 )
             )
 
@@ -1697,6 +1716,7 @@ class TestHermeticRun:
         assert payload["kind"] == "checkpoint-result"
         assert payload["target"] == target
         assert payload["invocation"]["id"] == "invocation-123"
+        assert payload["invocation"]["source"] == (invocation_source or "cli")
         assert payload["results"][0]["status"] == Status.MANUAL.value
         assert not (tmp_path / "out").exists()
 
@@ -1886,21 +1906,18 @@ class TestHermeticRun:
         assert payload["error"]["exitCode"] == 1
 
 
-class TestCheckpointTelemetry:
-    """Single-checkpoint runs emit outcome telemetry attributed to the
-    ``connect`` invocation source with a ``checkpoint:<ID>`` scope (ADO
-    7587431). The emit is best-effort and never affects the exit code.
-    """
+class TestTargetedTelemetry:
+    """Targeted runs use the caller's source and default to direct CLI."""
 
     @staticmethod
     def _capture(monkeypatch: pytest.MonkeyPatch) -> dict:
-        """Stub both telemetry families and capture the kwargs passed to the
-        legacy ``emit_flightcheck_telemetry`` call. Returns a dict that is
-        populated with ``called`` / ``kwargs`` once the emit runs."""
+        """Capture both telemetry families without network or identity writes."""
         from flightcheck import telemetry as _tele_mod
         import adk_telemetry as _adk_mod
 
-        captured: dict = {"called": False, "kwargs": None}
+        captured: dict = {
+            "called": False, "kwargs": None, "run_kwargs": None, "result_kwargs": None,
+        }
 
         def _fake_emit(run_result, **kwargs):  # noqa: ARG001
             captured["called"] = True
@@ -1911,12 +1928,18 @@ class TestCheckpointTelemetry:
         # Neutralise the adk.* family so no network / real identity is touched.
         monkeypatch.setattr(_adk_mod, "set_identity", lambda *a, **k: None)
         monkeypatch.setattr(_adk_mod, "next_run_index", lambda *a, **k: 1)
-        monkeypatch.setattr(_adk_mod, "emit_flightcheck_run", lambda *a, **k: None)
-        monkeypatch.setattr(_adk_mod, "emit_flightcheck_result", lambda *a, **k: None)
+        monkeypatch.setattr(
+            _adk_mod, "emit_flightcheck_run",
+            lambda **k: captured.update(run_kwargs=k),
+        )
+        monkeypatch.setattr(
+            _adk_mod, "emit_flightcheck_result",
+            lambda **k: captured.update(result_kwargs=k),
+        )
         monkeypatch.setattr(_adk_mod, "flush", lambda *a, **k: None)
         return captured
 
-    def test_emits_connect_source_and_checkpoint_scope(
+    def test_emits_cli_source_and_checkpoint_scope(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -1927,21 +1950,24 @@ class TestCheckpointTelemetry:
             monkeypatch, [_row("WD-ENTRA-CONSENT-001", Status.PASSED.value)]
         )
         captured = self._capture(monkeypatch)
-        # no_telemetry=False reaches the emit; invocation_source unset -> connect.
         with pytest.raises(SystemExit) as exc:
             cli._run_single_checkpoint(
                 _args("WD-ENTRA-CONSENT-001", tmp_path, no_telemetry=False)
             )
         assert exc.value.code == 0
         assert captured["called"] is True
-        assert captured["kwargs"]["invocation_source"] == "connect"
+        assert captured["kwargs"]["invocation_source"] == "cli"
+        assert captured["run_kwargs"]["invocation_source"] == "cli"
+        assert captured["result_kwargs"]["invocation_source"] == "cli"
         assert captured["kwargs"]["scope"] == "checkpoint:WD-ENTRA-CONSENT-001"
 
+    @pytest.mark.parametrize("source", ("adk", "installer", "connect"))
     def test_explicit_invocation_source_wins(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         _silence_output: None,
+        source: str,
     ) -> None:
         monkeypatch.chdir(tmp_path)
         TestHermeticRun._install_fake_plan(
@@ -1950,9 +1976,29 @@ class TestCheckpointTelemetry:
         captured = self._capture(monkeypatch)
         with pytest.raises(SystemExit):
             cli._run_single_checkpoint(
-                _args("FAKE-001", tmp_path, no_telemetry=False, invocation_source="adk")
+                _args("FAKE-001", tmp_path, no_telemetry=False, invocation_source=source)
             )
-        assert captured["kwargs"]["invocation_source"] == "adk"
+        assert captured["kwargs"]["invocation_source"] == source
+        assert captured["run_kwargs"]["invocation_source"] == source
+        assert captured["result_kwargs"]["invocation_source"] == source
+
+    @pytest.mark.parametrize("source", (None, "adk", "installer", "connect"))
+    def test_profile_source_is_consistent_across_telemetry_families(
+        self, tmp_path, monkeypatch, source,
+    ) -> None:
+        captured = self._capture(monkeypatch)
+        scope = "profile:workday-da:test"
+        args = _args("FAKE-001", tmp_path, no_telemetry=False, invocation_source=source)
+        args.profile = "workday-da:test"
+
+        cli._emit_run_telemetry(
+            RunResult(scope=scope, started="", overall="READY"),
+            args, {}, graph=None, tenant_id="", scope=scope,
+        )
+
+        assert captured["kwargs"]["scope"] == scope
+        for key in ("kwargs", "run_kwargs", "result_kwargs"):
+            assert captured[key]["invocation_source"] == (source or "cli")
 
     def test_no_telemetry_flag_suppresses_emit(
         self,

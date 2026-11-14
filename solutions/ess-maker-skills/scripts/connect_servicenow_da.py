@@ -10839,6 +10839,8 @@ def resume_handoff(
                 "scripts/flightcheck/cli.py",
                 "--checkpoint",
                 target,
+                "--invocation-source",
+                "connect",
                 "--compact-result",
                 "--invocation-id",
                 invocation_id,
