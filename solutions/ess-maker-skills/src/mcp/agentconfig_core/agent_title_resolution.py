@@ -30,6 +30,7 @@ from base_client import (  # noqa: E402
     validate_token_identity,
 )
 from _odata import _validate_https_base_url, _validate_title_id  # noqa: E402
+from operation_telemetry import send_get_request  # noqa: E402
 
 
 _LOGGER = logging.getLogger("ess-agentconfig.title-resolution")
@@ -312,6 +313,7 @@ def resolve_configured_agent_title(
             token,
             f"bots({target.bot_id})",
             params={"$select": "botid,applicationmanifestinformation"},
+            request_observer=send_get_request,
         )
         return {
             "botId": target.bot_id,

@@ -492,7 +492,7 @@ def retrieve_shared_principals_and_access(env_url, token, bot_id):
     return resp.json()
 
 
-def dataverse_get(env_url, token, path, params=None):
+def dataverse_get(env_url, token, path, params=None, *, request_observer=None):
     """GET a Dataverse Web API endpoint that is not a paged table query.
 
     Use this for function calls (e.g. ``WhoAmI()``) and single-record reads
@@ -511,6 +511,8 @@ def dataverse_get(env_url, token, path, params=None):
         ``"WhoAmI()"`` or ``"usersettingscollection(11111111-...)``.
     params : dict | None
         Optional querystring parameters (e.g. ``{"$select": "_preferredsolution_value"}``).
+    request_observer : callable | None
+        Optional transport observer that owns telemetry for this request.
 
     Returns
     -------
@@ -541,8 +543,12 @@ def dataverse_get(env_url, token, path, params=None):
     headers = {**HEADERS_BASE, "Authorization": f"Bearer {token}"}
     url = f"{env_url}/api/data/v9.2/{path.lstrip('/')}"
     _start = time.perf_counter()
-    resp = _SESSION.get(url, headers=headers, params=params, timeout=60, verify=True)
-    _emit_api_call(path.split("(")[0], "read", _start, status=resp.status_code)
+    request_args = {"headers": headers, "params": params, "timeout": 60, "verify": True}
+    if request_observer is None:
+        resp = _SESSION.get(url, **request_args)
+        _emit_api_call(path.split("(")[0], "read", _start, status=resp.status_code)
+    else:
+        resp = request_observer(_SESSION.get, url, **request_args)
     if resp.status_code == 401:
         raise AuthExpiredError(response=resp)
     resp.raise_for_status()

@@ -37,7 +37,6 @@ from urllib.parse import urlsplit
 
 import anyio
 import httpx
-from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from portalocker.exceptions import LockException
@@ -60,6 +59,14 @@ from agent_title_resolution import (
     load_configured_target,
     resolve_configured_agent_title,
 )
+from mcp_observability import ObservedFastMCP, register_client_events_bridge
+from operation_telemetry import (
+    annotate_usage,
+    capture_tenant,
+    confirm_write,
+    handler_entered,
+    result_metadata,
+)
 from drafts import (
     AnnouncementEditorDraft,
     AudienceGroup,
@@ -81,6 +88,8 @@ from telemetry import (
     SOURCE_BACKEND,
     SOURCE_GRAPH,
     SOURCE_MCP,
+    flush_telemetry,
+    initialize_telemetry_identity,
     normalize_error_code,
     record_operation,
 )
@@ -97,6 +106,9 @@ ALLOWED_WIDGET_ORIGINS = frozenset(
 )
 DEVELOPMENT_WIDGET_ORIGIN_ENV = "VORPAL_WIDGET_ALLOW_DEVELOPMENT_ORIGIN"
 WIDGET_MIME_TYPE = "text/html;profile=mcp-app"
+SOLUTION_LOCAL_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", ".local")
+)
 ORG_ANNOUNCEMENTS_RESOURCE_URI = (
     "ui://widget/org-announcements/OrgAnnouncements.html"
 )
@@ -289,7 +301,7 @@ def _widget_shell() -> str:
     )
 
 
-mcp = FastMCP(
+mcp = ObservedFastMCP(
     "ess-org-announcements",
     instructions=(
         "Author ESS announcements for one deployed agent in the authenticated "
@@ -342,6 +354,9 @@ async def _construct_and_publish_client() -> None:
             async with _client_lock:
                 if _client is None:
                     _client = client
+                    initialize_telemetry_identity(
+                        getattr(client, "tenant_id", ""), local_dir=SOLUTION_LOCAL_DIR,
+                    )
                     published = True
                 else:
                     close_client = client
@@ -421,6 +436,7 @@ async def get_client_lease() -> AsyncIterator[OrgAnnouncementsClient]:
     """Keep one authoring client alive for the complete tool operation."""
     client = await get_client()
     try:
+        capture_tenant(getattr(client, "tenant_id", ""), local_dir=SOLUTION_LOCAL_DIR)
         yield client
     finally:
         await release_client(client)
@@ -514,6 +530,7 @@ def _text_result(payload: dict[str, Any], message: str) -> CallToolResult:
     return CallToolResult(
         content=[TextContent(type="text", text=message)],
         structuredContent=payload,
+        _meta=result_metadata(),
     )
 
 
@@ -884,6 +901,7 @@ def _open_error_payload(
         content=[TextContent(type="text", text=visible_failure.message)],
         structuredContent=payload,
         isError=True,
+        _meta=result_metadata(),
     )
 
 
@@ -993,6 +1011,7 @@ async def resolve_agent_title_id(botId: str) -> dict[str, str | None]:
     a caller cancels; retries must wait for that lookup to finish.
     This read-only tool does not persist configuration or initialize a landing page.
     """
+    handler_entered()
     try:
         return await _title_resolution.run(lambda: _run_title_resolution(botId))
     except AgentTitleResolutionError as error:
@@ -1025,6 +1044,7 @@ async def open_org_announcements(
     whose actions need repair. Opening preserves working content; it does not
     establish that the content is valid to save or publish.
     """
+    handler_entered()
     # The flat tool signature stays compatible with MCP callers. Validate the
     # combination before entering the recoverable widget-error path: an invalid
     # request is not safe retry state and cannot be rendered as an error view.
@@ -1044,6 +1064,7 @@ async def open_org_announcements(
     except ValueError as error:
         raise ToolError(f"Invalid announcement opener: {error}") from None
 
+    annotate_usage(widget="org-announcements", draft_present=suggestedDraft is not None)
     started = time.monotonic()
     scope = {"titleId": titleId}
     client = None
@@ -1158,6 +1179,7 @@ def _mutation_failure(
             **scope, "status": "failure", "errors": failure.as_error_list()
         },
         isError=True,
+        _meta=result_metadata(),
     )
 
 
@@ -1268,6 +1290,7 @@ async def save_bulletin(
     id: Optional[str] = None,  # noqa: A002 — the widget's wire field name
 ) -> CallToolResult:
     """Create or update an announcement with its complete authored state."""
+    handler_entered()
     started = time.monotonic()
     scope = {"titleId": titleId}
     try:
@@ -1298,6 +1321,7 @@ async def save_bulletin(
             try:
                 saved = await client.save_bulletin(titleId, payload)
             except CommittedCanonicalReloadError as error:
+                confirm_write()
                 failure = await _failure_from(error.cause, client)
                 _LOGGER.warning(
                     "save_bulletin canonical reload failed after commit: %s",
@@ -1310,6 +1334,7 @@ async def save_bulletin(
                     scope,
                 )
 
+            confirm_write()
             try:
                 result = await _saved_item_result(
                     client,
@@ -1380,6 +1405,7 @@ async def transition_bulletin(
     build that routes publish-now through ``save_bulletin``. The current
     boundary is pinned by tests so it stays a known contract.
     """
+    handler_entered()
     started = time.monotonic()
     scope = {"titleId": titleId}
     client = None
@@ -1393,6 +1419,7 @@ async def transition_bulletin(
                     titleId, id, TRANSITION_STATUS[transition]
                 )
             except CommittedCanonicalReloadError as error:
+                confirm_write()
                 cause = await _failure_from(error.cause, client)
                 _LOGGER.warning(
                     "transition_bulletin canonical reload failed after commit: %s (%s)",
@@ -1406,6 +1433,7 @@ async def transition_bulletin(
                     scope,
                 )
 
+            confirm_write()
             # The transition is committed from here on. A refresh failure must never be
             # reported as a retryable normal failure, because the lifecycle change has
             # already been applied and re-issuing it could fail validation or move the
@@ -1468,6 +1496,7 @@ async def duplicate_bulletin(
     and creates a new Draft. A missing source is a not-found failure, never a
     create: duplicating something that no longer exists must not invent a record.
     """
+    handler_entered()
     started = time.monotonic()
     scope = {"titleId": titleId}
     client = None
@@ -1503,6 +1532,7 @@ async def duplicate_bulletin(
             try:
                 created = await client.save_bulletin(titleId, payload)
             except CommittedCanonicalReloadError as error:
+                confirm_write()
                 failure = await _failure_from(error.cause, client)
                 _LOGGER.warning(
                     "duplicate_bulletin canonical reload failed after commit: %s",
@@ -1522,6 +1552,7 @@ async def duplicate_bulletin(
                 )
                 return _fail("duplicate_bulletin", failure, started, scope)
 
+            confirm_write()
             try:
                 result = await _saved_item_result(
                     client,
@@ -1574,6 +1605,7 @@ async def search_audience_groups(query: str) -> CallToolResult:
     search looks identical to an exhausted one and the maker would be told a
     group does not exist when it simply was not reached.
     """
+    handler_entered()
     started = time.monotonic()
     authoring_client = None
     try:
@@ -1602,6 +1634,7 @@ async def search_audience_groups(query: str) -> CallToolResult:
                 "retryable": failure.retryable,
             },
             isError=True,
+            _meta=result_metadata(),
         )
     except ValueError as error:
         _LOGGER.warning("search_audience_groups rejected an invalid query")
@@ -1620,9 +1653,11 @@ async def search_audience_groups(query: str) -> CallToolResult:
                 "retryable": False,
             },
             isError=True,
+            _meta=result_metadata(),
         )
 
     groups = result["groups"]
+    annotate_usage(discovery_result_count=len(groups))
     record_operation(
         "search_audience_groups",
         outcome="success",
@@ -1639,5 +1674,11 @@ async def search_audience_groups(query: str) -> CallToolResult:
     )
 
 
+report_client_events = register_client_events_bridge(mcp)
+
+
 if __name__ == "__main__":
-    mcp.run()
+    try:
+        mcp.run()
+    finally:
+        flush_telemetry()

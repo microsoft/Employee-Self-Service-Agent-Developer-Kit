@@ -699,6 +699,58 @@ def test_cancelled_sign_in_cannot_accumulate_workers_or_independent_retries(
     assert PRIVATE not in caplog.text
 
 
+@pytest.mark.parametrize("status", [200, 403, None])
+def test_title_resolution_has_one_operation_and_correlated_http_telemetry(
+    config, authoring_identity, msal_auth, api, monkeypatch, status,
+):
+    import adk_telemetry as adk
+    import auth
+
+    operations, requests_sent, http_records = [], [], []
+    if status is None:
+        api.error = requests.ConnectionError(PRIVATE)
+    else:
+        api.status = status
+    original_get = auth._SESSION.get
+
+    def get(url, **kwargs):
+        requests_sent.append(kwargs["headers"]["client-request-id"])
+        return original_get(url, **kwargs)
+
+    monkeypatch.setattr(auth._SESSION, "get", get)
+    monkeypatch.setattr(adk, "telemetry_enabled", lambda: True)
+    monkeypatch.setattr(adk, "emit_api_call", lambda **fields: operations.append(fields))
+    monkeypatch.setattr(adk, "emit_http_request", lambda **fields: http_records.append(fields))
+    monkeypatch.setattr(
+        adk, "get_tenant_identity",
+        lambda tenant_id, **kwargs: {"tenant_id": tenant_id, "tenant_name": ""},
+    )
+
+    async def run():
+        if status == 200:
+            await server.mcp.call_tool("resolve_agent_title_id", {"botId": BOT_ID})
+        else:
+            expected_error = "NetworkError" if status is None else "AuthorizationDenied"
+            with pytest.raises(ToolError, match=expected_error):
+                await server.mcp.call_tool("resolve_agent_title_id", {"botId": BOT_ID})
+
+    asyncio.run(run())
+    operation, = operations
+    attempt, = http_records
+    assert operation["api_endpoint"] == "resolve_agent_title_id"
+    assert operation["http_attempt_count"] == 1
+    assert operation["http_status"] == attempt["http_status"] == status
+    assert attempt["http_request_id"] == requests_sent[0]
+    assert attempt["correlation_id"] == operation["correlation_id"]
+    assert attempt["server_operation_id"] == operation["server_operation_id"]
+    assert attempt["tenant_id"] == operation["tenant_id"] == TENANT_ID
+    assert operation["result_kind"] == ("success" if status == 200 else "exception")
+    assert attempt["outcome"] == (
+        "network_error" if status is None else "success" if status == 200 else "http_error"
+    )
+    assert PRIVATE not in json.dumps([operation, attempt])
+
+
 def test_cancelled_lookup_cannot_start_another_lookup_before_its_worker_finishes(
     config, authoring_identity, monkeypatch
 ):
