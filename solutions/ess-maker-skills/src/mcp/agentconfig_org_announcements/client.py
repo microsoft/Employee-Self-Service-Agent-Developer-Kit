@@ -41,6 +41,7 @@ from _odata import (  # noqa: E402
 )
 from agent_discovery import AgentDiscoveryClient  # noqa: E402
 from base_client import AgentConfigApiError  # noqa: E402
+from operation_telemetry import confirm_write  # noqa: E402
 from validation import validate_bulletin_id, validate_title_id  # noqa: E402
 
 
@@ -537,6 +538,7 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
             result,
             requested_id=requested_id if not is_create else None,
         )
+        confirm_write()
         return await self._reload_committed_bulletin(title_id, saved_id)
 
     async def _reload_committed_bulletin(
@@ -591,6 +593,7 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
             ),
             requested_id=validated_id,
         )
+        confirm_write()
         if validated_status == STATUS_DELETED:
             return None
         return await self._reload_committed_bulletin(title_id, saved_id)

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import json
 import sys
@@ -16,7 +17,9 @@ from typing import Any
 
 import httpx
 import pytest
+from mcp import ClientSession
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.shared.memory import create_client_server_memory_streams
 from portalocker.exceptions import LockException
 
 
@@ -40,6 +43,10 @@ _ORG_MODULES = load_org_announcements_modules()
 org_server = _ORG_MODULES["server"]
 org_client = _ORG_MODULES["client"]
 GraphDirectoryError = _ORG_MODULES["graph_directory_client"].GraphDirectoryError
+
+import adk_telemetry as adk  # noqa: E402
+import base_client  # noqa: E402
+import operation_telemetry as ot  # noqa: E402
 
 
 RESOURCE_URI = "ui://widget/org-announcements/OrgAnnouncements.html"
@@ -299,6 +306,19 @@ def fake_clients(monkeypatch):
     return install
 
 
+@pytest.fixture
+def operation_events(monkeypatch):
+    operations, requests = [], []
+    monkeypatch.setattr(adk, "telemetry_enabled", lambda: True)
+    monkeypatch.setattr(adk, "emit_api_call", lambda **fields: operations.append(fields))
+    monkeypatch.setattr(adk, "emit_http_request", lambda **fields: requests.append(fields))
+    monkeypatch.setattr(
+        adk, "get_tenant_identity",
+        lambda tenant_id, **kwargs: {"tenant_id": tenant_id, "tenant_name": ""},
+    )
+    return operations, requests
+
+
 def _call(tool: str, arguments: dict[str, Any], *, include_scope: bool = True) -> Any:
     if include_scope and tool != "search_audience_groups":
         arguments = {"titleId": TITLE_ID, **arguments}
@@ -474,9 +494,272 @@ def test_announcement_tools_require_title_id_but_directory_search_does_not() -> 
             assert properties == {}
         elif tool.name == "search_agents":
             assert set(properties) == {"searchString"}
+        elif tool.name == "report_client_events":
+            assert {"schemaVersion", "batchId", "mountId", "events"} <= set(properties)
         else:
             assert properties["titleId"]["type"] == "string"
             assert "titleId" in tool.inputSchema["required"]
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "writes"),
+    [
+        ("open_org_announcements", {"view": "manager"}, False),
+        ("save_bulletin", {
+            "bulletin": {"type": "standard", "title": "Sensitive title", "description": "Private body"},
+            "audience": [], "status": "draft",
+        }, True),
+        ("transition_bulletin", {"id": BULLETIN_ID, "transition": "archive"}, True),
+        ("duplicate_bulletin", {"id": BULLETIN_ID}, True),
+        ("search_audience_groups", {"query": "Private query"}, False),
+    ],
+)
+def test_business_calls_emit_one_shared_operation(
+    fake_clients, operation_events, tool, arguments, writes,
+) -> None:
+    fake_clients()
+    result = _call(tool, arguments)
+    operations, requests = operation_events
+
+    event, = operations
+    assert not result.isError
+    assert event["api_endpoint"] == tool
+    assert event["mcp_server"] == "ess-org-announcements"
+    assert event["result_kind"] == "success"
+    assert event["tenant_id"] == TENANT_ID
+    assert event["write_state"] == ("confirmed" if writes else None)
+    assert event["correlation_id"] == result.meta[ot.CORRELATION_ID]
+    assert event["server_operation_id"] == result.meta[ot.SERVER_OPERATION_ID]
+    assert event["error_message"] == ""
+    assert requests == []
+    assert "Sensitive title" not in json.dumps(event)
+    assert "Private query" not in json.dumps(event)
+    assert ot.current_operation.get() is None
+
+
+@pytest.mark.parametrize("status", ["accepted", "rejected"])
+def test_announcement_client_bridge_is_app_only_and_exempt(
+    monkeypatch, operation_events, status,
+) -> None:
+    captured = []
+    verdict = {"status": status, "acceptedEventCount": 1 if status == "accepted" else 0}
+    if status == "rejected":
+        verdict["rejectedReason"] = "invalid_event_shape"
+
+    def report(envelope):
+        captured.append(envelope)
+        return verdict
+
+    monkeypatch.setattr(adk, "report_client_events", report)
+    arguments = {
+        "schemaVersion": 2, "batchId": "batch-1", "mountId": "mount-1",
+        "appName": "OrgAnnouncements", "buildEnvironment": "dev", "buildNumber": "1",
+        "platform": "windows", "userAgent": "Vorpal/Test", "toolCallId": "tool-1",
+        "events": [{"eventName": "WidgetReady", "sequenceNumber": 1}],
+    }
+    result = _call("report_client_events", arguments, include_scope=False)
+    bridge = next(
+        tool for tool in asyncio.run(org_server.mcp.list_tools())
+        if tool.name == "report_client_events"
+    )
+
+    assert bridge.meta == {"ui": {"visibility": ["app"]}}
+    assert bridge.annotations.model_dump(exclude_none=True) == {
+        "readOnlyHint": False, "destructiveHint": False,
+        "idempotentHint": False, "openWorldHint": False,
+    }
+    assert captured == [arguments]
+    assert result.structuredContent == verdict
+    assert result.isError is (status == "rejected")
+    assert operation_events == ([], [])
+
+
+def test_native_widget_connection_correlates_business_and_client_events(
+    monkeypatch, fake_clients, operation_events,
+) -> None:
+    fake_clients()
+    captured = []
+
+    def report(envelope):
+        captured.append(envelope)
+        return {"status": "accepted", "acceptedEventCount": len(envelope["events"])}
+
+    monkeypatch.setattr(adk, "report_client_events", report)
+    root_id = "ABCDEF01-2345-6789-ABCD-EF0123456789"
+    request_id = "ABCDEF01-2345-6789-ABCD-EF0123456780"
+
+    async def run():
+        server = org_server.mcp
+        async with create_client_server_memory_streams() as (client_streams, server_streams):
+            task = asyncio.create_task(server._mcp_server.run(
+                *server_streams, server._mcp_server.create_initialization_options(),
+            ))
+            try:
+                async with ClientSession(*client_streams) as client:
+                    await client.initialize()
+                    opened = await client.call_tool(
+                        "open_org_announcements", {"titleId": TITLE_ID, "view": "manager"},
+                        meta={ot.CORRELATION_ID: root_id, ot.CLIENT_REQUEST_ID: request_id},
+                    )
+                    event = {
+                        "eventName": "WidgetReady", "correlationId": root_id,
+                        "requestId": request_id,
+                        "serverOperationId": opened.meta[ot.SERVER_OPERATION_ID],
+                    }
+                    reported = await client.call_tool("report_client_events", {
+                        "schemaVersion": 2, "batchId": "batch-1", "mountId": "mount-1",
+                        "appName": "OrgAnnouncements", "buildEnvironment": "dev",
+                        "buildNumber": "1", "events": [event],
+                    })
+                    return opened, reported, event
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    opened, reported, client_event = asyncio.run(run())
+    event, = operation_events[0]
+    assert opened.meta[ot.CORRELATION_ID] == event["correlation_id"] == root_id.lower()
+    assert opened.meta[ot.CLIENT_REQUEST_ID] == event["client_request_id"] == request_id.lower()
+    assert event["usage"] == {"widget": "org-announcements", "draft_present": False}
+    assert reported.structuredContent == {"status": "accepted", "acceptedEventCount": 1}
+    assert not reported.isError
+    assert captured[0]["events"] == [client_event]
+
+
+@pytest.mark.parametrize("status", [200, 401])
+def test_graph_gets_share_request_accounting_without_replay(
+    monkeypatch, fake_clients, operation_events, status,
+) -> None:
+    fake_clients()
+    sent = []
+
+    def respond(request):
+        sent.append(request)
+        return httpx.Response(status, json={"value": []})
+
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": TENANT_ID, "oid": OBJECT_ID}).encode()
+    ).decode().rstrip("=")
+    directory = _ORG_MODULES["graph_directory_client"].GraphDirectoryClient(
+        tenant_id=TENANT_ID, object_id=OBJECT_ID,
+        access_token=f"header.{payload}.signature", transport=httpx.MockTransport(respond),
+    )
+
+    @asynccontextmanager
+    async def graph_client(tenant_id, object_id):
+        assert (tenant_id, object_id) == (TENANT_ID, OBJECT_ID)
+        yield directory
+
+    monkeypatch.setattr(org_server, "get_graph_client", graph_client)
+
+    async def run():
+        try:
+            return await org_server.mcp.call_tool("search_audience_groups", {"query": "Private query"})
+        finally:
+            await directory.aclose()
+
+    result = asyncio.run(run())
+    operation, = operation_events[0]
+    request, = operation_events[1]
+    assert len(sent) == 1
+    assert request["http_request_id"] == sent[0].headers["client-request-id"]
+    assert request["server_operation_id"] == operation["server_operation_id"]
+    assert request["correlation_id"] == operation["correlation_id"]
+    assert request["http_status"] == operation["http_status"] == status
+    assert operation["http_attempt_count"] == 1
+    assert operation["retry_count"] == 0
+    assert result.isError is (status != 200)
+    assert "Private query" not in json.dumps(operation_events)
+    assert "graph.microsoft.com" not in json.dumps(operation_events)
+
+
+@pytest.mark.parametrize("scenario", ["cancelled_reload", "rejected_receipt"])
+def test_write_confirmation_follows_the_odata_receipt(
+    monkeypatch, fake_clients, operation_events, scenario,
+) -> None:
+    reload_entered = asyncio.Event()
+
+    async def respond(request):
+        if request.method == "POST":
+            receipt = {"Id": CREATED_BULLETIN_ID, "Errors": []}
+            if scenario == "rejected_receipt":
+                receipt["Errors"] = [{
+                    "Code": "AudienceRequired", "Field": "audience", "Message": "Private body",
+                }]
+            return httpx.Response(200, json=receipt)
+        reload_entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("cancelled reload returned")
+
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": TENANT_ID, "oid": OBJECT_ID}).encode()
+    ).decode().rstrip("=")
+    monkeypatch.setattr(base_client, "_resolve_token", lambda: f"header.{payload}.signature")
+    backend = org_client.OrgAnnouncementsClient(transport=httpx.MockTransport(respond))
+    fake_clients(client=backend)
+    arguments = {
+        "titleId": TITLE_ID, "bulletin": {
+            "type": "standard", "title": "Sensitive title", "description": "Private body",
+        }, "audience": ["g1"], "status": "draft",
+    }
+
+    async def run():
+        try:
+            task = asyncio.create_task(org_server.mcp.call_tool("save_bulletin", arguments))
+            if scenario == "cancelled_reload":
+                await asyncio.wait_for(reload_entered.wait(), timeout=2)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                result = await task
+                assert result.isError
+        finally:
+            await backend.aclose()
+
+    asyncio.run(run())
+    operation, = operation_events[0]
+    assert operation["write_state"] == (
+        "confirmed" if scenario == "cancelled_reload" else None
+    )
+    assert operation["result_kind"] == (
+        "cancelled" if scenario == "cancelled_reload" else "tool_error"
+    )
+    assert "Sensitive title" not in json.dumps(operation_events)
+    assert "Private body" not in json.dumps(operation_events)
+
+
+def test_client_construction_initializes_widget_telemetry_identity(monkeypatch) -> None:
+    identities = []
+
+    class Client:
+        tenant_id = TENANT_ID
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(org_server, "OrgAnnouncementsClient", Client)
+    monkeypatch.setattr(org_server, "_client", None)
+    monkeypatch.setattr(org_server, "_client_construction_task", None)
+    monkeypatch.setattr(org_server, "_client_users", {})
+    monkeypatch.setattr(org_server, "_retired_clients", set())
+    monkeypatch.setattr(org_server, "_client_lock", asyncio.Lock())
+    monkeypatch.setattr(_ORG_MODULES["telemetry"], "_adk_telemetry", lambda: adk)
+    monkeypatch.setattr(
+        adk, "initialize_tenant_identity",
+        lambda tenant_id, **fields: identities.append({"tenant_id": tenant_id, **fields}),
+    )
+
+    async def run():
+        try:
+            for _ in range(2):
+                async with org_server.get_client_lease():
+                    pass
+        finally:
+            await org_server.reset_client()
+
+    asyncio.run(run())
+    assert identities == [{"tenant_id": TENANT_ID, "local_dir": org_server.SOLUTION_LOCAL_DIR}]
 
 
 def test_the_server_instructions_disclose_agent_scope() -> None:

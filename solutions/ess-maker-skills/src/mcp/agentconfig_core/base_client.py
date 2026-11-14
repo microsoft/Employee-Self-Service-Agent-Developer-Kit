@@ -46,7 +46,7 @@ from portalocker.exceptions import LockException
 
 from _tenant_context import configured_tenant_id
 from _token_cache import create_token_cache
-
+import operation_telemetry
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -460,6 +460,7 @@ class AgentConfigBaseClient:
         async with self._token_lock:
             if self._token != rejected_token:
                 return
+            operation_telemetry.auth_refresh()
             try:
                 token = await asyncio.to_thread(self._acquire_replacement_token)
             except (ValueError, LockException, OSError) as error:
@@ -489,6 +490,19 @@ class AgentConfigBaseClient:
             self._token = token
             if self._client is not None:
                 self._client.headers["Authorization"] = f"Bearer {token}"
+
+    async def _send_request(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        path: str,
+        *,
+        retry: bool,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        return await operation_telemetry.send_request(
+            client, method, path, retry=retry, **kwargs,
+        )
 
     async def _request(
         self,
@@ -532,12 +546,16 @@ class AgentConfigBaseClient:
             client = await self._ensure_client()
             request_token = self._token
             try:
-                response = await client.request(method, path, **kwargs)
+                response = await self._send_request(
+                    client, method, path, retry=attempt > 0, **kwargs,
+                )
                 if response.status_code == 401 and not refreshed:
                     await response.aclose()
                     await self._refresh_token(request_token)
                     refreshed = True
-                    response = await client.request(method, path, **kwargs)
+                    response = await self._send_request(
+                        client, method, path, retry=True, **kwargs,
+                    )
                 if response.status_code == 429 or response.status_code in (
                     502,
                     503,
@@ -601,6 +619,9 @@ class AgentConfigBaseClient:
                 if retry_safe and attempt < self.max_retries - 1:
                     await asyncio.sleep((2**attempt) + random.uniform(0, 1))
                     continue
+                if retry_safe:
+                    operation_telemetry.retries_exhausted()
                 raise
 
+        operation_telemetry.retries_exhausted()
         raise AgentConfigApiError(f"Maximum retries exceeded: {last_error}")

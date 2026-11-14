@@ -39,6 +39,7 @@ sys.path.insert(
 
 from base_client import account_for_identity, validate_token_identity  # noqa: E402
 from _token_cache import create_token_cache  # noqa: E402
+from operation_telemetry import send_request  # noqa: E402
 
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -467,7 +468,7 @@ class GraphDirectoryClient:
             )
         request_token = client.headers["Authorization"].removeprefix("Bearer ")
         try:
-            response = await client.get(url, params=params)
+            response = await send_request(client, "GET", url, params=params)
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPStatusError as error:
