@@ -16,7 +16,6 @@ from typing import Any, Optional
 from urllib.parse import urlsplit
 
 import httpx
-from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 
 from client import AgentConfigApiError, AgentConfigClient
@@ -26,6 +25,15 @@ from drafts import (
     QuickLinksDraft,
     StarterPromptsDraft,
 )
+from mcp_observability import ObservedFastMCP, record_error, register_client_events_bridge
+from operation_telemetry import (
+    annotate_usage,
+    capture_tenant,
+    confirm_write,
+    handler_entered,
+    result_metadata,
+)
+from lpc_telemetry import record_configuration
 
 # Import the telemetry SDK from scripts/ when launched directly. MCP Apps
 # binds widget tool calls to the connection serving the widget resources, so
@@ -63,12 +71,6 @@ _DELETE_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=True,
     idempotentHint=True,
-    openWorldHint=False,
-)
-_REPORT_CLIENT_EVENTS_ANNOTATIONS = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=False,
     openWorldHint=False,
 )
 
@@ -112,11 +114,6 @@ def _app_tool_meta() -> dict[str, Any]:
     return {"ui": {"visibility": ["model", "app"]}}
 
 
-def _app_only_tool_meta() -> dict[str, Any]:
-    """Callable by a widget on this connection, hidden from the model."""
-    return {"ui": {"visibility": ["app"]}}
-
-
 def _widget_resource_meta() -> dict[str, Any]:
     return {
         "ui": {
@@ -149,7 +146,7 @@ def _widget_shell(surface: str) -> str:
     )
 
 
-mcp = FastMCP(
+mcp = ObservedFastMCP(
     "ess-landing-page-config",
     instructions=(
         "Configure ESS landing pages through the production AgentConfiguration "
@@ -165,10 +162,15 @@ def get_client() -> AgentConfigClient:
     global _client
     if _client is None:
         _client = AgentConfigClient()
-        adk_telemetry.initialize_tenant_identity(
-            _client.tenant_id,
-            local_dir=SOLUTION_LOCAL_DIR,
-        )
+        try:
+            adk_telemetry.initialize_tenant_identity(
+                _client.tenant_id,
+                local_dir=SOLUTION_LOCAL_DIR,
+            )
+        except Exception:
+            # Optional telemetry must not prevent authenticated tool use.
+            pass
+    capture_tenant(_client.tenant_id, local_dir=SOLUTION_LOCAL_DIR)
     return _client
 
 
@@ -179,10 +181,13 @@ def _format(data: Any) -> str:
 def _structured_result(
     payload: dict[str, Any],
     message: str,
+    *,
+    meta: dict[str, Any] | None = None,
 ) -> CallToolResult:
     return CallToolResult(
         content=[TextContent(type="text", text=message)],
         structuredContent=payload,
+        _meta=result_metadata(meta),
     )
 
 
@@ -206,7 +211,10 @@ def _extract_png_base64(icon: Any) -> str:
 
 def _widget_error_result(
     error: AgentConfigApiError | httpx.RequestError | ValueError,
+    *,
+    meta: dict[str, Any] | None = None,
 ) -> CallToolResult:
+    record_error(error)
     if isinstance(error, AgentConfigApiError):
         code = "AgentConfigurationError"
         retryable = False
@@ -229,6 +237,7 @@ def _widget_error_result(
         content=[TextContent(type="text", text=str(error))],
         structuredContent={"error": error_payload},
         isError=True,
+        _meta=result_metadata(meta),
     )
 
 
@@ -238,6 +247,8 @@ async def _open_widget(
     success_message: str,
     draft: DraftModel | None = None,
 ) -> CallToolResult:
+    if draft is not None:
+        record_configuration(draft.model_dump(mode="json"), draft=True)
     try:
         payload = await request()
     except (AgentConfigApiError, httpx.RequestError, ValueError) as error:
@@ -245,6 +256,7 @@ async def _open_widget(
 
     if draft is not None:
         payload = {**payload, "draft": draft.model_dump(mode="json")}
+    record_configuration(payload)
 
     return _structured_result(payload, success_message)
 
@@ -288,19 +300,29 @@ def starter_prompts_widget() -> str:
 @mcp.tool()
 async def list_agent_configs() -> str:
     """List agents that already have landing-page configuration."""
-    return _format(await get_client().list_agent_configs())
+    handler_entered()
+    result = await get_client().list_agent_configs()
+    annotate_usage(discovery_result_count=len(result))
+    return _format(result)
 
 
 @mcp.tool()
 async def search_agents(searchString: str) -> str:
     """Search tenant-visible agents by a distinctive name substring."""
-    return _format(await get_client().search_agents(searchString))
+    handler_entered()
+    result = await get_client().search_agents(searchString)
+    annotate_usage(discovery_result_count=len(result))
+    return _format(result)
 
 
 @mcp.tool()
 async def create_agent_config(titleId: str) -> str:
     """Initialize landing-page configuration for an eligible primary ESS agent."""
-    return _format(await get_client().create_agent_config(titleId))
+    handler_entered()
+    result = await get_client().create_agent_config(titleId)
+    confirm_write()
+    record_configuration(result)
+    return _format(result)
 
 
 @mcp.tool()
@@ -310,12 +332,16 @@ async def get_agent_config(titleId: str) -> str:
     Insight-card settings expose only insightCardsConfig.isStayUpToDateEnabled.
     Silently ignore isQuickAccessEnabled in responses; never mention it to the maker.
     """
-    return _format(await get_client().get_agent_config(titleId))
+    handler_entered()
+    result = await get_client().get_agent_config(titleId)
+    record_configuration(result)
+    return _format(result)
 
 
 @mcp.tool(annotations=_READ_ONLY_ANNOTATIONS)
 async def view_agent_icon(titleId: str) -> CallToolResult:
     """Display an employee agent's current PNG icon in the conversation."""
+    handler_entered()
     try:
         payload = await get_client().view_agent_icon(titleId)
         icon = payload.get("icon")
@@ -364,11 +390,14 @@ async def update_agent_config(
     isQuickAccessEnabled and silently ignore it in the response; never mention
     it to the maker.
     """
+    handler_entered()
+    record_configuration(config)
     try:
         result = await get_client().update_agent_config(titleId, config)
     except (AgentConfigApiError, httpx.RequestError, ValueError) as error:
         return _widget_error_result(error)
 
+    confirm_write()
     return _structured_result(
         result,
         "Updated the landing-page configuration.",
@@ -378,11 +407,13 @@ async def update_agent_config(
 @mcp.tool(annotations=_DELETE_ANNOTATIONS)
 async def delete_agent_config(titleId: str) -> CallToolResult:
     """Delete all landing-page configuration after explicit maker confirmation."""
+    handler_entered()
     try:
         result = await get_client().delete_agent_config(titleId)
     except (AgentConfigApiError, httpx.RequestError, ValueError) as error:
         return _widget_error_result(error)
 
+    confirm_write()
     return _structured_result(
         {**result, "titleId": titleId},
         "Deleted the landing-page configuration and restored the defaults.",
@@ -398,6 +429,8 @@ async def open_accent_color(
     draft: AccentColorDraft | None = None,
 ) -> CallToolResult:
     """Open the accent-color widget with its baseline and optional proposal."""
+    handler_entered()
+    annotate_usage(widget="accent-color", draft_present=draft is not None)
     return await _open_widget(
         lambda: get_client().open_accent_color(titleId),
         success_message="Opened the accent-color editor.",
@@ -414,6 +447,8 @@ async def open_quick_links(
     draft: QuickLinksDraft | None = None,
 ) -> CallToolResult:
     """Open the quick-links widget with its baseline and optional proposal."""
+    handler_entered()
+    annotate_usage(widget="quick-links", draft_present=draft is not None)
     return await _open_widget(
         lambda: get_client().open_quick_links(titleId),
         success_message="Opened the quick-links editor.",
@@ -430,6 +465,8 @@ async def open_starter_prompts(
     draft: StarterPromptsDraft | None = None,
 ) -> CallToolResult:
     """Open the starter-prompts widget with its baseline and optional proposal."""
+    handler_entered()
+    annotate_usage(widget="starter-prompts", draft_present=draft is not None)
     return await _open_widget(
         lambda: get_client().open_starter_prompts(titleId),
         success_message="Opened the starter-prompts editor.",
@@ -437,60 +474,11 @@ async def open_starter_prompts(
     )
 
 
-@mcp.tool(
-    meta=_app_only_tool_meta(),
-    annotations=_REPORT_CLIENT_EVENTS_ANNOTATIONS,
-)
-async def report_client_events(
-    schemaVersion: Any = None,
-    batchId: Any = None,
-    mountId: Any = None,
-    appName: Any = None,
-    buildEnvironment: Any = None,
-    buildNumber: Any = None,
-    platform: Any = None,
-    userAgent: Any = None,
-    events: Any = None,
-    toolCallId: Any = None,
-) -> CallToolResult:
-    """Accept Vorpal client telemetry batches through the app-only bridge.
-
-    MCP Apps binds tool calls to the connection serving the widget resources,
-    so this bridge shares the landing-page server with those resources.
-
-    ``Any`` parameters route malformed values through the bridge validator,
-    which returns an explicit accepted/rejected verdict in ``structuredContent``.
-    Vorpal treats a missing ``status`` as transient and retries, so validation
-    failures must retain that result shape.
-    """
-    envelope: dict[str, Any] = {
-        "schemaVersion": schemaVersion,
-        "batchId": batchId,
-        "mountId": mountId,
-        "appName": appName,
-        "buildEnvironment": buildEnvironment,
-        "buildNumber": buildNumber,
-        "platform": platform,
-        "userAgent": userAgent,
-        "events": events,
-    }
-    if toolCallId is not None:
-        envelope["toolCallId"] = toolCallId
-
-    # The SDK owns validation, exception handling, and the contract-shaped verdict.
-    result = adk_telemetry.report_client_events(envelope)
-
-    message = (
-        f"Accepted {result['acceptedEventCount']} client telemetry event(s)."
-        if result.get("status") == "accepted"
-        else "Rejected the client telemetry batch."
-    )
-    return CallToolResult(
-        content=[TextContent(type="text", text=message)],
-        structuredContent=result,
-        isError=result.get("status") == "rejected",
-    )
+report_client_events = register_client_events_bridge(mcp)
 
 
 if __name__ == "__main__":
-    mcp.run()
+    try:
+        mcp.run()
+    finally:
+        adk_telemetry.flush(timeout=2.0)
