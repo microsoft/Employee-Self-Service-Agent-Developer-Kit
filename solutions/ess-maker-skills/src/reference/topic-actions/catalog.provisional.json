@@ -1,0 +1,867 @@
+{
+  "schemaVersion": 1,
+  "authorityStatus": "provisional",
+  "source": {
+    "kind": "repository_inventory",
+    "repositoryUrl": "https://dev.azure.com/O365Exchange/O365%20Core/_git/ESSVivaCopilot",
+    "revision": "9fca1d8333a7e2354c5cb937d0854b6f4327d509",
+    "approvalReference": null
+  },
+  "packages": [
+    {
+      "key": "source-family:gptagent_copilotforemployeeselfservicehr",
+      "packageId": null,
+      "packageVersion": "1.0.1",
+      "agentSchemaNames": [
+        "gptagent_copilotforemployeeselfservicehr"
+      ],
+      "sourcePath": "/sources/dev/AgentTemplates/CopilotForEmployeeSelfServiceHR/Plugin/Agents/gptagent_copilotforemployeeselfservicehr/agent.yml",
+      "sourceRevision": "9fca1d8333a7e2354c5cb937d0854b6f4327d509",
+      "setCoverage": "unknown",
+      "requiredTopicCoverage": "unknown",
+      "requiredTopicSource": null,
+      "topics": [
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdayEmployeeID",
+          "displayName": "Workday Get EmployeeId",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetUserContextV2",
+          "displayName": "Workday [System] - 1: Set User Context V2",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdayOnError",
+          "displayName": "Workday System ParseError",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution",
+          "displayName": "Workday System Get CommonExecution",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetRESTExecution",
+          "displayName": "Workday System Get REST Execution",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.GetReferenceData",
+          "displayName": "Workday System Get ReferenceData",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemRefreshReferenceData",
+          "displayName": "Workday System Refresh ReferenceData",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemSetRuntimeTemplateConfigurations",
+          "displayName": "Workday [System] - 1: Set Runtime Template Configurations",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdayCompanyCode",
+          "displayName": "Workday Get CompanyCode",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetCostCenter",
+          "displayName": "Workday Get CostCenter",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetBaseCompensation",
+          "displayName": "Workday Get BaseCompensation",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetCertifications",
+          "displayName": "Workday Get Certifications",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetEmergencyContact",
+          "displayName": "Workday Get EmergencyContact",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetEmploymentInformation",
+          "displayName": "Workday Get EmploymentInformation",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetLanguageInformation",
+          "displayName": "Workday Get LanguageInformation",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.Workdayserviceanniversary",
+          "displayName": "Workday Get ServiceAnniversary",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetNationalIDs",
+          "displayName": "Workday Get NationalIDs",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetPassports",
+          "displayName": "Workday Get Passports",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetVisas",
+          "displayName": "Workday Get Visas",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.Workdayemployeeupdateemail",
+          "displayName": "Workday Update Email",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.EmployeeUpdatePhoneNumber",
+          "displayName": "Workday Update PhoneNumber",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdayManagerCheck",
+          "displayName": "Workday System ManagerCheck",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDAddAttachmentsorCommentsToCase",
+          "displayName": "ServiceNow HRSD Add Attachments To Case",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDCreateCase",
+          "displayName": "ServiceNow HRSD Create Case",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDGetCaseDetails",
+          "displayName": "ServiceNow HRSD Get Case Details",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDGetCaseUpdates",
+          "displayName": "ServiceNow HRSD Get Case Updates",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDGetUserCases",
+          "displayName": "ServiceNow HRSD Get User Cases",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSetupConfigurations",
+          "displayName": "ServiceNow HRSD Setup Configurations",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemCaseDetailsCacheLookup",
+          "displayName": "ServiceNow HRSD System Case Details Cache Lookup",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemCommonExecution",
+          "displayName": "ServiceNow HRSD System Common Execution",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemReadExecution",
+          "displayName": "ServiceNow HRSD System Read Execution",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemUpdateExecution",
+          "displayName": "ServiceNow HRSD System Update Execution",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemCreateCase",
+          "displayName": "ServiceNow HRSD System Create Case",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemCreateCaseExecution",
+          "displayName": "ServiceNow HRSD System Create Case Execution",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemGetCaseDetails",
+          "displayName": "ServiceNow HRSD System Get Case Details",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemGetCasesList",
+          "displayName": "ServiceNow HRSD System Get Cases List",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemGetMetadataCached",
+          "displayName": "ServiceNow HRSD System Get Metadata Cached",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemResponseMapper",
+          "displayName": "ServiceNow HRSD System Response Mapper",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemUpdateCase",
+          "displayName": "ServiceNow HRSD System Update Case",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemUserPermissionCheck",
+          "displayName": "ServiceNow HRSD System User Permission Check",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDUpdateCase",
+          "displayName": "ServiceNow HRSD Update Case",
+          "classification": "unknown",
+          "required": null
+        }
+      ]
+    },
+    {
+      "key": "source-family:msdyn_copilotforemployeeselfservicedahr",
+      "packageId": null,
+      "packageVersion": null,
+      "agentSchemaNames": [
+        "msdyn_copilotforemployeeselfservicedahr"
+      ],
+      "sourcePath": "/sources/dev/solutions/EssDAHRWorkdayHCM/Solution",
+      "sourceRevision": "9fca1d8333a7e2354c5cb937d0854b6f4327d509",
+      "setCoverage": "unknown",
+      "requiredTopicCoverage": "unknown",
+      "requiredTopicSource": null,
+      "topics": [
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.EmployeeScenariosHandoff",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.EmployeeUpdatePhoneNumber",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.GetReferenceData",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.ManagerScenariosHandoff",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayCompanyCode",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayEmployeeID",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetBaseCompensation",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetCertifications",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetCostCenter",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetEmergencyContact",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetEmploymentInformation",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetLanguageInformation",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetNationalIDs",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetPassports",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetVisas",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayManagerCheck",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayOnError",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdaySystemGetCommonExecution",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdaySystemGetRESTExecution",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdaySystemGetUserContextV2",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.WorkdaySystemRefreshReferenceData",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.Workdayemployeeupdateemail",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.Workdayserviceanniversary",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        }
+      ]
+    },
+    {
+      "key": "source-family:msdyn_copilotforemployeeselfservicedait",
+      "packageId": null,
+      "packageVersion": null,
+      "agentSchemaNames": [
+        "msdyn_copilotforemployeeselfservicedait"
+      ],
+      "sourcePath": "/sources/dev/solutions/EssDAITWorkdayHCM/Solution",
+      "sourceRevision": "9fca1d8333a7e2354c5cb937d0854b6f4327d509",
+      "setCoverage": "unknown",
+      "requiredTopicCoverage": "unknown",
+      "requiredTopicSource": null,
+      "topics": [
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.EmployeeScenariosHandoff",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.EmployeeUpdatePhoneNumber",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.GetReferenceData",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.ManagerScenariosHandoff",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdayCompanyCode",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdayEmployeeID",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetBaseCompensation",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetCertifications",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetCostCenter",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetEmergencyContact",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetEmploymentInformation",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetLanguageInformation",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetNationalIDs",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetPassports",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetVisas",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdayManagerCheck",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdayOnError",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdaySystemGetCommonExecution",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdaySystemGetRESTExecution",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdaySystemGetUserContextV2",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.WorkdaySystemRefreshReferenceData",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.Workdayemployeeupdateemail",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.Workdayserviceanniversary",
+          "displayName": null,
+          "classification": "unknown",
+          "required": null
+        }
+      ]
+    },
+    {
+      "key": "source-family:gptagent_copilotforemployeeselfserviceit",
+      "packageId": null,
+      "packageVersion": "1.0.1",
+      "agentSchemaNames": [
+        "gptagent_copilotforemployeeselfserviceit"
+      ],
+      "sourcePath": "/sources/dev/AgentTemplates/CopilotForEmployeeSelfServiceIT/Plugin/Agents/gptagent_copilotforemployeeselfserviceit/agent.yml",
+      "sourceRevision": "9fca1d8333a7e2354c5cb937d0854b6f4327d509",
+      "setCoverage": "unknown",
+      "requiredTopicCoverage": "unknown",
+      "requiredTopicSource": null,
+      "topics": [
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMCreateTicket",
+          "displayName": "ServiceNow ITSM Create Ticket",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMGetTicketDetails",
+          "displayName": "ServiceNow ITSM Get Ticket Details",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMGetTicketUpdates",
+          "displayName": "ServiceNow ITSM Get Ticket Updates",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMGetUserTickets",
+          "displayName": "ServiceNow ITSM Get User Tickets",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSetupConfigurations",
+          "displayName": "ServiceNow ITSM Setup Configurations",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemCommonExecution",
+          "displayName": "ServiceNow ITSM System Common Execution",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemWriteExecution",
+          "displayName": "ServiceNow ITSM System Write Execution",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemReadExecution",
+          "displayName": "ServiceNow ITSM System Read Execution",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemCreateTicket",
+          "displayName": "ServiceNow ITSM System Create Ticket",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemGetTicketDetails",
+          "displayName": "ServiceNow ITSM System Get Ticket Details",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemGetTicketsList",
+          "displayName": "ServiceNow ITSM System Get Tickets List",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemResponseMapper",
+          "displayName": "ServiceNow ITSM System Response Mapper",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemUpdateTicket",
+          "displayName": "ServiceNow ITSM System Update Ticket",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemUserPermissionCheck",
+          "displayName": "ServiceNow ITSM System User Permission Check",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMUpdateTicket",
+          "displayName": "ServiceNow ITSM Update Ticket",
+          "classification": "unknown",
+          "required": null
+        }
+      ]
+    }
+  ],
+  "sets": [
+    {
+      "key": "workday-da-hr",
+      "name": "HR Topics",
+      "integration": {
+        "key": "workday",
+        "name": "Workday"
+      },
+      "guidance": null,
+      "sourceVariants": [
+        {
+          "packageKey": "source-family:gptagent_copilotforemployeeselfservicehr",
+          "membershipStatus": "provisional",
+          "membershipComplete": null,
+          "memberSchemaNames": [
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdayEmployeeID",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetUserContextV2",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdayOnError",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetRESTExecution",
+            "gptagent_copilotforemployeeselfservicehr.topic.GetReferenceData",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemRefreshReferenceData",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemSetRuntimeTemplateConfigurations",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdayCompanyCode",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetCostCenter",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetBaseCompensation",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetCertifications",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetEmergencyContact",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetEmploymentInformation",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetLanguageInformation",
+            "gptagent_copilotforemployeeselfservicehr.topic.Workdayserviceanniversary",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetNationalIDs",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetPassports",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdayGetVisas",
+            "gptagent_copilotforemployeeselfservicehr.topic.Workdayemployeeupdateemail",
+            "gptagent_copilotforemployeeselfservicehr.topic.EmployeeUpdatePhoneNumber",
+            "gptagent_copilotforemployeeselfservicehr.topic.WorkdayManagerCheck"
+          ]
+        },
+        {
+          "packageKey": "source-family:msdyn_copilotforemployeeselfservicedahr",
+          "membershipStatus": "provisional",
+          "membershipComplete": null,
+          "memberSchemaNames": [
+            "msdyn_copilotforemployeeselfservicedahr.topic.EmployeeScenariosHandoff",
+            "msdyn_copilotforemployeeselfservicedahr.topic.EmployeeUpdatePhoneNumber",
+            "msdyn_copilotforemployeeselfservicedahr.topic.GetReferenceData",
+            "msdyn_copilotforemployeeselfservicedahr.topic.ManagerScenariosHandoff",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayCompanyCode",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayEmployeeID",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetBaseCompensation",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetCertifications",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetCostCenter",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetEmergencyContact",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetEmploymentInformation",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetLanguageInformation",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetNationalIDs",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetPassports",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayGetVisas",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayManagerCheck",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdayOnError",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdaySystemGetCommonExecution",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdaySystemGetRESTExecution",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdaySystemGetUserContextV2",
+            "msdyn_copilotforemployeeselfservicedahr.topic.WorkdaySystemRefreshReferenceData",
+            "msdyn_copilotforemployeeselfservicedahr.topic.Workdayemployeeupdateemail",
+            "msdyn_copilotforemployeeselfservicedahr.topic.Workdayserviceanniversary"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "workday-da-it",
+      "name": "IT Topics",
+      "integration": {
+        "key": "workday",
+        "name": "Workday"
+      },
+      "guidance": null,
+      "sourceVariants": [
+        {
+          "packageKey": "source-family:msdyn_copilotforemployeeselfservicedait",
+          "membershipStatus": "provisional",
+          "membershipComplete": null,
+          "memberSchemaNames": [
+            "msdyn_copilotforemployeeselfservicedait.topic.EmployeeScenariosHandoff",
+            "msdyn_copilotforemployeeselfservicedait.topic.EmployeeUpdatePhoneNumber",
+            "msdyn_copilotforemployeeselfservicedait.topic.GetReferenceData",
+            "msdyn_copilotforemployeeselfservicedait.topic.ManagerScenariosHandoff",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdayCompanyCode",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdayEmployeeID",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetBaseCompensation",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetCertifications",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetCostCenter",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetEmergencyContact",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetEmploymentInformation",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetLanguageInformation",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetNationalIDs",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetPassports",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdayGetVisas",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdayManagerCheck",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdayOnError",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdaySystemGetCommonExecution",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdaySystemGetRESTExecution",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdaySystemGetUserContextV2",
+            "msdyn_copilotforemployeeselfservicedait.topic.WorkdaySystemRefreshReferenceData",
+            "msdyn_copilotforemployeeselfservicedait.topic.Workdayemployeeupdateemail",
+            "msdyn_copilotforemployeeselfservicedait.topic.Workdayserviceanniversary"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "servicenow-hr",
+      "name": "HR Topics",
+      "integration": {
+        "key": "servicenow",
+        "name": "ServiceNow"
+      },
+      "guidance": null,
+      "sourceVariants": [
+        {
+          "packageKey": "source-family:gptagent_copilotforemployeeselfservicehr",
+          "membershipStatus": "provisional",
+          "membershipComplete": null,
+          "memberSchemaNames": [
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDAddAttachmentsorCommentsToCase",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDCreateCase",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDGetCaseDetails",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDGetCaseUpdates",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDGetUserCases",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSetupConfigurations",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemCaseDetailsCacheLookup",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemCommonExecution",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemReadExecution",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemUpdateExecution",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemCreateCase",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemCreateCaseExecution",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemGetCaseDetails",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemGetCasesList",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemGetMetadataCached",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemResponseMapper",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemUpdateCase",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemUserPermissionCheck",
+            "gptagent_copilotforemployeeselfservicehr.topic.ServiceNowHRSDUpdateCase"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "servicenow-it",
+      "name": "IT Topics",
+      "integration": {
+        "key": "servicenow",
+        "name": "ServiceNow"
+      },
+      "guidance": null,
+      "sourceVariants": [
+        {
+          "packageKey": "source-family:gptagent_copilotforemployeeselfserviceit",
+          "membershipStatus": "provisional",
+          "membershipComplete": null,
+          "memberSchemaNames": [
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMCreateTicket",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMGetTicketDetails",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMGetTicketUpdates",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMGetUserTickets",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSetupConfigurations",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemCommonExecution",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemWriteExecution",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemReadExecution",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemCreateTicket",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemGetTicketDetails",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemGetTicketsList",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemResponseMapper",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemUpdateTicket",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemUserPermissionCheck",
+            "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMUpdateTicket"
+          ]
+        }
+      ]
+    }
+  ]
+}
