@@ -1,0 +1,2291 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""
+ESS Maker Kit — Planner: the local Plan data model.
+
+This module owns the structured, on-disk Plan that the ``/planner`` skill
+authors (``workspace/plan/plan.json``). It is deliberately shaped like the
+WeveNova ``Plan`` / ``AgentConfigurationTask`` entities described in the
+"Plan Enrichment & Persistence" (Step 2) design so a future sync is a field
+copy, not a re-model:
+
+  * All sponsor/agent intent lives in ONE open ``context`` bag of
+    ``ContextEntry`` records (key + scalar value + group + description +
+    provenance).
+  * Each Task carries one extended ``assignedTo`` Principal that can name a
+    role, a person, or a person acting as a role (the pool / claimed /
+    direct-for-role states).
+  * A Task is described by its ``title`` + ``description`` — the "how" (which
+    kit command, or a portal/manual step) lives in the ``description``; there is
+    deliberately **no** separate ``action`` field.
+  * Produced artifacts land in a single ``outputs`` ledger, keyed and
+    supersede-on-rewrite, each stamped with the producing task id.
+  * An optional, read-back-only ``checklist`` on a Task carries step-level
+    display state a skill fills at runtime (steps are never first-class).
+
+The Plan is authoritative on disk and works with WeveNova, tenant inventory,
+and the roles source all absent. Writes are atomic (temp file + ``os.replace``
++ ``fsync``), mirroring ``scripts/setup.py`` so a crash mid-write cannot
+corrupt the file that drives the whole experience.
+
+Nothing here reaches the network; it is pure data + local file IO.
+"""
+
+from __future__ import annotations
+
+import heapq
+import json
+import os
+import re
+from datetime import datetime, timezone
+from graphlib import CycleError, TopologicalSorter
+from html import escape
+from itertools import groupby
+from pathlib import Path
+from typing import Any, Iterable
+
+from .attestable import resolve_attestable_role_id
+
+SCHEMA_VERSION = 1
+
+# Default on-disk locations (relative to the kit root — the cwd the skill runs
+# from, same convention as .local/config.json and workspace/agents/).
+PLAN_DIR = os.path.join("workspace", "plan")
+PLAN_PATH = os.path.join(PLAN_DIR, "plan.json")
+# The plan's human-readable Markdown view. It is an *editable* surface — a Plan
+# editor can revise it directly and the planner reconciles the changes back into
+# plan.json (see src/skills/planner/edit.md) — regenerated from plan.json after
+# every mutation. Named for the editor ("ESS scenario plan"), not "summary".
+SUMMARY_FILENAME = "ESS-scenario-plan.md"
+SUMMARY_PATH = os.path.join(PLAN_DIR, SUMMARY_FILENAME)
+RESEARCH_PATH = os.path.join(PLAN_DIR, "research-context.json")
+
+# Controlled vocabularies. Kept as plain tuples (not Enums) because the values
+# are serialized verbatim to JSON and read back by an agent — the string IS the
+# contract.
+TASK_STATES = ("NotStarted", "InProgress", "Completed", "Blocked")
+ARTIFACT_STATES = ("Active", "Superseded")
+PRINCIPAL_TYPES = ("User", "Role")
+CONTEXT_SOURCES = ("User", "Agent", "Discovered")
+ARTIFACT_KINDS = ("Environment", "Connection", "EntraApp", "KnowledgeSource", "Agent", "Custom")
+# Plan lifecycle vocab (mirrors the WeveNova PlanStatus enum). A local plan lives
+# in Draft until the sync seam pushes and activates it server-side.
+PLAN_STATES = ("Draft", "Active", "Completed", "Archived")
+# The ESS agent a plan configures (mirrors the WeveNova ConfiguringAgentName enum).
+# Required on the create body, so a plan must name one before it can be pushed.
+#
+# CONFIGURING_AGENT_NAMES is the full set the service accepts and is used only for
+# *validation*. It intentionally still includes the custom-engine-agent (CEA)
+# bundles so a shared plan authored earlier — or by another tool — that already
+# names a CEA agent keeps validating and re-exporting; dropping a server-valid
+# value here would reject those existing plans on their next mutation or push.
+CONFIGURING_AGENT_NAMES = (
+    "EmployeeSelfServiceHRCEA",
+    "EmployeeSelfServiceHRDA",
+    "EmployeeSelfServiceITCEA",
+    "EmployeeSelfServiceITDA",
+)
+# What a **new** plan is allowed to choose. The ESS agent ships as a declarative
+# agent (DA) — that's what merges to `main` — so the CEA variants are not offered:
+# a new plan never asks the sponsor to choose DA vs CEA, it's always DA. HR vs IT
+# is the only axis the sponsor still picks. Offered by the CLI; validation stays on
+# the wider CONFIGURING_AGENT_NAMES above so existing CEA plans keep working.
+CONFIGURING_AGENT_CHOICES = (
+    "EmployeeSelfServiceHRDA",
+    "EmployeeSelfServiceITDA",
+)
+# The ledger keys setup tasks produce and downstream tasks consume — the
+# grounded signal used to identify setup tasks and env-dependent tasks. A Task
+# is described only by its title + description (matching the WeveNova Task
+# entity); there is no execution-hint/action field.
+PRIMARY_ENVIRONMENT_KEY = "primaryEnvironment"
+SETUP_ENVIRONMENT_KEYS = (PRIMARY_ENVIRONMENT_KEY, "provisionedEnvironment")
+# The ledger key the /discover task produces — the tenant inventory summary the
+# discover skill pins back onto the plan after a crawl (see
+# capture.py::summarize_discovery and src/skills/discover/SKILL.md). Keyed like
+# PRIMARY_ENVIRONMENT_KEY so the discover task is identified by what it produces,
+# not by any execution-hint field.
+TENANT_INVENTORY_KEY = "tenantInventory"
+DEPENDENCY_KINDS = ("requires", "recommends")
+# Scenario dependency lives in the open Context bag (no new typed collection),
+# consistent with the "one Context bag" model. A scenario in scope is a Context
+# entry in SCENARIO_GROUP; a dependency edge is an entry in DEPENDS_ON_GROUP whose
+# key encodes "<dependent> -> <prerequisite>" and whose scalar value is the kind.
+SCENARIO_GROUP = "scenario"
+DEPENDS_ON_GROUP = "scenarioDependsOn"
+_DEP_SEP = " -> "
+# Acceptance criteria (definition-of-done) live in the open Context bag under this
+# group so the local model stays a single bag; the sync seam promotes them to the
+# WeveNova Plan's first-class acceptanceCriteria list on export and back on import.
+ACCEPTANCE_GROUP = "acceptanceCriteria"
+
+# The remaining Context groups the /planner skill writes (see
+# src/skills/planner/interview.md). Naming them here lets the readable Markdown
+# view render each in a dedicated, human-readable section instead of dumping the
+# raw ``group -> key: value`` bag; any group NOT listed here still falls through
+# to a generic "More context" block so no captured intent is silently dropped.
+OBJECTIVE_GROUP = "objective"
+MARKET_GROUP = "market"
+BUSINESS_GOALS_GROUP = "businessGoals"
+SCENARIO_CONTEXT_GROUP = "scenarioContext"
+CAPABILITY_GROUP = "scenarioCapability"
+SYSTEM_GROUP = "system"
+PENDING_DECISION_GROUP = "pendingDecision"
+
+# A per-task workstream label (``task["stream"]``) is a local-only rendering hint,
+# but the service task schema has no field for it. So the sync seam round-trips it
+# as plan Context under this group — written on export, reattached to tasks and
+# stripped from Context on import — keeping the grouped task view stable across a
+# publish/pull cycle. Never surfaced to the maker (see ``_STRUCTURED_GROUPS``).
+STREAM_GROUP = "taskStream"
+STREAM_MAP_GROUP = "taskStreamMap"
+
+# A maker-uploaded task owner that doesn't resolve to a closed attestable role is
+# kept here (not on the assignment, which the service would reject on publish) so
+# the interview can confirm the real owner instead of silently dropping the intent.
+# Deliberately NOT in ``_STRUCTURED_GROUPS`` — it surfaces under "More context".
+UNMAPPED_ROLE_GROUP = "unmappedRole"
+
+
+# Groups the readable Markdown sections already consume; anything else falls
+# through to the generic "More context" block (keeps the view lossless).
+_STRUCTURED_GROUPS = frozenset(
+    {
+        OBJECTIVE_GROUP,
+        MARKET_GROUP,
+        BUSINESS_GOALS_GROUP,
+        ACCEPTANCE_GROUP,
+        SCENARIO_CONTEXT_GROUP,
+        SCENARIO_GROUP,
+        CAPABILITY_GROUP,
+        SYSTEM_GROUP,
+        PENDING_DECISION_GROUP,
+        DEPENDS_ON_GROUP,
+        STREAM_GROUP,
+        STREAM_MAP_GROUP,
+    }
+)
+
+
+class Limits:
+    """Writer-enforced caps, following the Step-2 §8 / ``Project.Metadata`` caps."""
+
+    MAX_TASKS = 50
+    MAX_OUTPUTS = 50
+    MAX_CONTEXT_ENTRIES = 64
+    MAX_PRODUCES = 20
+    MAX_CHECKLIST = 40
+    MAX_KEY_LEN = 128
+    MAX_VALUE_LEN = 2000
+    MAX_DESCRIPTION_LEN = 1000
+    MAX_ATTRIBUTES = 32
+
+
+def now_iso() -> str:
+    """UTC timestamp in the ``2026-07-30T18:00:00Z`` shape used across the kit."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# --------------------------------------------------------------------------- #
+# Value-object builders (return plain dicts — JSON is the wire format).
+# --------------------------------------------------------------------------- #
+
+def role_ref(role_id: str, directory_ref: str | None = None) -> dict[str, Any]:
+    # Step-2 §7.4: Principal.Role = { roleId, directoryRef? }.
+    ref: dict[str, Any] = {"roleId": role_id}
+    if directory_ref:
+        ref["directoryRef"] = directory_ref
+    return ref
+
+
+def user_ref(oid: str, directory_ref: str | None = None) -> dict[str, Any]:
+    # Step-2 §7.4: Principal.User = { oid, directoryRef? }.
+    ref: dict[str, Any] = {"oid": oid}
+    if directory_ref:
+        ref["directoryRef"] = directory_ref
+    return ref
+
+
+def principal_pool(role_id: str, directory_ref: str | None = None) -> dict[str, Any]:
+    """State 1 — open to a role: nobody owns it yet, any holder of R can claim."""
+    return {"type": "Role", "id": role_id, "role": role_ref(role_id, directory_ref)}
+
+
+def principal_person(
+    oid: str, role_id: str | None = None, directory_ref: str | None = None
+) -> dict[str, Any]:
+    """A person owns it. With ``role_id`` this is the claimed / direct-for-role
+    state (role retained); without, a plain person assignment."""
+    p: dict[str, Any] = {"type": "User", "id": oid, "user": user_ref(oid, directory_ref)}
+    if role_id:
+        p["role"] = role_ref(role_id)
+    return p
+
+
+def assignee_role_id(assigned_to: dict[str, Any] | None) -> str | None:
+    """The grounded role a task is attached to, whether pooled or owned."""
+    if not assigned_to:
+        return None
+    role = assigned_to.get("role")
+    if isinstance(role, dict):
+        return role.get("roleId")
+    return None
+
+
+def assignee_user_oid(assigned_to: dict[str, Any] | None) -> str | None:
+    """The individual who owns a task, or None while it is an open pool."""
+    if not assigned_to or assigned_to.get("type") != "User":
+        return None
+    user = assigned_to.get("user")
+    if isinstance(user, dict):
+        return user.get("oid")
+    return assigned_to.get("id")
+
+
+def _role_match_key(role: str) -> str:
+    """Fold an attestable role's compact id and stored name to one key; other
+    role labels match exactly as written."""
+    return resolve_attestable_role_id(role) or role
+
+
+def provenance(
+    source: str,
+    added_by: dict[str, Any] | None = None,
+    added_at: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "source": source,
+        "addedBy": added_by or {},
+        "addedAt": added_at or now_iso(),
+    }
+
+
+def context_entry(
+    key: str,
+    value: Any,
+    *,
+    group: str | None = None,
+    description: str | None = None,
+    source: str = "User",
+    added_by: dict[str, Any] | None = None,
+    added_at: str | None = None,
+) -> dict[str, Any]:
+    """A single self-describing intent fact. ``value`` is a scalar; related
+    facts are separate entries sharing a ``group`` (never a nested object)."""
+    return {
+        "key": key,
+        "value": value,
+        "group": group or "",
+        "description": description or "",
+        "provenance": provenance(source, added_by, added_at),
+    }
+
+
+def plan_artifact(
+    key: str,
+    kind: str,
+    attributes: dict[str, Any],
+    *,
+    produced_by_task_id: str,
+    inventory_ref: str | None = None,
+    source: str = "Agent",
+    added_by: dict[str, Any] | None = None,
+    added_at: str | None = None,
+    state: str = "Active",
+) -> dict[str, Any]:
+    """A pinned, concrete artifact a completed task produced (the forked state)."""
+    return {
+        "key": key,
+        "kind": kind,
+        "attributes": dict(attributes),
+        "inventoryRef": inventory_ref or "",
+        "producedByTaskId": produced_by_task_id,
+        "provenance": provenance(source, added_by, added_at),
+        "state": state,
+    }
+
+
+def new_task(
+    task_id: str,
+    title: str,
+    *,
+    description: str = "",
+    stream: str = "",
+    assigned_to: dict[str, Any] | None = None,
+    produces: Iterable[str] | None = None,
+    consumes: Iterable[str] | None = None,
+    checklist: list[dict[str, Any]] | None = None,
+    state: str = "NotStarted",
+) -> dict[str, Any]:
+    task: dict[str, Any] = {
+        "id": task_id,
+        "title": title,
+        "description": description,
+        "assignedTo": assigned_to or {},
+        "state": state,
+        "produces": list(produces or []),
+        "consumes": list(consumes or []),
+    }
+    if stream:
+        task["stream"] = stream
+    if checklist:
+        task["checklist"] = list(checklist)
+    return task
+
+
+def dependency_key(scenario: str, depends_on: str) -> str:
+    """The Context key for a scenario dependency edge: ``"<dep> -> <prereq>"``."""
+    return f"{scenario}{_DEP_SEP}{depends_on}"
+
+
+def parse_dependency_key(key: str) -> tuple[str, str]:
+    """Split a dependency key back into ``(scenario, depends_on)``."""
+    parts = key.split(_DEP_SEP, 1)
+    return (parts[0], parts[1]) if len(parts) == 2 else (key, "")
+
+
+def known_scenario_dependencies() -> list[dict[str, str]]:
+    """The scenario dependencies the planner knows about, read from the vendored
+    non-Learn facts file (``planner_facts.json``).
+
+    These are *not* a scenario list — an edge only takes effect when the maker
+    independently puts both its scenarios in scope. Each edge carries an explicit
+    ``source``; the planner never fabricates a citation. A missing/empty facts
+    file simply yields no known dependencies (nothing invented)."""
+    try:
+        from . import facts
+
+        return facts.scenario_dependency_edges()
+    except Exception:  # noqa: BLE001 — facts are best-effort; never fail a read
+        return []
+
+
+# --------------------------------------------------------------------------- #
+# Readable-Markdown helpers (used by Plan.render_summary).
+# --------------------------------------------------------------------------- #
+
+# Acronyms the humaniser keeps upper-cased so ``hr-knowledge`` reads
+# "HR knowledge", not "Hr knowledge". Lower-case entries only.
+_ACRONYMS = frozenset(
+    {"hr", "it", "hrsd", "itsm", "sso", "api", "id", "ess", "adk", "sap", "m365", "pto", "url"}
+)
+
+
+def humanize(token: str) -> str:
+    """Turn an id / slug / camelCase key into readable heading text.
+
+    ``pilotBar`` -> ``Pilot bar``; ``hr-knowledge`` -> ``HR knowledge``;
+    ``ticket_deflection`` -> ``Ticket deflection``. Known acronyms are
+    upper-cased; only the first word is otherwise capitalised so the result
+    reads like a sentence fragment, not Title Case.
+    """
+    if not token:
+        return ""
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(token))
+    parts = [p for p in re.split(r"[\s._\-]+", spaced) if p]
+    words: list[str] = []
+    for i, part in enumerate(parts):
+        low = part.lower()
+        if low in _ACRONYMS:
+            words.append(low.upper())
+        elif i == 0:
+            words.append(part[:1].upper() + part[1:])
+        else:
+            words.append(low)
+    return " ".join(words)
+
+
+def slugify(text: str) -> str:
+    """Turn free text into a stable, lowercase slug usable as a Context key part
+    (e.g. ``"Create HR ticket"`` -> ``"create-hr-ticket"``). Runs of
+    non-alphanumeric characters collapse to a single dash and leading/trailing
+    dashes are trimmed; empty or symbol-only input yields ``""``."""
+    return re.sub(r"[^a-z0-9]+", "-", str(text).strip().lower()).strip("-")
+
+
+def _as_list(value: Any) -> list[Any]:
+    """Coerce a scalar / list / ``None`` into a list — a maker-authored upload
+    may give one value where the model expects many (one goal, one scenario)."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _as_area_pairs(value: Any) -> list[tuple[str, str]]:
+    """Read a top-level ``systems`` block from an uploaded plan as
+    ``[(area, system), ...]``. Accepts a mapping (``{area: system}``) or a list
+    of ``{area|scenario|id, system|name}`` objects; anything else yields ``[]``."""
+    pairs: list[tuple[str, str]] = []
+    if isinstance(value, dict):
+        for area, system in value.items():
+            pairs.append((str(area).strip(), str(system).strip()))
+    elif isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            area = item.get("area") or item.get("scenario") or item.get("id") or ""
+            system = item.get("system") or item.get("name") or ""
+            pairs.append((str(area).strip(), str(system).strip()))
+    return pairs
+
+
+# Keys under which an (agent-authored, free-form) research corpus may list its
+# Learn pages. The loader is deliberately tolerant of shape.
+_LEARN_LIST_KEYS = (
+    "sources", "pages", "prerequisites", "capabilities", "learn", "links", "references", "docs",
+)
+
+
+def learn_links(research: Any) -> list[dict[str, str]]:
+    """Best-effort ``[{label, url, scope}]`` extracted from a research corpus.
+
+    The corpus can contain managed Learn research alongside older agent-authored
+    notes. This tolerates a top-level list or a dict holding lists under any of
+    ``_LEARN_LIST_KEYS``, reads the
+    label/url/scope from the usual field spellings, de-dupes by url, and never
+    raises. A missing or unrecognised corpus yields an empty list.
+    """
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def take(seq: Any) -> None:
+        if not isinstance(seq, list):
+            return
+        for item in seq:
+            if not isinstance(item, dict):
+                continue
+            url = item.get("url") or item.get("href") or item.get("sourceUrl")
+            if not isinstance(url, str) or not url or url in seen:
+                continue
+            seen.add(url)
+            label = (
+                item.get("title") or item.get("toc_title") or item.get("label")
+                or item.get("name") or url
+            )
+            scope = (
+                item.get("scenario") or item.get("system") or item.get("area")
+                or item.get("scope") or ""
+            )
+            out.append({"label": str(label), "url": url, "scope": str(scope)})
+
+    if isinstance(research, list):
+        take(research)
+    elif isinstance(research, dict):
+        cache = research.get("learnCache")
+        if isinstance(cache, dict) and isinstance(cache.get("pages"), dict):
+            selected = cache.get("selected")
+            if isinstance(selected, list):
+                take([cache["pages"].get(url) for url in selected if isinstance(url, str)])
+        for key in _LEARN_LIST_KEYS:
+            take(research.get(key))
+    return out
+
+
+def read_research_context(directory: str | os.PathLike[str]) -> Any | None:
+    """Best-effort load of the Learn-research corpus (``research-context.json``)
+    next to the plan. Returns parsed JSON, or ``None`` when absent/unreadable so
+    the Markdown view enriches from it only when it exists. Managed research
+    writes this sidecar; older agent-authored grounding notes remain supported."""
+    path = os.path.join(os.fspath(directory), os.path.basename(RESEARCH_PATH))
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def write_json_atomic(path: str | os.PathLike[str], data: dict[str, Any]) -> None:
+    """Persist a plan or its research sidecar without exposing a partial write."""
+    path = os.fspath(path)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, ensure_ascii=False)
+        fh.flush()
+        try:
+            os.fsync(fh.fileno())
+        except OSError:
+            # Some network filesystems do not support fsync; replacement is atomic.
+            pass
+    os.replace(tmp, path)
+
+
+# --------------------------------------------------------------------------- #
+# The Plan.
+# --------------------------------------------------------------------------- #
+
+class Plan:
+    """A thin, validated wrapper over the plan.json document.
+
+    The class holds the raw dict (``self.data``) so round-tripping to JSON is
+    lossless and the agent-readable shape is never obscured behind typed
+    objects. Mutators keep invariants (unique task ids, supersede-by-key
+    outputs); ``validate`` reports cap / vocabulary violations without raising.
+    """
+
+    def __init__(self, data: dict[str, Any]) -> None:
+        self.data = data
+
+    # ---- construction / IO ---------------------------------------------- #
+
+    @classmethod
+    def new(cls, *, objective: str | None = None) -> "Plan":
+        data: dict[str, Any] = {
+            "schemaVersion": SCHEMA_VERSION,
+            "planId": "",
+            "projectId": "",
+            "configuringAgentName": "",
+            "status": "Draft",
+            "context": [],
+            "tasks": [],
+            "outputs": [],
+            "etag": "",
+            "syncedAt": "",
+        }
+        plan = cls(data)
+        if objective:
+            plan.set_context("objective", objective, group="objective",
+                             description="Plain-language goal the sponsor stated",
+                             source="User")
+        return plan
+
+    @classmethod
+    def load(cls, path: str | os.PathLike[str] = PLAN_PATH) -> "Plan":
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        # Old / partial documents deserialize to sensible empties.
+        data.setdefault("schemaVersion", SCHEMA_VERSION)
+        for key in ("context", "tasks", "outputs"):
+            data.setdefault(key, [])
+        for key in ("planId", "projectId", "configuringAgentName", "etag", "syncedAt"):
+            data.setdefault(key, "")
+        data.setdefault("status", "Draft")
+        return cls(data)
+
+    @classmethod
+    def load_or_new(cls, path: str | os.PathLike[str] = PLAN_PATH) -> "Plan":
+        if os.path.exists(path):
+            return cls.load(path)
+        return cls.new()
+
+    def save(self, path: str | os.PathLike[str] = PLAN_PATH) -> None:
+        """Atomically write plan.json (temp + fsync + os.replace).
+
+        Mirrors ``scripts/setup.py`` so a crash mid-write can never leave a
+        half-written file that breaks a later read.
+        """
+        write_json_atomic(path, self.data)
+
+    def write_summary(
+        self,
+        path: str | os.PathLike[str] = SUMMARY_PATH,
+        research: Any | None = None,
+    ) -> None:
+        """Regenerate the Markdown view from plan.json. This is the render/refresh
+        moment: unless a ``research`` corpus is passed in, best-effort load the
+        Learn-research sidecar next to the plan so the view is *enriched from
+        Learn* when grounding is available (and renders fully without it)."""
+        path = os.fspath(path)
+        directory = os.path.dirname(path) or "."
+        os.makedirs(directory, exist_ok=True)
+        if research is None:
+            research = read_research_context(directory)
+        Path(path).write_text(self.render_summary(research=research), encoding="utf-8")
+
+    def save_all(self, plan_path: str | os.PathLike[str] = PLAN_PATH) -> None:
+        """Write plan.json and regenerate the Markdown view alongside it."""
+        self.save(plan_path)
+        summary = os.path.join(os.path.dirname(os.fspath(plan_path)) or ".", SUMMARY_FILENAME)
+        self.write_summary(summary)
+
+    # ---- convenience accessors ------------------------------------------ #
+
+    @property
+    def tasks(self) -> list[dict[str, Any]]:
+        return self.data["tasks"]
+
+    @property
+    def context(self) -> list[dict[str, Any]]:
+        return self.data["context"]
+
+    @property
+    def outputs(self) -> list[dict[str, Any]]:
+        return self.data["outputs"]
+
+    def task(self, task_id: str) -> dict[str, Any] | None:
+        for t in self.tasks:
+            if t.get("id") == task_id:
+                return t
+        return None
+
+    # ---- remote identity (sync seam) ------------------------------------ #
+
+    @property
+    def configuring_agent_name(self) -> str:
+        return self.data.get("configuringAgentName", "")
+
+    def set_configuring_agent_name(self, name: str) -> None:
+        """Name the ESS agent this plan configures — required before a sync push.
+
+        Must be one of :data:`CONFIGURING_AGENT_NAMES` (mirrors the WeveNova
+        ``ConfiguringAgentName`` enum).
+        """
+        if name not in CONFIGURING_AGENT_NAMES:
+            raise ValueError(
+                "configuringAgentName must be one of " + ", ".join(CONFIGURING_AGENT_NAMES)
+            )
+        self.data["configuringAgentName"] = name
+
+    def set_remote_identity(
+        self,
+        *,
+        project_id: str | None = None,
+        plan_id: str | None = None,
+        etag: str | None = None,
+        synced_at: str | None = None,
+    ) -> None:
+        """Record the server ids / ETag this local cache now mirrors (sync seam).
+
+        ``syncedAt`` is refreshed to *now* unless an explicit value is given.
+        Only the arguments that are not ``None`` are written, so a partial stamp
+        (e.g. project id before the plan exists) leaves the rest untouched.
+        """
+        if project_id is not None:
+            self.data["projectId"] = project_id
+        if plan_id is not None:
+            self.data["planId"] = plan_id
+        if etag is not None:
+            self.data["etag"] = etag
+        self.data["syncedAt"] = synced_at if synced_at is not None else now_iso()
+
+    # ---- context (intent) mutators -------------------------------------- #
+
+    def set_context(
+        self,
+        key: str,
+        value: Any,
+        *,
+        group: str | None = None,
+        description: str | None = None,
+        source: str = "User",
+        added_by: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Add or overwrite-in-place a context entry (latest state only).
+
+        On overwrite the original ``addedBy``/``addedAt`` are preserved and
+        ``updatedBy``/``updatedAt`` are refreshed — creator + last editor,
+        no per-key history (Step-2 §7.6).
+        """
+        for entry in self.context:
+            if entry.get("key") == key:
+                entry["value"] = value
+                if group is not None:
+                    entry["group"] = group
+                if description is not None:
+                    entry["description"] = description
+                prov = entry.setdefault("provenance", provenance(source, added_by))
+                prov["source"] = source
+                prov["updatedBy"] = added_by or {}
+                prov["updatedAt"] = now_iso()
+                return entry
+        entry = context_entry(
+            key, value, group=group, description=description,
+            source=source, added_by=added_by,
+        )
+        self.context.append(entry)
+        return entry
+
+    def set_system(
+        self, area: str, system: str, *, source: str = "User", pending: bool = False,
+    ) -> dict[str, Any]:
+        """Record the target system for one scenario/area under a scoped key.
+
+        Systems are captured per area (``system.<area>``) so two areas never
+        collide on a single reused key: e.g. ``system.hr-knowledge = Workday``
+        and ``system.it-ticketing = ServiceNow ITSM`` coexist. ``area`` is a
+        scenario id or a short slug; the value is the system name the maker gave.
+        """
+        slug = area.strip().lower().replace(" ", "-")
+        if not slug:
+            raise ValueError("a system decision needs a scenario area")
+        unknown_answers = {
+            "", "unknown", "not known", "not sure", "not sure yet", "tbd", "pending",
+            "don't know", "don't know yet", "i don't know", "i don't know yet",
+            "i do not know", "i do not know yet", "i'm not sure", "i'm not sure yet",
+        }
+        uncertain = [
+            part.strip().casefold().replace("\u2019", "'").rstrip(".?!") in unknown_answers
+            for part in system.split(";")
+        ]
+        if not pending and any(uncertain) and not all(uncertain):
+            raise ValueError(
+                "Record confirmed systems and the pending decision separately; "
+                "planning can continue. Do not use 'Not sure yet' as a system name."
+            )
+        pending = pending or all(uncertain)
+        return self.set_context(
+            f"system.{slug}", system.strip() or "Not known yet",
+            group=PENDING_DECISION_GROUP if pending else SYSTEM_GROUP,
+            description=(
+                f"Confirm the system for {area} before its integration work starts; "
+                "planning and unrelated work can continue."
+                if pending else f"Target system for {area}"
+            ),
+            source=source,
+        )
+
+    def pending_decisions(self) -> list[dict[str, Any]]:
+        return self._context_group(PENDING_DECISION_GROUP)
+
+    def _system_input(self, key: str) -> dict[str, Any] | None:
+        for entry in self._context_group(SYSTEM_GROUP):
+            if entry.get("key") == key and entry.get("value"):
+                return {"system": entry["value"]}
+        return None
+
+    def _resolved_input(self, key: str) -> dict[str, Any] | None:
+        artifact = self.output(key)
+        if artifact is None:
+            return self._system_input(key)
+        attributes = artifact.get("attributes") or {}
+        if artifact.get("kind") == "Environment" and not str(attributes.get("environmentId") or "").strip():
+            return None
+        return attributes
+
+    def remove_context(self, key: str) -> dict[str, Any]:
+        """Remove a context entry by key and return it — the primitive for moving
+        something **out of scope**. A scenario (``key`` = scenario id), a Systems
+        label (``key`` = ``system.<area>``), and a scenario-dependency edge
+        (``key`` = ``"<A> -> <B>"``) are all ordinary context entries, so one
+        command drops any of them. Raises ``KeyError`` if no entry has that key,
+        so a mistyped key fails loudly.
+
+        This only drops the scope entry; it does not remove the tasks modelled for
+        that scenario/system. The edit flow (``src/skills/planner/edit.md``)
+        removes that stream's tasks and re-checks coherence around this call."""
+        for entry in self.context:
+            if entry.get("key") == key:
+                self.context.remove(entry)
+                return entry
+        raise KeyError(f"no such context key: {key!r}")
+
+    # ---- task mutators --------------------------------------------------- #
+
+    def add_task(self, task: dict[str, Any]) -> dict[str, Any]:
+        if self.task(task["id"]) is not None:
+            raise ValueError(f"duplicate task id: {task['id']!r}")
+        self.tasks.append(task)
+        return task
+
+    def assign_task(
+        self,
+        task_id: str,
+        *,
+        role_id: str | None = None,
+        person_oid: str | None = None,
+    ) -> dict[str, Any]:
+        """Set a task's assignee. Rules realising Flow 1:
+
+          * ``person_oid`` + ``role_id`` -> direct-for-role (person owns it,
+            role retained).
+          * ``role_id`` only            -> open pool (any holder can claim).
+          * ``person_oid`` only         -> plain person (no role).
+        """
+        task = self._require_task(task_id)
+        if person_oid:
+            task["assignedTo"] = principal_person(person_oid, role_id=role_id)
+        elif role_id:
+            task["assignedTo"] = principal_pool(role_id)
+        else:
+            raise ValueError("assign_task needs role_id and/or person_oid")
+        return task
+
+    def claim_task(self, task_id: str, person_oid: str) -> dict[str, Any]:
+        """A holder of the task's role picks it up (pool -> claimed). The role
+        is retained so the task still groups under it in Flow 2. Only an **open
+        role pool** can be claimed — claiming a task already assigned to a person
+        (or one with no role) is rejected so an existing owner is never silently
+        replaced and the role is never erased."""
+        task = self._require_task(task_id)
+        assigned = task.get("assignedTo") or {}
+        role = assignee_role_id(assigned)
+        if assigned.get("type") != "Role" or not role:
+            raise ValueError(
+                f"task {task_id!r} is not an open role pool "
+                f"(assignedTo.type={assigned.get('type')!r}); only pooled tasks can be claimed"
+            )
+        task["assignedTo"] = principal_person(person_oid, role_id=role)
+        return task
+
+    def set_task_state(self, task_id: str, state: str) -> dict[str, Any]:
+        if state not in TASK_STATES:
+            raise ValueError(f"invalid task state: {state!r}")
+        task = self._require_task(task_id)
+        if task.get("pendingSync") and state != "Completed" and self.data.get("planId"):
+            raise ValueError("Confirm the pending completion on the shared plan before reopening it.")
+        if state in ("InProgress", "Completed"):
+            # Record work already completed offline, but do not start downstream
+            # work on a shared plan until its input metadata is shared too.
+            missing_inputs = self.blocking_inputs(task_id, require_shared_confirmation=state == "InProgress")
+            if missing_inputs:
+                raise ValueError(
+                    f"task {task_id!r} cannot be {state} — waiting on "
+                    + self.blocking_reason(task_id)
+                )
+        # Invariant enforced for EVERY caller (not just the capture CLI): a task
+        # cannot be Completed while its declared `produces` have no Active
+        # artifact — that would leave a completed producer with blocked consumers.
+        if state == "Completed":
+            missing = self.unresolved_produces(task_id)
+            if missing:
+                raise ValueError(
+                    f"task {task_id!r} cannot be Completed — unresolved produces {missing}; "
+                    "pin those outputs first (capture-setup / pin-output)"
+                )
+            for artifact in self.outputs_of_task(task_id):
+                if (
+                    artifact.get("state") == "Active" and artifact.get("kind") == "Environment"
+                    and not str(artifact.get("attributes", {}).get("environmentId") or "").strip()
+                ):
+                    raise ValueError(
+                        f"task {task_id!r} cannot be Completed — verify environmentId for "
+                        f"{artifact['key']} before sharing setup completion"
+                    )
+        changed = task.get("state") != state
+        task["state"] = state
+        if state == "Completed":
+            task.pop("pendingOutputs", None)
+            if changed:
+                self.mark_task_pending_sync(task_id)
+        elif not self.data.get("planId"):
+            task.pop("pendingSync", None)
+            if self.outputs_of_task(task_id):
+                task["pendingOutputs"] = True
+        return task
+
+    def set_checklist(self, task_id: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+        """Replace a task's read-back-only step checklist (display state)."""
+        task = self._require_task(task_id)
+        task["checklist"] = list(items)
+        return task
+
+    # ---- pending-sync markers (local completion not yet on the service) -- #
+    # The CLI is network-free by design (src/skills/planner/sync.md): a capture
+    # ``--complete`` flips a task to Completed in this local cache, but the push
+    # to the shared planner is a separate step the agent performs via the
+    # ``complete_project_plan_task`` tool. ``pendingSync`` closes that gap: it
+    # marks a task Completed-locally-but-not-yet-confirmed-on-the-service so the
+    # completion can be pushed in the same flow, surfaced if the push fails, and
+    # NOT silently reverted by a later pull (see ``sync.preserve_local_pending``).
+    # Completion and shared confirmation are separate user-visible facts.
+
+    def mark_task_pending_sync(self, task_id: str) -> dict[str, Any]:
+        """Flag a task whose completion is saved locally but not yet confirmed on
+        the shared planner. Cleared on a confirmed push (``import-remote-plan``
+        re-hydrate, or ``mark-synced``); preserved across a pull so an unpushed
+        local completion is never clobbered by the service's stale state."""
+        task = self._require_task(task_id)
+        task["pendingSync"] = True
+        return task
+
+    def clear_task_pending_sync(self, task_id: str) -> dict[str, Any]:
+        """Clear the pending-sync flag once the completion is confirmed on the
+        service (the key is dropped rather than set false, keeping plan.json clean)."""
+        task = self._require_task(task_id)
+        task.pop("pendingSync", None)
+        return task
+
+    def pending_sync_tasks(self) -> list[dict[str, Any]]:
+        """Tasks completed locally but not yet confirmed on the shared planner —
+        the push backlog the agent reconciles (newest-producing order is not
+        guaranteed; callers push each independently)."""
+        return [t for t in self.tasks if t.get("pendingSync")]
+
+    def update_task(
+        self,
+        task_id: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        produces: list[str] | None = None,
+        consumes: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing task's content in place — used when reconciling a
+        Plan editor's Markdown edit back into plan.json (src/skills/planner/edit.md).
+
+        Only the WeveNova ``Task`` content fields (title, description, produces,
+        consumes) are touched here; the assignee/role goes through ``assign_task``
+        and state through ``set_task_state``. A ``None`` argument leaves that field
+        unchanged."""
+        task = self._require_task(task_id)
+        if title is not None:
+            task["title"] = title
+        if description is not None:
+            task["description"] = description
+        if produces is not None:
+            task["produces"] = list(produces)
+        if consumes is not None:
+            task["consumes"] = list(consumes)
+        return task
+
+    def remove_task(self, task_id: str) -> dict[str, Any]:
+        """Remove a task (reconciling a deletion from the Markdown view) and return
+        it. Also drops the outputs **only this task produced** — once their single
+        producer is gone nothing can produce them, so leaving them would dangle
+        (``validate`` flags an output whose ``producedByTaskId`` is unknown). This
+        keeps the ledger coherent after an edit; any downstream task that still
+        consumes a dropped key then surfaces via :meth:`task_consume_gaps` for the
+        edit flow to repair. Raises ``KeyError`` on an unknown id so a mistyped id
+        fails loudly rather than silently doing nothing."""
+        task = self._require_task(task_id)
+        self.tasks.remove(task)
+        for art in [a for a in self.outputs if a.get("producedByTaskId") == task_id]:
+            self.outputs.remove(art)
+        return task
+
+    # ---- output ledger --------------------------------------------------- #
+
+    def add_output(self, artifact: dict[str, Any]) -> dict[str, Any]:
+        """Pin an artifact, superseding any Active artifact with the same key
+        (append-and-supersede, never delete — Step-2 §8)."""
+        key = artifact["key"]
+        for existing in self.outputs:
+            if existing.get("key") == key and existing.get("state") == "Active":
+                existing["state"] = "Superseded"
+        self.outputs.append(artifact)
+        task = self.task(artifact.get("producedByTaskId", ""))
+        if task is not None:
+            task["pendingSync" if task.get("state") == "Completed" else "pendingOutputs"] = True
+        return artifact
+
+    def output(self, key: str) -> dict[str, Any] | None:
+        """The current Active artifact for a ledger key (what downstream reads)."""
+        for art in reversed(self.outputs):
+            if art.get("key") == key and art.get("state") == "Active":
+                return art
+        return None
+
+    def unresolved_produces(self, task_id: str) -> list[str]:
+        """A task's declared ``produces`` keys that have no Active artifact yet.
+
+        A task should not be marked ``Completed`` while its declared outputs are
+        still unresolved — otherwise it becomes a completed producer while
+        downstream consumers stay blocked."""
+        task = self.task(task_id)
+        if not task:
+            return []
+        return [k for k in (task.get("produces") or []) if self.output(k) is None]
+
+    def outputs_of_task(self, task_id: str) -> list[dict[str, Any]]:
+        """"This task's outputs" = the ledger filtered by producing id (no copy)."""
+        return [a for a in self.outputs if a.get("producedByTaskId") == task_id]
+
+    def resolved_consumes(self, task_id: str) -> dict[str, Any]:
+        """For each key a task consumes, the Active artifact's attributes (or
+        ``None`` if not produced yet). This is how a downstream assignee learns,
+        e.g., the ``environmentId`` the setup task produced — the back-propagation."""
+        task = self._require_task(task_id)
+        resolved: dict[str, Any] = {}
+        for key in task.get("consumes", []):
+            resolved[key] = self._resolved_input(key)
+        return resolved
+
+    def _input_awaits_sync(self, key: str) -> bool:
+        artifact = self.output(key)
+        producer = self.task(artifact.get("producedByTaskId", "")) if artifact else None
+        return bool(
+            self.data.get("planId") and producer
+            and (producer.get("pendingSync") or producer.get("pendingOutputs"))
+        )
+
+    def blocking_inputs(
+        self, task_id: str, *, require_shared_confirmation: bool = True,
+    ) -> dict[str, list[str]]:
+        """Unresolved inputs mapped to their declared producer task ids.
+
+        Starting shared work also requires input metadata to be confirmed shared.
+        Retrospective completion capture can waive that confirmation, but never
+        the actual evidence or required decisions. Pure/read-only.
+        """
+        task = self.task(task_id)
+        if not task:
+            return {}
+        unmet: dict[str, list[str]] = {}
+        for key in (task.get("consumes") or []):
+            if self._resolved_input(key) is not None and not (
+                require_shared_confirmation and self._input_awaits_sync(key)
+            ):
+                continue  # satisfied by an Active artifact
+            producers = [
+                t.get("id")
+                for t in self.tasks
+                if key in (t.get("produces") or []) and t.get("id") != task_id
+            ]
+            unmet[key] = [p for p in producers if p]
+        return unmet
+
+    def blocking_reason(self, task_id: str) -> str:
+        reasons: list[str] = []
+        pending = {e["key"]: e for e in self.pending_decisions()}
+        for key, producers in self.blocking_inputs(task_id).items():
+            artifact = self.output(key)
+            if self._input_awaits_sync(key):
+                reasons.append(f"shared confirmation of {humanize(key)}")
+            elif artifact is not None and artifact.get("kind") == "Environment":
+                reasons.append(f"verified environment ID for {humanize(key)}")
+            elif key in pending:
+                reasons.append(pending[key].get("description") or f"decision: {key}")
+            elif producers:
+                reasons.extend(self._require_task(tid).get("title", tid) for tid in producers)
+            else:
+                reasons.append(f"{humanize(key)} (not recorded yet)")
+        return "; ".join(dict.fromkeys(reasons))
+
+    def waiting_on(self, task_id: str) -> list[str]:
+        """Flattened, de-duplicated, sorted list of what a task is blocked on:
+        the upstream producer task ids for its unproduced consumed artifacts,
+        plus ``needs <key>`` for any consumed key nothing in the plan produces.
+        Empty when the task is ready. Drives the task-list dependency marker."""
+        tokens: list[str] = []
+        for key, producers in self.blocking_inputs(task_id).items():
+            if producers:
+                tokens.extend(producers)
+            else:
+                tokens.append(f"needs {key}")
+        return sorted(dict.fromkeys(tokens))
+
+    def dependency_marker(self, task_id: str) -> str:
+        """Compact task-list marker for artifact readiness: ``""`` when the task
+        is ready (all consumed artifacts produced, or it consumes nothing), else
+        the comma-joined :meth:`waiting_on` tokens (e.g. ``"T2"`` or
+        ``"T1, T2"``). Render-time only — reflects the produces/consumes ledger,
+        never mutates it, and never changes stored task sequence or state."""
+        return ", ".join(self.waiting_on(task_id))
+
+    def setup_environment_key(self, task_id: str) -> str | None:
+        """The environment output declared by a setup task, if any."""
+        produces = self._require_task(task_id).get("produces") or []
+        return next((key for key in SETUP_ENVIRONMENT_KEYS if key in produces), None)
+
+    def setup_task_id(self) -> str | None:
+        """The first unfinished environment-producing task in dependency order.
+
+        Recognizes both ``primaryEnvironment`` and ``provisionedEnvironment``,
+        so provisioning is captured before dependent workspace binding. Falls
+        back to the first completed candidate, or ``None`` when no task declares
+        either output. Never infers setup work from a title or execution hint.
+        """
+        candidates = [
+            t for t in self.ordered_tasks()
+            if self.setup_environment_key(t["id"]) is not None
+        ]
+        if not candidates:
+            return None
+        for t in candidates:
+            if t.get("state") != "Completed":
+                return t["id"]
+        return candidates[0]["id"]
+
+    def discover_task_id(self) -> str | None:
+        """The plan's discover task id — the task that **produces** the tenant
+        inventory (`tenantInventory`), i.e. the ``/discover`` task. Prefers the
+        first not-yet-Completed such task, else the first one; ``None`` if no task
+        produces it. Keyed on the grounded ``produces`` signal, mirroring
+        :meth:`setup_task_id` — never on any execution-hint field."""
+        candidates = [
+            t for t in self.tasks
+            if TENANT_INVENTORY_KEY in (t.get("produces") or [])
+        ]
+        if not candidates:
+            return None
+        for t in candidates:
+            if t.get("state") != "Completed":
+                return t["id"]
+        return candidates[0]["id"]
+
+    def _workspace_matches_plan(
+        self, environment: dict[str, Any], config: dict[str, Any] | None, *, setup_ready: bool,
+    ) -> bool:
+        if not setup_ready or not config:
+            return False
+        bindings = [
+            ("environmentId", environment.get("environmentId"), config.get("environmentId")),
+            ("dataverseEndpoint", environment.get("environmentUrl"), config.get("dataverseEndpoint")),
+        ]
+        if not any(expected for _, expected, _ in bindings):
+            return False
+        agent = self.output("essAgent") or self.output("deployedEssAgent")
+        if agent:
+            attributes = agent.get("attributes") or {}
+            key = next((key for key in ("botId", "schemaName") if attributes.get(key)), None)
+            if key:
+                local_agent = config.get("agent")
+                if not isinstance(local_agent, dict):
+                    return False
+                bindings.append((key, attributes[key], local_agent.get(key)))
+        for key, expected, actual in bindings:
+            if not expected:
+                continue
+            if not isinstance(expected, str) or not isinstance(actual, str):
+                return False
+            expected, actual = expected.strip().casefold(), actual.strip().casefold()
+            if key == "dataverseEndpoint":
+                expected, actual = expected.rstrip("/"), actual.rstrip("/")
+            if not expected or expected != actual:
+                return False
+        return True
+
+    def kit_setup_nudge(
+        self, task_id: str, *, workspace_config: dict[str, Any] | None = None,
+        workspace_setup_ready: bool = False,
+    ) -> dict[str, Any] | None:
+        """Whether this task's assignee should run ``/setup`` to connect their own
+        kit to the plan's environment before starting.
+
+        The Power Platform admin's environment task creates or chooses the
+        environment in the Power Platform admin center and pins
+        ``primaryEnvironment``. Every *other* task that **consumes**
+        `primaryEnvironment` runs against that same environment, but each
+        assignee's local kit must be connected to it first (via ``/setup``) — a
+        per-person step the pinned plan value can't do for them. So:
+
+        - Returns ``{environmentId, environmentUrl}`` when the task **consumes**
+          `primaryEnvironment` (needs the env), does **not** produce it, and the
+          plan already has an environment pinned — nudge this persona to run
+          ``/setup`` and connect to that env.
+        - Returns ``None`` for completed/blocked work, unmet dependencies, the
+          setup task itself, or tasks that don't need the environment.
+        - When canonical setup state reports this workspace's active agent ready
+          (``workspace_setup_ready``, see
+          :func:`planner.capture.workspace_setup_ready`) and the workspace config
+          records the same environment and agent identity, no binding nudge is
+          needed. Without that local evidence, the plan's shared environment alone
+          is not enough; the legacy ``setup`` field is not evidence.
+        """
+        task = self._require_task(task_id)
+        if task.get("state") not in ("NotStarted", "InProgress"):
+            return None
+        produces = task.get("produces") or []
+        consumes = task.get("consumes") or []
+        if PRIMARY_ENVIRONMENT_KEY in produces:
+            return None  # this IS the setup task
+        if PRIMARY_ENVIRONMENT_KEY not in consumes:
+            return None  # doesn't need the connected environment
+        env = self.output(PRIMARY_ENVIRONMENT_KEY)
+        if not env or self.blocking_inputs(task_id):
+            return None
+        attrs = env.get("attributes", {})
+        if self._workspace_matches_plan(attrs, workspace_config, setup_ready=workspace_setup_ready):
+            return None
+        return {
+            "environmentId": attrs.get("environmentId", ""),
+            "environmentUrl": attrs.get("environmentUrl", ""),
+        }
+
+    def first_run_setup_pending(self, task_id: str) -> bool:
+        """Whether this task is the plan's **first-run setup** still waiting to run.
+
+        True only for a ready environment task (one that **produces**
+        `primaryEnvironment` or `provisionedEnvironment`) while it is not yet
+        Completed **and no environment is pinned on the plan yet**. This is the
+        deterministic first-run-experience (FRE) signal: when the Power Platform
+        admin asks "what are my tasks?" and their environment task is still open
+        with no environment decided, nudge them to create or choose the
+        environment the whole plan runs on **now** — in the Power Platform admin
+        center, because ``/setup`` selects environments but never creates one —
+        and pin it.
+
+        Returns ``False`` once an environment is pinned (the env decision is
+        already made — e.g. the admin pinned the environment while its agent
+        setup is still pending, so it is no longer *first* run) or the task is
+        Completed. This is the mirror image of :meth:`kit_setup_nudge`,
+        which nudges *other* personas to connect **after** the env exists; together
+        they cover both sides of the environment handshake without overlapping.
+        """
+        task = self._require_task(task_id)
+        if self.setup_environment_key(task_id) is None:
+            return False
+        if task.get("state") not in ("NotStarted", "InProgress"):
+            return False
+        return (
+            all(self.output(key) is None for key in SETUP_ENVIRONMENT_KEYS)
+            and not self.blocking_inputs(task_id)
+        )
+
+    def task_brief(
+        self, task_id: str, *, workspace_config: dict[str, Any] | None = None,
+        workspace_setup_ready: bool = False,
+    ) -> dict[str, Any]:
+        """A briefing for a task's assignee: what to do (title + description), the
+        role, the resolved values it consumes (e.g. the env id to use), and the
+        keys to capture when done."""
+        task = self._require_task(task_id)
+        return {
+            "id": task["id"],
+            "title": task.get("title", ""),
+            "description": task.get("description", ""),
+            "role": assignee_role_id(task.get("assignedTo")),
+            "assignee": assignee_user_oid(task.get("assignedTo")),
+            "state": task.get("state", ""),
+            "firstRunSetup": self.first_run_setup_pending(task_id),
+            "kitSetup": self.kit_setup_nudge(
+                task_id, workspace_config=workspace_config, workspace_setup_ready=workspace_setup_ready,
+            ),
+            "consumes": self.resolved_consumes(task_id),
+            "blockedBy": self.blocking_inputs(task_id),
+            "blockingReason": self.blocking_reason(task_id),
+            "produces": list(task.get("produces", [])),
+        }
+
+    # ---- scenario dependencies (open Context bag, not a typed collection) - #
+
+    def in_scope_scenarios(self) -> dict[str, str]:
+        """Scenario id -> label for scenarios in scope (Context group 'scenario')."""
+        return {
+            e["key"]: e.get("value", "")
+            for e in self.context
+            if e.get("group") == SCENARIO_GROUP
+        }
+
+    def scenario_dependencies(self) -> list[dict[str, Any]]:
+        """Dependency edges parsed from the Context bag (group 'scenarioDependsOn').
+
+        Each edge: ``{scenario, dependsOn, kind, rationale, provenance}``. The
+        Plan stores these as ordinary Context entries — there is no separate
+        typed collection — so they round-trip and read back like any intent.
+        """
+        edges: list[dict[str, Any]] = []
+        for e in self.context:
+            if e.get("group") != DEPENDS_ON_GROUP:
+                continue
+            scenario, depends_on = parse_dependency_key(e.get("key", ""))
+            edges.append(
+                {
+                    "scenario": scenario,
+                    "dependsOn": depends_on,
+                    "kind": e.get("value", ""),
+                    "rationale": e.get("description", ""),
+                    "provenance": e.get("provenance", {}),
+                }
+            )
+        return edges
+
+    def add_scenario_dependency(
+        self,
+        scenario: str,
+        depends_on: str,
+        *,
+        kind: str = "requires",
+        rationale: str = "",
+        source: str = "Agent",
+    ) -> dict[str, Any]:
+        """Record that ``scenario`` depends on ``depends_on`` as a Context entry.
+
+        ``source`` is the Context provenance source ("Agent" when the planner
+        asserts it from the PM spec / research, "User" when the sponsor states
+        it); the PM-spec citation lives in ``rationale``.
+        """
+        if scenario == depends_on:
+            raise ValueError("a scenario cannot depend on itself")
+        if kind not in DEPENDENCY_KINDS:
+            raise ValueError(f"invalid dependency kind: {kind!r}")
+        return self.set_context(
+            dependency_key(scenario, depends_on),
+            kind,
+            group=DEPENDS_ON_GROUP,
+            description=rationale,
+            source=source,
+        )
+
+    def scenario_dependency_status(self) -> list[dict[str, Any]]:
+        """Every scenario-dependency edge whose dependent scenario is in scope,
+        each tagged ``met`` (prerequisite also in scope) or not.
+
+        Merges edges captured on this plan with the known non-Learn facts, so
+        callers can show *both* satisfied and unmet dependencies (not only the
+        gaps). De-dupes on ``(scenario, dependsOn)``, plan edges winning.
+        """
+        in_scope = set(self.in_scope_scenarios())
+        edges = self.scenario_dependencies()
+        have = {(e["scenario"], e["dependsOn"]) for e in edges}
+        for edge in known_scenario_dependencies():
+            pair = (edge["scenario"], edge["dependsOn"])
+            if edge["scenario"] in in_scope and pair not in have:
+                edges.append({**edge, "provenance": {"source": edge.get("source", "")}})
+        status: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for edge in edges:
+            pair = (edge["scenario"], edge["dependsOn"])
+            if edge["scenario"] in in_scope and pair not in seen:
+                seen.add(pair)
+                status.append({**edge, "met": edge["dependsOn"] in in_scope})
+        return status
+
+    def unmet_scenario_dependencies(self, *, include_known: bool = True) -> list[dict[str, Any]]:
+        """Edges whose dependent scenario is in scope but whose prerequisite
+        scenario is not — what to surface to the sponsor. Merges the PM-spec seed
+        (for in-scope scenarios) with edges captured on this plan."""
+        in_scope = set(self.in_scope_scenarios())
+        edges = self.scenario_dependencies()
+        if include_known:
+            have = {(e["scenario"], e["dependsOn"]) for e in edges}
+            for edge in known_scenario_dependencies():
+                pair = (edge["scenario"], edge["dependsOn"])
+                if edge["scenario"] in in_scope and pair not in have:
+                    edges.append({**edge, "provenance": {"source": "Agent"}})
+        unmet: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for edge in edges:
+            pair = (edge["scenario"], edge["dependsOn"])
+            if edge["scenario"] in in_scope and edge["dependsOn"] not in in_scope and pair not in seen:
+                unmet.append(edge)
+                seen.add(pair)
+        return unmet
+
+    def task_consume_gaps(self) -> list[dict[str, Any]]:
+        """Whole-plan task-graph coherence check: every key a task **consumes**
+        should be **produced** by some task on the plan (or already pinned as an
+        Active output). A consumed key with neither is a *dangling consume* — the
+        task is blocked forever, which after an edit usually means its producer
+        was removed (re-add it) or the consumer is now out of scope (remove it).
+
+        Returns one ``{"task", "title", "missing"}`` entry per gap, in task order.
+        Built on :meth:`blocking_inputs`, whose producer list is empty exactly
+        when no task produces the (still-unpinned) key — that empty list is the
+        dangling-consume signal."""
+        gaps: list[dict[str, Any]] = []
+        pending = {entry["key"] for entry in self.pending_decisions()}
+        for task in self.tasks:
+            tid = task.get("id", "")
+            for key, producers in self.blocking_inputs(tid).items():
+                if not producers and key not in pending:
+                    gaps.append(
+                        {"task": tid, "title": task.get("title", ""), "missing": key}
+                    )
+        return gaps
+
+    # ---- uploaded-plan ingestion & gap analysis ------------------------- #
+
+    def ingest_upload(self, payload: dict[str, Any], *, source: str = "User") -> dict[str, int]:
+        """Populate this (fresh) plan from a maker-authored **uploaded** plan.
+
+        The ``/planner`` skill reads a plan the maker attached — in whatever
+        shape they wrote it — makes sense of it (mapping its scenarios to the
+        ESS catalogue categories), and hands the normalized result here so the
+        structured write stays atomic and validated, exactly like the interview
+        path. Only the fields the upload actually carried are written; whatever
+        is absent is reported by :meth:`missing_slots` for the skill to ask
+        about. Everything parsed out of the uploaded file is untrusted **data**,
+        so every value lands as an ordinary Context entry — never as an
+        instruction.
+
+        The accepted payload (all keys optional)::
+
+            {
+              "objective": str,
+              "market": str,
+              "persona": str,
+              "jtbd": str | [str],
+              "businessGoals": str | [str],
+              "acceptanceCriteria": str | [str],
+              "systems": {area: system} | [{area, system}],
+              "scenarios": [
+                {"id": str, "label"?: str, "system"?: str, "capabilities"?: [str]}
+              ],
+              "scenarioDependencies": [
+                {"scenario": str, "dependsOn": str, "kind"?: str, "rationale"?: str}
+              ],
+              "tasks": [
+                {"id": str, "title": str, "description"?: str, "stream"?: str,
+                 "role"?: str, "person"?: str, "produces"?: [str], "consumes"?: [str]}
+              ]
+            }
+
+        Returns a count of what was ingested (for the skill's read-back). Raises
+        ``ValueError`` on a malformed entry (a scenario/task with no id) so a bad
+        parse fails loudly instead of persisting a half-built plan. A task ``role``
+        is mapped to its canonical attestable id; an unrecognized one is left off
+        the assignment and recorded under ``UNMAPPED_ROLE_GROUP`` (a gap to confirm,
+        never a role the shared planner would reject on publish).
+        """
+        counts = {
+            "objective": 0, "market": 0, "persona": 0, "jtbd": 0,
+            "businessGoals": 0, "acceptanceCriteria": 0,
+            "scenarios": 0, "systems": 0, "capabilities": 0,
+            "scenarioDependencies": 0, "tasks": 0,
+        }
+
+        def clean(value: Any) -> str:
+            return str(value).strip() if value is not None else ""
+
+        if clean(payload.get("objective")):
+            self.set_context(
+                "objective", clean(payload["objective"]), group=OBJECTIVE_GROUP,
+                description="Plain-language goal from the uploaded plan", source=source,
+            )
+            counts["objective"] = 1
+
+        if clean(payload.get("market")):
+            self.set_context(
+                "market", clean(payload["market"]), group=MARKET_GROUP,
+                description="Rollout market/wave from the uploaded plan", source=source,
+            )
+            counts["market"] = 1
+
+        if clean(payload.get("persona")):
+            self.set_context(
+                "persona", clean(payload["persona"]), group=SCENARIO_CONTEXT_GROUP,
+                description="Audience from the uploaded plan", source=source,
+            )
+            counts["persona"] = 1
+
+        jtbd_text = "; ".join(clean(x) for x in _as_list(payload.get("jtbd")) if clean(x))
+        if jtbd_text:
+            self.set_context(
+                "jtbd", jtbd_text, group=SCENARIO_CONTEXT_GROUP,
+                description="Jobs-to-be-done from the uploaded plan", source=source,
+            )
+            counts["jtbd"] = 1
+
+        for i, goal in enumerate(_as_list(payload.get("businessGoals")), start=1):
+            if clean(goal):
+                self.set_context(
+                    f"businessGoal-{i}", clean(goal), group=BUSINESS_GOALS_GROUP,
+                    description="Business goal from the uploaded plan", source=source,
+                )
+                counts["businessGoals"] += 1
+
+        for i, crit in enumerate(_as_list(payload.get("acceptanceCriteria")), start=1):
+            if clean(crit):
+                self.set_context(
+                    f"criterion-{i}", clean(crit), group=ACCEPTANCE_GROUP,
+                    description="Definition of done from the uploaded plan", source=source,
+                )
+                counts["acceptanceCriteria"] += 1
+
+        # Systems the upload listed on their own (not attached to a scenario).
+        for area, system in _as_area_pairs(payload.get("systems")):
+            if area and system:
+                self.set_system(area, system, source=source)
+                counts["systems"] += 1
+
+        for scn in _as_list(payload.get("scenarios")):
+            if isinstance(scn, str):
+                scn = {"id": scn}
+            if not isinstance(scn, dict):
+                raise ValueError(f"uploaded scenario must be an object or id string: {scn!r}")
+            sid = clean(scn.get("id") or scn.get("slug"))
+            if not sid:
+                raise ValueError(f"uploaded scenario is missing an id: {scn!r}")
+            label = clean(scn.get("label") or scn.get("name")) or humanize(sid)
+            self.set_context(
+                sid, label, group=SCENARIO_GROUP,
+                description="Scenario in scope (uploaded plan)", source=source,
+            )
+            counts["scenarios"] += 1
+            if clean(scn.get("system")):
+                self.set_system(sid, clean(scn["system"]), source=source)
+                counts["systems"] += 1
+            for cap in _as_list(scn.get("capabilities")):
+                cap_text = clean(cap)
+                if not cap_text:
+                    continue
+                slug = slugify(cap_text) or f"cap-{counts['capabilities'] + 1}"
+                self.set_context(
+                    f"{sid}.{slug}", cap_text, group=CAPABILITY_GROUP,
+                    description="Enabled scenario from the uploaded plan", source=source,
+                )
+                counts["capabilities"] += 1
+
+        for dep in _as_list(payload.get("scenarioDependencies")):
+            if not isinstance(dep, dict):
+                raise ValueError(f"uploaded scenario dependency must be an object: {dep!r}")
+            scenario = clean(dep.get("scenario"))
+            depends_on = clean(dep.get("dependsOn") or dep.get("depends_on"))
+            if not scenario or not depends_on:
+                raise ValueError(f"uploaded scenario dependency malformed (need scenario + dependsOn): {dep!r}")
+            self.add_scenario_dependency(
+                scenario, depends_on,
+                kind=clean(dep.get("kind")) or "requires",
+                rationale=clean(dep.get("rationale")) or "From the uploaded plan",
+                source=source,
+            )
+            counts["scenarioDependencies"] += 1
+
+        for tsk in _as_list(payload.get("tasks")):
+            if not isinstance(tsk, dict):
+                raise ValueError(f"uploaded task must be an object: {tsk!r}")
+            tid = clean(tsk.get("id"))
+            title = clean(tsk.get("title"))
+            if not tid or not title:
+                raise ValueError(f"uploaded task needs both an id and a title: {tsk!r}")
+            role = clean(tsk.get("role"))
+            person = clean(tsk.get("person"))
+            # The shared planner only pools/attests tasks against the closed
+            # attestable-role set, so map the uploaded label to its canonical
+            # compact id. A non-attestable label (e.g. "Power Platform Admin") is
+            # NOT attached — it would fail on publish — but it's recorded as a gap
+            # so the interview can confirm the real owner rather than lose the intent.
+            role_id = resolve_attestable_role_id(role) if role else None
+            if role and role_id is None:
+                self.set_context(
+                    f"task-role.{tid}", role, group=UNMAPPED_ROLE_GROUP,
+                    description=(
+                        f"Uploaded owner for task '{title}' ({role!r}) isn't a "
+                        "recognized attestable role — confirm who owns it"
+                    ),
+                    source=source,
+                )
+            assigned: dict[str, Any] | None = None
+            if person:
+                assigned = principal_person(person, role_id=role_id or None)
+            elif role_id:
+                assigned = principal_pool(role_id)
+            self.add_task(
+                new_task(
+                    tid, title,
+                    description=clean(tsk.get("description")),
+                    stream=clean(tsk.get("stream")),
+                    assigned_to=assigned,
+                    produces=[clean(x) for x in _as_list(tsk.get("produces")) if clean(x)],
+                    consumes=[clean(x) for x in _as_list(tsk.get("consumes")) if clean(x)],
+                )
+            )
+            counts["tasks"] += 1
+
+        return counts
+
+    def missing_slots(self) -> dict[str, list[dict[str, str]]]:
+        """The intent slots the plan still lacks — the questions the skill should
+        ask after an upload (or an under-specified interview), and nothing it has
+        already captured.
+
+        ``required`` contains unanswered objective, scope, and system questions.
+        Explicitly deferred decisions move to ``pending`` and do not block
+        drafting. ``recommended`` sharpens the plan but never blocks: audience,
+        market, business goals, definition of done, and the per-scenario enabled
+        capabilities the eval reads off the plan. Each gap carries a ready-to-ask
+        ``prompt``. Pure/read-only — re-running after the skill fills a slot
+        simply returns fewer gaps, so it drives an "ask only what's missing,
+        then re-check" loop.
+        """
+        required: list[dict[str, str]] = []
+        recommended: list[dict[str, str]] = []
+        pending = [
+            {"slot": entry["key"], "prompt": entry.get("description") or str(entry["value"])}
+            for entry in self.pending_decisions()
+        ]
+
+        if not str(self.output_value_or_context("objective") or "").strip():
+            required.append({
+                "slot": "objective",
+                "prompt": "In one sentence — what should this agent do, and for whom?",
+            })
+
+        scenarios = self.in_scope_scenarios()
+        if not scenarios and not any(entry["key"] == "scope" for entry in self.pending_decisions()):
+            required.append({
+                "slot": "scenarios",
+                "prompt": "What should your team be able to self-serve? Think in outcomes, not systems.",
+            })
+        else:
+            systems = self._systems_by_area()
+            deferred_systems = {
+                entry["key"].removeprefix("system."): entry["value"]
+                for entry in self.pending_decisions() if entry["key"].startswith("system.")
+            }
+            for sid, label in scenarios.items():
+                name = label or sid
+                if (
+                    self._system_for_scenario(sid, systems) is None
+                    and self._system_for_scenario(sid, deferred_systems) is None
+                ):
+                    required.append({
+                        "slot": f"system:{sid}",
+                        "prompt": f"For {name}, which system holds the data (e.g. Workday, ServiceNow, SharePoint)?",
+                    })
+                if not self._capabilities_for(sid):
+                    recommended.append({
+                        "slot": f"capabilities:{sid}",
+                        "prompt": f"Which named scenarios should {name} enable (e.g. create ticket, read cases)?",
+                    })
+
+        if self._first_value(SCENARIO_CONTEXT_GROUP, "persona") is None:
+            recommended.append({
+                "slot": "persona",
+                "prompt": "Employees only, or managers too?",
+            })
+        if self._first_value(MARKET_GROUP) is None:
+            recommended.append({
+                "slot": "market",
+                "prompt": "Rolling out to a specific market or wave first (e.g. India, a pilot group)?",
+            })
+        if not self._context_group(BUSINESS_GOALS_GROUP):
+            recommended.append({
+                "slot": "businessGoals",
+                "prompt": "What business outcome measures success (e.g. deflect 30% of HR tickets)?",
+            })
+        if not self._context_group(ACCEPTANCE_GROUP):
+            recommended.append({
+                "slot": "acceptanceCriteria",
+                "prompt": "How will you know a scenario is done — pilot-ready? production-signed-off?",
+            })
+
+        # Uploaded task owners that didn't map to a recognized attestable role are
+        # recorded under UNMAPPED_ROLE_GROUP during ingest. Surface each as a
+        # pending decision — but only while the task still has no owner — so an
+        # otherwise-complete upload with an unrecognized role can't report "nothing
+        # missing" and skip asking who owns that task. Once the task is assigned
+        # (a person was named, or the interview picks an owner) the gap clears, so
+        # the ask-only-what's-missing loop converges.
+        for entry in self._context_group(UNMAPPED_ROLE_GROUP):
+            key = str(entry.get("key") or "")
+            tid = key.split(".", 1)[1] if "." in key else ""
+            task = next(
+                (t for t in self.tasks if str(t.get("id") or "") == tid), None
+            ) if tid else None
+            if task is None or (task.get("assignedTo") or {}):
+                continue
+            role_label = str(entry.get("value") or "").strip()
+            prompt = str(entry.get("description") or "").strip() or (
+                f"The uploaded owner {role_label!r} isn't a recognized role — "
+                "who should own this task?"
+            )
+            pending.append({"slot": key or "task-role", "prompt": prompt})
+
+        return {"required": required, "recommended": recommended, "pending": pending}
+
+    # ---- Flow 2: discovery ---------------------------------------------- #
+
+    def tasks_for_person(
+        self, person_oid: str, roles: Iterable[str]
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Group a person's tasks by role for the "what am I assigned?" view.
+
+        Returns ``{roleId: [{"task": <task>, "relation": "assigned"|"pool"}]}``.
+        Covers both tasks assigned directly to the person (bucketed by the
+        task's retained role) and open pools for any role the person holds —
+        which is how a multi-role person sees everything waiting on them.
+
+        ``roles`` may use the compact id (``WorkdayAdmin``) or the stored role
+        name the role tools return (``Workday administrator``); attestable roles
+        match on either spelling, and the group key stays the task's own role.
+        """
+        role_set = {_role_match_key(r) for r in roles}
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for task in self.ordered_tasks():
+            if task.get("state") == "Completed":
+                continue  # Flow 2 surfaces work still waiting, not finished tasks
+            assigned = task.get("assignedTo") or {}
+            role_id = assignee_role_id(assigned)
+            role = role_id or "(no role)"
+            owner = assignee_user_oid(assigned)
+            if assigned.get("type") == "User" and owner == person_oid:
+                grouped.setdefault(role, []).append(
+                    {"task": task, "relation": "assigned", "waitingOn": self.waiting_on(task.get("id"))}
+                )
+            elif assigned.get("type") == "Role" and role_id and _role_match_key(role_id) in role_set:
+                grouped.setdefault(role, []).append(
+                    {"task": task, "relation": "pool", "waitingOn": self.waiting_on(task.get("id"))}
+                )
+        return grouped
+
+    # ---- validation ------------------------------------------------------ #
+
+    def validate(self) -> list[str]:
+        """Return a list of human-readable problems (empty == valid)."""
+        errors: list[str] = []
+        d = self.data
+
+        if d.get("schemaVersion") != SCHEMA_VERSION:
+            errors.append(f"schemaVersion should be {SCHEMA_VERSION}")
+
+        agent_name = d.get("configuringAgentName")
+        if agent_name and agent_name not in CONFIGURING_AGENT_NAMES:
+            errors.append(f"invalid configuringAgentName: {agent_name!r}")
+
+        # Context
+        if len(self.context) > Limits.MAX_CONTEXT_ENTRIES:
+            errors.append(f"too many context entries (> {Limits.MAX_CONTEXT_ENTRIES})")
+        seen_ctx: set[str] = set()
+        for i, entry in enumerate(self.context):
+            key = entry.get("key", "")
+            if not key:
+                errors.append(f"context[{i}] missing key")
+            if key in seen_ctx:
+                errors.append(f"context key not unique: {key!r}")
+            seen_ctx.add(key)
+            if len(str(key)) > Limits.MAX_KEY_LEN:
+                errors.append(f"context key too long: {key!r}")
+            if isinstance(entry.get("value"), (dict, list)):
+                errors.append(f"context[{key}] value must be scalar, not nested")
+            if len(str(entry.get("value", ""))) > Limits.MAX_VALUE_LEN:
+                errors.append(f"context[{key}] value too long")
+            src = (entry.get("provenance") or {}).get("source")
+            if src and src not in CONTEXT_SOURCES:
+                errors.append(f"context[{key}] invalid provenance source: {src!r}")
+            if entry.get("group") == DEPENDS_ON_GROUP:
+                if entry.get("value") not in DEPENDENCY_KINDS:
+                    errors.append(f"scenario dependency {key!r} invalid kind: {entry.get('value')!r}")
+                dep_from, dep_to = parse_dependency_key(key)
+                if not dep_to or dep_from == dep_to:
+                    errors.append(f"scenario dependency {key!r} malformed (expected 'A -> B')")
+
+        # Tasks
+        if len(self.tasks) > Limits.MAX_TASKS:
+            errors.append(f"too many tasks (> {Limits.MAX_TASKS})")
+        seen_task: set[str] = set()
+        for i, task in enumerate(self.tasks):
+            tid = task.get("id", "")
+            if not tid:
+                errors.append(f"tasks[{i}] missing id")
+            if tid in seen_task:
+                errors.append(f"task id not unique: {tid!r}")
+            seen_task.add(tid)
+            if task.get("state") not in TASK_STATES:
+                errors.append(f"task {tid!r} invalid state: {task.get('state')!r}")
+            errors.extend(self._validate_assignee(tid, task.get("assignedTo")))
+            if len(task.get("produces", [])) > Limits.MAX_PRODUCES:
+                errors.append(f"task {tid!r} too many produces keys")
+            if len(task.get("checklist", [])) > Limits.MAX_CHECKLIST:
+                errors.append(f"task {tid!r} too many checklist items")
+
+        # Outputs
+        if len(self.outputs) > Limits.MAX_OUTPUTS:
+            errors.append(f"too many outputs (> {Limits.MAX_OUTPUTS})")
+        for i, art in enumerate(self.outputs):
+            if not art.get("key"):
+                errors.append(f"outputs[{i}] missing key")
+            if art.get("kind") not in ARTIFACT_KINDS:
+                errors.append(f"outputs[{art.get('key')!r}] invalid kind: {art.get('kind')!r}")
+            if art.get("state") not in ARTIFACT_STATES:
+                errors.append(f"outputs[{art.get('key')!r}] invalid state: {art.get('state')!r}")
+            if not art.get("producedByTaskId"):
+                errors.append(f"outputs[{art.get('key')!r}] missing producedByTaskId")
+            elif art.get("producedByTaskId") not in seen_task:
+                errors.append(
+                    f"outputs[{art.get('key')!r}] references unknown task "
+                    f"{art.get('producedByTaskId')!r}"
+                )
+            if len(art.get("attributes", {})) > Limits.MAX_ATTRIBUTES:
+                errors.append(f"outputs[{art.get('key')!r}] too many attributes")
+
+        # At most one Active artifact per key.
+        active: dict[str, int] = {}
+        for art in self.outputs:
+            if art.get("state") == "Active":
+                active[art.get("key", "")] = active.get(art.get("key", ""), 0) + 1
+        for key, count in active.items():
+            if count > 1:
+                errors.append(f"output key {key!r} has {count} Active artifacts (max 1)")
+
+        graph = {
+            task["id"]: {
+                producer["id"] for producer in self.tasks
+                if producer.get("id") != task.get("id")
+                and set(producer.get("produces") or []).intersection(task.get("consumes") or [])
+            }
+            for task in self.tasks if task.get("id")
+        }
+        try:
+            tuple(TopologicalSorter(graph).static_order())
+        except CycleError as exc:
+            errors.append("task dependency cycle: " + " -> ".join(exc.args[1]))
+        return errors
+
+    @staticmethod
+    def _validate_assignee(tid: str, assigned: Any) -> list[str]:
+        errors: list[str] = []
+        if not assigned:
+            return errors  # unassigned draft task is allowed
+        ptype = assigned.get("type")
+        if ptype not in PRINCIPAL_TYPES:
+            errors.append(f"task {tid!r} invalid assignee type: {ptype!r}")
+        if ptype == "Role" and not assignee_role_id(assigned):
+            errors.append(f"task {tid!r} role-assigned but no role.roleId")
+        if ptype == "User" and not assignee_user_oid(assigned):
+            errors.append(f"task {tid!r} user-assigned but no user.oid")
+        return errors
+
+    def _require_task(self, task_id: str) -> dict[str, Any]:
+        task = self.task(task_id)
+        if task is None:
+            raise KeyError(f"no such task: {task_id!r}")
+        return task
+
+    # ---- rendering ------------------------------------------------------- #
+
+    def ordered_tasks(self) -> list[dict[str, Any]]:
+        """Tasks in execution order: a task that **produces** an artifact another
+        task **consumes** is listed before that consumer.
+
+        A stable topological sort over the ``produces``/``consumes`` ledger.
+        Tasks with no dependency between them keep their original order (ties
+        break by original position), so the view only reorders where a real
+        producer -> consumer edge forces it. A ``produces``/``consumes`` cycle
+        degrades gracefully — tasks still tangled in it are appended in original
+        order — so rendering never drops or duplicates a task. Pure: it does not
+        mutate the stored task order (the shared planner stays authoritative on
+        sequence; this is a render-time convenience only)."""
+        tasks = self.tasks
+        n = len(tasks)
+        if n < 2:
+            return list(tasks)
+        # Map each produced key to the task positions that produce it.
+        producer_positions: dict[str, list[int]] = {}
+        for i, task in enumerate(tasks):
+            for key in (task.get("produces") or []):
+                producer_positions.setdefault(key, []).append(i)
+        # Edge producer -> consumer for every consumed key; indegree per consumer.
+        successors: list[set[int]] = [set() for _ in range(n)]
+        indegree = [0] * n
+        for i, task in enumerate(tasks):
+            producers: set[int] = set()
+            for key in (task.get("consumes") or []):
+                for p in producer_positions.get(key, []):
+                    if p != i:
+                        producers.add(p)
+            for p in producers:
+                if i not in successors[p]:
+                    successors[p].add(i)
+                    indegree[i] += 1
+        # Kahn's algorithm; original position as a stable tie-break so
+        # independent tasks never shuffle.
+        def priority(i: int) -> tuple[int, int]:
+            foundation = (
+                (tasks[i].get("stream") or "").casefold() == "setup"
+                or any(key in (tasks[i].get("produces") or []) for key in SETUP_ENVIRONMENT_KEYS)
+            )
+            return (0 if foundation else 1, i)
+
+        ready = [priority(i) for i in range(n) if indegree[i] == 0]
+        heapq.heapify(ready)
+        order: list[int] = []
+        while ready:
+            _, i = heapq.heappop(ready)
+            order.append(i)
+            for j in sorted(successors[i]):
+                indegree[j] -= 1
+                if indegree[j] == 0:
+                    heapq.heappush(ready, priority(j))
+        if len(order) < n:  # produces/consumes cycle — keep the rest as-is.
+            placed = set(order)
+            order.extend(i for i in range(n) if i not in placed)
+        return [tasks[i] for i in order]
+
+    def render_summary(self, research: Any | None = None) -> str:
+        """A readable Markdown view of the Plan — the editable surface a Plan
+        editor revises directly; edits are reconciled back into plan.json
+        (see src/skills/planner/edit.md).
+
+        The view is generated **from plan.json** — the local cache of the shared
+        WeveNova plan, hydrated on pull (src/skills/planner/sync.md) — so it always
+        reflects the persisted plan (status + sync identity render straight off it).
+        Instead of dumping the raw Context bag as ``group -> key: value`` bullets,
+        it groups the sponsor's intent into human sections: an Overview, the
+        Scenarios in scope (each with its capabilities, backing system and
+        dependencies), the Systems, the scenario-dependency ledger, the Tasks, and
+        any pinned outputs.
+
+        ``research`` is an optional, best-effort Learn-research corpus
+        (workspace/plan/research-context.json) used only to *enrich* the view with
+        grounding links at render/refresh time; the plan renders fully without it.
+        """
+        lines: list[str] = []
+        self._render_header(lines)
+        self._render_overview(lines)
+        self._render_scenarios(lines, research)
+        self._render_systems(lines)
+        self._render_pending_decisions(lines)
+        self._render_scenario_deps(lines)
+        self._render_tasks(lines)
+        self._render_outputs(lines)
+        self._render_more_context(lines)
+        self._render_learn(lines, research)
+        return "\n".join(lines).rstrip() + "\n"
+
+    # ---- render helpers (one readable section each) --------------------- #
+
+    def _context_group(self, group: str) -> list[dict[str, Any]]:
+        return [e for e in self.context if e.get("group") == group]
+
+    def _first_value(self, group: str, key: str | None = None) -> Any:
+        for entry in self.context:
+            if entry.get("group") == group and (key is None or entry.get("key") == key):
+                return entry.get("value")
+        return None
+
+    def _agent_display(self) -> str:
+        """The agent's friendly name off the pinned ``essAgent`` output (captured
+        by /setup and synced to WeveNova), or a not-set placeholder."""
+        for art in self.outputs:
+            if art.get("state") != "Active":
+                continue
+            if art.get("kind") == "Agent" or art.get("key") == "essAgent":
+                attrs = art.get("attributes", {}) or {}
+                name = attrs.get("name") or attrs.get("schemaName") or attrs.get("slug")
+                if name:
+                    return str(name)
+        return "not set yet"
+
+    def _render_header(self, lines: list[str]) -> None:
+        d = self.data
+        objective = self.output_value_or_context("objective") or "(objective not set)"
+        lines.append(f"# ESS scenario plan — {objective}")
+        lines.append("")
+        agent = d.get("configuringAgentName") or self._agent_display()
+        pending = any(t.get("pendingSync") or t.get("pendingOutputs") for t in self.tasks)
+        plan_state = "Local draft — saved in this workspace; not shared"
+        if d.get("planId"):
+            plan_state = (
+                "Saved locally — awaiting shared confirmation"
+                if pending else "Shared plan — last retrieved copy"
+            )
+        header = (
+            f"**Status:** {d.get('status') or 'Draft'} | "
+            f"**Agent:** {agent} | **Plan:** {plan_state}"
+        )
+        if d.get("syncedAt"):
+            header += f" | **Last retrieved:** {d.get('syncedAt')}"
+        lines.append(header)
+        lines.append("")
+
+    def _render_overview(self, lines: list[str]) -> None:
+        market = self._first_value(MARKET_GROUP)
+        persona = self._first_value(SCENARIO_CONTEXT_GROUP, "persona")
+        jtbd = self._first_value(SCENARIO_CONTEXT_GROUP, "jtbd")
+        goals = self._context_group(BUSINESS_GOALS_GROUP)
+        criteria = self._context_group(ACCEPTANCE_GROUP)
+        other_ctx = [
+            e for e in self._context_group(SCENARIO_CONTEXT_GROUP)
+            if e.get("key") not in ("persona", "jtbd")
+        ]
+        if not any([market, persona, jtbd, goals, criteria, other_ctx]):
+            return
+        lines.append("## Overview")
+        lines.append("")
+        if market:
+            lines.append(f"- **Market / rollout wave:** {market}")
+        if persona:
+            lines.append(f"- **Audience:** {persona}")
+        if jtbd:
+            lines.append(f"- **Jobs to be done:** {jtbd}")
+        for entry in other_ctx:
+            lines.append(f"- **{humanize(entry.get('key', ''))}:** {entry.get('value')}")
+        lines.append("")
+        if goals:
+            lines.append("**Business goals**")
+            lines.append("")
+            for entry in goals:
+                lines.append(f"- {entry.get('value')}")
+            lines.append("")
+        if criteria:
+            lines.append("**Definition of done (pilot bar)**")
+            lines.append("")
+            for entry in criteria:
+                lines.append(f"- {entry.get('value')}")
+            lines.append("")
+
+    def _systems_by_area(self) -> dict[str, str]:
+        """``area -> system name`` from the ``system.<area>`` Context keys."""
+        systems: dict[str, str] = {}
+        for entry in self._context_group(SYSTEM_GROUP):
+            key = entry.get("key", "")
+            area = key[len("system."):] if key.startswith("system.") else key
+            systems[area] = entry.get("value", "")
+        return systems
+
+    @staticmethod
+    def _system_for_scenario(scenario_id: str, systems: dict[str, str]) -> str | None:
+        """Match a scenario to its backing system by area (a system area often
+        spans read/write scenarios, e.g. ``hr-profile`` backs ``hr-profile-read``
+        and ``hr-profile-write``). Longest matching area wins."""
+        best_area: str | None = None
+        for area in systems:
+            if (
+                scenario_id == area
+                or scenario_id.startswith(area + "-")
+                or area.startswith(scenario_id + "-")
+            ) and (best_area is None or len(area) > len(best_area)):
+                best_area = area
+        return systems.get(best_area) if best_area else None
+
+    def _capabilities_for(self, scenario_id: str) -> list[str]:
+        prefix = scenario_id + "."
+        caps: list[str] = []
+        for entry in self._context_group(CAPABILITY_GROUP):
+            key = entry.get("key", "")
+            if key.startswith(prefix):
+                caps.append(entry.get("value") or humanize(key[len(prefix):]))
+        return caps
+
+    def _render_scenarios(self, lines: list[str], research: Any) -> None:
+        scenarios = self.in_scope_scenarios()
+        if not scenarios:
+            return
+        systems = self._systems_by_area()
+        deps = self.scenario_dependency_status()
+        links = learn_links(research)
+        lines.append("## Scenarios in scope")
+        lines.append("")
+        for sid, label in scenarios.items():
+            lines.append(f"### {label or sid} (`{sid}`)")
+            system = self._system_for_scenario(sid, systems)
+            if system:
+                lines.append(f"Backed by **{system}**.")
+            lines.append("")
+            caps = self._capabilities_for(sid)
+            if caps:
+                lines.append("Capabilities:")
+                for cap in caps:
+                    lines.append(f"- {cap}")
+                lines.append("")
+            sdeps = [e for e in deps if e.get("scenario") == sid]
+            if sdeps:
+                parts = [
+                    f"`{e['dependsOn']}` ({e.get('kind')}, "
+                    f"{'in scope' if e.get('met') else 'missing — add it first'})"
+                    for e in sdeps
+                ]
+                lines.append(f"Depends on: {', '.join(parts)}")
+                lines.append("")
+            slinks = [link for link in links if link["scope"] == sid]
+            if slinks:
+                lines.append("Learn:")
+                for link in slinks:
+                    lines.append(f"- [{link['label']}]({link['url']})")
+                lines.append("")
+
+    def _render_systems(self, lines: list[str]) -> None:
+        systems = self._systems_by_area()
+        if not systems:
+            return
+        lines.append("## Systems")
+        lines.append("")
+        lines.append("| Area | System |")
+        lines.append("|------|--------|")
+        for area, name in systems.items():
+            lines.append(f"| {humanize(area)} | {name} |")
+        lines.append("")
+
+    def _render_pending_decisions(self, lines: list[str]) -> None:
+        pending = self.pending_decisions()
+        if not pending:
+            return
+        lines.extend([
+            "## Pending decisions", "",
+            "These do not block planning, sharing, or unrelated work. "
+            "Only tasks that need a decision must wait.", "",
+        ])
+        for entry in pending:
+            label = humanize(entry["key"].replace("system.", "").replace("owner.", ""))
+            lines.append(f"- **{label}:** {entry['value']}. {entry.get('description') or ''}".rstrip())
+        lines.append("")
+
+    def _render_scenario_deps(self, lines: list[str]) -> None:
+        # Show BOTH satisfied and unmet edges (whose dependent scenario is in
+        # scope) so a met dependency doesn't silently disappear from the view
+        # while `check-deps` still reports it.
+        status_edges = self.scenario_dependency_status()
+        if not status_edges:
+            return
+        lines.append("## Scenario dependencies")
+        lines.append("")
+        lines.append("| Scenario | Depends on | Kind | Status |")
+        lines.append("|----------|-----------|------|--------|")
+        for edge in status_edges:
+            status = "met" if edge.get("met") else "MISSING — add it first"
+            lines.append(
+                f"| {edge['scenario']} | {edge['dependsOn']} | {edge.get('kind')} | {status} |"
+            )
+        lines.append("")
+
+    def _render_tasks(self, lines: list[str]) -> None:
+        # Described by title + role; the "how" lives in each task's description
+        # (shown in task-brief), keeping the table scannable.
+        lines.append("## Tasks")
+        lines.append("")
+        if not self.tasks:
+            lines.append("_No tasks yet._")
+            lines.append("")
+            return
+        ordered = self.ordered_tasks()
+        # Group under a stream/theme heading when tasks carry one (e.g. "Workday",
+        # "Setup", "Authoring") so the sponsor reads the plan by workstream; the
+        # per-task State cell still shows the cross-stream sequencing (a task whose
+        # consumed artifacts aren't produced yet reads as "🔒 Not started").
+        # Streams are ordered by the earliest execution position of any task in
+        # them, and tasks keep execution order within a stream. A plan whose tasks
+        # carry no stream renders as a single flat table (unchanged).
+        if any((t.get("stream") or "").strip() for t in ordered):
+            for label, tasks in groupby(ordered, key=lambda t: (t.get("stream") or "").strip() or "Other"):
+                lines.append(f"### {label}")
+                lines.append("")
+                self._render_task_table(lines, list(tasks))
+                lines.append("")
+        else:
+            self._render_task_table(lines, ordered)
+            lines.append("")
+
+    def _render_task_table(self, lines: list[str], tasks: list[dict[str, Any]]) -> None:
+        # Design-aligned columns: a plain Step number (internal task ids stay
+        # hidden from the sponsor), the task, its role/owner, and a State cell
+        # whose icon carries the dependency signal — ✅ Complete / In progress /
+        # 🔒 Not started (locked while an upstream task still owes a consumed
+        # artifact) / Not started (ready) / 🔒 Blocked. The lock replaces the old
+        # numeric "Blocked by T#" column so dependent tasks read the way the UX
+        # intends: you see *that* a task is gated without leaking task ids.
+        lines.append("| Step | Task | Role / owner | State |")
+        lines.append("|------|------|--------------|-------|")
+        for step, task in enumerate(tasks, start=1):
+            lines.append(
+                f"| {step} <!-- task-id: {escape(task['id'])} --> | {task.get('title')} | "
+                f"{_render_assignee(task.get('assignedTo'))} | "
+                f"{self._task_state_label(task)} |"
+            )
+
+    def _task_state_label(self, task: dict[str, Any]) -> str:
+        """The design's State cell, one icon per state. ``✅ Complete`` /
+        ``🔄 In progress`` / ``🔒 Blocked`` map the stored state directly; a
+        ``NotStarted`` task reads as ``🔒 Not started`` while it still
+        :meth:`waiting_on` an upstream artifact (the render-time dependency lock)
+        and ``⬜ Not started`` once it's ready to pick up. Pure/read-only —
+        reflects the current produces/consumes ledger, never mutates it or the
+        stored task state."""
+        state = task.get("state") or "NotStarted"
+        if task.get("syncConflict"):
+            return "🔒 Needs review — " + task["syncConflict"]
+        if state == "Completed":
+            if task.get("pendingSync"):
+                return "✅ Complete locally — awaiting shared confirmation" if self.data.get("planId") else "✅ Complete locally — not shared"
+            return "✅ Complete"
+        if state == "InProgress":
+            return "🔄 In progress"
+        if state == "Blocked":
+            return "🔒 Blocked"
+        if self.waiting_on(task.get("id")):
+            return "🔒 Not started — waiting on " + self.blocking_reason(task["id"])
+        return "⬜ Not started — ready"
+
+    def _task_state_icon(self, task: dict[str, Any]) -> str:
+        """Just the state glyph behind :meth:`_task_state_label` — ``✅`` complete,
+        ``🔄`` in progress, ``🔒`` blocked or dependency-locked, ``⬜`` ready/not
+        started. Shared by the plan table and the chat task checklist so both
+        views speak one icon vocabulary. Pure/read-only."""
+        if task.get("syncConflict"):
+            return "🔒"
+        state = task.get("state") or "NotStarted"
+        if state == "Completed":
+            return "✅"
+        if state == "InProgress":
+            return "🔄"
+        if state == "Blocked":
+            return "🔒"
+        if self.waiting_on(task.get("id")):
+            return "🔒"
+        return "⬜"
+
+    def render_task_checklist(self) -> str:
+        """The chat-facing task readback the maker sees the moment a plan is saved
+        or changed: the same tasks as the plan's Tasks table, grouped by
+        workstream, but as a scannable checklist — ``<state-icon> <title> —
+        <role>`` per line — so the assistant renders the breakdown inline instead
+        of collapsing it to a bare count ("N tasks across M workstreams"). Reuses
+        :meth:`ordered_tasks` and the table's stream bucketing, so execution order
+        and the dependency lock (``🔒``) match the table exactly; a render-time
+        convenience that mutates nothing. Returns ``""`` when the plan has no
+        tasks (nothing to read back)."""
+        if not self.tasks:
+            return ""
+        ordered = self.ordered_tasks()
+        lines: list[str] = []
+
+        def emit(tasks: list[dict[str, Any]]) -> None:
+            for task in tasks:
+                lines.append(
+                    f"- {self._task_state_icon(task)} {task.get('title')} "
+                    f"— {_render_assignee(task.get('assignedTo'))} "
+                    f"— {self._task_state_label(task).split(' ', 1)[1]}"
+                )
+
+        if any((t.get("stream") or "").strip() for t in ordered):
+            for index, (label, tasks) in enumerate(groupby(
+                ordered, key=lambda t: (t.get("stream") or "").strip() or "Other",
+            )):
+                if index:
+                    lines.append("")
+                lines.append(f"**{label}**")
+                emit(list(tasks))
+        else:
+            emit(ordered)
+        return "\n".join(lines)
+
+    def _render_outputs(self, lines: list[str]) -> None:
+        active = [a for a in self.outputs if a.get("state") == "Active"]
+        if not active:
+            return
+        lines.append("## Produced outputs")
+        lines.append("")
+        lines.append("| Key | Kind | Attributes | By task |")
+        lines.append("|-----|------|------------|---------|")
+        for art in active:
+            attrs = ", ".join(f"{k}={v}" for k, v in art.get("attributes", {}).items())
+            lines.append(
+                f"| {art.get('key')} | {art.get('kind')} | {attrs} | "
+                f"{art.get('producedByTaskId')} |"
+            )
+        lines.append("")
+
+    def _render_more_context(self, lines: list[str]) -> None:
+        """Any Context group the sections above don't consume — rendered as
+        readable bullets so no captured intent is silently dropped."""
+        extras: dict[str, list[dict[str, Any]]] = {}
+        for entry in self.context:
+            group = entry.get("group") or "other"
+            if group in _STRUCTURED_GROUPS:
+                continue
+            extras.setdefault(group, []).append(entry)
+        if not extras:
+            return
+        lines.append("## More context")
+        lines.append("")
+        for group in sorted(extras):
+            lines.append(f"**{humanize(group)}**")
+            for entry in extras[group]:
+                lines.append(f"- {humanize(entry.get('key', ''))}: {entry.get('value')}")
+            lines.append("")
+
+    def _render_learn(self, lines: list[str], research: Any) -> None:
+        links = learn_links(research)
+        if not links:
+            return
+        lines.append("## Learn references")
+        lines.append("")
+        lines.append(
+            "_Grounding pages this plan was researched from — refreshed from "
+            "Microsoft Learn at render time._"
+        )
+        lines.append("")
+        for link in links[:15]:
+            suffix = f" — {humanize(link['scope'])}" if link.get("scope") else ""
+            lines.append(f"- [{link['label']}]({link['url']}){suffix}")
+        lines.append("")
+
+    def output_value_or_context(self, key: str) -> Any:
+        for entry in self.context:
+            if entry.get("key") == key:
+                return entry.get("value")
+        return None
+
+
+def _render_assignee(assigned: dict[str, Any] | None) -> str:
+    if not assigned:
+        return "unassigned"
+    role = assignee_role_id(assigned)
+    if assigned.get("type") == "Role":
+        return role or "unassigned"
+    oid = assignee_user_oid(assigned) or "?"
+    return f"{oid} (as {role})" if role else oid

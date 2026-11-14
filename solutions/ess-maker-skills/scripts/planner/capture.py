@@ -1,0 +1,468 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""
+ESS Maker Kit — Planner: capturing what a Task produced (observe mode).
+
+A Task declares the output *keys* it should yield in ``produces`` (grounded
+from the Learn doc). When the assignee finishes, the ADK fills a value for each
+key one of two ways, then confirms before pinning it onto the Plan's ledger:
+
+  (a) **Observe** — read the value(s) from the kit state the action actually
+      changed. This module implements those deterministic detectors. The
+      canonical case is ``/setup``: the ADK diffs ``.local/config.json`` and pins
+      **every** id + name (and any other artifact) a skill recorded there — the
+      environment, the cloned agent, connections, apps, or an unknown shape — not
+      just one hard-coded value (:func:`detect_config_artifacts`).
+  (b) **Ask** — the skill asks the assignee to supply the value (used for
+      manual/portal/external steps, or anything not observable). This module
+      provides :func:`ask_artifact` to shape that answer into a ``PlanArtifact``.
+
+Detectors never trust the agent's narration — they diff a before/after snapshot
+of real local state. All values are confirmed with the assignee (in chat) before
+:meth:`planner.plan_model.Plan.add_output` pins them.
+
+Local file IO only; no network.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import os
+from typing import Any
+
+from .plan_model import TENANT_INVENTORY_KEY, plan_artifact
+
+CONFIG_PATH = os.path.join(".local", "config.json")
+
+# Config keys that are bookkeeping/status, never artifacts to pin.
+_CONFIG_NOISE_KEYS = {"setup"}
+
+# Which Task actions have an observe-mode detector today. Anything not listed
+# falls back to ask-mode (b). This is metadata the CLI/skill can surface.
+OBSERVE_DETECTORS: dict[str, str] = {
+    "setup": "config-artifacts",       # /setup -> every id+name in config.json
+    "discover": "inventory-results",   # /discover -> tenantInventory summary from results.json
+}
+
+
+def read_config(path: str | os.PathLike[str] = CONFIG_PATH) -> dict[str, Any]:
+    """An absent first-run config is normal; unreadable/corrupt state is not."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Cannot read setup configuration {path}: invalid JSON; repair it before capturing setup.") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Setup configuration {path} must be a JSON object.")
+    return data
+
+
+def _read_json_object(path: str) -> dict[str, Any]:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def workspace_setup_ready(config_path: str | os.PathLike[str] = CONFIG_PATH) -> bool:
+    """Whether canonical setup state reports this workspace's active agent ready.
+
+    The same rule as ``auth.is_connect_ready()`` and the kit's global setup gate:
+    ``setup/config.json`` beside ``config_path`` (``.local/setup/config.json``) has
+    ``schema_version`` 4 and an ``agents`` entry whose ``agent.workspace_slug``
+    matches ``activeAgent`` in ``config_path`` with ``connect_ready: true``. The
+    legacy ``setup`` field in ``config.json`` is never consulted; ``/setup`` writes
+    it when the workspace is materialized, before the remaining foundation steps
+    finish. Missing or unreadable state reads as not ready, so the planner points
+    the person to ``/setup``, which owns repairing it. Kept import-light instead of
+    calling ``auth`` so planner commands do not load MSAL or requests.
+    """
+    config_path = os.fspath(config_path)
+    config = _read_json_object(config_path)
+    state = _read_json_object(os.path.join(os.path.dirname(config_path), "setup", "config.json"))
+    agents = state.get("agents")
+    active_slug = config.get("activeAgent")
+    if state.get("schema_version") != 4 or not isinstance(agents, dict):
+        return False
+    if not isinstance(active_slug, str) or not active_slug:
+        return False
+    return any(
+        isinstance(agent_state, dict)
+        and isinstance(agent_state.get("agent"), dict)
+        and agent_state["agent"].get("workspace_slug") == active_slug
+        and agent_state.get("connect_ready") is True
+        for agent_state in agents.values()
+    )
+
+
+def config_snapshot(config: dict[str, Any]) -> dict[str, Any]:
+    """A deep copy of the **whole** ``config.json`` — the setup capture diffs the
+    entire file so it can pin **every** id + name (and any other artifact a skill
+    recorded), not just the environment/agent. Bookkeeping keys (e.g. ``setup``)
+    are ignored by the detectors, not stripped here."""
+    return copy.deepcopy(config) if isinstance(config, dict) else {}
+
+
+def snapshot_config(path: str | os.PathLike[str] = CONFIG_PATH) -> dict[str, Any]:
+    """Convenience: read config.json and return the detector snapshot."""
+    return config_snapshot(read_config(path))
+
+
+def detect_environment(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    task_id: str,
+    key: str = "primaryEnvironment",
+) -> dict[str, Any] | None:
+    """Detect an Environment artifact from a ``config.json`` before/after diff.
+
+    Returns a ``PlanArtifact`` when ``/setup`` bound/recorded an environment
+    that wasn't reflected before (a new/changed ``dataverseEndpoint`` or
+    ``environmentId``, or setup transitioning to ``"complete"``), else ``None``.
+    ``/setup`` records the environment it selected (it never creates one) once
+    it finishes creating or connecting the agent.
+
+    ``environmentId`` is a GUID assigned when the environment is created and is
+    stable thereafter; ``dataverseEndpoint`` is the org URL. Guided DA setup
+    records only the ``environmentId``, so its environment is pinned without an
+    ``environmentUrl``; older workspace configs may also carry the endpoint. A
+    URL without an ID is a partial local observation, not a shareable
+    Environment completion.
+    """
+    endpoint = after.get("dataverseEndpoint")
+    env_id = after.get("environmentId")
+    if not endpoint and not env_id:
+        return None
+
+    became_complete = before.get("setup") != "complete" and after.get("setup") == "complete"
+    endpoint_changed = endpoint and endpoint != before.get("dataverseEndpoint")
+    env_changed = env_id and env_id != before.get("environmentId")
+    if not (became_complete or endpoint_changed or env_changed):
+        return None
+
+    attributes: dict[str, Any] = {}
+    if env_id:
+        attributes["environmentId"] = env_id
+    if endpoint:
+        attributes["environmentUrl"] = endpoint
+    if not attributes:
+        return None
+
+    inventory_ref = f"Environment:{env_id}" if env_id else ""
+    return plan_artifact(
+        key,
+        "Environment",
+        attributes,
+        produced_by_task_id=task_id,
+        inventory_ref=inventory_ref,
+        source="Agent",
+    )
+
+
+def detect_agent(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    task_id: str,
+    key: str = "essAgent",
+) -> dict[str, Any] | None:
+    """Detect the ESS **Agent** artifact from a ``config.json`` before/after diff.
+
+    ``/setup`` connects to the deployed ESS agent and **clones it** — recording
+    the agent identity (``botId``, ``schemaName``, ``name``, local ``folder`` /
+    ``slug``) into ``.local/config.json`` and its components under
+    ``workspace/agents/<slug>/``. Returns an ``Agent`` ``PlanArtifact`` when that
+    identity appears or changes, else ``None`` (nothing to pin). This is the
+    second half of the ``/setup`` capture — the environment is :func:`detect_environment`.
+    """
+    agent = after.get("agent") or {}
+    bot_id = agent.get("botId")
+    if not bot_id and not agent.get("schemaName"):
+        return None
+    if agent == (before.get("agent") or {}):
+        return None  # unchanged
+
+    attributes: dict[str, Any] = {
+        k: agent[k] for k in ("botId", "schemaName", "name", "folder", "slug")
+        if agent.get(k)
+    }
+    if not attributes:
+        return None
+    inventory_ref = f"Agent:{bot_id}" if bot_id else ""
+    return plan_artifact(
+        key,
+        "Agent",
+        attributes,
+        produced_by_task_id=task_id,
+        inventory_ref=inventory_ref,
+        source="Agent",
+    )
+
+
+# --- Generic config-artifact capture -------------------------------------------------
+# "Capture all ids + names in config, plus any other artifact a skill produced."
+# The environment (a top-level scalar pair) and the cloned agent are recognised for
+# nicer kinds/keys; any OTHER id-bearing object (or list of objects) is captured too.
+
+def _artifact_attrs(obj: dict[str, Any]) -> dict[str, Any]:
+    """The id / name / locator scalars that identify an artifact — captured
+    generically (ids, names, slugs, schema names, urls/endpoints, folders, refs).
+    Booleans and nested containers are skipped; only identifying scalars are kept."""
+    attrs: dict[str, Any] = {}
+    for k, v in obj.items():
+        if isinstance(v, bool) or not isinstance(v, (str, int)):
+            continue
+        kl = k.lower()
+        if (
+            kl == "id" or kl.endswith("id")
+            or "name" in kl
+            or kl in ("slug", "folder")
+            or kl.endswith("url") or kl.endswith("endpoint")
+            or kl.endswith("ref") or "reference" in kl
+        ):
+            attrs[k] = v
+    return attrs
+
+
+def _has_id(attrs: dict[str, Any]) -> bool:
+    return any(k.lower() == "id" or k.lower().endswith("id") for k in attrs)
+
+
+def _first_id(attrs: dict[str, Any]) -> Any:
+    for k, v in attrs.items():
+        if k.lower() == "id" or k.lower().endswith("id"):
+            return v
+    return ""
+
+
+def _infer_kind(key: str, obj: dict[str, Any]) -> str:
+    """Best-effort kind for a captured config object; falls back to ``Custom``."""
+    k = key.lower()
+    if "connection" in k or obj.get("connectionId") or obj.get("connectionReferenceId"):
+        return "Connection"
+    if "entra" in k or "app" in k or obj.get("appId") or obj.get("objectId"):
+        return "EntraApp"
+    if "agent" in k or obj.get("botId"):
+        return "Agent"
+    if "environment" in k or obj.get("environmentId"):
+        return "Environment"
+    if "knowledge" in k or "source" in k:
+        return "KnowledgeSource"
+    return "Custom"
+
+
+def _sweep_value(
+    key: str,
+    value: Any,
+    before_value: Any,
+    *,
+    task_id: str,
+) -> list[dict[str, Any]]:
+    """Emit a ``PlanArtifact`` for each changed id-bearing object under a config
+    key — handling either a single object or a list of objects."""
+    candidates: list[tuple[str, dict[str, Any], Any]] = []
+    if isinstance(value, dict):
+        candidates.append((key, value, before_value if isinstance(before_value, dict) else {}))
+    elif isinstance(value, list):
+        before_list = before_value if isinstance(before_value, list) else []
+        for i, element in enumerate(value):
+            if isinstance(element, dict):
+                sub = _first_id(_artifact_attrs(element)) or element.get("name") or str(i)
+                before_el = before_list[i] if i < len(before_list) else {}
+                candidates.append((f"{key}.{sub}", element, before_el))
+
+    out: list[dict[str, Any]] = []
+    for art_key, obj, before_obj in candidates:
+        if obj == before_obj:
+            continue  # unchanged
+        attrs = _artifact_attrs(obj)
+        if not _has_id(attrs):
+            continue
+        kind = _infer_kind(art_key, obj)
+        id_val = _first_id(attrs)
+        out.append(plan_artifact(
+            art_key,
+            kind,
+            attrs,
+            produced_by_task_id=task_id,
+            inventory_ref=f"{kind}:{id_val}" if id_val else "",
+            source="Agent",
+        ))
+    return out
+
+
+def detect_config_artifacts(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    task_id: str,
+    env_key: str = "primaryEnvironment",
+    agent_key: str = "essAgent",
+) -> list[dict[str, Any]]:
+    """Generic ``/setup`` (and any config-writing skill) capture — pin **every**
+    id + name (and any other artifact) a skill recorded in ``config.json`` that
+    changed since ``before``.
+
+    Not env/agent-only: the environment (a top-level scalar pair) and the cloned
+    agent get recognised kinds/keys, and **any other** top-level object — or list
+    of objects — carrying an id is captured too (a Connection, an Entra app, a
+    knowledge source, or an unknown ``Custom`` shape). Artifacts a skill writes
+    *outside* ``config.json`` are covered by the per-kind detector registry
+    (design §12.3); this is the config-file half of that contract.
+    """
+    before = before or {}
+    after = after or {}
+    artifacts: list[dict[str, Any]] = []
+    handled = set(_CONFIG_NOISE_KEYS)
+
+    env = detect_environment(before, after, task_id=task_id, key=env_key)
+    if env is not None:
+        artifacts.append(env)
+    handled.update({"environmentId", "dataverseEndpoint"})
+
+    agent = detect_agent(before, after, task_id=task_id, key=agent_key)
+    if agent is not None:
+        artifacts.append(agent)
+    handled.add("agent")
+    # The discovered-agent *list* (`agents`) mirrors the active `agent` and is
+    # tenant inventory, not a per-task output — never sweep it into task outputs
+    # (that would duplicate the agent and attribute every discovered agent here).
+    handled.add("agents")
+
+    # The generic sweep of any OTHER id-bearing object requires a **real
+    # before-snapshot** so "changed since before" is meaningful. With no snapshot
+    # we cannot tell a freshly-produced artifact from pre-existing config, so we
+    # pin only the recognised /setup outputs (environment + agent) and skip the
+    # sweep — otherwise every pre-existing connection/app on an existing kit
+    # config would be falsely attributed to this task. Capture a snapshot before
+    # the action (CLI ``snapshot-config``) and pass it as ``before`` to enable it.
+    if not before:
+        return artifacts
+    for key, value in after.items():
+        if key in handled:
+            continue
+        artifacts.extend(_sweep_value(key, value, before.get(key), task_id=task_id))
+    return artifacts
+
+
+def ask_artifact(
+    key: str,
+    kind: str,
+    attributes: dict[str, Any],
+    *,
+    task_id: str,
+    inventory_ref: str | None = None,
+) -> dict[str, Any]:
+    """Shape an assignee-supplied answer (capture mode b) into a ``PlanArtifact``.
+
+    Used when a Task's output is not observable from kit state (a manual/portal/
+    external step) — the skill asks the assignee for the value(s) and passes them
+    here. Provenance is stamped ``source="User"`` because the person supplied it.
+    """
+    return plan_artifact(
+        key,
+        kind,
+        attributes,
+        produced_by_task_id=task_id,
+        inventory_ref=inventory_ref,
+        source="User",
+    )
+
+
+# --- Discovery capture (observe mode for /discover) --------------------------------
+# The tenant inventory is the one backbone output the config sweep can't see:
+# ``/discover`` writes the full picture to the durable local mirror
+# (``.local/inventory.json``) and only leaves two string pointers in ``config.json``
+# (``inventoryPath``/``inventoryUpdatedAt``), so :func:`detect_config_artifacts` — which
+# pins id-bearing *objects* — skips it. This detector reads the run's ``results.json``
+# instead and shapes a single ``Custom`` ``tenantInventory`` artifact so the discover
+# task can close and downstream tasks read the summary off the plan. The full
+# per-resource picture stays in the mirror, referenced by ``inventoryPath``.
+
+DISCOVER_RESULTS_PATH = os.path.join("workspace", "discover", "results.json")
+INVENTORY_MIRROR_PATH = os.path.join(".local", "inventory.json")
+
+
+def summarize_discovery(
+    results: dict[str, Any],
+    *,
+    task_id: str,
+    key: str = TENANT_INVENTORY_KEY,
+    inventory_path: str = INVENTORY_MIRROR_PATH,
+    results_path: str = DISCOVER_RESULTS_PATH,
+    updated_at: str | None = None,
+) -> dict[str, Any] | None:
+    """Shape a ``/discover`` run's ``results.json`` into a pinnable ``tenantInventory``
+    artifact (kind ``Custom``), or ``None`` when the run **aborted**.
+
+    An aborted run wrote nothing and left the mirror untouched, so there is nothing
+    to pin — the discover task legitimately stays open. A **degraded** run (the crawl
+    succeeded but the server write failed, exit ``2``) still refreshed the durable
+    local mirror, so it IS captured; the artifact records ``writeDegraded="true"`` so
+    the plan stays honest about it. A **sync-withheld** run (the crawl succeeded and
+    the service was reachable, but the whole-inventory payload was withheld for
+    safety, exit ``2``) likewise refreshed the mirror and IS captured, but records
+    ``syncWithheld="true"`` plus the reason — otherwise the clean ``writePath`` and
+    ``writeDegraded="false"`` would read as a server persist that never happened. The
+    full per-resource picture is not copied onto the plan — the artifact carries
+    per-kind counts plus a pointer to the mirror (``inventoryPath``) that holds the
+    detail.
+    """
+    if not isinstance(results, dict):
+        return None
+    if results.get("aborted") or results.get("status") == "aborted":
+        return None
+
+    totals = results.get("totals") or {}
+    discovered = results.get("discovered") or {}
+    # Per-kind counts, sorted, as a compact human-readable summary. The detail
+    # (natural keys + attributes) stays in the durable mirror at ``inventory_path``.
+    counts = {
+        kind: len(rows)
+        for kind, rows in discovered.items()
+        if isinstance(rows, list) and rows
+    }
+    resources = " ".join(f"{kind}:{counts[kind]}" for kind in sorted(counts))
+
+    # Three distinct "did this reach the server?" states must stay honest on the
+    # plan. ``writeDegraded`` covers a failed write path; separately, a sync can be
+    # *withheld for safety* — the service was reachable (``writeDegraded`` is false
+    # and ``writePath`` is a real server path), but the whole-inventory payload was
+    # not submitted. Without carrying the withheld flag that run reads as persisted,
+    # so pin it (and its reason) onto the artifact.
+    withheld_reason = str((results.get("sync") or {}).get("blockedReason") or "")
+    attributes: dict[str, Any] = {
+        "inventoryPath": inventory_path,
+        "resultsPath": results_path,
+        "resourceCount": int(totals.get("mapped", 0) or 0),
+        "kindsCrawled": int(totals.get("kindsCrawled", len(counts)) or 0),
+        "writePath": str(results.get("writePath", "") or ""),
+        "writeDegraded": "true" if results.get("writeDegraded") else "false",
+        "syncWithheld": "true" if withheld_reason else "false",
+    }
+    if withheld_reason:
+        attributes["syncWithheldReason"] = withheld_reason
+    if resources:
+        attributes["resources"] = resources
+    correlation_id = results.get("correlationId")
+    if correlation_id:
+        attributes["correlationId"] = str(correlation_id)
+    if updated_at:
+        attributes["updatedAt"] = str(updated_at)
+
+    inventory_ref = f"Inventory:{correlation_id}" if correlation_id else ""
+    return plan_artifact(
+        key,
+        "Custom",
+        attributes,
+        produced_by_task_id=task_id,
+        inventory_ref=inventory_ref,
+        source="Discovered",
+    )

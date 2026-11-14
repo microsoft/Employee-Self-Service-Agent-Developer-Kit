@@ -7,6 +7,11 @@ setup-required stop.** Use both the user's message and the invoked command
 prompt: `/connect workday` remains a Connect request when `workday` is supplied
 as the command argument.
 
+Do the classification and any setup-gate reads **silently, in one pass** — do
+not narrate them ("config missing", "setup not ready", "starting setup",
+"loading instructions"). The maker's first visible output is the setup-required
+Message block or the response from the experience you route to.
+
 ### Setup-independent routes
 
 Apply these routes before the ordinary setup gate below. For a matching request,
@@ -32,14 +37,30 @@ The selected entry point owns any metadata checks and missing-state handling.
   `connect_ready: true`; Workday connections may be the remaining runtime
   readiness blocker. A missing `.local` directory or a `Path does not exist`
   result is expected unprepared state, not a terminal Connect failure.
-- If the user typed `/setup` or explicitly asked to run setup, proceed with
-  setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
-- If the user typed `/planner` or asked to **plan a rollout / plan an ESS
-  deployment / set up ESS for the first time / where do I start / how do I get
-  started / "what am I assigned?"**, proceed with planning — read
-  `src/skills/planner/SKILL.md` and follow it. The planner is allowed to run
-  before setup because it defines the greenfield deployment and emits setup as
-  the first task. Do not route these requests directly to setup.
+- If the user typed `/setup` or gave the direct setup invocation `run setup`
+  (the Copilot CLI has no typed `/setup`, so `run setup` is its
+  command-equivalent), proceed with setup — read
+  `src/skills/foundation-setup/SKILL.md` and follow it. While Planner is
+  briefing the maker's assigned setup task, a natural-language request to start
+  it ("start setup") enters setup the same way; do not ask the maker to type
+  `/setup`. Any other open-ended or exploratory setup phrasing — "set up ESS",
+  "I want to set up ESS", "set up ESS for the first time", "deploy ESS", "where
+  do I start", "how do I get started" — is not a setup route; it follows the
+  setup gate below.
+- If the user typed `/planner` or explicitly requested a planning or plan
+  action — **plan a rollout / plan my ESS deployment / create a plan / build a
+  scenario plan / show my plan status / "what am I assigned?"** — proceed with
+  planning: read `src/skills/planner/SKILL.md` and follow it. The planner may
+  run before setup because it defines the greenfield deployment and emits setup
+  as a task. A saved `workspace/plan/plan.json` can identify the plan for an
+  explicit request, but its presence alone is not a planning request.
+  Open-ended first-time requests such as "where do I start" or "how do I get
+  started" are not planning requests; `/setup` offers **Plan my ESS rollout
+  first** when no plan exists.
+- If the user typed `/roles` or explicitly asked to assign, attest, or look up
+  who holds a rollout role, proceed without setup — read
+  `src/skills/roles/SKILL.md` and follow it. That skill requires an existing
+  plan, not completed setup.
 - If the user explicitly asks to create or generate evaluation test sets,
   proceed without setup — read
   `src/skills/evaluations/dispatcher/SKILL.md` and follow it. This exception is
@@ -168,7 +189,8 @@ Use this setup-required Message block and finish the request:
 **Message:**
 
 Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up your
-environment. Type `/setup` to get started — it only takes a couple minutes.
+environment. In VS Code, type `/setup`; in the Copilot CLI, say **`run setup`**.
+It only takes a couple minutes.
 
 **End message.**
 
@@ -559,6 +581,8 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | User intent                                                                                             | Skill to read                                                                                 |
 | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Run common ESS foundation setup (`/setup`)                                                              | `src/skills/foundation-setup/SKILL.md`                                                        |
+| Plan a rollout / generate a scenario Plan / "what am I assigned?" (`/planner`)                          | `src/skills/planner/SKILL.md`                                                                 |
+| Assign/attest a rollout role to a person (`/roles`)                                                     | `src/skills/roles/SKILL.md`                                                                   |
 | Provision/connect Workday for the active ESS HR agent (`/connect workday` or `/connect-workday`)        | `src/skills/connect/SKILL.md`                                                                 |
 | Connect to Workday                                                                                      | `src/skills/connect/SKILL.md`                                                                 |
 | Create a topic                                                                                          | Stop: topic creation is not yet available; do not read a topic-authoring skill or write files |
@@ -570,6 +594,7 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | Test/debug a topic                                                                                      | `src/skills/topics/test/SKILL.md`                                                             |
 | Test/debug a workflow                                                                                   | `src/skills/workflows/test/SKILL.md`                                                          |
 | Run pre-deployment readiness check                                                                      | `src/skills/flightcheck/SKILL.md`                                                             |
+| Discover / crawl tenant inventory (`/discover`)                                                         | `src/skills/discover/SKILL.md`                                                                |
 | Fix compile errors                                                                                      | `src/skills/cleanup/SKILL.md`                                                                 |
 | Generate evaluation test sets                                                                           | `src/skills/evaluations/dispatcher/SKILL.md`                                                  |
 | Update/modify evaluation test cases                                                                     | `src/skills/evaluations/update/SKILL.md`                                                      |
@@ -593,6 +618,23 @@ JSON format", "something went wrong with Workday".
 **Trigger phrases for flightcheck:** "readiness check", "pre-deployment check",
 "flightcheck", "flight check", "is my agent ready", "validate my environment",
 "check my setup", "pre-flight", "deployment readiness", "run validation".
+
+**Trigger phrases for planner (explicit planning intent):** "plan a rollout",
+"plan my ESS deployment", "create a plan", "scenario plan", "show my plan
+status", "what am I assigned", "what are my tasks", "my tasks", "what's
+assigned to me", "/planner". Open-ended first-time requests with no explicit
+planning intent — "where do I start", "how do I get started", "I want to deploy
+ESS", "set up ESS", "set up ESS for the first time" — are neither planner nor
+setup triggers; they follow the setup gate, and `/setup` (or the Copilot CLI's
+`run setup`) offers **Plan my ESS rollout first** when no plan exists.
+
+**Trigger phrases for roles:** "assign the ServiceNow admin role to <person>",
+"make <person> the Workday admin", "give <person> the <role> role", "who holds
+the <role> role", "who's the ServiceNow admin", "assign roles for this plan",
+"attest a role", "/roles". **Not** a roles request: "what are my tasks / what am
+I assigned?" — that is the planner (Flow 2), which reads back the roles this flow
+records. Roles attestation needs an existing plan; if none exists, route to
+`/planner` first.
 
 **Landing-page configuration invocation:** Before invoking ANY tool from the
 `ess-landing-page-config` MCP server, read and follow

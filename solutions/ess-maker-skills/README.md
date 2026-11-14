@@ -1,6 +1,6 @@
 # ESS Maker Kit
 
-Customize your Employee Self-Service (ESS) agent using GitHub Copilot in VS Code — no deep platform knowledge required. Describe what you need in plain English and the kit generates topic YAML, workflow JSON, adaptive cards, and integration configurations for you.
+Plan your Employee Self-Service (ESS) rollout and customize your agent using GitHub Copilot in VS Code — no deep platform knowledge required. Describe what you need in plain English to build a grounded rollout plan, coordinate owners, and generate topic YAML, workflow JSON, adaptive cards, and integration configurations.
 
 > **This repo is intended as an example or learning tool.** It demonstrates how to customize Employee Self-Service (ESS) agents using GitHub Copilot in VS Code. It is not a Microsoft product or a supported service. See [SUPPORT.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SUPPORT.md) for the support model and [SECURITY.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SECURITY.md) for reporting security issues.
 
@@ -11,6 +11,67 @@ Building and customizing an ESS agent means working across topic YAML, Power Aut
 ---
 
 ## Features
+
+### ESS Rollout Planning
+
+Run `/planner` to work out which employee scenarios to enable, which systems to
+connect, and who owns each part. **Planning does not require a deployed ESS agent
+or completed `/setup`.** Unknown systems or owners are saved as pending decisions
+instead of blocking the draft.
+
+- **Scenario-first grounding** - captures your goals, researches the relevant
+  Microsoft Learn guidance, and distinguishes ESS-native connector paths from
+  custom integration work. The proposed HR or IT experience is confirmed with the draft.
+- **Dependency-aware tasks** - groups work by workstream, records responsible
+  roles, prerequisites, required outputs, and success criteria, and identifies
+  ready work without starting it automatically.
+- **Editable plans** - imports an existing plan or reconciles edits to the
+  generated Markdown view. CSV review produces proposed changes for confirmation,
+  not automatic spreadsheet-driven updates.
+- **Early evaluation preview** - saves representative employee prompts and
+  expected behaviors alongside the scenarios. These are **draft cases, not run
+  tests**; the existing authoring and evaluation commands generate actual tests
+  when the connected agent and topics are available.
+
+The local draft is saved in `workspace/plan/plan.json`, with an editable view at
+`workspace/plan/ESS-scenario-plan.md`. Resume it in the same workspace with
+`/planner`. Sharing stores a **shared draft**; activation is a separate, explicit
+action that starts execution and archives any previous active plan. Once shared,
+the local files are a cache of the shared plan. A local save is not confirmation
+that a shared update succeeded.
+
+| Example prompt in Copilot Chat | Result |
+|--------------------------------|--------|
+| `/planner plan an ESS HR rollout for Workday employee profiles and ServiceNow HR cases` | Capture the scope and build a draft grounded in the relevant documentation |
+| `/planner show my plan status` | Resume the plan and report progress, pending decisions, and the next action |
+| `/planner share this plan` | Store the reviewed local draft in the shared planner |
+| `/planner activate this plan` | Activate the shared draft for execution |
+| `/planner what am I assigned?` | Show the caller's assigned work and its prerequisites |
+
+A Power Platform administrator creates the rollout environment in the Power
+Platform admin center; `/setup` does not create environments. When a task needs
+that environment, its owner runs `/setup` to connect their workspace to the
+environment's ESS agent. Other collaborators must connect their own workspace to
+the same environment before doing environment-dependent work. The planner
+captures verified setup and task outputs back into the plan after you confirm
+them; dependent shared work waits for shared confirmation.
+
+For CLI commands, review/export details, and sync behavior, see the
+[Planner README](scripts/planner/README.md).
+
+### Rollout Role Attestation
+
+After sharing and activating a plan, run `/roles` to record who holds an
+attestable rollout role, such as Workday admin, ServiceNow admin, or Power
+Platform administrator. The kit resolves the named person against the directory,
+asks you to confirm the match, and records the assignment on the shared plan.
+For example: `/roles assign the ServiceNow admin role to <person>`.
+
+Attestation makes the role's work visible to that person. They use
+`/planner what am I assigned?` to see and pick up tasks; `/roles` is for assigning,
+listing, or revoking role attestations, not for listing personal tasks.
+**Attestation does not grant Entra, Power Platform, or external-system
+permissions.** Actual access is checked during setup and task execution.
 
 ### 🔌 Guided DA-GA Setup
 
@@ -261,6 +322,8 @@ Legacy/custom-engine documentation is available on
 
 This toolkit is designed for:
 
+- **Planning ESS rollouts before environment setup**, with grounded scenarios,
+  dependency-ordered tasks, role ownership, and shared progress
 - **Connecting to an existing editable DA Dev agent**
 - **Authoring supported Copilot Studio components locally**
 - **Generating evaluation files**
@@ -341,6 +404,23 @@ The repository also includes [Workday](src/mcp/workday/) and
 [ServiceNow](src/mcp/servicenow/) MCP tools for separate development tasks.
 These are not required by the guided DA Workday connection.
 
+### Planner and WorkIQ MCP Servers
+
+Planner prepares the solution's `.vscode/mcp.json` from the committed
+`.vscode/mcp.defaults.json`, preserving custom server entries. Configuration
+alone does not approve shared access or share a plan.
+
+| Server | Purpose | Requirements |
+|--------|---------|--------------|
+| `ess-planner` | Read and update shared plans, tasks, and role attestations through the WeveNova planner service | Host trust approval, Microsoft sign-in, and shared-plan access |
+| `workiq-preview` | Resolve people when the tenant blocks the normal directory lookup | Node.js with `npx`, Microsoft 365 Copilot, and WorkIQ access; the workspace pins `@microsoft/workiq@1.0.0` |
+
+Person resolution first uses Microsoft Graph's `User.ReadBasic.All` permission.
+If tenant policy prevents that sign-in or consent, the guided flow can use
+WorkIQ as a fallback and still confirms the person before assigning them.
+WorkIQ is not needed for local drafting. You can keep a draft local without
+approving shared access; shared saves and assignments require the planner service.
+
 ---
 
 ## Getting Started
@@ -349,12 +429,25 @@ These are not required by the guided DA Workday connection.
 
 - [VS Code](https://code.visualstudio.com/) (latest version)
 - [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot-chat) extension (with an active subscription)
+- Python and the kit's [script dependencies](scripts/requirements.txt), installed by the one-shot installer
 - Access to a Power Platform environment with an editable DA Dev agent
 - Permission to open that agent in Copilot Studio
+
+Local rollout planning needs no existing environment or deployed agent. See
+[Planner and WorkIQ MCP Servers](#planner-and-workiq-mcp-servers) for the
+additional requirements for sharing plans and resolving owners.
 
 ### Recommended Models
 
 This kit relies on structured instructions and multi-step tool use. Not all models handle this reliably. Behaviors below were observed during kit development; results may change as models are updated.
+
+The solution's `.vscode/settings.json` keeps thinking and grouped tool activity
+collapsed and disables the experimental persistent-progress display. These are
+display defaults only: they do not change the selected model, reasoning effort,
+or token usage, and do not hide approval prompts or every file/tool affordance.
+Open `solutions/ess-maker-skills` as the workspace to use them; adjust the
+workspace settings if you prefer the expanded display. Older VS Code versions
+may not support these experimental settings.
 
 **Last tested:** 2026-05-04
 
@@ -387,7 +480,9 @@ Select the 2-core machine type. Once it starts, open `solutions/ess-maker-skills
 
 **Option C: Manual setup** — clone the repo and open `solutions/ess-maker-skills` in VS Code yourself.
 
-Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
+Then **run `/setup`** in GitHub Copilot Chat to configure your environment. To
+plan your rollout before connecting an agent, choose **Plan my ESS rollout
+first** when setup offers it, or run **`/planner`** directly.
 
 ---
 
@@ -396,6 +491,9 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | Command | What it does |
 |---------|-------------|
 | `/setup` | Connect this workspace to an existing editable DA Dev agent |
+| `/planner` | Create, import, edit, share, activate, and track an ESS rollout plan; view assigned tasks |
+| `/roles` | Attest who holds a rollout role on a shared plan; list or revoke attestations |
+| `/discover` | Inventory tenant environments, agents, and integrations to ground the rollout in actual configuration |
 | `/landing-page` | Configure landing-page branding and content |
 | `/connect` | Choose an available integration |
 | `/connect-workday` | Connect the ESS HR agent to Workday |
@@ -419,6 +517,10 @@ You can also describe what you want in plain English — the agent will figure o
 
 ## How It Works
 
+Start with `/planner` when rollout scope or ownership is not settled. It saves
+the plan and hands ready work to the existing setup and authoring experience
+below; presenting a plan does not execute its tasks.
+
 ```
 You describe what you need
         ↓
@@ -437,13 +539,13 @@ The kit reports the current DA-GA deployment boundary
 solutions/ess-maker-skills/
   .github/             Per-solution copilot-instructions and prompt files
   .vscode/             VS Code workspace settings + recommended extensions
-  scripts/             Python automation: setup, checkpoints, local checks, flightcheck/
+  scripts/             Python automation: setup, checkpoints, local checks, flightcheck/, planner/, roles/
   src/
     reference/         ESS docs, integration guides, customization patterns
     skills/            Step-by-step instructions the agent follows for each command
-    mcp/               Workday + ServiceNow MCP servers
+    mcp/               Workday, ServiceNow, and shared planner/config MCP servers
     templates/         Starting points for topics and workflows
-  workspace/           Your files (gitignored): agents/, tests/, flightcheck/history/
+  workspace/           Your files (gitignored): agents/, tests/, flightcheck/history/, plan/
   .local/              Kit-internal state (gitignored): .baseline/, .checkpoints/,
                        .token_cache.bin, .component-map.json, config.json
 ```

@@ -11,7 +11,7 @@ Reference content used directly by customers — topic YAMLs, template-config XM
 ```
 .github/                Repo-level CI, CodeQL, Dependabot, issue templates, labels
 solutions/
-  ess-maker-skills/     Maker kit — customize your ESS agent in VS Code with Copilot
+  ess-maker-skills/     Maker kit — plan rollouts and customize ESS in VS Code with Copilot
   ess-flightcheck/      (planned) Standalone deployment-readiness validator
 samples/                Reference topics, template configs, evaluation test sets (peer to solutions/)
 LICENSE                 MIT

@@ -1,0 +1,1312 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""Request-construction contract for the AgentConfiguration planner/role client.
+
+Every PlannerClient method is exercised through an httpx.MockTransport so the
+exact route, HTTP method, camelCase body, OData query, and mutation headers each
+endpoint builds are pinned without touching the network. Identity (tenant + the
+caller object id) is decoded from a crafted access token, mirroring production;
+no identity value is ever a method argument.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+import sys
+from pathlib import Path
+
+import httpx
+import pytest
+
+
+REPO_ROOT = Path(__file__).parents[3]
+MCP_ROOT = REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp"
+PLANNER_DIR = MCP_ROOT / "agentconfig_planner"
+CORE_DIR = MCP_ROOT / "agentconfig_core"
+sys.path.insert(0, str(CORE_DIR))
+sys.path.insert(0, str(PLANNER_DIR))
+
+import planner_client as planner_client_module  # noqa: E402
+import base_client as base_client_module  # noqa: E402
+import roles_surface as roles_module  # noqa: E402
+
+
+TENANT_ID = "11111111-2222-3333-4444-555555555555"
+CALLER_OID = "99999999-8888-7777-6666-555555555555"
+REQUEST_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+BASE = "https://substrate.office.com/weveb2/api/beta"
+
+
+def _token() -> str:
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": TENANT_ID, "oid": CALLER_OID}).encode("utf-8")
+    ).rstrip(b"=")
+    return f"header.{payload.decode('ascii')}.signature"
+
+
+def _make_client(monkeypatch, handler) -> planner_client_module.PlannerClient:
+    monkeypatch.setenv("AGENTCONFIG_ACCESS_TOKEN", _token())
+    monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AGENTCONFIG_BASE_URL", raising=False)
+    monkeypatch.delenv("AGENTCONFIG_PROJECTS_BASE_URL", raising=False)
+    return planner_client_module.PlannerClient(transport=httpx.MockTransport(handler))
+
+
+def _recorder(response_json=None, status: int = 200):
+    """Return (captured_requests, handler) recording every request."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        body = response_json if response_json is not None else {"value": []}
+        return httpx.Response(status, json=body)
+
+    return requests, handler
+
+
+def _run(client, coro_factory):
+    async def run():
+        try:
+            return await coro_factory()
+        finally:
+            await client.aclose()
+
+    return asyncio.run(run())
+
+
+async def _no_sleep(*_args, **_kwargs):
+    """Drop-in for asyncio.sleep so retry backoff is instant under test."""
+    return None
+
+
+def _assert_request_diagnostics(error, request, request_id=REQUEST_ID):
+    message = str(error)
+    assert f"HTTP {error.http_status}" in message
+    assert f"authenticated tenant: {TENANT_ID}" in message
+    assert request.headers["client-request-id"] in message
+    assert request_id in message
+    assert _token() not in message
+
+
+# ---------------------------------------------------------------------------
+# Identity / base URL wiring
+# ---------------------------------------------------------------------------
+def test_client_decodes_tenant_and_caller_and_defaults_base(monkeypatch) -> None:
+    _, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    assert client.tenant_id == TENANT_ID
+    assert client._caller_object_id == CALLER_OID
+    assert client.projects_base_url == BASE
+    assert client.projects_base_url == planner_client_module._DEFAULT_AGENTCONFIG_PROJECTS_BASE_URL
+    # The bearer token must never leak through the client's repr.
+    assert _token() not in repr(client)
+
+
+def test_projects_base_url_is_overridable_and_https_only(monkeypatch) -> None:
+    _, handler = _recorder()
+    monkeypatch.setenv(
+        "AGENTCONFIG_PROJECTS_BASE_URL", "https://substrate.example.test/beta/"
+    )
+    monkeypatch.setenv("AGENTCONFIG_ACCESS_TOKEN", _token())
+    monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN_FILE", raising=False)
+    client = planner_client_module.PlannerClient(
+        transport=httpx.MockTransport(handler)
+    )
+    assert client.projects_base_url == "https://substrate.example.test/beta"
+
+    monkeypatch.setenv("AGENTCONFIG_PROJECTS_BASE_URL", "http://insecure.test")
+    with pytest.raises(ValueError, match="HTTPS"):
+        planner_client_module.PlannerClient(transport=httpx.MockTransport(handler))
+
+
+# ---------------------------------------------------------------------------
+# Projects
+# ---------------------------------------------------------------------------
+def test_project_routes_methods_and_bodies(monkeypatch) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    def calls():
+        return asyncio.gather(
+            client.list_agent_configuration_projects(),
+            client.get_agent_configuration_project("proj1", {"select": "name"}),
+            client.create_agent_configuration_project(
+                {"name": "Employee Self Serve"}, idempotency_key="idem-1"
+            ),
+            client.archive_agent_configuration_project("proj1", "etag-p"),
+        )
+
+    _run(client, calls)
+
+    listing = next(r for r in requests if r.method == "GET" and r.url.path.endswith("agentConfigurationProjects"))
+    assert str(listing.url) == f"{BASE}/me/agentConfigurationProjects"
+
+    getting = next(
+        r for r in requests if r.method == "GET" and "('proj1')" in str(r.url)
+    )
+    assert getting.url.params["$select"] == "name"
+
+    creating = next(r for r in requests if r.method == "POST")
+    assert str(creating.url) == f"{BASE}/me/agentConfigurationProjects"
+    assert json.loads(creating.content) == {"name": "Employee Self Serve"}
+    assert creating.headers["Idempotency-Key"] == "idem-1"
+
+    archiving = next(r for r in requests if r.method == "PATCH")
+    assert json.loads(archiving.content) == {"state": "Archived"}
+    assert archiving.headers["If-Match"] == "etag-p"
+
+
+def test_project_id_is_odata_escaped_and_url_encoded(monkeypatch) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    _run(client, lambda: client.get_agent_configuration_project("a'b/c"))
+
+    assert b"agentConfigurationProjects('a%27%27b%2Fc')" in requests[0].url.raw_path
+
+
+# ---------------------------------------------------------------------------
+# Plans
+# ---------------------------------------------------------------------------
+def test_plan_routes_nest_under_project_and_archive_uses_status(monkeypatch) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    def calls():
+        return asyncio.gather(
+            client.create_project_plan("proj1", {"ownedById": "u1"}, "idem-2"),
+            client.update_project_plan("proj1", "plan1", {"status": "Active"}, "etag-pl"),
+            client.archive_project_plan("proj1", "plan1", "etag-pl"),
+        )
+
+    _run(client, calls)
+
+    creating = next(r for r in requests if r.method == "POST")
+    assert str(creating.url) == (
+        f"{BASE}/me/agentConfigurationProjects('proj1')/agentPlans"
+    )
+    assert json.loads(creating.content) == {"ownedById": "u1"}
+    assert creating.headers["Idempotency-Key"] == "idem-2"
+
+    updating = next(
+        r for r in requests if r.method == "PATCH" and json.loads(r.content) == {"status": "Active"}
+    )
+    assert str(updating.url) == (
+        f"{BASE}/me/agentConfigurationProjects('proj1')/agentPlans('plan1')"
+    )
+    assert updating.headers["If-Match"] == "etag-pl"
+
+    archiving = next(
+        r for r in requests if r.method == "PATCH" and json.loads(r.content) == {"status": "Archived"}
+    )
+    # Plans archive via `status`, projects via `state` - the fields differ.
+    assert "state" not in json.loads(archiving.content)
+
+
+# ---------------------------------------------------------------------------
+# Tasks
+# ---------------------------------------------------------------------------
+def test_task_routes_lifecycle_and_headers(monkeypatch) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    def calls():
+        return asyncio.gather(
+            client.create_project_plan_task("proj1", "plan1", {"title": "T"}, "idem-3"),
+            client.get_project_plan_task("proj1", "plan1", "task1"),
+            client.set_project_plan_task_state("proj1", "plan1", "task1", "InProgress", "e"),
+            client.delete_project_plan_task("proj1", "plan1", "task1", "etag-t"),
+        )
+
+    _run(client, calls)
+
+    tasks_url = (
+        f"{BASE}/me/agentConfigurationProjects('proj1')"
+        "/agentPlans('plan1')/agentPlanTasks"
+    )
+    creating = next(r for r in requests if r.method == "POST")
+    assert str(creating.url) == tasks_url
+    assert json.loads(creating.content) == {"title": "T"}
+    assert creating.headers["Idempotency-Key"] == "idem-3"
+
+    setting = next(r for r in requests if r.method == "PATCH")
+    assert str(setting.url) == f"{tasks_url}('task1')"
+    assert json.loads(setting.content) == {"state": "InProgress"}
+
+    deleting = next(r for r in requests if r.method == "DELETE")
+    assert str(deleting.url) == f"{tasks_url}('task1')"
+    assert deleting.headers["If-Match"] == "etag-t"
+
+
+def test_task_caller_scoping_delegates_role_expansion_to_service(
+    monkeypatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"value": []})
+
+    client = _make_client(monkeypatch, handler)
+
+    _run(
+        client,
+        lambda: client.list_project_plan_tasks_for_caller("proj1", "plan1"),
+    )
+
+    role_calls = [r for r in requests if "agentRoleAssignments" in str(r.url)]
+    task_calls = [r for r in requests if "agentPlanTasks" in str(r.url)]
+    # The service owns the caller expansion (the caller's direct assignments
+    # plus the Role pools they hold), so the client must NOT pre-resolve role
+    # assignments itself.
+    assert role_calls == []
+    assert len(task_calls) == 1
+    task_filter = task_calls[0].url.params["$filter"]
+    # The caller marker is a standalone top-level AND term carrying the caller's
+    # own object id; the service strips it and substitutes the authorized scope.
+    assert task_filter == f"assignedToId eq '{CALLER_OID}' and state ne 'Completed'"
+    # Regression guards for the service's AgentPlanTaskQueryScope parser: the
+    # caller marker may appear only as a top-level AND term, never nested in an
+    # OR/group, and never alongside a role-pool / assignedToType clause.
+    assert " or " not in task_filter
+    assert "assignedToRoleId" not in task_filter
+    assert "assignedToType" not in task_filter
+
+
+def test_task_caller_scoping_preserves_caller_supplied_filter(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"value": []})
+
+    client = _make_client(monkeypatch, handler)
+
+    _run(
+        client,
+        lambda: client.list_project_plan_tasks_for_caller(
+            "proj1", "plan1", {"filter": "state eq 'InProgress'"}
+        ),
+    )
+
+    task_call = next(r for r in requests if "agentPlanTasks" in str(r.url))
+    task_filter = task_call.url.params["$filter"]
+    # The caller marker stays a standalone top-level AND term; the caller's own
+    # filter rides along as a parenthesised residual conjunct, never wrapping
+    # the marker.
+    assert task_filter == (
+        f"assignedToId eq '{CALLER_OID}' and state ne 'Completed' "
+        "and (state eq 'InProgress')"
+    )
+    assert " or " not in task_filter
+
+
+def test_caller_scoping_requires_object_id_claim(monkeypatch) -> None:
+    _, handler = _recorder()
+    # A token with tid but no oid claim.
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": TENANT_ID}).encode("utf-8")
+    ).rstrip(b"=")
+    monkeypatch.setenv("AGENTCONFIG_ACCESS_TOKEN", f"h.{payload.decode()}.s")
+    monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN_FILE", raising=False)
+    client = planner_client_module.PlannerClient(
+        transport=httpx.MockTransport(handler)
+    )
+    assert client._caller_object_id is None
+
+    with pytest.raises(base_client_module.AgentConfigApiError, match="oid"):
+        _run(client, lambda: client.list_project_plan_tasks_for_caller("p", "pl"))
+
+
+def test_role_assigned_task_targets_a_role_pool(monkeypatch) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    _run(
+        client,
+        lambda: client.create_role_assigned_project_plan_task(
+            "proj1", "plan1", "ServiceNowAdmin", "Configure ServiceNow"
+        ),
+    )
+
+    # The compact id is accepted as input but written as the backend wire display
+    # name, so the pooled task matches the attestation grant (stored under the same
+    # wire name) and surfaces to the role's attested holders.
+    assert json.loads(requests[0].content) == {
+        "title": "Configure ServiceNow",
+        "assignedToId": "ServiceNow Administrator",
+        "assignedToType": "Role",
+        "assignedToRoleId": "ServiceNow Administrator",
+    }
+
+
+@pytest.mark.parametrize("role", ["ServiceNow Administrator", "servicenow administrator"])
+def test_role_assigned_task_accepts_the_stored_role_name(monkeypatch, role) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    _run(
+        client,
+        lambda: client.create_role_assigned_project_plan_task(
+            "proj1", "plan1", role, "Configure ServiceNow"
+        ),
+    )
+
+    body = json.loads(requests[0].content)
+    assert body["assignedToId"] == body["assignedToRoleId"] == "ServiceNow Administrator"
+
+
+def test_task_create_writes_attestable_roles_under_the_stored_name(monkeypatch) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    pooled = {
+        "title": "T",
+        "assignedToType": "Role",
+        "assignedToId": "WorkdayAdmin",
+        "assignedToRoleId": "WorkdayAdmin",
+    }
+    unknown = {
+        "title": "U",
+        "assignedToType": "Role",
+        "assignedToId": "SomeFutureRole",
+        "assignedToRoleId": "SomeFutureRole",
+    }
+    person = {
+        "title": "V",
+        "assignedToType": "User",
+        "assignedToId": CALLER_OID,
+        "assignedToRoleId": "workday administrator",
+    }
+
+    async def calls():
+        for task in (pooled, unknown, person):
+            await client.create_project_plan_task("proj1", "plan1", task)
+
+    _run(client, calls)
+
+    # Role expansion matches the stored grant name exactly, so an attestable role
+    # must be written under it; a role outside the catalog passes through as-is.
+    sent = [json.loads(r.content) for r in requests]
+    assert sent == [
+        {**pooled, "assignedToId": "Workday administrator", "assignedToRoleId": "Workday administrator"},
+        unknown,
+        {**person, "assignedToRoleId": "Workday administrator"},
+    ]
+    assert pooled["assignedToId"] == "WorkdayAdmin"
+
+
+def test_plan_create_writes_inline_task_roles_under_the_stored_name(monkeypatch) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    plan = {
+        "tasks": [
+            {
+                "title": "T",
+                "assignedToType": "Role",
+                "assignedToId": "ServiceNowAdmin",
+                "assignedToRoleId": "ServiceNowAdmin",
+            },
+            {"title": "U"},
+        ]
+    }
+
+    _run(client, lambda: client.create_project_plan("proj1", plan, "idem"))
+
+    assert json.loads(requests[0].content)["tasks"] == [
+        {
+            "title": "T",
+            "assignedToType": "Role",
+            "assignedToId": "ServiceNow Administrator",
+            "assignedToRoleId": "ServiceNow Administrator",
+        },
+        {"title": "U"},
+    ]
+    assert plan["tasks"][0]["assignedToId"] == "ServiceNowAdmin"
+
+
+def test_complete_task_normalizes_outputs_and_enforces_environment_rule(
+    monkeypatch,
+) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    _run(
+        client,
+        lambda: client.complete_project_plan_task(
+            "proj1",
+            "plan1",
+            "task1",
+            [
+                {
+                    "key": "prod-env",
+                    "kind": "Environment",
+                    "attributes": [{"key": "environmentId", "value": "E-1"}],
+                }
+            ],
+            "etag-t",
+        ),
+    )
+
+    body = json.loads(requests[0].content)
+    assert body["state"] == "Completed"
+    assert body["outputs"][0] == {
+        "key": "prod-env",
+        "kind": "Environment",
+        "attributes": [{"key": "environmentId", "value": "E-1"}],
+    }
+
+
+@pytest.mark.parametrize(
+    ("method_name", "args", "match"),
+    [
+        ("set_project_plan_task_state", ("p", "pl", "t", "Bogus", "e"), "state must be"),
+        (
+            "update_project_plan_task",
+            ("p", "pl", "t", {"state": "Completed"}, "e"),
+            "not accepted here",
+        ),
+        (
+            "create_role_assigned_project_plan_task",
+            ("p", "pl", "NotARole", "title"),
+            "role must be one of",
+        ),
+    ],
+)
+def test_task_validation_rejects_bad_input(
+    monkeypatch, method_name: str, args: tuple, match: str
+) -> None:
+    _, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(ValueError, match=match):
+        _run(client, lambda: getattr(client, method_name)(*args))
+
+
+def test_complete_task_rejects_environment_output_without_environment_id(
+    monkeypatch,
+) -> None:
+    _, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(ValueError, match="environmentId"):
+        _run(
+            client,
+            lambda: client.complete_project_plan_task(
+                "p",
+                "pl",
+                "t",
+                [{"key": "e", "kind": "Environment", "attributes": []}],
+                "etag",
+            ),
+        )
+
+
+def test_complete_task_rejects_duplicate_output_keys(monkeypatch) -> None:
+    _, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(ValueError, match="duplicate key"):
+        _run(
+            client,
+            lambda: client.complete_project_plan_task(
+                "p",
+                "pl",
+                "t",
+                [
+                    {"key": "dup", "kind": "Custom", "attributes": []},
+                    {"key": "dup", "kind": "Custom", "attributes": []},
+                ],
+                "etag",
+            ),
+        )
+
+
+def test_complete_task_rejects_oversized_outputs(monkeypatch) -> None:
+    _, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    bulky = [
+        {
+            "key": "tenantInventory",
+            "kind": "Custom",
+            "attributes": [{"key": "dump", "value": "x" * 30_000}],
+        }
+    ]
+    with pytest.raises(ValueError, match="too large"):
+        _run(
+            client,
+            lambda: client.complete_project_plan_task("p", "pl", "t", bulky, "etag"),
+        )
+
+
+def test_complete_task_accepts_compact_outputs(monkeypatch) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    compact = [
+        {
+            "key": "tenantInventory",
+            "kind": "Custom",
+            "attributes": [
+                {"key": "resourceCount", "value": "4"},
+                {"key": "resources", "value": "connection:2 environment:1"},
+            ],
+            "inventoryRef": "Inventory:run-123",
+        }
+    ]
+    _run(
+        client,
+        lambda: client.complete_project_plan_task("p", "pl", "t", compact, "etag"),
+    )
+    body = json.loads(requests[0].content)
+    assert body["outputs"][0]["inventoryRef"] == "Inventory:run-123"
+
+
+# ---------------------------------------------------------------------------
+# Role attestation (tenant-sharded)
+# ---------------------------------------------------------------------------
+def test_role_assignment_routes_are_tenant_sharded(monkeypatch) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    def calls():
+        return asyncio.gather(
+            client.list_plan_role_assignments("plan1", role="WorkdayAdmin", status="Active"),
+            client.get_role_assignment("assign1"),
+            client.attest_plan_role("plan1", "subject-oid", "WorkdayAdmin"),
+            client.revoke_role_assignment("assign1", "etag-a"),
+        )
+
+    _run(client, calls)
+
+    collection = f"{BASE}/tenants('{TENANT_ID}')/agentRoleAssignments"
+
+    listing = next(r for r in requests if r.method == "GET" and r.url.path.endswith("agentRoleAssignments"))
+    assert str(listing.url).startswith(collection)
+    # The compact id filters on the stored display name: assignments are saved
+    # and matched under that name, so the compact id would hide the holder.
+    assert listing.url.params["$filter"] == (
+        "targetPlanId eq 'plan1' and roleId eq 'Workday administrator' and status eq 'Active'"
+    )
+
+    getting = next(r for r in requests if r.method == "GET" and "('assign1')" in str(r.url))
+    assert str(getting.url) == f"{collection}('assign1')"
+
+    attesting = next(r for r in requests if r.method == "POST")
+    assert str(attesting.url) == f"{collection}/attest"
+    assert json.loads(attesting.content) == {
+        "subjectId": "subject-oid",
+        # Caller passes the compact id "WorkdayAdmin"; the client maps it to the
+        # provider display name the backend validates the attest role against.
+        "role": "Workday administrator",
+        "target": {"type": "Plan", "id": "plan1"},
+        "provider": "External",
+    }
+
+    revoking = next(r for r in requests if r.method == "DELETE")
+    assert str(revoking.url) == f"{collection}('assign1')"
+    assert revoking.headers["If-Match"] == "etag-a"
+
+
+def test_list_role_assignments_requires_target_plan_equality(monkeypatch) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    _run(client, lambda: client.list_plan_role_assignments("plan1"))
+
+    # Even with no optional filters, the plan-scoping equality is always present.
+    assert requests[0].url.params["$filter"] == "targetPlanId eq 'plan1'"
+
+
+@pytest.mark.parametrize("role", ["Workday administrator", "workday-Administrator"])
+def test_list_role_assignments_filters_any_spelling_on_the_stored_name(
+    monkeypatch, role
+) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    _run(client, lambda: client.list_plan_role_assignments("plan1", role=role))
+
+    assert requests[0].url.params["$filter"] == (
+        "targetPlanId eq 'plan1' and roleId eq 'Workday administrator'"
+    )
+
+
+def test_list_role_assignments_rejects_an_unattestable_role_before_sending(
+    monkeypatch,
+) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    with pytest.raises(ValueError, match="role must be one of"):
+        _run(client, lambda: client.list_plan_role_assignments("plan1", role="NotARole"))
+    assert requests == []
+
+
+@pytest.mark.parametrize(
+    ("args", "kwargs", "match"),
+    [
+        (("plan1", "subj", "NotARole"), {}, "role must be one of"),
+        (("plan1", "subj", "WorkdayAdmin"), {"provider": "Internal"}, "External"),
+    ],
+)
+def test_attest_validation(monkeypatch, args, kwargs, match) -> None:
+    _, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(ValueError, match=match):
+        _run(client, lambda: client.attest_plan_role(*args, **kwargs))
+
+
+def test_attest_accepts_role_display_name_and_sends_it_verbatim(monkeypatch) -> None:
+    # Callers may pass either the compact id or the backend display name; a
+    # display name is already wire-shaped and must pass through unchanged.
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    _run(
+        client,
+        lambda: client.attest_plan_role(
+            "plan1", "subject-oid", "ServiceNow Administrator"
+        ),
+    )
+
+    attesting = next(r for r in requests if r.method == "POST")
+    assert json.loads(attesting.content)["role"] == "ServiceNow Administrator"
+
+
+def test_attest_non_external_role_sends_its_owning_provider(monkeypatch) -> None:
+    # A non-External attestable role must go out with the provider that owns it,
+    # derived from the role rather than the legacy hard-coded "External". Power
+    # Platform Administrator is owned by the Entra provider on the backend.
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    _run(
+        client,
+        lambda: client.attest_plan_role(
+            "plan1", "subject-oid", "EntraPowerPlatformAdministrator"
+        ),
+    )
+
+    body = json.loads(next(r for r in requests if r.method == "POST").content)
+    assert body["role"] == "Power Platform Administrator"
+    assert body["provider"] == "Entra"
+
+
+def test_attest_rejects_provider_that_does_not_own_the_role(monkeypatch) -> None:
+    # An explicit provider is allowed but must match the role's owner; the
+    # backend would otherwise reject the mismatch, so the client catches it first.
+    _, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(ValueError, match="Entra"):
+        _run(
+            client,
+            lambda: client.attest_plan_role(
+                "plan1",
+                "subject-oid",
+                "EntraPowerPlatformAdministrator",
+                provider="PowerPlatform",
+            ),
+        )
+
+
+def test_planner_api_error_surfaces_target_and_details(monkeypatch) -> None:
+    # The generic top-level Message is opaque ("...sent a bad request..."); the
+    # planner overrides the error formatter to surface Target + Details[] so the
+    # agent reads the real reason (e.g. the exact allowed attest role values)
+    # and self-corrects. This is the planner counterpart to the landing page's
+    # test_api_error_uses_top_level_code_message_and_http_status (which pins the
+    # neutral core still dropping Details).
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "Code": "BadRequest",
+                "Message": "The calling client sent a bad request to the service.",
+                "Target": "agentRoleAssignments.role",
+                "Details": [
+                    {
+                        "Code": "ValidationError",
+                        "Message": (
+                            "role must be one of Workday administrator, "
+                            "ServiceNow Administrator, ServiceNow Knowledge Manager."
+                        ),
+                    }
+                ],
+            },
+        )
+
+    client = _make_client(monkeypatch, handler)
+
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(client, lambda: client.list_project_plan_tasks("proj1", "plan1"))
+
+    message = str(excinfo.value)
+    assert excinfo.value.http_status == 400
+    assert message.startswith("BadRequest:")
+    assert "agentRoleAssignments.role" in message  # Target surfaced
+    assert "ValidationError" in message
+    assert "ServiceNow Administrator" in message  # Details surfaced
+
+
+def test_list_role_assignments_validates_status_and_orderby(monkeypatch) -> None:
+    _, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(ValueError, match="Active or Revoked"):
+        _run(client, lambda: client.list_plan_role_assignments("p", status="Nope"))
+    with pytest.raises(ValueError, match="createdAt"):
+        _run(client, lambda: client.list_plan_role_assignments("p", orderby="name asc"))
+
+
+# ---------------------------------------------------------------------------
+# Response passthrough
+# ---------------------------------------------------------------------------
+def test_planner_responses_are_returned_without_key_transformation(
+    monkeypatch,
+) -> None:
+    # Planner/role payloads carry user-authored camelCase keys (e.g. assignedToId)
+    # that must be returned verbatim, unlike the landing-page PascalCase surface.
+    _, handler = _recorder(
+        response_json={"value": [{"assignedToId": "user-1", "someKey": "keepMe"}]}
+    )
+    client = _make_client(monkeypatch, handler)
+
+    result = _run(client, lambda: client.list_project_plan_tasks("p", "pl"))
+
+    assert result == {"value": [{"assignedToId": "user-1", "someKey": "keepMe"}]}
+
+
+def test_attestable_roles_constant_is_the_provider_owned_set() -> None:
+    # Mirrors the backend AttestableAuthorizationRoles registry: the three
+    # External roles first (preserving the prior ordering/behaviour), then the
+    # Entra directory roles, then the Power Platform roles.
+    assert roles_module.ATTESTABLE_ROLES == (
+        "WorkdayAdmin",
+        "ServiceNowAdmin",
+        "ServiceNowKnowledgeManager",
+        "EntraGlobalAdministrator",
+        "EntraNetworkAdministrator",
+        "EntraUserAdministrator",
+        "EntraPowerPlatformAdministrator",
+        "EntraApplicationAdministrator",
+        "EntraCloudApplicationAdministrator",
+        "PowerPlatformEnvironmentMaker",
+        "PowerPlatformEnvironmentAdministrator",
+        "PowerPlatformSystemAdministrator",
+    )
+    # Each role resolves to its (display name, owning provider). The provider is
+    # a fixed property of the role, spanning all three attestation providers.
+    assert roles_module.ATTESTABLE_ROLE_DEFINITIONS["WorkdayAdmin"] == (
+        "Workday administrator",
+        "External",
+    )
+    assert roles_module.ATTESTABLE_ROLE_DEFINITIONS["EntraPowerPlatformAdministrator"] == (
+        "Power Platform Administrator",
+        "Entra",
+    )
+    assert roles_module.ATTESTABLE_ROLE_DEFINITIONS["PowerPlatformEnvironmentMaker"] == (
+        "Environment Maker",
+        "PowerPlatform",
+    )
+
+
+# ---------------------------------------------------------------------------
+# ETag / plan-state conflict recovery
+#
+# AgentConfiguration returns 412 PreconditionFailed for a stale/mismatched If-Match and
+# 409 Conflict when a task mutation targets a non-Active plan. On the former the
+# client re-reads only to raise an actionable "the ETag advanced, re-read and
+# reapply" error -- it never replays the mutation, since replaying would defeat
+# the If-Match lost-update guard. On the latter it turns the generic conflict
+# into an actionable message. These tests pin both paths through MockTransport.
+# ---------------------------------------------------------------------------
+def _stale_then_ok_handler(requests, mutate_method, retry_response, refetch_json):
+    """Handler: first mutation -> 412, re-GET -> refetch_json, retry -> ok."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == mutate_method:
+            attempts = [r for r in requests if r.method == mutate_method]
+            if len(attempts) == 1:
+                return httpx.Response(
+                    412, headers={"request-id": REQUEST_ID},
+                    json={"Code": "PreconditionFailed", "Message": "stale"},
+                )
+            return retry_response
+        if request.method == "GET":
+            return httpx.Response(200, json=refetch_json)
+        return httpx.Response(200, json={})
+
+    return handler
+
+
+def test_task_update_preserves_stale_etag_412_without_replaying(monkeypatch) -> None:
+    # A moved ETag is indistinguishable from a concurrent edit to the same
+    # fields, so the client must NOT auto-replay the PATCH; it re-reads only to
+    # raise an actionable 412 telling the caller to re-read and reapply.
+    requests: list[httpx.Request] = []
+    client = _make_client(
+        monkeypatch,
+        _stale_then_ok_handler(
+            requests, "PATCH", httpx.Response(200, json={"ok": True}), {"ETag": 'W/"2"'}
+        ),
+    )
+
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.update_project_plan_task(
+                "proj1", "plan1", "task1", {"title": "New"}, 'W/"1"'
+            ),
+        )
+
+    assert excinfo.value.http_status == 412
+    message = str(excinfo.value)
+    assert "re-read" in message.lower()
+    assert 'W/"2"' in message  # surfaces the advanced ETag so the caller can act
+    # Exactly one PATCH (no blind replay) and a single re-read GET.
+    patches = [r for r in requests if r.method == "PATCH"]
+    assert [p.headers["If-Match"] for p in patches] == ['W/"1"']
+    _assert_request_diagnostics(excinfo.value, patches[0])
+    gets = [r for r in requests if r.method == "GET"]
+    assert len(gets) == 1
+    assert str(gets[0].url).endswith("agentPlanTasks('task1')")
+
+
+def test_task_delete_preserves_stale_etag_412_without_replaying(monkeypatch) -> None:
+    # A moved ETag on DELETE is just as ambiguous as on PATCH: the entity may
+    # have been edited after the caller read it, so replaying the DELETE could
+    # destroy work done in between. The client re-reads only to raise.
+    requests: list[httpx.Request] = []
+    client = _make_client(
+        monkeypatch,
+        _stale_then_ok_handler(
+            requests, "DELETE", httpx.Response(204), {"ETag": 'W/"5"'}
+        ),
+    )
+
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.delete_project_plan_task("proj1", "plan1", "task2", 'W/"4"'),
+        )
+
+    assert excinfo.value.http_status == 412
+    assert 'W/"5"' in str(excinfo.value)  # advanced ETag surfaced to the caller
+    # Exactly one DELETE (no blind replay) and a single re-read GET.
+    deletes = [r for r in requests if r.method == "DELETE"]
+    assert [d.headers["If-Match"] for d in deletes] == ['W/"4"']
+    _assert_request_diagnostics(excinfo.value, deletes[0])
+    assert len([r for r in requests if r.method == "GET"]) == 1
+
+
+def test_plan_update_preserves_stale_etag_412_without_replaying(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+    client = _make_client(
+        monkeypatch,
+        _stale_then_ok_handler(
+            requests,
+            "PATCH",
+            httpx.Response(200, json={"Status": "Active"}),
+            {"ETag": 'W/"7"', "Status": "Draft"},
+        ),
+    )
+
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.update_project_plan(
+                "proj1", "plan1", {"status": "Active"}, 'W/"6"'
+            ),
+        )
+
+    assert excinfo.value.http_status == 412
+    assert 'W/"7"' in str(excinfo.value)
+    patches = [r for r in requests if r.method == "PATCH"]
+    assert [p.headers["If-Match"] for p in patches] == ['W/"6"']  # no replay
+    _assert_request_diagnostics(excinfo.value, patches[0])
+
+
+def test_stale_etag_retry_gives_up_when_version_did_not_move(monkeypatch) -> None:
+    # A 412 whose re-read ETag is unchanged is a genuine precondition failure,
+    # not reconciliation drift: re-raise it rather than loop or clobber.
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "PATCH":
+            return httpx.Response(
+                412, json={"Code": "PreconditionFailed", "Message": "stale"}
+            )
+        if request.method == "GET":
+            return httpx.Response(200, json={"ETag": 'W/"1"'})
+        return httpx.Response(200, json={})
+
+    client = _make_client(monkeypatch, handler)
+
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.update_project_plan_task(
+                "proj1", "plan1", "task1", {"title": "X"}, 'W/"1"'
+            ),
+        )
+
+    assert excinfo.value.http_status == 412
+    assert len([r for r in requests if r.method == "PATCH"]) == 1
+
+
+def test_task_mutation_on_non_active_plan_gets_actionable_409(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+    generic = (
+        "The request could not be completed due to a conflict with the "
+        "current state of the resource."
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "PATCH":
+            return httpx.Response(
+                409, headers={"request-id": REQUEST_ID},
+                json={"Code": "Conflict", "Message": generic},
+            )
+        if request.method == "GET":
+            return httpx.Response(200, json={"Status": "Draft", "ETag": 'W/"1"'})
+        return httpx.Response(200, json={})
+
+    client = _make_client(monkeypatch, handler)
+
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.set_project_plan_task_state(
+                "proj1", "plan1", "task1", "InProgress", 'W/"1"'
+            ),
+        )
+
+    assert excinfo.value.http_status == 409
+    message = str(excinfo.value)
+    assert "not Active" in message
+    assert "update_project_plan" in message and '"status": "Active"' in message
+    _assert_request_diagnostics(excinfo.value, requests[0])
+    # The clarifier re-reads the plan (not the task) to learn the status.
+    gets = [r for r in requests if r.method == "GET"]
+    assert len(gets) == 1
+    assert str(gets[0].url).endswith("agentPlans('plan1')")
+
+
+def test_task_mutation_409_with_active_plan_is_reraised_unchanged(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+    generic = (
+        "The request could not be completed due to a conflict with the "
+        "current state of the resource."
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "PATCH":
+            return httpx.Response(409, json={"Code": "Conflict", "Message": generic})
+        if request.method == "GET":
+            return httpx.Response(200, json={"Status": "Active", "ETag": 'W/"9"'})
+        return httpx.Response(200, json={})
+
+    client = _make_client(monkeypatch, handler)
+
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.set_project_plan_task_state(
+                "proj1", "plan1", "task1", "InProgress", 'W/"9"'
+            ),
+        )
+
+    assert excinfo.value.http_status == 409
+    # An Active plan means the 409 is some other invariant: keep it verbatim.
+    assert "not Active" not in str(excinfo.value)
+    assert generic in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Archive routing (PR #251 review): update_project_plan must never perform the
+# destructive archive that also cancels tasks -- that belongs to the separately
+# annotated archive_project_plan tool. The guard is case/whitespace-insensitive.
+# ---------------------------------------------------------------------------
+def test_update_project_plan_refuses_archived_status(monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("archive must be rejected before any HTTP request")
+
+    client = _make_client(monkeypatch, handler)
+    for patch in (
+        {"status": "Archived"},
+        {"Status": "archived"},
+        {"status": " ARCHIVED "},
+    ):
+        with pytest.raises(ValueError, match="archive_project_plan"):
+            _run(
+                client,
+                lambda p=patch: client.update_project_plan("proj1", "plan1", p, 'W/"1"'),
+            )
+
+
+# ---------------------------------------------------------------------------
+# Task-patch key casing (PR #251 review): the live surface is case-insensitive,
+# but the client emits a deterministic camelCase body and rejects a field named
+# twice under different casing.
+# ---------------------------------------------------------------------------
+def test_task_update_normalizes_key_casing_to_camelcase(monkeypatch) -> None:
+    requests, handler = _recorder(response_json={"ok": True})
+    client = _make_client(monkeypatch, handler)
+
+    _run(
+        client,
+        lambda: client.update_project_plan_task(
+            "proj1",
+            "plan1",
+            "task1",
+            {"Title": "New", "ASSIGNEDTOID": "u1", "produces": ["a"]},
+            'W/"1"',
+        ),
+    )
+
+    body = json.loads(requests[-1].content)
+    assert body == {"title": "New", "assignedToId": "u1", "produces": ["a"]}
+
+
+def test_task_update_rejects_keys_differing_only_by_casing(monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("ambiguous duplicate key must be rejected pre-flight")
+
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(ValueError, match="duplicates field title"):
+        _run(
+            client,
+            lambda: client.update_project_plan_task(
+                "proj1", "plan1", "task1", {"title": "a", "Title": "b"}, 'W/"1"'
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Retry safety (PR #251 review): an ambiguous gateway failure (502/503/504) on
+# an unkeyed create must NOT be replayed -- it may already have committed and a
+# retry would duplicate it. An Idempotency-Key makes the create retry-safe.
+# ---------------------------------------------------------------------------
+def test_unkeyed_create_is_not_retried_on_ambiguous_5xx(monkeypatch) -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(
+            503, json={"Code": "ServiceUnavailable", "Message": "down"}
+        )
+
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.create_project_plan(
+                "proj1", {"configuringAgentName": "EmployeeSelfServiceHRDA"}
+            ),
+        )
+
+    assert excinfo.value.http_status == 503
+    assert len([r for r in calls if r.method == "POST"]) == 1  # surfaced, not replayed
+
+
+def test_keyed_create_is_retried_on_ambiguous_5xx(monkeypatch) -> None:
+    monkeypatch.setattr(base_client_module.asyncio, "sleep", _no_sleep)
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len([r for r in calls if r.method == "POST"]) == 1:
+            return httpx.Response(
+                503, json={"Code": "ServiceUnavailable", "Message": "down"}
+            )
+        return httpx.Response(200, json={"PlanId": "p1"})
+
+    client = _make_client(monkeypatch, handler)
+    result = _run(
+        client,
+        lambda: client.create_project_plan(
+            "proj1", {"configuringAgentName": "EmployeeSelfServiceHRDA"}, "idem-1"
+        ),
+    )
+
+    assert result == {"PlanId": "p1"}
+    posts = [r for r in calls if r.method == "POST"]
+    assert len(posts) == 2  # an Idempotency-Key makes the create retry-safe
+    assert all("Idempotency-Key" in p.headers for p in posts)
+
+
+@pytest.mark.parametrize(
+    "value,count", [("x" * 170, 65), ("\u6f22" * 1000, 9)],
+    ids=["metadata-overhead", "utf8-not-characters"],
+)
+def test_create_rejects_aggregate_metadata_before_post(monkeypatch, value, count):
+    def handler(request):
+        raise AssertionError("oversized metadata must never reach the service")
+
+    client = _make_client(monkeypatch, handler)
+    body = {
+        "configuringAgentName": "EmployeeSelfServiceHRDA",
+        "context": [{"key": f"scope.{i}", "value": value} for i in range(count)],
+    }
+    with pytest.raises(ValueError, match="PlanPayloadTooLarge") as excinfo:
+        _run(client, lambda: client.create_project_plan("proj1", body, "idem"))
+    assert "25,600" in str(excinfo.value)
+    assert TENANT_ID in str(excinfo.value)
+    assert _token() not in str(excinfo.value)
+
+
+def test_context_patch_checks_combined_record_before_writing(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.method == "GET", "combined oversized update must not be sent"
+        return httpx.Response(200, json={
+            "PlanId": "plan1",
+            "Context": [{"key": f"scope.{i}", "value": "x" * 110} for i in range(50)],
+        })
+
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(ValueError, match="PlanPayloadTooLarge"):
+        _run(client, lambda: client.update_project_plan(
+            "proj1", "plan1", {"acceptanceCriteria": ["y" * 1900] * 3}, "caller-etag",
+        ))
+    assert len(calls) == 1
+
+
+def test_metadata_patch_preserves_original_etag_and_body(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={
+                "PlanId": "plan1", "Context": [{"key": "scope", "value": "old"}],
+                "AcceptanceCriteria": ["Reviewed"], "ETag": "server-etag",
+            })
+        return httpx.Response(200, json={"PlanId": "plan1"})
+
+    client = _make_client(monkeypatch, handler)
+    patch = {"context": [{"key": "scope", "value": "updated"}]}
+    _run(client, lambda: client.update_project_plan("proj1", "plan1", patch, "caller-etag"))
+    assert [call.method for call in calls] == ["GET", "PATCH"]
+    assert json.loads(calls[1].content) == patch
+    assert calls[1].headers["If-Match"] == "caller-etag"
+
+
+def test_known_storage_error_has_actionable_guidance_and_scope(monkeypatch):
+    calls = []
+    request_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(500, headers={"request-id": request_id}, json={
+            "Code": "InternalServerError", "Message": "The operation failed.",
+            "Details": [{"Code": "OpenTypeTooLarge", "Message": "Record exceeds storage limit."}],
+        })
+
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(client, lambda: client.create_project_plan(
+            "proj1", {"configuringAgentName": "EmployeeSelfServiceHRDA"}, "idem",
+        ))
+    message = str(excinfo.value)
+    assert "25,600" in message
+    assert "Do not retry unchanged" in message
+    assert "HTTP 500" in message and TENANT_ID in message
+    assert request_id in message
+    assert len(calls) == 1
+
+
+def test_generic_server_error_keeps_diagnostics_without_guessing_size(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(500, headers={"Authorization": "do-not-display"}, json={
+            "Code": "InternalServerError", "Message": "The operation failed.",
+        })
+
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(client, lambda: client.create_project_plan(
+            "proj1", {"configuringAgentName": "EmployeeSelfServiceHRDA"}, "idem",
+        ))
+    message = str(excinfo.value)
+    assert "HTTP 500" in message and TENANT_ID in message
+    assert calls[0].headers["client-request-id"] in message
+    assert "OpenTypeTooLarge" not in message and "PlanPayloadTooLarge" not in message
+    assert "do-not-display" not in message and _token() not in message
+    assert len(calls) == 1
+
+
+def test_rejected_token_is_reported_without_automatic_replay(monkeypatch):
+    calls, handler = _recorder({"Code": "Unauthorized", "Message": "Sign-in required."}, status=401)
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(base_client_module.AgentConfigApiError) as error:
+        _run(client, lambda: client.list_project_plans("proj1"))
+    assert error.value.http_status == 401
+    assert "Renew credentials for the original account" in str(error.value)
+    assert _token() not in str(error.value)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+@pytest.mark.parametrize("operation", ["read", "keyed-create", "unkeyed-create"])
+def test_exhausted_transient_http_preserves_final_diagnostics(monkeypatch, status, operation):
+    calls, sleeps = [], []
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(base_client_module.asyncio, "sleep", record_sleep)
+
+    def handler(request):
+        calls.append(request)
+        request_id = f"00000000-0000-0000-0000-{len(calls):012d}"
+        return httpx.Response(
+            status, headers={"request-id": request_id, "Authorization": "do-not-display"},
+            json={"Code": "Unavailable", "Message": "Please try later."},
+        )
+
+    client = _make_client(monkeypatch, handler)
+
+    async def call():
+        if operation == "read":
+            return await client.list_project_plans("proj1")
+        return await client.create_project_plan(
+            "proj1", {"configuringAgentName": "EmployeeSelfServiceHRDA"},
+            "same-key" if operation == "keyed-create" else None,
+        )
+
+    with pytest.raises(base_client_module.AgentConfigApiError) as error:
+        _run(client, call)
+
+    attempts = 1 if operation == "unkeyed-create" and status != 429 else client.max_retries
+    assert len(calls) == attempts
+    assert error.value.http_status == status
+    _assert_request_diagnostics(error.value, calls[-1], f"00000000-0000-0000-0000-{attempts:012d}")
+    assert len(sleeps) == attempts - 1
+    assert "Unavailable: Please try later." in str(error.value)
+    assert "do-not-display" not in str(error.value)
+    assert len({call.headers["client-request-id"] for call in calls}) == 1
+    if operation == "keyed-create":
+        assert {call.headers["Idempotency-Key"] for call in calls} == {"same-key"}
+
+
+def test_completion_metadata_counts_utf8_bytes_before_sending(monkeypatch):
+    def handler(request):
+        raise AssertionError("oversized Unicode output must not reach the service")
+
+    client = _make_client(monkeypatch, handler)
+    outputs = [{
+        "key": "result", "kind": "Custom",
+        "attributes": [{"key": f"field.{i}", "value": "\u6f22" * 1000} for i in range(8)],
+    }]
+    with pytest.raises(ValueError, match="completion outputs are too large"):
+        _run(client, lambda: client.complete_project_plan_task(
+            "proj1", "plan1", "task1", outputs, "etag",
+        ))

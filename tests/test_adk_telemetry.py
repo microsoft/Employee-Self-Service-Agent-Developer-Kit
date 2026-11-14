@@ -3088,6 +3088,10 @@ def test_wired_capabilities_are_in_canonical_list():
         "backup_template_configs", "restore_template_configs",
         "analytics",
         "push",
+        # discover_inventory.py and planner/cli.py emit directly (script-backed
+        # skills, no shim -- emit_capability_use does not dedupe, so wiring
+        # both would double-count)
+        "discover", "planner",
         # emit_flightcheck_*() event family
         "flightcheck",
         # emit_capability.py shim invocations across the SKILL.md skills

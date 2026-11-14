@@ -18,6 +18,15 @@ Microsoft authorization, encounters denied access, names a Power Platform role,
 or hands an action to an administrator. That file owns the operation-specific
 role language and administrator handoff.
 
+When Planner hands off the maker's assigned setup task because they asked in
+natural language to start it ("start setup", "start my setup task"), treat the
+request exactly like `/setup`: continue directly and never ask the maker to
+retype it as a command. Retain the assigned task, plan role, and the plan's
+target environment through setup so Planner can return to that task afterward.
+A plan assignment is not proof of access: keep the normal sign-in and
+environment-access checks, and use the permission guidance above to explain a
+specific missing permission rather than asking which role the maker holds.
+
 ## Setup state sources
 
 - **Current setup state:** `.local/setup/config.json`
@@ -833,6 +842,24 @@ Resolve the environment label from known context. This question confirms the sel
 - For **Help me decide**, follow the shared contract under **Standard choices and ad hoc recovery**. Establish whether an agent already exists in this environment whose current content should become the workspace's authoring source, or whether the maker wants a separate agent created from an available agent template. Include the creator-login requirement for an existing agent and the creation-permission requirement for a fresh agent in the comparison.
 - For **Cancel setup**, make no changes and stop.
 
+Under the conditions of the generic agent question below, first run this
+read-only rollout-plan check without narrating it:
+
+```text
+python scripts/planner/cli.py setup-status
+```
+
+When it reports a non-empty `environment.environmentId`, the maker's saved
+rollout plan identifies the target environment. Retain that ID, use
+`environment.displayName` as the environment label, and resolve the ring
+through **Resolve the service ring** in
+`src/skills/foundation-setup/da-environment-target.md`; a plan environment ID
+alone uses `prod` unless the current request says otherwise. Treat it as the
+resolved target for the workspace comparison above, then continue with the
+identified-environment choices above. Never create or select a different
+environment for that plan. When the check fails or reports no plan
+environment, continue below and keep its `hasPlan` value.
+
 When the request does not identify an agent or environment, no usable local
 target exists, and no incomplete canonical setup record must resume, render
 the **What does setup do?** orientation above, then ask:
@@ -843,9 +870,10 @@ Present these standard choices:
 
 - **Yes, I have an agent** — ask for its Microsoft Copilot Studio URL.
 - **No, I need a fresh agent** — follow `src/skills/foundation-setup/da-mos-starter.md`.
+- **Plan my ESS rollout first** — only when the plan check found no saved plan. Planning precedes setup rather than following it: end this setup request, then read `src/skills/planner/SKILL.md` and follow it.
 - **Help me decide**
 
-For **Help me decide**, follow the shared contract under **Standard choices and ad hoc recovery**. Establish whether anyone has already created an ESS agent whose content must be preserved, whether the maker has its Microsoft Copilot Studio URL and creator login, or whether the intended outcome is a new agent from an available agent template.
+For **Help me decide**, follow the shared contract under **Standard choices and ad hoc recovery**. Establish whether anyone has already created an ESS agent whose content must be preserved, whether the maker has its Microsoft Copilot Studio URL and creator login, or whether the intended outcome is a new agent from an available agent template. When **Plan my ESS rollout first** is offered, also establish whether the rollout's scenarios, owners, or target environment are still undecided.
 
 Do not run Dataverse foundation or onboarding playbooks. Begin a downstream
 playbook only when a maker whose setup is complete selects its documented ready
