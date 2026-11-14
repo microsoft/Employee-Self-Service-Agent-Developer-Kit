@@ -3679,14 +3679,16 @@ def test_optional_bridge_correlation_omits_malformed_ids(value, captured_post):
         assert not {"client_root_correlation_id", "client_request_id", "client_server_operation_id"} & row.keys()
 
 
-def test_bridge_correlation_is_verbatim_but_properties_remain_scrubbed(captured_post):
+@pytest.mark.parametrize("uppercase", [False, True])
+def test_bridge_correlation_normalizes_ids_and_scrubs_properties(captured_post, uppercase):
     fields = _http_attempt_fields()
+    supplied = {key: value.upper() if uppercase and isinstance(value, str) else value for key, value in fields.items()}
     envelope = _client_events_envelope()
     envelope["events"][0].update(
         operationId=fields["correlation_id"],
-        correlationId=fields["correlation_id"],
-        requestId=fields["client_request_id"],
-        serverOperationId=fields["server_operation_id"],
+        correlationId=supplied["correlation_id"],
+        requestId=supplied["client_request_id"],
+        serverOperationId=supplied["server_operation_id"],
         properties={"id": fields["client_request_id"]},
     )
     assert adk.CLIENT_EVENTS_SCHEMA_VERSION == 2

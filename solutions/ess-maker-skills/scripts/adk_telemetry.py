@@ -2182,6 +2182,8 @@ def _validate_client_events_envelope(envelope: Any) -> tuple[str | None, list[di
             ("serverOperationId", "client_server_operation_id"),
         ):
             value = event.get(source)
+            if isinstance(value, str):
+                value = value.lower()
             if _valid_client_operation_id(value):
                 row[target] = value
         blob, dropped = _client_properties_blob(event.get("properties"))

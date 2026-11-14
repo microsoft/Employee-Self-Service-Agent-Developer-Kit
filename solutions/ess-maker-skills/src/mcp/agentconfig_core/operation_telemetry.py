@@ -21,11 +21,12 @@ SERVER_OPERATION_ID = "com.microsoft.ess/server-operation-id"
 
 
 def valid_correlation_id(value: object) -> str | None:
-    """Keep only canonical hyphenated UUIDs, never arbitrary request metadata."""
+    """Normalize canonical hyphenated UUIDs to lowercase."""
     if not isinstance(value, str) or len(value) != 36:
         return None
     try:
-        return value if str(uuid.UUID(value)) == value.lower() else None
+        canonical = str(uuid.UUID(value))
+        return canonical if canonical == value.lower() else None
     except ValueError:
         return None
 
