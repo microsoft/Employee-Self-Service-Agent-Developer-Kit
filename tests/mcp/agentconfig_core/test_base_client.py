@@ -65,8 +65,9 @@ def test_token_cache_uses_shared_local_state() -> None:
     )
 
 
-def test_interactive_auth_always_prompts_for_account_selection(
-    monkeypatch, capsys
+@pytest.mark.parametrize("login_hint", [None, "maker@example.test"])
+def test_interactive_auth_selects_an_account_only_without_a_hint(
+    monkeypatch, capsys, login_hint
 ) -> None:
     captured: dict[str, object] = {}
 
@@ -96,10 +97,17 @@ def test_interactive_auth_always_prompts_for_account_selection(
     )
     monkeypatch.setattr(base_client.webbrowser, "open", lambda url: True)
 
-    result = base_client._acquire_token_interactive_form_post(FakeApp())
+    result = base_client._acquire_token_interactive_form_post(
+        FakeApp(), login_hint=login_hint
+    )
 
     assert result == {"access_token": "token"}
-    assert captured["prompt"] == "select_account"
+    if login_hint:
+        assert captured["login_hint"] == login_hint
+        assert "prompt" not in captured
+    else:
+        assert captured["prompt"] == "select_account"
+        assert "login_hint" not in captured
     output = capsys.readouterr()
     assert output.out == ""
     assert output.err == (
