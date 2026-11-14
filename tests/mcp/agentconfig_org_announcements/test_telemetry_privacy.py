@@ -45,6 +45,8 @@ org_telemetry = _ORG_MODULES["telemetry"]
 org_server = _ORG_MODULES["server"]
 org_client = _ORG_MODULES["client"]
 
+import adk_telemetry as adk  # noqa: E402
+
 
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
 TENANT_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -66,7 +68,6 @@ SECRET_URL = "https://contoso.example/secret-plan"
 FORBIDDEN = (
     TITLE_ID,
     LOB_TITLE_ID,
-    TENANT_ID,
     OBJECT_ID,
     SECRET_TITLE,
     SECRET_DESCRIPTION,
@@ -93,6 +94,13 @@ def emitted(monkeypatch) -> list[dict[str, Any]]:
 
     monkeypatch.setattr(
         org_telemetry, "_adk_telemetry", lambda: _FakeAdkTelemetry()
+    )
+    monkeypatch.setattr(adk, "emit_api_call", _FakeAdkTelemetry.emit_api_call)
+    monkeypatch.setattr(adk, "emit_http_request", _FakeAdkTelemetry.emit_api_call)
+    monkeypatch.setattr(adk, "telemetry_enabled", lambda: True)
+    monkeypatch.setattr(
+        adk, "get_tenant_identity",
+        lambda tenant_id, **kwargs: {"tenant_id": tenant_id, "tenant_name": ""},
     )
     return events
 
@@ -184,7 +192,7 @@ def test_an_unknown_operation_is_bucketed_rather_than_emitted(emitted) -> None:
 def test_every_registered_tool_has_an_observability_policy() -> None:
     tools = {tool.name for tool in asyncio.run(org_server.mcp.list_tools())}
 
-    assert tools == org_telemetry._OPERATIONS
+    assert tools - org_server.mcp._telemetry_exempt_tools == org_telemetry._OPERATIONS
 
 
 def test_an_unknown_error_source_is_bucketed(emitted) -> None:
@@ -278,6 +286,7 @@ def test_a_telemetry_failure_does_not_fail_the_tool_call(
             raise RuntimeError("collector unreachable")
 
     monkeypatch.setattr(org_telemetry, "_adk_telemetry", lambda: _Exploding())
+    monkeypatch.setattr(adk, "emit_api_call", _Exploding.emit_api_call)
     _install_fakes(monkeypatch)
 
     payload = _call(
@@ -554,6 +563,27 @@ def test_no_event_field_is_outside_the_agreed_set(monkeypatch, emitted) -> None:
         "error_code",
         "error_category",
         "error_message",
+        "mcp_server",
+        "server_operation_id",
+        "correlation_id",
+        "client_request_id",
+        "result_kind",
+        "http_attempt_count",
+        "retry_count",
+        "auth_refresh_count",
+        "retry_exhausted",
+        "http_status",
+        "failure_http_status",
+        "write_state",
+        "tenant_id",
+        "tenant_name",
+        "usage",
+        "http_request_id",
+        "http_attempt_number",
+        "http_method",
     }
     for event in emitted:
         assert set(event) <= allowed, set(event) - allowed
+        assert set(event.get("usage") or {}) <= {
+            "widget", "draft_present", "discovery_result_count",
+        }

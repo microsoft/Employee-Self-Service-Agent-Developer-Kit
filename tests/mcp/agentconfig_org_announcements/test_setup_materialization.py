@@ -81,6 +81,7 @@ def test_stdio_server_starts_in_its_runtime_directory_with_the_new_tool() -> Non
     assert runtime["tools"] == sorted({
         "resolve_agent_title_id", "open_org_announcements", "save_bulletin",
         "transition_bulletin", "duplicate_bulletin", "search_audience_groups",
+        "report_client_events",
     })
     assert runtime["schema"]["required"] == ["botId"]
     assert set(runtime["schema"]["properties"]) == {"botId"}

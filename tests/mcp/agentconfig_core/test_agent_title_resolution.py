@@ -70,9 +70,10 @@ def test_shared_lookup_reads_both_titles_without_writing_configuration(
         assert (endpoint, tenant_id, object_id) == (ENDPOINT, TENANT_ID, OBJECT_ID)
         return "test-resource-token"
 
-    def read(endpoint, resource_token, path, *, params):
+    def read(endpoint, resource_token, path, *, params, request_observer):
         calls.append((endpoint, path, params))
         assert resource_token == "test-resource-token"
+        assert request_observer is resolution.send_get_request
         return {
             "botid": BOT_ID,
             "applicationmanifestinformation": json.dumps({"microsoft365": metadata}),
