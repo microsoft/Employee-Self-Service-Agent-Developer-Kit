@@ -579,6 +579,10 @@ def test_final_network_failure_does_not_reuse_prior_http_status(monkeypatch, rec
         {ot.CORRELATION_ID: TENANT.replace("-", ""), ot.CLIENT_REQUEST_ID: [TENANT]},
         {ot.CORRELATION_ID: f"{{{TENANT}}}", ot.CLIENT_REQUEST_ID: TENANT + "\n"},
         {ot.CORRELATION_ID: TENANT, ot.CLIENT_REQUEST_ID: OTHER_TENANT},
+        {
+            ot.CORRELATION_ID: "ABCDEF01-2345-6789-ABCD-EF0123456789",
+            ot.CLIENT_REQUEST_ID: "ABCDEF01-2345-6789-ABCD-EF0123456780",
+        },
         {ot.CORRELATION_ID: TENANT},
         {ot.CLIENT_REQUEST_ID: OTHER_TENANT},
     ],
@@ -641,6 +645,8 @@ def test_native_request_metadata_correlates_each_execution(
         request = ot.valid_correlation_id(meta.get(ot.CLIENT_REQUEST_ID))
         assert returned[ot.CORRELATION_ID] == row["correlation_id"] == event["correlation_id"] == correlation
         assert returned.get(ot.CLIENT_REQUEST_ID) == row["client_request_id"] == event["client_request_id"] == request
+        assert correlation == correlation.lower()
+        assert request is None or request == request.lower()
         assert event["http_attempt_number"] == 1
         assert event["api_endpoint"] == "business"
         assert str(UUID(server_id)) == server_id
