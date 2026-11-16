@@ -51,8 +51,13 @@
 .PARAMETER FlightCheckOnly
     Install only the minimal toolchain needed to run FlightCheck (Python + Git +
     pip dependencies). Skips VS Code, extensions, and the full maker kit setup.
-    Prompts for your Dataverse environment URL and creates a minimal
-    .local/config.json so FlightCheck can authenticate without running /setup.
+    Selects and verifies a native Declarative Agent and runs shared maker setup
+    diagnostics without /setup. Legacy/custom-engine agents are not supported
+    by this standalone mode.
+
+.PARAMETER Checkpoint
+    With -FlightCheckOnly, run only this checkpoint ID or family (for example
+    WD-RUN-001). When omitted, runs the full DA setup diagnostics.
 
 .PARAMETER InstallMode
     Selects the VS Code experience: 'maker' (guided rail layout - was
@@ -98,8 +103,14 @@ param(
     [string] $Ring = 'prod',
     [ValidateSet('maker', 'developer', 'prompt', 'lite', 'standard')]
     [string] $InstallMode = 'prompt',
-    [switch] $SkipMakerProfile
+    [switch] $SkipMakerProfile,
+    [ValidateNotNullOrEmpty()]
+    [string] $Checkpoint
 )
+
+if ($Checkpoint -and -not $FlightCheckOnly) {
+    throw '-Checkpoint requires -FlightCheckOnly.'
+}
 
 # Back-compat: -SkipMakerProfile forces developer mode even when
 # -InstallMode is passed. This preserves the old behaviour where the
@@ -961,6 +972,7 @@ if (-not $SkipClone) {
             $gitOutput = Invoke-Native { & git fetch --quiet --tags origin }
             foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
             if ($LASTEXITCODE -ne 0) {
+                if ($FlightCheckOnly) { throw 'Could not fetch the requested FlightCheck revision. Resolve the Git error and rerun; stale diagnostics were not started.' }
                 Write-Warn2 "git fetch failed (exit $LASTEXITCODE). Continuing with local copy."
             } else {
                 $currentRef = Invoke-Native { & git branch --show-current } |
@@ -975,6 +987,7 @@ if (-not $SkipClone) {
                 $gitOutput = Invoke-Native { & git checkout --quiet $Branch }
                 foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
                 if ($LASTEXITCODE -ne 0) {
+                    if ($FlightCheckOnly) { throw "Could not check out '$Branch'. Resolve the Git error and rerun; stale diagnostics were not started." }
                     # Loud, actionable: silent fallback to stale code is what
                     # caused the "env types showing Unknown" / "browser doesn't
                     # open" regression reports for users who first installed
@@ -995,6 +1008,7 @@ if (-not $SkipClone) {
                         }
                         foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
                         if ($LASTEXITCODE -ne 0) {
+                            if ($FlightCheckOnly) { throw "Could not update '$Branch'. Resolve the Git error and rerun; stale diagnostics were not started." }
                             Write-Warn2 "git pull failed (exit $LASTEXITCODE). Continuing with local copy (may be behind '$Branch')."
                             Write-Warn2 "If you see stale behavior, delete '$repoPath' and re-run."
                         }
@@ -1220,12 +1234,11 @@ if (-not $FlightCheckOnly) {
 # 6. FlightCheck config generation (FlightCheckOnly mode)
 # ---------------------------------------------------------------------------
 if ($FlightCheckOnly) {
-    Write-Step 'Configuring FlightCheck environment'
+    Write-Step 'Configuring FlightCheck environment (DA)'
 
     $localDir = Join-Path $workspace '.local'
     $configPath = Join-Path $localDir 'config.json'
 
-    # Resolve python command early - needed for both discovery and fetch
     $pythonExe = Resolve-Python
     if (-not $pythonExe) {
         throw 'Python not found on PATH or known locations. Cannot run FlightCheck.'
@@ -1238,322 +1251,45 @@ if ($FlightCheckOnly) {
         $pyCmd = $pythonExe; $pyBaseArgs = @()
     }
 
-    if (Test-Path $configPath) {
-        Write-Host ''
-        Write-Host "    Config already exists at $configPath" -ForegroundColor White
-        Write-Host '    Would you like to reconfigure? (Y/N)' -ForegroundColor Gray
-        Write-Host ''
-        $reconfigure = Read-Host '    Reconfigure'
-        if ($reconfigure -notmatch '^[Yy]') {
-            Write-Ok 'Keeping existing config'
+    $setupPy = Join-Path $workspace 'scripts\flightcheck_setup.py'
+    if (-not (Test-Path -LiteralPath $setupPy)) {
+        throw "DA FlightCheck setup is missing from '$Branch'. Update the checkout; legacy diagnostics were not started."
+    }
+    Push-Location $workspace
+    $prevEAP = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $pyCmd @pyBaseArgs $setupPy --ring $Ring
+        $setupExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEAP
+        if ($setupExit -ne 0) {
+            throw 'DA selection did not complete. FlightCheck was not started; any prior report is unchanged.'
+        }
+        $configState = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+        if ($configState.releaseLine -ne 'da' -or -not $configState.agent.botId -or -not $configState.activeAgent) {
+            throw 'Standalone FlightCheck requires a verified selected DA; legacy diagnostics were not started.'
+        }
+        $cliArgs = @(
+            'scripts\flightcheck\cli.py',
+            '--invocation-source', 'installer', '--select-targets', 'never',
+            '--agent-slug', $configState.activeAgent,
+            '--tenant-id', $configState.tenantId,
+            '--preferred-username', $configState.account,
+            '--ring', $configState.ring
+        )
+        if ($Checkpoint) {
+            Write-Step "Running FlightCheck checkpoint $Checkpoint"
+            $cliArgs += @('--checkpoint', $Checkpoint)
         } else {
-            Remove-Item $configPath -Force
-            Write-Ok 'Removed existing config - starting fresh'
+            Write-Step 'Running FlightCheck DA setup diagnostics'
+            $cliArgs += @('--scope', 'full')
         }
-    }
-
-    # --- Account selection: offer to clear cached MSAL tokens ---
-    # Runs before BOTH the discover.py auth (when reconfiguring) and the
-    # FlightCheck run (which also authenticates via cli.py), so a single
-    # prompt covers every code path that hits the MSAL cache.
-    # All FlightCheck clients share .local/.token_cache.bin. The cached
-    # tokens silently sign the next run in as whichever user authenticated
-    # last - desirable most of the time, but bites users who installed
-    # under one account and now need to FlightCheck a different tenant /
-    # different user (e.g. customer-engineer scenarios). Offer an explicit
-    # switch rather than making them hunt for the cache file.
-    $tokenCacheFile = Join-Path $localDir '.token_cache.bin'
-    if (Test-Path $tokenCacheFile) {
-        # Force array context with @(...) - Get-CachedUsernames returns a
-        # [string[]] guarded by the unary comma operator, but belt-and-
-        # suspenders here in case the function output ever changes.
-        $cachedUsers = @(Get-CachedUsernames -CachePath $tokenCacheFile)
-        Write-Host ''
-        if ($cachedUsers.Count -eq 1) {
-            Write-Host "    Existing sign-in detected: $($cachedUsers[0])" -ForegroundColor White
-        } elseif ($cachedUsers.Count -gt 1) {
-            Write-Host '    Existing sign-in detected for:' -ForegroundColor White
-            foreach ($u in $cachedUsers) {
-                Write-Host "      - $u" -ForegroundColor White
-            }
-        } else {
-            # Cache present but couldn't read the username (corrupt JSON,
-            # schema change, etc.). Fall back to the generic message.
-            Write-Host '    Existing sign-in detected from a previous session.' -ForegroundColor White
-        }
-        Write-Host '    Sign in as a different account? (y/N)' -ForegroundColor Gray
-        $switchAccount = Read-Host '    Switch account'
-        if ($switchAccount -match '^[Yy]') {
-            try {
-                Remove-Item $tokenCacheFile -Force
-                Write-Ok 'Cleared sign-in cache - you will be prompted to sign in fresh'
-                Write-Host '    Tip: your browser may auto-SSO into the previous account.' -ForegroundColor DarkGray
-                Write-Host '          If so, sign out at https://login.microsoftonline.com' -ForegroundColor DarkGray
-                Write-Host '          or use an InPrivate/Incognito browser window.' -ForegroundColor DarkGray
-            } catch {
-                Write-Warn2 "Could not remove token cache at $tokenCacheFile - $($_.Exception.Message)"
-                Write-Warn2 'Continuing with cached sign-in.'
-            }
-        } else {
-            Write-Ok 'Using cached sign-in'
-        }
-    }
-
-    if (-not (Test-Path $configPath)) {
-        $scriptsDir = Join-Path $workspace 'scripts'
-        $discoverPy = Join-Path $scriptsDir 'discover.py'
-
-        if (-not (Test-Path $discoverPy)) {
-            throw "discover.py not found at $discoverPy. Was the repo cloned correctly?"
-        }
-
-        # --- Step 1: List environments and let user pick ---
-        Write-Host ''
-        Write-Host '    Listing Power Platform environments in your tenant...' -ForegroundColor White
-        Write-Host '    A browser window will open for sign-in.' -ForegroundColor Gray
-        Write-Host ''
-
-        # Run discover.py --list-environments (interactive - shows table to user)
-        Push-Location $workspace
-        try {
-            $discoverArgs = $pyBaseArgs + @($discoverPy, '--list-environments')
-            $output = Invoke-Native { & $pyCmd @discoverArgs }
-            # Filter out the machine-parseable JSON dump lines that discover.py
-            # emits for programmatic consumers (skills read these; a maker
-            # running the installer just sees an unreadable wall of JSON).
-            foreach ($line in $output) {
-                if ($line -match '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):') { continue }
-                Write-Host $line
-            }
-            if ($LASTEXITCODE -ne 0) {
-                throw 'Environment listing failed.'
-            }
-
-            Write-Host ''
-            $envChoice = Read-Host '    Select environment number from the list above'
-            if ($envChoice) { $envChoice = $envChoice.Trim() }
-            if (-not $envChoice -or $envChoice -notmatch '^\d+$') {
-                throw 'Invalid selection. Please re-run and pick a number from the list.'
-            }
-
-            # Re-run with --select to get machine-parseable JSON
-            $selectArgs = $pyBaseArgs + @($discoverPy, '--list-environments', '--select', $envChoice)
-            $envOutput = Invoke-Native { & $pyCmd @selectArgs }
-            if ($LASTEXITCODE -ne 0) {
-                throw "Environment selection failed: $envOutput"
-            }
-            $envJsonLine = ($envOutput | Where-Object { $_ -match '^SELECTED_ENV_JSON:' }) -replace '^SELECTED_ENV_JSON:', ''
-            if (-not $envJsonLine) {
-                throw 'Could not parse environment selection output.'
-            }
-            $selectedEnv = $envJsonLine | ConvertFrom-Json
-            $envUrl = $selectedEnv.instanceUrl.TrimEnd('/')
-
-            if (-not $envUrl) {
-                throw 'Selected environment has no linked Dataverse URL.'
-            }
-            Write-Ok "Environment: $($selectedEnv.displayName)"
-            Write-Ok "URL: $envUrl"
-
-            # --- Step 2: List agents and let user pick ---
-            Write-Host ''
-            Write-Host '    Discovering agents in this environment...' -ForegroundColor White
-            Write-Host ''
-
-            $agentListArgs = $pyBaseArgs + @($discoverPy, '--url', $envUrl)
-            $output = Invoke-Native { & $pyCmd @agentListArgs }
-            foreach ($line in $output) {
-                if ($line -match '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):') { continue }
-                Write-Host $line
-            }
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warn2 'Agent discovery failed. Config will be created without a bot ID.'
-                $botId = ''
-                $agentName = 'FlightCheck-only (no agent selected)'
-                $schemaName = ''
-                $isManaged = $true
-            } else {
-                Write-Host ''
-                $agentChoice = Read-Host '    Select agent number (or press Enter to run environment-wide checks only)'
-                if ($agentChoice) { $agentChoice = $agentChoice.Trim() }
-
-                if ($agentChoice -and $agentChoice -match '^\d+$') {
-                    $agentSelectArgs = $pyBaseArgs + @($discoverPy, '--url', $envUrl, '--select', $agentChoice)
-                    $agentOutput = Invoke-Native { & $pyCmd @agentSelectArgs }
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-Warn2 "Agent selection failed. Continuing without bot ID."
-                        $botId = ''
-                        $agentName = 'FlightCheck-only (no agent selected)'
-                        $schemaName = ''
-                        $isManaged = $true
-                    } else {
-                        $agentJsonLine = ($agentOutput | Where-Object { $_ -match '^SELECTED_AGENT_JSON:' }) -replace '^SELECTED_AGENT_JSON:', ''
-                        if ($agentJsonLine) {
-                            $selectedAgent = $agentJsonLine | ConvertFrom-Json
-                            $botId = $selectedAgent.botid
-                            $agentName = $selectedAgent.name
-                            $schemaName = $selectedAgent.schemaname
-                            $isManaged = [bool]$selectedAgent.ismanaged
-                            Write-Ok "Agent: $agentName"
-                        } else {
-                            $botId = ''
-                            $agentName = 'FlightCheck-only (no agent selected)'
-                            $schemaName = ''
-                            $isManaged = $true
-                        }
-                    }
-                } else {
-                    Write-Warn2 'Skipping agent selection. Some agent-specific checks will be skipped.'
-                    $botId = ''
-                    $agentName = 'FlightCheck-only (no agent selected)'
-                    $schemaName = ''
-                    $isManaged = $true
-                }
-            }
-        } finally { Pop-Location }
-
-        # Create .local directory
-        if (-not (Test-Path $localDir)) {
-            New-Item -ItemType Directory -Path $localDir -Force | Out-Null
-        }
-
-        # Write minimal config.json sufficient for FlightCheck
-        $slug = 'flightcheck-only'
-        $agentEntry = @{
-            name       = $agentName
-            botId      = $botId
-            schemaName = $schemaName
-            isManaged  = $isManaged
-            slug       = $slug
-            folder     = ''
-        }
-
-        # Match the structure setup.py produces: agents array + activeAgent slug
-        if ($botId) {
-            $agentsList = [System.Collections.ArrayList]@()
-            $agentsList.Add($agentEntry) | Out-Null
-        } else {
-            $agentsList = [System.Collections.ArrayList]@()
-        }
-
-        $config = @{
-            configVersion      = 1
-            setup              = 'flightcheck-only'
-            dataverseEndpoint  = $envUrl
-            ring               = $Ring
-            flightCheckOnly    = $true
-            agent              = $agentEntry
-            agents             = $agentsList
-            activeAgent        = if ($botId) { $slug } else { '' }
-        }
-
-        $json = $config | ConvertTo-Json -Depth 4 -Compress:$false
-        [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $false))
-        Write-Ok "Created $configPath"
-    }
-
-    # Reuse the retained config's ring when it has one, infer it from a saved
-    # environment API endpoint when possible, and migrate legacy configs that
-    # had neither. This keeps the explicit --ring argument consistent with the
-    # durable config instead of letting the installer's default prod conflict
-    # with a retained preprod/test workspace.
-    $configState = Get-Content $configPath -Raw | ConvertFrom-Json
-    $effectiveRing = [string]$configState.ring
-    if (-not $effectiveRing) {
-        $endpoint = ([string]$configState.powerPlatformApiEndpoint).ToLowerInvariant()
-        if ($endpoint -match 'api[.]test[.]powerplatform[.]com') {
-            $effectiveRing = 'test'
-        } elseif ($endpoint -match 'api[.]preprod[.]powerplatform[.]com') {
-            $effectiveRing = 'preprod'
-        } elseif ($endpoint -match 'api[.]powerplatform[.]com') {
-            $effectiveRing = 'prod'
-        }
-    }
-    if (-not $effectiveRing) { $effectiveRing = $Ring }
-    $effectiveRing = $effectiveRing.Trim().ToLowerInvariant()
-    if ($effectiveRing -notin @('prod', 'preprod', 'test')) {
-        throw "Existing config has unsupported Power Platform ring '$effectiveRing'. Reconfigure and choose prod, preprod, or test."
-    }
-    $Ring = $effectiveRing
-    $configState | Add-Member -NotePropertyName ring -NotePropertyValue $Ring -Force
-    $json = $configState | ConvertTo-Json -Depth 20 -Compress:$false
-    [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $false))
-
-    # --- Read config values if they came from an existing file ---
-    if (-not $botId -and (Test-Path $configPath)) {
-        $existingConfig = Get-Content $configPath -Raw | ConvertFrom-Json
-        $envUrl = $existingConfig.dataverseEndpoint
-        $botId = $existingConfig.agent.botId
-        $agentName = $existingConfig.agent.name
-        $schemaName = $existingConfig.agent.schemaName
-        $isManaged = $existingConfig.agent.isManaged
-    }
-
-    # --- Fetch solution snapshot for local file checks ---
-    if ($botId) {
-        Write-Step 'Fetching agent solution from Dataverse'
-        $fetchPy = Join-Path $workspace 'scripts\fetch_and_setup.py'
-        if (Test-Path $fetchPy) {
-            Push-Location $workspace
-            try {
-                $fetchArgs = $pyBaseArgs + @(
-                    $fetchPy,
-                    '--url', $envUrl,
-                    '--bot-id', $botId,
-                    '--name', $agentName,
-                    '--schema', $schemaName
-                )
-                if ($isManaged) { $fetchArgs += '--managed' }
-
-                Start-Spinner "fetching agent solution"
-                $fetchOutput = & $pyCmd @fetchArgs 2>&1
-                $fetchExit = $LASTEXITCODE
-                Stop-Spinner "fetching agent solution"
-
-                if ($fetchExit -eq 0) {
-                    Write-Ok 'Agent solution fetched and extracted'
-                } else {
-                    Write-Warn2 'fetch_and_setup.py exited with errors. Local file checks may be skipped.'
-                    foreach ($line in $fetchOutput) { Write-Host "      $line" }
-                }
-            } finally { Pop-Location }
-        } else {
-            Write-Warn2 "fetch_and_setup.py not found at $fetchPy. Local file checks will be skipped."
-        }
-    } else {
-        Write-Host ''
-        Write-Host '    [info] No agent selected - skipping solution fetch (local file checks will be skipped).' -ForegroundColor Gray
-    }
-
-    # --- Run FlightCheck ---
-    Write-Step 'Running FlightCheck'
-    $pythonExe = Resolve-Python
-    if ($pythonExe) {
-        Push-Location $workspace
-        try {
-            # Run FlightCheck with EAP=Continue so stderr doesn't terminate,
-            # but let output stream directly to console (FlightCheck is interactive)
-            $prevEAP = $ErrorActionPreference
-            $ErrorActionPreference = 'Continue'
-            # --ring <ring>: the FlightCheck-only installer discovers
-            # environments via BAP prod (api.bap.microsoft.com) by default,
-            # so we target the prod service ring unless the caller (typically
-            # a PM validating a preprod/test environment) overrode -Ring.
-            # Persisting the ring supports later /flightcheck runs; forwarding
-            # it explicitly also covers this first run and older configs.
-            if ($pythonExe -eq 'py -3.12') {
-                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
-            } elseif ($pythonExe -eq 'py -3') {
-                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
-            } else {
-                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
-            }
-            $ErrorActionPreference = $prevEAP
-        } finally { Pop-Location }
-    } else {
-        Write-Warn2 'Python not found. Open a new terminal and run:'
-        Write-Warn2 "  cd $workspace"
-        Write-Warn2 "  python scripts/flightcheck/cli.py --scope full --select-targets always --ring $Ring"
+        $ErrorActionPreference = 'Continue'
+        & $pyCmd @pyBaseArgs @cliArgs
+        $flightCheckExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEAP
+        Pop-Location
     }
     # Record the FlightCheck-only install as a success HERE, before the early
     # return below. This branch returns from inside the top-level try well
@@ -1565,6 +1301,7 @@ if ($FlightCheckOnly) {
     # outcome has been emitted. (The FlightCheck run's own pass/fail verdict is
     # separate telemetry emitted by cli.py; this outcome is the install's.)
     Complete-EssInstallTelemetry -Outcome 'success'
+    $global:LASTEXITCODE = $flightCheckExit
     # ``return`` (not ``exit 0``) so the script ends without terminating
     # the PowerShell host. When this installer is invoked via
     # ``iex (irm .../bootstrap-flightcheck.ps1)`` from an interactive

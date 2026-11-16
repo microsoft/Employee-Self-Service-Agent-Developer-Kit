@@ -832,4 +832,7 @@ def cli() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(cli())
+    from adk_telemetry import script_error_boundary
+
+    with script_error_boundary("evaluate_evals"):
+        raise SystemExit(cli())

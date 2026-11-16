@@ -96,24 +96,21 @@ def bash_launch_section(bash_text: str) -> str:
 
 
 class TestPowerShellInstallerAutoLaunch:
-    def test_flightcheck_only_config_persists_selected_ring(
+    def test_flightcheck_only_uses_verified_da_setup(
         self, ps1_text: str
     ) -> None:
-        config_match = re.search(
-            r"\$config\s*=\s*@\{.*?^\s*ring\s*=\s*\$Ring\s*$",
-            ps1_text,
-            flags=re.DOTALL | re.MULTILINE,
-        )
-        assert config_match, (
-            "FlightCheck-only config must persist the selected Power Platform "
-            "ring for later /flightcheck runs"
-        )
-        assert re.search(
-            r"\$configState\s*\|\s*Add-Member\s+"
-            r"-NotePropertyName\s+ring\s+"
-            r"-NotePropertyValue\s+\$Ring\s+-Force",
-            ps1_text,
-        ), "retained FlightCheck-only configs must be migrated with a ring"
+        section = ps1_text.split("# 6. FlightCheck config generation", 1)[1]
+        section = section.split("# VS Code can retain", 1)[0]
+        assert "'scripts\\flightcheck_setup.py'" in section
+        assert "$setupPy --ring $Ring" in section
+        assert "if ($setupExit -ne 0)" in section
+        assert "'--agent-slug', $configState.activeAgent" in section
+        assert "'--preferred-username', $configState.account" in section
+        assert "'--tenant-id', $configState.tenantId" in section
+        assert "'--ring', $configState.ring" in section
+        assert "discover.py" not in section
+        assert "fetch_and_setup.py" not in section
+        assert "select-targets always" not in section
 
     def test_launch_section_invokes_code_chat_with_setup_prompt(
         self, ps1_launch_section: str
