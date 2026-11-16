@@ -1,11 +1,13 @@
 <#
 .SYNOPSIS
-    One-liner bootstrap for FlightCheck-only installation.
+    One-liner bootstrap for Declarative Agent FlightCheck installation.
 
 .DESCRIPTION
     Downloads the installer script into a temp folder and runs it with
     -FlightCheckOnly. Installs only Python + Git, pip dependencies, and
-    walks through interactive environment/agent discovery.
+    selects a native Declarative Agent and runs shared maker setup diagnostics.
+    Legacy/custom-engine agents and environment-only runs are not supported
+    by this standalone entry point.
 
     Designed to be invoked from a single command:
 
@@ -20,6 +22,10 @@
 .PARAMETER Branch
     Forwarded to Install-EssAdk.ps1. Defaults to "main".
 
+.PARAMETER Checkpoint
+    Run only this checkpoint ID or family (for example WD-RUN-001).
+    When omitted, runs the full DA setup diagnostics.
+
 .PARAMETER SourceBaseUrl
     Where to fetch the installer files from. Defaults to the raw GitHub URL of
     the setup folder. Override for testing.
@@ -31,7 +37,9 @@ param(
     [string] $Branch = 'main',
     [ValidateSet('prod', 'preprod', 'test')]
     [string] $Ring = 'prod',
-    [string] $SourceBaseUrl
+    [string] $SourceBaseUrl,
+    [ValidateNotNullOrEmpty()]
+    [string] $Checkpoint
 )
 
 # Derive SourceBaseUrl from $Branch so that passing -Branch also fetches the
@@ -90,5 +98,6 @@ $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
 $installerArgs = @{ Branch = $Branch; FlightCheckOnly = $true; Ring = $Ring }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
+if ($Checkpoint) { $installerArgs.Checkpoint = $Checkpoint }
 
 & $scriptBlock @installerArgs

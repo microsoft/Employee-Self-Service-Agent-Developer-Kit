@@ -3822,4 +3822,7 @@ def _status_tag(status: str) -> str:
 
 
 if __name__ == "__main__":
-    main()
+    from adk_telemetry import script_error_boundary
+
+    with script_error_boundary("flightcheck.cli"):
+        main()
