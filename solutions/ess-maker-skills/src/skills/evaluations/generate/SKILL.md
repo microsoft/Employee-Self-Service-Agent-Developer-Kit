@@ -275,11 +275,9 @@ through catalogue-grounded generation rather than topic-grounded generation.
 Do not show a separate validation progress message or preamble after the
 generated-case preview.
 
-After the subagent returns, display its **Post-generation quality report**
-scorecard verbatim. Preserve the exact opening paragraph, overall line,
-case-count line, eight score rows, optional improvements, local-only warning,
-next-steps heading, and four closing questions. Do not add a table, filename
-callout, summary, or second preamble.
+After the validate subagent returns a completed quality report, render **Post-generation quality report** from `src/skills/evaluations/experience-contract.md` exactly. Do not append a next-steps heading or action questions to the scorecard.
+
+Leave next-step selection to this skill’s maker-action step after its quality gate and selected fix/revalidation flow. That step uses **Four maker actions** from the same contract.
 The generated-case tables from Step 6 appear once only; never repeat them during
 or after quality validation unless a fix changed specific rows, in which case
 show only those changed rows.

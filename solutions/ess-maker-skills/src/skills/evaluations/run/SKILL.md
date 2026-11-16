@@ -234,6 +234,14 @@ format. Replace brace-delimited values with returned or deterministically
 derived data. Preserve the headings, punctuation, blank lines, and table column
 order. Do not prepend a metadata table or repeat the generated-case preview.
 
+Resolve the following placeholders before rendering. `{Expected failure explanation}`
+is the evidence-based explanation or the exact sentence
+"No failures were explicitly marked as expected for this run."
+`{Expected failure table}` is the table defined below, included only when
+explicit expected-failure evidence exists; otherwise omit it.
+`{Next corrective action question}` is one concise question offering the most
+useful next corrective action. Keep these conditions outside the result copy.
+
 ```text
 **Eval run complete — {passed} of {total} passed, {failed} failed ({pass-rate}%)**
 
@@ -247,9 +255,9 @@ Verdict: {verdict against the stated target}
 
 **Expected failures**
 
-{evidence-based explanation, or "No failures were explicitly marked as expected for this run."}
+{Expected failure explanation}
 
-{expected-failure table only when explicit expected-failure evidence exists}
+{Expected failure table}
 
 **Failure analysis — grouped by root cause**
 
@@ -264,7 +272,7 @@ Verdict: {verdict against the stated target}
 • {owner}: {consolidated corrective actions}
 • Gate: {target and the condition required before promotion}
 
-{one concise question offering the most useful next corrective action}
+{Next corrective action question}
 ```
 
 Use `✅` when a scenario group meets the stated target and `❌` when it does not.

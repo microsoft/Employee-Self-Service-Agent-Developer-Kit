@@ -113,7 +113,6 @@ SCRIPT_ERROR_ENTRY_POINTS = {
     "checkpoint": "",
     "connect_servicenow_da": "connect",
     "drive_topic": "topic_test",
-    "eval_scenario": "evaluation_validate",
     "evaluate_evals": "evaluation_validate",
     "evaluation_authoring": "evaluation_create",
     "evaluation_csv": "evaluation_validate",

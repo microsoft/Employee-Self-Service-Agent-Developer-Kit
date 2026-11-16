@@ -1,24 +1,39 @@
 # Cleanup Skill
 
+<!-- markdownlint-disable MD001 -->
+
 This skill scans a cloned ESS agent for compile errors and walks the user through fixing them.
 
-Complete the checkpoint, local fixes, and re-scan, but skip every `push.py`
-instruction. Finish by saying the local fixes are ready and DA-GA deployment is
-not yet available in this release.
+Distinguish local fixes from changes pushed to the agent. Use the normal topic
+update owner for approved changes and the general Push prompt for
+a selected batch. Carry scoped approval forward without repeating it.
 
 ## Rules
 
-- Do NOT run terminal commands or scripts EXCEPT the kit's own helper scripts under `scripts/` (specifically `python scripts/checkpoint.py`, `python scripts/push.py`, and `python scripts/emit_capability.py`, which Steps 2b and 6 require). For everything else - file edits, validation, lookups - use your built-in file reading, writing, and editing tools only. Do NOT use Python, PowerShell, Node.js, or any other scripting language to do work the editing tools can do.
+- Before proposing or applying topic-file fixes, read and apply **Authoring policy for this release** in [the shared topic contract](../topics/experience-contract.md). Topic deletion is not available in this release. Preserve local files, baselines and mappings; report blocked operations as unchanged with their specific reason, not as fixed, and continue read-only scanning and independently eligible work.
+- Do NOT run terminal commands or scripts EXCEPT the kit's own helper scripts under `scripts/`, including the selected topic owner's preview and approved execution commands. For everything else - file edits, validation, lookups - use your built-in file reading, writing, and editing tools only. Do NOT use Python, PowerShell, Node.js, or any other scripting language to do work the editing tools can do.
 - Do NOT fix errors automatically without user confirmation. Present each group of errors and ask the user before making changes.
 - Do NOT modify the source template files in `src/`. Only modify files inside the agent folder (the cloned agent at the workspace root).
 - After fixing errors, re-scan to verify the fix worked. Show the updated error count.
-- **Communication**: Follow the communication rules in `copilot-instructions.md`. Do NOT mention patches, deltas, diagnostics tools, stale caches, skill files, or any internal terminology. Speak in plain terms: "Fixing...", "Fixed.", "Scanning again...", "X errors remaining."
-- **Stale diagnostics**: After editing a file, the error scanner may still report the old error for a short time. If you've verified the file contents are correct (by reading the file after editing), treat the error as resolved and move on. Do NOT re-fix an already-fixed file. Do NOT tell the user about stale/cached diagnostics — just report the fix as done.
-- **TRACK PROGRESS**: Use the todo list tool to track your progress through this skill's steps. Create a todo list at the start with all the steps, mark each in-progress as you start it, and mark completed when done.
+- **Communication**: Follow the communication rules in `copilot-instructions.md`. Use the status definitions below for observed results. Keep internal tooling terms out of maker-facing messages.
+- **Pending verification**: Preserve a completed edit without repeatedly applying it when diagnostics have not refreshed. Report the edit and verification state separately; do not count an unconfirmed diagnostic result as resolved.
+
+## Cleanup status updates
+
+Read the [shared foundation](../topics/experience-contract.md), including Status update markers and Presentation and scope, before scanning. Use the local definitions below, not a native todo list or progress checklist. Bind counts to the current deduplicated local scan. Delegated topic edits emit through their performing owners; cleanup does not repeat their updates.
+
+| Reporting point        | Completion condition                                                                                              | Completion message                                                       |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `cleanup-scan`         | Both local error sources have been read for the selected agent and their current results merged and deduplicated. | ✅ Checked the local agent files: **{Error count}** errors found.        |
+| `cleanup-checkpoint`   | The checkpoint operation confirms a saved snapshot before any approved edit.                                      | ✅ Saved a checkpoint of your agent files.                               |
+| `cleanup-verification` | A fresh combined scan reflects the post-change files and establishes the remaining local error count.             | ✅ Rechecked the local agent files: **{Remaining count}** errors remain. |
+
+For missing, failed or stale scan evidence, state what remains unverified rather than claiming zero errors or resolved findings. Preserve confirmed edits and remote outcomes separately. A failed checkpoint leaves fixes unstarted. For partial work, name completed changes and the remaining issue in the [Final Report](#step-6-final-report). A local scan does not verify remote behavior.
 
 ## Step 1: Read Config
 
 Read `.local/config.json` to get the agent details:
+
 - `agent.folder` — the name of the cloned agent folder (e.g., `Employee Self-Service HR`)
 - `agent.slug` — the slugified name (e.g., `employee-self-service-hr`)
 
@@ -31,6 +46,8 @@ there are any errors at all. Gather errors from both sources described in
 Step 3 below (VS Code Problems panel + agent folder scan), merge and
 deduplicate.
 
+{EMIT_STATUS_UPDATE: cleanup-scan}
+
 If the error count is **zero**, skip the checkpoint entirely and jump
 straight to Step 6 (Final Report) with 0 errors before / 0 fixed / 0
 remaining. Do NOT ask the user to confirm a checkpoint — there's nothing
@@ -42,16 +59,46 @@ If the error count is **greater than zero**, continue to Step 2b.
 
 Tell the user:
 
-> "I found {count} errors. Before making any changes, I'll save a checkpoint of your agent files. This way you can always restore them if needed. **Ready to proceed?**"
+> I found {count} errors. Before making any changes, I'll save a checkpoint of your agent files. This lets you restore the local files if needed; it does not restore changes already pushed to the agent.
+>
+> ##### YOUR CHOICES
+>
+> | Choice          | What happens                                                                                     |
+> | --------------- | ------------------------------------------------------------------------------------------------ |
+> | Save checkpoint | Save a local snapshot, then review proposed fixes. This does not approve edits or a remote Push. |
+> | Not now         | Leave files unchanged and stop before fixing errors.                                             |
 
-Wait for the user to confirm.
+Use the shared native-question conventions. Call `ask_user`:
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Cleanup checkpoint",
+        "description": "How would you like to continue?",
+        "enum": ["Save checkpoint", "Not now"]
+      }
+    }
+  }
+}
+```
+
+Wait for Save checkpoint before continuing. Not now stops without edits.
 
 When confirmed:
+
 - Run in the terminal: `python scripts/checkpoint.py "pre-scan-fixes"`
 - This saves a full snapshot of all working files before any modifications.
+
+{EMIT_STATUS_UPDATE: cleanup-checkpoint}
+
+Continue only after the checkpoint is confirmed.
+
 - Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
   message, and it never fails the step): `python scripts/emit_capability.py cleanup`
-- Tell the user: "Checkpoint saved. Let me walk you through the fixes."
 
 ## Step 3: Scan for Errors (detailed categorization)
 
@@ -60,43 +107,49 @@ Gather errors from TWO sources and combine them into a single list:
 1. **VS Code Problems panel** — Use the error/diagnostics tool with NO file path filter (get all errors across the workspace). Filter the results to only include errors from files inside `{agent.folder}/`.
 2. **Agent folder scan** — Use the error/diagnostics tool specifically on `{agent.folder}/`.
 
-Merge both lists and deduplicate (the same error may appear in both). Use the combined list for the rest of this flow.
+Merge both lists and deduplicate (the same error may appear in both). Use the combined list for the rest of this flow. Reuse the quick scan while still current; report only a new scan assessment here.
+
+{EMIT_STATUS_UPDATE: cleanup-scan}
 
 After scanning, group the errors into these categories:
 
 ### Category 1: ModelDescription Too Long
+
 **Error message**: `Property 'ModelDescription' exceeds maximum length of 1024 characters`
 **What it means**: The topic's `modelDescription` field (under `beginDialog`) is longer than 1024 characters, which Copilot Studio doesn't allow.
 **Fix**: Truncate or rewrite the `modelDescription` to fit within 1024 characters while preserving the key intent information.
 
 ### Category 2: Missing CloudFlow
+
 **Error message**: `CloudFlow with id '{guid}' not found`
 **What it means**: The topic references a Power Automate workflow (via `InvokeFlowAction` with a `flowId`) that wasn't included in the clone. This usually happens with add-on workflows (ADP, D365, password reset, catalog) that aren't part of the core ESS package.
 **Fix options**:
-- **Delete the topic file** — Remove the topic entirely since it can't work without its workflow
-- **Skip** — Leave it as-is (errors will remain but won't affect other topics)
+
+- Leave the reference unchanged and report the unresolved error and any known impact. A missing workflow in local extraction does not establish its absence at runtime. Topic deletion is not available in this release.
 
 ### Category 3: Missing Dialog Reference
+
 **Error message**: `Dialog with id '{schema}.topic.{name}' not found`
 **What it means**: The topic references another topic using a `BeginDialog` action, but the schema name in the reference is wrong. Common cause: truncated schema name (e.g., `msdyn_copilotforemployeeselfservice` instead of `msdyn_copilotforemployeeselfservicehr`).
 **Fix**: Look at the incorrect dialog reference. Read `.local/config.json` to get the correct `agent.schemaName`. Replace the wrong schema prefix with the correct one. For example, if the error says `msdyn_copilotforemployeeselfservice.topic.WorkdayManagerCheck` and the correct schemaName is `msdyn_copilotforemployeeselfservicehr`, replace `msdyn_copilotforemployeeselfservice` with `msdyn_copilotforemployeeselfservicehr` in the file.
 
 ### Unknown Errors
+
 If you find errors that don't match any of the above categories, list them separately and tell the user: "I found some errors I don't have an automatic fix for. Here's what they are:" Then list them and suggest the user check the Copilot Studio documentation.
 
 ## Step 4: Present Summary
 
 Show the user a summary table:
 
-```
-I found {total} errors across {file_count} files:
-
-| Error Type | Files Affected | Fix |
-|-----------|---------------|-----|
-| ModelDescription too long | {count} topics | Truncate to fit 1024-char limit |
-| Missing CloudFlow | {count} topics | Delete topic or skip |
-| Missing Dialog reference | {count} topics | Correct the schema name |
-```
+> ##### SCAN RESULTS
+>
+> I found {total} errors across {file_count} files:
+>
+> | Error Type                | Files Affected | Fix                             |
+> | ------------------------- | -------------- | ------------------------------- |
+> | ModelDescription too long | {count} topics | Truncate to fit 1024-char limit |
+> | Missing CloudFlow         | {count} topics | Report the unresolved reference |
+> | Missing Dialog reference  | {count} topics | Correct the schema name         |
 
 Then say: "Let's walk through each file. I'll explain what's wrong and propose fixes for your approval before making any changes."
 
@@ -106,11 +159,12 @@ Work through errors **one file at a time**. If a single file has multiple error 
 
 For each file with errors:
 
-1. Tell the user which topic has issues and list ALL errors in that file.
-2. Read the full topic file.
-3. For each error in the file, propose a fix:
+1. Read the full topic file.
+2. Name the topic under an H5 TOPIC heading and list all its errors under H5 ERRORS.
+3. Propose fixes under H5 PROPOSED FIXES using the applicable guidance below, then show the corresponding choice explanations and native control.
 
 ### ModelDescription Too Long
+
 - Find the `modelDescription` field under `beginDialog`.
 - Rewrite it to be under 1024 characters. Keep the essential information:
   - What the topic does (1-2 sentences)
@@ -120,46 +174,110 @@ For each file with errors:
 - Show the user the proposed new description and its character count.
 
 ### Missing Dialog Reference
+
 - Show the incorrect reference and what it should be (using `agent.schemaName` from config).
 - If the file has multiple bad references, include all of them in the same proposal.
 
 ### Missing CloudFlow
+
 - Tell the user the topic references a workflow that wasn't included in the clone. Include the topic's `componentName` and what it appears to do.
-- Offer: "Would you like me to **delete** this topic file, or **skip** it (leave the error)?"
-- If the file ALSO has other fixable errors (ModelDescription, Dialog), ask about the delete/skip decision first — if they choose delete, the other fixes are unnecessary.
+- Leave this reference unresolved without deleting the topic. Report the limitation and continue to other independently fixable errors.
 
-4. After presenting all proposed fixes for the file, ask: "Apply these fixes?" (or "Apply this fix?" if only one).
-5. If confirmed:
-   - Apply all approved fixes to the file (checkpoint already saved all originals).
-   - For deletions: delete the file.
-   - Tell the user: "Fixed. Moving to the next file."
-6. Move to the next file with errors.
+After presenting all remaining proposed fixes for the file, explain the choices and call `ask_user`:
 
-After fixing all files, re-scan the agent folder to confirm the errors are resolved.
+> ##### YOUR CHOICES
+>
+> | Choice               | What happens                                                                                          |
+> | -------------------- | ----------------------------------------------------------------------------------------------------- |
+> | Apply proposed fixes | Apply only the displayed local changes, then check their effect. This does not approve a remote Push. |
+> | Skip                 | Leave these proposed changes unapplied and continue.                                                  |
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Topic fixes",
+        "description": "How would you like to continue?",
+        "enum": ["Apply proposed fixes", "Skip"]
+      }
+    }
+  }
+}
+```
+
+If confirmed:
+
+- Use the normal topic update owner for the approved fixes. Carry the local-only edit scope and existing checkpoint; do not infer remote-save approval. If no checkpoint has been saved for these files, return to Step 2b before editing.
+- Reuse the owner's update for what changed and where. Count a diagnostic as fixed only after the relevant re-scan confirms it.
+
+Move to the next file with errors.
+
+After processing all files, proceed to the final combined scan below.
 
 ## Step 6: Final Report
 
-After all groups are processed:
+After all groups are processed, re-scan both error sources for the entire agent folder and deduplicate. For the initial zero-error path, reuse the still-current quick scan and proceed directly to the report without another status update.
 
-1. Re-scan the entire agent folder for errors.
-2. Show a final summary:
+After a new final scan assessment, before the report:
 
+{EMIT_STATUS_UPDATE: cleanup-verification}
+
+Show a final summary:
+
+> ##### CLEANUP RESULTS
+>
+> ##### ERRORS BEFORE
+>
+> {original_count}
+>
+> ##### ERRORS FIXED
+>
+> {fixed_count}
+>
+> ##### ERRORS REMAINING
+>
+> {remaining_count}
+
+Use only observed counts; if verification is unavailable or stale, replace the affected count with the actual unresolved state rather than a guessed number. Include actual owner save outcomes separately when any changes were pushed.
+
+If zero local errors remain, report that scope without claiming remote validation or completed Push. If errors remain, report their known effects and unresolved evidence. Do not promise that skipped items cannot affect other topics.
+
+After showing the results, add this note:
+
+> Local changes have not been pushed to the agent. Use `/push` to review and approve them.
+
+Show this note only for changes that remain local. If an owner already pushed
+a change, retain its confirmed or uncertain outcome instead.
+
+Explain these choices and use the native control:
+
+> ##### YOUR CHOICES
+>
+> | Choice         | What happens                                                                                  |
+> | -------------- | --------------------------------------------------------------------------------------------- |
+> | Run scan again | Inspect the local files again. Any additional fixes still need their own review and approval. |
+> | Done           | Finish cleanup with the reported changes and unresolved issues unchanged.                     |
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Cleanup follow-up",
+        "description": "How would you like to continue?",
+        "enum": ["Run scan again", "Done"]
+      }
+    }
+  }
+}
 ```
-Scan complete!
 
-- Errors before: {original_count}
-- Errors fixed: {fixed_count}
-- Errors remaining: {remaining_count}
-```
-
-3. If zero errors remain: "Your agent is clean and ready to push changes."
-4. If errors remain: "Some errors remain (skipped items). These won't affect the topics you're working with, but you'll need to resolve them before pushing if Copilot Studio requires a clean build."
-5. After showing the results, add this note:
-
-> "**Note:** When you're ready to push changes to Copilot Studio, type `/push`."
-
-6. Ask the user: "Would you like me to **run the scan again** to make sure everything is clean, or are you good to go?"
-   - If they want to scan again, go back to **Step 3** and repeat the full flow.
-   - If they're done, tell the user: "Type `/menu` to see what else you can do, or just describe what you'd like to work on next."
+- If they want to scan again, go back to **Step 3** and repeat the full flow.
+- If they're done, tell the user: "Type `/menu` to see what else you can do, or just describe what you'd like to work on next."
 
 **Do NOT ask additional questions beyond the re-scan offer. End the cleanup flow here.**
