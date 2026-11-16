@@ -278,6 +278,26 @@ def test_activation_follow_up_uses_the_prominent_action_block():
     assert "unfinished work still have no owners" in example
 
 
+def test_full_plan_readback_preserves_sections_status_and_readable_roles():
+    main = _text("planner/SKILL.md").split("## Building the plan", 1)[1]
+    for phrase in (
+        "### Start here: Fundamentals",
+        "### Scenario 1 — HR Knowledge",
+        "- ⬜ Set up the Power Platform environment — Power Platform Administrator",
+        "- 🔒 Set up the ESS HR agent — Environment Maker",
+        "not inside a code block",
+        "Do not merge saved tasks or add dependencies",
+        "display never rewrites stored assignments",
+    ):
+        assert phrase in " ".join(main.split())
+    model = _text("planner/model.md")
+    assert '--stream "hr-knowledge"' in model
+    assert '--stream "hr-ticketing"' in model
+    assert "do not create new task fields or infer scenario membership from task titles" in " ".join(model.split())
+    for phase in ("SKILL", "model", "edit", "interview"):
+        assert "numbered task-and-role list" not in _text(f"planner/{phase}.md")
+
+
 def test_initial_plan_and_import_do_not_bury_or_misroute_next_steps():
     interview = _text("planner/interview.md").split("## After the plan is shown", 1)[1]
     assert "> ## Next steps\n" in interview

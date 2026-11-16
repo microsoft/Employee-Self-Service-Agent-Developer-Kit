@@ -212,8 +212,8 @@ ambiguous" rule below). Only once `check-deps` reports a coherent graph and
 `validate` passes, re-render (`summary`) and present the refreshed plan the usual
 way — the download link **then** what changed (tasks added/removed, system
 re-pointed, updated dependencies), pending decisions, blockers, and the next
-action. Show the full numbered task-and-role list only on request; do not
-reintroduce wave or phase buckets when presenting an edited plan.
+action. Show the full grouped checklist with status and readable roles only on
+request; do not reintroduce wave or phase buckets when presenting an edited plan.
 
 > **Why this matters.** The maker edits a readable plan, not a dependency graph — the
 > Markdown can't express `produces`/`consumes`, and a one-word swap ("use

@@ -45,7 +45,7 @@ from itertools import groupby
 from pathlib import Path
 from typing import Any, Iterable
 
-from .attestable import resolve_attestable_role_id
+from .attestable import ATTESTABLE_ROLE_WIRE_NAMES, resolve_attestable_role_id
 
 SCHEMA_VERSION = 1
 
@@ -2147,7 +2147,7 @@ class Plan:
                 f"{self._task_state_label(task)} |"
             )
 
-    def _task_state_label(self, task: dict[str, Any]) -> str:
+    def _task_state_label(self, task: dict[str, Any], *, compact: bool = False) -> str:
         """The design's State cell, one icon per state. ``✅ Complete`` /
         ``🔄 In progress`` / ``🔒 Blocked`` map the stored state directly; a
         ``NotStarted`` task reads as ``🔒 Not started`` while it still
@@ -2167,20 +2167,57 @@ class Plan:
         if state == "Blocked":
             return "🔒 Blocked"
         if self.waiting_on(task.get("id")):
+            if compact:
+                return "🔒 Waiting"
             return "🔒 Not started — waiting on " + self.blocking_reason(task["id"])
-        return "⬜ Not started — ready"
+        return "⬜ Not started" if compact else "⬜ Not started — ready"
 
     def render_task_checklist(self) -> str:
-        """A numbered chat readback of task titles and roles in dependency order.
+        """A grouped chat checklist with status and readable roles.
 
-        Each saved task gets one entry, without stream headings, wave buckets,
-        or execution states. Detailed status stays in the downloadable plan and
-        task briefs. Pure/read-only; an empty plan returns ``""``.
+        Each saved task appears once in dependency order, never in wave buckets.
+        Scenario headings use saved ids or unique labels; shared work keeps its stream.
+        Role labels are presentation-only. Pure/read-only; an empty plan returns
+        ``""``.
         """
-        return "\n".join(
-            f"{step}. {task.get('title')} — {_render_assignee(task.get('assignedTo'))}"
-            for step, task in enumerate(self.ordered_tasks(), start=1)
-        )
+        ordered = self.ordered_tasks()
+        has_streams = any((task.get("stream") or "").strip() for task in ordered)
+        scenario_headings: dict[str, str] = {}
+        label_headings: dict[str, str | None] = {}
+        for number, (scenario_id, label) in enumerate(self.in_scope_scenarios().items(), start=1):
+            title = f"Scenario {number} — {label or humanize(scenario_id)}"
+            scenario_headings[scenario_id.strip().casefold()] = title
+            if label:
+                key = str(label).strip().casefold()
+                label_headings[key] = None if key in label_headings else title
+
+        def heading(task: dict[str, Any]) -> str:
+            stream = (task.get("stream") or "").strip()
+            key = stream.casefold()
+            if key == "setup":
+                return "Fundamentals"
+            return scenario_headings.get(key) or label_headings.get(key) or stream or "Other tasks"
+
+        lines: list[str] = []
+        seen: set[str] = set()
+        for section, tasks in groupby(ordered, key=heading):
+            if has_streams:
+                title = section
+                if section in seen:
+                    title += " (continued)"
+                elif section == "Fundamentals" and not seen:
+                    title = "Start here: Fundamentals"
+                lines.extend([f"### {title}", ""])
+                seen.add(section)
+            for task in tasks:
+                role = assignee_role_id(task.get("assignedTo"))
+                role_label = ATTESTABLE_ROLE_WIRE_NAMES.get(
+                    resolve_attestable_role_id(role or "") or "", role or "Role not specified",
+                )
+                icon, status = self._task_state_label(task, compact=True).split(" ", 1)
+                lines.append(f"- {icon} {task.get('title')} — {role_label} — {status}")
+            lines.append("")
+        return "\n".join(lines).rstrip()
 
     def _render_outputs(self, lines: list[str]) -> None:
         active = [a for a in self.outputs if a.get("state") == "Active"]

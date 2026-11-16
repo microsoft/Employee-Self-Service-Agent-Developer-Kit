@@ -333,7 +333,7 @@ per **First** above instead of re-running the interview.)
 |-------|------|------|
 | 1. Interview | Reuse the request/upload and catalogue; capture only missing goal, scenarios, and systems in at most three batched turns. Save unknown answers as pending decisions. | `src/skills/planner/interview.md` |
 | 2. Research | Ground the captured scope on Microsoft Learn **and the kit's own skills**. Reuse fresh cached page text; fetch only missing/stale sources before modelling capabilities, prerequisites, roles, and outputs. | `src/skills/planner/research.md` |
-| 3. Model | Emit the **full** atomic Task set (title + description + grounded role + produces/consumes), then show a **numbered task-and-role list** in dependency order | `src/skills/planner/model.md` |
+| 3. Model | Emit the **full** atomic Task set (title + description + grounded role + produces/consumes), then show **Fundamentals and scenario checklists** in dependency order | `src/skills/planner/model.md` |
 | 4. Assign (follow-up) | Suggested after the plan is shown — put names to the roles **only when the sponsor asks**, never a gate before sharing or a fired question | `src/skills/planner/assign.md` |
 | 5. Evaluate | Persist scenario test cases during planning, then orchestrate native evaluation generation as the required topics become available; preserve review and push approval. | `src/skills/planner/evaluate.md` |
 | 6. Capture | After a Task's work runs, observe/ask and pin what it produced | `src/skills/planner/capture.md` |
@@ -361,7 +361,7 @@ don't re-interview, rebuild the plan, or execute the recommended action.
 > (Phase 1) must capture the scenarios and either known systems or explicit pending
 > system decisions before scoped research in Phase 2 and modelling in Phase 3 —
 > those drive the tasks and the roles. Once the full set is modelled, show its
-> **numbered task-and-role list** in dependency order, without wave or phase
+> **Fundamentals and scenario checklists** in dependency order, without wave or phase
 > buckets (`model.md` → *Sequence the tasks*). Independent work can still run in
 > parallel. As soon as scenarios + goals are captured
 > (Phase 1), Phase 5 generates and saves draft scenario test cases; refine them
@@ -412,24 +412,37 @@ plan body**, e.g.:
 ```
 
 so the maker can save or hand it off, not just read it inline (Bug 7952898).
-**On first creation, show a dependency-ordered numbered task-and-role list after the
+**On first creation, show the grouped, dependency-ordered task checklist after the
 link. On refinement or resume, show the delta, pending decisions, blockers, and next
 action instead of repeating the entire plan.** A full checklist is available on request.
-`summary` prints that list on stderr under `readback:`. Each saved task gets one
-numbered entry containing only its title and responsible role; render those lines
-**verbatim, below the link**, e.g.:
+`summary` prints the checklist on stderr under `readback:`. Render its headings
+and task lines **verbatim as Markdown, below the link**, not inside a code block.
+Each saved task appears once, with a status marker, title, readable role label,
+and concise state. The layout is:
 
 ```
-1. Set up the Power Platform environment — Power Platform Administrator
-2. Set up the ESS HR agent — Environment Maker
-3. Configure SharePoint HR knowledge — Environment Maker
+### Start here: Fundamentals
+
+- ⬜ Set up the Power Platform environment — Power Platform Administrator — Not started
+- 🔒 Set up the ESS HR agent — Environment Maker — Waiting
+
+### Scenario 1 — HR Knowledge
+
+- 🔒 Configure SharePoint HR knowledge — Environment Maker — Waiting
 ```
 
-Do not turn this list into waves, phases, stages, workstream sections, or a
-sequencing table, and do not merge multiple saved tasks into one entry. Numbering
-preserves dependency order; it does not add execution prerequisites or prevent
-independent work from running in parallel. Detailed status and blockers remain
-in the downloadable plan and task/status views. Explain briefly that tasks come
+Use the actual saved headings, tasks, and states, not the example's task set.
+`Setup` renders as **Fundamentals**; scenario streams use the saved scenario labels.
+Shared integration work keeps its own heading, without duplicating tasks across
+scenarios. A section marked **(continued)** preserves a cross-section dependency.
+Never flatten the checklist into a numbered list or turn it into waves, phases,
+stages, or a sequencing table. Do not merge saved tasks or add dependencies to
+make sections contiguous; independent work can still run in parallel.
+Use readable role labels, not compact role IDs or a role-code glossary; this
+display never rewrites stored assignments or changes the accepted backend roles.
+Waiting is not a failed task. Keep local-only completion and shared-conflict
+warnings visible; detailed blockers remain in the download and task/status views.
+Explain briefly that tasks come
 from the selected scenarios and systems, the ESS catalogue, and Microsoft Learn
 setup requirements; named people provide ownership, not new admin permissions.
 

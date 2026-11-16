@@ -97,7 +97,8 @@ Do not invent execution prerequisites to force visual order: independent
 preparation may run in parallel with environment setup. The views put foundation
 work first when ready and preserve topological order across stream boundaries.
 The downloadable plan can repeat a stream heading when dependencies require it;
-the chat readback remains one numbered task-and-role list.
+the chat checklist marks a repeated section **(continued)** rather than moving
+a consumer before its prerequisite.
 
 ## Split on role boundaries
 
@@ -316,31 +317,32 @@ python scripts/planner/cli.py setup-tasks --system workday --commands --skip-fou
 python scripts/planner/cli.py add-task --id T-sn-config --stream "ServiceNow" --title "Configure ServiceNow HRSD" --description "Configure the ServiceNow HRSD integration per the connect research for ServiceNow — role: ServiceNow Administrator" --role ServiceNowAdmin --produces servicenowConfig --consumes primaryEnvironment
 python scripts/planner/cli.py add-task --id T-sn-connect --stream "ServiceNow" --title "Install ServiceNow pack and connect" --description "Run /connect to install the ServiceNow extension pack and create the connection" --role PowerPlatformEnvironmentMaker --produces servicenowConnection --consumes "primaryEnvironment,essAgent,servicenowConfig"
 # 5. authoring per scenario area (knowledge before ticketing — register the dependency)
-python scripts/planner/cli.py add-task --id T-know --stream "Authoring" --title "Set up HR knowledge" --description "Run /create to author the HR knowledge topics" --role PowerPlatformEnvironmentMaker --produces "topic:hr-knowledge" --consumes "primaryEnvironment,essAgent"
-python scripts/planner/cli.py add-task --id T-tick --stream "Authoring" --title "Author HR ticketing topics" --description "Run /create to author the HR ticketing topics" --role PowerPlatformEnvironmentMaker --produces "topic:hr-ticketing" --consumes "primaryEnvironment,essAgent,servicenowConnection"
+python scripts/planner/cli.py add-task --id T-know --stream "hr-knowledge" --title "Set up HR knowledge" --description "Run /create to author the HR knowledge topics" --role PowerPlatformEnvironmentMaker --produces "topic:hr-knowledge" --consumes "primaryEnvironment,essAgent"
+python scripts/planner/cli.py add-task --id T-tick --stream "hr-ticketing" --title "Author HR ticketing topics" --description "Run /create to author the HR ticketing topics" --role PowerPlatformEnvironmentMaker --produces "topic:hr-ticketing" --consumes "primaryEnvironment,essAgent,servicenowConnection"
 # 6. evals + publish
 python scripts/planner/cli.py add-task --id T-eval --stream "Evaluation" --title "Generate evals" --description "Continue the guided evaluation flow using saved scenario cases and built topics; preserve review and push approval" --role PowerPlatformEnvironmentMaker --produces evalSuite --consumes "primaryEnvironment,essAgent,topic:hr-knowledge,topic:hr-ticketing"
 python scripts/planner/cli.py add-task --id T-eval-run --stream "Evaluation" --title "Run evaluations" --description "Run the approved suite and record actual results against the agreed acceptance criteria" --role PowerPlatformEnvironmentMaker --produces evaluationResults --consumes "evalSuite,servicenowConnection"
 python scripts/planner/cli.py add-task --id T-pub --stream "Publish" --title "Publish the agent" --description "After the evaluation bar is met and publishing is approved, publish the agent using the grounded Learn steps" --role EntraPowerPlatformAdministrator --consumes "primaryEnvironment,essAgent,evaluationResults"
 ```
 
-**Give every task a `--stream` (workstream/theme) for the downloadable plan.**
-That document groups tasks under a `### <stream>` heading (`plan_model._render_tasks`)
-so the sponsor sees the plan as **Workday**, **ServiceNow**, **Setup**,
-**Authoring**, **Evaluation**, **Publish**. The chat readback is a numbered
-task-and-role list, not grouped sections. Rules:
+**Give every task a `--stream` for both the chat checklist and downloadable plan.**
+Use existing scenario context to preserve the plan's visual hierarchy; do not
+create new task fields or infer scenario membership from task titles. Rules:
 
-- **A captured system → its own stream** (the system name: `Workday`,
-  `ServiceNow`). System-specific tasks share that stream. The Workday extractor
-  labels the shared environment and agent foundations `Setup` and the integration
-  tasks `Workday`; paste its emitted lines verbatim.
-- **Cross-cutting backbone tasks → a workstream**: `Setup` (the `/setup` +
-  `/flightcheck` backbone), `Authoring` (the `/create` topic tasks), `Evaluation`
-  (`/evaluate`), `Publish`.
-- Keep stream labels **few and consistent** — a stream is a workstream a sponsor
-  staffs, not a per-task tag. The task **State** column still carries the exact
-  cross-stream sequencing (a task waiting on an upstream artifact reads
-  **🔒 Not started**), so grouping never hides a dependency.
+- **Foundation tasks → `Setup`**, rendered as **Start here: Fundamentals** when
+  that section comes first in chat. Keep environment, agent, and shared readiness
+  tasks here rather than under a system-specific heading.
+- **Scenario-specific work → the scenario id**, such as `hr-knowledge` or
+  `hr-ticketing`. Include that scenario's authoring and evaluation tasks.
+  The chat renderer resolves the id (or an unambiguous matching label) to
+  **Scenario N — label** from the saved scenario context.
+- **Shared system integration → its own stream** (`Workday`, `ServiceNow`).
+  Do not duplicate a shared integration task under every scenario. The Workday
+  extractor labels the shared environment and agent foundations `Setup` and the
+  integration tasks `Workday`; paste its emitted lines verbatim.
+- **Plan-wide evaluation and release → `Evaluation` or `Publish`**.
+- Existing streams without a matching scenario retain their headings. Rendering
+  alone never rewrites stream metadata or invents a scenario association.
 
 Also register the scenarios and their dependencies (see `interview.md`) so the
 plan shows knowledge-before-ticketing. Then present the plan as described below.
@@ -349,19 +351,21 @@ plan shows knowledge-before-ticketing. Then present the plan as described below.
 
 `produces`/`consumes` aren't just per-task gates — together they form the plan's
 **dependency graph**. The CLI orders producers before consumers and emits one
-numbered entry per saved task, containing its title and responsible role. Use
-that readback verbatim. Do not replace it with waves, phases, stages, parallel
-buckets, or a sequencing table, and do not combine separate tasks into one row.
+status-marked checklist entry per saved task under Fundamentals, scenario, or
+shared-work headings. Each line names the task and its readable responsible role.
+Use that readback verbatim, including **(continued)** headings when dependencies
+cross sections. Do not flatten it into a numbered list or replace it with waves,
+phases, stages, parallel buckets, or a sequencing table, and do not combine tasks.
 
 The list order is not a requirement to execute every task serially. Independent
 preparation may run alongside setup, and connection-free scenarios may run
 alongside the Workday chain. Keep the actual `produces`/`consumes` gates; never
 add dependencies just to make the list look sequential.
 
-Detailed readiness and waiting reasons remain in the downloadable plan, task
-briefs, and status views. If the sponsor asks about sequencing, explain the real
-missing inputs and which tasks can run independently without rebucketing the
-plan. The Workday chain remains preflight, Entra, Workday tenant, then connect
+The chat shows concise states; detailed readiness and waiting reasons remain in
+the downloadable plan, task briefs, and status views. If the sponsor asks about
+sequencing, explain the real missing inputs and which tasks can run independently
+without rebucketing the plan. The Workday chain remains preflight, Entra, Workday tenant, then connect
 because each stage consumes the previous output. Different role holders can
 work concurrently when the graph and their availability permit it; one person's
 capacity is a staffing concern, not a new task dependency.

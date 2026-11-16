@@ -312,19 +312,20 @@ def test_summary_emits_task_checklist_readback(tmp_path, capsys):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")
     _run("--plan", plan_path, "add-task", "--id", "T-setup", "--title", "Set up the environment",
-         "--role", "pp-admin", "--stream", "Setup", "--produces", "primaryEnvironment")
+         "--role", "EntraPowerPlatformAdministrator", "--stream", "Setup", "--produces", "primaryEnvironment")
     _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Connect Workday",
-         "--role", "workday-admin", "--stream", "Workday", "--consumes", "primaryEnvironment")
+         "--role", "WorkdayAdmin", "--stream", "Workday", "--consumes", "primaryEnvironment")
     capsys.readouterr()
     _run("--plan", plan_path, "summary")
     err = capsys.readouterr().err
-    assert "readback:" in err
-    assert "1. Set up the environment — pp-admin" in err
-    assert "2. Connect Workday — workday-admin" in err
-    assert "**Setup**" not in err
-    assert "**Workday**" not in err
-    # The role is named, but the internal "pool" notion never leaks to the maker.
-    assert "workday-admin (pool)" not in err
+    assert err.index("artifact:") < err.index("readback:")
+    assert "### Start here: Fundamentals" in err
+    assert "- ⬜ Set up the environment — Power Platform Administrator — Not started" in err
+    assert "### Workday" in err
+    assert "- 🔒 Connect Workday — Workday administrator — Waiting" in err
+    assert "After an edit, summarize the changes and blockers" in err
+    assert "EntraPowerPlatformAdministrator" not in err
+    assert "WorkdayAdmin" not in err
 
 
 def test_pin_output_rejects_malformed_attr(tmp_path, capsys):

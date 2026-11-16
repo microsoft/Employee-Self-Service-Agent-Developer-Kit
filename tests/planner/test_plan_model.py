@@ -485,26 +485,45 @@ def test_render_summary_locks_dependent_tasks():
 # Chat task checklist (deterministic readback the assistant echoes verbatim)
 # --------------------------------------------------------------------------- #
 
-def test_render_task_checklist_numbers_tasks_and_roles_across_streams():
+def test_render_task_checklist_groups_fundamentals_scenarios_and_shared_work():
     plan = Plan.new()
+    plan.set_context("hr-knowledge", "HR Knowledge", group=SCENARIO_GROUP)
     plan.add_task(new_task(
         "T1", "Create a Power Platform Environment", stream="Setup",
-        assigned_to=principal_pool("pp-admin"), produces=["envId"],
+        assigned_to=principal_pool("EntraPowerPlatformAdministrator"), produces=["envId"],
     ))
     plan.add_task(new_task(
         "T2", "Connect Workday", stream="Workday",
-        assigned_to=principal_pool("workday-admin"),
+        assigned_to=principal_person(PAUL, role_id="WorkdayAdmin"),
     ))
     plan.add_task(new_task(
         "T3", "Check environment readiness", stream="Setup",
-        assigned_to=principal_pool("pp-admin"), consumes=["envId"],
+        assigned_to=principal_pool("PowerPlatformEnvironmentMaker"), consumes=["envId"],
     ))
+    plan.add_task(new_task(
+        "T4", "Add knowledge source", stream="hr-knowledge",
+        assigned_to=principal_pool("PowerPlatformEnvironmentMaker"),
+    ))
+    plan.add_task(new_task(
+        "T5", "Evaluate knowledge answers", stream="HR Knowledge",
+        assigned_to=principal_pool("Environment Maker"),
+    ))
+    before = json.dumps(plan.data, sort_keys=True)
+    summary = plan.render_summary()
     checklist = plan.render_task_checklist()
     assert checklist.splitlines() == [
-        "1. Create a Power Platform Environment — pp-admin",
-        "2. Check environment readiness — pp-admin",
-        "3. Connect Workday — workday-admin",
+        "### Start here: Fundamentals", "",
+        "- ⬜ Create a Power Platform Environment — Power Platform Administrator — Not started",
+        "- 🔒 Check environment readiness — Environment Maker — Waiting", "",
+        "### Workday", "",
+        "- ⬜ Connect Workday — Workday administrator — Not started", "",
+        "### Scenario 1 — HR Knowledge", "",
+        "- ⬜ Add knowledge source — Environment Maker — Not started",
+        "- ⬜ Evaluate knowledge answers — Environment Maker — Not started",
     ]
+    assert PAUL not in checklist
+    assert json.dumps(plan.data, sort_keys=True) == before
+    assert plan.render_summary() == summary
 
 
 def test_render_task_checklist_keeps_dependency_order():
@@ -513,29 +532,90 @@ def test_render_task_checklist_keeps_dependency_order():
     plan.add_task(new_task("T2", "produce", stream="S", produces=["envId"]))
     checklist = plan.render_task_checklist()
     assert checklist.splitlines() == [
-        "1. produce — unassigned",
-        "2. consume — unassigned",
+        "### S", "",
+        "- ⬜ produce — Role not specified — Not started",
+        "- 🔒 consume — Role not specified — Waiting",
     ]
+    plan.add_output(plan_artifact("envId", "Environment", {"environmentId": "e"}, produced_by_task_id="T2"))
+    assert "- ⬜ consume — Role not specified — Not started" in plan.render_task_checklist()
 
 
-def test_render_task_checklist_omits_execution_states():
+def test_render_task_checklist_shows_execution_states():
     plan = Plan.new()
     plan.add_task(new_task("T1", "done", state="Completed"))
     plan.add_task(new_task("T2", "doing", state="InProgress"))
     plan.add_task(new_task("T3", "stuck", state="Blocked"))
     checklist = plan.render_task_checklist()
     assert checklist.splitlines() == [
-        "1. done — unassigned",
-        "2. doing — unassigned",
-        "3. stuck — unassigned",
+        "- ✅ done — Role not specified — Complete",
+        "- 🔄 doing — Role not specified — In progress",
+        "- 🔒 stuck — Role not specified — Blocked",
     ]
+
+
+@pytest.mark.parametrize(("plan_id", "confirmation"), [
+    ("", "not shared"),
+    ("shared-plan", "awaiting shared confirmation"),
+])
+def test_render_task_checklist_keeps_local_completion_and_conflict_warnings(plan_id, confirmation):
+    plan = Plan.new()
+    plan.data["planId"] = plan_id
+    plan.add_task(new_task("T1", "Prepare environment", state="Completed"))
+    plan.task("T1")["pendingSync"] = True
+    assert f"Complete locally — {confirmation}" in plan.render_task_checklist()
+    plan.task("T1")["syncConflict"] = "The shared task changed"
+    assert "- 🔒 Prepare environment — Role not specified — Needs review — The shared task changed" in plan.render_task_checklist()
+    assert "✅" not in plan.render_task_checklist()
+
+
+def test_render_task_checklist_continues_scenarios_only_for_cross_stream_dependencies():
+    plan = Plan.new()
+    plan.set_context("hr-knowledge", "HR Knowledge", group=SCENARIO_GROUP)
+    plan.set_context("hr-ticketing", "HR ticketing", group=SCENARIO_GROUP)
+    plan.add_task(new_task("T3", "Evaluate knowledge", stream="hr-knowledge", consumes=["cases"]))
+    plan.add_task(new_task("T2", "Configure cases", stream="hr-ticketing", consumes=["knowledge"], produces=["cases"]))
+    plan.add_task(new_task("T1", "Configure knowledge", stream="hr-knowledge", produces=["knowledge"]))
+    checklist = plan.render_task_checklist()
+    assert checklist.index("Configure knowledge") < checklist.index("Configure cases") < checklist.index("Evaluate knowledge")
+    assert [line for line in checklist.splitlines() if line.startswith("### ")] == [
+        "### Scenario 1 — HR Knowledge",
+        "### Scenario 2 — HR ticketing",
+        "### Scenario 1 — HR Knowledge (continued)",
+    ]
+    assert len([line for line in checklist.splitlines() if line.startswith("- ")]) == 3
+
+
+@pytest.mark.parametrize(("saved_role", "display_role"), [
+    ("workday-administrator", "Workday administrator"),
+    ("Environment Maker", "Environment Maker"),
+    ("External reviewer", "External reviewer"),
+])
+def test_render_task_checklist_displays_role_aliases_without_rewriting_them(saved_role, display_role):
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "Review", assigned_to=principal_pool(saved_role)))
+    assert plan.render_task_checklist() == f"- ⬜ Review — {display_role} — Not started"
+    assert assignee_role_id(plan.task("T1")["assignedTo"]) == saved_role
+
+
+@pytest.mark.parametrize(("first_label", "second_label", "stream", "heading"), [
+    ("HR Knowledge", "hr-knowledge", "hr-knowledge", "Scenario 1 — HR Knowledge"),
+    ("HR support", "HR support", "HR support", "HR support"),
+])
+def test_render_task_checklist_does_not_guess_ambiguous_scenario_labels(first_label, second_label, stream, heading):
+    plan = Plan.new()
+    plan.set_context("hr-knowledge", first_label, group=SCENARIO_GROUP)
+    plan.set_context("hr-ticketing", second_label, group=SCENARIO_GROUP)
+    plan.add_task(new_task("T1", "Configure HR support", stream=stream))
+    assert plan.render_task_checklist() == (
+        f"### {heading}\n\n- ⬜ Configure HR support — Role not specified — Not started"
+    )
 
 
 def test_render_task_checklist_flat_without_streams():
     plan = Plan.new()
     plan.add_task(new_task("T1", "lonely"))
     checklist = plan.render_task_checklist()
-    assert checklist == "1. lonely — unassigned"
+    assert checklist == "- ⬜ lonely — Role not specified — Not started"
 
 
 def test_render_task_checklist_empty_when_no_tasks():

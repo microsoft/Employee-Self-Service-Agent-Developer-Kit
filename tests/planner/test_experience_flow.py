@@ -133,6 +133,34 @@ def test_views_keep_cross_stream_dependencies_in_order():
     assert plan.blocking_inputs("prep") == {}
 
 
+def test_scenario_chat_readback_survives_share_and_resume_without_changing_roles():
+    plan = Plan.new(objective="Reduce assisted HR tickets")
+    plan.set_configuring_agent_name("EmployeeSelfServiceHRDA")
+    plan.set_context("hr-knowledge", "HR Knowledge", group="scenario")
+    plan.set_context("hr-ticketing", "HR ticketing", group="scenario")
+    plan.set_system("hr-ticketing", "Unknown")
+    plan.add_task(new_task(
+        "knowledge", "Configure SharePoint knowledge", stream="hr-knowledge",
+        assigned_to=principal_pool("PowerPlatformEnvironmentMaker"),
+    ))
+    plan.add_task(new_task(
+        "cases", "Enable HR case operations", stream="hr-ticketing",
+        assigned_to=principal_pool("PowerPlatformEnvironmentMaker"), consumes=["system.hr-ticketing"],
+    ))
+    body = sync.to_remote_plan_body(plan)
+    resumed = Plan(sync.hydrate_from_remote(
+        {**body, "planId": "shared-plan", "status": "Active"},
+        [{"taskId": task["id"], **remote} for task, remote in zip(plan.tasks, body["tasks"])],
+    ))
+    assert resumed.render_task_checklist() == plan.render_task_checklist()
+    assert "### Scenario 2 — HR ticketing" in resumed.render_task_checklist()
+    assert "- 🔒 Enable HR case operations — Environment Maker — Waiting" in resumed.render_task_checklist()
+    assert resumed.task("cases")["assignedTo"] == plan.task("cases")["assignedTo"]
+    assert resumed.blocking_inputs("knowledge") == {}
+    with pytest.raises(ValueError, match="Confirm the system"):
+        resumed.set_task_state("cases", "InProgress")
+
+
 @pytest.mark.parametrize("state", ["InProgress", "Completed"])
 def test_missing_inputs_block_execution_not_assignment(state):
     plan = Plan.new()
