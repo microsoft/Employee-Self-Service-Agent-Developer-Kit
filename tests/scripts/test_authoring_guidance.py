@@ -176,6 +176,38 @@ def test_create_and_update_prompts_route_to_normal_topic_owners():
     assert "eval-driven save/materialization" in update
 
 
+def test_planner_routes_coexist_with_native_topic_authoring():
+    instructions = _read(".github/copilot-instructions.md")
+    routing = instructions.split("### Skill routing for CRUD operations\n", 1)[1]
+    for intent, owner in (
+        ("Plan a rollout", "src/skills/planner/SKILL.md"),
+        ("Assign/attest", "src/skills/roles/SKILL.md"),
+        ("Discover / crawl", "src/skills/discover/SKILL.md"),
+        ("Create a topic", "src/skills/topics/create/SKILL.md"),
+        ("Update/modify a topic", "src/skills/topics/update/SKILL.md"),
+    ):
+        row = next(line for line in routing.splitlines() if line.startswith("|") and intent in line)
+        assert owner in row
+        assert "Stop:" not in row
+    for path in (".github/prompts/menu.prompt.md", "README.md"):
+        text = _read(path)
+        assert "| `/planner`" in text
+        assert "| `/roles`" in text
+        assert "Draft and approve a topic save" in text
+        assert "Inspect pending changes" in text
+
+
+def test_general_handoffs_preserve_owning_topic_presentation():
+    formatting = _read("src/reference/ui-formatting-guidelines.md")
+    handoff = formatting.split("## Next-step handoffs\n", 1)[1].split(
+        "## Questions that need the maker\n", 1
+    )[0]
+    assert "use that contract without adding or replacing its headings, questions, or continuation" in handoff
+    assert "topic authoring, deletion, Push, testing and cleanup retain" in handoff
+    assert "../skills/topics/experience-contract.md#presentation-and-scope" in handoff
+    assert handoff.index("when the owner does not define one") < handoff.index("## Your next step")
+
+
 def test_topic_owners_use_yaml_adapters_and_separate_instruction_approval():
     create = _read("src/skills/topics/create/SKILL.md")
     update = _read("src/skills/topics/update/SKILL.md")
