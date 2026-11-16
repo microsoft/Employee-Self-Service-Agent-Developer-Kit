@@ -55,6 +55,35 @@ def _row(payload, key):
     return next(row for row in payload["results"] if row["checkpoint_id"] == key)
 
 
+def test_standalone_selection_runs_real_shared_da_report(setup_workspace, monkeypatch):
+    import flightcheck_setup
+
+    ws = setup_workspace
+    ws.config["flightCheckOnly"] = True
+    (ws.root / ".local" / "config.json").write_text(json.dumps(ws.config), encoding="utf-8")
+    agent_id = ws.config["agents"][0]["botId"]
+    url = (
+        f"https://copilotstudio.microsoft.com/environments/{ws.config['environmentId']}"
+        f"/copilots/{agent_id}"
+    )
+    monkeypatch.setattr("builtins.input", lambda _: url)
+    monkeypatch.setattr(flightcheck_setup, "authenticate_flightcheck", ws.auth)
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as http:
+        _register_native(http, ws)
+        _register_maker_baseline(http)
+        ws.config = flightcheck_setup.configure_standalone(ws.root, "prod")
+        payload, _ = _run_cli(ws, monkeypatch, http, [
+            "--scope", "full", "--invocation-source", "installer",
+            "--agent-slug", ws.config["activeAgent"], "--tenant-id", ws.config["tenantId"],
+            "--preferred-username", ws.config["account"], "--ring", "prod",
+        ])
+    html = (ws.root / "report" / "report.html").read_text(encoding="utf-8")
+    assert _row(payload, "DA-AGENT-001")["status"] == "Passed"
+    assert "Technical details" in html
+    assert "Full deployment readiness" not in html
+    assert payload["total"] == len(payload["coverage"]["planned"])
+
+
 @pytest.mark.parametrize("status", ["Passed", "Manual", "Blocked", "Error", "NotConfigured"])
 def test_custom_tags_merge_registered_and_producer_labels_without_mutation(status):
     from flightcheck.da_execution import decorate

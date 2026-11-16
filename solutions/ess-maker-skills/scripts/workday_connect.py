@@ -1504,4 +1504,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from adk_telemetry import script_error_boundary
+
+    with script_error_boundary("workday_connect"):
+        main()

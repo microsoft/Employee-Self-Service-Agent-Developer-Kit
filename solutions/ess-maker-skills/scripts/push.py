@@ -314,11 +314,16 @@ def main(argv=None, *, config=None):
 
 
 if __name__ == "__main__":
-    _ensure_utf8_stdout()
-    try:
-        main()
-    except (MinimalBotEvaluationError, OSError, ValueError) as exc:
-        print(json.dumps({
-            "errors": _exception_chain(exc), "evidence": getattr(exc, "evidence", {}),
-        }), file=sys.stderr)
-        raise SystemExit(1) from exc
+    from adk_telemetry import script_error_boundary
+
+    with script_error_boundary("push"):
+        _ensure_utf8_stdout()
+        try:
+            outcome = main()
+            if isinstance(outcome, dict) and outcome.get("status") in {"blocked", "failed"}:
+                raise SystemExit(1)
+        except (MinimalBotEvaluationError, OSError, ValueError) as exc:
+            print(json.dumps({
+                "errors": _exception_chain(exc), "evidence": getattr(exc, "evidence", {}),
+            }), file=sys.stderr)
+            raise SystemExit(1) from exc

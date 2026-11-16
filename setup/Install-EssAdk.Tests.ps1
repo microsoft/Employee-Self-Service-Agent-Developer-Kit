@@ -645,30 +645,35 @@ Test 'bootstrap-flightcheck.ps1 derives SourceBaseUrl from -Branch (no hardcoded
 }
 
 # ---------------------------------------------------------------------------
-# JSON dump suppression - regression for the "wall of JSON after env list" bug
-# reported by Senthil on 2026-09-29 (ADO 7965470).
-#
-# discover.py emits ENVIRONMENT_LIST_JSON: / AGENT_DISCOVERY_JSON: lines
-# on stdout for programmatic consumers (setup skills parse them). When the
-# installer echoes discover.py output verbatim to the user, the maker sees an
-# unreadable single-line JSON blob right after the environment/agent tables.
-# Both echo sites must filter those marker lines while still passing the
-# human-readable table through.
+# Windows delegates selection to the native DA selector. macOS retains its
+# discover.py flow and must still filter machine-readable marker lines.
 # ---------------------------------------------------------------------------
-Write-Host "`nJSON dump suppression (Install-EssAdk.ps1 + install-ess-adk.sh):" -ForegroundColor Cyan
+Write-Host "`nDA selection handoff (Windows) and JSON dump suppression (macOS):" -ForegroundColor Cyan
 
-Test 'Install-EssAdk.ps1 filters ENVIRONMENT_LIST_JSON from user-visible env-list echo' {
-    # Both PS echo sites (env-list and agent-list) must filter the marker lines.
-    $filterHits = [regex]::Matches($src, "if\s*\(\s*\`$line\s+-match\s+'\^\(ENVIRONMENT_LIST_JSON\|AGENT_DISCOVERY_JSON\|SELECTED_ENV_JSON\|SELECTED_AGENT_JSON\):'\s*\)\s*\{\s*continue\s*\}").Count
-    if ($filterHits -lt 2) {
-        throw "expected 2 marker-line filters (env-list + agent-list echoes), found $filterHits"
+function Get-DaFlightCheckSection {
+    $section = [regex]::Match($src, '(?s)# 6\. FlightCheck config generation.*?(?=\r?\n# VS Code can retain)')
+    if (-not $section.Success) {
+        throw 'Could not locate the standalone FlightCheck section'
+    }
+    $start = $section.Value.IndexOf('if ($FlightCheckOnly) {')
+    if ($start -lt 0) { throw 'Standalone FlightCheck guard is missing' }
+    return $section.Value.Substring($start)
+}
+
+Test 'Install-EssAdk.ps1 delegates native DA selection before reading the verified config' {
+    $section = Get-DaFlightCheckSection
+    if ($section -notmatch [regex]::Escape("'scripts\flightcheck_setup.py'")) {
+        throw 'Standalone FlightCheck must use the native DA selector'
+    }
+    if ($section -notmatch '(?s)& \$pyCmd @pyBaseArgs \$setupPy --ring \$Ring.*?if \(\$setupExit -ne 0\).*?throw.*?Get-Content -LiteralPath \$configPath') {
+        throw 'Selector failure must stop the handoff before reading configuration'
     }
 }
 
-Test 'Install-EssAdk.ps1 filters AGENT_DISCOVERY_JSON from user-visible agent-list echo' {
-    # Agent-list echo must not naively call Write-Host on every line.
-    if ($src -match "\`$agentListArgs\s*=[^\n]*\n[^\n]*Invoke-Native[^\n]*\n\s*foreach\s*\(\s*\`$line\s+in\s+\`$output\s*\)\s*\{\s*Write-Host\s+\`$line\s*\}") {
-        throw 'agent-list echo still writes every discover.py line unfiltered'
+Test 'Install-EssAdk.ps1 no longer uses legacy discovery or Dataverse export in standalone mode' {
+    $section = Get-DaFlightCheckSection
+    if ($section -match 'discover\.py|fetch_and_setup\.py|ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON') {
+        throw 'Standalone DA selection must not use the removed legacy discovery/export path'
     }
 }
 
@@ -681,33 +686,174 @@ Test 'install-ess-adk.sh filters JSON marker lines from both env-list and agent-
     }
 }
 
-Test 'PS filter regex behaviorally drops all four discover.py marker lines and keeps human rows' {
-    # Behavioral test: exercise the actual filter pattern against representative
-    # discover.py output. Guards against the class of bug that shipped as
-    # `ESS_AGENT_DISCOVERY_JSON` (source-only tests passed while the real output
-    # kept leaking) - this test only depends on the regex extracted from
-    # Install-EssAdk.ps1 and the observed marker names, not on any spelling
-    # inside the test file itself.
-    $filterRegex = '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):'
-    if ($src -notmatch [regex]::Escape($filterRegex)) {
-        throw "Install-EssAdk.ps1 no longer contains the expected filter regex literal; update this test if the marker list intentionally changed"
+function Invoke-DaHandoffFixture(
+    [int]$SelectionExit,
+    [string]$SelectedRing,
+    [string]$Checkpoint,
+    [int]$DiagnosticExit = 7
+) {
+    $tempRoot = Join-Path ([IO.Path]::GetTempPath()) "ess-da-smoke-$([guid]::NewGuid().ToString('N'))"
+    $scriptsDir = Join-Path $tempRoot 'scripts'
+    $localDir = Join-Path $tempRoot '.local'
+    $selectorPath = Join-Path $scriptsDir 'flightcheck_setup.py'
+    $fixtureConfig = Join-Path $localDir 'config.json'
+    $initialPath = (Get-Location).Path
+    $initialExit = $global:LASTEXITCODE
+    $fixture = @{
+        calls = [System.Collections.Generic.List[object]]::new()
+        outcome = ''
     }
-    $sampleLines = @(
-        'ENVIRONMENT_LIST_JSON:[{"id":"env1","name":"Contoso"}]',
-        'AGENT_DISCOVERY_JSON:[{"botid":"9b28","name":"da"}]',
-        'SELECTED_ENV_JSON:{"id":"env1"}',
-        'SELECTED_AGENT_JSON:{"botid":"9b28"}',
-        'Found 4 agent(s):',
-        '  Contoso  |  msdyn_copilotforemployeeselfservicehr',
-        'Page 1: 4 records -> Total: 4'
-    )
-    $kept = @($sampleLines | Where-Object { $_ -notmatch $filterRegex })
-    $leaked = @($sampleLines | Where-Object { $_ -match '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):' } | Where-Object { $_ -notmatch $filterRegex })
-    if ($leaked.Count -ne 0) {
-        throw "filter let $($leaked.Count) marker line(s) through: $($leaked -join '; ')"
+    try {
+        $null = New-Item -ItemType Directory -Path $scriptsDir, $localDir
+        [IO.File]::WriteAllText($selectorPath, '')
+        $agent = @{
+            botId = '00000000-0000-0000-0000-000000002222'
+            slug = 'selected-da'
+            releaseLine = 'da'
+        }
+        $target = @{
+            releaseLine = 'da'
+            environmentId = '00000000-0000-0000-0000-000000001111'
+            agent = $agent
+            agents = @($agent)
+            activeAgent = $agent.slug
+            tenantId = '00000000-0000-0000-0000-000000004444'
+            account = 'maker@example.test'
+            ring = $SelectedRing
+        }
+        [IO.File]::WriteAllText($fixtureConfig, ($target | ConvertTo-Json -Depth 4))
+        $before = [IO.File]::ReadAllText($fixtureConfig)
+        $workspace = $tempRoot
+        $FlightCheckOnly = $true
+        # A distinct default catches forwarding the installer ring instead of
+        # the selector's saved target in the preprod/test handoff cases.
+        $Ring = 'prod'
+        $ErrorActionPreference = 'Stop'
+        function Write-Step { param($Message) }
+        function Resolve-Python { return 'Invoke-SmokePython' }
+        function Complete-EssInstallTelemetry { param($Outcome) $fixture.outcome = $Outcome }
+        function Invoke-SmokePython {
+            $fixture.calls.Add(@($args))
+            if ($args[0] -eq $selectorPath) {
+                $global:LASTEXITCODE = $SelectionExit
+            } else {
+                $global:LASTEXITCODE = $DiagnosticExit
+            }
+        }
+        $failure = ''
+        try {
+            & ([scriptblock]::Create((Get-DaFlightCheckSection)))
+        } catch {
+            $failure = $_.Exception.Message
+        }
+        return @{
+            calls = $fixture.calls
+            outcome = $fixture.outcome
+            failure = $failure
+            exitCode = $global:LASTEXITCODE
+            target = $target
+            configUnchanged = ($before -ceq [IO.File]::ReadAllText($fixtureConfig))
+            restoredPath = ((Get-Location).Path -eq $initialPath)
+            restoredPreference = ($ErrorActionPreference -eq 'Stop')
+        }
+    } finally {
+        Set-Location -LiteralPath $initialPath
+        $global:LASTEXITCODE = $initialExit
+        foreach ($path in @($fixtureConfig, $selectorPath, $localDir, $scriptsDir, $tempRoot)) {
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+        }
     }
-    if ($kept.Count -ne 3) {
-        throw "filter dropped human-readable rows too aggressively; kept $($kept.Count) of 3 expected: $($kept -join ' / ')"
+}
+
+foreach ($selectedRing in @('prod', 'preprod', 'test')) {
+    Test "DA handoff preserves selected target, account, tenant and $selectedRing ring" {
+        $actual = Invoke-DaHandoffFixture -SelectionExit 0 -SelectedRing $selectedRing
+        if ($actual.failure) { throw $actual.failure }
+        if ($actual.calls.Count -ne 2) { throw 'Expected one selector and one shared CLI invocation' }
+        $selectorArgs = $actual.calls[0]
+        if ($selectorArgs[-2] -ne '--ring' -or $selectorArgs[-1] -ne 'prod') {
+            throw 'The selector must receive the requested ring'
+        }
+        $cliArgs = $actual.calls[1]
+        if ($cliArgs -contains '--checkpoint') {
+            throw 'Default standalone diagnostics must not select a checkpoint'
+        }
+        if ($cliArgs[0] -ne 'scripts\flightcheck\cli.py') {
+            throw 'The verified target must reach the shared FlightCheck CLI'
+        }
+        $expected = @{
+            '--scope' = 'full'
+            '--invocation-source' = 'installer'
+            '--select-targets' = 'never'
+            '--agent-slug' = $actual.target.activeAgent
+            '--preferred-username' = $actual.target.account
+            '--tenant-id' = $actual.target.tenantId
+            '--ring' = $selectedRing
+        }
+        foreach ($flag in $expected.Keys) {
+            $index = [array]::IndexOf($cliArgs, $flag)
+            if ($index -lt 0 -or $cliArgs[$index + 1] -cne $expected[$flag]) {
+                throw "Shared CLI did not receive the verified $flag value"
+            }
+        }
+        if (-not $actual.configUnchanged) { throw 'The handoff must not rewrite the verified target' }
+        if (-not $actual.restoredPath -or -not $actual.restoredPreference) {
+            throw 'DA handoff did not restore location/error handling'
+        }
+        if ($actual.outcome -ne 'success' -or $actual.exitCode -ne 7) {
+            throw 'Installer completion must preserve the separate diagnostic exit code'
+        }
+    }
+}
+
+foreach ($checkpoint in @('WD-RUN-001', 'ENV-004', 'WD-FLOW-*', 'UNKNOWN-CHECKPOINT')) {
+    Test "DA handoff forwards only the requested checkpoint $checkpoint" {
+        $actual = Invoke-DaHandoffFixture -SelectionExit 0 -SelectedRing 'preprod' -Checkpoint $checkpoint -DiagnosticExit 2
+        if ($actual.failure) { throw $actual.failure }
+        if ($actual.calls.Count -ne 2) { throw 'Expected one selector and one shared CLI invocation' }
+        $cliArgs = $actual.calls[1]
+        $index = [array]::IndexOf($cliArgs, '--checkpoint')
+        if ($index -lt 0 -or $cliArgs[$index + 1] -cne $checkpoint) {
+            throw 'The requested checkpoint must reach the shared CLI unchanged'
+        }
+        if ($cliArgs -contains '--scope' -or $cliArgs -contains '--profile') {
+            throw 'Checkpoint runs must not also request a scope or profile'
+        }
+        $expected = @{
+            '--agent-slug' = $actual.target.activeAgent
+            '--preferred-username' = $actual.target.account
+            '--tenant-id' = $actual.target.tenantId
+            '--ring' = 'preprod'
+            '--invocation-source' = 'installer'
+            '--select-targets' = 'never'
+        }
+        foreach ($flag in $expected.Keys) {
+            $index = [array]::IndexOf($cliArgs, $flag)
+            if ($index -lt 0 -or $cliArgs[$index + 1] -cne $expected[$flag]) {
+                throw "Checkpoint handoff lost the verified $flag value"
+            }
+        }
+        if (-not $actual.configUnchanged -or -not $actual.restoredPath -or -not $actual.restoredPreference) {
+            throw 'Checkpoint handoff must preserve configuration and restore the caller'
+        }
+        if ($actual.outcome -ne 'success' -or $actual.exitCode -ne 2) {
+            throw 'The shared CLI exit code must be preserved without a full-suite retry'
+        }
+    }
+}
+
+foreach ($selectionExit in @(1, 130)) {
+    Test "DA handoff blocks diagnostics after failed/cancelled selection (exit $selectionExit)" {
+        $actual = Invoke-DaHandoffFixture -SelectionExit $selectionExit -SelectedRing 'test' -Checkpoint 'WD-RUN-001'
+        if ($actual.calls.Count -ne 1 -or $actual.failure -notmatch 'FlightCheck was not started') {
+            throw 'Failed/cancelled selection must stop before invoking the shared CLI'
+        }
+        if ($actual.outcome -or -not $actual.configUnchanged) {
+            throw 'Failed/cancelled selection must not report success or change the prior target'
+        }
+        if (-not $actual.restoredPath -or -not $actual.restoredPreference) {
+            throw 'Failed/cancelled selection must restore location/error handling'
+        }
     }
 }
 
@@ -738,10 +884,8 @@ Test 'bash filter pattern behaviorally drops all four discover.py marker lines a
 }
 
 # ---------------------------------------------------------------------------
-# FC-only installers persist the selected ring for later /flightcheck runs and
-# pass --ring explicitly on the initial FlightCheck invocation. The installer
-# uses BAP prod (api.bap.microsoft.com) for environment discovery, so prod is
-# the default ring; PMs can override to preprod/test via -Ring / --ring.
+# Windows uses the ring saved by the native DA selector. macOS retains its
+# existing config writer. Both pass the selected ring to the shared CLI.
 # ---------------------------------------------------------------------------
 
 Test 'Install-EssAdk.ps1 accepts a -Ring parameter (prod|preprod|test) defaulting to prod' {
@@ -750,24 +894,36 @@ Test 'Install-EssAdk.ps1 accepts a -Ring parameter (prod|preprod|test) defaultin
     }
 }
 
-Test 'Install-EssAdk.ps1 forwards $Ring on every FC-only FlightCheck invocation' {
-    $invocations = [regex]::Matches($src, 'scripts/flightcheck/cli\.py[^\r\n]*')
-    if ($invocations.Count -lt 3) {
-        throw "expected at least 3 FlightCheck invocations in Install-EssAdk.ps1, found $($invocations.Count)"
+Test 'Install-EssAdk.ps1 uses one shared CLI handoff guarded by DA selection' {
+    $section = Get-DaFlightCheckSection
+    if ([regex]::Matches($section, [regex]::Escape("'scripts\flightcheck\cli.py'")).Count -ne 1) {
+        throw 'Expected one shared CLI argument list, independent of Python launcher selection'
     }
-    foreach ($m in $invocations) {
-        if ($m.Value -notmatch '--ring\s+\$Ring') {
-            throw "FlightCheck invocation must forward `$Ring, not a hardcoded ring literal: $($m.Value)"
-        }
+    if ($section -notmatch [regex]::Escape("& `$pyCmd @pyBaseArgs @cliArgs")) {
+        throw 'The resolved Python launcher must invoke the shared CLI argument list'
+    }
+    if ($section -notmatch [regex]::Escape("`$configState.releaseLine -ne 'da' -or -not `$configState.agent.botId -or -not `$configState.activeAgent")) {
+        throw 'A selected native DA must guard the shared CLI handoff'
     }
 }
 
-Test 'Install-EssAdk.ps1 persists $Ring in the FC-only config' {
-    if ($src -notmatch '(?s)\$config\s*=\s*@\{.*?ring\s*=\s*\$Ring') {
-        throw "Install-EssAdk.ps1 must persist the selected ring in .local/config.json for later FlightCheck runs"
+Test 'native DA selector persists ring and target identity for later FlightCheck runs' {
+    $selectorPath = Join-Path $PSScriptRoot '..\solutions\ess-maker-skills\scripts\flightcheck_setup.py'
+    $selector = Get-Content -LiteralPath $selectorPath -Raw
+    foreach ($mapping in @(
+        '"ring": ring',
+        '"environmentId": environment_id',
+        '"tenantId": tenant_id',
+        '"account": account',
+        '"botId": agent_id',
+        '"activeAgent": slug'
+    )) {
+        if ($selector -notmatch [regex]::Escape($mapping)) {
+            throw "The DA selector must persist the verified $mapping"
+        }
     }
-    if ($src -notmatch '\$configState\s*\|\s*Add-Member\s+-NotePropertyName\s+ring\s+-NotePropertyValue\s+\$Ring\s+-Force') {
-        throw "Install-EssAdk.ps1 must migrate retained FlightCheck-only configs with the effective ring"
+    if ($selector -notmatch [regex]::Escape('_write_json(config_path, config)')) {
+        throw 'The DA selector must save the verified config atomically'
     }
 }
 
@@ -827,6 +983,55 @@ Test 'bootstrap-flightcheck.ps1 accepts -Ring and forwards it to Install-EssAdk.
     if ($bsSrc -notmatch 'Ring\s*=\s*\$Ring') {
         throw "bootstrap-flightcheck.ps1 must forward -Ring in the installer args hashtable"
     }
+}
+
+foreach ($checkpoint in @($null, 'WD-RUN-001')) {
+    Test "bootstrap-flightcheck.ps1 binds and forwards optional checkpoint '$checkpoint'" {
+        $path = Join-Path $PSScriptRoot 'bootstrap-flightcheck.ps1'
+        $tokens = $null; $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+        if ($errors.Count -gt 0) { throw "Bootstrap parse error: $($errors[0].Message)" }
+        $source = Get-Content -LiteralPath $path -Raw
+        $start = $source.IndexOf('$installerArgs =')
+        if ($start -lt 0) { throw 'Bootstrap installer handoff is missing' }
+        $handoff = [scriptblock]::Create($ast.ParamBlock.Extent.Text + "`n" + $source.Substring($start))
+        $fixture = @{ bound = $null }
+        $scriptBlock = {
+            param($Branch, [switch]$FlightCheckOnly, $Ring, $InstallRoot, $Checkpoint)
+            $fixture.bound = $PSBoundParameters
+        }
+        $arguments = @{ Branch = 'test-branch'; Ring = 'preprod'; InstallRoot = 'C:\fixture with spaces' }
+        if ($null -ne $checkpoint) { $arguments.Checkpoint = $checkpoint }
+        & $handoff @arguments
+        if ($fixture.bound.Branch -cne $arguments.Branch -or
+            $fixture.bound.Ring -cne $arguments.Ring -or
+            $fixture.bound.InstallRoot -cne $arguments.InstallRoot -or
+            -not $fixture.bound.FlightCheckOnly) {
+            throw 'Bootstrap lost its existing installer arguments'
+        }
+        if ($null -eq $checkpoint) {
+            if ($fixture.bound.ContainsKey('Checkpoint')) {
+                throw 'Default bootstrap must not bind an empty checkpoint'
+            }
+        } elseif ($fixture.bound.Checkpoint -cne $checkpoint) {
+            throw 'Bootstrap did not forward the requested checkpoint'
+        }
+    }
+}
+
+Test 'Install-EssAdk.ps1 rejects Checkpoint without FlightCheckOnly before installing tools' {
+    $tokens = $null; $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($installerPath, [ref]$tokens, [ref]$errors)
+    $end = $src.IndexOf('# Back-compat: -SkipMakerProfile')
+    if ($end -lt 0) { throw 'Installer initialization boundary is missing' }
+    $guard = $src.Substring($ast.ParamBlock.Extent.EndOffset, $end - $ast.ParamBlock.Extent.EndOffset)
+    $entry = [scriptblock]::Create($ast.ParamBlock.Extent.Text + $guard)
+    $failure = ''
+    try { & $entry -InstallRoot ([IO.Path]::GetTempPath()) -Checkpoint 'WD-RUN-001' } catch { $failure = $_.Exception.Message }
+    if ($failure -notmatch '\-Checkpoint requires \-FlightCheckOnly') {
+        throw 'A checkpoint outside standalone mode must fail before installation'
+    }
+    & $entry -InstallRoot ([IO.Path]::GetTempPath()) -FlightCheckOnly -Checkpoint 'WD-RUN-001'
 }
 
 Test 'bootstrap-flightcheck-mac.sh accepts --ring and exports RING for install-ess-adk.sh' {
