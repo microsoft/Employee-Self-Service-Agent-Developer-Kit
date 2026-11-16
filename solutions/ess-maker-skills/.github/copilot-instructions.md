@@ -70,7 +70,12 @@ The selected entry point owns any metadata checks and missing-state handling.
   `src/skills/evaluations/update/SKILL.md` and follow it. This includes natural
   requests such as "edit the testsets" and "change an expected response." That
   skill discovers workspace-level sets without setup and agent-owned sets when
-  configuration is available. Deleting deployed sets still requires setup.
+  configuration is available.
+- If the user asks to delete or remove evaluation test sets or individual test
+  cases, proceed without setup with `src/skills/evaluations/delete/SKILL.md`.
+  This is local-only deletion, including for DA-GA/MinimalBot agents. Do not
+  make API calls, require authentication, or push deletions to Copilot Studio.
+  The selected entry point owns target discovery, backup, and confirmation.
 - If the user typed `/flightcheck` or explicitly asked to validate setup or
   environment readiness, follow the **FlightCheck entry contract** below.
 - If the user typed `/topic-actions`, explicitly asked to enable or disable
@@ -657,8 +662,8 @@ and internal process into chat instead of the clean formatted result.
 
 **Quality validation invocation:** When quality validation is requested on
 eval files — at step 4.3 of the topic-grounded eval create flow, step 6 of the
-catalogue-grounded eval generate flow, step 4 of the eval update flow, OR step
-5 of the eval delete flow (single test case deletion only) — invoke
+catalogue-grounded eval generate flow, step 4 of the eval update flow, or during
+an explicitly requested quality review — invoke
 `runSubagent` (the VS Code Copilot Chat tool) pointing the subagent to read
 `src/skills/evaluations/validate/SKILL.md` as its first action, passing the
 paths of the newly written eval files and the exact evaluation-set folder.
@@ -669,6 +674,8 @@ are applied, re-invoke the subagent and wait for the updated report
 before continuing. Do NOT complete local authoring until the subagent has
 returned. Do NOT invoke the validate subagent after entire test set delete
 operations or after deleting the last remaining case in a category.
+Local evaluation deletion does not automatically invoke cloud quality
+validation; it verifies local artifacts only.
 
 **Topic review invocation:** Direct topic creation and update requests stop at
 the not-yet-available capability gate and must not reach an authoring or review
@@ -693,7 +700,8 @@ and continue.
 **When the user asks to modify, delete, rename, or otherwise change an agent
 component, ALWAYS load and follow the corresponding skill file.** The
 supported pipeline includes pushing local changes via the push pipeline
-after the local scan.
+after the local scan when requested. Evaluation deletion is local-only and
+must not invoke that push pipeline.
 
 ## Testing and Deployment
 

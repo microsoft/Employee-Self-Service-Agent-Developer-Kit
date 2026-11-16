@@ -35,6 +35,13 @@ from evaluation_review import (
     parse_review_marker,
     parse_review_metadata,
 )
+from evaluation_session import (
+    EvaluationSessionError,
+    adk_runs,
+    agent_key,
+    observe_run,
+    record_run,
+)
 from flightcheck.pp_admin_client import PPAdminClient
 from flightcheck.powerplatform_client import PowerPlatformClient
 from fetch_and_setup import fetch_components
@@ -42,7 +49,9 @@ from http_errors import APIError
 from minimalbot_evaluation import (
     MinimalBotEvaluationClient,
     MinimalBotEvaluationError,
+    _agent_backend_for_ring,
     is_minimalbot,
+    ring_for_config,
 )
 
 
@@ -56,8 +65,9 @@ INSTALLATION_CONFIG_PATH = (
 )
 RUN_WAIT_GUIDANCE = (
     "I've started running your test set in Copilot Studio. This may take "
-    "10-15 minutes. Return here to view the results when the run is complete; "
-    "you don't need to open Copilot Studio."
+    "10-15 minutes. Ask me for the run's status here at any time to check its "
+    "progress and see the results when it's complete; you don't need to open "
+    "Copilot Studio."
 )
 RUN_NAVIGATION_WARNING = (
     "The run started, but its Copilot Studio link could not be constructed. "
@@ -73,7 +83,7 @@ REVIEW_COMPLETION_NOT_PUSHED_GUIDANCE = (
     "Complete the selected set's Run preparation before running."
 )
 COPILOT_STUDIO_ORIGIN_BY_RING = {
-    "prod": "https://copilotstudio.microsoft.com",
+    "prod": "https://copilotstudio.preview.microsoft.com",
     "preprod": "https://copilotstudio.preprod.microsoft.com",
     "test": "https://copilotstudio.test.microsoft.com",
 }
@@ -109,32 +119,46 @@ def _agent_studio_url(
 
     When both ``test_set_id`` and ``run_id`` are known, a deep link to the
     exact run's results is built using the confirmed Copilot Studio route
-    ``/environments/{env}/copilots/{bot}/evaluation/runsDetails/{testSetId}/{runId}``
+    ``/environments/{env}/copilots/{bot}/evaluation/runsDetails/{runId}/{testSetId}``
     (verified against a live test-ring portal URL). ``agent_backend`` is
     appended as the ``?agentBackend=`` query parameter when supplied (e.g.
     ``cosmos`` for the test-ring MinimalBot).
 
-    When the run/test-set IDs are unavailable, it falls back to the agent's
-    overview page via the ``/environments/{env}/bots/{bot}/overview`` path
-    already relied on by flightcheck (``checks/publishing.py``,
-    ``checks/local_files.py``) and foundation-setup (``da-existing-dev.md``).
-    Both forms are combined with the ring-aware ``origin``; no unverified
-    route is fabricated.
+    When no run exists yet (run/test-set IDs unavailable), it links to the
+    agent's Evaluation page, ``/environments/{env}/copilots/{bot}/evaluation``
+    (verified against a live portal URL). A run-specific link is never built
+    without a run. Both forms are combined with the ring-aware ``origin``; no
+    unverified route is fabricated.
     """
     if not origin or not environment_id or not bot_id:
         return None
     environment_id = quote(environment_id, safe="")
     bot_id = quote(bot_id, safe="")
+    url = f"{origin}/environments/{environment_id}/copilots/{bot_id}/evaluation"
     if test_set_id and run_id:
-        url = (
-            f"{origin}/environments/{environment_id}/copilots/{bot_id}"
-            f"/evaluation/runsDetails/{quote(test_set_id, safe='')}"
-            f"/{quote(run_id, safe='')}"
+        url += (
+            f"/runsDetails/{quote(run_id, safe='')}"
+            f"/{quote(test_set_id, safe='')}"
         )
-        if agent_backend:
-            url += f"?agentBackend={quote(agent_backend, safe='')}"
-        return url
-    return f"{origin}/environments/{environment_id}/bots/{bot_id}/overview"
+    if agent_backend:
+        url += f"?agentBackend={quote(agent_backend, safe='')}"
+    return url
+
+
+def evaluation_page_url(
+    config: dict[str, Any], environment_id: str, bot_id: str,
+) -> str | None:
+    """Return the agent's Copilot Studio Evaluation page for a run-less state."""
+    agent_backend = (
+        _agent_backend_for_ring(ring_for_config(config))
+        if is_minimalbot(config) else None
+    )
+    return _agent_studio_url(
+        _studio_origin_for_config(config),
+        str(environment_id or ""),
+        str(bot_id or ""),
+        agent_backend=agent_backend,
+    )
 
 
 class EvaluationRunError(RuntimeError):
@@ -714,25 +738,25 @@ def list_run_candidates(
             baseline = agent_folder / ".baseline" / "evaluations" / folder.name
             try:
                 changed = not baseline.is_dir() or (
-                    _set_payload(folder, include_review=not native)
-                    != _set_payload(baseline, include_review=not native)
+                    _set_payload(folder)
+                    != _set_payload(baseline)
                 )
             except OSError as exc:
                 raise EvaluationRunError(
                     f"Unable to compare evaluation files in {folder}: {exc}"
                 ) from exc
         deployed_status = baseline_status
-        if remote is not None and not native:
+        if remote is not None:
             marker = parse_review_marker(remote.get("description"))
             if marker:
                 deployed_status = marker["status"]
             elif remote.get("deployedReviewStatus"):
                 deployed_status = remote["deployedReviewStatus"]
+            elif "description" in remote:
+                deployed_status = None
         review_block = _review_block_reason(
             local_status, baseline_status, deployed_status,
         )
-        if native:
-            review_block = REVIEW_PENDING_GUIDANCE if local_status == REVIEW_REQUESTED else None
         # An explicitly saved completion may be deployed by preparation; a
         # still-pending request can never be completed as a Run side effect.
         preparation_block = (
@@ -772,7 +796,7 @@ def list_run_candidates(
             "id": str(remote["id"]) if remote is not None else None,
             "testSetId": str(remote["id"]) if remote is not None else None,
             "mappedTestSetId": mapped_id,
-            "deployedReviewStatus": None if native else deployed_status,
+            "deployedReviewStatus": deployed_status,
             "hasLocalChanges": changed,
             "deployedIdentityKnown": remote is not None,
             "canPrepare": not (policy_error or preparation_block),
@@ -1050,6 +1074,39 @@ def start_run(
     return {**response, **run_details}
 
 
+def _test_set_names(test_sets: list[dict[str, Any]]) -> dict[str, str]:
+    return {
+        str(item.get("id")): str(item.get("displayName") or item.get("id"))
+        for item in test_sets
+        if isinstance(item, dict)
+    }
+
+
+def enrich_run_history(
+    runs: list[dict[str, Any]],
+    test_sets: list[dict[str, Any]],
+    source: str = "Power Platform API",
+) -> list[dict[str, Any]]:
+    """Join run history to test-set names and sort newest first."""
+    names = _test_set_names(test_sets)
+    enriched = []
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        test_set_id = str(run.get("testSetId", ""))
+        enriched.append({
+            **run,
+            "runId": str(run.get("id") or run.get("runId") or ""),
+            "testSetName": names.get(test_set_id, "Unknown test set"),
+            "source": source,
+        })
+    return sorted(
+        enriched,
+        key=lambda item: str(item.get("startTime", "")),
+        reverse=True,
+    )
+
+
 def _remote_run_history(
     client: PowerPlatformClient,
     environment_id: str,
@@ -1057,26 +1114,32 @@ def _remote_run_history(
 ) -> list[dict[str, Any]]:
     test_sets = client.list_maker_evaluation_test_sets(environment_id, bot_id)
     _raise_api_error(test_sets, "list evaluation test sets")
-    names = {
-        str(item.get("id")): str(item.get("displayName") or item.get("id"))
-        for item in test_sets
-    }
     runs = client.list_maker_evaluation_test_runs(environment_id, bot_id)
     _raise_api_error(runs, "list evaluation runs")
-    enriched = []
+    return enrich_run_history(runs, test_sets)
+
+
+def scope_run_history(
+    runs: list[dict[str, Any]],
+    recorded: list[dict[str, Any]],
+    *,
+    include_all: bool,
+) -> dict[str, Any]:
+    """Default to runs started from ADK; include every returned run on request."""
+    recorded_ids = {str(item.get("runId")) for item in recorded}
     for run in runs:
-        test_set_id = str(run.get("testSetId", ""))
-        enriched.append({
-            **run,
-            "runId": str(run.get("id") or run.get("runId") or ""),
-            "testSetName": names.get(test_set_id, "Unknown test set"),
-            "source": "Power Platform API",
-        })
-    return sorted(
-        enriched,
-        key=lambda item: str(item.get("startTime", "")),
-        reverse=True,
-    )
+        run["startedFromAdk"] = run.get("runId") in recorded_ids
+    returned_ids = {run.get("runId") for run in runs}
+    not_returned = [
+        item for item in recorded if item.get("runId") not in returned_ids
+    ]
+    selected = runs if include_all else [run for run in runs if run["startedFromAdk"]]
+    return {
+        "scope": "all" if include_all else "adk",
+        "runs": selected,
+        "otherRunCount": 0 if include_all else len(runs) - len(selected),
+        "adkRunsNotReturned": not_returned,
+    }
 
 
 def list_runs(
@@ -1219,7 +1282,6 @@ def analyze_run_results(result: dict[str, Any]) -> dict[str, Any]:
     for case in cases:
         (passed if _case_passed(case) else failed).append(case)
     total = len(cases)
-    pass_rate = round((len(passed) / total) * 100, 1) if total else 0.0
 
     groups: dict[str, dict[str, Any]] = {}
     for case in failed:
@@ -1238,13 +1300,7 @@ def analyze_run_results(result: dict[str, Any]) -> dict[str, Any]:
     failure_groups = []
     for group in groups.values():
         count = len(group.pop("cases"))
-        failure_groups.append({
-            **group,
-            "caseCount": count,
-            "failurePercentage": (
-                round((count / len(failed)) * 100, 1) if failed else 0.0
-            ),
-        })
+        failure_groups.append({**group, "caseCount": count})
     failure_groups.sort(
         key=lambda item: (-item["caseCount"], item["category"])
     )
@@ -1259,17 +1315,46 @@ def analyze_run_results(result: dict[str, Any]) -> dict[str, Any]:
             "totalCases": total,
             "passedCases": len(passed),
             "failedCases": len(failed),
-            "passRate": pass_rate,
         },
         "scenarioGroups": [{
             "group": test_set_name,
             "cases": total,
             "passed": len(passed),
             "failed": len(failed),
-            "passRate": pass_rate,
         }],
         "failureGroups": failure_groups,
     }
+
+
+def enrich_run_result(
+    result: dict[str, Any],
+    case_names: dict[str, str],
+    load_test_sets: Any,
+) -> dict[str, Any]:
+    """Add case names, the test-set name, and the deterministic analysis.
+
+    ``load_test_sets`` is called only when the run omits ``testSetName``.
+    """
+    cases = result.get("testCasesResults")
+    if isinstance(cases, list):
+        result["testCasesResults"] = [
+            {
+                **case,
+                "testCaseName": case_names.get(
+                    str(case.get("testCaseId", "")),
+                    str(case.get("testCaseId", "")) or "Unknown test case",
+                ),
+            }
+            for case in cases
+            if isinstance(case, dict)
+        ]
+    test_set_id = str(result.get("testSetId", ""))
+    if not result.get("testSetName") and test_set_id:
+        name = _test_set_names(load_test_sets()).get(test_set_id)
+        if name:
+            result["testSetName"] = name
+    result["analysis"] = analyze_run_results(result)
+    return result
 
 
 def get_run_results(
@@ -1287,39 +1372,14 @@ def get_run_results(
         run_id,
     )
     _raise_api_error(result, "retrieve evaluation run results")
-    names = _case_names(Path(agent_folder))
-    cases = result.get("testCasesResults")
-    if isinstance(cases, list):
-        result["testCasesResults"] = [
-            {
-                **case,
-                "testCaseName": names.get(
-                    str(case.get("testCaseId", "")),
-                    str(case.get("testCaseId", "")) or "Unknown test case",
-                ),
-            }
-            for case in cases
-            if isinstance(case, dict)
-        ]
-    test_set_id = str(result.get("testSetId", ""))
-    if not result.get("testSetName") and test_set_id:
-        test_sets = client.list_maker_evaluation_test_sets(
-            environment_id,
-            bot_id,
-        )
+
+    def load_test_sets() -> list[dict[str, Any]]:
+        test_sets = client.list_maker_evaluation_test_sets(environment_id, bot_id)
         _raise_api_error(test_sets, "list evaluation test sets")
-        selected = next(
-            (
-                item for item in test_sets
-                if str(item.get("id")) == test_set_id
-            ),
-            None,
-        )
-        if selected:
-            result["testSetName"] = (
-                selected.get("displayName") or test_set_id
-            )
-    result["analysis"] = analyze_run_results(result)
+        return test_sets
+
+    enrich_run_result(result, _case_names(Path(agent_folder)), load_test_sets)
+    test_set_id = str(result.get("testSetId", ""))
     result["agentStudioUrl"] = _agent_studio_url(
         studio_origin,
         str(environment_id or ""),
@@ -1327,11 +1387,59 @@ def get_run_results(
         test_set_id=test_set_id or None,
         run_id=str(run_id or "") or None,
     )
+    result["evaluationPageUrl"] = _agent_studio_url(
+        studio_origin, str(environment_id or ""), str(bot_id or ""),
+    )
     return result
 
 
 def _print_json(value: Any) -> None:
     print(json.dumps(value, indent=2, ensure_ascii=False))
+
+
+SESSION_WARNING = (
+    "The run started, but ADK could not save it to the local run history: {error}. "
+    "Keep the run ID to check its status."
+)
+
+
+def _record_started_run(
+    config: dict[str, Any],
+    result: dict[str, Any],
+    source_folder: str | Path | None = None,
+) -> None:
+    """Save a confirmed run start locally; never fail the start because of it."""
+    try:
+        record_run(agent_key(config), result, source_folder=source_folder)
+    except (EvaluationSessionError, OSError) as exc:
+        result["sessionWarning"] = SESSION_WARNING.format(error=exc)
+
+
+def _observe_run(config: dict[str, Any], run_id: str, result: dict[str, Any]) -> None:
+    try:
+        observe_run(agent_key(config), run_id, result)
+    except (EvaluationSessionError, OSError):
+        pass
+
+
+def _scoped_history(
+    config: dict[str, Any],
+    runs: list[dict[str, Any]],
+    include_all: bool,
+) -> dict[str, Any]:
+    warning = None
+    try:
+        recorded = adk_runs(agent_key(config))
+    except (EvaluationSessionError, OSError) as exc:
+        recorded, warning = [], str(exc)
+        include_all = True
+    history = scope_run_history(runs, recorded, include_all=include_all)
+    if warning:
+        history["sessionWarning"] = (
+            f"ADK could not read its local run history ({warning}); "
+            "showing every run Copilot Studio returned."
+        )
+    return history
 
 
 def _check_native_run_review(
@@ -1384,7 +1492,7 @@ def _check_native_run_review(
             selected.get("blockedReason") or "The selected test set is blocked from running."
         )
     if local_folder and any(local_folder.glob("*.mcs.yml")):
-        _require_synchronized_local_set(local_folder, include_review=False)
+        _require_synchronized_local_set(local_folder)
 
 
 def _start_native_run(
@@ -1549,6 +1657,7 @@ def _prepared_run_command(args: argparse.Namespace, config: dict[str, Any]) -> i
                 result = _start_dataverse_run(
                     client, environment_id, bot_id, agent_folder, run_args, config,
                 )
+        _record_started_run(config, result, source_folder=args.set_folder)
         _print_json({**result, "deployment": deployment})
         return 0
     except (
@@ -1559,6 +1668,10 @@ def _prepared_run_command(args: argparse.Namespace, config: dict[str, Any]) -> i
             "status": "run_failed",
             "stage": "run",
             "deployment": deployment,
+            "evaluationPageUrl": evaluation_page_url(
+                config, str(deployment.get("environmentId") or ""),
+                str(deployment.get("botId") or ""),
+            ),
             "error": str(exc),
             "userGuidance": (
                 "Deployment reported success, but Run did not return a confirmed "
@@ -1600,17 +1713,22 @@ def _minimalbot_command(args: argparse.Namespace, config: dict[str, Any]) -> int
         _print_json(sets)
         return 0
     if args.command == "run":
-        _print_json(_start_native_run(client, args, config))
+        result = _start_native_run(client, args, config)
+        _record_started_run(config, result)
+        _print_json(result)
         return 0
     if args.command == "list-connections":
         _print_json(list_native_mcs_connections(client))
         return 0
     if args.command == "list-runs":
-        _print_json(client.list_test_runs())
+        runs = enrich_run_history(client.list_test_runs(), client.list_test_sets())
+        _print_json(_scoped_history(config, runs, getattr(args, "all", False)))
         return 0
     if args.command == "results":
         result = client.get_test_run(args.run_id)
         if isinstance(result, dict):
+            agent_folder = Path(str((config.get("agent") or {}).get("folder") or ""))
+            enrich_run_result(result, _case_names(agent_folder), client.list_test_sets)
             result["agentStudioUrl"] = _agent_studio_url(
                 COPILOT_STUDIO_ORIGIN_BY_RING.get(
                     client.ring, DEFAULT_COPILOT_STUDIO_ORIGIN,
@@ -1621,6 +1739,15 @@ def _minimalbot_command(args: argparse.Namespace, config: dict[str, Any]) -> int
                 run_id=str(args.run_id or "") or None,
                 agent_backend=client.agent_backend,
             )
+            result["evaluationPageUrl"] = _agent_studio_url(
+                COPILOT_STUDIO_ORIGIN_BY_RING.get(
+                    client.ring, DEFAULT_COPILOT_STUDIO_ORIGIN,
+                ),
+                client.environment_id,
+                client.bot_id,
+                agent_backend=client.agent_backend,
+            )
+            _observe_run(config, args.run_id, result)
         _print_json(result)
         return 0
     raise MinimalBotEvaluationError(
@@ -1662,7 +1789,11 @@ def main() -> int:
     prepared_parser.add_argument("--mcs-connection-id", required=True)
 
     subparsers.add_parser("list-connections")
-    subparsers.add_parser("list-runs")
+    list_runs_parser = subparsers.add_parser("list-runs")
+    list_runs_parser.add_argument(
+        "--all", action="store_true",
+        help="Include runs not started from ADK, such as runs started in Copilot Studio.",
+    )
 
     results_parser = subparsers.add_parser("results")
     results_parser.add_argument("--run-id", required=True)
@@ -1705,9 +1836,11 @@ def main() -> int:
                     include_blocked=True,
                 ))
         elif args.command == "run":
-            _print_json(_start_dataverse_run(
+            result = _start_dataverse_run(
                 client, environment_id, bot_id, agent_folder, args, config,
-            ))
+            )
+            _record_started_run(config, result)
+            _print_json(result)
         elif args.command == "list-connections":
             _print_json(list_mcs_connections(
                 config,
@@ -1715,20 +1848,22 @@ def main() -> int:
                 client.signed_in_username,
             ))
         elif args.command == "list-runs":
-            _print_json(list_runs(
-                client,
-                environment_id,
-                bot_id,
+            _print_json(_scoped_history(
+                config,
+                list_runs(client, environment_id, bot_id),
+                args.all,
             ))
         elif args.command == "results":
-            _print_json(get_run_results(
+            result = get_run_results(
                 client,
                 environment_id,
                 bot_id,
                 agent_folder,
                 args.run_id,
                 _studio_origin_for_config(config),
-            ))
+            )
+            _observe_run(config, args.run_id, result)
+            _print_json(result)
     except (
         EvaluationRunError, MinimalBotEvaluationError, EvaluationMethodError,
         ReviewMetadataError, APIError,

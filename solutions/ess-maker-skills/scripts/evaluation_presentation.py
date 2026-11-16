@@ -11,7 +11,13 @@ import html
 import json
 from pathlib import Path
 import re
+import sys
 
+from evaluation_case_categories import (
+    CaseCategoryError,
+    load_case_categories,
+    save_case_categories,
+)
 from evaluation_csv import EvaluationCSVError, generate_set_csv, read_set_documents
 from evaluation_method_policy import EvaluationMethodError, validate_evaluation_documents
 
@@ -30,6 +36,23 @@ SECTIONS = (
 
 class EvaluationPresentationError(ValueError):
     """A preview cannot be rendered truthfully from the provided context."""
+
+
+# Flag -> (preview section, saved category). ``--in-scope`` predates the
+# positive/boundary split, so it groups the row without saving a category.
+GROUP_FLAGS = (
+    ("positive", "in_scope", "positive"),
+    ("boundary", "in_scope", "boundary"),
+    ("in_scope", "in_scope", None),
+    ("out_of_scope", "out_of_scope", "out_of_scope"),
+    ("other_negative", "other_negative", "negative"),
+)
+CATEGORY_SECTIONS = {
+    "positive": "in_scope",
+    "boundary": "in_scope",
+    "negative": "other_negative",
+    "out_of_scope": "out_of_scope",
+}
 
 
 @dataclass(frozen=True)
@@ -105,6 +128,8 @@ def render_preview(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evaluation-folder", required=True)
+    parser.add_argument("--positive", action="append", default=[])
+    parser.add_argument("--boundary", action="append", default=[])
     parser.add_argument("--in-scope", action="append", default=[])
     parser.add_argument("--out-of-scope", action="append", default=[])
     parser.add_argument("--other-negative", action="append", default=[])
@@ -112,20 +137,37 @@ def main() -> int:
     args = parser.parse_args()
     try:
         name, rows = load_preview_rows(args.evaluation_folder)
+        stored = load_case_categories(args.evaluation_folder)
         if args.list_rows:
-            print(json.dumps({"name": name, "rows": [asdict(row) for row in rows]}, indent=2))
+            print(json.dumps({"name": name, "rows": [
+                {**asdict(row), "category": stored.get(row.case_id)} for row in rows
+            ]}, indent=2))
             return 0
         groups: dict[str, str] = {}
-        for key in ("in_scope", "out_of_scope", "other_negative"):
-            for case_id in getattr(args, key):
+        categories: dict[str, str] = {}
+        for flag, section, category in GROUP_FLAGS:
+            for case_id in getattr(args, flag):
                 if case_id in groups:
                     raise EvaluationPresentationError(
                         f"Case {case_id} was assigned more than one section."
                     )
-                groups[case_id] = key
+                groups[case_id] = section
+                if category:
+                    categories[case_id] = category
+        for case_id, category in stored.items():
+            if category and case_id not in groups:
+                groups[case_id] = CATEGORY_SECTIONS[category]
         folder = Path(args.evaluation_folder)
         csv_path = generate_set_csv(folder, folder.parent / "exports")
         print(render_preview(name, rows, csv_path, groups))
+        if categories:
+            try:
+                save_case_categories(folder, categories)
+            except (CaseCategoryError, OSError) as exc:
+                print(
+                    f"Categories were not saved and will be classified again next time: {exc}",
+                    file=sys.stderr,
+                )
     except (EvaluationPresentationError, EvaluationCSVError, EvaluationMethodError, OSError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}))
         return 1

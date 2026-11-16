@@ -71,3 +71,72 @@ def test_csv_failure_reports_saved_case_and_recovery_without_false_success(tmp_p
     with pytest.raises(evaluation_authoring.EvaluationAuthoringError, match="do not add the case again"):
         evaluation_authoring.add_evaluation_case(folder, "New", "Answer")
     assert (folder / "custom-pay-new.mcs.yml").is_file()
+
+
+def _multi_row_set(tmp_path):
+    folder = _set(tmp_path)
+    (folder / "original.mcs.yml").write_text(yaml.safe_dump({
+        "kind": "EvaluationData",
+        "rows": [
+            {"input": "Keep", "expectedOutput": "Kept."},
+            {"input": "Drop", "expectedOutput": "Dropped."},
+        ],
+        "extensionData": {"displayOrder": "1"},
+    }), encoding="utf-8")
+    (folder / "negative.mcs.yml").write_text(yaml.safe_dump({
+        "kind": "EvaluationData",
+        "rows": [{"input": "Someone else's pay", "expectedOutput": "The agent should refuse."}],
+        "extensionData": {"displayOrder": "2"},
+    }), encoding="utf-8")
+    return folder
+
+
+def test_remove_deletes_only_selected_rows_backs_up_and_syncs_csv(tmp_path):
+    folder = _multi_row_set(tmp_path)
+    review = (folder / "review.json").read_bytes()
+    result = evaluation_authoring.remove_evaluation_cases(
+        folder, ["original.mcs.yml:2", "negative.mcs.yml:1"], tmp_path / "backups",
+    )
+    assert not (folder / "negative.mcs.yml").exists()
+    remaining = yaml.safe_load((folder / "original.mcs.yml").read_text(encoding="utf-8"))
+    assert remaining["rows"] == [{"input": "Keep", "expectedOutput": "Kept."}]
+    assert remaining["extensionData"] == {"displayOrder": "1"}
+    assert (folder / "review.json").read_bytes() == review
+    assert [item["prompt"] for item in result["removed"]] == ["Drop", "Someone else's pay"]
+    assert result["rowCount"] == 1
+    backup = Path(result["backup"]) / folder.name
+    assert sorted(path.name for path in backup.iterdir()) == ["negative.mcs.yml", "original.mcs.yml"]
+    with Path(result["csv"]).open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.reader(stream))
+    assert [row[0] for row in rows[1:]] == ["Keep"]
+
+
+@pytest.mark.parametrize("case_ids", [
+    ["missing.mcs.yml:1"],
+    ["original.mcs.yml:1", "original.mcs.yml:2", "negative.mcs.yml:1"],
+    ["original.mcs.yml:1", "original.mcs.yml:1"],
+    [],
+])
+def test_rejected_remove_has_no_side_effects(tmp_path, case_ids):
+    folder = _multi_row_set(tmp_path)
+    before = {path: path.read_bytes() for path in folder.iterdir()}
+    with pytest.raises(evaluation_authoring.EvaluationAuthoringError):
+        evaluation_authoring.remove_evaluation_cases(folder, case_ids, tmp_path / "backups")
+    assert {path: path.read_bytes() for path in folder.iterdir()} == before
+    assert not (tmp_path / "backups").exists()
+    assert not (folder.parent / "exports").exists()
+
+
+def test_remove_restores_files_when_a_write_fails(tmp_path, monkeypatch):
+    folder = _multi_row_set(tmp_path)
+    before = {path: path.read_bytes() for path in folder.iterdir()}
+
+    def fail_write(*args):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(evaluation_authoring, "_write_yaml_atomic", fail_write)
+    with pytest.raises(evaluation_authoring.EvaluationAuthoringError, match="restored"):
+        evaluation_authoring.remove_evaluation_cases(
+            folder, ["negative.mcs.yml:1", "original.mcs.yml:2"], tmp_path / "backups",
+        )
+    assert {path: path.read_bytes() for path in folder.iterdir()} == before

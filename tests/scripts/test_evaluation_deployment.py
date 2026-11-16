@@ -111,7 +111,7 @@ class DataverseState:
 
 
 class NativeState:
-    """Exercise the existing BotComponentInsert/read/changeToken contract offline."""
+    """Exercise native component insert/update/read contracts offline."""
 
     def __init__(self, monkeypatch, config):
         self.client = native.MinimalBotEvaluationClient(
@@ -122,6 +122,8 @@ class NativeState:
         self.fail_after_write = False
         self.fail_before_write = False
         self.partial = False
+        self.drop_description = False
+        self.revision = 0
         monkeypatch.setattr(self.client, "authenticate", lambda: None)
         monkeypatch.setattr(self.client, "read_components", self.read)
         monkeypatch.setattr(self.client, "_request", self.request)
@@ -132,13 +134,13 @@ class NativeState:
 
     def read(self):
         return {
-            "changeToken": str(len(self.components)),
+            "changeToken": str(self.revision),
             "botComponentChanges": deepcopy(self.components),
         }
 
     def request(self, method, url, *, body, operation):
         assert method == "PUT"
-        assert body["changeToken"] == str(len(self.components))
+        assert body["changeToken"] == str(self.revision)
         assert set(body) == {
             "changeToken", "botComponentChanges",
             "connectionReferenceChanges", "connectorDefinitionChanges",
@@ -147,7 +149,20 @@ class NativeState:
         if self.fail_before_write:
             raise native.MinimalBotEvaluationError("Uncertain transport failure")
         changes = deepcopy(body["botComponentChanges"])
-        self.components.extend(changes[:1] if self.partial else changes)
+        for change in changes[:1] if self.partial else changes:
+            if self.drop_description:
+                change["component"].pop("description", None)
+            if change["$kind"] == "BotComponentUpdate":
+                matches = [
+                    index for index, existing in enumerate(self.components)
+                    if existing["component"]["id"] == change["component"]["id"]
+                ]
+                assert len(matches) == 1
+                self.components[matches[0]]["component"] = change["component"]
+            else:
+                assert change["$kind"] == "BotComponentInsert"
+                self.components.append(change)
+        self.revision += 1
         if self.fail_after_write:
             raise native.MinimalBotEvaluationError("Uncertain transport failure")
         return SimpleNamespace(status_code=200), {}
@@ -201,6 +216,9 @@ def test_workspace_review_push_is_scoped_and_does_not_run(tmp_path, monkeypatch)
     assert result["sets"][0]["deployedReviewStatus"] == "review_requested"
     assert result["reviewMetadataPersisted"] is True
     assert result["sets"][0]["testSetId"] == "component-1"
+    assert result["evaluationPageUrl"].endswith(
+        f"/copilots/{result['botId']}/evaluation"
+    )
     assert len(state.rows) == 2
     assert not source.exists()
     assert unrelated.exists()
@@ -357,7 +375,7 @@ def test_native_workspace_plan_is_stable_and_reused_on_unchanged(tmp_path, monke
 
 
 @pytest.mark.parametrize("action", ["dirty", "request-review", "completion"])
-def test_native_push_reuses_existing_api_for_edits_and_local_review(tmp_path, monkeypatch, action):
+def test_native_push_persists_review_without_replacing_unchanged_sets(tmp_path, monkeypatch, action):
     config = config_for(tmp_path, minimalbot=True)
     state = NativeState(monkeypatch, config)
     folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
@@ -381,16 +399,27 @@ def test_native_push_reuses_existing_api_for_edits_and_local_review(tmp_path, mo
         assert all(change["$kind"] == "BotComponentInsert"
                    for change in state.puts[-1]["botComponentChanges"])
     else:
-        assert result["status"] == "up_to_date", result
+        assert result["status"] == "pushed", result
         assert result["deploymentBehavior"] == "reuse"
         assert result["sets"][0]["testSetId"] == first["sets"][0]["testSetId"]
-        assert len(state.puts) == 1
-        assert "review.json stays local" in result["reviewWarning"]
+        assert len(state.puts) == 2
+        assert [change["$kind"] for change in state.puts[-1]["botComponentChanges"]] == [
+            "BotComponentUpdate",
+        ]
         assert (folder / "review.json").exists()
-        assert not (folder.parents[1] / ".baseline" / "evaluations" / folder.name / "review.json").exists()
-    assert result["reviewMetadataPersisted"] is False
-    assert result["sets"][0]["deployedReviewStatus"] is None
-    assert state.components[:len(old_components)] == old_components
+        assert (folder.parents[1] / ".baseline" / "evaluations" / folder.name / "review.json").exists()
+        assert state.components[1:] == old_components[1:]
+        assert state.components[0]["component"]["definition"] == old_components[0]["component"]["definition"]
+    assert result["reviewMetadataPersisted"] is True
+    expected_status = (
+        "review_requested" if action == "request-review"
+        else "review_completed" if action == "completion" else None
+    )
+    assert result["sets"][0]["deployedReviewStatus"] == expected_status
+    state.puts.clear()
+    repeated = execute(folder, config, tmp_path, action="push")
+    assert repeated["status"] == "up_to_date", repeated
+    assert not state.puts
 
 
 @pytest.mark.parametrize("change", ["add", "remove"])
@@ -426,21 +455,21 @@ def test_native_changed_cases_create_selected_copy_without_remote_deletion(tmp_p
     }
 
 
-def test_native_workspace_review_uses_existing_push_and_preserves_local_sidecar(tmp_path, monkeypatch):
+def test_native_workspace_review_persists_and_baselines_shared_marker(tmp_path, monkeypatch):
     config = config_for(tmp_path, minimalbot=True)
     state = NativeState(monkeypatch, config)
     agent = Path(config["agent"]["folder"])
     source = write_set(tmp_path / "workspace" / "evaluations" / "selected")
     result = execute(source, config, tmp_path, action="request-review")
     assert result["status"] == "pushed", result
-    assert result["reviewMetadataPersisted"] is False
-    assert result["sets"][0]["deployedReviewStatus"] is None
-    assert result["reviewWarning"] == native.NATIVE_REVIEW_LOCAL_ONLY_WARNING
+    assert result["reviewMetadataPersisted"] is True
+    assert result["sets"][0]["deployedReviewStatus"] == "review_requested"
+    assert "reviewWarning" not in result
     assert not source.exists()
     local_review = agent / "evaluations" / "selected" / "review.json"
     assert json.loads(local_review.read_text(encoding="utf-8"))["status"] == "review_requested"
-    assert not (agent / ".baseline" / "evaluations" / "selected" / "review.json").exists()
-    assert "review_requested" not in json.dumps(state.puts)
+    assert (agent / ".baseline" / "evaluations" / "selected" / "review.json").exists()
+    assert "review_requested" in state.puts[0]["botComponentChanges"][0]["component"]["description"]
     preview = deployment.preview_deployment(
         local_review.parent, action="run", config=config, solution_root=tmp_path,
     )
@@ -448,7 +477,7 @@ def test_native_workspace_review_uses_existing_push_and_preserves_local_sidecar(
     assert "tagged for review" in preview["error"]
 
 
-def test_native_standalone_push_keeps_existing_yaml_api_and_reports_local_review(
+def test_native_standalone_push_publishes_review_marker(
     tmp_path, monkeypatch, capsys,
 ):
     config = config_for(tmp_path, minimalbot=True)
@@ -458,10 +487,100 @@ def test_native_standalone_push_keeps_existing_yaml_api_and_reports_local_review
     result = push.main(["--only", "evaluations/selected/*", "--yes"], config=config)
     assert result["status"] == "pushed"
     assert len(state.puts) == 1
-    assert "review_requested" not in json.dumps(state.puts)
+    assert "review_requested" in state.puts[0]["botComponentChanges"][0]["component"]["description"]
     output = capsys.readouterr().out
     assert "existing remote copies are retained" in output
-    assert native.NATIVE_REVIEW_LOCAL_ONLY_WARNING in output
+    assert "stays local" not in output
+    assert result["reviewMetadataPersisted"] is True
+
+
+def test_native_review_completion_preserves_human_description_and_case_ids(tmp_path, monkeypatch):
+    config = config_for(tmp_path, minimalbot=True)
+    state = NativeState(monkeypatch, config)
+    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
+    set_review_metadata(folder, "review_requested", "Human-authored description")
+    first = execute(folder, config, tmp_path, action="request-review")
+    before = deepcopy(state.components)
+    set_review_metadata(folder, "review_completed")
+    result = execute(folder, config, tmp_path, action="push")
+    assert result["status"] == "pushed", result
+    assert result["sets"][0]["testSetId"] == first["sets"][0]["testSetId"]
+    assert result["sets"][0]["deployedReviewStatus"] == "review_completed"
+    assert state.components[0]["component"]["description"] == (
+        "Human-authored description\n\n[ADK-REVIEW status=review_completed]"
+    )
+    assert state.components[1:] == before[1:]
+    assert len(state.components) == len(before)
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_native_unpersisted_review_marker_never_reports_success(tmp_path, monkeypatch, existing):
+    config = config_for(tmp_path, minimalbot=True)
+    state = NativeState(monkeypatch, config)
+    agent = Path(config["agent"]["folder"])
+    folder = write_set(agent / "evaluations" / "selected")
+    if existing:
+        execute(folder, config, tmp_path)
+    state.drop_description = True
+    result = execute(folder, config, tmp_path, action="request-review")
+    assert result["status"] == "failed", result
+    assert "description" in result["error"]
+    assert not (agent / ".baseline" / "evaluations" / "selected" / "review.json").exists()
+    assert (agent / ".evaluation-pending.json").is_file()
+
+
+@pytest.mark.parametrize("committed", [False, True])
+def test_native_uncertain_review_update_reconciles_without_replaying(tmp_path, monkeypatch, committed):
+    config = config_for(tmp_path, minimalbot=True)
+    state = NativeState(monkeypatch, config)
+    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
+    first = execute(folder, config, tmp_path)
+    state.fail_after_write = committed
+    state.fail_before_write = not committed
+    result = execute(folder, config, tmp_path, action="request-review")
+    assert result["status"] == "failed", result
+    state.fail_after_write = state.fail_before_write = False
+    if committed:
+        recovered = execute(folder, config, tmp_path, action="request-review")
+        assert recovered["status"] == "pushed", recovered
+        assert recovered["sets"][0]["testSetId"] == first["sets"][0]["testSetId"]
+        assert recovered["reviewMetadataPersisted"] is True
+    else:
+        preview = deployment.preview_deployment(
+            folder, action="request-review", config=config, solution_root=tmp_path,
+        )
+        assert preview["status"] == "blocked"
+    assert len(state.puts) == 2
+    assert len(state.components) == 2
+
+
+def test_native_remote_review_drift_invalidates_consent_without_overwriting(tmp_path, monkeypatch):
+    config = config_for(tmp_path, minimalbot=True)
+    state = NativeState(monkeypatch, config)
+    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
+    execute(folder, config, tmp_path)
+    preview = deployment.preview_deployment(
+        folder, action="request-review", config=config, solution_root=tmp_path,
+    )
+    assert preview["requiresPush"] is True
+    state.components[0]["component"]["description"] = "New remote human description"
+    result = deployment.deploy_evaluation_set(
+        folder, action="request-review", config=config, solution_root=tmp_path,
+        confirmation_token=preview["confirmationToken"], yes=True,
+    )
+    assert result["status"] == "blocked"
+    assert state.components[0]["component"]["description"] == "New remote human description"
+    assert len(state.puts) == 1
+
+
+def test_native_direct_run_checks_shared_review_marker_before_connection_calls(tmp_path, monkeypatch):
+    config = config_for(tmp_path, minimalbot=True)
+    state = NativeState(monkeypatch, config)
+    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
+    result = execute(folder, config, tmp_path, action="request-review")
+    monkeypatch.setattr(state.client, "_connected", lambda *args: pytest.fail("Run is blocked"))
+    with pytest.raises(native.MinimalBotEvaluationError, match="tagged for review"):
+        state.client.run_test_set(result["sets"][0]["testSetId"])
 
 
 def test_native_force_delete_retains_existing_unsupported_operation_guard(tmp_path, monkeypatch):
@@ -516,15 +635,15 @@ def test_native_prepared_run_uses_existing_push_result_once(
     current_id = result["deployment"]["sets"][0]["testSetId"]
     assert starts == [current_id]
     assert result["testSetId"] == current_id
-    assert f"/{current_id}/new-run" in result["agentStudioUrl"]
+    assert f"/new-run/{current_id}" in result["agentStudioUrl"]
     if change == "content":
         assert current_id != first["sets"][0]["testSetId"]
         assert len(state.puts) == 2
     else:
         assert current_id == first["sets"][0]["testSetId"]
-        assert len(state.puts) == 1
-        assert result["deployment"]["reviewWarning"] == native.NATIVE_REVIEW_LOCAL_ONLY_WARNING
-        assert result["deployment"]["sets"][0]["deployedReviewStatus"] is None
+        assert len(state.puts) == 2
+        assert result["deployment"]["reviewMetadataPersisted"] is True
+        assert result["deployment"]["sets"][0]["deployedReviewStatus"] == "review_completed"
 
 
 def test_native_uncertain_committed_write_reconciles_same_ids(tmp_path, monkeypatch):

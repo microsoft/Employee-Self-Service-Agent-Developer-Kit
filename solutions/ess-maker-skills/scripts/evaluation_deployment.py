@@ -32,6 +32,7 @@ from evaluation_review import (
     REVIEW_FILENAME,
     REVIEW_REQUESTED,
     ReviewMetadataError,
+    parse_review_feedback,
     parse_review_marker,
     parse_review_metadata,
     set_review_metadata,
@@ -40,7 +41,6 @@ from http_errors import APIError
 from minimalbot_evaluation import (
     MinimalBotEvaluationClient,
     MinimalBotEvaluationError,
-    NATIVE_REVIEW_LOCAL_ONLY_WARNING,
     is_minimalbot,
 )
 
@@ -136,6 +136,11 @@ def _status(files: dict[str, str]) -> str | None:
     return parse_review_metadata(content)["status"] if content is not None else None
 
 
+def _feedback(files: dict[str, str]) -> str | None:
+    content = files.get(REVIEW_FILENAME)
+    return parse_review_metadata(content).get("feedback") if content is not None else None
+
+
 def _parent(files: dict[str, str]) -> str:
     parents = [
         name for name, content in files.items()
@@ -222,6 +227,8 @@ def _verify_dataverse(
     remote_status = parse_review_marker(remote_parent.get("description"))
     if (remote_status or {}).get("status") != _status(source):
         raise EvaluationDeploymentError("The deployed review marker does not match local intent.")
+    if parse_review_feedback(remote_parent.get("description")) != _feedback(source):
+        raise EvaluationDeploymentError("The deployed reviewer feedback does not match local feedback.")
     for relative, entry in context["originalMap"].items():
         if relative.startswith(prefix) and relative not in {
             prefix + name for name in source if name.endswith(".mcs.yml")
@@ -324,7 +331,7 @@ def _prepare(
         context["nativePlan"] = plan
         context["nativeRemote"] = remote
         remote_snapshot = remote
-        if selected_map and not native_pending and not plan["changes"]:
+        if selected_map and not native_pending:
             client.verify_deployed_components({"entries": selected_map}, remote)
         if native_pending:
             context["nativePending"] = native_pending
@@ -399,10 +406,22 @@ def _prepare(
             )
     if native:
         local_status, baseline_status = _status(source_files), _status(baseline)
-        remote_status = baseline_status
+        parent_id = (
+            plan["sets"][0]["testSetId"] if native_pending else
+            selected_map.get(prefix + _parent(source_files), {}).get("botcomponentid")
+        )
+        remote_parent = client._remote_components(remote).get(str(parent_id), {})
+        remote_status = (
+            parse_review_marker(remote_parent.get("description")) or {}
+        ).get("status")
+        if not native_pending and parent_id and remote_status != baseline_status:
+            raise EvaluationDeploymentError(
+                "Remote review state differs from the baseline. Refresh/reconcile "
+                "without implicitly completing or replacing a review."
+            )
     if action == "run":
         pending_change = local_status != baseline_status
-        blocked = local_status == REVIEW_REQUESTED if native else (
+        blocked = (
             (
                 pending_change and local_status != REVIEW_COMPLETED
                 and REVIEW_REQUESTED in (local_status, baseline_status)
@@ -430,7 +449,8 @@ def _prepare(
     context.update({
         "confirmationToken": token,
         "requiresPush": (
-            bool(plan["changes"]) if native else bool(changed or new or deleted)
+            bool(plan["changes"] or plan.get("reviewChanges"))
+            if native else bool(changed or new or deleted)
         ) and not recovery,
         "changes": {"modified": changed, "new": new, "deleted": deleted},
         "recovering": recovery,
@@ -466,9 +486,7 @@ def _public(context: dict[str, Any], status: str) -> dict[str, Any]:
         result["deploymentBehavior"] = (
             "new_copy" if context["nativePlan"]["changes"] else "reuse"
         )
-        result["reviewMetadataPersisted"] = False
-        if REVIEW_FILENAME in context["files"]:
-            result["reviewWarning"] = NATIVE_REVIEW_LOCAL_ONLY_WARNING
+        result["reviewMetadataPersisted"] = status in SUCCESS_STATUSES
     elif status in SUCCESS_STATUSES:
         result["reviewMetadataPersisted"] = True
     return result
@@ -615,10 +633,21 @@ def deploy_evaluation_set(
                 "sourceFolder": str(source), "agentSetFolder": str(destination),
                 "testSetId": set_id,
                 "deployedReviewStatus": (
-                    _status(context["files"]) if context["backend"] == "dataverse" else None
+                    (
+                        parse_review_marker(
+                            context["nativePlan"]["entries"][
+                                context["prefix"] + _parent(context["files"])
+                            ].get("description")
+                        ) or {}
+                    ).get("status")
+                    if context["backend"] == "minimalbot" else _status(context["files"])
                 ),
             }],
         }
+        from evaluation_runs import evaluation_page_url
+        result["evaluationPageUrl"] = evaluation_page_url(
+            config, result["environmentId"], result["botId"],
+        )
         if context["backend"] == "minimalbot":
             try:
                 (agent / ".evaluation-preview.json").unlink(missing_ok=True)

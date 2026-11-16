@@ -11,20 +11,18 @@ evaluation validate subagent when entering this skill.
 The reviewer must not be asked to pull or refresh test sets manually.
 
 Read `.local/config.json` and `src/skills/evaluations/deployment-flow.md`.
-Dataverse pushes review metadata in the evaluation-parent description. Native
-MinimalBot pushes YAML only and retains review sidecars locally; do not block
-the existing local review workflow on a new shared-metadata prerequisite.
-Do not turn a successful native YAML upload into a cross-user review-availability
-claim or invent remote metadata.
+Both backends publish review metadata in the evaluation-parent description.
+Use synchronized, verified review status; a local sidecar or YAML upload alone
+does not establish shared review availability.
 
 Apply this backend gate before any refresh, MCP invocation, or remote discovery:
 
 - When `.local/config.json` has `releaseLine: "da"` or a
   `powerPlatformApiEndpoint` and no `dataverseEndpoint`, treat it as native.
-  Run only `python scripts/evaluation_review.py --list-all`, select rows whose
-  `localStatus` is `review_requested`, and never invoke Dataverse MCP,
-  `fetch_and_setup.py --refresh`, or the Dataverse-only `--list --status`
-  command. A Dataverse authentication prompt in this branch is a routing error,
+  Run `python scripts/evaluation_review.py --list --status review_requested`
+  to refresh shared native evaluation definitions and review descriptions,
+  and never invoke Dataverse MCP or `fetch_and_setup.py --refresh`.
+  A Dataverse authentication prompt in this branch is a routing error,
   not a prerequisite.
 - Only a configured agent with a real `dataverseEndpoint` uses the Dataverse
   refresh and synchronized remote-marker discovery below.
@@ -52,7 +50,7 @@ When no configured agent exists, skip the refresh and continue discovery so
 the command can report any eligible local state. The local working status alone
 is not proof that a configured-agent review tag was pushed.
 
-For Dataverse review discovery, from the solution root run:
+For shared review discovery on either backend, from the solution root run:
 
 ```text
 python scripts/evaluation_review.py --list --status review_requested
@@ -62,24 +60,25 @@ This command compares each configured-agent working set with its matching
 `.baseline/evaluations/{set}/` snapshot from the latest pull or successful
 push. It returns only sets whose `localStatus` and `deployedStatus` are both
 `review_requested`.
-Use this command's JSON output as the complete Dataverse pending-review list. Do not
+For native agents, the command creates a checkpoint, fetches current shared
+review state, and synchronizes clean local copies and baselines before listing.
+If authentication, readback, or local-edit protection fails, stop rather than
+reviewing stale local state.
+Use this command's JSON output as the complete pending-review list. Do not
 replace it with a broad file-search or glob. The command filters out local-only review requests that have not been pushed,
 review completions waiting to be pushed, and `review_completed` sets. It
 returns each set's source, folder, test-case count, local status, deployed
 status, synchronization state, and next action.
 
-For native local review, use the existing local-inclusive discovery instead:
+With no configured agent, local-inclusive discovery remains available:
 
 ```text
 python scripts/evaluation_review.py --list-all
 ```
 
-Select returned rows with `localStatus=review_requested` and label them
-**Review requested locally**, not remotely assigned/shared review work. The
-sidecar stays in the selected local/promoted folder and confirmed plan
-fingerprint, not deployed `.baseline`. Do not require a remote review refresh
-or matching `deployedStatus`/`nextAction=review` to inspect this local work.
-An explicit local review completion remains distinct from remote publication.
+Select returned workspace rows with `localStatus=review_requested` and label
+them **Review requested locally**, not remotely assigned/shared review work.
+This command is offline and does not refresh or authenticate against either API.
 Use the command output, never an ad hoc sidecar glob or a cross-agent search.
 
 ## Step 2: List before reviewing
@@ -90,12 +89,10 @@ Before reading cases or running any validation, present the pending sets:
 > |---|---|---|---|---|
 > | 1 | Compensation | Configured agent | 8 | Review requested |
 
-If no tagged sets are available on Dataverse, say that no test sets from the
-latest pulled Copilot Studio state are currently available for review. On
-native, say no eligible locally tagged sets were returned; shared-review
-discovery is not provided by the existing YAML-only push. On Dataverse, do not
+If no tagged sets are available for a configured agent, say that no test sets from
+the latest pulled Copilot Studio state are currently available for review. Do not
 treat a local `review_requested` change with `nextAction=push_review_request`
-as shared review work. Native local review does not wait for that shared marker.
+as shared review work.
 Do not run the quality validator as a fallback.
 
 Use the available structured question control (dropdown or choice buttons)
@@ -125,12 +122,15 @@ feedback or recommendations for the maker** or **Mark review complete without
 feedback**. If recommendations are supplied, state that the maker owns the
 official edits, validation, push, and subsequent evaluation run.
 
-Retain all feedback for the same selected set and ask whether to **Provide more
+Retain all feedback for the same selected set, save it with
+`evaluation_review.py --add-feedback`, and publish it through the scoped push
+in update Flow R2 so the maker can see it in Copilot Studio and ADK. Then ask
+whether to **Provide more
 feedback** or **Mark review complete**. Explicit completion follows update Flow
 R2 and `src/skills/evaluations/deployment-flow.md` in the same workflow:
-save explicit local completion and continue the existing scoped push. Dataverse
-verifies the published marker. Native reports the uploaded/reused ID,
-`reviewMetadataPersisted=false`, `deployedReviewStatus=null`, and `reviewWarning`;
-completion is local, not published to other users. Run remains subject to its
+save explicit local completion and continue the existing scoped push. Both
+backends verify the published marker before reporting
+`reviewMetadataPersisted=true` and `deployedReviewStatus=review_completed`.
+Native status-only updates retain the existing set and case IDs. Run remains subject to its
 existing gates. Failed/cancelled completion deployment stays local/pending.
 Never infer completion from maker activity, quality scores, or an ordinary push.

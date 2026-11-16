@@ -17,14 +17,42 @@ After scope/name confirmation and before generating files, say once:
 
 > We'll generate an evaluation set for your scenario. It will include common
 > questions employees might ask, which your agent should answer when configured
-> for that scenario. It will also include out-of-scope and imperfectly worded
-> questions to test how your agent responds to those situations.
+> for that scenario. It will also include negative cases that test restrictions,
+> out-of-scope questions, and imperfectly worded questions to test how your agent
+> responds to those situations.
 
 The owning generator, not the dispatcher, renders this message. Also use it
 when the maker chooses to generate additional cases. Do not announce generation
 when the user only views, edits supplied values, keeps, or cancels a set.
 The explanation does not replace scope/name confirmation or claim measured
 question frequency. Catalogue scope is not proof of configured agent capability.
+
+## Required generation coverage
+
+Every newly generated set, including each overflow set, must contain **at least
+2 negative cases + 2 out-of-scope cases**, in addition to the owning generator's
+positive and boundary requirements. These are separate, non-overlapping groups:
+
+- **Negative:** two distinct in-scenario failure behaviors grounded in the
+  selected topic or catalogue evidence, such as a privacy restriction,
+  write-on-read-only request, missing required information, or conflicting
+  inputs. Assert the supported refusal, clarification, or safe handling; do not
+  invent restrictions or assume all requests about another person are forbidden.
+- **Out of scope:** one request outside the selected scenario but supported by
+  another configured topic or catalogue scenario, and one genuinely outside the
+  full configured agent or catalogue. Expect successful handling for the former
+  and the supported limitation or redirection for the latter.
+
+Never count an out-of-scope case toward the two-negative minimum or reuse one
+row to satisfy both groups. Vary failure behaviors rather than paraphrasing the
+same case. If the evidence cannot support this coverage, explain the gap and
+confirm a suitable scope before generating; do not fabricate cases or silently
+drop a required group.
+
+Before export and quality review, classify all generated rows from their actual
+prompts and expected behavior and verify both minimums for every set. Add missing
+coverage before claiming generation is complete. These generation requirements
+do not automatically rewrite existing sets during viewing, editing, or running.
 
 ## Method admission
 
@@ -105,7 +133,8 @@ mere presence of refusal wording:
 
 | Case behavior | Renderer group |
 |---|---|
-| Supported positive or imperfect/boundary input within scope | `--in-scope "{case_id}"` |
+| Supported request within scope | `--positive "{case_id}"` |
+| Imperfect, ambiguous, or edge-of-scope wording for a supported request | `--boundary "{case_id}"` |
 | Outside the selected scenario but supported elsewhere, or genuinely outside the full agent/catalogue | `--out-of-scope "{case_id}"` |
 | Privacy or other negative behavior not genuinely out of scope | `--other-negative "{case_id}"` |
 | Insufficient context to classify reliably | Omit a group flag; retain in Additional cases |
@@ -118,7 +147,26 @@ equate "outside this evaluation goal" with "unsupported by the agent."
 
 Run `evaluation_presentation.py --evaluation-folder "{set-folder}"`, repeating
 the appropriate group flag for each classified row. Never assign a row to two
-groups. The helper regenerates the complete CSV through `generate_set_csv` and
+groups. Positive and boundary rows both appear under **Positive cases / In
+scope**. Each `--list-rows` row includes its saved local `category` (or
+`null`); reuse a saved category instead of reclassifying that row. The helper
+groups rows with a saved category automatically and saves the category of every
+flagged row locally (positive, boundary, negative, or out of scope) so later
+edits and deletions reuse it; no separate save step is needed. A row without a
+flag is not saved. If saving fails, the preview still renders and the helper
+reports that categories will be classified again next time.
+
+After showing the preview of a newly generated set, save its workflow context
+with its scenario (see **Workflow context**):
+
+```text
+python scripts/evaluation_session.py set-context --set-folder "{set-folder}" --set-name "{set name}" --stage created --scenario "{confirmed scenario}"
+```
+
+A failure to save does not block the preview or quality validation.
+
+The categories file stays local; it is never pushed to Copilot Studio. The
+presentation helper regenerates the complete CSV through `generate_set_csv` and
 uses its actual returned path. Display its complete Markdown output:
 
 - `### Eval generated - {actual scenario/set name}` and its plain-language intro.
@@ -134,9 +182,9 @@ tables. Empty sections must say there are no cases, not invent balanced coverage
 Do not add server fields or globally rename negative cases to out of scope.
 
 The CSV is provided for preview and sharing. Changes are made to source
-evaluation files and automatically reflected in the CSV. Do not claim removal
-is supported by this feature; a removal request uses the existing delete route
-and its restrictions.
+evaluation files and automatically reflected in the CSV. A removal request uses
+the local-only evaluation delete route with explicit confirmation; it does not
+push deletions or change anything in Copilot Studio.
 
 Show this preview before automatic quality validation. Do not add an action
 menu mid-operation. After fixes, re-read rows, regenerate the CSV, and render
@@ -166,13 +214,13 @@ quality validation must not reproduce, quote, summarize as a table, or otherwise
 repeat them. Render only this scorecard.
 
 ```text
-I ran a quality report to make sure this eval follows best practices — realistic inputs, expected outputs, and a balanced mix of positive, boundary, and negative cases. A high score means the eval is well-constructed, not that the agent will pass. It tells you the test set is trustworthy, so results will be meaningful.
+I ran a quality report to make sure this eval follows best practices — realistic inputs, expected outputs, and a balanced mix of positive, boundary, negative, and out-of-scope cases. A high score means the eval is well-constructed, not that the agent will pass. It tells you the test set is trustworthy, so results will be meaningful.
 
-We're reviewing how effectively your test set covers positive, negative, and boundary scenarios. This is a review of the test set itself, not confirmation that the tests will work in your tenant. You'll get that information from running the eval set in your tenant.
+We're reviewing how effectively your test set covers positive, negative, boundary, and out-of-scope scenarios. This is a review of the test set itself, not confirmation that the tests will work in your tenant. You'll get that information from running the eval set in your tenant.
 
 OVERALL EVAL QUALITY: {overall}/5 {overall-label}
 
-Positive: {positive-count} | Boundary: {boundary-count} | Negative: {negative-count} | Total: {total-count}
+Positive: {positive-count} | Boundary: {boundary-count} | Negative: {negative-count} | Out of scope: {out-of-scope-count} | Total: {total-count}
 
 Validity          {validity-bar} {validity}/5 {validity-label}
 Realism           {realism-bar} {realism}/5 {realism-label}
@@ -197,8 +245,9 @@ one `•` line for each dimension scoring 3 or below, in scorecard order. Keep t
 validator's flagged filenames and detailed evidence internally for the fix flow;
 do not insert them into this compact report. When every dimension scores 4 or
 5, render exactly `• No improvements suggested.` so the section is never empty.
-Classify every generated case as positive, boundary, or negative from its actual
-prompt and expected behavior; the three counts must sum to Total.
+Classify every generated case as positive, boundary, negative, or out of scope
+from its actual prompt and expected behavior; the four counts must sum to Total.
+Keep out-of-scope cases separate from the negative count.
 
 This report reviews construction quality, not tenant execution. Human/SME review
 is a different workflow, not another name for quality scoring. Preserve all raw
@@ -230,8 +279,8 @@ remains supported through `src/skills/evaluations/deployment-flow.md`.
 | Selected action | Continuation |
 |---|---|
 | Do you want to mark this test set ready for review so another user can provide feedback? | `update/SKILL.md` Flow R1 with the exact selected context; the selection authorizes its immediate non-destructive push, with no second confirmation |
-| Are you ready to run this test set in Copilot Studio? | `run/SKILL.md` Flow A; preserve its separate discovery/selection turn, review and connection gates; it owns required deployment and run |
-| Do you want to further edit this test set? | `update/SKILL.md` with the exact selected context; expose editing and adding cases; no automatic deployment |
+| Are you ready to run this test set in Copilot Studio? | `run/SKILL.md` Flow A with the exact selected set through its workflow handoff exception, with no second set-selection question; keep its review, deployment-approval, and connection gates; it owns required deployment and run |
+| Do you want to further edit this test set? | `update/SKILL.md` with the exact selected context; expose editing, adding, and deleting cases; no automatic deployment |
 | Do you want to do another quality review on this test set? | Invoke `validate/SKILL.md` for this exact set without a separate preamble, follow the fix flow, then return here without auto-repeating |
 
 Run and Request Review include required push; generators must not also push.
@@ -246,16 +295,121 @@ For an unpushed or failed/cancelled deployment, explain:
 > another authorized reviewer yet. Run or Request Review will publish the
 > selected set when required; {actual prerequisite or failure, if any}.
 
-Publishing the YAML does not always publish review metadata. Dataverse's existing
-push carries `review.json` in the evaluation-parent description. Native push
-retains that sidecar locally and reports `reviewMetadataPersisted=false` with
-`reviewWarning`; do not promise shared review availability after its YAML upload.
+Both backends publish the `review.json` status in the evaluation-parent
+description and report `reviewMetadataPersisted=true` only after readback
+verification. A local sidecar or successful YAML upload alone is not proof of
+shared review availability.
 For Request Review, native new/changed YAML immediately creates a new deployed
 copy with a new ID and retains the old remote copy; unchanged YAML, including
-local review-only changes, reuses a verified copy. These
+review-only changes, reuses a verified copy and updates its description in place. These
 existing API behaviors are explained by the deployment flow, not new blockers
 or additional maker actions.
 
 Do not claim local save, promotion, dry run, push, or run are equivalent states.
 Successful review request deployment does not notify anyone, grant access, or
 run evaluations. Reviewer completion uses Flow R2, not these maker actions.
+
+### Workflow state labels
+
+Describe where a test set is with exactly one of these maker-facing labels,
+based only on confirmed results:
+
+| Label | Use when |
+|---|---|
+| Created | The set is saved locally and has not been confirmed in Copilot Studio |
+| Ready for review | Verified deployment returned `deployedReviewStatus=review_requested` |
+| Running | A run start returned a valid run ID and the run is not complete |
+| Complete | Copilot Studio reports the run as completed |
+| Failed | Deployment or run start did not complete; say which step failed, what did complete, and how to retry |
+
+Failed applies only to uploading the set or starting the run. Do not label a
+started run as Failed; report its returned state and results instead.
+
+### Review status labels
+
+Review status is separate from the workflow and run states above. When listing
+test sets, show exactly one of these labels from `evaluation_review.py
+--list-all` and the saved workflow context:
+
+| Label | Use when |
+|---|---|
+| Approved | `localStatus` is `review_completed` |
+| Ready for review | `localStatus` and `deployedStatus` are both `review_requested`, so an authorized reviewer can find the set |
+| In progress | The set is still being worked on: it is the selected set in the saved workflow context and has not been marked for review, or review was requested locally but has not reached Copilot Studio yet |
+| Not requested | No review has been requested and the set is not being edited |
+
+Do not show a reviewer name, pass rate, or score with these labels.
+
+## Workflow context
+
+Keep the maker's place per agent in this workspace so they can take a side task
+and return without restarting:
+
+```text
+python scripts/evaluation_session.py show
+python scripts/evaluation_session.py set-context --set-folder "{set-folder}" --set-name "{set name}" --stage {created|ready_for_review|running|complete|failed} [--scenario "{scenario}"] [--pending-action "{description}"]
+python scripts/evaluation_session.py clear-context
+```
+
+Save the context after each stage: generation or edit (`created`), verified
+review handoff (`ready_for_review`), and run start (`running`). When a new set
+is generated, include `--scenario` with the scenario the maker confirmed (for
+example `Leave and time off`); the helper keeps it per set, so it is still
+shown after the maker moves to another set. The run helper
+records each confirmed run and updates its stage when results show it complete.
+When an action needs confirmation, save it as the pending action and clear it
+with `--clear-pending-action` once the maker confirms or cancels. Keep the
+context until the selected set is deleted or the maker asks to start over, then
+clear it.
+
+When the maker returns to evaluations, or asks "what next?", first show the
+**Evaluation overview** below. Then read the saved
+context. If it exists and the request could mean either the current task or the
+overall evaluation, say where the selected set stands and ask which they mean;
+do not assume only the most recent action matters. Never finish a saved pending
+action automatically. Show it and ask again before continuing. The saved context
+is local guidance, not proof of a deployed or running state; confirm those
+states with their helpers before reporting them.
+
+### Evaluation overview
+
+Run `evaluation_review.py --list-all` and `evaluation_session.py show`. Match
+each returned set's `folder` to the `runs` entries whose `sourceFolder` is that
+folder. Render:
+
+> **Here's where {Agent name} stands – {N} test sets**
+>
+> {One sentence naming each set's review status, for example: Leave and time
+> off is ready for review. Compensation and Profile updates are still in
+> progress.}
+>
+> | # | Test set | Test cases | Status |
+> |---|---|---|---|
+> | 1 | {test set} | {test case count} | {status} |
+>
+> {Run line}
+
+Use the same agent name, test-set name, `testCaseCount`, and **Review status
+labels** rules as the post-delete table; never use "Your" in the heading or
+summary sentence. Do not show a scenario column, a reviewer column, pass rates,
+or scores. When no sets exist, say so instead of the table.
+
+For the run line, when none of the listed sets has a run started from ADK,
+write `These tests haven't run yet.` Otherwise write one line per set that has
+one, using its latest run's `lastObserved.state`, for example
+`Compensation – last run: Completed (last checked {observedAt})`, and write
+`{Test set} hasn't run yet.` for the others. A saved state is the last state
+ADK saw; to report the current state, use the run status helper.
+
+When any listed set has a non-empty `feedback`, add one line after the run line:
+`Reviewer feedback is available for {test set names}. Open a set to read it.`
+Do not quote the feedback in the overview.
+
+Confirm which agent to use only when it is unclear, for example when several
+agents are configured and the request does not identify one. Otherwise use the
+active agent without asking.
+
+Offer review handoff only at the review stage: in the maker actions after
+generation, refinement, quality review, or deleting individual cases. Do not
+add it to post-run menus. Completed run results end with the Copilot Studio
+pointer and show no next-step question.

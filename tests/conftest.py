@@ -43,6 +43,16 @@ def _disable_adk_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ESS_ADK_TELEMETRY_SYNC", "1")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_evaluation_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory,
+) -> Path:
+    """Keep the local evaluation run history out of the repository."""
+    path = tmp_path_factory.mktemp("evaluation-session") / "evaluation-session.json"
+    monkeypatch.setenv("ESS_EVALUATION_SESSION_PATH", str(path))
+    return path
+
+
 # Stable fake values used everywhere a test needs an "identity". These match
 # the redaction substitution table documented in tests/captures/README.md so
 # cassettes and hand-built mocks share a vocabulary.

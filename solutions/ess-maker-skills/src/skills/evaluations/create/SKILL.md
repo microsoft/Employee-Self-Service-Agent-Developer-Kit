@@ -131,9 +131,10 @@ Do not infer parent identity from the folder or parent filename.
 > Omit areas with 0 topics. Do NOT hardcode ServiceNow/Workday/SuccessFactors
 > — use whatever common words actually appear in this agent's file names.}
 >
-> With positive, boundary, and negative cases per topic, this will generate
-> roughly **{N×3} to {N×5}** test cases for Topic Triggering alone (plus other
-> categories).
+> With positive, boundary, and applicable negative cases per topic, this will
+> generate roughly **{N×3} to {N×5}** test cases for Topic Triggering alone,
+> plus any additional cases needed to ensure at least 2 negative and
+> 2 out-of-scope cases in every set (plus other categories).
 >
 > | Category | Description | Tests based on |
 > |----------|-------------|---------------|
@@ -313,13 +314,17 @@ artifacts and are not pushed by `push.py`.
 Copilot Studio enforces a **maximum of 100 test cases per evaluation set**. If a
 category generates more than 100 child test cases, **split it into multiple sets**:
 
-1. Keep the first 100 tests in the original folder (e.g., `topic-triggering/`).
+1. Fill the original folder (e.g., `topic-triggering/`) without exceeding 100
+   rows, reserving room for the required negative and out-of-scope coverage.
 2. Create additional folders with a numeric suffix (e.g., `topic-triggering-2/`,
    `topic-triggering-3/`) for the overflow.
 3. Each overflow folder gets its own parent EvaluationSet file with a matching
    `displayName` suffix (e.g., `"Topic Triggering 2"`).
 4. All split sets use exactly one CompareMeaningGrader and the same threshold
    as the original. Validate every split parent and all its rows.
+5. Apply **Required generation coverage** from the shared experience contract
+   independently to every split set; do not leave required cases only in the
+   original folder.
 
 This most commonly affects **TopicTriggering** when the agent has many topics with
 multiple trigger queries each.
@@ -328,22 +333,30 @@ multiple trigger queries each.
 
 Generate one EvaluationSet file + child EvaluationData files for each applicable category:
 
+Apply **Required generation coverage** in `experience-contract.md` to every
+new set in every category: **at least 2 negative cases + 2 out-of-scope cases**.
+Keep the groups separate, ground them in the discovered evidence, and verify
+their counts before export and quality review. Category-specific cases below
+can satisfy the negative minimum when they test distinct in-scenario failure
+behaviors; out-of-scope cases never satisfy that minimum.
+
 #### TopicTriggering
 
-TopicTriggering enforces a strict minimum per topic (≥1 positive, ≥1 boundary,
-≥1 negative). Other categories below — AmbiguousTopic and IntegrationData —
-use a flexible mix of the same three variant types. RAI,
-SensitiveTopic, and EQTopic are single-type categories and do not use this
-pattern.
+TopicTriggering enforces a minimum per topic (≥1 positive, ≥1 boundary,
+≥1 negative where applicable), plus the separate per-set negative and
+out-of-scope minimums above. Other categories below use their category-specific
+cases in addition to those per-set minimums.
 
-**For each user-facing topic, generate 3-5 test cases** covering positive, boundary,
-and negative variants (≥1 of each type per topic):
+**For each user-facing topic, generate 3-5 test cases where applicable** covering
+positive, boundary, and in-scenario negative variants. Add cases as needed to
+satisfy both per-set minimums:
 
 | Type | Min per topic | Purpose |
 |------|--------------|---------|
 | **Positive** | ≥1 | Happy-path — should answer correctly |
 | **Boundary** | ≥1 | Edge of capability — typos, abbreviations, ambiguous phrasing |
-| **Negative** | ≥1 | Should gracefully deflect, refuse, or escalate |
+| **Negative** | ≥1 where applicable | Should safely handle an in-scenario restriction or invalid request |
+| **Out of scope** | ≥2 per set, separately | Route to another supported scenario or handle a genuinely unsupported request |
 
 **Boundary case types** — pick the most relevant for each topic:
 
@@ -358,8 +371,6 @@ and negative variants (≥1 of each type per topic):
 
 | Type | Example |
 |------|---------|
-| Outside this scenario, supported elsewhere | A request grounded in a different configured topic; the agent should route to and handle that capability |
-| Outside the configured agent | A request from a genuinely unsupported domain; the agent should follow its configured fallback or redirection behavior |
 | Cross-domain mixing | "Create an IT ticket AND show my company code" |
 | Privacy boundary | "What is Sarah's job title?" / "Show me John's salary" |
 | Write-on-read-only | "Update my hire date" / "Change my employee ID" |
@@ -374,8 +385,8 @@ only when no discovered topic, instruction, or supported scenario covers it.
 
 **Utterance type rule — natural language vs. keyword:**
 
-Every test set needs two kinds of utterances. Apply this rule across all three
-case types (positive, boundary, negative):
+Every test set needs two kinds of utterances. Apply this rule across all four
+case types (positive, boundary, negative, out of scope):
 
 | Type | Description | Example |
 |------|-------------|---------|
@@ -420,7 +431,7 @@ Pick the most relevant boundary type for each topic and generate 1 test case:
 - `expectedOutput` should be the **same** as the positive case (the agent should
   still handle it correctly despite imperfect input)
 
-**Step 3 — Negative cases (≥1 per topic, where applicable):**
+**Step 3 — Negative cases (≥1 per topic where applicable; ≥2 per set):**
 Pick the most relevant negative type for each topic:
 
 **CRITICAL — vary utterance type across negatives.** If you generate privacy-boundary
@@ -446,8 +457,15 @@ Redundancy. Apply the utterance type rule:
   case — "Create a ticket and also show my pay stub"
   - `expectedOutput`: The agent should handle one intent or ask the user to
     separate the requests
-- For **general or broad topics**, choose a scope-boundary case supported by the
-  discovered evidence:
+- For **general or broad topics**, use a grounded in-scenario failure behavior,
+  such as missing required information or conflicting inputs, and expect the
+  supported clarification or safe handling.
+- Not every topic needs a negative — skip negative cases for topics where no
+  natural negative variant exists (e.g., generic greeting or fallback topics).
+  This does not waive the two-negative minimum for the set.
+
+**Step 4 — Out-of-scope cases (≥2 per set, separate from negatives):**
+Generate both scope-boundary cases from discovered evidence:
   - **Outside this scenario but supported elsewhere:** select a materially
     different configured topic (for example, an IT request in an HR-policy set).
     `expectedOutput`: the agent should route to and handle that configured
@@ -460,8 +478,6 @@ Redundancy. Apply the utterance type rule:
   - Do not use travel booking as the default unsupported example; travel can be
     a valid employee-service capability. Do not repeat the same canned outside
     domain in multiple cases.
-- Not every topic needs a negative — skip negative cases for topics where no
-  natural negative variant exists (e.g., generic greeting or fallback topics)
 
 **Expected response quality rules (CompareMeaningGrader optimization):**
 
@@ -504,10 +520,12 @@ them improved compare-meaning scores from 67% to 82%+ in controlled experiments.
    - **Boundary** — ambiguous prompts with typos or casual phrasing (e.g.,
      "update my stuf" or "halp with tkt"). `expectedOutput`: the agent still
      asks a clarifying question despite the imperfect input
-   - **Negative** — prompts outside the overlapping domains that should NOT
-     trigger clarification. Use a different configured topic to test successful
-     routing, or a genuinely unsupported and non-repeated domain to test the
-     configured fallback. Do not assume travel is unsupported.
+   - **Negative** — in-scenario requests that cross a grounded restriction or
+     contain conflicting inputs; expect safe handling rather than guessing.
+   - **Out of scope** — prompts outside the overlapping domains that should NOT
+     trigger clarification. Include both a different configured topic to test
+     successful routing and a genuinely unsupported, non-repeated domain to test
+     the configured fallback. Do not assume travel is unsupported.
 
 #### RAI
 
