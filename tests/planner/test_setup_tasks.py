@@ -30,6 +30,7 @@ import pytest
 
 from planner import setup_tasks
 from planner.cli import build_parser
+from planner.plan_model import Plan, new_task, principal_pool
 from planner.setup_tasks import (
     canonical_role,
     checklist_path,
@@ -250,9 +251,48 @@ class TestWorkdayDecomposition:
         }
         assert list(actual) == list(_WORKDAY_TASKS)
         assert actual == _WORKDAY_TASKS
+        assert [task.stream for task in tasks] == [
+            "Setup", "Setup", "Workday", "Workday", "Workday", "Workday",
+        ]
         for task in tasks:
             assert task.attestable is True
-            assert task.stream == "Workday"
+
+    def test_foundation_checks_do_not_split_the_workday_section(self):
+        plan = Plan.new()
+        for task in system_setup_tasks("workday"):
+            plan.add_task(new_task(
+                task.task_id, task.title,
+                description=task.description,
+                assigned_to=principal_pool(task.role),
+                produces=task.produces,
+                consumes=task.consumes,
+                stream=task.stream,
+            ))
+        for task_id, title in [
+            ("readiness", "Check the selected agent and environment readiness"),
+            ("discovery", "Discover existing tenant resources"),
+        ]:
+            plan.add_task(new_task(
+                task_id, title, stream="Setup",
+                consumes=["primaryEnvironment", "essAgent"],
+            ))
+        plan.add_task(new_task(
+            "scenarios", "Implement the selected HR scenarios",
+            stream="Scenario work", consumes=["workdayConnection"],
+        ))
+
+        workday_ids = list(_WORKDAY_TASKS)
+        assert [task["id"] for task in plan.ordered_tasks()] == [
+            *workday_ids[:2], "readiness", "discovery", *workday_ids[2:], "scenarios",
+        ]
+        assert [
+            line for line in plan.render_summary().splitlines()
+            if line.startswith("### ")
+        ] == ["### Setup", "### Workday", "### Scenario work"]
+        assert [
+            line for line in plan.render_task_checklist().splitlines()
+            if line.startswith("**")
+        ] == ["**Setup**", "**Workday**", "**Scenario work**"]
 
     def test_ledger_honours_each_phase_prerequisite(self):
         tasks = system_setup_tasks("workday")
@@ -288,6 +328,7 @@ class TestWorkdayDecomposition:
     def test_skip_foundation_keeps_the_connect_workday_tasks(self):
         tasks = system_setup_tasks("workday", skip_foundation=True)
         assert [t.task_id for t in tasks] == list(_WORKDAY_TASKS)[2:]
+        assert all(task.stream == "Workday" for task in tasks)
 
     def test_commands_name_real_kit_prompts(self):
         for task in system_setup_tasks("workday"):

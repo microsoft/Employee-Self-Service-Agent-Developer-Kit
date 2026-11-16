@@ -495,7 +495,11 @@ def _build_task(
     # Reference summaries are full sentences; drop their period before joining.
     description = f"{how.rstrip(' .')}. {grounding} {role_line}"
 
-    stream_display = _SYSTEM_STREAM.get(system, system.replace("-", " ").title())
+    stream_display = (
+        "Setup"
+        if system == "workday" and group_index in FOUNDATION_GROUPS
+        else _SYSTEM_STREAM.get(system, system.replace("-", " ").title())
+    )
 
     return SetupTask(
         task_id=task_id,
