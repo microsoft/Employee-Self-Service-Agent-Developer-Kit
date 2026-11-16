@@ -191,6 +191,17 @@ def test_servicenow_connect_hands_off_to_setup_automatically() -> None:
     assert "Do not ask the maker to type `/setup`" in entry
     assert "We'll continue with **{AGENT_NAME}**" in entry
     assert "Offer only **Choose a different agent**" in entry
+    assert (
+        "Setup for **{AGENT_NAME}** didn't finish: {REASON}. ServiceNow "
+        "wasn't connected, and nothing was changed. When you're ready, just "
+        "tell me to finish setup and connect ServiceNow, and I'll pick up "
+        "from here."
+    ) in entry
+    assert "setup was cancelled" in entry
+    assert "without requiring `/setup`" in entry
+    assert "do not tell the maker to type `/setup`" in entry
+    assert "Run `/setup` when you are ready" not in entry
+    assert "Run `/setup` when you are ready" not in chooser
     assert "does not authorize setup" not in entry
     assert "show the returned typed `/setup` handoff and stop" not in chooser
     assert "automatic Setup handoff" in chooser

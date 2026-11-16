@@ -77,9 +77,27 @@ Connect. Setup's normal selection, sign-in, and environment/account
 confirmation controls still apply; do not choose or create an agent for the
 maker. The chooser itself changes no state.
 
-If Setup is blocked, cancelled, or exited, preserve the original request, show
-its actual blocker or disposition, and do not continue Connect or invoke Setup
-again.
+If Setup is blocked, cancelled, or exited, do not continue Connect or invoke
+Setup again in this invocation, and do not tell the maker to type `/setup`.
+Preserve the original request and show:
+
+**Message:**
+
+Setup for **{AGENT_NAME}** didn't finish: {REASON}. ServiceNow wasn't
+connected, and nothing was changed. When you're ready, just tell me to finish
+setup and connect ServiceNow, and I'll pick up from here.
+
+**End message.**
+
+`{REASON}` is a short plain clause with no trailing period, taken from what
+Setup reported, with no paths or error codes; for a plain cancel it is "setup
+was cancelled". Use the agent name from the pasted link or Setup's report, and
+omit " for **{AGENT_NAME}**" when none is known.
+
+When the maker later asks to finish setup and connect ServiceNow (or sends
+`/connect servicenow` again), treat it as a fresh request: rerun
+`agent-chooser` and follow this handoff again, without requiring `/setup`. The
+no-loop rule applies only within one invocation.
 
 When Setup returns a materialized workspace, rerun the chooser instead of
 showing the full chooser again:
