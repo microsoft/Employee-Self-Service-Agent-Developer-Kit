@@ -3202,11 +3202,31 @@ def _resolve_explicit_agent_link(
     environment: dict[str, Any],
     prepared_choices: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    target = _resolve_link_target(
-        agent_link,
-        str(environment.get("id") or ""),
-        str(environment.get("ring") or ""),
-    )
+    target = _resolve_link_target(agent_link, "", "")
+    workspace_environment = str(environment.get("id") or "")
+    if str(target["environmentId"]).casefold() != workspace_environment.casefold():
+        return {
+            "schemaVersion": "servicenow.agent-chooser.v1",
+            "status": "setup-required",
+            "branch": "explicit-agent-link",
+            "message": (
+                "This agent is in a different environment than this "
+                "workspace. Setup runs first and asks how to handle the "
+                "environment change, then Connect continues with this agent."
+            ),
+            "setupHandoff": {
+                **_setup_handoff_for_link(agent_link, target),
+                "workspaceEnvironmentDiffers": True,
+            },
+            "stateChanged": False,
+        }
+    workspace_ring = str(environment.get("ring") or "")
+    if workspace_ring and target["ring"] != workspace_ring:
+        raise ServiceNowConnectError(
+            "This agent link points to a different Copilot Studio ring. "
+            "Run /setup and explicitly confirm that environment before "
+            "using the agent."
+        )
     agent_id = str(target["agentId"])
     prepared = next(
         (

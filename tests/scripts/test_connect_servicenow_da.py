@@ -14064,6 +14064,34 @@ def test_agent_chooser_resolves_prepared_agent_link_without_duplicate_setup(
     assert not (tmp_path / ".local" / "connect").exists()
 
 
+def test_agent_chooser_hands_off_to_setup_for_different_environment_link(
+    tmp_path: Path,
+) -> None:
+    setup_path, config_path = _seed_it_setup(tmp_path)
+    setup_before = setup_path.read_text(encoding="utf-8")
+    config_before = config_path.read_text(encoding="utf-8")
+    other_environment = "00000000-0000-4000-8000-000000009997"
+    link = (
+        "https://copilotstudio.test.microsoft.com/environments/"
+        f"{other_environment}/bots/{AGENT_ID}"
+    )
+
+    result = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key="another-agent",
+        agent_link=link,
+    )
+
+    assert result["status"] == "setup-required"
+    assert result["branch"] == "explicit-agent-link"
+    assert result["setupHandoff"]["environmentId"] == other_environment
+    assert result["setupHandoff"]["workspaceEnvironmentDiffers"] is True
+    assert result["stateChanged"] is False
+    assert setup_path.read_text(encoding="utf-8") == setup_before
+    assert config_path.read_text(encoding="utf-8") == config_before
+    assert not (tmp_path / ".local" / "connect").exists()
+
+
 def test_agent_chooser_rejects_invalid_or_cross_environment_link_without_write(
     tmp_path: Path,
 ) -> None:
@@ -14078,10 +14106,9 @@ def test_agent_chooser_rejects_invalid_or_cross_environment_link_without_write(
             "full Copilot Studio link",
         ),
         (
-            "https://copilotstudio.test.microsoft.com/environments/"
-            "00000000-0000-4000-8000-000000009997"
-            f"/bots/{AGENT_ID}",
-            "different environment",
+            "https://copilotstudio.preprod.microsoft.com/environments/"
+            f"{ENVIRONMENT_ID}/bots/{AGENT_ID}",
+            "different Copilot Studio ring",
         ),
     ):
         with pytest.raises(snow.ServiceNowConnectError, match=message):

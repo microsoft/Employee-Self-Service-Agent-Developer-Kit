@@ -184,9 +184,15 @@ def test_servicenow_connect_hands_off_to_setup_automatically() -> None:
     )
 
     assert (
-        "I'll prepare your agent workspace first, then continue connecting "
-        "ServiceNow." in entry
-    )
+        "Before we can connect ServiceNow, we need to finish basic ADK "
+        "setup. We'll complete that first, then return to the ServiceNow "
+        "connection."
+    ) in entry
+    assert "I'll prepare your agent workspace first" not in entry
+    assert "workspaceEnvironmentDiffers: true" in entry
+    assert "Shared workspace choices" in entry
+    assert "completion summary and post-setup choices are not shown" in entry
+    assert "`environment.display_name`" in entry
     assert "**Prepare the workspace for an integration**" in entry
     assert "Do not ask the maker to type `/setup`" in entry
     assert "We'll continue with **{AGENT_NAME}**" in entry

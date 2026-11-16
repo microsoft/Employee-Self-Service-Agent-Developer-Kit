@@ -63,7 +63,8 @@ an automatic Setup handoff, not a stop. Show:
 
 **Message:**
 
-I'll prepare your agent workspace first, then continue connecting ServiceNow.
+Before we can connect ServiceNow, we need to finish basic ADK setup. We'll
+complete that first, then return to the ServiceNow connection.
 
 **End message.**
 
@@ -76,6 +77,14 @@ type `/setup`, ask for confirmation just to enter Setup, or ask them to repeat
 Connect. Setup's normal selection, sign-in, and environment/account
 confirmation controls still apply; do not choose or create an agent for the
 maker. The chooser itself changes no state.
+
+When the pasted link is in a different environment than this workspace, the
+handoff carries `workspaceEnvironmentDiffers: true`. Setup's existing
+conflicting-environment choice (**Shared workspace choices** in
+`foundation-setup/SKILL.md`) applies; do not make the choice for the maker or
+ask them to type `/setup`. Continue below only when Setup returns a
+materialized workspace for this agent; if it ends elsewhere (for example in a
+separate worktree), show its actual disposition and do not continue here.
 
 If Setup is blocked, cancelled, or exited, do not continue Connect or invoke
 Setup again in this invocation, and do not tell the maker to type `/setup`.
@@ -111,8 +120,10 @@ When the maker later asks to finish setup and connect ServiceNow (or sends
 `agent-chooser` and follow this handoff again, without requiring `/setup`. The
 no-loop rule applies only within one invocation.
 
-When Setup returns a materialized workspace, rerun the chooser instead of
-showing the full chooser again:
+When Setup returns a materialized workspace, continue directly: Setup's
+completion summary and post-setup choices are not shown, as in Workday's
+prepare-at-entry flow. Rerun the chooser instead of showing the full chooser
+again:
 
 - with a link: `agent-chooser --selection-key "another-agent" --agent-link "{LINK}"`
 - without a link: `agent-chooser --selection-key "prepared:{AGENT_ID}"`, using
@@ -129,8 +140,9 @@ continue.
 
 **End message.**
 
-Use the environment display name recorded in `.local/setup/config.json`, and
-omit "in **{ENVIRONMENT_NAME}**" when none is recorded. Offer only
+Use the canonical `environment.display_name` from `.local/setup/config.json`
+(the same optional field Setup uses as `{ENVIRONMENT_DISPLAY_NAME}`), and omit
+" in **{ENVIRONMENT_NAME}**" when it is not recorded; never infer a name. Offer only
 **Choose a different agent**; if the maker picks it, run
 `python scripts/connect_servicenow_da.py agent-chooser` and follow
 `servicenow-da/SKILL.md`. Otherwise continue without asking again. Do not change

@@ -39,8 +39,10 @@ python scripts/connect_servicenow_da.py agent-chooser \
 ```
 
 Do not ask for an environment ID, agent ID, account, or multiple values in the
-same field. A malformed, non-Copilot, different-environment, or different-ring
-link returns an actionable no-write error. A link matching a prepared agent
+same field. A malformed, non-Copilot, or different-ring link returns an
+actionable no-write error. A link to a different environment hands off to
+Setup's existing conflicting-environment choice (see the entry doc). A link
+matching a prepared agent
 returns `ready` without duplicate setup. `setup-required` means the exact
 existing agent is new to this workspace: follow the automatic Setup handoff in
 `src/skills/connect/servicenow/entry.md` (**Choose the agent**) for that exact
