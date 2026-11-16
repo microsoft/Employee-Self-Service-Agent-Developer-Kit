@@ -10348,16 +10348,6 @@ def _render_grouped_phases(
         )
         for phase_id in group["phaseIds"]:
             lines.append(f"   - {status_line(items_by_id[phase_id])}")
-    lines.extend(
-        [
-            "",
-            (
-                "✅ Complete — admin confirmed or reused means current "
-                "compatible evidence was accepted; it is not automatic API "
-                "verification."
-            ),
-        ]
-    )
     return "\n".join(lines)
 
 

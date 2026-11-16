@@ -12987,10 +12987,7 @@ def test_initial_plan_shows_business_groups_without_preflight_gate(
         len(json.loads(source_contract.read_text(encoding="utf-8"))["phases"])
         - 1
     )
-    assert (
-        "✅ Complete — admin confirmed or reused means current compatible "
-        "evidence was accepted; it is not automatic API verification."
-    ) in ordinary
+    assert "not automatic API verification" not in ordinary
     assert availability["gateRequired"] is False
     assert availability["currentGroup"] is None
     assert availability["question"] is None
@@ -13213,10 +13210,7 @@ def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
     assert "   - ⬜ Set employee portal URL — Pending" in ordinary
     assert "   - ✅ Test a ServiceNow request — Complete — admin confirmed" in ordinary
     assert ordinary.count("Responsible role:") == 4
-    assert (
-        "✅ Complete — admin confirmed or reused means current compatible "
-        "evidence was accepted; it is not automatic API verification."
-    ) in ordinary
+    assert "not automatic API verification" not in ordinary
     assert transport["businessGroupAvailability"]["question"] is None
     assert state == state_before
 
@@ -15664,7 +15658,7 @@ def test_resume_render_block_final_is_grouped_final_text() -> None:
 def _assert_grouped_phase_view(text: str, contract: dict) -> None:
     assert "**Phases**" in text
     assert "Connection progress:" not in text
-    assert "Complete — admin confirmed or reused" in text
+    assert "not automatic API verification" not in text
     for index, group in enumerate(snow._business_groups(contract), start=1):
         assert (
             f"{index}. **{group['label']}** — Responsible role: {group['role']}"
