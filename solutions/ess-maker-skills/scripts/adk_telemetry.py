@@ -230,13 +230,18 @@ _CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 # own donut slice, so we can see which specific action drove a change in
 # usage. Umbrella labels (a single "evaluations" or "publishing" wedge
 # covering multiple commands) hide that signal, so we split them apart.
-#   setup                   -> first-run environment setup + discovery
-#                              (discover / list_environments are sub-steps of
-#                              this flow and do NOT emit their own capability;
-#                              the adk.agent.create event at the end of setup is
-#                              tracked separately by the "Agents Created" KPI and
-#                              is NOT a capability-donut slice)
+#   setup                   -> first-run environment setup + environment
+#                              discovery (the list_environments / environment
+#                              picker sub-step belongs to this flow and does
+#                              NOT emit its own capability; the
+#                              adk.agent.create event at the end of setup is
+#                              tracked separately by the "Agents Created" KPI
+#                              and is NOT a capability-donut slice)
 #   connect                 -> ServiceNow / Workday connection setup
+#   discover                -> /discover tenant inventory crawl + syncInventory
+#                              upload. A standalone maker-facing skill, NOT the
+#                              same thing as the setup-time environment
+#                              discovery sub-step called out above.
 #   topic_create            -> author a new topic
 #   topic_update            -> modify an existing topic
 #   topic_delete            -> delete a topic
@@ -257,9 +262,13 @@ _CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 #   push                    -> upload local changes to Dataverse (staging)
 #   publishing              -> publish so pushed changes go live in runtime
 #   flightcheck             -> pre-deployment readiness check
+#   planner                 -> /planner ESS rollout plan authoring + tracking
+#                              (emitted per scripts/planner/cli.py call, so one
+#                              /planner conversation counts several times)
 ADK_CAPABILITIES = (
     "setup",
     "connect",
+    "discover",
     "topic_create",
     "topic_update",
     "topic_delete",
@@ -281,6 +290,7 @@ ADK_CAPABILITIES = (
     "push",
     "publishing",
     "flightcheck",
+    "planner",
 )
 _CAPABILITY_SET = frozenset(ADK_CAPABILITIES)
 
