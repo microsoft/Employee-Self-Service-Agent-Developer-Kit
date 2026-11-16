@@ -59,12 +59,13 @@ The kit ships with a complete reference library that the AI agent reads at task 
 
 The agent uses this knowledge when drafting topics or evaluation sets and inspecting existing integration contracts.
 
-### ✏️ Create and Update Topics
+### ✏️ Create, Update and Delete Topics
 
 Describe the intended conversation or supply relevant evaluation cases. Copilot reads current topics, drafts ordinary `.mcs.yml` content, and previews the proposed behavior for approval.
 
 - **Create** (`/create`): save one new inactive topic to the selected editable Dev agent after approval.
 - **Update** (`/update`): read and save the selected mapped topic while preserving its identity, active state, and unrelated behavior.
+- **Delete** (`/delete`): review and approve deletion of a selected editable Dev topic, keep its deletion local for a later Push, or discard a never-pushed local draft. Review any routing-instruction correction separately before approving its save.
 - **Instructions**: preview and approve matching instruction-section changes separately from topic changes.
 
 Save/readback verification is not activation, publication, or conversation acceptance. Supported conversation testing is offered when installed and the saved topic meets its conditions; otherwise acceptance remains pending.
@@ -143,7 +144,7 @@ Local draft -> Review and preview -> Scoped approval -> AgentBuilder save and re
 
 General `/push` first shows local pending changes, then delegates selected topics, separately approved instructions, and evaluation sets to their owners. Each owner acknowledges only its submitted content; later edits and unsupported changes remain pending. A local baseline is not a remote mirror.
 
-Explicit evaluation push retains its selected-set flow and AgentBuilder new-copy behavior. Topic deletion is not available in this release. Workflow and template-config deployment, activation, and publication are not part of general Push. Publication remains separately approved.
+Explicit evaluation push retains its selected-set flow and AgentBuilder new-copy behavior. Topic deletion uses its owning operation with an impact preview and explicit destructive approval, including when selected in a Push batch. Workflow and template-config deployment, activation, and publication are not part of general Push. Publication remains separately approved.
 
 ### ✈️ FlightCheck — Agent Setup Diagnostics
 
@@ -385,7 +386,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | `/connect-workday`          | Connect the ESS HR agent to Workday                                                                           |
 | `/create`                   | Draft and approve a topic save, or separately author evaluation sets; flow authoring is outside ADK           |
 | `/update`                   | Read and approve a mapped topic save, or separately edit evaluation sets                                      |
-| `/delete`                   | Deletion is not available for DA-GA agents in this release                                                    |
+| `/delete`                   | Review and approve a selected Dev topic deletion, stage it locally, or discard a never-pushed local draft     |
 | `/scan`                     | Scan your agent for compile errors and fix them                                                               |
 | `/review`                   | Review local topics or evaluation test sets tagged for review                                                 |
 | `/evaluate`                 | Generate evaluation test sets for your agent                                                                  |

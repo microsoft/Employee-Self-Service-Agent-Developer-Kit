@@ -85,7 +85,7 @@ parsed instruction section with the baseline separately from metadata. Keep
 unchanged instructions out of pending and excluded changes. Classify an actual
 rename as Display name, retaining the proposed value and save limitation.
 
-For a Create/Update routing-correction handoff, limit the applicable
+For a Create/Update/Delete routing-correction handoff, limit the applicable
 save scope to the carried topic change and isolated instruction correction.
 Retain all other discovered pending edits in `{component_inventory}` and render
 them as named Not included entries. Narrowing save scope does not narrow the
@@ -100,7 +100,7 @@ displayed scope. Inventory inspection alone is not remote validation.
 
 For topic entries, apply the shared **Authoring policy for this release** and Supported authoring scope before offering a save, making local revisions or dispatching an approved save. Read [Authoring experience](../../src/skills/topics/authoring-experience.md) for the applicable summary and wording review. Show unaccepted or acceptance-unknown response wording before any batch Push approval, using its Response text / Suggested response quotations. Explain that Push accepts the displayed wording for the approved topics together with their saves. Keep revisions in normal chat; persist them locally and refresh the review before approval. Local retention alone is not wording acceptance. Reuse valid unchanged scoped consent without an additional wording gate.
 
-For a deleted topic path, retain the named change under Not included: topic deletion is not available in this release. A missing file does not establish intent, remote absence or approval. Preserve its baseline and mapping.
+For a deleted topic path, read [Deletion experience](../../src/skills/topics/deletion-experience.md) and use the delete owner's fresh deletion preview and deletion summary instead of a content-update preview. The missing file does not establish intent, remote absence or approval. Show the deletion and any contained content explicitly before scoped destructive consent; keep template-protected topics and independently blocked deletions pending with their specific reasons. Deletion does not author replacement content and needs no response-wording acceptance.
 
 Use the shared inventory outcomes after appropriate observation and recovery:
 **No changes to push.** only after successful empty inspection, or **Could not
@@ -141,6 +141,7 @@ Use these existing owners:
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | New topic draft                 | `src/skills/topics/create/SKILL.md`, using `topic_authoring.py create --draft`                              |
 | Existing mapped topic           | `src/skills/topics/update/SKILL.md`, using its fresh read and `topic_authoring.py update --draft`           |
+| Deleted mapped topic path       | `src/skills/topics/delete/SKILL.md`, using `topic_authoring.py delete --topic` and its reviewed preview     |
 | Instructions in `agent.mcs.yml` | `agent_instructions.py read`, then `agent_instructions.py update --draft` against that read snapshot        |
 | Evaluation sets                 | The selected-set evaluation deployment flow above, retaining its review state and applicable scoped consent |
 

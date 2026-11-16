@@ -11,6 +11,7 @@ Read only the reference needed for the current operation or next step. Load its 
 | When                                                                                      | Reference                                                                                                                    |
 | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Drafting or reviewing a topic or related instruction correction; reporting their outcomes | [Authoring experience](authoring-experience.md)                                                                              |
+| Reviewing or applying topic deletion, local-only deletion or draft discard                | [Deletion experience](deletion-experience.md)                                                                                |
 | Reviewing a Push inventory or composed result; executing any approved save batch          | [Push experience](push-experience.md); standalone owners use its [Push telemetry](push-experience.md#push-telemetry) section |
 | Offering or conducting topic testing; readiness, outcomes, pause or stop                  | [Testing experience](testing-experience.md)                                                                                  |
 
@@ -103,8 +104,6 @@ A genuinely new topic can proceed through Create with a new schema identity that
 Unclear target identity, denied access, unavailable required reads and conflicting edits require their owning operation's safety handling. Name the actual blocker; missing topic-origin evidence alone is not one.
 
 ### Template protection for deletion
-
-Topic deletion is not available in this release. Preserve local files, baselines and mappings. The protection rules below also apply when assessing pending deletions; they do not enable a deletion operation.
 
 Do not delete template-provided topics through topic deletion, Push or cleanup, including local-only deletion. Apply this section before deletion; inventory classifications do not override it.
 

@@ -18,7 +18,7 @@ Here's what I can help you with:
 | `/connect`                  | Choose an available integration                                                              |
 | `/create`                   | Draft and approve a topic save, or separately author evaluation sets                         |
 | `/update`                   | Read and approve a topic update, or separately edit evaluation sets                          |
-| `/delete`                   | Deletion is not available for DA-GA agents in this release                                  |
+| `/delete`                   | Review a topic deletion, keep it local, or push it to the agent                              |
 | `/scan`                     | Type Enter to scan your agent for compile errors and fix them                                |
 | `/review`                   | Type Enter to review a topic or evaluation test sets tagged for review                       |
 | `/test`                     | Use installed bounded topic testing when ready; otherwise report acceptance pending          |
