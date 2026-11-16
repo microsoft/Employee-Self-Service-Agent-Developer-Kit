@@ -173,7 +173,7 @@ class FakeDriver:
         self.calls = []
         self.started = 0
         self.closed = 0
-        self.resets = 0
+        self.new_chats = 0
 
     def start(self):
         self.started += 1
@@ -185,9 +185,9 @@ class FakeDriver:
         self._i += 1
         return bubbles, timed_out
 
-    def reset(self):
-        self.resets += 1
-        self.calls.append("reset")
+    def newChat(self):
+        self.new_chats += 1
+        self.calls.append("newChat")
         return True
 
     def close(self):
@@ -220,6 +220,16 @@ def test_surface_drive_requires_start():
     surface = DriveSurface(driver)
     with pytest.raises(RuntimeError):
         surface.drive("x", timeout_s=30)
+
+
+def test_surface_new_chat_requires_start_and_delegates_once():
+    driver = FakeDriver([])
+    surface = DriveSurface(driver)
+    with pytest.raises(RuntimeError, match="not started"):
+        surface.newChat()
+    surface.start()
+    assert surface.newChat() is True
+    assert driver.calls == ["start", "newChat"]
 
 
 def test_surface_close_is_safe_without_start():

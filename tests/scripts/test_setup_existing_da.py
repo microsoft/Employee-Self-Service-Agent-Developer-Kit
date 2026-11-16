@@ -2999,9 +2999,11 @@ def test_selected_dev_connection_enforces_workspace_and_identity(
     assert auth.call_args.kwargs["emit_account_identity"] is False
 
 
+@pytest.mark.parametrize("operation", ["topic-list", "native-list", "prepare-browser"])
 def test_topic_operations_reuse_the_validated_connection_inventory(
-    tmp_path, monkeypatch, capsys,
+    tmp_path, monkeypatch, capsys, operation,
 ):
+    import native_topic_test
     import topic_authoring
 
     client = FakeClient()
@@ -3017,12 +3019,24 @@ def test_topic_operations_reuse_the_validated_connection_inventory(
     )
     monkeypatch.setattr(setup_existing_da, "tenant_id_from_access_token", lambda _token: TENANT_ID)
     monkeypatch.setattr(setup_existing_da, "AgentBuilderClient", lambda *_args, **_kwargs: client)
-    code = topic_authoring.main(["list", "--kit-root", str(tmp_path)])
+    if operation == "topic-list":
+        code = topic_authoring.main(["list", "--kit-root", str(tmp_path)])
+    elif operation == "native-list":
+        code = native_topic_test.main(["list", "--kit-root", str(tmp_path)])
+    else:
+        monkeypatch.setattr(
+            native_topic_test, "_prepare_browser",
+            lambda *_args: ({"outcome": "prepared"}, 0),
+        )
+        code = native_topic_test.main([
+            "prepare-browser", "--kit-root", str(tmp_path), "--url", AGENT_URL,
+        ])
     assert code == 0
     assert client.fetch_calls == 1
-    output = capsys.readouterr().out
-    assert '"topics":' in output
-    assert '"botComponentChanges":' not in output
+    if operation != "prepare-browser":
+        output = capsys.readouterr().out
+        assert '"topics":' in output
+        assert '"botComponentChanges":' not in output
 
 
 @pytest.mark.parametrize("mismatch", ["agent", "schema"])

@@ -153,6 +153,48 @@ def test_authoring_usage_precedes_drafting_and_excludes_later_saves():
         assert "unchanged draft for a later Push, skip this emission" in skill
 
 
+def test_testing_usage_counts_attempted_passes_and_post_fix_retests():
+    skill = _read("src/skills/topics/test/SKILL.md")
+    command = "python scripts/emit_capability.py topic_test"
+    assert skill.count(command) == 1
+    assert skill.index("## Execute and interpret tests") < skill.index(command)
+    assert skill.index(command) < skill.index("Use the reference's general `capture`")
+    assert "first authorized `capture` or `run` attempt of each pass" in skill
+    assert "readiness-only pauses add no count" in skill
+    assert "resuming the same paused pass add no count" in skill
+    assert "Each post-fix retest starts a new pass" in skill
+    assert "count as two passes" in skill
+
+
+def test_supported_authoring_scope_is_not_an_admission_restriction():
+    contract = _read("src/skills/topics/experience-contract.md")
+    scope = contract.split("## Supported authoring scope\n", 1)[1].split(
+        "## Authoring policy for this release\n", 1
+    )[0]
+    assert "one employee intent" in scope
+    assert "optional input collection and local conditional logic" in scope
+    assert "ending in approved text" in scope
+    assert "Makers may author outside this scope with an explicit disclaimer" in scope
+    assert "permitted but unsupported in this release" in scope
+    assert (
+        "Examples include cross-topic calls, live lookups, business actions "
+        "and modifications to shipped topics."
+    ) in scope
+    assert "The support boundary is not an authoring restriction." in scope
+    assert "Do not silently remove requested or existing behavior" in scope
+    assert "optional exact-response compatibility as a universal admission requirement" in scope
+    for relative in (
+        ".github/copilot-instructions.md",
+        ".github/prompts/push.prompt.md",
+        "src/skills/topics/create/SKILL.md",
+        "src/skills/topics/update/SKILL.md",
+        "src/skills/topics/test/SKILL.md",
+        "src/skills/topics/push-experience.md",
+        "src/skills/topics/testing-experience.md",
+    ):
+        assert "Supported authoring scope" in _read(relative), relative
+
+
 def test_unsupported_authoring_disclaimer_leads_the_response_once():
     contract = _read("src/skills/topics/experience-contract.md")
     scope = contract.split("## Supported authoring scope\n", 1)[1].split(
@@ -172,6 +214,34 @@ def test_unsupported_authoring_disclaimer_leads_the_response_once():
         "Customizations to shipped topics and more complex topic behavior may be attempted, "
         "but are outside this release's supported scope."
     ) in scope
+
+
+def test_create_update_and_push_do_not_reintroduce_the_support_scope_gate():
+    for relative in (
+        ".github/copilot-instructions.md",
+        ".github/prompts/push.prompt.md",
+        ".github/prompts/test.prompt.md",
+        "src/skills/topics/experience-contract.md",
+        "src/skills/topics/create/SKILL.md",
+        "src/skills/topics/update/SKILL.md",
+        "src/skills/topics/test/SKILL.md",
+        "src/skills/topics/push-experience.md",
+        "src/skills/topics/testing-experience.md",
+    ):
+        guidance = " ".join(_read(relative).split())
+        for restriction in (
+            "business/ISV actions are prohibited",
+            "seek an in-scope request",
+            "without importing prohibited behavior",
+            "not as permission to author backend-backed topics",
+            "backend-backed topic authoring is outside ADK",
+            "action-backed topic authoring is outside ADK",
+            "do not author a live lookup",
+            "do not edit, overwrite or delete it",
+        ):
+            assert restriction not in guidance, (relative, restriction)
+    push = _read("src/skills/topics/push-experience.md")
+    assert "outside this push's scope or support boundary" not in push
 
 
 def test_wording_review_preserves_supplied_text_and_distinguishes_local_drafts():
@@ -242,6 +312,23 @@ def test_suggested_response_revision_returns_to_review_without_save_consent():
     assert "Return to this component's refreshed review before saving it." in push
     assert "before Keep as draft and use the response-revision continuation" in contract
     assert "resolving the instruction conflict alone does not accept it" in contract
+
+
+def test_debugging_preserves_wording_without_claiming_verbatim_runtime_delivery():
+    contract = _read("src/skills/topics/testing-experience.md")
+    goal = contract.split("### Scoped runtime correctness goal\n", 1)[1].split(
+        "### Topic debugging outcome:", 1
+    )[0]
+    assert "Preserve supplied or accepted response wording and links during debugging" in goal
+    assert "unless the maker authorizes a wording change" in goal
+    assert "Do not replace wording merely to obtain a passing test." in goal
+    assert "literal saved content and verbatim runtime delivery are distinct claims" in goal
+    assert "a save alone does not establish the last" in goal
+    assert "without restricting read-only inspection of existing topics" in goal
+    testing = _read("src/skills/topics/test/SKILL.md")
+    assert "Preserve supplied or accepted response wording and links" in testing
+    assert "Distinguish literal saved content from observed runtime delivery" in testing
+    assert "Apply the shared Supported authoring scope to proposed topic fixes" in testing
 
 
 def test_eval_driven_aliases_are_thin_and_scenario_lifecycle_is_retired():
@@ -731,6 +818,35 @@ def test_initial_routing_conflict_decision_precedes_push_and_preserves_exact_sco
     assert "declined routing correction as an explicit exclusion" in initial
     assert "Do not immediately offer the same resolution decision again" in initial
     assert "do not offer runnable testing of unsaved topic changes" in initial
+
+
+def test_new_conflict_after_push_combines_state_aware_testing_without_instruction_consent():
+    contract = _read("src/skills/topics/authoring-experience.md")
+    follow_up = contract.split(
+        "### Combined routing-conflict and testing follow-up\n", 1
+    )[1].split("### Targeted instruction-change preview and approval\n", 1)[0]
+    question = json.loads(re.search(r"```json\n(.*?)\n```", follow_up, re.DOTALL)[1])
+    assert question["requestedSchema"]["properties"]["action"]["enum"] == [
+        "Resolve the routing conflict in the Agent Instructions",
+        "Not now, Activate and test anyway.",
+    ]
+    assert "**Not now, Test anyway.**" in follow_up
+    assert "does not approve an instruction push, activation or testing" in follow_up
+    assert "Confirm authoritative Active state before sending a test message" in follow_up
+    assert "do not silently repair it during testing" in follow_up
+    assert "scoped batch/debugging consent rules" in follow_up
+    assert "deliberate topic-only save" in follow_up
+    assert "only when a routing conflict is newly discovered or materially changed" in follow_up
+    assert "Do not repeat the resolution choice for the same conflict" in follow_up
+    assert "Prepare instruction change for review" not in contract
+    assert "> ##### ROUTING CONFLICTS" in follow_up
+    assert "This routing conflict will likely block topic execution." in follow_up
+    assert "Check the installed testing capability before offering a runnable test" in follow_up
+    testing = _read("src/skills/topics/test/SKILL.md")
+    assert "declined routing correction as an explicit exclusion" in testing
+    assert "not blanket debugging consent" in testing
+    assert "later authorized testing after Push topic anyway" in testing
+    assert "Push topic anyway authorizes only the topic save, not testing" in testing
 
 
 def test_instruction_correction_has_separate_preview_approval_and_truthful_outcomes():
