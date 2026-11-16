@@ -30,7 +30,9 @@ Check whether `.local/setup/config.json` exists before reading it, then read it
 together with `.local/config.json` when present. A missing `.local` directory
 or `Path does not exist` result is expected unprepared state, not a terminal
 Connect failure. Do not retry the missing read or show the global
-setup-required welcome message.
+setup-required welcome message. Unprepared state is handled by the automatic
+Setup handoff in **Choose the agent**; never ask the maker to type `/setup` or
+repeat their Connect request.
 
 ServiceNow Connect applies to Declarative Agents prepared in this workspace.
 It does not depend on `.local/config.json.activeAgent`, does not change it, and
@@ -46,16 +48,63 @@ environment evidence, then proceed to the router; do not gate ServiceNow on
 
 Read `src/skills/connect/servicenow-da/SKILL.md` and follow it. It offers the
 prepared HR and IT agents for this workspace, accepts one pasted Copilot Studio
-link, returns a typed `/setup` handoff for an agent that is new to this
-workspace, and dispatches to the selected HR or IT Dev lifecycle.
+link, hands off to Setup automatically when the workspace or the pasted agent
+is not prepared, and dispatches to the selected HR or IT Dev lifecycle.
 
 Before selecting an agent, run only
-`python scripts/connect_servicenow_da.py agent-chooser`. Do not call
-`list-agents` or scan the environment. Continue to the mandatory
-`resume-handoff` boundary only when the chooser returns `status: ready`.
-`setup-required` is a typed handoff to `/setup` for the exact pasted Copilot
-Studio link; it does not authorize setup, creation, environment switching, or
-state mutation.
+`python scripts/connect_servicenow_da.py agent-chooser`, adding
+`--selection-key "another-agent" --agent-link "{LINK}"` when the maker's
+request already includes a Copilot Studio link. Do not call `list-agents` or
+scan the environment. Continue to the mandatory `resume-handoff` boundary only
+when the chooser returns `status: ready`.
+
+`setup-required` (branch `workspace-not-prepared` or `explicit-agent-link`) is
+an automatic Setup handoff, not a stop. Show:
+
+**Message:**
+
+I'll prepare your agent workspace first, then continue connecting ServiceNow.
+
+**End message.**
+
+Then immediately read `src/skills/foundation-setup/SKILL.md` and follow
+**Prepare the workspace for an integration** in the same invocation. Preserve
+ServiceNow as the selected integration, the original request, and any supplied
+agent link; pass `setupHandoff.targetUrl` to Setup as the supplied target so it
+does not ask whether the maker already has an agent. Do not ask the maker to
+type `/setup`, ask for confirmation just to enter Setup, or ask them to repeat
+Connect. Setup's normal selection, sign-in, and environment/account
+confirmation controls still apply; do not choose or create an agent for the
+maker. The chooser itself changes no state.
+
+If Setup is blocked, cancelled, or exited, preserve the original request, show
+its actual blocker or disposition, and do not continue Connect or invoke Setup
+again.
+
+When Setup returns a materialized workspace, rerun the chooser instead of
+showing the full chooser again:
+
+- with a link: `agent-chooser --selection-key "another-agent" --agent-link "{LINK}"`
+- without a link: `agent-chooser --selection-key "prepared:{AGENT_ID}"`, using
+  the agent ID Setup reports for the agent it just prepared
+
+Continue only when it returns `status: ready`; otherwise show the returned
+error and do not loop into Setup. Before continuing, show:
+
+**Message:**
+
+We'll continue with **{AGENT_NAME}**, the agent you just set up in
+**{ENVIRONMENT_NAME}**. You can select another supported ESS agent before we
+continue.
+
+**End message.**
+
+Use the environment display name recorded in `.local/setup/config.json`, and
+omit "in **{ENVIRONMENT_NAME}**" when none is recorded. Offer only
+**Choose a different agent**; if the maker picks it, run
+`python scripts/connect_servicenow_da.py agent-chooser` and follow
+`servicenow-da/SKILL.md`. Otherwise continue without asking again. Do not change
+`.local/config.json.activeAgent` or persist the choice.
 
 Do not use the legacy `step*.md` files in this directory.
 

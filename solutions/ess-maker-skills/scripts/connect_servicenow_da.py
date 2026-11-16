@@ -3133,11 +3133,10 @@ def _agent_link_question() -> dict[str, Any]:
     }
 
 
-def _resolve_explicit_agent_link(
-    *,
+def _resolve_link_target(
     agent_link: str,
-    environment: dict[str, Any],
-    prepared_choices: list[dict[str, Any]],
+    environment_id: str,
+    ring: str,
 ) -> dict[str, Any]:
     try:
         from setup_existing_da import (
@@ -3156,10 +3155,10 @@ def _resolve_explicit_agent_link(
             raise ServiceNowConnectError(
                 "Paste the full Copilot Studio link for the existing agent."
             )
-        target = resolve_da_target(
+        return resolve_da_target(
             target_url=agent_link,
-            environment_id=str(environment.get("id") or ""),
-            ring=str(environment.get("ring") or ""),
+            environment_id=environment_id,
+            ring=ring or None,
             require_agent=True,
         )
     except ExistingDASetupError as exc:
@@ -3181,6 +3180,33 @@ def _resolve_explicit_agent_link(
             "link must include both the environment and agent."
         ) from exc
 
+
+def _setup_handoff_for_link(
+    agent_link: str,
+    target: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "command": "/setup",
+        "targetUrl": agent_link.strip(),
+        "environmentId": target["environmentId"],
+        "agentId": str(target["agentId"]),
+        "ring": target["ring"],
+        "requiresEnvironmentConfirmation": True,
+        "requiresAccountConfirmation": True,
+    }
+
+
+def _resolve_explicit_agent_link(
+    *,
+    agent_link: str,
+    environment: dict[str, Any],
+    prepared_choices: list[dict[str, Any]],
+) -> dict[str, Any]:
+    target = _resolve_link_target(
+        agent_link,
+        str(environment.get("id") or ""),
+        str(environment.get("ring") or ""),
+    )
     agent_id = str(target["agentId"])
     prepared = next(
         (
@@ -3197,19 +3223,34 @@ def _resolve_explicit_agent_link(
         "status": "setup-required",
         "branch": "explicit-agent-link",
         "message": (
-            "This existing agent is not prepared in this workspace. Run "
-            "/setup and use the same Copilot Studio link. Setup must confirm "
-            "the environment and account before changing the workspace."
+            "This agent isn't prepared in this workspace yet. Setup runs "
+            "first for this exact agent, then Connect continues with it."
         ),
-        "setupHandoff": {
-            "command": "/setup",
-            "targetUrl": agent_link.strip(),
-            "environmentId": target["environmentId"],
-            "agentId": agent_id,
-            "ring": target["ring"],
-            "requiresEnvironmentConfirmation": True,
-            "requiresAccountConfirmation": True,
-        },
+        "setupHandoff": _setup_handoff_for_link(agent_link, target),
+        "stateChanged": False,
+    }
+
+
+def _workspace_not_prepared(root: Path) -> bool:
+    return not (root / SETUP_STATE).exists() or not (root / ACTIVE_CONFIG).exists()
+
+
+def _unprepared_workspace_handoff(agent_link: str | None) -> dict[str, Any]:
+    handoff: dict[str, Any] = {"command": "/setup"}
+    if agent_link is not None:
+        handoff = _setup_handoff_for_link(
+            agent_link,
+            _resolve_link_target(agent_link, "", ""),
+        )
+    return {
+        "schemaVersion": "servicenow.agent-chooser.v1",
+        "status": "setup-required",
+        "branch": "workspace-not-prepared",
+        "message": (
+            "Basic ADK setup is not finished in this workspace. Setup runs "
+            "first, then Connect continues."
+        ),
+        "setupHandoff": handoff,
         "stateChanged": False,
     }
 
@@ -3220,12 +3261,14 @@ def agent_chooser_handoff(
     selection_key: str | None = None,
     agent_link: str | None = None,
 ) -> dict[str, Any]:
+    if agent_link is not None and selection_key not in (None, "another-agent"):
+        raise ServiceNowConnectError(
+            "An agent link can be supplied only for Use another agent."
+        )
+    if _workspace_not_prepared(root):
+        return _unprepared_workspace_handoff(agent_link)
     environment, prepared_choices = _prepared_agent_choices(root)
     if agent_link is not None:
-        if selection_key not in (None, "another-agent"):
-            raise ServiceNowConnectError(
-                "An agent link can be supplied only for Use another agent."
-            )
         return _resolve_explicit_agent_link(
             agent_link=agent_link,
             environment=environment,

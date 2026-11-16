@@ -13994,6 +13994,52 @@ def test_agent_chooser_returns_typed_setup_handoff_for_new_workspace_link(
     assert not (tmp_path / ".local" / "connect").exists()
 
 
+def test_agent_chooser_hands_off_to_setup_when_workspace_is_not_prepared(
+    tmp_path: Path,
+) -> None:
+    result = snow.agent_chooser_handoff(tmp_path)
+
+    assert result["status"] == "setup-required"
+    assert result["branch"] == "workspace-not-prepared"
+    assert result["setupHandoff"] == {"command": "/setup"}
+    assert result["stateChanged"] is False
+    assert not (tmp_path / ".local").exists()
+
+
+def test_agent_chooser_carries_link_into_setup_for_unprepared_workspace(
+    tmp_path: Path,
+) -> None:
+    link = (
+        "https://copilotstudio.test.microsoft.com/environments/"
+        f"{ENVIRONMENT_ID}/bots/{AGENT_ID}"
+    )
+
+    result = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key="another-agent",
+        agent_link=link,
+    )
+
+    assert result["status"] == "setup-required"
+    assert result["branch"] == "workspace-not-prepared"
+    assert result["setupHandoff"]["targetUrl"] == link
+    assert result["setupHandoff"]["environmentId"] == ENVIRONMENT_ID
+    assert result["setupHandoff"]["agentId"] == AGENT_ID
+    assert not (tmp_path / ".local").exists()
+
+
+def test_agent_chooser_unprepared_workspace_still_rejects_bad_link(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(snow.ServiceNowConnectError, match="full Copilot Studio"):
+        snow.agent_chooser_handoff(
+            tmp_path,
+            selection_key="another-agent",
+            agent_link="https://example.com/not-an-agent",
+        )
+    assert not (tmp_path / ".local").exists()
+
+
 def test_agent_chooser_resolves_prepared_agent_link_without_duplicate_setup(
     tmp_path: Path,
 ) -> None:

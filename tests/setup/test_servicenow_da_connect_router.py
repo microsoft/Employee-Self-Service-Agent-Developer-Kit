@@ -172,6 +172,30 @@ def test_connect_prompt_keeps_only_a_servicenow_routing_line() -> None:
     assert len(lines) <= 62
 
 
+def test_servicenow_connect_hands_off_to_setup_automatically() -> None:
+    skills = _SOLUTION / "src" / "skills" / "connect"
+    entry = " ".join(
+        (skills / "servicenow" / "entry.md").read_text(encoding="utf-8").split()
+    )
+    chooser = " ".join(
+        (skills / "servicenow-da" / "SKILL.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+
+    assert (
+        "I'll prepare your agent workspace first, then continue connecting "
+        "ServiceNow." in entry
+    )
+    assert "**Prepare the workspace for an integration**" in entry
+    assert "Do not ask the maker to type `/setup`" in entry
+    assert "We'll continue with **{AGENT_NAME}**" in entry
+    assert "Offer only **Choose a different agent**" in entry
+    assert "does not authorize setup" not in entry
+    assert "show the returned typed `/setup` handoff and stop" not in chooser
+    assert "automatic Setup handoff" in chooser
+
+
 def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     prompt_file = (
         _SOLUTION / ".github" / "prompts" / "connect.prompt.md"

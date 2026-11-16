@@ -42,9 +42,16 @@ Do not ask for an environment ID, agent ID, account, or multiple values in the
 same field. A malformed, non-Copilot, different-environment, or different-ring
 link returns an actionable no-write error. A link matching a prepared agent
 returns `ready` without duplicate setup. `setup-required` means the exact
-existing agent is new to this workspace: show the returned typed `/setup`
-handoff and stop. Do not run setup, create an agent, switch environment/account,
-or mutate local state from this chooser.
+existing agent is new to this workspace: follow the automatic Setup handoff in
+`src/skills/connect/servicenow/entry.md` (**Choose the agent**) for that exact
+link, then rerun this command with the same link. The chooser itself never
+runs setup, creates an agent, switches environment/account, or mutates local
+state.
+
+When `agent-chooser` returns `setup-required` with branch
+`workspace-not-prepared`, the workspace has no prepared setup state yet. Follow
+the same automatic handoff; a supplied link is carried into Setup, otherwise
+Setup asks its normal questions.
 
 After selection, keep only invocation-local values:
 
