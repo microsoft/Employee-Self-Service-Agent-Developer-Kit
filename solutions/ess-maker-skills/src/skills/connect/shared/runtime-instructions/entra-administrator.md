@@ -1,5 +1,7 @@
 #### Instructions for the Entra administrator
 
+For the full steps, see [Register an application in Microsoft Entra ID for OIDC integration with ServiceNow](https://learn.microsoft.com/en-us/copilot/employee-self-service/declarative-agent-servicenow-hr-it#task-1-register-an-application-in-microsoft-entra-id-for-oidc-integration-with-servicenow).
+
 Your organization is connecting the Employee Self-Service (ESS) HR or IT agent to ServiceNow, so employees can create and track HR cases and IT tickets while signed in as themselves. This needs an app registration in Microsoft Entra ID that ServiceNow trusts to identify users. You need the **Global Administrator** or **Cloud Application Administrator** role.
 
 If your organization already has an app registration that ServiceNow uses to verify Microsoft Entra sign-in, for example for ServiceNow Knowledge or single sign-on, check with your ServiceNow administrator before creating another one. ServiceNow allows only one OIDC configuration per Microsoft Entra tenant. See [Coexistence with the Microsoft Graph connector for ServiceNow](https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service/declarative-agent-servicenow-hr-it#coexistence-with-the-microsoft-graph-connector-for-servicenow).

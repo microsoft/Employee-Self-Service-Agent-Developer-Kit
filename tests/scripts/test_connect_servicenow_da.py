@@ -7230,7 +7230,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "runtime-instructions/entra-administrator.md"
     )
     assert entra["runtimeInstructionSha256"] == (
-        "3EFE09214DEFAE5889AF480E041EDF7CE3D5D2F8B8E82B83D83C4856A2D80CFD"
+        "7671335136F75FBC32D23A77A5DEA0FD79A2CF670994452A8CA20F2A086CB82B"
     )
     assert "sourceWorkbookSha256" not in entra
     assert "sourceWorkbookRole" not in entra
@@ -7336,7 +7336,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "runtime-instructions/servicenow-administrator.md"
     )
     assert service_now["runtimeInstructionSha256"] == (
-        "F4BE4C961DA8C0A7548D8F346C3A46831EFFF571718001B59A1CBF42B5C62020"
+        "D969B92C889E943F98238D105F2636A33801F1B1164D575B01AFB4F25A389F7A"
     )
     assert service_now["lockedValues"] == {
         "applicationClientId": APP_CLIENT_ID,
@@ -7401,13 +7401,26 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
         "runtime-instructions/servicenow-administrator.md"
     )
     assert entra_sha == (
-        "3EFE09214DEFAE5889AF480E041EDF7CE3D5D2F8B8E82B83D83C4856A2D80CFD"
+        "7671335136F75FBC32D23A77A5DEA0FD79A2CF670994452A8CA20F2A086CB82B"
     )
     assert service_now_sha == (
-        "F4BE4C961DA8C0A7548D8F346C3A46831EFFF571718001B59A1CBF42B5C62020"
+        "D969B92C889E943F98238D105F2636A33801F1B1164D575B01AFB4F25A389F7A"
     )
     assert "\u00a0" not in entra + service_now
     assert entra.startswith("#### Instructions for the Entra administrator")
+    assert entra.split("\n")[2] == (
+        "For the full steps, see [Register an application in Microsoft "
+        "Entra ID for OIDC integration with ServiceNow]"
+        "(https://learn.microsoft.com/en-us/copilot/employee-self-service/"
+        "declarative-agent-servicenow-hr-it#task-1-register-an-application-"
+        "in-microsoft-entra-id-for-oidc-integration-with-servicenow)."
+    )
+    assert service_now.split("\n")[2] == (
+        "For the full steps, see [Register the OIDC provider in ServiceNow]"
+        "(https://learn.microsoft.com/en-us/copilot/employee-self-service/"
+        "declarative-agent-servicenow-hr-it"
+        "#task-2-register-oidc-provider-in-servicenow)."
+    )
     assert "**Part 1: Register the app**" in entra
     assert "**Part 2: Add the user claims to the token**" in entra
     assert (

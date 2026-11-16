@@ -1,5 +1,7 @@
 #### Instructions for the ServiceNow administrator
 
+For the full steps, see [Register the OIDC provider in ServiceNow](https://learn.microsoft.com/en-us/copilot/employee-self-service/declarative-agent-servicenow-hr-it#task-2-register-oidc-provider-in-servicenow).
+
 Your organization is connecting the Employee Self-Service (ESS) HR or IT agent to ServiceNow, so employees can create and track HR cases and IT tickets while signed in as themselves. ServiceNow needs to trust Microsoft Entra ID sign-in and match each signed-in employee to their ServiceNow user record. You need the `admin` or `security_admin` role.
 
 ServiceNow allows only one OIDC configuration per Microsoft Entra tenant. If one already exists for your tenant, for example for the Microsoft Graph connector or single sign-on, don't change it. See [Coexistence with the Microsoft Graph connector for ServiceNow](https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service/declarative-agent-servicenow-hr-it#coexistence-with-the-microsoft-graph-connector-for-servicenow) and the [ServiceNow Knowledge connector guidance](https://learn.microsoft.com/en-us/microsoftsearch/servicenow-knowledge-connector).
