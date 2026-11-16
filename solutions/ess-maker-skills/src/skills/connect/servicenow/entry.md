@@ -267,7 +267,8 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   rollback gates, then read the exact returned action document in this
   invocation and follow it;
 - when that action calls `topic-action-handoff` and returns
-  `question-required`, require the supported
+  `question-required`, first show the returned `replyBeforeQuestion` verbatim
+  as an ordinary agent reply, then require the supported
   `header`/`question`/`options`/`allowFreeformInput` canonical shape, pass it
   through `adapt-question`, call `ask_user` with the generated arguments
   verbatim, and wait. After the maker answers, continue the matching branch in

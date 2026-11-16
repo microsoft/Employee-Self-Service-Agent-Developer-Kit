@@ -224,12 +224,8 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
         (
             _ACTIONS / "prepare-topics.md",
             (
-                "Selected agent:",
-                "Environment:",
-                "Component hash:",
-                "Current topic inventory:",
-                "Inactive HRSD topics:",
                 "Do you want to enable all listed inactive",
+                "inventory listed above",
             ),
         ),
         (
@@ -284,6 +280,9 @@ def test_visible_handoff_payloads_are_supported_and_complete(
             assert "**Phases**" not in question["question"]
         if path.name == "guide-entra-registration.md":
             assert "requirements above" in question["question"].casefold()
+        elif path.name == "prepare-topics.md":
+            assert "inventory listed above" in question["question"]
+            assert "Selected agent:" not in question["question"]
         else:
             assert "above" not in question["question"].casefold()
 

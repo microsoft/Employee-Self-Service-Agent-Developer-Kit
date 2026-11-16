@@ -9578,7 +9578,7 @@ def topic_action_handoff(
         str(topic.get("displayName") or topic.get("schemaName") or "")
         for topic in inactive
     ]
-    question = (
+    reply_before_question = (
         f"Selected agent: {ACTIVE_PROFILE.agent_display_name} "
         f"(`{_agent_slug(context)}` / `{context['agent']['id']}`)\n"
         f"Environment: `{context['environment']['id']}`\n"
@@ -9587,16 +9587,17 @@ def topic_action_handoff(
         f"topics; {active} active and {len(inactive)} inactive.\n\n"
         f"Inactive {ACTIVE_PROFILE.product_name} topics:\n"
         + "\n".join(f"- {name}" for name in inactive_names)
-        + (
-            "\n\nDo you want to enable all listed inactive ServiceNow "
-            "topics, or keep their current states? Only topics in this exact "
-            "inventory are in scope; unrelated topics remain unchanged."
-        )
+    )
+    question = (
+        "Do you want to enable all listed inactive ServiceNow topics, or "
+        "keep their current states? Only topics in the inventory listed "
+        "above are in scope; unrelated topics remain unchanged."
     )
     return {
         **base,
         "decision": "question-required",
         "actionResult": None,
+        "replyBeforeQuestion": reply_before_question,
         "question": _native_question(
             header="ServiceNow topic states",
             question=question,
@@ -10089,7 +10090,10 @@ def _business_group_availability_question(
             ),
         },
         "maker-configuration": {
-            "question": "Are you available to complete this step?",
+            "question": (
+                "Are you available, with the ESS Maker / Agent Developer "
+                "role, to complete this step?"
+            ),
             "yes": "Yes, the Maker is available now",
             "no": "No, I need to bring the Maker in",
         },
@@ -10641,8 +10645,77 @@ def _record_business_group_acknowledgement(
             "ServiceNow business-group acknowledgements are invalid."
         )
     records[group["id"]] = record
+    _record_group_role_attestations(state, contract, group)
     _write_lifecycle_state(context, state)
     return copy.deepcopy(record)
+
+
+def _group_required_roles(
+    contract: dict[str, Any],
+    group: dict[str, Any],
+) -> list[str]:
+    phases = {
+        str(phase.get("id")): phase
+        for phase in contract.get("phases", [])
+        if isinstance(phase, dict)
+    }
+    roles: list[str] = []
+    for phase_id in group["phaseIds"]:
+        phase = phases.get(phase_id) or {}
+        role = phase.get("requiredRole")
+        if (
+            phase.get("mutates") is True
+            and phase.get("gateMode", "attested") == "attested"
+            and isinstance(role, str)
+            and role
+            and role not in roles
+        ):
+            roles.append(role)
+    return roles
+
+
+def _record_group_role_attestations(
+    state: dict[str, Any],
+    contract: dict[str, Any],
+    group: dict[str, Any],
+) -> bool:
+    """Count a Maker group Yes as the lifecycle role attestation.
+
+    Only the Maker configuration group carries attested mutating phases, so
+    the phase-start availability answer replaces the per-phase role prompts.
+    """
+    if group.get("id") != "maker-configuration":
+        return False
+    roles = _group_required_roles(contract, group)
+    if not roles:
+        return False
+    attestations = state.setdefault("roleAttestations", {})
+    if not isinstance(attestations, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow role attestations are invalid."
+        )
+    changed = False
+    for role in roles:
+        existing = attestations.get(role)
+        if (
+            isinstance(existing, dict)
+            and existing.get("verifiedBy") == "attested"
+            and existing.get("provider") == state.get("provider")
+            and existing.get("agentSlug") == state.get("agentSlug")
+        ):
+            continue
+        attestations[role] = {
+            "verifiedBy": "attested",
+            "provider": state.get("provider"),
+            "agentSlug": state.get("agentSlug"),
+            "attestedAt": _utc_now(),
+            "note": (
+                f"maker confirmed availability as {role} at the start of "
+                f"{group['label']}"
+            ),
+        }
+        changed = True
+    return changed
 
 
 def _shared_reuse_before_availability(
@@ -10907,6 +10980,13 @@ def resume_handoff(
             group_changed=True,
         )
     result["businessGroupAvailabilityAccepted"] = False
+    if (
+        current_group is not None
+        and not bypass_availability
+        and isinstance(state, dict)
+        and _record_group_role_attestations(state, contract, current_group)
+    ):
+        _write_lifecycle_state(context, state)
     pending_input = _pending_preflight_input(state, decision)
     if pending_input is not None:
         result["pendingInput"] = pending_input

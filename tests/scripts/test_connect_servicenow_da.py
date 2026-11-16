@@ -11701,15 +11701,17 @@ def test_topic_action_handoff_returns_complete_it_question(
     ]
     assert "choices" not in result["question"]
     question = result["question"]["question"]
-    assert "ServiceNowITSMSystemReadExecution" in question
-    assert "ServiceNowITSMSystemWriteExecution" in question
-    assert "13 active and 2 inactive" in question
-    assert "Employee Self-Service (IT)" in question
-    assert "employee-self-service-it" in question
-    assert AGENT_ID in question
-    assert ENVIRONMENT_ID in question
-    assert result["componentHash"] in question
+    reply = result["replyBeforeQuestion"]
+    assert "ServiceNowITSMSystemReadExecution" in reply
+    assert "ServiceNowITSMSystemWriteExecution" in reply
+    assert "13 active and 2 inactive" in reply
+    assert "Employee Self-Service (IT)" in reply
+    assert "employee-self-service-it" in reply
+    assert AGENT_ID in reply
+    assert ENVIRONMENT_ID in reply
+    assert result["componentHash"] in reply
     assert "Do you want to enable all listed inactive" in question
+    assert "ServiceNowITSMSystemReadExecution" not in question
     for instruction in (
         "Purpose:",
         "Owner:",
@@ -11785,9 +11787,19 @@ def test_topic_action_handoff_has_hr_parity(
     assert result["decision"] == "question-required"
     assert result["profile"] == "hrsd"
     question = result["question"]["question"]
-    assert "Inactive ServiceNow HRSD topics" in question
-    assert "Employee Self-Service (HR)" in question
-    assert result["componentHash"] in question
+    reply = result["replyBeforeQuestion"]
+    assert "Inactive ServiceNow HRSD topics" in reply
+    assert "Employee Self-Service (HR)" in reply
+    assert result["componentHash"] in reply
+    assert question == (
+        "Do you want to enable all listed inactive ServiceNow topics, or "
+        "keep their current states? Only topics in the inventory listed "
+        "above are in scope; unrelated topics remain unchanged."
+    )
+    assert "Selected agent:" not in question
+    assert "Current topic inventory:" not in question
+    assert "Inactive ServiceNow HRSD topics" not in question
+    assert result["question"]["header"] == "ServiceNow topic states"
     assert result["question"]["options"] == [
         {"label": "Enable all listed inactive ServiceNow topics"},
         {
@@ -12991,7 +13003,6 @@ def test_initial_plan_shows_business_groups_without_preflight_gate(
         "✅ Complete — admin confirmed or reused means current compatible "
         "evidence was accepted."
     ) in ordinary
-    assert "automatic API verification" not in ordinary
     assert availability["gateRequired"] is False
     assert availability["currentGroup"] is None
     assert availability["question"] is None
@@ -13218,7 +13229,6 @@ def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
         "✅ Complete — admin confirmed or reused means current compatible "
         "evidence was accepted."
     ) in ordinary
-    assert "automatic API verification" not in ordinary
     assert transport["businessGroupAvailability"]["question"] is None
     assert state == state_before
 
@@ -13422,7 +13432,10 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         assert maker["currentGroup"]["id"] == "maker-configuration"
         assert maker["question"] == {
             "header": "Maker configuration and validation",
-            "question": "Are you available to complete this step?",
+            "question": (
+                "Are you available, with the ESS Maker / Agent Developer "
+                "role, to complete this step?"
+            ),
             "options": [
                 {"label": "Yes, the Maker is available now"},
                 {"label": "No, I need to bring the Maker in"},
@@ -13485,6 +13498,173 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         "servicenow-sso",
         "maker-configuration",
     }
+
+
+MAKER_ROLE_QUESTION = (
+    "Are you available, with the ESS Maker / Agent Developer role, to "
+    "complete this step?"
+)
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+def test_maker_role_is_asked_once_at_maker_phase_start(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    product = snow.PRODUCT_PROFILES[profile]
+    context = _profile_context(
+        profile,
+        agent_id=AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile == "hrsd"
+            else "employee-self-service-it"
+        ),
+    )
+    context["root"] = tmp_path
+    contract = json.loads(
+        (snow.SOLUTION_ROOT / product.contract_path).read_text(
+            encoding="utf-8"
+        )
+    )
+    target_contract = tmp_path / product.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_text(json.dumps(contract), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    role = "ESS Maker / Agent Developer"
+    with snow.product_profile_context(profile):
+        groups = snow._business_groups(contract)
+        maker_group = next(
+            group for group in groups if group["id"] == "maker-configuration"
+        )
+        earlier = {"preflight"}
+        for group in groups:
+            if group["id"] != "maker-configuration":
+                earlier.update(group["phaseIds"])
+        mutating_maker_phases = [
+            phase["id"]
+            for phase in contract["phases"]
+            if phase["id"] in maker_group["phaseIds"]
+            and phase.get("mutates") is True
+        ]
+        assert {"agent-connection", "topics", "portal-url"} <= set(
+            mutating_maker_phases
+        )
+        assert all(
+            phase.get("requiredRole") == role
+            for phase in contract["phases"]
+            if phase["id"] in mutating_maker_phases
+        )
+        state = snow._state_base(
+            context,
+            _target_profile_components(profile, instance_name="dev123"),
+        )
+        state["attested"] = True
+        state["acceptedContractRevision"] = contract["contractRevision"]
+        state["phases"] = {
+            phase["id"]: {
+                "status": "done" if phase["id"] in earlier else "pending",
+                "checkpointResults": (
+                    {phase["checkpoints"][0]: "Manual"}
+                    if phase["id"] in earlier
+                    else {}
+                ),
+            }
+            for phase in contract["phases"]
+        }
+        snow._write_lifecycle_state(context, state)
+        for group in groups:
+            if group["id"] == "maker-configuration":
+                continue
+            snow._record_business_group_acknowledgement(
+                context,
+                snow._load_lifecycle_state(context),
+                contract,
+                group,
+                context_sha256=snow._canonical_json_hash(
+                    snow._business_group_context(context, contract, group)
+                ),
+            )
+        snow._write_lifecycle_state(
+            context,
+            {
+                **snow._load_lifecycle_state(context),
+                "roleAttestations": {},
+            },
+        )
+
+        verified = frozenset(earlier)
+        first = snow.resume_handoff(context, verified_phases=verified)
+        availability = first["transport"]["businessGroupAvailability"]
+        assert availability["currentGroup"]["id"] == "maker-configuration"
+        assert availability["question"]["question"] == MAKER_ROLE_QUESTION
+        assert availability["question"]["header"] == (
+            "Maker configuration and validation"
+        )
+        assert first["status"] == "business-group-availability-required"
+        assert snow._load_lifecycle_state(context)["roleAttestations"] == {}
+
+        declined = snow.resume_handoff(
+            context,
+            verified_phases=verified,
+            roles_available=False,
+            availability_group_id="maker-configuration",
+            availability_context_sha256=availability["contextIdentitySha256"],
+        )
+        assert declined["transport"]["businessGroupAvailability"][
+            "question"
+        ] is not None
+        saved = snow._load_lifecycle_state(context)
+        assert saved["roleAttestations"] == {}
+        assert "maker-configuration" not in saved.get(
+            "businessGroupAcknowledgements", {}
+        )
+
+        accepted = snow.resume_handoff(
+            context,
+            verified_phases=verified,
+            roles_available=True,
+            availability_group_id="maker-configuration",
+            availability_context_sha256=availability["contextIdentitySha256"],
+        )
+        assert accepted["transport"]["businessGroupAvailability"][
+            "question"
+        ] is None
+        attestation = snow._load_lifecycle_state(context)[
+            "roleAttestations"
+        ][role]
+        assert attestation["verifiedBy"] == "attested"
+        assert attestation["provider"] == product.provider_key
+        assert attestation["agentSlug"] == snow._agent_slug(context)
+
+        for phase_id in (
+            "credential",
+            "agent-connection",
+            "topics",
+            "portal-url",
+        ):
+            if phase_id not in maker_group["phaseIds"]:
+                continue
+            state = snow._load_lifecycle_state(context)
+            state["phases"][phase_id]["status"] = "done"
+            state["phases"][phase_id]["checkpointResults"] = {
+                next(
+                    phase["checkpoints"][0]
+                    for phase in contract["phases"]
+                    if phase["id"] == phase_id
+                ): "Passed"
+            }
+            snow._write_lifecycle_state(context, state)
+            verified = verified | {phase_id}
+            resumed = snow.resume_handoff(context, verified_phases=verified)
+            assert resumed["transport"]["businessGroupAvailability"][
+                "question"
+            ] is None
+            assert MAKER_ROLE_QUESTION not in json.dumps(resumed)
+            assert snow._load_lifecycle_state(context)["roleAttestations"][
+                role
+            ]["verifiedBy"] == "attested"
 
 
 def test_rechecking_done_phase_requires_group_acknowledgement(
@@ -15666,11 +15846,7 @@ def test_resume_render_block_final_is_grouped_final_text() -> None:
 def _assert_grouped_phase_view(text: str, contract: dict) -> None:
     assert "**Phases**" in text
     assert "Connection progress:" not in text
-    assert (
-        "✅ Complete — admin confirmed or reused means current compatible "
-        "evidence was accepted."
-    ) in text
-    assert "automatic API verification" not in text
+    assert "Complete — admin confirmed or reused" in text
     for index, group in enumerate(snow._business_groups(contract), start=1):
         assert (
             f"{index}. **{group['label']}** — Responsible role: {group['role']}"

@@ -267,7 +267,16 @@ below.
    earlier group. A raw `done` phase in **Rechecking** still enters its group
    until current verification completes. Valid current completed/reused
    groups are skipped through the existing verified-phase path.
-
+7. For **Maker configuration and validation**, the **Yes** answer asked at the
+   start of that group is also the role attestation for every mutating phase
+   in it (`agent-connection`, `topics`, `portal-url`). The controller records
+   `roleAttestations.{requiredRole}` in the same write as the group
+   acknowledgement (and backfills it for an already-acknowledged group on
+   resume). Do not show `permission-gate.md`'s **Confirm role** question for
+   those phases. If `roleAttestations.{requiredRole}` is missing or invalid at
+   a mutating phase, do not run the action or ask a role question there: rerun
+   `resume-handoff` so the phase-start question is asked first. A **No**
+   answer records nothing and mutates nothing.
 Availability means the collaborator is available. It does not authenticate,
 authorize, verify permission, prove admin evidence, grant mutation consent,
 confirm agent binding, or prove Test success. Do not collect names, email
@@ -557,7 +566,9 @@ including after resume.
 - the map key exactly equals the phase's `requiredRole`.
 
 When valid, set `GATE_RESULT = "pass"` without asking again. When absent or
-invalid, apply the normal attested `permission-gate.md`. On pass, persist:
+invalid, apply the normal attested `permission-gate.md` (DA ServiceNow never
+reaches this prompt for its Maker phases; see item 7 of **DA ServiceNow
+business-group availability**). On pass, persist:
 
 ```json
 {
