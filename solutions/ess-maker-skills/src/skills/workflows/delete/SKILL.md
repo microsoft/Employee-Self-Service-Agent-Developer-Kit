@@ -4,7 +4,7 @@ This skill guides the user through deleting a Power Automate cloud flow
 (workflow) from their Copilot Studio agent. Deleting means removing the
 workflow both locally AND from the live environment via push.
 
-Explain that DA-GA component deletion is not yet available in this release and
+Explain that DA-GA workflow deletion is not available in this release and
 stop before changing local files.
 
 ## CRITICAL — Local Files Are a Working Copy
@@ -33,6 +33,7 @@ List the workflow folders in `{agent.folder}/workflows/`. Each workflow is a
 folder containing `metadata.yml` and `workflow.json`.
 
 If the user named a specific workflow, find the matching folder by:
+
 - Folder name
 - Display name in `metadata.yml` (`name` field)
 
@@ -48,6 +49,7 @@ all topic files in `{agent.folder}/topics/` for the workflow's GUID (from
 If topics reference this workflow, warn the user:
 
 > ⚠️ The following topics call this workflow:
+>
 > - {TopicName1}
 > - {TopicName2}
 >
@@ -74,7 +76,7 @@ Wait for the user to confirm.
 
 Run in the terminal:
 
-```
+```powershell
 python scripts/checkpoint.py "pre-delete-{WorkflowName}"
 python scripts/emit_capability.py workflow_delete
 ```
@@ -96,7 +98,7 @@ Verify the files are gone.
 
 Run in the terminal:
 
-```
+```powershell
 python scripts/push.py --dry-run
 ```
 
@@ -108,11 +110,12 @@ Ask the user: "Ready to push this deletion to your environment?"
 
 When confirmed, run:
 
-```
+```powershell
 python scripts/push.py --yes
 ```
 
 **If the push fails:**
+
 - Show the error output.
 - Offer: **Retry** or **Revert** (`python scripts/checkpoint.py --revert`).
 

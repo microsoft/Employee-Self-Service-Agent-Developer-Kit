@@ -1,0 +1,241 @@
+{
+  "schemaVersion": 1,
+  "inventoryKind": "template_topic_additions",
+  "source": {
+    "kind": "repository_inventory",
+    "repositoryUrl": "https://dev.azure.com/O365Exchange/O365%20Core/_git/ESSVivaCopilot",
+    "revision": "0737a5a499a03a0e32ea329ae815be0013a6f686"
+  },
+  "baseCatalog": {
+    "file": "catalog.provisional.json",
+    "repositoryUrl": "https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit",
+    "revision": "9953b38b39df3e727e3a705af717f2e1771a150e",
+    "gitBlob": "81bbfb411eda270d4ddc490c0318b26d6d6b4cf5"
+  },
+  "packages": [
+    {
+      "key": "source-family:gptagent_copilotforemployeeselfservicecore",
+      "agentSchemaNames": [
+        "gptagent_copilotforemployeeselfservicecore"
+      ],
+      "packageVersion": "1.0.0",
+      "sourcePath": "/sources/dev/AgentTemplates/CopilotForEmployeeSelfServiceCore/Plugin/Agents/gptagent_copilotforemployeeselfservicecore/agent.yml",
+      "sourceRevision": "0737a5a499a03a0e32ea329ae815be0013a6f686",
+      "combinedTopicInventory": {
+        "coverage": "complete_at_source_revision",
+        "topicCount": 3,
+        "schemaNamesSha256": "99d3e7f62e53747a95606949d3f4f3e5a462361a1bf52abd7363c586931bb525"
+      },
+      "topics": [
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicecore.topic.ConversationStart",
+          "displayName": "Conversation Start"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicecore.topic.OnError",
+          "displayName": "[System] - On Error"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicecore.topic.System-Logger",
+          "displayName": "[System] - Log Telemetry Event"
+        }
+      ]
+    },
+    {
+      "key": "source-family:gptagent_copilotforemployeeselfservicehr",
+      "agentSchemaNames": [
+        "gptagent_copilotforemployeeselfservicehr"
+      ],
+      "packageVersion": "1.0.1",
+      "sourcePath": "/sources/dev/AgentTemplates/CopilotForEmployeeSelfServiceHR/Plugin/Agents/gptagent_copilotforemployeeselfservicehr/agent.yml",
+      "sourceRevision": "0737a5a499a03a0e32ea329ae815be0013a6f686",
+      "combinedTopicInventory": {
+        "coverage": "complete_at_source_revision",
+        "topicCount": 50,
+        "schemaNamesSha256": "bc35dd504740161fe840e335898e012f25c69e043ea1a624ae27eb2a3d1ab066"
+      },
+      "topics": [
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.ConversationStart",
+          "displayName": "Conversation Start"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.Example-CraftedResponse",
+          "displayName": "[Example] - Crafted Response"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.OnError",
+          "displayName": "[System] - On Error"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.SensitiveTopics",
+          "displayName": "[Example] - Sensitive Topics"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.Setusercontext",
+          "displayName": "[Admin] - User Context - Setup"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.System-Logger",
+          "displayName": "[System] - Log Telemetry Event"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.System-UserContext-Createglobalvariables",
+          "displayName": "[System] - User Context - Init Variables"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.System-UserContext-Validate",
+          "displayName": "[System] - User Context - Validate"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemAccessCheck",
+          "displayName": "Workday System AccessCheck"
+        }
+      ]
+    },
+    {
+      "key": "source-family:gptagent_copilotforemployeeselfserviceit",
+      "agentSchemaNames": [
+        "gptagent_copilotforemployeeselfserviceit"
+      ],
+      "packageVersion": "1.0.1",
+      "sourcePath": "/sources/dev/AgentTemplates/CopilotForEmployeeSelfServiceIT/Plugin/Agents/gptagent_copilotforemployeeselfserviceit/agent.yml",
+      "sourceRevision": "0737a5a499a03a0e32ea329ae815be0013a6f686",
+      "combinedTopicInventory": {
+        "coverage": "complete_at_source_revision",
+        "topicCount": 47,
+        "schemaNamesSha256": "f8c7beec3f4c7987c52d4f908faa31b576acd81eb1d41ac1ef2c01851f6ed163"
+      },
+      "topics": [
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ConversationStart",
+          "displayName": "Conversation Start"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.EmployeeUpdatePhoneNumber",
+          "displayName": "Workday Update PhoneNumber"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.Example-CraftedResponse",
+          "displayName": "[Example] - Crafted Response"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.GetReferenceData",
+          "displayName": "Workday System Get ReferenceData"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.MicrosoftSelfHelp",
+          "displayName": "Microsoft Self Help"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.OnError",
+          "displayName": "[System] - On Error"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.SensitiveTopics",
+          "displayName": "[Example] - Sensitive Topics"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.Setusercontext",
+          "displayName": "[Admin] - User Context - Setup"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.System-Logger",
+          "displayName": "[System] - Log Telemetry Event"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.System-UserContext-Createglobalvariables",
+          "displayName": "[System] - User Context - Init Variables"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.System-UserContext-Validate",
+          "displayName": "[System] - User Context - Validate"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdayCompanyCode",
+          "displayName": "Workday Get CompanyCode"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdayEmployeeID",
+          "displayName": "Workday Get EmployeeId"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdayGetBaseCompensation",
+          "displayName": "Workday Get BaseCompensation"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdayGetCertifications",
+          "displayName": "Workday Get Certifications"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdayGetCostCenter",
+          "displayName": "Workday Get CostCenter"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdayGetEmergencyContact",
+          "displayName": "Workday Get EmergencyContact"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdayGetEmploymentInformation",
+          "displayName": "Workday Get EmploymentInformation"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdayGetLanguageInformation",
+          "displayName": "Workday Get LanguageInformation"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdayGetNationalIDs",
+          "displayName": "Workday Get NationalIDs"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdayGetPassports",
+          "displayName": "Workday Get Passports"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdayGetVisas",
+          "displayName": "Workday Get Visas"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdayManagerCheck",
+          "displayName": "Workday System ManagerCheck"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdayOnError",
+          "displayName": "Workday System ParseError"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdaySystemAccessCheck",
+          "displayName": "Workday System AccessCheck"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdaySystemGetCommonExecution",
+          "displayName": "Workday System Get CommonExecution"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdaySystemGetRESTExecution",
+          "displayName": "Workday System Get REST Execution"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdaySystemGetUserContextV2",
+          "displayName": "Workday [System] - 1: Set User Context V2"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdaySystemRefreshReferenceData",
+          "displayName": "Workday System Refresh ReferenceData"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.WorkdaySystemSetRuntimeTemplateConfigurations",
+          "displayName": "Workday [System] - 1: Set Runtime Template Configurations"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.Workdayemployeeupdateemail",
+          "displayName": "Workday Update Email"
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.Workdayserviceanniversary",
+          "displayName": "Workday Get ServiceAnniversary"
+        }
+      ]
+    }
+  ]
+}

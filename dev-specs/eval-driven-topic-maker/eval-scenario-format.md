@@ -1,5 +1,10 @@
 # Eval-Scenario Format (Step 1: the eval contract)
 
+> Historical design record: the supported topic-authoring flow no longer uses a
+> separate eval-scenario schema or materializer. Evaluation context now delegates
+> to the normal topic owner, and evaluation files remain owned by the evaluation
+> skills.
+
 This is the format that starts everything in the eval-driven topic maker. One
 eval scenario is the eval contract for one topic. It is the artifact the maker
 approves before any topic file is written. It does two jobs:
@@ -15,10 +20,9 @@ the eval tables in that document.
 
 A scenario is a small YAML file, authored by a PM or engineer and read by a
 machine. This version supports Phase 1 topics only: informational responses,
-clarification, routing, and handoff without an external-system call. See the
-`examples/` folder for a complete example, and
-`../../solutions/ess-maker-skills/src/skills/topics/create-eval-driven/eval-scenario.schema.json`
-for the machine-checkable version used by `/create`.
+clarification, routing, and handoff without an external-system call. The
+`examples/` folder remains as historical design material; `/create` does not
+consume this format.
 
 ## The flow this format sits in
 

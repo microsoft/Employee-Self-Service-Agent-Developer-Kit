@@ -146,8 +146,8 @@ def _service_error_code(body: Any) -> str | None:
     return code.strip() if isinstance(code, str) and code.strip() else None
 
 
-def _exception_chain(error: BaseException) -> list[dict[str, str]]:
-    chain: list[dict[str, str]] = []
+def _exception_chain(error: BaseException) -> list[dict[str, Any]]:
+    chain: list[dict[str, Any]] = []
     current: BaseException | None = error
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
@@ -156,6 +156,8 @@ def _exception_chain(error: BaseException) -> list[dict[str, str]]:
             {
                 "type": type(current).__name__,
                 "message": _redact_text(str(current)),
+                **({"notes": [_redact_text(note) for note in current.__notes__]}
+                   if getattr(current, "__notes__", None) else {}),
             }
         )
         current = current.__cause__ or current.__context__
