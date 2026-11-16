@@ -52,8 +52,9 @@ When `agent-chooser` returns `setup-required` with branch
 `workspace-not-prepared`, the workspace has no prepared setup state yet. Follow
 the same automatic handoff; a supplied link is carried into Setup, otherwise
 Setup asks its normal questions. If Setup is cancelled or blocked, use the
-cancel/blocked Message in the entry doc (short reason, nothing changed, tell me
-to finish setup and connect again); never tell the maker to type `/setup`.
+cancel/blocked Messages in the entry doc (blocker: say what to fix, ask the
+maker to fix it, then to tell me to finish setup and connect again; cancel:
+nothing to fix); never tell the maker to type `/setup`.
 
 After selection, keep only invocation-local values:
 
