@@ -489,6 +489,7 @@ def application(
     preauthorize_connector: bool = True,
     connector_app_id: str = WORKDAY_CONNECTOR_APP_ID,
     graph_permissions: bool = True,
+    optional_claim_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Build a single Graph /applications record for the Workday app.
 
@@ -514,6 +515,8 @@ def application(
                 id (Edm.String, key — the object id)
                 appId (Edm.String)
                 displayName (Edm.String)
+                optionalClaims (optionalClaims) — accessToken
+                  Collection(optionalClaim), name (Edm.String)
                 api (apiApplication) — fields used:
                   oauth2PermissionScopes (Collection(permissionScope)):
                     id (Edm.Guid), value (Edm.String),
@@ -565,6 +568,14 @@ def application(
         "displayName": display_name,
         "signInAudience": "AzureADMyOrg",
         "identifierUris": [f"api://{app_id}"],
+        "optionalClaims": {
+            "accessToken": [
+                {"name": name, "source": None, "essential": False}
+                for name in optional_claim_names
+            ],
+            "idToken": [],
+            "saml2Token": [],
+        },
         "api": {
             "oauth2PermissionScopes": scopes,
             "preAuthorizedApplications": preauth,
@@ -710,6 +721,38 @@ def list_users(
         "json": collection(
             users if users is not None else [user()],
             odata_context="$metadata#users",
+        ),
+        "status": 200,
+    }
+
+
+def search_users(
+    *, users: Iterable[Mapping[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Mock GET /v1.0/users?$search=... (name/UPN/mail resolution).
+
+    Registered on the bare ``/users`` path so it matches the ``$search`` /
+    ``$select`` / ``$top`` query the resolver sends (``responses`` treats a
+    querystring-free registration as "match any query on this path"). Tests
+    assert the outgoing ``$search`` term on ``responses.calls`` afterwards.
+
+    Cited consumers:
+      - flightcheck/graph_client.py search_users (name -> object id).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="user" — id, displayName,
+              userPrincipalName, mail
+      Docs:   https://learn.microsoft.com/graph/api/user-list
+              (?$search on directory objects; requires
+              ConsistencyLevel: eventual)
+    """
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/users",
+        "json": collection(
+            users if users is not None else [user()],
+            odata_context="$metadata#users(id,displayName,userPrincipalName,mail)",
         ),
         "status": 200,
     }

@@ -19,6 +19,7 @@ codified it has been removed.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -31,6 +32,30 @@ require_validated_mock(pp)
 
 
 class TestAuthenticationScope:
+    def test_delegated_read_tokens_are_added_without_clearing_other_audiences(self):
+        from flightcheck.pp_admin_client import PPAdminClient
+
+        client = PPAdminClient("tenant")
+        assert not client.has_flow_token and not client.has_powerapps_token
+
+        client.set_read_tokens(flow_token="flow-read-token")
+        client.set_read_tokens(powerapps_token="powerapps-read-token")
+
+        assert client.has_flow_token and client.has_powerapps_token
+        assert client._flow_token == "flow-read-token"
+        assert client._token == "powerapps-read-token"
+
+    @pytest.mark.parametrize("value", ["", "   ", False, 0])
+    def test_invalid_delegated_token_is_rejected(self, value):
+        from flightcheck.pp_admin_client import PPAdminClient
+
+        client = PPAdminClient("tenant")
+
+        with pytest.raises(ValueError, match="non-empty string"):
+            client.set_read_tokens(flow_token=value)
+
+        assert not client.has_flow_token
+
     def test_bap_only_auth_skips_flow_token(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -293,6 +318,74 @@ class TestPermissionHandling:
         assert isinstance(result, dict)
         assert result["_error"] == "insufficient_permissions"
         assert result["_status"] == 403
+
+
+class TestStrictConnectionPagination:
+    @pytest.mark.parametrize("field", ["nextLink", "@odata.nextLink"])
+    @pytest.mark.parametrize("value", [False, 0, "", "   ", [], {}])
+    @responses.activate
+    def test_malformed_continuation_is_not_complete_inventory(self, pp_client, field, value):
+        request = pp.list_connections(env_id=pp.MOCK_ENV_ID, connections=[])
+        request["json"][field] = value
+        responses.add(**request)
+
+        with pytest.raises(ValueError, match="invalid continuation"):
+            pp_client.get_connections(pp.MOCK_ENV_ID, strict_collection=True)
+
+    @pytest.mark.parametrize("field", ["nextLink", "@odata.nextLink"])
+    @responses.activate
+    def test_complete_pages_preserve_inventory(self, pp_client, field):
+        rows = [pp.workday_connection(), pp.servicenow_connection()]
+        request = pp.list_connections(env_id=pp.MOCK_ENV_ID, connections=rows[:1])
+        next_url = request["url"] + "?api-version=2016-11-01&$skiptoken=page2"
+        request["match"] = [
+            responses.matchers.query_param_matcher({"api-version": "2016-11-01"})
+        ]
+        request["json"][field] = next_url
+        responses.add(**request)
+        responses.add("GET", next_url, json=pp.collection(rows[1:]))
+
+        assert pp_client.get_connections(pp.MOCK_ENV_ID, strict_collection=True) == rows
+        assert len(responses.calls) == 2
+
+    @responses.activate
+    def test_repeated_page_is_rejected(self, pp_client):
+        request = pp.list_connections(env_id=pp.MOCK_ENV_ID, connections=[])
+        request["json"]["nextLink"] = request["url"]
+
+        def page(_request):
+            assert not responses.calls, "A repeated page must not be requested."
+            return 200, {}, json.dumps(request["json"])
+
+        responses.add_callback("GET", request["url"], callback=page)
+
+        with pytest.raises(ValueError, match="repeated continuation"):
+            pp_client.get_connections(pp.MOCK_ENV_ID, strict_collection=True)
+
+        assert len(responses.calls) == 1
+
+    @pytest.mark.parametrize("invalid_target", ["environment", "fragment"])
+    @responses.activate
+    def test_wrong_collection_or_fragment_is_rejected(self, pp_client, invalid_target):
+        request = pp.list_connections(env_id=pp.MOCK_ENV_ID, connections=[])
+        request["json"]["nextLink"] = (
+            request["url"].replace(pp.MOCK_ENV_ID, "other-environment")
+            if invalid_target == "environment" else request["url"] + "#page2"
+        )
+        responses.add(**request)
+
+        with pytest.raises(ValueError, match="invalid continuation"):
+            pp_client.get_connections(pp.MOCK_ENV_ID, strict_collection=True)
+
+    @responses.activate
+    def test_conflicting_continuations_are_not_complete_inventory(self, pp_client):
+        request = pp.list_connections(env_id=pp.MOCK_ENV_ID, connections=[])
+        request["json"]["nextLink"] = request["url"] + "?$skiptoken=page2"
+        request["json"]["@odata.nextLink"] = request["url"] + "?$skiptoken=other-page"
+        responses.add(**request)
+
+        with pytest.raises(ValueError, match="conflicting continuations"):
+            pp_client.get_connections(pp.MOCK_ENV_ID, strict_collection=True)
 
 
 class TestFindEnvironmentIdByDataverseUrl:

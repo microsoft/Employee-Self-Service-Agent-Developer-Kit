@@ -1,0 +1,8 @@
+{
+  "id": "servicenow",
+  "displayName": "ServiceNow",
+  "description": "HR and IT service management",
+  "aliases": ["snow"],
+  "availability": "available",
+  "entryDoc": "entry.md"
+}

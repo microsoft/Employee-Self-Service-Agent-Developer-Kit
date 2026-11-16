@@ -1,27 +1,36 @@
 # Action: Wire the User Context redirect to Workday
 
-Called by the lifecycle runner (`src/skills/connect/shared/lifecycle-runner.md`)
-for the `agent-wiring` phase of the Workday contract. By the time this file
-runs, the role gate has already passed and a rollback checkpoint has already
-been saved — this file only performs the edit and pushes it.
+**Development only.** Require verified `activeTargetRealm: dev` before
+checkpointing, editing or pushing local topics. Test and Production preserve
+the redirect carried by promotion; do not run this authoring action there.
+
+Called by the native DA Workday Runtime phase in
+`src/skills/connect/workday/configure-power-platform.md` after approved runtime
+configuration, flow attachment, topic activation, and runtime-template wiring.
+This action performs only the scoped redirect edit and push.
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 
 ---
 
-## A.0 — Role gate (Environment Maker)
+## A.0 — Verify the calling phase and save a restore point
 
-The lifecycle runner already applied `permission-gate.md` before reading this
-file using the exact programmatic Dataverse security-role query and accepted
-role names declared for this phase in `contract.json`. This file starts from a
-passed gate; it does not re-check it.
+Require the current Runtime phase's approved target and recorded maker, plus
+the controller-verified `runtime-template-configured` result. Do not run this
+action independently or use a CEA permission gate as evidence.
+
+Save a rollback checkpoint before editing the mapped topic:
+
+```text
+python scripts/checkpoint.py "pre-workday-user-context-redirect"
+```
 
 ## A.1 — Explain what's about to change
 
 **Message:**
 
-I'll connect your agent's **User Context** setup to Workday so it can identify
-the signed-in employee when a Workday request begins.
+I'll configure the agent to identify the signed-in employee when a Workday
+request starts.
 
 **End message.**
 
@@ -102,15 +111,26 @@ conflict reported by the push. Do not ask the maker to choose an overwrite
 strategy, and never replace newer live content with the older workspace copy.
 
 Only when the command exits successfully, set `ACTION_RESULT = "applied"`.
-If it fails, stop and report the failure; do not return an applied result.
+If it fails, follow the scoped recovery in A.5 and report the failure; do not
+return an applied result.
 
 ---
 
 ## A.5 — Return
 
-Return `ACTION_RESULT` to the lifecycle runner. With an `"applied"` result,
-also return the exact `{USER_CONTEXT_TOPIC_PATH}` as
-`ACTION_ROLLBACK_PUSH_GLOB`. Do not return a wildcard or directory. The runner
-re-runs `WD-REST-002` for `AGENT_SLUG` only after an `"applied"` result and
-decides whether to advance or use the named restore point — this file does not
-re-run the checkpoint itself.
+Return `ACTION_RESULT` to the calling Runtime phase. Only an `"applied"`
+result permits it to continue to `record-agent-binding`, which performs the
+controller's live verification. Do not run a separate readiness checkpoint or
+mark the Runtime phase complete here.
+
+If mutation was attempted and the action fails, restore and publish only the
+exact mapped setup topic:
+
+```text
+python scripts/checkpoint.py --revert-reason "pre-workday-user-context-redirect" --only "{USER_CONTEXT_TOPIC_PATH}"
+python scripts/push.py --only "{USER_CONTEXT_TOPIC_PATH}" --dry-run --preferred-username "{POWER_PLATFORM_MAKER}"
+python scripts/push.py --only "{USER_CONTEXT_TOPIC_PATH}" --yes --preferred-username "{POWER_PLATFORM_MAKER}"
+```
+
+If any restore or push fails, stop and report the failure. Leave Runtime
+incomplete; never replace the topic with a stock copy or publish unrelated work.

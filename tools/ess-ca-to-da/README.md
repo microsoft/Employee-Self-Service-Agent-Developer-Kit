@@ -180,11 +180,13 @@ python -m essmig inspect --environment-url https://contoso.crm.dynamics.com --ve
 ```
 
 Prints each customization, gives an **eligibility verdict**, and writes
-`out/customizations.json`, `out/customizations.md`, and `out/assessment.json`. The
-`.md` is a per-component diff of what you changed from the ESS baseline, with each
-component tagged **✅ migratable now**, **⚠️ migratable but needs you**, or
-**⛔ not supported yet**. This is the fast way to answer "is this customer ready to
-migrate, and if not, what is in the way?" and it touches nothing.
+`out/customizations.json`, `out/customizations.md`, `out/customizationsMade.md`, and
+`out/assessment.json`. `customizations.md` is a per-component diff of what you changed
+from the ESS baseline, with each component tagged **✅ migratable now**,
+**⚠️ migratable but needs you**, or **⛔ not supported yet**.
+`customizationsMade.md` is the mirror-image audit — see [§3a](#3a-audit-what-the-migration-changed).
+This is the fast way to answer "is this customer ready to migrate, and if not, what is
+in the way?" and it touches nothing.
 
 The verdict is one of:
 
@@ -222,9 +224,37 @@ out/
       agent.yml
       app.config.dev.json
   gptagent_copilotforemployeeselfservicehr.zip
+  flows.zip
   migration-report.md
   migration-report.json
+  customizationsMade.md
 ```
+
+`flows.zip` is written only when the migrated topics invoke **customer-authored
+cloud flows** (a `--from-package` capability — see the note in
+[§3b](#3b-cloud-flows-the-customer-authored)). It is a second, separate artifact:
+the agent package can *reference* a flow but not *contain* one, so the flows travel
+as their own unmanaged solution that must be imported **before** the agent package.
+
+#### 3a. Audit what the migration changed
+
+`customizationsMade.md` (written by both `inspect` and `migrate`) is a per-component
+diff of the Declarative Agent **as ESS shipped it** against the **package this tool
+produced** — the same layout as `customizations.md`, but answering the reviewer's
+question instead of the Maker's: *what did the tool actually write onto the DA?*
+
+- **Changed** — a template component the migration edited, shown as a unified diff
+  (shipped → produced): a merged topic, or the GPT gaining a `knowledgeSources`
+  pointer, for example.
+- **Added** — a component the produced package has that the template did not: the
+  customer's own net-new topics and any carried knowledge source, shown in full.
+- **Removed** — a template component the package dropped (migration does not normally
+  remove, so this is for completeness).
+
+A leading **Agent settings** section calls out a changed display name or description.
+Components the migration left byte-for-byte identical are omitted. This is the file to
+hand a reviewer who must sign off on exactly what changed before the package is
+published.
 
 **Omit `--vertical`** to migrate every ESS agent the environment actually has —
 the tool detects which of Core/HR/IT are installed and writes each into its own
@@ -242,6 +272,71 @@ Add `--preferred-solution <uniquename>` to scope the run to one unmanaged soluti
 (the ALM path — run once per preferred solution). Add
 `--snapshot out/customizations.json` to re-run the merge offline against an earlier
 `inspect`, which is also how the end-to-end tests work.
+
+### 3a. No Dataverse access? Migrate from an exported solution package
+
+Some customers cannot run the tool's Dataverse queries — no CLI access, a locked-down
+tenant, or a separation of duties where the person exporting is not the person
+migrating. They can still hand over an **exported customization solution** instead of
+a live connection. In make.powerapps.com, open **Solutions**, select the
+customization solution, choose **Export solution** (unmanaged is fine), and download
+the `.zip`.
+
+Point `inspect` or `migrate` at that `.zip` (or an already-unpacked folder) with
+`--from-package` instead of `--environment-url`. Everything else is identical — same
+detection, same classification, same package, same report:
+
+```powershell
+# Read-only: what did they customize?
+python -m essmig inspect --from-package .\EmployeeSelfServiceCustomization.zip
+
+# Produce the package + report from the export
+python -m essmig migrate --from-package .\EmployeeSelfServiceCustomization.zip --out out
+```
+
+`--from-package` and `--environment-url` are mutually exclusive (the export is the
+source). Omit `--vertical` and the tool detects which of Core/HR/IT the package
+carries, exactly as it does against a live environment. `--preferred-solution` is
+ignored — the export already *is* the set of components the customer chose to ship.
+
+Two limitations of the package path, both reported rather than silent:
+
+- The agent's shipped **Overview description** is not present in the vendored
+  baseline, so an *edited* description is surfaced for review rather than migrated
+  automatically. A renamed agent (display name) still migrates normally.
+- **Environment variables** the solution also contains are not carried into the
+  package yet (cloud flows *are* carried — see below).
+
+#### 3b. Cloud flows the customer authored
+
+A migrated topic can *call* a cloud flow (a `- kind: InvokeFlowAction` with a
+`flowId`), and the Declarative Agent declares each flow it uses in a top-level
+`flows:` block — the flow's *interface* (id, input and output parameters). But the
+DA package has nowhere to hold the flow's *definition*: a cloud flow is a Power
+Platform environment component, installed by a **solution import**, not a part the
+agent package can carry.
+
+So when the migrated topics invoke a customer-authored flow (read from a
+`--from-package` export — the live-Dataverse path cannot read a flow definition),
+the tool:
+
+- synthesises the `agent.yml` `flows:` interface entry for each referenced flow
+  from the flow's own trigger/response schemas, and registers the flow id in
+  `app.config.dev.json`'s `flows` map — the two places the ESS template declares
+  its own runtime flows, so the agent knows the flow's shape and can resolve it at
+  publish time; and
+- re-emits the customer's flows as `out/flows.zip`, a small unmanaged solution that
+  *creates* the flows in the target — near-verbatim from their export, so the flow
+  definitions and their connection references carry across exactly.
+
+**Import `flows.zip` first, then the agent package.** The flow ids are preserved,
+so once the flows exist the agent's `InvokeFlowAction` references resolve. Import in
+the other order and the flow registrar rejects the agent package with *"a referenced
+flow could not be registered because it was deleted or you do not have access."* The
+report's **Cloud flows** section lists what was carried, the import order, and any
+connection references the operator must rebind. A flow a topic references but the
+tool cannot carry (e.g. on the live-Dataverse path) is reported as **dangling** — a
+hard import blocker — never silently dropped.
 
 ### 4. Deliver it into a target Declarative Agent
 
@@ -276,7 +371,25 @@ questions* — so the endpoint and scope are deliberately overridable.
 Knowledge sources **do** ride in the package: a SharePoint (or other) source is
 carried as a `KnowledgeSourceComponent`, marked customer-owned, and the GPT is
 pointed at it (`knowledgeSources: SearchAllKnowledgeSources`) so it is actually
-searched after import. Custom metrics, Copilot settings, file attachments,
+searched after import. A **ServiceNow knowledge source** reaches its content
+through a Graph-connector connection that the source names *indirectly*, by an
+environment variable: the component's `connectionId.schemaName` points at an
+`envVar.*`, and `app.config.dev.json`'s `values` block binds it under an
+`envvar:<schema>` key whose value is the Graph connector's connection id. Two
+things the platform would normally wire are reproduced for it, or the source
+silently disappears after import:
+
+- the **connection binding** — the `envvar:` entry is written into the config,
+  carrying the value from the customer's exported environment-variable definition.
+  That value names a Graph connector in the *source* tenant, so it is a starting
+  point the operator must **rebind** in the target; the report's **Knowledge
+  sources** section lists each source and its connection for exactly that.
+- the **rename fix** — a net-new knowledge source is renamed to the DA-valid
+  `knowledge.<Name>` schema, and any migrated topic that searches it has its
+  `SearchSpecificKnowledgeSources` references repointed at the new name so the
+  action does not dangle.
+
+Custom metrics, Copilot settings, file attachments,
 evaluations (test cases) and skills cannot ride in the package, but they are no
 longer dropped silently: every one is **detected and reported** under *Re-create
 these in the agent's settings* (with its configuration reproduced) or, where the DA
@@ -319,6 +432,11 @@ the API returns 409 when the agent already exists). Import is a **clean replace
 into the development environment only** — Test and Production are untouched until
 the customer promotes.
 
+If the migration produced a `flows.zip` (see [§3b](#3b-cloud-flows-the-customer-authored)),
+**import it first** — as an unmanaged solution into the same environment — then
+import the agent package. The agent references the flows by id, so they must exist
+before the agent import runs.
+
 Connection ids and secrets are deliberately **not** in the package: they belong to
 the destination environment and are bound there. A connection is left *Unbound* by
 setting its `connectionId` to `null` — the ESS template ships exactly this shape and
@@ -357,6 +475,25 @@ deleted. Each gap is labelled with who has to act on it:
 
 Only the last kind makes a migration `blocked`. The rest is a worklist.
 
+#### Auto-upgrading `AnswerQuestionWithAI`
+
+Before a topic is disabled, `convert.py` inspects each `AnswerQuestionWithAI`
+("create generative answers") node — a construct the DA has no equivalent for —
+and classifies how the CA actually used it:
+
+| class | what happens |
+| --- | --- |
+| *response composition* over an all-scalar parsed record | **auto-upgraded** to a deterministic `SetVariable` that renders the record, exactly how the GA templates compose `InvokeFlow → ParseValue → SendActivity`. The output variable the next `SendActivity` reads is preserved, so the topic stays active |
+| *response composition* over tabular/nested data | left in place and flagged — a deterministic template cannot reproduce a table losslessly |
+| *intent classification* (output drives a branch) | left in place; route it with the agent's native intent routing instead |
+| *knowledge grounded* / *general knowledge* | left in place with guidance to connect a knowledge source or fold it into instructions |
+
+A topic un-deprecates (stays active) only when **every** unsupported construct in
+it was converted. A topic that mixes a convertible composition node with, say, an
+intent classifier keeps the composition upgrade but still lands on the worklist
+for the classifier. Every upgrade is listed in the report's *Automatically
+upgraded to supported building blocks* section.
+
 ### What the report will not tell you
 
 The report covers *content*. Three things change for employees that no amount of
@@ -390,16 +527,21 @@ src/essmig/
   auth.py         MSAL public-client auth (in-memory cache only)
   dataverse.py    read-only Dataverse Web API client
   discovery.py    what did the customer change?
+  package_source.py read an exported CA solution package (--from-package) as a source
   reference.py    vendored base + theirs
   projection.py   CA botcomponent → agent.yml component shape
   merge.py        three-way merge + Overlays policy
+  flows.py        carry customer cloud flows (interface + flows.zip solution)
+  knowledge.py    wire carried Graph-connector knowledge sources (bind + rename fix)
   instructions.py model-backed reconciliation of edited agent instructions
   llm.py          minimal GitHub Copilot API client (gh auth token)
   rules.py        constructs the DA does not support, and who must act on each
+  convert.py      classify AnswerQuestionWithAI nodes; auto-upgrade the convertible ones
   assessment.py   the eligibility verdict: blockers, worklist, employee impact
   packaging.py    emit the ALM package
   deliver.py      import the package into a target DA (the one write path; opt-in)
   report.py       the report
+  made.py         diff shipped DA vs produced package (customizationsMade.md)
   cli.py          vendor / inspect / migrate
 reference/        vendored reference data (committed)
 tests/

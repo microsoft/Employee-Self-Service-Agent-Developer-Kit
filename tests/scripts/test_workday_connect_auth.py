@@ -46,6 +46,7 @@ def test_authentication_plan_distinguishes_credential_stores() -> None:
 
     assert stores == {
         "pac",
+        "agentbuilder-msal",
         "dataverse-msal",
         "workday-connector",
     }

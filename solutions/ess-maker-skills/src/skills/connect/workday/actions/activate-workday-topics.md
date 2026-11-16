@@ -1,5 +1,12 @@
 # Action: Activate all Workday topics
 
+**Development only.** Require controller status `activeTargetRealm: dev` before
+previewing changes or asking either activation question. For Test or Production,
+do not run this action, change topic enabled/disabled states, or show the
+**Enable Workday topics** or **Confirm Workday topics** questions. Return to
+the Runtime guide's read-only verification of the promoted state instead.
+Stop if the active realm is unresolved; never assume Development.
+
 Run this action only after the reviewed Workday flows are connected to the
 agent and **Allow permission to share parameters** is enabled.
 
@@ -13,7 +20,7 @@ Read `workspace/agents/{AGENT_SLUG}/.component-map.json`. This map is the
 materialized workspace projection of the source `agent.yml`.
 
 Resolve the repository-reviewed ESS HR Workday inventory. The resolver must
-match all 23 exact schema names in the checked-in contract, including the two
+match all 22 exact schema names in the checked-in contract, including the two
 topics whose schema names do not begin with `Workday`:
 
 - `{AGENT_SCHEMA}.topic.EmployeeUpdatePhoneNumber`
@@ -22,7 +29,7 @@ topics whose schema names do not begin with `Workday`:
 For every reviewed entry:
 
 - `componentKind` must be `DialogComponent`;
-- the exact schema name must be in the reviewed 23-topic HR inventory;
+- the exact schema name must be in the reviewed 22-topic HR inventory;
 - `displayName` must start with `Workday`;
 - the mapped path starts with `topics/` and ends with `.mcs.yml`;
 - the mapped file exists beneath the selected agent directory.
@@ -33,7 +40,7 @@ enforces the same exact mapped set and rejects omitted Workday topics or any
 selected non-Workday dialog; these instructions are not the only safety
 boundary. Do not derive the set from a broad display-name search. The two
 disabled employee/manager handoff topics are not in the reviewed inventory and
-must remain excluded. For the current ESS HR template this resolves all 23
+must remain excluded. For the current ESS HR template this resolves all 22
 active-contract Workday dialog topics, including business and supporting
 system topics.
 
@@ -58,9 +65,9 @@ activation approval never approves topic-content edits.
 
 **Message:**
 
-The Workday connections and shared parameters are ready. I found
-**{WORKDAY_TOPIC_COUNT}** Workday topics included with this agent. I can now
-enable all of them without changing their configured behavior.
+The Workday connections are ready. I can enable the
+**{WORKDAY_TOPIC_COUNT}** Workday topics included with this agent.
+Their existing content will stay unchanged.
 
 **End message.**
 
@@ -71,10 +78,7 @@ Use the `vscode_askQuestions` tool:
   {
     "header": "Enable Workday topics",
     "question": "Enable all Workday topics in the active ESS HR agent?",
-    "options": [
-      { "label": "Enable" },
-      { "label": "Not now" }
-    ],
+    "options": [{ "label": "Enable" }, { "label": "Not now" }],
     "allowFreeformInput": false
   }
 ]
@@ -104,7 +108,42 @@ The command may also report dependency diagnostics such as
 `CloudFlow NotFound`; preserve those diagnostics for support correlation, but
 do not treat them as an activation failure or proof of a broken package.
 
-Record the live activation evidence:
+**Message:**
+
+I enabled the Workday topics and verified the change.
+
+1. Refresh the Copilot Studio page.
+2. Open `Topics`.
+3. Check that all **{WORKDAY_TOPIC_COUNT}** Workday topics show as `On`.
+
+**End message.**
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Confirm Workday topics",
+    "question": "After refreshing Copilot Studio, do all Workday topics show as On?",
+    "options": [
+      { "label": "Yes, all Workday topics show as On" },
+      { "label": "No, one or more topics do not show as On" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave the selection unset. This confirmation checks that the maker's refreshed
+Copilot Studio page reflects the verified activation; it does not replace the
+controller's live reread.
+
+If the maker selects **No**, stop before recording topic activation. Keep the
+runtime phase active, preserve the live diagnostics, and repeat the scoped
+activation verification before asking the maker to refresh and confirm again.
+Do not accept a generic `done` response or continue to runtime-template wiring.
+
+If the maker selects **Yes**, record the live activation evidence:
 
 ```powershell
 python scripts/workday_connect.py record-topic-activation

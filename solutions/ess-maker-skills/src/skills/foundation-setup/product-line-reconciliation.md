@@ -33,7 +33,8 @@ Run the Dataverse probe:
 python scripts/reconcile_setup_agent.py \
   --probe dataverse \
   --environment-id "{ENVIRONMENT_ID}" \
-  --agent-id "{AGENT_ID}"
+  --agent-id "{AGENT_ID}" \
+  --ring "{RING}"
 ```
 
 Append the parent setup skill's confirmed `--account` when available. Append `--dataverse-url` only when the selected environment's exact Dataverse URL is already authoritative setup input. Do not ask the maker for a Dataverse URL solely for this check.

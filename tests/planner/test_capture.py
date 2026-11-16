@@ -1,0 +1,308 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""Tests for planner.capture — observe-mode detectors (pure logic + local IO)."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from planner.capture import (
+    ask_artifact,
+    config_snapshot,
+    detect_agent,
+    detect_config_artifacts,
+    detect_environment,
+    read_config,
+    snapshot_config,
+    summarize_discovery,
+    workspace_setup_ready,
+)
+
+ENV_ID = "d3f10000-0000-1111-2222-333344445555"
+ENDPOINT = "https://org123.crm.dynamics.com"
+AGENT = {"botId": "bot-9", "name": "ESS Agent", "schemaName": "ess_agent", "folder": "agents/ess", "slug": "ess"}
+
+
+def test_read_config_missing_returns_empty(tmp_path):
+    assert read_config(tmp_path / "nope.json") == {}
+
+
+def test_read_config_corrupt_surfaces_error(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid JSON"):
+        read_config(path)
+
+
+def _agent_state(slug, ready):
+    return {"agent": {"workspace_slug": slug}, "connect_ready": ready}
+
+
+@pytest.mark.parametrize(("state", "ready"), [
+    ({"schema_version": 4, "agents": {"a": _agent_state("ess", True)}}, True),
+    # The legacy `setup: "complete"` alone is not readiness.
+    (None, False),
+    # Readiness is scoped to the active agent.
+    ({"schema_version": 4, "agents": {"a": _agent_state("other", True), "b": _agent_state("ess", False)}}, False),
+    ({"schema_version": 3, "agents": {"a": _agent_state("ess", True)}}, False),
+    # Unreadable state reads as not ready; /setup owns repairing it.
+    ("{broken", False),
+])
+def test_workspace_setup_ready_requires_canonical_active_agent_state(tmp_path, state, ready):
+    config_path = tmp_path / ".local" / "config.json"
+    (config_path.parent / "setup").mkdir(parents=True)
+    config_path.write_text(json.dumps({"setup": "complete", "activeAgent": "ess"}), encoding="utf-8")
+    if state is not None:
+        text = state if isinstance(state, str) else json.dumps(state)
+        (config_path.parent / "setup" / "config.json").write_text(text, encoding="utf-8")
+    assert workspace_setup_ready(config_path) is ready
+
+
+def test_snapshot_config_returns_full_config(tmp_path):
+    # The snapshot is the WHOLE file (deep copy) so the generic sweep sees every key.
+    cfg = {"setup": "complete", "dataverseEndpoint": ENDPOINT, "environmentId": ENV_ID, "other": 1, "agent": AGENT}
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(cfg), encoding="utf-8")
+    snap = snapshot_config(path)
+    assert snap == cfg
+    snap["agent"]["botId"] = "mutated"  # deep copy — mutating the snapshot doesn't leak
+    assert config_snapshot(cfg)["agent"]["botId"] == "bot-9"
+
+
+def test_detect_agent_new_clone():
+    before = config_snapshot({"setup": "pending"})
+    after = config_snapshot({"setup": "complete", "agent": AGENT})
+    art = detect_agent(before, after, task_id="T1")
+    assert art is not None
+    assert art["kind"] == "Agent"
+    assert art["key"] == "essAgent"
+    assert art["attributes"]["botId"] == "bot-9"
+    assert art["attributes"]["schemaName"] == "ess_agent"
+    assert art["attributes"]["slug"] == "ess"
+    assert art["inventoryRef"] == "Agent:bot-9"
+    assert art["producedByTaskId"] == "T1"
+
+
+def test_detect_agent_none_when_absent():
+    before = config_snapshot({})
+    after = config_snapshot({"setup": "complete", "environmentId": ENV_ID})
+    assert detect_agent(before, after, task_id="T1") is None
+
+
+def test_detect_agent_none_when_unchanged():
+    snap = config_snapshot({"agent": AGENT})
+    assert detect_agent(snap, snap, task_id="T1") is None
+
+
+# --- generic config-artifact capture -------------------------------------------------
+
+def test_detect_config_artifacts_env_and_agent():
+    before = {}
+    after = config_snapshot({"setup": "complete", "dataverseEndpoint": ENDPOINT, "environmentId": ENV_ID, "agent": AGENT})
+    arts = detect_config_artifacts(before, after, task_id="T1")
+    by_key = {a["key"]: a for a in arts}
+    assert set(by_key) == {"primaryEnvironment", "essAgent"}
+    assert by_key["primaryEnvironment"]["kind"] == "Environment"
+    assert by_key["essAgent"]["kind"] == "Agent"
+
+
+def test_detect_config_artifacts_generic_connection_and_custom():
+    # A real before-snapshot is required for the generic sweep; the connection
+    # and widget are new since `before`, so they are pinned.
+    before = config_snapshot({"setup": "pending"})
+    after = config_snapshot({
+        "setup": "complete",
+        "connection": {"connectionId": "conn-1", "name": "Workday conn"},
+        "widget": {"widgetId": "w-7", "displayName": "My widget"},
+        "flags": {"enabled": True},          # no id → skipped
+        "note": "just a string",             # not an object → skipped
+    })
+    arts = detect_config_artifacts(before, after, task_id="T2")
+    by_key = {a["key"]: a for a in arts}
+    assert by_key["connection"]["kind"] == "Connection"
+    assert by_key["connection"]["attributes"]["connectionId"] == "conn-1"
+    assert by_key["connection"]["inventoryRef"] == "Connection:conn-1"
+    assert by_key["widget"]["kind"] == "Custom"          # unknown shape → Custom
+    assert by_key["widget"]["attributes"]["displayName"] == "My widget"
+    assert "flags" not in by_key and "note" not in by_key
+
+
+def test_detect_config_artifacts_list_of_objects():
+    before = config_snapshot({"setup": "pending"})
+    after = config_snapshot({"connections": [
+        {"connectionId": "c-1", "name": "One"},
+        {"connectionId": "c-2", "name": "Two"},
+    ]})
+    arts = detect_config_artifacts(before, after, task_id="T3")
+    keys = sorted(a["key"] for a in arts)
+    assert keys == ["connections.c-1", "connections.c-2"]
+    assert all(a["kind"] == "Connection" for a in arts)
+
+
+def test_detect_config_artifacts_empty_before_skips_generic_sweep():
+    # With NO before-snapshot we can't tell new from pre-existing config, so the
+    # generic sweep is skipped — only the recognised /setup outputs are pinned.
+    after = config_snapshot({
+        "setup": "complete",
+        "dataverseEndpoint": ENDPOINT,
+        "environmentId": ENV_ID,
+        "agent": AGENT,
+        "connection": {"connectionId": "conn-1", "name": "Workday conn"},
+    })
+    arts = detect_config_artifacts({}, after, task_id="T1")
+    keys = {a["key"] for a in arts}
+    assert keys == {"primaryEnvironment", "essAgent"}  # connection NOT swept
+
+
+def test_detect_config_artifacts_never_sweeps_agents_list():
+    # The discovered-agent list mirrors the active agent; it must never be swept.
+    before = config_snapshot({"setup": "pending"})
+    after = config_snapshot({
+        "setup": "complete",
+        "agent": AGENT,
+        "agents": [AGENT, {"botId": "bot-2", "name": "Other", "schemaName": "other"}],
+    })
+    arts = detect_config_artifacts(before, after, task_id="T1")
+    keys = {a["key"] for a in arts}
+    assert keys == {"essAgent"}  # only the active agent, never agents.<id>
+
+
+def test_detect_config_artifacts_only_changed():
+    before = config_snapshot({"connection": {"connectionId": "conn-1", "name": "Workday conn"}})
+    after = config_snapshot({"connection": {"connectionId": "conn-1", "name": "Workday conn"}})
+    assert detect_config_artifacts(before, after, task_id="T2") == []
+
+
+def test_detect_config_artifacts_none_when_empty():
+    assert detect_config_artifacts({}, config_snapshot({"setup": "pending"}), task_id="T1") == []
+
+
+def test_detect_environment_new_setup():
+    before = {}
+    after = config_snapshot({"setup": "complete", "dataverseEndpoint": ENDPOINT, "environmentId": ENV_ID})
+    art = detect_environment(before, after, task_id="T1")
+    assert art is not None
+    assert art["kind"] == "Environment"
+    assert art["attributes"]["environmentId"] == ENV_ID
+    assert art["attributes"]["environmentUrl"] == ENDPOINT
+    assert art["inventoryRef"] == f"Environment:{ENV_ID}"
+    assert art["producedByTaskId"] == "T1"
+    assert art["provenance"]["source"] == "Agent"
+    assert art["state"] == "Active"
+
+
+def test_detect_environment_no_change_returns_none():
+    snap = {"setup": "complete", "dataverseEndpoint": ENDPOINT, "environmentId": ENV_ID}
+    # before == after -> nothing new produced
+    assert detect_environment(snap, dict(snap), task_id="T1") is None
+
+
+def test_detect_environment_became_complete_triggers():
+    before = {"setup": None, "dataverseEndpoint": ENDPOINT, "environmentId": ENV_ID}
+    after = {"setup": "complete", "dataverseEndpoint": ENDPOINT, "environmentId": ENV_ID}
+    art = detect_environment(before, after, task_id="T1")
+    assert art is not None
+
+
+def test_detect_environment_endpoint_only():
+    before = {}
+    after = {"setup": "complete", "dataverseEndpoint": ENDPOINT, "environmentId": None}
+    art = detect_environment(before, after, task_id="T1")
+    assert art is not None
+    assert art["attributes"] == {"environmentUrl": ENDPOINT}
+    assert art["inventoryRef"] == ""  # no env id yet
+
+
+def test_detect_environment_empty_after_returns_none():
+    assert detect_environment({}, {}, task_id="T1") is None
+
+
+def test_ask_artifact_marks_user_provenance():
+    art = ask_artifact("workdayEntraApp", "EntraApp", {"appId": "abc"}, task_id="T2")
+    assert art["kind"] == "EntraApp"
+    assert art["attributes"] == {"appId": "abc"}
+    assert art["producedByTaskId"] == "T2"
+    assert art["provenance"]["source"] == "User"  # assignee supplied it
+
+
+# --- /discover summary capture (tenantInventory) -------------------------------------
+
+DISCOVER_RESULTS = {
+    "correlationId": "run-abc",
+    "aborted": False,
+    "writePath": "mcp:substrate.office.com",
+    "writeDegraded": False,
+    "totals": {"kindsCrawled": 3, "mapped": 16},
+    "discovered": {
+        "Environment": [{"naturalKey": "e1"}],
+        "Connection": [{"naturalKey": "c1"}, {"naturalKey": "c2"}],
+        "EntraApp": [{"naturalKey": "a1"}],
+    },
+}
+
+
+def test_summarize_discovery_shapes_tenant_inventory():
+    art = summarize_discovery(DISCOVER_RESULTS, task_id="T2")
+    assert art is not None
+    assert art["kind"] == "Custom"          # single summary artifact, not per-resource
+    assert art["key"] == "tenantInventory"
+    assert art["producedByTaskId"] == "T2"
+    assert art["provenance"]["source"] == "Discovered"
+    attrs = art["attributes"]
+    assert attrs["resourceCount"] == 16     # from totals.mapped
+    assert attrs["kindsCrawled"] == 3
+    assert attrs["writePath"] == "mcp:substrate.office.com"
+    assert attrs["writeDegraded"] == "false"          # bool -> scalar string
+    assert attrs["syncWithheld"] == "false"           # no blockedReason -> not withheld
+    assert "syncWithheldReason" not in attrs
+    assert attrs["inventoryPath"].endswith("inventory.json")
+    # per-kind counts, sorted, space-joined (no commas -> renders cleanly in the table)
+    assert attrs["resources"] == "Connection:2 EntraApp:1 Environment:1"
+    assert art["inventoryRef"] == "Inventory:run-abc"
+
+
+def test_summarize_discovery_none_on_aborted():
+    # An aborted run wrote nothing and left the mirror untouched -> nothing to pin.
+    assert summarize_discovery({"aborted": True}, task_id="T2") is None
+    assert summarize_discovery({"status": "aborted"}, task_id="T2") is None
+    assert summarize_discovery("not a dict", task_id="T2") is None  # defensive guard
+
+
+def test_summarize_discovery_degraded_still_pins():
+    # exit 2: crawl OK, server write failed, but the durable local mirror WAS
+    # refreshed -> the task output exists, so it is captured and flagged degraded.
+    degraded = dict(DISCOVER_RESULTS, writeDegraded=True, writePath="")
+    art = summarize_discovery(degraded, task_id="T2")
+    assert art is not None
+    assert art["attributes"]["writeDegraded"] == "true"
+    assert art["attributes"]["writePath"] == ""
+
+
+def test_summarize_discovery_withheld_is_flagged_not_persisted():
+    # exit 2 variant: the crawl succeeded AND the service was reachable
+    # (writeDegraded stays false, writePath is a real server path), but the
+    # whole-inventory payload was withheld for safety. Without the withheld flag the
+    # clean writePath would read as a server persist that never happened.
+    withheld = dict(
+        DISCOVER_RESULTS,
+        sync={"attempted": True, "blockedReason": "incomplete scope coverage"},
+    )
+    art = summarize_discovery(withheld, task_id="T2")
+    assert art is not None
+    attrs = art["attributes"]
+    assert attrs["writeDegraded"] == "false"                 # not a write-path failure
+    assert attrs["writePath"] == "mcp:substrate.office.com"  # service was reachable
+    assert attrs["syncWithheld"] == "true"
+    assert attrs["syncWithheldReason"] == "incomplete scope coverage"
+
+
+def test_summarize_discovery_empty_run_and_updated_at():
+    minimal = {"totals": {"mapped": 0, "kindsCrawled": 0}, "discovered": {}}
+    art = summarize_discovery(minimal, task_id="T2", updated_at="2026-01-02T03:04:05Z")
+    assert art["attributes"]["updatedAt"] == "2026-01-02T03:04:05Z"
+    assert art["attributes"]["resourceCount"] == 0
+    assert "resources" not in art["attributes"]   # nothing discovered -> key omitted
+    assert art["inventoryRef"] == ""              # no correlationId -> empty ref

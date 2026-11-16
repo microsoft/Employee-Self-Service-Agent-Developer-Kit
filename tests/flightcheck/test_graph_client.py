@@ -52,13 +52,15 @@ def test_empty_tenant_id_returns_empty():
 
 def test_authenticate_uses_preferred_cached_account(monkeypatch):
     selected_accounts = []
+    client_ids = []
+    requested_scopes = []
 
     class FakeCache:
         has_state_changed = False
 
     class FakeApp:
         def __init__(self, *args, **kwargs):
-            pass
+            client_ids.append(args[0])
 
         def get_accounts(self):
             return [
@@ -68,6 +70,7 @@ def test_authenticate_uses_preferred_cached_account(monkeypatch):
 
         def acquire_token_silent(self, scopes, account):
             selected_accounts.append(account)
+            requested_scopes.append(scopes)
             return {
                 "access_token": "preferred-token",
                 "id_token_claims": {
@@ -94,6 +97,8 @@ def test_authenticate_uses_preferred_cached_account(monkeypatch):
 
     assert token == "preferred-token"
     assert selected_accounts == [{"username": "Maker@Example.com"}]
+    assert client_ids == [graph_client.GRAPH_CLIENT_ID]
+    assert requested_scopes == [graph_client.GRAPH_SCOPES]
     assert client.signed_in_username == "Maker@Example.com"
 
 

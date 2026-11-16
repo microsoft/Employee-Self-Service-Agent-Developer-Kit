@@ -21,7 +21,7 @@ body:
     id: area
     attributes:
       label: Area / ISV
-      description: e.g. WorkdayCustomEngineAgent, WorkdayDeclarativeAgent, Facilities, ServiceNow
+      description: e.g. Workday, Facilities, ServiceNow
     validations:
       required: true
   - type: dropdown
@@ -32,7 +32,6 @@ body:
         - (flat / none)
         - Employee
         - Manager
-        - Extended
     validations:
       required: false
   - type: input

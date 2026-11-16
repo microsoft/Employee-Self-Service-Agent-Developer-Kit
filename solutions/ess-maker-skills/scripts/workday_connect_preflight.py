@@ -23,11 +23,19 @@ from workday_connect_auth import (
     require_identity,
 )
 from workday_connect_model import load_catalog, plan_hash
+from workday_connect_prerequisites import check_prerequisites
 from workday_connect_store import WorkdayConnectStore
 
 
 class WorkdayConnectPreflightError(RuntimeError):
     """Raised when the Workday target cannot be proven safely."""
+
+    def __init__(self, message: str, *, details: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.details = details or {}
+
+
+SUPPORTED_POWER_PLATFORM_RINGS = frozenset({"prod", "preprod", "test"})
 
 
 @dataclass(frozen=True)
@@ -38,7 +46,7 @@ class PreflightTarget:
     package_flavor: str
     dataverse_url: str
     foundation_ring: str
-    pac_ring: str
+    tenant_id: str | None = None
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -123,17 +131,6 @@ def _require_materialized_workspace(
             "Finish the selected agent's workspace setup before connecting "
             "Workday."
         )
-
-
-def _pac_ring(foundation_ring: str) -> str:
-    normalized = str(foundation_ring or "prod").casefold()
-    if normalized in {"test", "preprod"}:
-        return "preprod"
-    if normalized == "prod":
-        return "prod"
-    raise WorkdayConnectPreflightError(
-        f"Unsupported Power Platform ring: {foundation_ring!r}."
-    )
 
 
 def _cached_dataverse_url(
@@ -269,6 +266,10 @@ def resolve_target(
     _require_materialized_workspace(setup_state, agent)
 
     foundation_ring = str(foundation.get("ring") or "prod").casefold()
+    if foundation_ring not in SUPPORTED_POWER_PLATFORM_RINGS:
+        raise WorkdayConnectPreflightError(
+            f"Unsupported Power Platform ring: {foundation.get('ring')!r}."
+        )
     foundation_environment_id = str(
         foundation.get("environmentId") or ""
     ).strip()
@@ -290,6 +291,18 @@ def resolve_target(
         raise WorkdayConnectPreflightError(
             "The setup state does not contain an exact Power Platform "
             "environment ID."
+        )
+    foundation_tenant = str(foundation.get("tenantId") or "").strip()
+    setup_tenant = str(
+        (setup_state.get("environment") or {}).get("tenant_id") or ""
+    ).strip()
+    if (
+        foundation_tenant and setup_tenant
+        and foundation_tenant.casefold() != setup_tenant.casefold()
+    ):
+        raise WorkdayConnectPreflightError(
+            "Foundation and setup state record different Microsoft Entra tenants. "
+            "Refresh setup for the selected agent before continuing."
         )
 
     foundation_url = str(
@@ -370,7 +383,7 @@ def resolve_target(
         package_flavor=supported["packageFlavor"],
         dataverse_url=exact_url,
         foundation_ring=foundation_ring,
-        pac_ring=_pac_ring(foundation_ring),
+        tenant_id=foundation_tenant or setup_tenant or None,
     )
 
 
@@ -456,6 +469,14 @@ def run_preflight(
         )
     except WorkdayConnectIdentityError as exc:
         raise WorkdayConnectPreflightError(str(exc)) from exc
+    if (
+        target.tenant_id
+        and target.tenant_id.casefold() != identity["tenantId"].casefold()
+    ):
+        raise WorkdayConnectPreflightError(
+            "The Microsoft sign-in returned a different tenant from Step 1. "
+            "Retry sign-in for the same selected environment and tenant."
+        )
     try:
         installed = _installed_solutions(
             target.dataverse_url,
@@ -506,6 +527,26 @@ def run_preflight(
             }
         },
     )
+    prerequisite_checks = check_prerequisites(
+        workspace_root,
+        state_store.load(),
+        package_installed=package_installed,
+        pac_resolver=pac_resolver,
+        runner=pac_runner,
+    )
+    state_store.record_preflight_checks(prerequisite_checks)
+    blocked = [
+        check for check in prerequisite_checks if check["status"] == "blocked"
+    ]
+    if blocked:
+        error = WorkdayConnectPreflightError(
+            "Workday prerequisites need attention: "
+            + "; ".join(check["name"] for check in blocked)
+            + ". Choose Help me fix it or recheck after repair.",
+            details={"verificationChecks": prerequisite_checks},
+        )
+        error.suppress_blocker_persistence = True
+        raise error
     state_store.complete_action(
         "preflight",
         "verify-target",
@@ -542,6 +583,7 @@ def run_preflight(
                 "name": "Dataverse access, maker account, and Entra tenant",
                 "status": "verified",
             },
+            *prerequisite_checks,
         ],
         "authenticationPlan": authentication_plan(),
         "status": state_store.status(),

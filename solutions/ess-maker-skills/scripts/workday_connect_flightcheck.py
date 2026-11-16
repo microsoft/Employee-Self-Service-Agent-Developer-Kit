@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -16,11 +15,30 @@ import tempfile
 from typing import Any, Mapping
 
 from workday_connect_model import PHASE_REQUIRED_ACTIONS
+from workday_connect_readiness_policy import (
+    CHECKPOINT_PHASES,
+    PHASE_ORDER as _PHASE_ORDER,
+    PHASE_REQUIRED_PROFILES,
+    PROFILE_POLICIES,
+    checkpoint_phase,
+    manual_evidence_for,
+)
 
 
 RESULT_SCHEMA = "flightcheck.result.v2"
 INVOCATION_SOURCE = "connect"
 DEFAULT_TIMEOUT_SECONDS = 300
+_CHECKPOINT_PHASES = CHECKPOINT_PHASES
+
+__all__ = [
+    "PHASE_REQUIRED_PROFILES",
+    "PROFILE_POLICIES",
+    "WorkdayConnectFlightCheckError",
+    "effective_validation_state",
+    "evaluate_contract",
+    "run_profile",
+    "validation_input_fingerprint",
+]
 
 
 class WorkdayConnectFlightCheckError(ValueError):
@@ -44,219 +62,6 @@ class WorkdayConnectFlightCheckError(ValueError):
         self.input_fingerprint = input_fingerprint
 
 
-@dataclass(frozen=True)
-class ProfilePolicy:
-    phase_id: str
-    checkpoints: tuple[str, ...]
-    families: Mapping[str, int]
-    clients: tuple[str, ...]
-
-
-PROFILE_POLICIES: dict[str, ProfilePolicy] = {
-    "workday-da:setup-readiness": ProfilePolicy(
-        phase_id="preflight",
-        checkpoints=(
-            "DA-AGENT-001",
-            "DA-CONTENT-001",
-        ),
-        families={},
-        clients=("agentbuilder",),
-    ),
-    "workday-da:external-prerequisites": ProfilePolicy(
-        phase_id="workday-admin",
-        checkpoints=(
-            # Role-aware execution will trigger these live Entra API checks later.
-            # For now, Workday Connect uses a guided Entra administrator handoff.
-            # "WD-ENTRA-SCOPE-001",
-            # "WD-ENTRA-CONSENT-001",
-            # "WD-ASSIGN-001",
-            # "WD-ENTRA-NAMEID-001",
-            "WD-ENTRA-SIGNOPT-001",
-            # "WD-CONN-010",
-            # "WD-CONN-102",
-            "WD-API-CLIENT-001",
-            "WD-TENANT-001",
-            "WD-NET-001",
-        ),
-        families={},
-        clients=(
-            # "graph",
-        ),
-    ),
-    "workday-da:package-ready": ProfilePolicy(
-        phase_id="connections",
-        checkpoints=(
-            "WD-DA-PKG-001",
-        ),
-        families={},
-        clients=("dataverse",),
-    ),
-    "workday-da:dataverse-ready": ProfilePolicy(
-        phase_id="runtime",
-        checkpoints=(
-            "WD-DA-PKG-001",
-            "WD-DA-FLOW-001",
-            "DV-CONN-001",
-        ),
-        families={},
-        clients=("dataverse",),
-    ),
-    "workday-da:post-connection": ProfilePolicy(
-        phase_id="runtime",
-        checkpoints=(
-            "WD-DA-PKG-001",
-            "WD-DA-FLOW-001",
-            "WD-CONN-012",
-            "WD-DA-AUTH-001",
-            "DV-CONN-001",
-            "WD-REST-001",
-        ),
-        families={},
-        clients=("dataverse",),
-    ),
-    "workday-da:post-agent-wiring": ProfilePolicy(
-        phase_id="runtime",
-        checkpoints=(
-            "WD-DA-TOPIC-001",
-            "WD-DA-WIRING-001",
-            "WD-DA-ATTACH-001",
-            "WD-REST-002",
-        ),
-        families={},
-        clients=("agentbuilder",),
-    ),
-    "workday-da:post-runtime": ProfilePolicy(
-        phase_id="employee-validation",
-        checkpoints=("WD-DA-FLOW-001", "WD-DA-RUN-001"),
-        families={},
-        clients=("dataverse", "pp_admin"),
-    ),
-    "workday-da:final": ProfilePolicy(
-        phase_id="employee-validation",
-        checkpoints=(
-            "DA-AGENT-001",
-            "DA-CONTENT-001",
-            "WD-DA-PKG-001",
-            "WD-DA-FLOW-001",
-            # Role-aware execution will trigger these live Entra API checks later.
-            # For now, Workday Connect uses a guided Entra administrator handoff.
-            # "WD-ENTRA-SCOPE-001",
-            # "WD-ENTRA-CONSENT-001",
-            # "WD-ASSIGN-001",
-            # "WD-ENTRA-NAMEID-001",
-            "WD-ENTRA-SIGNOPT-001",
-            # "WD-CONN-010",
-            # "WD-CONN-102",
-            "WD-API-CLIENT-001",
-            "WD-TENANT-001",
-            "WD-CONN-012",
-            "WD-DA-AUTH-001",
-            "DV-CONN-001",
-            "WD-REST-001",
-            "WD-REST-002",
-            "WD-NET-001",
-            "WD-DA-TOPIC-001",
-            "WD-DA-WIRING-001",
-            "WD-DA-ATTACH-001",
-            "WD-DA-RUN-001",
-        ),
-        families={},
-        clients=(
-            "agentbuilder",
-            "dataverse",
-            # "graph",
-            "pp_admin",
-        ),
-    ),
-}
-
-PHASE_REQUIRED_PROFILES: dict[str, tuple[str, ...]] = {
-    "preflight": ("workday-da:setup-readiness",),
-    "entra": (),
-    "workday-admin": ("workday-da:external-prerequisites",),
-    "connections": ("workday-da:package-ready",),
-    "runtime": (
-        "workday-da:dataverse-ready",
-        "workday-da:post-connection",
-        "workday-da:post-agent-wiring",
-    ),
-    "employee-validation": (
-        "workday-da:post-runtime",
-        "workday-da:final",
-    ),
-}
-
-
-_MANUAL_EVIDENCE: dict[str, tuple[tuple[str, str], ...]] = {
-    "WD-ENTRA-SIGNOPT-001": (
-        ("entra", "administrator-configuration-verified"),
-    ),
-    "WD-CONN-010": (
-        ("entra", "administrator-configuration-verified"),
-        ("workday-admin", "administrator-response-validated"),
-    ),
-    "WD-API-CLIENT-001": (
-        ("workday-admin", "administrator-response-validated"),
-    ),
-    "WD-TENANT-001": (
-        ("workday-admin", "administrator-response-validated"),
-    ),
-    "WD-SEC-003": (
-        ("workday-admin", "administrator-response-validated"),
-    ),
-    "WD-NET-001": (
-        ("workday-admin", "administrator-response-validated"),
-    ),
-    "WD-CONN-AUTH-001": (
-        ("connections", "physical-connections-verified"),
-    ),
-    "WD-DA-ATTACH-001": (("runtime", "flow-attachment-confirmed"),),
-}
-
-_CHECKPOINT_PHASES = {
-    "ENV-001": "preflight",
-    "ENV-002": "preflight",
-    "ENV-009": "runtime",
-    "ENV-CAPACITY-001": "preflight",
-    "DA-AGENT-001": "preflight",
-    "DA-CONTENT-001": "preflight",
-    "WD-DA-PKG-001": "connections",
-    "WD-DA-FLOW-001": "runtime",
-    "WD-ENTRA-SCOPE-001": "entra",
-    "WD-ENTRA-CONSENT-001": "entra",
-    "WD-ASSIGN-001": "entra",
-    "WD-ENTRA-NAMEID-001": "entra",
-    "WD-ENTRA-SIGNOPT-001": "entra",
-    "WD-CONN-010": "entra",
-    "WD-CONN-102": "entra",
-    "WD-API-CLIENT-001": "workday-admin",
-    "WD-TENANT-001": "workday-admin",
-    "WD-SEC-003": "workday-admin",
-    "WD-NET-001": "workday-admin",
-    "WD-CONN-AUTH-001": "connections",
-    "DV-CONN-001": "runtime",
-    "DA-CONN": "runtime",
-    "WD-CONN-012": "runtime",
-    "WD-CONN-013": "runtime",
-    "WD-DA-AUTH-001": "runtime",
-    "WD-REST-001": "runtime",
-    "WD-REST-002": "runtime",
-    "WD-DA-TOPIC-001": "runtime",
-    "WD-DA-WIRING-001": "runtime",
-    "WD-DA-ATTACH-001": "runtime",
-    "WD-DA-RUN-001": "employee-validation",
-}
-
-_PHASE_ORDER = (
-    "preflight",
-    "entra",
-    "workday-admin",
-    "connections",
-    "runtime",
-    "employee-validation",
-)
-
-
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -266,15 +71,34 @@ def _normalized(value: Any) -> str:
 
 
 def _checkpoint_phase(checkpoint_id: str, fallback: str) -> str:
-    if checkpoint_id.startswith("DA-CONN-"):
-        return "runtime"
-    return _CHECKPOINT_PHASES.get(checkpoint_id, fallback)
+    return checkpoint_phase(checkpoint_id, fallback)
+
+
+def _administrator_handoff_phase(
+    state: Mapping[str, Any],
+    phase_id: str,
+) -> str:
+    workday_status = _text(
+        ((state.get("phases") or {}).get("workday-admin") or {}).get("status")
+    )
+    if phase_id == "entra" and workday_status in {
+        "active",
+        "blocked",
+        "complete",
+    }:
+        return "workday-admin"
+    return phase_id
 
 
 def _customer_remediation(phase_id: str, error_type: str) -> str:
+    if error_type == "flightcheck-transport-error":
+        return (
+            "Readiness validation did not finish. Review the validation error "
+            "before retrying; keep the existing package and completed setup "
+            "unchanged."
+        )
     if error_type in {
         "flightcheck-timeout",
-        "flightcheck-transport-error",
         "flightcheck-execution-error",
     }:
         return (
@@ -288,7 +112,7 @@ def _customer_remediation(phase_id: str, error_type: str) -> str:
             "and capacity, then rerun Preflight."
         ),
         "entra": (
-            "Have the Microsoft Entra administrator review the Workday "
+            "Have the Microsoft Entra app administrator review the Workday "
             "application, consent, assignment, NameID, and signing settings, "
             "then rerun the Entra verification."
         ),
@@ -305,9 +129,9 @@ def _customer_remediation(phase_id: str, error_type: str) -> str:
             "Review the runtime flows, connection references, authorization, "
             "topic wiring, and selected-agent attachment, then rerun Runtime."
         ),
-        "employee-validation": (
-            "Retry the signed-in employee validation using the recorded "
-            "target and reviewed runtime flows."
+        "maker-validation": (
+            "Resolve the focused Maker Test-pane blocker, then rerun the "
+            "same read-only scenario when the remediation requires a retest."
         ),
     }
     return guidance[phase_id]
@@ -339,7 +163,6 @@ def validation_input_fingerprint(
             "approvedPlan": phase.get("approvedPlan"),
             "evidence": list(phase.get("evidence") or []),
             "administrator": phase.get("administrator"),
-            "employeeTestAttempt": phase.get("employeeTestAttempt"),
         }
     operators = state.get("operators") or {}
     payload = {
@@ -364,7 +187,7 @@ def effective_validation_state(
     root: Path,
     state: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Add the foundation validation realm without mutating lifecycle state."""
+    """Resolve the active target realm without mutating lifecycle state."""
     effective_state = dict(state)
     effective_scope = dict(state.get("scope") or {})
     foundation_path = root.resolve() / ".local" / "config.json"
@@ -380,13 +203,16 @@ def effective_validation_state(
         except (OSError, json.JSONDecodeError):
             foundation_error = True
     realm = _text(
-        effective_scope.get("validationRealm")
+        ("invalid-foundation-config" if foundation_error else "")
+        or state.get("activeTargetRealm")
+        or effective_scope.get("validationRealm")
         or foundation.get("realm")
-        or ("invalid-foundation-config" if foundation_error else "")
         or "dev"
     ).casefold()
     effective_scope["validationRealm"] = realm
     effective_scope["validationRealmSourceValid"] = not foundation_error
+    if "agentBuilderApiVersion" in foundation:
+        effective_scope["agentBuilderApiVersion"] = foundation["agentBuilderApiVersion"]
     effective_state["scope"] = effective_scope
     return effective_state
 
@@ -418,6 +244,7 @@ def _config_projection(state: Mapping[str, Any]) -> dict[str, Any]:
         **scope,
         **identifiers,
         **endpoints,
+        "releaseLine": "da",
         "realm": scope.get("validationRealm") or "dev",
         "tenantId": scope.get("entraTenantId"),
         "dataverseEndpoint": scope.get("dataverseUrl"),
@@ -433,33 +260,12 @@ def _config_projection(state: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _runtime_arguments(state: Mapping[str, Any]) -> list[str]:
-    phase = (state.get("phases") or {}).get("employee-validation") or {}
-    attempt = phase.get("employeeTestAttempt") or {}
-    arguments: list[str] = []
-    attempt_id = _text(attempt.get("attemptId"))
-    start = _text(attempt.get("startedAt"))
-    end = _text(attempt.get("completedAt"))
-    if attempt_id:
-        arguments.extend(("--runtime-evidence-attempt-id", attempt_id))
-    if start:
-        arguments.extend(("--runtime-evidence-start", start))
-    if end:
-        arguments.extend(("--runtime-evidence-end", end))
-    for flow_id in attempt.get("expectedFlowIds") or []:
-        if _text(flow_id):
-            arguments.extend(("--runtime-evidence-flow-id", _text(flow_id)))
-    return arguments
-
-
 def _command(
     root: Path,
     state: Mapping[str, Any],
     profile_name: str,
     output_dir: Path,
     config_path: Path,
-    *,
-    migration_baseline: bool,
 ) -> list[str]:
     context = _agent_context(state)
     maker = (
@@ -472,7 +278,7 @@ def _command(
         str(Path(__file__).with_name("flightcheck") / "cli.py"),
         "--output",
         str(output_dir),
-        "--connect-config",
+        "--profile-config",
         str(config_path),
         "--profile",
         profile_name,
@@ -495,10 +301,6 @@ def _command(
             command.extend((option, context[field]))
     if _text(maker):
         command.extend(("--preferred-username", _text(maker)))
-    if profile_name in {"workday-da:post-runtime", "workday-da:final"}:
-        command.extend(_runtime_arguments(state))
-        if migration_baseline:
-            command.append("--runtime-evidence-migration-baseline")
     return command
 
 
@@ -677,11 +479,43 @@ def _has_action(
 def _manual_accepted(
     state: Mapping[str, Any],
     checkpoint_id: str,
+    row: Mapping[str, Any],
 ) -> bool:
-    requirements = _MANUAL_EVIDENCE.get(checkpoint_id)
-    return bool(requirements) and all(
+    requirements = manual_evidence_for(checkpoint_id)
+    accepted = bool(requirements) and all(
         _has_action(state, phase_id, action)
         for phase_id, action in requirements
+    )
+    if not accepted or checkpoint_id != "WD-REST-001":
+        return accepted
+    scope = state.get("scope") or {}
+    endpoints = state.get("endpoints") or {}
+    maker = ((state.get("operators") or {}).get("powerPlatformMaker") or {}).get("username")
+    records = ((state.get("phases") or {}).get("connections") or {}).get("evidence") or []
+    record = next(
+        (item for item in records if isinstance(item, Mapping) and item.get("action") == "physical-connections-verified"),
+        {},
+    )
+    target = record.get("workdayTarget") or {}
+    observed = row.get("evidence") or {}
+    connection_ids = record.get("connectionIds") or {}
+    rest = endpoints.get("restBaseUrl")
+    return (
+        record.get("outcome") == "verified"
+        and record.get("source") == "live-power-platform-discovery"
+        and record.get("workdayTargetOutcome") == "maker-confirmed-against-workday-packet"
+        and bool(maker) and _normalized(record.get("makerUsername")) == _normalized(maker)
+        and isinstance(target, Mapping)
+        and bool(scope.get("environmentId"))
+        and _normalized(target.get("environmentId")) == _normalized(scope.get("environmentId"))
+        and bool(scope.get("workdayTenant"))
+        and _normalized(target.get("workdayTenant")) == _normalized(scope.get("workdayTenant"))
+        and bool(rest) and _normalized(target.get("restBaseUrl")) == _normalized(rest)
+        and isinstance(observed, Mapping)
+        and _normalized(observed.get("configuredRestBaseUrl")) == _normalized(rest)
+        and isinstance(connection_ids, Mapping)
+        and bool(target.get("connectionId"))
+        and target.get("connectionId") == connection_ids.get("workday")
     )
 
 
@@ -733,12 +567,15 @@ def _validate_results(
         elif checkpoint_id not in rows or checkpoint_id not in emitted:
             missing.append(checkpoint_id)
     if missing:
-        owning_phase = min(
-            (
-                _checkpoint_phase(checkpoint_id, policy.phase_id)
-                for checkpoint_id in missing
+        owning_phase = _administrator_handoff_phase(
+            state,
+            min(
+                (
+                    _checkpoint_phase(checkpoint_id, policy.phase_id)
+                    for checkpoint_id in missing
+                ),
+                key=_PHASE_ORDER.index,
             ),
-            key=_PHASE_ORDER.index,
         )
         raise WorkdayConnectFlightCheckError(
             "Required readiness evidence is incomplete.",
@@ -773,7 +610,7 @@ def _validate_results(
         remediation_id = _text(row.get("remediationId"))
         if status == "Passed":
             continue
-        if status == "Manual" and _manual_accepted(state, checkpoint_id):
+        if status == "Manual" and _manual_accepted(state, checkpoint_id, row):
             suppressions.append(
                 {
                     "checkpointId": checkpoint_id,
@@ -798,15 +635,18 @@ def _validate_results(
         rejected.append("profile-overall")
 
     if rejected:
-        owning_phase = min(
-            (
-                _checkpoint_phase(
-                    value.split("=", maxsplit=1)[0],
-                    policy.phase_id,
-                )
-                for value in rejected
+        owning_phase = _administrator_handoff_phase(
+            state,
+            min(
+                (
+                    _checkpoint_phase(
+                        value.split("=", maxsplit=1)[0],
+                        policy.phase_id,
+                    )
+                    for value in rejected
+                ),
+                key=_PHASE_ORDER.index,
             ),
-            key=_PHASE_ORDER.index,
         )
         raise WorkdayConnectFlightCheckError(
             "Workday readiness checks need remediation: "
@@ -858,13 +698,21 @@ def evaluate_contract(
             for row in parsed["executionErrors"]
             if isinstance(row, Mapping)
         ]
-        raise WorkdayConnectFlightCheckError(
-            "FlightCheck reported execution errors.",
-            error_type="flightcheck-execution-error",
-            phase_id=(
+        owning_phase = _administrator_handoff_phase(
+            state,
+            (
                 min(execution_phases, key=_PHASE_ORDER.index)
                 if execution_phases
                 else PROFILE_POLICIES[profile_name].phase_id
+            ),
+        )
+        raise WorkdayConnectFlightCheckError(
+            "FlightCheck reported execution errors.",
+            error_type="flightcheck-execution-error",
+            phase_id=owning_phase,
+            customer_remediation=_customer_remediation(
+                owning_phase,
+                "flightcheck-execution-error",
             ),
         )
     checkpoint_statuses, suppressions, remediation_ids = _validate_results(
@@ -878,12 +726,15 @@ def evaluate_contract(
             "graph": "entra",
             "connectivity": "runtime",
         }
-        owning_phase = min(
-            (
-                client_phases.get(client, policy.phase_id)
-                for client in failed_clients
+        owning_phase = _administrator_handoff_phase(
+            state,
+            min(
+                (
+                    client_phases.get(client, policy.phase_id)
+                    for client in failed_clients
+                ),
+                key=_PHASE_ORDER.index,
             ),
-            key=_PHASE_ORDER.index,
         )
         raise WorkdayConnectFlightCheckError(
             "Required authenticated readiness clients are unavailable: "
@@ -998,7 +849,6 @@ def run_profile(
                     profile_name,
                     output_dir,
                     config_path,
-                    migration_baseline=migration_baseline,
                 ),
                 cwd=root,
                 capture_output=True,

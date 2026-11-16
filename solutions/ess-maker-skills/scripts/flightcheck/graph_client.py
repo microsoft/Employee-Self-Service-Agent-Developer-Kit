@@ -56,6 +56,20 @@ GRAPH_SCOPES = [
     "https://graph.microsoft.com/ExternalConnection.Read.All",
 ]
 
+# Least-privilege delegated scope for the /roles person resolver
+# (scripts/roles/cli.py: person name -> Entra object id). Several of the
+# broader FlightCheck GRAPH_SCOPES above (User.Read.All, Directory.Read.All,
+# Policy.Read.All) are ADMIN-consent-gated; this single scope is instead
+# USER-consentable in a default tenant, so a maker can grant it themselves
+# without pulling in a directory admin — yet it still authorizes the org-wide
+# GET /users?$search that search_users runs. Where a tenant disables user
+# consent for the Graph CLI app outright (e.g. Microsoft corp), interactive
+# sign-in is refused; the resolver then reports auth_required so the /roles
+# skill can fall back to the WorkIQ MCP (see src/skills/roles/resolve-person.md).
+PERSON_RESOLUTION_SCOPES = [
+    "https://graph.microsoft.com/User.ReadBasic.All",
+]
+
 # Wall-clock ceiling for the two silent lookups called from the interactive
 # auth hot path (``resolve_tenant_display_name_silent`` → /organization then
 # /me). Kept small — the sign-in critical path must not stall on a
@@ -285,8 +299,20 @@ def _try_me_company_name_lookup(app, account) -> str:
 class GraphClient:
     """Lightweight Microsoft Graph client with MSAL interactive auth."""
 
-    def __init__(self, tenant_id: str):
+    def __init__(
+        self,
+        tenant_id: str,
+        scopes: list[str] | None = None,
+        *,
+        strict_reads: bool = False,
+    ):
         self.tenant_id = tenant_id
+        # Default to the broad FlightCheck scope set. Callers that only need a
+        # narrow, user-consentable capability (e.g. the /roles person resolver)
+        # pass their own least-privilege scopes so makers aren't pushed through
+        # an admin-consent prompt for permissions their task never uses.
+        self._scopes = scopes or GRAPH_SCOPES
+        self.strict_reads = strict_reads
         self._token: str | None = None
         self.signed_in_username: str | None = None
 
@@ -321,7 +347,7 @@ class GraphClient:
         result = None
         if selected_account is not None:
             result = app.acquire_token_silent(
-                GRAPH_SCOPES,
+                self._scopes,
                 account=selected_account,
             )
 
@@ -332,7 +358,7 @@ class GraphClient:
             if preferred_username:
                 interactive_options["login_hint"] = preferred_username
             result = app.acquire_token_interactive(
-                GRAPH_SCOPES,
+                self._scopes,
                 **interactive_options,
             )
 
@@ -373,8 +399,12 @@ class GraphClient:
         url = f"{GRAPH_BASE}{path}"
         resp = _SESSION.get(url, headers=self.headers, params=params, timeout=30)
         if resp.status_code == 403:
+            if self.strict_reads:
+                raise PermissionError(f"Graph returned HTTP 403 on {path}.")
             return {"_error": "insufficient_permissions", "_status": 403}
         if resp.status_code == 401:
+            if self.strict_reads:
+                resp.raise_for_status()
             return {"_error": "token_expired", "_status": 401}
         resp.raise_for_status()
         return resp.json()
@@ -400,18 +430,40 @@ class GraphClient:
         """
         items: list = []
         url = f"{GRAPH_BASE}{path}"
+        seen_urls: set[str] = set()
         while url:
+            if self.strict_reads:
+                if url in seen_urls:
+                    raise ValueError("Graph returned a repeated collection continuation.")
+                seen_urls.add(url)
             resp = _SESSION.get(url, headers=self.headers, params=params, timeout=30)
             if resp.status_code in (401, 403):
-                if raise_on_permission_error:
+                if self.strict_reads and resp.status_code == 401:
+                    resp.raise_for_status()
+                if raise_on_permission_error or self.strict_reads:
                     raise PermissionError(
                         f"Graph returned HTTP {resp.status_code} on {path}."
                     )
                 return items  # partial results
             resp.raise_for_status()
             data = resp.json()
+            if self.strict_reads and (
+                not isinstance(data, dict) or not isinstance(data.get("value"), list)
+                or any(not isinstance(row, dict) for row in data["value"])
+            ):
+                raise ValueError("Graph returned an invalid resource collection.")
             items.extend(data.get("value", []))
             url = data.get("@odata.nextLink")
+            if self.strict_reads and url is not None:
+                from urllib.parse import urlsplit
+
+                expected, actual = urlsplit(f"{GRAPH_BASE}{path}"), urlsplit(str(url))
+                if (
+                    not isinstance(url, str) or not url
+                    or actual.scheme != expected.scheme or actual.netloc != expected.netloc
+                    or actual.path != expected.path or actual.fragment
+                ):
+                    raise ValueError("Graph returned an invalid collection continuation.")
             params = None  # nextLink is fully qualified
         return items
 
@@ -449,6 +501,52 @@ class GraphClient:
     def get_users_sample(self, top: int = 10) -> list:
         """Get a sample of users for sync verification."""
         data = self.get("/users", params={"$top": str(top)})
+        return data.get("value", [])
+
+    def search_users(self, query: str, *, top: int = 10) -> list:
+        """Resolve a person by name (or email / UPN) to their directory objects.
+
+        Runs a Graph ``$search`` over ``displayName``, ``userPrincipalName`` and
+        ``mail`` — which requires the ``ConsistencyLevel: eventual`` header that
+        :attr:`headers` already sets. Each returned object carries ``id`` (the
+        Entra object id used everywhere as the subject id) plus ``displayName`` /
+        ``userPrincipalName`` / ``mail`` for disambiguation. ``jobTitle`` is
+        deliberately not requested: the person-resolution scope is
+        ``User.ReadBasic.All``, whose basic projection doesn't grant it, so a
+        ``$select`` on it comes back empty at best and 403s the call at worst.
+
+        Returns an empty list for a blank query or a genuine no-match. Raises
+        ``PermissionError`` on a 401/403 (the caller lacks a directory user-read
+        scope such as ``User.ReadBasic.All``, or the tenant blocks user consent
+        for the CLI app) so the caller can tell "sign in / grant access / fall
+        back" apart from an empty result — a swallowed ``[]`` there would read as
+        a genuine "no match" and defeat the WorkIQ fallback the ``/roles`` skill
+        relies on.
+        """
+        term = " ".join((query or "").split()).replace('"', "")
+        if not term:
+            return []
+        search = (
+            f'"displayName:{term}" OR "userPrincipalName:{term}" OR "mail:{term}"'
+        )
+        data = self.get(
+            "/users",
+            params={
+                "$search": search,
+                "$select": "id,displayName,userPrincipalName,mail",
+                "$top": str(top),
+            },
+        )
+        if isinstance(data, dict) and data.get("_error"):
+            # 401/403 -> the caller lacks a directory user-read scope (e.g.
+            # User.ReadBasic.All) or the tenant blocks user consent for the CLI
+            # app. Raise (mirroring get_all(raise_on_permission_error=True)) so
+            # the caller can tell "grant access / fall back" apart from a real
+            # empty result — a swallowed [] here would read as a genuine "no
+            # match" and defeat the /roles skill's WorkIQ fallback.
+            raise PermissionError(
+                f"Graph returned HTTP {data.get('_status')} resolving users."
+            )
         return data.get("value", [])
 
     def get_service_principals(

@@ -20,6 +20,7 @@ Contracts pinned:
   * plan producing a FAILED row               -> SystemExit code 1
   * plan producing an ERROR row                -> SystemExit code 1
   * plan producing only SKIPPED/NOT_CONFIGURED -> SystemExit code 1
+  * compact SKIPPED/NOT_CONFIGURED -> bounded NOT_READY result / exit 0
   * plan producing a MANUAL row                -> READY_WITH_WARNINGS / 0
   * exact checkpoint producing no row          -> SystemExit code 1
 """
@@ -28,6 +29,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -47,6 +50,8 @@ def _args(
     invocation_source: str | None = None,
     quiet_auth: bool = False,
     ring: str | None = None,
+    compact_result: bool = False,
+    invocation_id: str | None = None,
     power_platform_admin_origin: str | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
@@ -60,6 +65,8 @@ def _args(
         invocation_source=invocation_source,
         quiet_auth=quiet_auth,
         ring=ring,
+        compact_result=compact_result,
+        invocation_id=invocation_id,
         power_platform_admin_origin=power_platform_admin_origin,
     )
 
@@ -73,6 +80,31 @@ def _row(checkpoint_id: str, status: str) -> CheckResult:
         description="fake",
         result="fake",
     )
+
+
+@pytest.mark.parametrize(
+    "option",
+    (
+        "--runtime-evidence-attempt-id",
+        "--runtime-evidence-start",
+        "--runtime-evidence-end",
+        "--runtime-evidence-flow-id",
+        "--runtime-evidence-migration-baseline",
+    ),
+)
+def test_retired_runtime_evidence_options_are_rejected(
+    option: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    argv = ["flightcheck", option]
+    if option != "--runtime-evidence-migration-baseline":
+        argv.append("value")
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
 
 
 class _FakeRunResult:
@@ -104,21 +136,6 @@ def test_run_exit_code_treats_blocked_as_not_ready(
     # previously omitted result.blocked.
     result = _FakeRunResult(failed=failed, blocked=blocked, errors=errors)
     assert cli._run_exit_code(result) == expected
-
-
-@pytest.mark.parametrize(
-    "label",
-    ["employee@example.com", "attempt label", "../attempt", "x" * 129],
-)
-def test_runtime_evidence_label_rejects_free_form_or_sensitive_text(
-    tmp_path: Path,
-    label: str,
-) -> None:
-    args = _args("WD-DA-RUN-001", tmp_path)
-    args.runtime_evidence_attempt_id = label
-
-    with pytest.raises(ValueError, match="opaque label"):
-        cli._runtime_evidence_values(args)
 
 
 @pytest.mark.parametrize(
@@ -155,7 +172,7 @@ def test_resolve_environment_ring(
 @pytest.mark.parametrize(
     ("config", "explicit_ring", "message"),
     [
-        ({}, None, "ring is unavailable"),
+        ({}, None, "could not determine the Power Platform environment ring"),
         (
             {
                 "ring": "prod",
@@ -165,7 +182,7 @@ def test_resolve_environment_ring(
                 ),
             },
             None,
-            "do not identify the same",
+            "identifies different rings",
         ),
     ],
 )
@@ -461,6 +478,26 @@ class TestGates:
             cli._run_single_checkpoint(_args("DEFINITELY-NOT-A-REAL-ID-ZZZ", tmp_path))
         assert exc.value.code == 2
 
+    @pytest.mark.parametrize(
+        "checkpoint_id",
+        [
+            f"SN-DA-{profile}-ENTRA-{suffix}-001"
+            for profile in ("HRSD", "ITSM")
+            for suffix in ("APP", "CLAIMS", "SCOPE", "PREAUTH")
+        ],
+    )
+    def test_retired_servicenow_entra_checkpoint_exits_2(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        checkpoint_id: str,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        assert registry.resolve(checkpoint_id) is None
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args(checkpoint_id, tmp_path))
+        assert exc.value.code == 2
+
     def test_missing_config_exits_1(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -483,18 +520,29 @@ class TestGates:
         monkeypatch.chdir(tmp_path)
 
         class _PowerPlatform:
-            def __init__(self, tenant_id: str) -> None:
+            def __init__(self, tenant_id: str, *, ring: str) -> None:
                 assert tenant_id == "organizations"
+                assert ring == "prod"
 
             def authenticate(self) -> str:
                 return "token"
 
-            def get_currency_allocations(self, environment_id: str):
+            def get_environment_entitlements(self, environment_id: str):
                 assert (
                     environment_id
                     == "00000000-0000-4000-8000-000000001111"
                 )
-                return [{"currencyType": "MCSMessages", "allocated": 100}]
+                return {
+                    "items": [{
+                        "entitlementId": "MCSMessages",
+                        "entitlement": {
+                            "capacity": {
+                                "allocated": {"value": 100},
+                            },
+                        },
+                    }],
+                    "_status": 200,
+                }
 
         monkeypatch.setattr(cli, "PowerPlatformClient", _PowerPlatform)
 
@@ -539,18 +587,29 @@ class TestGates:
         monkeypatch.chdir(tmp_path)
 
         class _PowerPlatform:
-            def __init__(self, tenant_id: str) -> None:
+            def __init__(self, tenant_id: str, *, ring: str) -> None:
                 assert tenant_id == "organizations"
+                assert ring == "test"
 
             def authenticate(self) -> str:
                 return "token"
 
-            def get_currency_allocations(self, environment_id: str):
+            def get_environment_entitlements(self, environment_id: str):
                 assert (
                     environment_id
                     == "00000000-0000-4000-8000-000000001111"
                 )
-                return [{"currencyType": "MCSMessages", "allocated": 100}]
+                return {
+                    "items": [{
+                        "entitlementId": "MCSMessages",
+                        "entitlement": {
+                            "capacity": {
+                                "allocated": {"value": 100},
+                            },
+                        },
+                    }],
+                    "_status": 200,
+                }
 
         monkeypatch.setattr(cli, "PowerPlatformClient", _PowerPlatform)
 
@@ -576,17 +635,28 @@ class TestGates:
         )
 
         class _PowerPlatform:
-            def __init__(self, tenant_id: str) -> None:
+            def __init__(self, tenant_id: str, *, ring: str) -> None:
                 assert tenant_id == "organizations"
+                assert ring == "prod"
 
             def authenticate(self) -> str:
                 return "token"
 
-            def get_currency_allocations(self, environment_id: str):
+            def get_environment_entitlements(self, environment_id: str):
                 assert environment_id == (
                     "00000000-0000-4000-8000-000000001111"
                 )
-                return []
+                return {
+                    "items": [{
+                        "entitlementId": "MCSMessages",
+                        "entitlement": {
+                            "capacity": {
+                                "allocated": {"value": 0},
+                            },
+                        },
+                    }],
+                    "_status": 200,
+                }
 
         monkeypatch.setattr(cli, "PowerPlatformClient", _PowerPlatform)
 
@@ -639,7 +709,9 @@ class TestGates:
             )
 
         assert exc.value.code == 1
-        assert "Confirm whether the environment uses" in capsys.readouterr().out
+        output = capsys.readouterr().out
+        assert "Confirm prod, preprod, or test" in output
+        assert "rerun with --ring" in output
 
 
 class TestHermeticRun:
@@ -681,6 +753,185 @@ class TestHermeticRun:
         self._install_fake_plan(monkeypatch, [_row("FAKE-001", Status.PASSED.value)])
         with pytest.raises(SystemExit) as exc:
             cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
+        assert exc.value.code == 0
+
+    def test_entra_setup_target_evaluates_category_once_and_keeps_exact_row(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        target = "SN-DA-HRSD-ENTRA-SETUP-001"
+        calls = 0
+        saved = {}
+
+        class _Spec:
+            category_label = "ServiceNow DA HRSD"
+            is_family = False
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+
+            def __init__(self) -> None:
+                self.ordered_fns = [
+                    ("ServiceNow DA HRSD", self._run_category)
+                ]
+
+            @staticmethod
+            def _run_category(_runner):
+                nonlocal calls
+                calls += 1
+                return [
+                    _row(target, Status.MANUAL.value),
+                    _row("SN-DA-HRSD-OIDC-001", Status.PASSED.value),
+                ]
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(
+            cli,
+            "save_results",
+            lambda result, _output: saved.update(result=result),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args(target, tmp_path))
+
+        assert exc.value.code == 0
+        assert calls == 1
+        assert tuple(
+            result.checkpoint_id for result in saved["result"].results
+        ) == (target, "CHECKPOINT-CONTRACT-GUIDED")
+
+    @pytest.mark.parametrize(
+        ("target", "slug", "schema_name", "ring"),
+        (
+            (
+                "SN-DA-HRSD-ENTRA-SETUP-001",
+                "employee-self-service-hr",
+                "gptagent_copilotforemployeeselfservicehr",
+                "test",
+            ),
+            (
+                "SN-DA-HRSD-ENTRA-SETUP-001",
+                "employee-self-service-hr",
+                "gptagent_copilotforemployeeselfservicehr",
+                "prod",
+            ),
+            (
+                "SN-DA-ITSM-ENTRA-SETUP-001",
+                "employee-self-service-it",
+                "gptagent_copilotforemployeeselfserviceit",
+                "test",
+            ),
+            (
+                "SN-DA-ITSM-ENTRA-SETUP-001",
+                "employee-self-service-it",
+                "gptagent_copilotforemployeeselfserviceit",
+                "prod",
+            ),
+        ),
+    )
+    def test_servicenow_entra_cli_never_initializes_graph(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+        target: str,
+        slug: str,
+        schema_name: str,
+        ring: str,
+    ) -> None:
+        environment_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        tenant_id = "935884d7-bdee-469b-a461-fcc530a3ac83"
+        agent_id = "cccccccc-dddd-4eee-8fff-111111111111"
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps(
+                {
+                    "tenantId": tenant_id,
+                    "environmentId": environment_id,
+                    "ring": ring,
+                    "powerPlatformApiEndpoint": (
+                        "https://aaaaaaaabbbb4ccc8dddeeeeeeeeee.ee."
+                        "environment.api.powerplatform.com"
+                    ),
+                    "agents": [
+                        {
+                            "slug": slug,
+                            "botId": agent_id,
+                            "schemaName": schema_name,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        actual_plan = registry.transitive_requirements(target)
+        assert actual_plan.clients == frozenset({registry.AGENTBUILDER})
+
+        class _Spec:
+            category_label = "ServiceNow Entra"
+            is_family = False
+
+        class _Plan:
+            clients = actual_plan.clients
+            requires_config = True
+            requires_dataverse_endpoint = False
+
+            def __init__(self) -> None:
+                self.ordered_fns = [
+                    (
+                        "ServiceNow Entra",
+                        lambda _runner: [
+                            _row(target, Status.MANUAL.value)
+                        ],
+                    )
+                ]
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(
+            cli,
+            "GraphClient",
+            lambda *_args, **_kwargs: pytest.fail(
+                "ServiceNow Entra must not initialize Microsoft Graph."
+            ),
+        )
+        monkeypatch.setattr(
+            cli,
+            "authenticate_flightcheck",
+            lambda *_args, **_kwargs: ("token", tenant_id, None),
+        )
+        monkeypatch.setattr(
+            cli,
+            "AgentBuilderClient",
+            lambda *_args, **_kwargs: object(),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args(
+                    target,
+                    tmp_path,
+                    agent_slug=slug,
+                    quiet_auth=True,
+                )
+            )
+
         assert exc.value.code == 0
 
     def test_assigns_explicit_agent_slug_and_connect_config(
@@ -792,6 +1043,131 @@ class TestHermeticRun:
             "preferred_username": "maker@example.com",
         }
 
+    def test_configured_setup_account_does_not_enable_verification(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps({
+                "tenantId": "00000000-0000-0000-0000-000000001111",
+                "account": "maker@example.com",
+            }),
+            encoding="utf-8",
+        )
+        observed = {}
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            requires_config = True
+
+        class _Plan:
+            clients = frozenset({registry.GRAPH})
+            requires_config = True
+            requires_dataverse_endpoint = False
+            ordered_fns = [(
+                "Fake",
+                lambda _runner: [_row("FAKE-001", Status.PASSED.value)],
+            )]
+
+        class _Graph:
+            signed_in_username = "maker@example.com"
+
+            def __init__(self, tenant_id: str) -> None:
+                observed["tenant_id"] = tenant_id
+
+            def authenticate(self, preferred_username=None):
+                observed["preferred_username"] = preferred_username
+                return "token"
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(cli, "GraphClient", _Graph)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
+
+        assert exc.value.code == 0
+        assert observed == {
+            "tenant_id": "00000000-0000-0000-0000-000000001111",
+            "preferred_username": None,
+        }
+
+    def test_explicit_preferred_username_mismatch_blocks_checkpoint(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps({
+                "tenantId": "00000000-0000-0000-0000-000000001111",
+                "account": "maker@example.com",
+            }),
+            encoding="utf-8",
+        )
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            requires_config = True
+
+        class _Plan:
+            clients = frozenset({registry.GRAPH})
+            requires_config = True
+            requires_dataverse_endpoint = False
+            ordered_fns = [(
+                "Fake",
+                lambda runner: [
+                    _row(
+                        "FAKE-001",
+                        (
+                            Status.ERROR.value
+                            if runner.graph is None
+                            else Status.PASSED.value
+                        ),
+                    )
+                ],
+            )]
+
+        class _Graph:
+            signed_in_username = "other@example.com"
+
+            def __init__(self, _tenant_id: str) -> None:
+                pass
+
+            def authenticate(self, preferred_username=None):
+                assert preferred_username == "maker@example.com"
+                return "token"
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(cli, "GraphClient", _Graph)
+        monkeypatch.chdir(tmp_path)
+
+        args = _args("FAKE-001", tmp_path)
+        args.preferred_username = "maker@example.com"
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(args)
+
+        assert exc.value.code == 1
+
     def test_required_client_auth_failure_blocks_checkpoint(
         self,
         tmp_path: Path,
@@ -844,56 +1220,6 @@ class TestHermeticRun:
 
         assert exc.value.code == 1
 
-    def test_runtime_evidence_arguments_reach_single_checkpoint_runner(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        _silence_output: None,
-    ) -> None:
-        captured = {}
-
-        def _check(runner):
-            captured["label"] = runner.runtime_evidence_attempt_id
-            captured["start"] = runner.runtime_evidence_start
-            captured["end"] = runner.runtime_evidence_end
-            captured["flow_ids"] = runner.runtime_evidence_flow_ids
-            return [_row("WD-DA-RUN-001", Status.PASSED.value)]
-
-        class _Spec:
-            category_label = "Fake"
-            is_family = False
-
-        class _Plan:
-            clients = frozenset()
-            requires_config = False
-            requires_dataverse_endpoint = False
-
-            ordered_fns = [("Fake", _check)]
-
-        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
-        monkeypatch.setattr(
-            registry,
-            "transitive_requirements",
-            lambda _target: _Plan(),
-        )
-        monkeypatch.chdir(tmp_path)
-        args = _args("WD-DA-RUN-001", tmp_path)
-        args.runtime_evidence_attempt_id = "attempt-001"
-        args.runtime_evidence_start = "2026-01-01T00:00:00Z"
-        args.runtime_evidence_end = "2026-01-01T00:05:00Z"
-        args.runtime_evidence_flow_id = ["flow-1", "flow-2"]
-
-        with pytest.raises(SystemExit) as exc:
-            cli._run_single_checkpoint(args)
-
-        assert exc.value.code == 0
-        assert captured == {
-            "label": "attempt-001",
-            "start": "2026-01-01T00:00:00Z",
-            "end": "2026-01-01T00:05:00Z",
-            "flow_ids": ("flow-1", "flow-2"),
-        }
-
     def test_failed_row_exits_1(
         self,
         tmp_path: Path,
@@ -940,6 +1266,297 @@ class TestHermeticRun:
         with pytest.raises(SystemExit) as exc:
             cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
         assert exc.value.code == 1
+
+    @pytest.mark.parametrize(
+        "status",
+        [Status.SKIPPED.value, Status.NOT_CONFIGURED.value],
+    )
+    def test_compact_unresolved_row_emits_bounded_nonready_result(
+        self,
+        status: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        target = "FAKE-001"
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            provider = "servicenow-da-itsm"
+            profile = "itsm"
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+            ordered_fns = [
+                ("Fake", lambda _runner: [_row(target, status)])
+            ]
+
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps(
+                {
+                    "activeAgent": "employee-self-service-it",
+                    "environmentId": (
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                    "agents": [
+                        {
+                            "slug": "employee-self-service-it",
+                            "botId": (
+                                "00000000-0000-4000-8000-000000002222"
+                            ),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    target,
+                    tmp_path,
+                    agent_slug="employee-self-service-it",
+                    compact_result=True,
+                    invocation_id="repairable-nonready",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert payload["kind"] == "checkpoint-result"
+        assert payload["overall"] == "NOT_READY"
+        assert payload["exitCode"] == 0
+        assert payload["results"][0]["status"] == status
+        assert "CHECKPOINT-CONTRACT-UNRESOLVED" not in captured.out
+
+    def test_compact_required_client_failure_stays_typed_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps(
+                {
+                    "tenantId": "00000000-0000-0000-0000-000000001111",
+                    "activeAgent": "employee-self-service-it",
+                    "environmentId": (
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                    "agents": [
+                        {
+                            "slug": "employee-self-service-it",
+                            "botId": (
+                                "00000000-0000-4000-8000-000000002222"
+                            ),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            provider = "servicenow-da-itsm"
+            profile = "itsm"
+            requires_config = True
+
+        class _Plan:
+            clients = frozenset({registry.GRAPH})
+            requires_config = True
+            requires_dataverse_endpoint = False
+            ordered_fns = [
+                (
+                    "Fake",
+                    lambda _runner: [
+                        _row("FAKE-001", Status.NOT_CONFIGURED.value)
+                    ],
+                )
+            ]
+
+        class _Graph:
+            signed_in_username = None
+
+            def __init__(self, _tenant_id: str) -> None:
+                pass
+
+            def authenticate(self, preferred_username=None):
+                raise RuntimeError("sign-in failed")
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(cli, "GraphClient", _Graph)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    "FAKE-001",
+                    tmp_path,
+                    agent_slug="employee-self-service-it",
+                    compact_result=True,
+                    invocation_id="client-failure",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 1
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["kind"] == "checkpoint-error"
+        assert payload["error"]["exitCode"] == 1
+
+    def test_real_itsm_topics_compact_flow_preserves_repairable_nonready(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        import copy
+
+        from tests.flightcheck.checks.test_servicenow_da_itsm import (
+            _itsm_components,
+        )
+
+        environment_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        agent_id = "cccccccc-dddd-4eee-8fff-111111111111"
+        slug = "employee-self-service-it"
+        components = copy.deepcopy(_itsm_components())
+        for index, suffix in enumerate(
+            (
+                "ServiceNowITSMSystemReadExecution",
+                "ServiceNowITSMSystemWriteExecution",
+            )
+        ):
+            components["botComponentChanges"].append(
+                {
+                    "$kind": "BotComponentInsert",
+                    "component": {
+                        "$kind": "DialogComponent",
+                        "id": (
+                            "00000000-0000-4000-8000-"
+                            f"{9900 + index:012d}"
+                        ),
+                        "displayName": suffix,
+                        "schemaName": (
+                            "gptagent_copilotforemployeeselfserviceit."
+                            f"topic.{suffix}"
+                        ),
+                        "state": "Inactive",
+                        "status": "Inactive",
+                        "dialog": {"$kind": "TaskDialog"},
+                    },
+                }
+            )
+
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps(
+                {
+                    "activeAgent": "employee-self-service-hr",
+                    "account": "maker@example.test",
+                    "tenantId": "935884d7-bdee-469b-a461-fcc530a3ac83",
+                    "environmentId": environment_id,
+                    "ring": "prod",
+                    "powerPlatformApiEndpoint": (
+                        "https://aaaaaaaabbbb4ccc8dddeeeeeeeeee.ee."
+                        "environment.api.powerplatform.com"
+                    ),
+                    "agents": [
+                        {
+                            "slug": "employee-self-service-hr",
+                            "botId": (
+                                "00000000-0000-4000-8000-000000009998"
+                            ),
+                            "schemaName": (
+                                "gptagent_copilotforemployeeselfservicehr"
+                            ),
+                        },
+                        {
+                            "slug": slug,
+                            "botId": agent_id,
+                            "schemaName": (
+                                "gptagent_copilotforemployeeselfserviceit"
+                            ),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        config_before = (local / "config.json").read_bytes()
+
+        monkeypatch.setattr(
+            cli,
+            "authenticate_flightcheck",
+            lambda *_args, **_kwargs: (
+                "token",
+                "935884d7-bdee-469b-a461-fcc530a3ac83",
+                "maker@example.test",
+            ),
+        )
+
+        class _AgentBuilder:
+            def __init__(self, *_args, **_kwargs) -> None:
+                pass
+
+            def fetch_components(self, requested_id: str) -> dict:
+                assert requested_id == agent_id
+                return components
+
+        monkeypatch.setattr(cli, "AgentBuilderClient", _AgentBuilder)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    "SN-DA-ITSM-TOPICS-001",
+                    tmp_path,
+                    agent_slug=slug,
+                    compact_result=True,
+                    invocation_id="real-itsm-repairable",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["kind"] == "checkpoint-result"
+        assert payload["overall"] == "NOT_READY"
+        assert payload["exitCode"] == 0
+        assert payload["results"][0]["status"] == Status.NOT_CONFIGURED.value
+        assert payload["results"][0]["result"] == (
+            "13/15 ServiceNow ITSM topics are Active."
+        )
+        assert "Enable the inactive ITSM topics" in (
+            payload["results"][0]["remediation"]
+        )
+        assert payload["identity"]["agentSlug"] == slug
+        assert payload["identity"]["agentId"] == agent_id
+        assert (local / "config.json").read_bytes() == config_before
 
     def test_manual_row_adds_guided_warning_and_exits_0(
         self,
@@ -1003,6 +1620,270 @@ class TestHermeticRun:
         output = capsys.readouterr().out
         assert "Single Checkpoint" not in output
         assert "Running checkpoint" not in output
+
+    def test_compact_result_is_pure_stdout_and_writes_no_report(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        target = "FAKE-001"
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            provider = "servicenow-da-hrsd"
+            profile = "hrsd"
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+            ordered_fns = [
+                ("Fake", lambda _runner: [_row(target, Status.MANUAL.value)])
+            ]
+
+        config_dir = tmp_path / ".local"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "activeAgent": "employee-self-service-hr",
+                    "environmentId": (
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                    "agents": [
+                        {
+                            "slug": "employee-self-service-hr",
+                            "botId": (
+                                "00000000-0000-4000-8000-000000002222"
+                            ),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(
+            cli,
+            "save_results",
+            lambda *_args, **_kwargs: pytest.fail(
+                "compact checkpoint must not write reports"
+            ),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    target,
+                    tmp_path,
+                    compact_result=True,
+                    invocation_id="invocation-123",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert captured.out.count("\n") == 1
+        assert payload["kind"] == "checkpoint-result"
+        assert payload["target"] == target
+        assert payload["invocation"]["id"] == "invocation-123"
+        assert payload["results"][0]["status"] == Status.MANUAL.value
+        assert not (tmp_path / "out").exists()
+
+    def test_compact_servicenow_requires_explicit_selected_agent_before_auth(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(
+            cli,
+            "authenticate_flightcheck",
+            lambda *_args, **_kwargs: pytest.fail(
+                "missing selected agent must fail before auth"
+            ),
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    "SN-DA-ITSM-TOPICS-001",
+                    tmp_path,
+                    compact_result=True,
+                    invocation_id="missing-selected-agent",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 2
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert payload["kind"] == "checkpoint-error"
+        assert "exact selected --agent-slug" in payload["error"]["message"]
+        assert "refusing to fall back to activeAgent" in captured.err
+
+    @pytest.mark.parametrize(
+        ("target", "selected_slug"),
+        [
+            ("SN-DA-ITSM-TOPICS-001", "employee-self-service-hr"),
+            ("SN-DA-HRSD-TOPICS-001", "employee-self-service-it"),
+        ],
+    )
+    def test_compact_servicenow_rejects_wrong_selected_profile_before_auth(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        target: str,
+        selected_slug: str,
+    ) -> None:
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps(
+                {
+                    "activeAgent": "employee-self-service-hr",
+                    "agents": [
+                        {
+                            "slug": "employee-self-service-hr",
+                            "botId": (
+                                "00000000-0000-4000-8000-000000009998"
+                            ),
+                            "schemaName": (
+                                "gptagent_copilotforemployeeselfservicehr"
+                            ),
+                        },
+                        {
+                            "slug": "employee-self-service-it",
+                            "botId": (
+                                "00000000-0000-4000-8000-000000002222"
+                            ),
+                            "schemaName": (
+                                "gptagent_copilotforemployeeselfserviceit"
+                            ),
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            cli,
+            "authenticate_flightcheck",
+            lambda *_args, **_kwargs: pytest.fail(
+                "wrong profile must fail before auth"
+            ),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    target,
+                    tmp_path,
+                    agent_slug=selected_slug,
+                    compact_result=True,
+                    invocation_id="wrong-selected-profile",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 1
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["kind"] == "checkpoint-error"
+        assert "does not match" in payload["error"]["message"]
+
+    def test_compact_result_emits_typed_error_when_no_rows(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        target = "FAKE-EMPTY"
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            provider = "servicenow-da-hrsd"
+            profile = "hrsd"
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+            ordered_fns = [("Fake", lambda _runner: [])]
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    target,
+                    tmp_path,
+                    compact_result=True,
+                    invocation_id="invocation-123",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 1
+        payload = json.loads(capsys.readouterr().out)
+        assert payload == {
+            "schemaVersion": "flightcheck.lifecycle-checkpoint.v1",
+            "kind": "checkpoint-error",
+            "target": target,
+            "error": {
+                "type": "checkpoint-execution",
+                "message": (
+                    "Checkpoint execution ended before a result contract "
+                    "was produced. Review stderr."
+                ),
+                "exitCode": 1,
+            },
+        }
+
+    def test_compact_result_never_returns_success_without_contract(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(
+            cli,
+            "_run_single_checkpoint",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(SystemExit(0)),
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    "FAKE-001",
+                    tmp_path,
+                    compact_result=True,
+                    invocation_id="invocation-123",
+                )
+            )
+
+        assert exc.value.code == 1
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["kind"] == "checkpoint-error"
+        assert payload["error"]["exitCode"] == 1
 
 
 class TestCheckpointTelemetry:
@@ -1259,3 +2140,155 @@ class TestCheckpointAdkConnector:
             cli._run_single_checkpoint(_args("ENV-001", tmp_path, no_telemetry=False))
         assert captured["run_kwargs"]["connector"] == ""
         assert captured["result_kwargs"]["connector"] == ""
+
+
+_CONNECT_SKILLS = (
+    Path(__file__).resolve().parents[2]
+    / "solutions"
+    / "ess-maker-skills"
+    / "src"
+    / "skills"
+    / "connect"
+)
+
+
+def _lifecycle_checkpoint_ids(profile: str) -> tuple[str, ...]:
+    contract = (_CONNECT_SKILLS / f"servicenow-da-{profile}" / "contract.json").read_text(
+        encoding="utf-8"
+    )
+    return tuple(
+        sorted(set(re.findall(rf"SN-DA-{profile.upper()}-[A-Z0-9-]+-\d{{3}}", contract)))
+    )
+
+
+_SERVICENOW_LIFECYCLE_TARGETS = tuple(
+    (profile, target)
+    for profile in ("hrsd", "itsm")
+    for target in _lifecycle_checkpoint_ids(profile)
+)
+
+
+def test_servicenow_lifecycle_targets_cover_both_profiles() -> None:
+    targets = {target for _profile, target in _SERVICENOW_LIFECYCLE_TARGETS}
+    assert "SN-DA-HRSD-ADMIN-PREFLIGHT-001" in targets
+    assert "SN-DA-ITSM-ADMIN-PREFLIGHT-001" in targets
+    assert "SN-DA-ITSM-PLUGIN-001" not in targets
+    assert len(targets) >= 19
+
+
+@pytest.mark.parametrize(("profile", "target"), _SERVICENOW_LIFECYCLE_TARGETS)
+def test_servicenow_lifecycle_checkpoint_bypasses_da_planner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    profile: str,
+    target: str,
+) -> None:
+    slug = f"{profile}-agent"
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / "config.json").write_text(
+        json.dumps(
+            {
+                "tenantId": "935884d7-bdee-469b-a461-fcc530a3ac83",
+                "environmentId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                "activeAgent": slug,
+                "agents": [
+                    {
+                        "slug": slug,
+                        "botId": "cccccccc-dddd-4eee-8fff-111111111111",
+                        "schemaName": "gptagent_copilotforemployeeselfservice"
+                        + ("hr" if profile == "hrsd" else "it"),
+                        "releaseLine": "da",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    scopes = []
+    to_contract = cli.compact_checkpoint_result_to_dict
+
+    def _record_scope(result, **kwargs):
+        scopes.append(result.scope)
+        return to_contract(result, **kwargs)
+
+    monkeypatch.setattr(cli, "compact_checkpoint_result_to_dict", _record_scope)
+    monkeypatch.setattr(cli, "_print_prioritized_summary", lambda *a, **k: None)
+    manual_row = _row(target, Status.MANUAL.value)
+    monkeypatch.setattr(
+        registry,
+        "transitive_requirements",
+        lambda _target: type(
+            "_Plan",
+            (),
+            {
+                "clients": frozenset(),
+                "requires_config": False,
+                "requires_dataverse_endpoint": False,
+                "ordered_fns": [("Fake", lambda _runner: [manual_row])],
+            },
+        )(),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        cli._run_compact_checkpoint(
+            _args(
+                target,
+                tmp_path,
+                agent_slug=slug,
+                compact_result=True,
+                invocation_id="11111111-2222-4333-8444-555555555555",
+                quiet_auth=True,
+            )
+        )
+
+    assert exc.value.code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schemaVersion"] == "flightcheck.lifecycle-checkpoint.v1"
+    assert payload["target"] == target
+    assert payload["kind"] == "checkpoint-result"
+    assert payload["invocation"]["id"] == "11111111-2222-4333-8444-555555555555"
+    assert payload["identity"]["agentSlug"] == slug
+    assert scopes == [f"checkpoint:{target}"]
+
+
+def test_servicenow_inventory_checkpoint_still_uses_da_planner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flightcheck import maker_diagnostics
+
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / "config.json").write_text(
+        json.dumps(
+            {
+                "activeAgent": "hr-agent",
+                "agents": [
+                    {
+                        "slug": "hr-agent",
+                        "botId": "cccccccc-dddd-4eee-8fff-111111111111",
+                        "schemaName": "gptagent_copilotforemployeeselfservicehr",
+                        "releaseLine": "da",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _planner(*_args, **_kwargs):
+        raise ValueError("planner reached")
+
+    monkeypatch.setattr(maker_diagnostics, "run_maker_diagnostics", _planner)
+    monkeypatch.chdir(tmp_path)
+    args = _args("SN-DA-AUTH-001", tmp_path, agent_slug="hr-agent")
+    args.profile = None
+    args.runtime_reachability = False
+    args.alm_import_probe = False
+
+    with pytest.raises(SystemExit) as exc:
+        cli._run_single_checkpoint(args)
+
+    assert exc.value.code == 2

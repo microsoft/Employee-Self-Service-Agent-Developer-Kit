@@ -2,8 +2,12 @@
 
 # ESS Foundation Setup
 
-Every **Message** block is exact user-facing text. Do not expose internal step IDs,
-checkpoint IDs, state paths, or tool narration.
+Render every **Message** block in this file and every delegated setup file
+using its fixed wording and structure. Replace documented placeholders with
+resolved evidence and send only the block contents. Surrounding instructions
+remain internal.
+
+Do not expose internal step IDs, checkpoint IDs, state paths, or tool narration.
 
 Follow `src/reference/ui-formatting-guidelines.md` for every user-facing
 instruction in this flow. Resolve its examples with the actual environment,
@@ -13,6 +17,15 @@ Read `src/skills/foundation-setup/permission-guidance.md` whenever setup opens
 Microsoft authorization, encounters denied access, names a Power Platform role,
 or hands an action to an administrator. That file owns the operation-specific
 role language and administrator handoff.
+
+When Planner hands off the maker's assigned setup task because they asked in
+natural language to start it ("start setup", "start my setup task"), treat the
+request exactly like `/setup`: continue directly and never ask the maker to
+retype it as a command. Retain the assigned task, plan role, and the plan's
+target environment through setup so Planner can return to that task afterward.
+A plan assignment is not proof of access: keep the normal sign-in and
+environment-access checks, and use the permission guidance above to explain a
+specific missing permission rather than asking which role the maker holds.
 
 ## Setup state sources
 
@@ -40,7 +53,7 @@ defined maker interaction.
 
 ## Standard choices and ad hoc recovery
 
-Choice lists define the standard maker-facing UX for the current decision. Render the listed choices in the documented order with their labels unchanged, initially unselected, and with custom entry disabled inside the interactive control.
+Choice lists define the standard maker-facing UX for the current decision. Render the listed choices in the documented order with their labels unchanged and initially unselected.
 
 The choice list is not an exhaustive recovery contract. If the maker instead types another recovery action in chat, treat that message as current intent and compose the available bounded operations when the requested action can be performed. Preserve existing evidence, obtain the existing confirmation for consequential mutations, and let authoritative service operations validate remote state. Do not reject a recovery solely because it is absent from the presented choices. When the typed intent is ambiguous, explain what must be resolved and present the standard choices again.
 
@@ -124,7 +137,7 @@ Setup does not automatically:
 - publish the agent;
 - make it available to employees;
 - promote it to another environment;
-- configure an HR or IT system integration;
+- configure an external HR or IT system;
 - allocate capacity or grant permissions; or
 - perform administrator actions on your behalf.
 
@@ -171,7 +184,7 @@ The checklist is a view, not another state model. It tracks local workspace setu
 - `connectionStatus: workspace-ready` with canonical workspace evidence and `SETUP-07` in state `done` completes local workspace materialization, independently of `connectReady`;
 - reviewing the factual completion report completes the handoff stage in the conversation and does not write another readiness marker.
 
-Before canonical setup begins, mark the first unresolved checklist stage with 🔄 and leave later stages marked ⬜. Mark a checklist stage ⛔ only when the operation named by that stage is itself blocked, and preserve its failure causes in the response. A blocked capacity, connection, or content FlightCheck belongs in the runtime-readiness table and does not change an already completed checklist marker. Do not mark a stage complete from a skipped internal setup record.
+Before canonical setup begins, mark the first unresolved checklist stage with 🔄 and leave later stages marked ⬜. Mark a checklist stage ⛔ only when the operation named by that stage is itself blocked, and preserve its failure causes in the response. A blocked access, connection, or content FlightCheck belongs in the runtime-readiness table and does not change an already completed checklist marker. Do not mark a stage complete from a skipped internal setup record.
 
 ## Choose the sign-in account
 
@@ -184,12 +197,22 @@ python scripts/setup_existing_da.py cached-accounts
 Parse `DA_AGENTBUILDER_ACCOUNTS_JSON:`. This is a local read and does not authenticate.
 
 - When no cached account is returned, do not ask an account question. Use the Microsoft account picker on the first command that can authenticate.
-- When exactly one cached account `{CACHED_ACCOUNT}` is returned, ask **Continue with {CACHED_ACCOUNT}?** and present **Continue** and **Use a different user** as the standard choices, with no preselected choice and custom entry disabled inside the control. **Continue** retains that account. **Use a different user** uses the Microsoft account picker on the first command that can authenticate.
-- When two or more cached accounts are returned, ask **Which Microsoft account should setup use to access the target Power Platform environment?** Explain that this Microsoft sign-in is separate from GitHub/Copilot sign-in. Build the standard choices in this order: **Use the Microsoft account picker** first, followed by every cached sign-in name, then **Help me decide**. Do not preselect or recommend an option. Disable custom entry inside the control.
+- When exactly one cached account `{CACHED_ACCOUNT}` is returned, ask **Continue with {CACHED_ACCOUNT}?** and present **Continue** and **Use a different user** as the standard choices, with no preselected choice. **Continue** retains that account. **Use a different user** uses the Microsoft account picker on the first command that can authenticate.
+- When two or more cached accounts are returned, ask **Which Microsoft account should setup use to access the target Power Platform environment?** Explain that this Microsoft sign-in is separate from GitHub/Copilot sign-in. Build the standard choices in this order: **Use the Microsoft account picker** first, followed by every cached sign-in name, then **Help me decide**. Do not preselect or recommend an option.
 
 For **Help me decide** on the multiple-account surface, follow the shared contract above. Establish whether the maker is accessing an existing agent, creating a fresh agent, or only discovering environments. Explain that an existing-agent path needs the login that created the exact agent, a fresh-agent path needs a login whose environment permissions allow agent creation, and environment discovery needs a login that can access the target environment. Recommend only an account the maker identifies as satisfying the applicable reason; otherwise recommend the Microsoft account picker.
 
 Retain a confirmed cached sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, `setup_alm_import.py`, and `reconcile_setup_agent.py` command in this invocation. Never infer a corp account.
+
+Every authenticated setup command must return and verify the actual non-secret
+sign-in name. A login hint is not identity proof. When the returned account is
+missing or differs from `{SETUP_ACCOUNT}`, stop with the exact authentication
+error instead of continuing under an unknown account. Successful workspace
+attachment persists the verified account with the canonical environment and
+operational config so `/connect` and its FlightChecks can reuse and reverify
+that identity without silently switching accounts.
+
+Pass `--preferred-username "{SETUP_ACCOUNT}"` to every setup-owned `flightcheck/cli.py` command, including retries and rechecks. Use the current `{SETUP_ACCOUNT}` after any account change.
 
 When no cached account exists, or the maker selects **Use a different user** or **Use the Microsoft account picker**, omit `--account` and append `--select-account` only to the first read-only command that can authenticate. Parse `DA_AGENTBUILDER_AUTH_JSON:` from that command's output, retain its non-empty `account` as `{SETUP_ACCOUNT}`, and use `--account "{SETUP_ACCOUNT}"` for every later command in this invocation. The picker establishes the identity once; later commands reuse its cached token and sign-in name.
 
@@ -201,7 +224,21 @@ maker explicitly named, follow the corresponding recovery under **Microsoft
 authorization** in `permission-guidance.md` before retaining an account or
 using the read-only operation result.
 
-If the first authenticated command succeeds but does not return an account identity, run `setup_existing_da.py cached-accounts` again. Retain its sole account when exactly one is present. When no single identity can be established, state that setup could not retain the selected sign-in and rerun the Microsoft account picker before continuing.
+If the first authenticated command does not return an account identity, do not
+use cached-account inventory as proof of who authenticated. Preserve the exact
+identity-verification error and offer one normal Microsoft account-picker
+retry. Continue only after the token result returns the actual non-secret
+account identity.
+
+Run this local operation once after the first authenticated account is established as `{SETUP_ACCOUNT}`, before the next setup operation:
+
+```text
+python scripts/setup_existing_da.py seed-shared-cache --account "{SETUP_ACCOUNT}"
+```
+
+Parse `DA_AUTH_CACHE_SEED_JSON:`. `copied` means the workspace's AgentBuilder cache was copied into a new shared authentication cache. `already-exists` means the existing shared cache was left unchanged. The operation performs no sign-in. No later account change repeats the copy; each cache is maintained by the commands that use it.
+
+On failure, stop before the next setup operation and explain the reported problem, including any partial-completion note. Keep `{SETUP_ACCOUNT}` selected. Resolve the reported local cache problem before rerunning this operation. A later command may still request Microsoft authorization for its own application or permissions.
 
 Account selection does not prove that the maker holds a particular administrator role. Let each service operation validate its own permissions and preserve its specific authorization error instead of rejecting the selected account through a blanket local admin check.
 
@@ -417,7 +454,7 @@ single-selection control, in runtime readiness order. Across those actions,
 append **(Recommended)** to exactly one action: the action owned by the first
 unresolved row. Leave every other action untagged. After adding every static
 and dynamic action, append **Exit setup** as the final secondary choice. Leave
-every choice initially unselected and disable custom entry. Selecting **Exit
+every choice initially unselected. Selecting **Exit
 setup** uses the incomplete **Exit setup** message under **Start**. Do not
 render the ready completion choices, durable completion snapshot, or general
 post-setup capabilities. The global router's explicit
@@ -433,11 +470,11 @@ continuation:
    `/landing-page` at its first decision surface. Do not render the setup
    terminal choice control.
 2. When the current request explicitly states `/connect` as the supported next
-   goal, recommend **Add or change an integration**.
+   goal, recommend **Add or change an external HR or IT system**.
 3. Otherwise, when authoritative product-specific evidence shows that an
    applicable supported integration is configured, render the setup terminal
    choice control without a recommended action.
-4. Otherwise, recommend **Add or change an integration**.
+4. Otherwise, recommend **Add or change an external HR or IT system**.
 
 Do not treat **Connections: Not required**, an aggregate diagnostic row, or the
 presence or absence of native logical connector references as authoritative
@@ -449,28 +486,28 @@ recommendation reflects the absence of completion evidence; it does not claim
 that an integration is missing or broken.
 
 Before the choice control, render the applicable maker-facing recommendation
-only when **Add or change an integration** is recommended:
+only when **Add or change an external HR or IT system** is recommended:
 
 - For the default integration recommendation, say: **I recommend Add or change
-  an integration so this agent can communicate with your HR or IT systems.
-  Setup did not find authoritative evidence that an applicable integration is
+  an external HR or IT system so this agent can communicate with the system
+  your organization uses. Setup did not find authoritative evidence that an applicable external system is
   configured.**
 - For an explicitly requested `/connect` action, state that it matches what the
-  maker asked to do next and explain that integrations let the agent
-  communicate with HR or IT systems.
+  maker asked to do next and explain that this connects the agent to the
+  external HR or IT system it needs to use.
 
 Then present these choices in one host interactive single-selection control:
 
-- **Add or change an integration{CONNECT_RECOMMENDATION_SUFFIX}**
+- **Add or change an external HR or IT system{CONNECT_RECOMMENDATION_SUFFIX}**
 - **Switch to another configured agent** -- when the latest live agent list contains at least one selectable identity other than the active agent.
 - **Set up another agent in this environment**
 - **Exit setup**
 
 Set `{CONNECT_RECOMMENDATION_SUFFIX}` to ` (Recommended)` only when **Add or
-change an integration** is recommended; otherwise set it to an empty string.
+change an external HR or IT system** is recommended; otherwise set it to an empty string.
 Omit **Switch to another configured agent** when it is unavailable. Leave every
-choice initially unselected, disable custom entry, and always render **Exit
-setup** after every static and dynamic choice. **Add or change an integration**
+choice initially unselected, and always render **Exit
+setup** after every static and dynamic choice. **Add or change an external HR or IT system**
 begins `/connect` at its first decision surface. **Exit setup** acknowledges the
 displayed results and renders a durable completion snapshot as the final chat
 message without rerunning checks. Reuse the exact agent link, final readiness
@@ -493,15 +530,7 @@ Here's your ESS agent setup:
 
 > **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
 
-### Runtime readiness
-
-| Check                | Status                         | Details                                 |
-| -------------------- | ------------------------------ | --------------------------------------- |
-| Agent access         | {agent access status}          | {agent access evidence summary}         |
-| Environment capacity | {environment capacity status}  | {environment capacity evidence summary} |
-| Connections          | {connections status}           | {connections evidence summary}          |
-| Agent content        | {agent content status}         | {agent content evidence summary}        |
-| **Overall**          | **{overall readiness status}** | **{maker-facing readiness summary}**    |
+{FINAL_RUNTIME_READINESS_BLOCK}
 
 {APPLICABLE_LOCAL_CLEANUP_BLOCKS}
 
@@ -514,6 +543,12 @@ Next steps:
 **End message.**
 
 Then end the request.
+
+Replace `{FINAL_RUNTIME_READINESS_BLOCK}` with the complete `### Runtime
+readiness` block already rendered in the final handoff during this invocation.
+Reuse that block verbatim, including the four rows, statuses, evidence summaries,
+observation times, and Overall verdict. Do not regenerate the table from
+placeholders or read state again.
 
 Replace `{APPLICABLE_LOCAL_CLEANUP_BLOCKS}` with the body of every unresolved
 local-cleanup block from the detailed handoff, in the same order.
@@ -533,17 +568,17 @@ used for the ready choice control. Render exactly one of these non-interactive
 command lists, with the recommended command first:
 
 - For the default integration recommendation:
-  - Run `/connect` **(Recommended)** to add or change an integration so this agent can communicate with your HR or IT systems. Setup did not find authoritative evidence that an applicable integration is configured.
+  - Run `/connect` **(Recommended)** to add or change an external HR or IT system. Setup did not find authoritative evidence that an applicable external system is configured.
     {SUPPORTED_INTEGRATION_SHORTCUTS}
   - Run `/landing-page` to configure the branding and content employees see.
   - Type `/menu` to see all available capabilities.
 - For the evidence-based landing-page recommendation:
-  - Run `/landing-page` **(Recommended)** to configure the branding and content employees see. An applicable integration is already configured, so this is the next useful customization step.
-  - Run `/connect` to add or change an integration.
+  - Run `/landing-page` **(Recommended)** to configure the branding and content employees see. An applicable external HR or IT system is already configured, so this is the next useful customization step.
+  - Run `/connect` to add or change an external HR or IT system.
     {SUPPORTED_INTEGRATION_SHORTCUTS}
   - Type `/menu` to see all available capabilities.
 - For an explicitly requested `/connect` action:
-  - Run `/connect` **(Recommended)** to add or change an integration. This matches what you asked to do next, and integrations let this agent communicate with your HR or IT systems.
+  - Run `/connect` **(Recommended)** to add or change an external HR or IT system. This matches what you asked to do next.
     {SUPPORTED_INTEGRATION_SHORTCUTS}
   - Run `/landing-page` to configure the branding and content employees see.
   - Type `/menu` to see all available capabilities.
@@ -562,6 +597,58 @@ case, and replace or omit `{SUPPORTED_INTEGRATION_SHORTCUTS}` under the
 its first agent-setup decision surface with the recorded environment
 and ring. Every other selected follow-up begins at that follow-up's first
 decision surface rather than rendering the durable completion snapshot.
+
+## Prepare the workspace for an integration
+
+An explicit integration request may invoke Setup automatically when its entry
+prerequisites are missing. This is an entry-only prerequisite handoff, not
+a return from the middle or completion of an integration lifecycle. Retain
+the caller's selected integration, original request, supplied target and
+realm intent, and any verified maker in this invocation.
+
+Check for `.local/config.json` and canonical `.local/setup/config.json` before
+reading them. If `.local` or either file is absent, or a read reports
+`Path does not exist`, treat it as missing preparation and continue normal
+Setup target resolution in this invocation. Do not show the global
+setup-required welcome message, ask the maker to type `/setup`, retry a
+missing-file read, or recreate deleted metadata by guessing old state.
+Unreadable or malformed files still require supported state recovery.
+Resolve a known workspace target by `activeAgent`, schema version `4`, and canonical
+`agent.workspace_slug`. Preserve the recorded workspace Dev identity; do not
+replace it with a promoted Test or Production integration target.
+
+If canonical workspace evidence is complete and `steps.SETUP-07.state: "done"`,
+return immediately to the caller without rerunning setup or showing the Start
+menu, even when `connect_ready` is false. Otherwise perform Setup's normal
+target resolution, access verification, and workspace materialization. For a
+known incomplete target, treat the request as **Resume setup for this agent**
+without asking the maker to select that option. Reuse a retained verified
+maker rather than repeating account selection. If no target or verified
+sign-in is known, use the normal setup questions and authorization controls.
+An integration request does not authorize silently creating or selecting an
+agent, resetting a workspace, installing software, or changing tenants.
+
+Preserve existing setup progress and local edits. Follow normal approval,
+conflicting-workspace, supported-product, and state-recovery rules. A changed,
+expired, or mismatched sign-in still follows Microsoft authorization recovery
+in `permission-guidance.md`; never silently switch account or tenant.
+
+After successful workspace materialization, verify `schema_version: 4`,
+canonical workspace evidence, and `steps.SETUP-07.state: "done"` for the
+resolved workspace agent. Return to the caller's entry point in this same
+invocation, carrying the verified target and maker, without asking the maker
+to repeat Connect or choose it from the post-setup menu. This preparation
+return takes precedence over the usual post-attachment readiness-check and
+terminal-choice handoff. Do not wait for `connect_ready: true`, because
+integration connections may be needed to resolve runtime readiness. Do not
+claim that overall setup readiness passed or mark unfinished records done.
+Carry any unresolved local-cleanup warning into the return.
+
+If preparation is blocked, cancelled, or exited, retain that evidence and the
+caller's request but do not start the integration. Do not return success,
+repeat the automatic handoff, or bypass a missing prerequisite. Ordinary
+standalone `/setup` still runs its full readiness and completion behavior;
+Setup does not proactively launch an integration without a retained caller.
 
 ## Start
 
@@ -601,7 +688,7 @@ setup**:
 - **What does setup do?**
 
 Use the same recommendation suffixes and maker-facing recommendation. Leave
-every choice initially unselected, disable custom entry, and keep **Exit setup**
+every choice initially unselected, and keep **Exit setup**
 as the final choice. Selecting **Exit setup** uses the ready exit message below.
 
 For a usable local target whose canonical agent record is incomplete or blocked, render the maker-facing progress checklist and ask:
@@ -619,7 +706,7 @@ single-selection control:
 - **What does setup do?**
 - **Exit setup**
 
-Leave every choice initially unselected, disable custom entry, and keep **Exit
+Leave every choice initially unselected, and keep **Exit
 setup** as the final choice. Follow the corresponding shared workspace choice
 above. For **Create and open a new workspace**, use the location-selection and
 worktree handoff defined under **Work with both environments side by side**,
@@ -680,7 +767,12 @@ not explicitly selected package import, infer its environment ID, agent ID,
 service ring, and optional `agentBackend` ordering hint. When the URL does not
 identify the ring, use **Resolve the service ring** in
 `src/skills/foundation-setup/da-environment-target.md` exactly. Ask only when
-the environment ID or agent ID is unclear. Complete the selected-agent
+the environment ID or agent ID is unclear. If this invocation has not already
+received the environment's service-provided display name, run `list-environments`
+for the resolved ring and retain the exact matching environment record's `name`
+as `{ENVIRONMENT_DISPLAY_NAME}`. A failed or missing exact match does not
+invalidate the URL target; leave the display name unavailable rather than
+inferring it. Complete the selected-agent
 product-line reconciliation before running:
 
 ```text
@@ -750,6 +842,24 @@ Resolve the environment label from known context. This question confirms the sel
 - For **Help me decide**, follow the shared contract under **Standard choices and ad hoc recovery**. Establish whether an agent already exists in this environment whose current content should become the workspace's authoring source, or whether the maker wants a separate agent created from an available agent template. Include the creator-login requirement for an existing agent and the creation-permission requirement for a fresh agent in the comparison.
 - For **Cancel setup**, make no changes and stop.
 
+Under the conditions of the generic agent question below, first run this
+read-only rollout-plan check without narrating it:
+
+```text
+python scripts/planner/cli.py setup-status
+```
+
+When it reports a non-empty `environment.environmentId`, the maker's saved
+rollout plan identifies the target environment. Retain that ID, use
+`environment.displayName` as the environment label, and resolve the ring
+through **Resolve the service ring** in
+`src/skills/foundation-setup/da-environment-target.md`; a plan environment ID
+alone uses `prod` unless the current request says otherwise. Treat it as the
+resolved target for the workspace comparison above, then continue with the
+identified-environment choices above. Never create or select a different
+environment for that plan. When the check fails or reports no plan
+environment, continue below and keep its `hasPlan` value.
+
 When the request does not identify an agent or environment, no usable local
 target exists, and no incomplete canonical setup record must resume, render
 the **What does setup do?** orientation above, then ask:
@@ -760,9 +870,10 @@ Present these standard choices:
 
 - **Yes, I have an agent** — ask for its Microsoft Copilot Studio URL.
 - **No, I need a fresh agent** — follow `src/skills/foundation-setup/da-mos-starter.md`.
+- **Plan my ESS rollout first** — only when the plan check found no saved plan. Planning precedes setup rather than following it: end this setup request, then read `src/skills/planner/SKILL.md` and follow it.
 - **Help me decide**
 
-For **Help me decide**, follow the shared contract under **Standard choices and ad hoc recovery**. Establish whether anyone has already created an ESS agent whose content must be preserved, whether the maker has its Microsoft Copilot Studio URL and creator login, or whether the intended outcome is a new agent from an available agent template.
+For **Help me decide**, follow the shared contract under **Standard choices and ad hoc recovery**. Establish whether anyone has already created an ESS agent whose content must be preserved, whether the maker has its Microsoft Copilot Studio URL and creator login, or whether the intended outcome is a new agent from an available agent template. When **Plan my ESS rollout first** is offered, also establish whether the rollout's scenarios, owners, or target environment are still undecided.
 
 Do not run Dataverse foundation or onboarding playbooks. Begin a downstream
 playbook only when a maker whose setup is complete selects its documented ready

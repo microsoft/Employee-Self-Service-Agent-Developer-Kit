@@ -74,4 +74,7 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from adk_telemetry import script_error_boundary
+
+    with script_error_boundary("strip_debug"):
+        raise SystemExit(main())

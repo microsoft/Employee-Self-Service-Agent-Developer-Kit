@@ -20,7 +20,12 @@ def authentication_plan() -> list[dict[str, Any]]:
         {
             "store": "pac",
             "role": "Power Platform Environment Maker",
-            "purpose": "Install the Workday package and inspect connections",
+            "purpose": "Install the Workday package and inspect connections as a fallback",
+        },
+        {
+            "store": "agentbuilder-msal",
+            "role": "Power Platform Environment Maker",
+            "purpose": "Inspect connections through the read-only Power Platform API",
         },
         {
             "store": "dataverse-msal",

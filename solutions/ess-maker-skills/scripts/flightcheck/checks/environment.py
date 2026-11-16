@@ -19,7 +19,7 @@ from ._dlp_utils import iter_effective_policies
 from ._maker_urls import maker_solutions_url
 from .licensing import (
     _CAPACITY_DOC,
-    _env_mcs_allocation_observation,
+    _env_mcs_entitlement_observation,
     classify_copilot_studio_capacity,
 )
 from auth import query_all, dataverse_get, AuthExpiredError  # scripts/auth.py, on path via cli.py
@@ -507,8 +507,8 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
     it asks only whether the environment has any dedicated Copilot Studio
     capacity (``population=None``).
 
-    A known zero allocation requires an explicit maker override before
-    foundation readiness can complete. When the allocation cannot be read, the
+    A known zero entitlement requires an explicit maker override before
+    foundation readiness can complete. When the entitlement cannot be read, the
     row requires explicit manual confirmation rather than presenting the
     unknown result as a known failure.
     """
@@ -518,7 +518,7 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
             "Environment ID is unavailable, so Copilot Studio capacity could not be verified.",
             "Verify the environment identity, then rerun this checkpoint.")]
 
-    allocated, evidence = _env_mcs_allocation_observation(
+    allocated, evidence = _env_mcs_entitlement_observation(
         getattr(runner, "powerplatform", None),
         env_id,
     )
@@ -531,10 +531,21 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
         outcome = evidence.get("outcome")
         if outcome == "denied-access":
             detail = "access was denied"
+        elif outcome == "not-found":
+            detail = "the environment entitlement resource was not found"
+        elif outcome == "missing-entitlement":
+            detail = "the service returned no MCSMessages entitlement"
+        elif outcome == "ambiguous-entitlement":
+            detail = "the service returned multiple MCSMessages entitlements"
         elif outcome == "service-error":
             detail = "the service returned an error"
         elif outcome == "invalid-response":
-            detail = "the service response contained an invalid allocation value"
+            detail = (
+                "the service response contained an invalid entitlement value"
+                if evidence.get("errorType")
+                == "InvalidEntitlementAllocationValue"
+                else "the service returned an invalid entitlement response"
+            )
         else:
             detail = "the required API capability was unavailable"
         return [_env_capacity(Status.MANUAL.value,

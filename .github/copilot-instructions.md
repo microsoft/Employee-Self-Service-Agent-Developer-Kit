@@ -1,62 +1,172 @@
 # Repo-root Copilot instructions
 
-If GitHub Copilot is reading this file, the user has opened the **top-level repo folder** (`Employee-Self-Service-Agent-Developer-Kit/`) as their VS Code workspace root.
+## Determine the active workspace
 
-This repo is a **monorepo of solutions**. The actual tooling for each solution — slash-commands, agent personas, Python scripts — lives inside individual solution folders under `solutions/` (today the canonical one is `solutions/ess-maker-skills/`; more may be added over time), NOT at this repo root. Slash-commands typed against the repo root will not resolve to any prompt and Copilot Chat will treat them as plain text.
+At the beginning of each conversation, first check whether both of these direct
+Maker Kit paths are available:
 
-## Do not load nested solution-level instructions from here
+- `.github/prompts/` contains at least one `*.prompt.md` file.
+- `src/skills/` exists.
 
-Even when responding to a normal coding request at the repo root, do **not** read or follow `solutions/ess-maker-skills/.github/copilot-instructions.md` (or the equivalent file in any future sibling solution). Those files expect to be the active workspace's instructions and contain setup gates that misfire when loaded out of context (e.g. they will force-trigger a "run `/setup`" welcome message even when the user is just editing a CI workflow at the repo root). Treat solution-level instruction files as opaque from this workspace.
+When that direct pair is available, the Maker Kit is already the active
+workspace. Do not apply the folder-selection guidance in this file. Continue
+with the active workspace instructions instead.
 
-## Default behavior
+Otherwise, check whether both of these nested Maker Kit paths are available:
 
-For everything that isn't an attempt to use the kit (general questions, code exploration, README lookups, "what is this repo?", build/test help on the repo's Python scripts, etc.) **behave normally**. You are a general-purpose coding assistant working in a monorepo. Help the user with whatever they're actually asking about — there is no kit persona to load here and no setup gate to enforce.
+- `solutions/ess-maker-skills/.github/prompts/` contains at least one
+  `*.prompt.md` file.
+- `solutions/ess-maker-skills/src/skills/` exists.
 
-## When to fire the "wrong folder" redirect
+When that pair is unavailable, do not apply the Maker Kit folder-routing
+instructions below. Route the request as normal.
 
-**Only** show the redirect message below when the user is clearly trying to invoke the ESS Maker Kit and will be blocked by the wrong-folder problem. Concretely, fire the redirect if either of the following is true:
+When that pair is available:
 
-1. **Explicit kit slash-command.** The user's message starts with (or is exactly) one of the kit's slash-commands:
-   - `/setup`
-   - `/landing-page`
-   - `/create`
-   - `/connect`
-   - `/connect-workday`
-   - `/delete`
-   - `/evaluate`
-   - `/run`
-   - `/scan`
-   - `/update`
-   - `/push`
-   - `/menu`
-   - `/troubleshoot`
-   - `/flightcheck`
+- When the request begins with `/`, derive its prompt filename from the command
+  name. For example, `/flightcheck` maps to `flightcheck.prompt.md`. Check that
+  candidate directly in the nested prompt catalog.
+- For natural-language requests, or when the direct command candidate does not
+  exist, list the prompt filenames in the nested catalog and use them to match
+  the operation intent.
+- When the filename match remains unclear, read the `description` frontmatter
+  field from likely candidate prompts.
+- Provide the folder-selection guidance when the request matches a discovered
+  Maker Kit operation.
+- Also provide the folder-selection guidance when the user explicitly asks to
+  use, open, or run the ESS Maker Kit as a maker experience.
 
-2. **Intent hint — natural-language equivalent.** The user isn't typing a slash-command but is unambiguously asking to *run* the kit from this workspace. Examples:
-   - "How do I set up the kit?" / "How do I run setup?" / "Start the ESS Maker Kit"
-   - "Run flightcheck" / "Run the readiness check on my agent"
-   - "Create a topic" / "Connect ServiceNow" / "Scan my agent for errors" — when phrased as a request to *do it now* in this workspace, not as a general "how does this work?" question.
+## Folder-selection recovery
 
-   When in doubt, prefer the default behavior (answer normally) over firing the redirect. A user asking "what does /flightcheck do?" is asking a documentation question — answer it from the README and `solutions/ess-maker-skills/` files; do **not** redirect.
+When folder-selection guidance applies, do not execute the Maker Kit operation
+in the repository-root chat. Preserve the user's original request without
+adding, removing, or rewriting any text.
 
-## The redirect message
+First provide this manual guidance:
 
-When (and only when) the trigger conditions above are met, respond with **only** this message and nothing else:
-
-> Hey! It looks like you opened the top-level repo folder in VS Code, but the kit's slash-commands live inside a specific solution folder.
+> ESS Maker Kit agent operations are available from the
+> `solutions/ess-maker-skills` workspace.
 >
-> **To use the ESS Maker Kit:**
+> **Open the Maker Kit workspace manually:**
 >
-> 1. Click `File` → `Open Folder…` (or press `Ctrl+K Ctrl+O`)
-> 2. Navigate **inside** this folder, then **into** `solutions`, and select `ess-maker-skills`
-> 3. Click `Select Folder`
-> 4. VS Code will reopen with the kit loaded
-> 5. Type your command again (for example `/setup` or `/run`) — it will work this time
->
-> See the [README](README.md) for the full getting-started walkthrough.
->
-> Just looking for example topics to copy rather than the runnable kit? Browse the `samples/` folder at the repo root. That's reference content (topics, prompts, sample data), not a slash-command workspace.
+> 1. In VS Code, select `File` → `Open Folder…` or press `Ctrl+K Ctrl+O`.
+> 2. Select `solutions/ess-maker-skills`.
+> 3. Click `Select Folder`.
+> 4. After VS Code reopens, start a new Copilot chat and enter your prompt
+>    again.
 
-When firing the redirect, do not also try to execute the user's request from this folder — the kit persona, skills, and scripts are not loaded here, so any attempt would run against the wrong workspace.
+Then send:
 
-If the user explicitly asks "why doesn't this work?" or "what is this repo?", you may briefly explain that this is a monorepo and direct them to open the solution folder, then include the steps above.
+> **Want me to try?**
+>
+> I can attempt to open the Maker Kit in a new VS Code window and send your
+> prompt to a fresh chat. This requires the new Maker Kit window to remain
+> focused until the attempt finishes. Do not switch to another VS Code window
+> during the attempt.
+>
+> This chat will remain available until you confirm that the prompt arrived.
+
+After sending that message, call `ask_user` with this exact form shape:
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "recoveryAction": {
+        "type": "string",
+        "title": "ADK Maker Kit Recovery",
+        "description": "Choose how to continue",
+        "oneOf": [
+          {
+            "const": "attempt",
+            "title": "Attempt to open the Maker Kit"
+          },
+          {
+            "const": "manual",
+            "title": "I’ll open it manually"
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+If the user chooses **I’ll open it manually**, declines, or skips the
+confirmation, do not launch VS Code. The manual steps have already been
+provided.
+
+If the user chooses **Attempt to open the Maker Kit**:
+
+1. Resolve `solutions/ess-maker-skills` to an absolute path from the active
+   repository root. Verify the direct Maker Kit markers listed above exist at
+   that path.
+2. Show `Opening the Maker Kit workspace` while running
+   `code --new-window "<absolute Maker Kit path>"`. Wait for that command to
+   complete successfully, then wait for the newly opened Maker Kit window to
+   finish loading. Do not run the two commands concurrently.
+3. Show `Keep the new Maker Kit window focused`, then use the Maker Kit folder
+   as the working directory and run
+   `code chat --reuse-window "<original request>"` while showing
+   `Sending your prompt to a fresh Maker Kit chat`. Pass the preserved request
+   as one prompt argument with shell-appropriate escaping. Do not add guard
+   text, setup instructions, or other framing to the prompt.
+4. After the chat command succeeds, respond with only:
+
+   > VS Code accepted your prompt. Check the new Maker Kit window.
+
+5. Keep the current chat available and call `ask_user` with this exact form
+   shape:
+
+   ```json
+   {
+     "message": "",
+     "requestedSchema": {
+       "properties": {
+         "promptResult": {
+           "type": "string",
+           "title": "Confirm prompt",
+           "description": "Did your prompt appear in a fresh Maker Kit chat?",
+           "oneOf": [
+             {
+               "const": "confirmed",
+               "title": "Yes, continue there"
+             },
+             {
+               "const": "retry",
+               "title": "No, try again"
+             },
+             {
+               "const": "manual",
+               "title": "No, let me handle it manually"
+             }
+           ]
+         }
+       }
+     }
+   }
+   ```
+
+6. If the user chooses **Yes, continue there**, respond with only:
+
+   > Continue in the Maker Kit window.
+
+   Then stop processing the request in the current chat. The new Maker Kit chat
+   owns setup gating, execution, recovery, and completion reporting.
+7. If the user chooses **No, try again**, respond with:
+
+   > I’ll repeat the attempt. Keep the newly opened Maker Kit window focused
+   > until your prompt appears.
+
+   Then repeat the complete attempt beginning with path validation. Each retry
+   requires the user's explicit selection. Do not retry automatically.
+8. If the user chooses **No, let me handle it manually**, respond with:
+
+   > Use the manual steps above.
+
+If path validation or either command fails, surface the failure, keep the
+current chat available, and direct the user to the manual steps above. Do not
+claim that the prompt appeared in the Maker Kit window.
+
+Route every request not covered above as normal.

@@ -8,7 +8,7 @@ Use only intent supplied in the current request and results observed in this inv
 
 ## Identify the target
 
-Read `src/skills/foundation-setup/da-environment-target.md` and follow it, including its exact **Resolve the service ring** decision surface whenever the ring is not identified. Retain the resolved environment ID and ring for every operation in this invocation. Do not ask the maker to classify an agent template before loading the catalog. When fresh-agent intent and the target environment are known, mark **Choose the starting point and target environment** complete.
+Read `src/skills/foundation-setup/da-environment-target.md` and follow its **Resolve the service ring** precedence whenever the ring is not identified. Retain the resolved environment ID and ring for every operation in this invocation. Do not ask the maker to classify an agent template before loading the catalog. When fresh-agent intent and the target environment are known, mark **Choose the starting point and target environment** complete.
 
 ## Use the workspace environment
 
@@ -102,7 +102,7 @@ When listing succeeds, render this mostly fixed catalog surface:
 
 **End message.**
 
-Set `{PRODUCT_COUNT}` to the exact grouped `packageId` count and `{PRODUCT_ROWS}` to the unnumbered agent rows defined below; never assume a fixed agent count. In the host's interactive single-selection control, present those agent choices followed by **Help me decide**, **Refresh list**, and **Choose a different environment**, in that order. Leave the selection initially unset, and disable custom entry inside the control. Use **Choose an ESS agent or setup action.** as the exact question. Do not imply that selecting an installed agent creates it.
+Set `{PRODUCT_COUNT}` to the exact grouped `packageId` count and `{PRODUCT_ROWS}` to the unnumbered agent rows defined below; never assume a fixed agent count. In the host's interactive single-selection control, present those agent choices followed by **Help me decide**, **Refresh list**, and **Choose a different environment**, in that order. Leave the selection initially unset. Use **Choose an ESS agent or setup action.** as the exact question. Do not imply that selecting an installed agent creates it.
 
 For **Help me decide**, follow the shared contract in `SKILL.md`. Ask what employee experience the maker wants to provide. Compare **Employee Self-Service (Hub)** for one experience coordinating HR, IT, or other connected agents, **Employee Self-Service (HR)** for HR answers and requests, and **Employee Self-Service (IT)** for technical support and issue resolution. For another catalog entry, use only its service-provided description. Recommend an exact current catalog choice and preserve whether that choice is **Create** or **Use — Already installed**.
 
@@ -113,7 +113,7 @@ Build the agent picker as a projection of the latest successful catalog result, 
 When one or more exact validated Dev candidates match the same catalog entry, format that choice as **Use {friendly agent name} — Already installed**. Keep the catalog version in supporting text when present; never present it as the installed agent's version. Selecting this choice does not invoke create:
 
 - When exactly one agent has the matching key, the effective path changes to existing-agent setup. Complete the parent checkpoint for that path, environment, and Microsoft login using **Existing-agent setup** from `permission-guidance.md`, then run the parent's selected-agent product-line reconciliation for that exact returned identity and continue through `da-existing-dev.md`.
-- When multiple agents have the matching key, show those exact returned agent names followed by **Help me decide** as the standard choices, leave the selection initially unset, disable custom entry inside the control, and let the maker select one. For **Help me decide**, use the existing-agent picker guidance in `da-existing-dev.md`. The effective path then changes to existing-agent setup; complete its parent checkpoint using **Existing-agent setup** from `permission-guidance.md` before reconciliation and `da-existing-dev.md`.
+- When multiple agents have the matching key, show those exact returned agent names followed by **Help me decide** as the standard choices, leave the selection initially unset, and let the maker select one. For **Help me decide**, use the existing-agent picker guidance in `da-existing-dev.md`. The effective path then changes to existing-agent setup; complete its parent checkpoint using **Existing-agent setup** from `permission-guidance.md` before reconciliation and `da-existing-dev.md`.
 
 When the current setup invocation retains a definitive collision for an agent template and the latest successful agent list contains no exact matching identity, format that choice as **Resolve {friendly agent name} — Existing installation not visible**. Use this exact supporting description:
 
@@ -139,7 +139,7 @@ Copilot Studio reported a conflict the last time setup tried to create **{friend
 
 **End message.**
 
-Immediately ask **How would you like to continue?** and present **Create anyway**, **Use a Microsoft Copilot Studio URL**, **I have another login we can use to try connecting to this agent**, and **Go back** as the standard choices, with no preselected choice and custom entry disabled inside the control.
+Immediately ask **How would you like to continue?** and present **Create anyway**, **Use a Microsoft Copilot Studio URL**, **I have another login we can use to try connecting to this agent**, and **Go back** as the standard choices, with no preselected choice.
 
 For **Create anyway**, retain the selected package facts and proceed through **Create** with a new client request UUID. Do not claim that the agent type is absent or that creation will succeed; preserve the service's success or collision result. Apply the documented direct-inspection, alternate-login, or catalog-return route when another choice is selected.
 
@@ -147,7 +147,7 @@ When an older environment-scoped observation reports `installed: true` but the l
 
 > Setup previously observed this ESS agent type in the environment, but current agent visibility could not confirm it. An existing agent may still be hidden from this account. Create anyway and let Copilot Studio validate the current state?
 
-Present **Create anyway**, **Use a Microsoft Copilot Studio URL**, **Try with a different user**, and **Go back** as the standard choices, with no preselected choice and custom entry disabled inside the control. **Create anyway** retains the selected package facts and proceeds through **Create** with a new client request UUID. It does not claim that a matching agent is absent or that creation will succeed; preserve the service's success or collision result. Apply the documented route when one of the other standard choices is selected. Do not add another prohibition based on the earlier observation.
+Present **Create anyway**, **Use a Microsoft Copilot Studio URL**, **Try with a different user**, and **Go back** as the standard choices, with no preselected choice. **Create anyway** retains the selected package facts and proceeds through **Create** with a new client request UUID. It does not claim that a matching agent is absent or that creation will succeed; preserve the service's success or collision result. Apply the documented route when one of the other standard choices is selected. Do not add another prohibition based on the earlier observation.
 
 When no current exact Dev identity is established, format the choice as **Create {friendly agent name} {version}**. This label is an action, not a claim that no matching agent exists. Omit a blank version instead of showing an unresolved value. After the maker selects the choice, retain the exact `packageId`, backend `name`, catalog `version`, and friendly agent name, then begin **Create**. Retain the friendly agent name for the final exact-agent link.
 
@@ -191,9 +191,21 @@ When a definitive create response returns HTTP 401 or 403, preserve its evidence
 Say setup stopped only after reconciliation cannot prove an identity and the
 maker selects a stop or escalation action.
 
-When the annotations report `outcome: created`, keep the distinction between `catalogPackageVersion` and `templateVersion` in diagnostic evidence; do not explain those internal version concepts to the maker. Say that the new agent was created and setup is not complete.
+When the annotations report `outcome: created`, keep the distinction between `catalogPackageVersion` and `templateVersion` in diagnostic evidence; do not explain those internal version concepts to the maker.
 
-The successful native create result is authoritative identity and environment-scoped installation evidence. Record its exact package, catalog, returned schema, environment, and ring through `da_product_registry.py observe` with source `setup_mos_starter.py create`, then run the parent's selected-agent product-line reconciliation with the returned identity and `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before the enable-ALM operation.
+Build `{ACTUAL_AGENT_URL}` as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/{RETURNED_AGENT_ID}/details?agentBackend=cosmos`, using the origin retained by **Resolve the service ring** and the exact environment and agent IDs from the successful create result. An explicit Preview target keeps its Preview origin even though its logical ring is `prod`.
+
+Immediately show the successful creation result before recording product evidence, running reconciliation, inspecting the authoring route, or performing another operation:
+
+**Message:**
+
+The agent was created. Setup is not complete yet.
+
+> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
+
+**End message.**
+
+The successful native create result is authoritative identity and environment-scoped installation evidence. Record its exact package, catalog, returned schema, environment, and ring through `da_product_registry.py observe` with source `setup_mos_starter.py create`, then run the parent's selected-agent product-line reconciliation with the returned identity and `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before route inspection.
 
 When the annotations report `outcome: collision`, preserve the exact selected package ID and catalog name. Do not render an intermediate collision message. Before listing or validating collision candidates, complete the parent checkpoint for the current existing-agent path, environment, and Microsoft login and use **Existing-agent setup** from `permission-guidance.md`. When `list-agents` or `validate-agent` returns an authentication or authorization failure, follow **Existing-agent discovery and access** there; do not recommend **Environment Maker** as remediation for existing-agent access. First record and reconcile all available evidence, then render exactly one outcome-specific message immediately followed by the choice set it explains. A collision message must never be separated from its next interactive choice set by another operation or maker-facing message.
 
@@ -219,7 +231,7 @@ Copilot Studio says an agent for **{friendly agent name}** already exists. This 
 
 Immediately ask **Choose the installed {friendly agent name}.**, present those matching identities followed by **Help me decide** and **Go back** as the standard choices, and render every agent identity option as its exact service-provided display name only. For **Help me decide**, use the existing-agent picker guidance in `da-existing-dev.md`.
 
-Leave every collision choice initially unset and disable custom entry inside the control. Retain IDs and schemas as internal evidence; never display an ID, schema, product key, or **schema will be verified** annotation in either the message or choice panel.
+Leave every collision choice initially unset. Retain IDs and schemas as internal evidence; never display an ID, schema, product key, or **schema will be verified** annotation in either the message or choice panel.
 
 For a selected identity whose matching MakerOperations BotEntity supplies a usable schema, pass that exact schema into the parent's selected-agent product-line reconciliation as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`. Otherwise run both exact identity probes so the native component result can establish schema identity. Only a supported native `found` result may continue to route inspection and optional enrollment; a native `not-found`, access failure, or uncertain result must stop without offering enrollment. Successful enrollment requires reconciliation and route inspection before the normal attachment path; skipped enrollment with established supported native identity returns to the attachment command below with `--allow-unenrolled-authoring`.
 
@@ -251,18 +263,6 @@ For **Go back**, preserve the collided create result and its client request UUID
 
 ## Prepare the authoring route
 
-Build `{ACTUAL_AGENT_URL}` as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/{RETURNED_AGENT_ID}/details?agentBackend=cosmos`, using the origin retained by **Resolve the service ring** and the exact environment and agent IDs from the successful create result. An explicit Preview target keeps its Preview origin even though its logical ring is `prod`.
-
-After a successful create, show:
-
-**Message:**
-
-The agent was created.
-
-> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
-
-**End message.**
-
 Inspect the service-owned authoring route before offering enrollment:
 
 ```text
@@ -282,18 +282,18 @@ After the initial route inspection establishes a Dev route, successful enrollmen
 
 ```text
 python scripts/setup_existing_da.py attach \
-  --environment-id "{ENVIRONMENT_ID}" \
+  --environment-id "{ENVIRONMENT_ID}" --environment-display-name "{ENVIRONMENT_DISPLAY_NAME}" \
   --ring "{RING}" \
   --agent-id "{RETURNED_AGENT_ID}" \
   --setup-source mos-starter \
   --expected-schema-name "{RETURNED_SCHEMA_NAME}"
 ```
 
-Append `--allow-unenrolled-authoring` only for the shared path's explicit **Skip enrollment** result. Preserve `--setup-source mos-starter` and `--expected-schema-name`.
+Append `--allow-unenrolled-authoring` only for the shared path's explicit **Skip enrollment** result. Preserve `--setup-source mos-starter` and `--expected-schema-name`. For an integration's entry-only preparation request, return to the retained caller using the parent skill's **Prepare the workspace for an integration** boundary after verified workspace materialization, before the ordinary readiness-check and completion handoff below.
 
-The normal attachment validates the returned agent through its direct Dev route and component identity. The skip attachment validates exact direct identity and `/components` without establishing or recording a Dev ALM realm. Neither mode requires published Dev configuration. It resolves any connection requirement from the product registry by exact agent identity and records that requirement on canonical `SETUP-05`. On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. Publishing is outside foundation setup and is not remediation for an attachment failure. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. When attachment reports `connectionStatus: workspace-ready`, mark the access, identity, editable-agent, and materialization stages complete, then run the three setup-readiness FlightChecks and broad connection diagnostic as the single presentation unit defined in `da-existing-dev.md`. Complete every check whose prerequisites remain available before producing the factual workspace and runtime-readiness handoff. When an operation requires maker action or prevents later checks from running, state the observed blocker and supported recovery. The request-scoped create evidence intentionally remains as an audit note. Do not publish, remove, or replace components from this path.
+The normal attachment validates the returned agent through its direct Dev route and component identity. The skip attachment validates exact direct identity and `/components` without establishing or recording a Dev ALM realm. Neither mode requires published Dev configuration. It resolves any connection requirement from the product registry by exact agent identity and records that requirement on canonical `SETUP-05`. On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. Publishing is outside foundation setup and is not remediation for an attachment failure. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. When attachment reports `connectionStatus: workspace-ready`, mark the access, identity, editable-agent, and materialization stages complete, then run the native FlightCheck maintenance sequence as the single presentation unit defined in `da-existing-dev.md`. Complete every check whose prerequisites remain available before producing the factual workspace and runtime-readiness handoff. When an operation requires maker action or prevents later checks from running, state the observed blocker and supported recovery. The request-scoped create evidence intentionally remains as an audit note. Do not publish, remove, or replace components from this path.
 
-After all four FlightChecks have been attempted, render the factual workspace and runtime-readiness report from `da-existing-dev.md` using **New ESS agent** as the starting point, including when `connectReady` is false.
+After every available check in that sequence has been attempted, render the factual workspace and runtime-readiness report from `da-existing-dev.md` using **New ESS agent** as the starting point, including when `connectReady` is false.
 For every non-created outcome (`pre-dispatch-failure`, `collision`, `rejected`, `malformed-success`, `source-package-mismatch`, or an uncertain response or transport failure), end the create operation. The existing read-only `list` and `setup_existing_da.py validate-agent`/`list-agents` commands remain available for a separately requested inspection.
 
 Connection setup is outside this foundation path. Never invoke `/connect`, install a connector, or configure Dataverse, publishing, promotion, or telemetry from this skill.
