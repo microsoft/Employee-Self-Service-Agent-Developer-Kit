@@ -51,7 +51,8 @@ def test_empty_tenant_id_returns_empty():
 
 
 @pytest.mark.parametrize("scopes", [None, ["https://graph.microsoft.com/User.Read"]])
-def test_authenticate_uses_preferred_cached_account(monkeypatch, scopes):
+@pytest.mark.parametrize("client_scopes", [None, graph_client.PERSON_RESOLUTION_SCOPES])
+def test_authenticate_uses_preferred_cached_account(monkeypatch, scopes, client_scopes):
     selected_accounts = []
     client_ids = []
     requested_scopes = []
@@ -93,18 +94,19 @@ def test_authenticate_uses_preferred_cached_account(monkeypatch, scopes):
         FakeApp,
     )
 
-    client = graph_client.GraphClient("organizations")
+    client = graph_client.GraphClient("organizations", scopes=client_scopes)
     token = client.authenticate(preferred_username="maker@example.com", scopes=scopes)
 
     assert token == "preferred-token"
     assert selected_accounts == [{"username": "Maker@Example.com"}]
     assert client_ids == [graph_client.GRAPH_CLIENT_ID]
-    assert requested_scopes == [graph_client.GRAPH_SCOPES if scopes is None else scopes]
+    assert requested_scopes == [scopes if scopes is not None else client_scopes or graph_client.GRAPH_SCOPES]
     assert client.signed_in_username == "Maker@Example.com"
 
 
 @pytest.mark.parametrize("scopes", [None, ["https://graph.microsoft.com/User.Read"]])
-def test_interactive_auth_does_not_reuse_stale_cached_identity(monkeypatch, scopes):
+@pytest.mark.parametrize("client_scopes", [None, graph_client.PERSON_RESOLUTION_SCOPES])
+def test_interactive_auth_does_not_reuse_stale_cached_identity(monkeypatch, scopes, client_scopes):
     interactive_options = {}
     interactive_scopes = []
 
@@ -137,11 +139,11 @@ def test_interactive_auth_does_not_reuse_stale_cached_identity(monkeypatch, scop
         FakeApp,
     )
 
-    client = graph_client.GraphClient("organizations")
+    client = graph_client.GraphClient("organizations", scopes=client_scopes)
     client.authenticate(preferred_username="maker@example.com", scopes=scopes)
 
     assert client.signed_in_username is None
-    assert interactive_scopes == [graph_client.GRAPH_SCOPES if scopes is None else scopes]
+    assert interactive_scopes == [scopes if scopes is not None else client_scopes or graph_client.GRAPH_SCOPES]
     assert interactive_options == {
         "prompt": "select_account",
         "login_hint": "maker@example.com",
