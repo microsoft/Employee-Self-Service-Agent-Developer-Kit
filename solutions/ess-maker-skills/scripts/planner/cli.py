@@ -790,9 +790,11 @@ def cmd_summary(args: argparse.Namespace) -> int:
         checklist = plan.render_task_checklist()
         if checklist:
             print(
-                "readback: use this dependency-ordered checklist for the initial plan "
-                "or an explicit full-plan request. After an edit, summarize the changes "
-                "and blockers instead of repeating every unchanged task:\n"
+                "readback: render this numbered task-and-role list verbatim for the "
+                "initial plan or an explicit full-plan request. Do not replace it "
+                "with waves, phases, grouped sections, or a sequencing table. After "
+                "an edit, summarize the changes and blockers instead of repeating "
+                "every unchanged task:\n"
                 + textwrap.indent(checklist, "    "),
                 file=sys.stderr,
             )

@@ -94,9 +94,10 @@ assigned before its dependencies are ready. Missing people do not block drafting
 or unrelated work, but a qualified owner must perform the affected work.
 
 Do not invent execution prerequisites to force visual order: independent
-preparation may run in parallel with environment setup. The view puts foundation
-work first when ready and preserves topological order across stream boundaries;
-a stream can appear in more than one contiguous section.
+preparation may run in parallel with environment setup. The views put foundation
+work first when ready and preserve topological order across stream boundaries.
+The downloadable plan can repeat a stream heading when dependencies require it;
+the chat readback remains one numbered task-and-role list.
 
 ## Split on role boundaries
 
@@ -323,16 +324,17 @@ python scripts/planner/cli.py add-task --id T-eval-run --stream "Evaluation" --t
 python scripts/planner/cli.py add-task --id T-pub --stream "Publish" --title "Publish the agent" --description "After the evaluation bar is met and publishing is approved, publish the agent using the grounded Learn steps" --role EntraPowerPlatformAdministrator --consumes "primaryEnvironment,essAgent,evaluationResults"
 ```
 
-**Give every task a `--stream` (workstream/theme) so the plan reads by workstream.**
-The summary groups tasks under a `### <stream>` heading (`plan_model._render_tasks`)
+**Give every task a `--stream` (workstream/theme) for the downloadable plan.**
+That document groups tasks under a `### <stream>` heading (`plan_model._render_tasks`)
 so the sponsor sees the plan as **Workday**, **ServiceNow**, **Setup**,
-**Authoring**, **Evaluation**, **Publish** — not one flat wall of rows. Rules:
+**Authoring**, **Evaluation**, **Publish**. The chat readback is a numbered
+task-and-role list, not grouped sections. Rules:
 
 - **A captured system → its own stream** (the system name: `Workday`,
-  `ServiceNow`). Every task for that system shares that stream —
-  the `setup-tasks` extractor already stamps `--stream "<System>"` on each row,
-  so pasting its lines verbatim groups them for free.
-- **Cross-cutting backbone tasks → a phase stream**: `Setup` (the `/setup` +
+  `ServiceNow`). System-specific tasks share that stream. The Workday extractor
+  labels the shared environment and agent foundations `Setup` and the integration
+  tasks `Workday`; paste its emitted lines verbatim.
+- **Cross-cutting backbone tasks → a workstream**: `Setup` (the `/setup` +
   `/flightcheck` backbone), `Authoring` (the `/create` topic tasks), `Evaluation`
   (`/evaluate`), `Publish`.
 - Keep stream labels **few and consistent** — a stream is a workstream a sponsor
@@ -341,44 +343,28 @@ so the sponsor sees the plan as **Workday**, **ServiceNow**, **Setup**,
   **🔒 Not started**), so grouping never hides a dependency.
 
 Also register the scenarios and their dependencies (see `interview.md`) so the
-plan shows knowledge-before-ticketing. Then show the summary and go to Phase 4.
+plan shows knowledge-before-ticketing. Then present the plan as described below.
 
-## Sequence the tasks — show what's parallel, what's blocked, and the critical path
+## Sequence the tasks without wave buckets
 
 `produces`/`consumes` aren't just per-task gates — together they form the plan's
-**dependency graph**. Once the full set is in, *reason across it* and show the
-sponsor the shape, so the work can be **staffed in parallel** instead of run one
-task at a time. This is derived entirely from the ledger — don't narrate an order
-the keys don't encode; if two tasks must be ordered, wire the key.
+**dependency graph**. The CLI orders producers before consumers and emits one
+numbered entry per saved task, containing its title and responsible role. Use
+that readback verbatim. Do not replace it with waves, phases, stages, parallel
+buckets, or a sequencing table, and do not combine separate tasks into one row.
 
-- **Parallel waves.** A *wave* is every task whose consumed keys are all produced
-  by earlier waves — tasks **in the same wave have no dependency between them and
-  can run at once**. The summary's **State** column is the per-task view (a task
-  still waiting on an upstream artifact reads **🔒 Not started**; a ready task is
-  **⬜ Not started**). Present the plan as waves, not a flat list. In the emitted
-  example above, once the environment exists (Wave 0), **ESS HR agent (Env Maker)
-  ∥ tenant discovery (PP Admin) ∥ ServiceNow configuration (ServiceNow Admin)**
-  all open together (Wave 1) — three roles working at once. The Workday chain
-  itself is serial — preflight, Entra, Workday tenant, then connect — because
-  each `/connect-workday` phase needs the previous phase's output.
-- **Parallel across roles vs. one person.** Two same-wave tasks owned by
-  **different** roles are genuinely concurrent. Two owned by the **same** role are
-  independent in the graph but will **serialize on one assignee** — call that out
-  so the sponsor can staff a second holder when it sits on the long pole.
-- **Blocked = waiting on a producer.** A task can't start until **every** key it
-  consumes has been produced. The Workday connect task
-  is a **cross-role join**: it waits for the verified environment, the ESS HR
-  agent, the Entra app, and the Workday tenant configuration. Name every actual
-  missing input, not just the number of dependencies.
-- **Critical path = the long pole.** The longest `produces`→`consumes` chain sets
-  the minimum end-to-end time; tasks off it have slack. Surface it so the sponsor
-  optimizes the right thing. In a Workday rollout the serial connection chain
-  (preflight → Entra → Workday tenant → connect) runs ahead of every
-  Workday-backed scenario, so it usually sits on the critical path; scenarios
-  that don't consume `workdayConnection` (knowledge, for example) have slack. The
-  levers are to line up the Entra and Workday administrators early and to author
-  the connection-free scenarios in parallel (a second Env Maker).
+The list order is not a requirement to execute every task serially. Independent
+preparation may run alongside setup, and connection-free scenarios may run
+alongside the Workday chain. Keep the actual `produces`/`consumes` gates; never
+add dependencies just to make the list look sequential.
 
-Say all of this in plain language — the waves, who can go at once, what's blocked
-on whom, and the long pole — right after you show the task summary, then go to
-Phase 4.
+Detailed readiness and waiting reasons remain in the downloadable plan, task
+briefs, and status views. If the sponsor asks about sequencing, explain the real
+missing inputs and which tasks can run independently without rebucketing the
+plan. The Workday chain remains preflight, Entra, Workday tenant, then connect
+because each stage consumes the previous output. Different role holders can
+work concurrently when the graph and their availability permit it; one person's
+capacity is a staffing concern, not a new task dependency.
+
+After showing the plan, stop and present the follow-up options from `SKILL.md`;
+do not start assignment or execution automatically.

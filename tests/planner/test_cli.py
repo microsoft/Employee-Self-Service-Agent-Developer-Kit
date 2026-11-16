@@ -311,16 +311,18 @@ def test_summary_is_read_only(tmp_path):
 def test_summary_emits_task_checklist_readback(tmp_path, capsys):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T-setup", "--title", "Set up the environment",
+         "--role", "pp-admin", "--stream", "Setup", "--produces", "primaryEnvironment")
     _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Connect Workday",
-         "--role", "workday-admin", "--stream", "Workday")
+         "--role", "workday-admin", "--stream", "Workday", "--consumes", "primaryEnvironment")
     capsys.readouterr()
     _run("--plan", plan_path, "summary")
     err = capsys.readouterr().err
-    # The assistant gets a deterministic, grouped checklist to echo verbatim after
-    # the download link — so it renders the breakdown instead of a bare task count.
     assert "readback:" in err
-    assert "**Workday**" in err
-    assert "- ⬜ Connect Workday — workday-admin" in err
+    assert "1. Set up the environment — pp-admin" in err
+    assert "2. Connect Workday — workday-admin" in err
+    assert "**Setup**" not in err
+    assert "**Workday**" not in err
     # The role is named, but the internal "pool" notion never leaks to the maker.
     assert "workday-admin (pool)" not in err
 

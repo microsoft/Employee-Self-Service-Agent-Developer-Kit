@@ -289,10 +289,6 @@ class TestWorkdayDecomposition:
             line for line in plan.render_summary().splitlines()
             if line.startswith("### ")
         ] == ["### Setup", "### Workday", "### Scenario work"]
-        assert [
-            line for line in plan.render_task_checklist().splitlines()
-            if line.startswith("**")
-        ] == ["**Setup**", "**Workday**", "**Scenario work**"]
 
     def test_ledger_honours_each_phase_prerequisite(self):
         tasks = system_setup_tasks("workday")

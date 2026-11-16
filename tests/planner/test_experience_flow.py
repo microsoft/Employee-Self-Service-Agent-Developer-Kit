@@ -122,14 +122,14 @@ def test_deferred_owner_does_not_block_unrelated_work_or_erase_role():
     plan.set_task_state("connect", "InProgress")
 
 
-def test_grouped_view_keeps_cross_stream_dependencies_in_order():
+def test_views_keep_cross_stream_dependencies_in_order():
     plan = Plan.new()
     plan.add_task(new_task("prep", "Prepare firewall", stream="Workday"))
     plan.add_task(new_task("connect", "Connect Workday", stream="Workday", consumes=["env"]))
     plan.add_task(new_task("env", "Prepare environment", stream="Setup", produces=["env"]))
     for view in [plan.render_summary(), plan.render_task_checklist()]:
         assert view.index("Prepare environment") < view.index("Connect Workday")
-        assert "waiting on Prepare environment" in view
+    assert "waiting on Prepare environment" in plan.render_summary()
     assert plan.blocking_inputs("prep") == {}
 
 

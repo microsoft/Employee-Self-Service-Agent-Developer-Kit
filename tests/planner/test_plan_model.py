@@ -485,7 +485,7 @@ def test_render_summary_locks_dependent_tasks():
 # Chat task checklist (deterministic readback the assistant echoes verbatim)
 # --------------------------------------------------------------------------- #
 
-def test_render_task_checklist_groups_by_stream_with_icons_and_roles():
+def test_render_task_checklist_numbers_tasks_and_roles_across_streams():
     plan = Plan.new()
     plan.add_task(new_task(
         "T1", "Create a Power Platform Environment", stream="Setup",
@@ -495,48 +495,47 @@ def test_render_task_checklist_groups_by_stream_with_icons_and_roles():
         "T2", "Connect Workday", stream="Workday",
         assigned_to=principal_pool("workday-admin"),
     ))
+    plan.add_task(new_task(
+        "T3", "Check environment readiness", stream="Setup",
+        assigned_to=principal_pool("pp-admin"), consumes=["envId"],
+    ))
     checklist = plan.render_task_checklist()
-    # Grouped under a bold workstream header, each task `<icon> <title> — <role>`.
-    assert "**Setup**" in checklist
-    assert "**Workday**" in checklist
-    assert "- ⬜ Create a Power Platform Environment — pp-admin" in checklist
-    assert "- ⬜ Connect Workday — workday-admin" in checklist
-    # The maker-facing readback names the role but never the internal "pool" notion.
-    assert "(pool)" not in checklist
-    # Streams keep execution order (Setup before Workday).
-    assert checklist.index("**Setup**") < checklist.index("**Workday**")
+    assert checklist.splitlines() == [
+        "1. Create a Power Platform Environment — pp-admin",
+        "2. Check environment readiness — pp-admin",
+        "3. Connect Workday — workday-admin",
+    ]
 
 
-def test_render_task_checklist_locks_dependent_task():
+def test_render_task_checklist_keeps_dependency_order():
     plan = Plan.new()
     plan.add_task(new_task("T1", "consume", stream="S", consumes=["envId"]))
     plan.add_task(new_task("T2", "produce", stream="S", produces=["envId"]))
     checklist = plan.render_task_checklist()
-    # The consumer waits on its producer -> 🔒; the ready producer -> ⬜. The
-    # producer renders before the consumer (same execution order as the table).
-    assert "- 🔒 consume" in checklist
-    assert "- ⬜ produce" in checklist
-    assert checklist.index("produce") < checklist.index("consume")
+    assert checklist.splitlines() == [
+        "1. produce — unassigned",
+        "2. consume — unassigned",
+    ]
 
 
-def test_render_task_checklist_shows_one_icon_per_state():
+def test_render_task_checklist_omits_execution_states():
     plan = Plan.new()
     plan.add_task(new_task("T1", "done", state="Completed"))
     plan.add_task(new_task("T2", "doing", state="InProgress"))
     plan.add_task(new_task("T3", "stuck", state="Blocked"))
     checklist = plan.render_task_checklist()
-    assert "- ✅ done" in checklist
-    assert "- 🔄 doing" in checklist
-    assert "- 🔒 stuck" in checklist
+    assert checklist.splitlines() == [
+        "1. done — unassigned",
+        "2. doing — unassigned",
+        "3. stuck — unassigned",
+    ]
 
 
 def test_render_task_checklist_flat_without_streams():
     plan = Plan.new()
     plan.add_task(new_task("T1", "lonely"))
     checklist = plan.render_task_checklist()
-    # No stream on any task -> a single flat list, no workstream headers.
-    assert checklist == "- ⬜ lonely — unassigned — Not started — ready"
-    assert "**" not in checklist
+    assert checklist == "1. lonely — unassigned"
 
 
 def test_render_task_checklist_empty_when_no_tasks():

@@ -2170,58 +2170,17 @@ class Plan:
             return "🔒 Not started — waiting on " + self.blocking_reason(task["id"])
         return "⬜ Not started — ready"
 
-    def _task_state_icon(self, task: dict[str, Any]) -> str:
-        """Just the state glyph behind :meth:`_task_state_label` — ``✅`` complete,
-        ``🔄`` in progress, ``🔒`` blocked or dependency-locked, ``⬜`` ready/not
-        started. Shared by the plan table and the chat task checklist so both
-        views speak one icon vocabulary. Pure/read-only."""
-        if task.get("syncConflict"):
-            return "🔒"
-        state = task.get("state") or "NotStarted"
-        if state == "Completed":
-            return "✅"
-        if state == "InProgress":
-            return "🔄"
-        if state == "Blocked":
-            return "🔒"
-        if self.waiting_on(task.get("id")):
-            return "🔒"
-        return "⬜"
-
     def render_task_checklist(self) -> str:
-        """The chat-facing task readback the maker sees the moment a plan is saved
-        or changed: the same tasks as the plan's Tasks table, grouped by
-        workstream, but as a scannable checklist — ``<state-icon> <title> —
-        <role>`` per line — so the assistant renders the breakdown inline instead
-        of collapsing it to a bare count ("N tasks across M workstreams"). Reuses
-        :meth:`ordered_tasks` and the table's stream bucketing, so execution order
-        and the dependency lock (``🔒``) match the table exactly; a render-time
-        convenience that mutates nothing. Returns ``""`` when the plan has no
-        tasks (nothing to read back)."""
-        if not self.tasks:
-            return ""
-        ordered = self.ordered_tasks()
-        lines: list[str] = []
+        """A numbered chat readback of task titles and roles in dependency order.
 
-        def emit(tasks: list[dict[str, Any]]) -> None:
-            for task in tasks:
-                lines.append(
-                    f"- {self._task_state_icon(task)} {task.get('title')} "
-                    f"— {_render_assignee(task.get('assignedTo'))} "
-                    f"— {self._task_state_label(task).split(' ', 1)[1]}"
-                )
-
-        if any((t.get("stream") or "").strip() for t in ordered):
-            for index, (label, tasks) in enumerate(groupby(
-                ordered, key=lambda t: (t.get("stream") or "").strip() or "Other",
-            )):
-                if index:
-                    lines.append("")
-                lines.append(f"**{label}**")
-                emit(list(tasks))
-        else:
-            emit(ordered)
-        return "\n".join(lines)
+        Each saved task gets one entry, without stream headings, wave buckets,
+        or execution states. Detailed status stays in the downloadable plan and
+        task briefs. Pure/read-only; an empty plan returns ``""``.
+        """
+        return "\n".join(
+            f"{step}. {task.get('title')} — {_render_assignee(task.get('assignedTo'))}"
+            for step, task in enumerate(self.ordered_tasks(), start=1)
+        )
 
     def _render_outputs(self, lines: list[str]) -> None:
         active = [a for a in self.outputs if a.get("state") == "Active"]

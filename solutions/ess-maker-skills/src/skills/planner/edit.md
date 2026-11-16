@@ -198,7 +198,7 @@ python scripts/planner/cli.py validate
 
 Don't hand-sequence the tasks: **ordering falls out of the `produces`/`consumes`
 wiring** — the view lists each producer before its consumer — so wiring the ledger
-correctly in step 1 *is* how the plan stays in the right order and its waves hold.
+correctly in step 1 *is* how the plan stays in the right dependency order.
 
 **3. Completeness — an in-scope scenario carries its *whole* task set.** Don't leave
 a scenario half-modelled. If the edit left (or brought) a scenario in scope, it must
@@ -210,8 +210,10 @@ ships without the tasks that build it.
 work the maker didn't explicitly name — confirm before deleting (the "Ask where
 ambiguous" rule below). Only once `check-deps` reports a coherent graph and
 `validate` passes, re-render (`summary`) and present the refreshed plan the usual
-way — the download link **then** the grouped checklist — calling out what changed
-(tasks added/removed, system re-pointed, new ordering/waves).
+way — the download link **then** what changed (tasks added/removed, system
+re-pointed, updated dependencies), pending decisions, blockers, and the next
+action. Show the full numbered task-and-role list only on request; do not
+reintroduce wave or phase buckets when presenting an edited plan.
 
 > **Why this matters.** The maker edits a readable plan, not a dependency graph — the
 > Markdown can't express `produces`/`consumes`, and a one-word swap ("use

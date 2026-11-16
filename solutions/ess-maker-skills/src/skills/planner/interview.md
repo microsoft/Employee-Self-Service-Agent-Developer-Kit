@@ -440,7 +440,7 @@ pinned — scenarios + goals are enough to show what "good" looks like.
 ## After the plan is shown — stop, and name the next steps (don't run them)
 
 **Showing the plan is the end of the turn.** Once the plan is modelled and presented
-locally (the download link **then** the grouped task checklist — `SKILL.md` →
+locally (the download link **then** the numbered task-and-role list — `SKILL.md` →
 *Building the plan*), **stop there** — the plan stays in the maker's workspace and is
 **not** stored to the shared space until the sponsor asks to share it. Do **not**:
 
