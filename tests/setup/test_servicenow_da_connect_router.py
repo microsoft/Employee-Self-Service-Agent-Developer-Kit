@@ -219,6 +219,36 @@ def test_servicenow_connect_hands_off_to_setup_automatically() -> None:
     assert "automatic Setup handoff" in chooser
 
 
+def test_servicenow_connect_confirms_agent_only_after_ready_and_resumes_once() -> None:
+    skills = _SOLUTION / "src" / "skills" / "connect"
+    entry = " ".join(
+        (skills / "servicenow" / "entry.md").read_text(encoding="utf-8").split()
+    )
+    chooser = " ".join(
+        (skills / "servicenow-da" / "SKILL.md").read_text(encoding="utf-8").split()
+    )
+
+    continue_message = entry.index("We'll continue with **{AGENT_NAME}**")
+    ready_rule = entry.index("After the rerun returns `ready`, show:")
+    assert ready_rule < continue_message
+    assert entry.count("We'll continue with **{AGENT_NAME}**") == 1
+    assert (
+        "Do not say the agent is set up, show the \"We'll continue\" message, "
+        "or start any Connect step before that result."
+    ) in entry
+    assert "If the rerun returns `setup-incomplete`" in entry
+    assert "Resume Setup once in this invocation" in entry
+    assert "`DA-AGENT-001` and `DA-CONTENT-001`" in entry
+    assert "`setup_existing_da.py maintain-flightcheck`" in entry
+    assert "foundation-setup/da-existing-dev.md" in entry
+    assert "do not resume again" in entry
+    assert "Please fix that first." in entry
+    assert '--environment-display-name "{ENVIRONMENT_DISPLAY_NAME}"' in entry
+    assert "`setup-incomplete`" in chooser
+    assert "no longer available" in chooser
+    assert "at most one resume per invocation" in chooser
+
+
 def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     prompt_file = (
         _SOLUTION / ".github" / "prompts" / "connect.prompt.md"

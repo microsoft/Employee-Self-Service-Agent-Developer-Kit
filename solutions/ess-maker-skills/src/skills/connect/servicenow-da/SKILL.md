@@ -46,7 +46,11 @@ matching a prepared agent
 returns `ready` without duplicate setup. `setup-required` means the exact
 existing agent is new to this workspace: follow the automatic Setup handoff in
 `src/skills/connect/servicenow/entry.md` (**Choose the agent**) for that exact
-link, then rerun this command with the same link. The chooser itself never
+link, then rerun this command with the same link. `setup-incomplete` means the
+agent is in the workspace but its Setup steps are still pending; it is not an
+"agent no longer available" error. Follow the same entry doc: Setup's remaining
+steps run (at most one resume per invocation), then rerun this command. The
+chooser itself never
 runs setup, creates an agent, switches environment/account, or mutates local
 state.
 

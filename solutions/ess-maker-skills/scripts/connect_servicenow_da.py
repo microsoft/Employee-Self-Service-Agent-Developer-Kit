@@ -3047,7 +3047,7 @@ def list_agent_choices(
 
 def _prepared_agent_choices(
     root: Path,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     setup = _load_json(root / SETUP_STATE)
     config = _load_json(root / ACTIVE_CONFIG)
     if setup.get("schema_version") != SETUP_SCHEMA_VERSION:
@@ -3066,6 +3066,7 @@ def _prepared_agent_choices(
     _validate_discovery_binding(environment, config)
 
     choices: list[dict[str, Any]] = []
+    incomplete: list[dict[str, Any]] = []
     for raw_agent_id, canonical in canonical_agents.items():
         if not isinstance(raw_agent_id, str) or not isinstance(canonical, dict):
             continue
@@ -3079,17 +3080,20 @@ def _prepared_agent_choices(
             operational,
             agent_id,
         )
-        if profile is None or not ready or not isinstance(operational, dict):
-            continue
         canonical_agent = canonical.get("agent")
-        if not isinstance(canonical_agent, dict):
+        if profile is None or not isinstance(canonical_agent, dict):
             continue
         display_name = str(
             canonical_agent.get("display_name")
             or canonical_agent.get("name")
-            or operational.get("name")
+            or (operational or {}).get("name")
             or profile.agent_display_name
         )
+        if not ready or not isinstance(operational, dict):
+            # A Dev-eligible agent whose Setup steps are still pending.
+            if _canonical_local_authoring_ready(canonical, canonical_agent):
+                incomplete.append({"id": agent_id, "name": display_name})
+            continue
         choices.append(
             {
                 "id": agent_id,
@@ -3102,13 +3106,37 @@ def _prepared_agent_choices(
                 "selectable": True,
             }
         )
-    return environment, sorted(
-        choices,
-        key=lambda item: (
-            str(item["name"]).casefold(),
-            str(item["id"]),
+    return (
+        environment,
+        sorted(
+            choices,
+            key=lambda item: (
+                str(item["name"]).casefold(),
+                str(item["id"]),
+            ),
         ),
+        incomplete,
     )
+
+
+def _setup_incomplete_result(
+    agent: dict[str, Any],
+    setup_handoff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": "servicenow.agent-chooser.v1",
+        "status": "setup-incomplete",
+        "branch": "setup-not-finished",
+        "message": (
+            "This agent is in the workspace, but its setup isn't finished "
+            "yet. Setup's remaining steps run first, then Connect continues "
+            "with it."
+        ),
+        "agent": agent,
+        "setupHandoff": setup_handoff
+        or {"command": "/setup", "agentId": agent["id"]},
+        "stateChanged": False,
+    }
 
 
 def _prepared_agent_result(choice: dict[str, Any]) -> dict[str, Any]:
@@ -3201,6 +3229,7 @@ def _resolve_explicit_agent_link(
     agent_link: str,
     environment: dict[str, Any],
     prepared_choices: list[dict[str, Any]],
+    incomplete_agents: list[dict[str, Any]],
 ) -> dict[str, Any]:
     target = _resolve_link_target(agent_link, "", "")
     workspace_environment = str(environment.get("id") or "")
@@ -3238,6 +3267,19 @@ def _resolve_explicit_agent_link(
     )
     if prepared is not None:
         return _prepared_agent_result(prepared)
+    unfinished = next(
+        (
+            agent
+            for agent in incomplete_agents
+            if str(agent["id"]).casefold() == agent_id.casefold()
+        ),
+        None,
+    )
+    if unfinished is not None:
+        return _setup_incomplete_result(
+            unfinished,
+            _setup_handoff_for_link(agent_link, target),
+        )
     return {
         "schemaVersion": "servicenow.agent-chooser.v1",
         "status": "setup-required",
@@ -3287,12 +3329,13 @@ def agent_chooser_handoff(
         )
     if _workspace_not_prepared(root):
         return _unprepared_workspace_handoff(agent_link)
-    environment, prepared_choices = _prepared_agent_choices(root)
+    environment, prepared_choices, incomplete_agents = _prepared_agent_choices(root)
     if agent_link is not None:
         return _resolve_explicit_agent_link(
             agent_link=agent_link,
             environment=environment,
             prepared_choices=prepared_choices,
+            incomplete_agents=incomplete_agents,
         )
     if selection_key is not None:
         if selection_key == "another-agent":
@@ -3312,6 +3355,16 @@ def agent_chooser_handoff(
             None,
         )
         if prepared is None:
+            unfinished = next(
+                (
+                    agent
+                    for agent in incomplete_agents
+                    if selection_key == f"prepared:{agent['id']}"
+                ),
+                None,
+            )
+            if unfinished is not None:
+                return _setup_incomplete_result(unfinished)
             raise ServiceNowConnectError(
                 "The selected prepared agent is no longer available in this "
                 "workspace. Choose again."

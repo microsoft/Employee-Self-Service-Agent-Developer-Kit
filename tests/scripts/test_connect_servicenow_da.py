@@ -14064,6 +14064,69 @@ def test_agent_chooser_resolves_prepared_agent_link_without_duplicate_setup(
     assert not (tmp_path / ".local" / "connect").exists()
 
 
+def _mark_it_setup_pending(setup_path: Path, **agent_overrides: object) -> None:
+    state = json.loads(setup_path.read_text(encoding="utf-8"))
+    agent = state["agents"][AGENT_ID]
+    agent["steps"]["SETUP-02.1"] = {"state": "pending"}
+    agent["agent"].update(agent_overrides)
+    setup_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def test_agent_chooser_reports_setup_incomplete_for_pending_agent(
+    tmp_path: Path,
+) -> None:
+    setup_path, config_path = _seed_it_setup(tmp_path)
+    _mark_it_setup_pending(setup_path)
+    setup_before = setup_path.read_text(encoding="utf-8")
+    config_before = config_path.read_text(encoding="utf-8")
+
+    result = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key=f"prepared:{AGENT_ID}",
+    )
+
+    assert result["status"] == "setup-incomplete"
+    assert result["branch"] == "setup-not-finished"
+    assert result["agent"]["id"] == AGENT_ID
+    assert result["setupHandoff"]["agentId"] == AGENT_ID
+    assert result["stateChanged"] is False
+    assert "no longer available" not in result["message"]
+    listing = snow.agent_chooser_handoff(tmp_path)
+    assert listing["status"] == "choice-required"
+    assert listing["agents"] == []
+    link = (
+        "https://copilotstudio.test.microsoft.com/environments/"
+        f"{ENVIRONMENT_ID}/bots/{AGENT_ID}"
+    )
+    linked = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key="another-agent",
+        agent_link=link,
+    )
+    assert linked["status"] == "setup-incomplete"
+    assert linked["setupHandoff"]["targetUrl"] == link
+    assert setup_path.read_text(encoding="utf-8") == setup_before
+    assert config_path.read_text(encoding="utf-8") == config_before
+    assert not (tmp_path / ".local" / "connect").exists()
+
+
+def test_agent_chooser_keeps_unavailable_error_for_unknown_or_non_dev_agent(
+    tmp_path: Path,
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _mark_it_setup_pending(setup_path, realm="test")
+
+    for key in (
+        f"prepared:{AGENT_ID}",
+        "prepared:00000000-0000-4000-8000-000000000001",
+    ):
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="no longer available",
+        ):
+            snow.agent_chooser_handoff(tmp_path, selection_key=key)
+
+
 def test_agent_chooser_hands_off_to_setup_for_different_environment_link(
     tmp_path: Path,
 ) -> None:

@@ -58,8 +58,10 @@ request already includes a Copilot Studio link. Do not call `list-agents` or
 scan the environment. Continue to the mandatory `resume-handoff` boundary only
 when the chooser returns `status: ready`.
 
-`setup-required` (branch `workspace-not-prepared` or `explicit-agent-link`) is
-an automatic Setup handoff, not a stop. Show:
+`setup-required` (branch `workspace-not-prepared` or `explicit-agent-link`) and
+`setup-incomplete` (branch `setup-not-finished`: the agent is already in this
+workspace but its Setup steps are still pending) are automatic Setup
+handoffs, not stops. Show:
 
 **Message:**
 
@@ -76,7 +78,11 @@ does not ask whether the maker already has an agent. Do not ask the maker to
 type `/setup`, ask for confirmation just to enter Setup, or ask them to repeat
 Connect. Setup's normal selection, sign-in, and environment/account
 confirmation controls still apply; do not choose or create an agent for the
-maker. The chooser itself changes no state.
+maker. The chooser itself changes no state. When Setup attaches the agent,
+pass the service-provided environment display name with
+`--environment-display-name "{ENVIRONMENT_DISPLAY_NAME}"` exactly as
+`foundation-setup/da-existing-dev.md` requires, and omit it when Setup has none;
+never derive a name from an ID, URL, or host.
 
 When the pasted link is in a different environment than this workspace, the
 handoff carries `workspaceEnvironmentDiffers: true`. Setup's existing
@@ -129,8 +135,24 @@ again:
 - without a link: `agent-chooser --selection-key "prepared:{AGENT_ID}"`, using
   the agent ID Setup reports for the agent it just prepared
 
-Continue only when it returns `status: ready`; otherwise show the returned
-error and do not loop into Setup. Before continuing, show:
+Continue only when the rerun returns `status: ready` for that agent. Do not
+say the agent is set up, show the "We'll continue" message, or start any
+Connect step before that result.
+
+If the rerun returns `setup-incomplete`, the agent is in the workspace but
+Setup's remaining steps are still pending (for example after **Checkpoint and
+refresh** reset them). Do not end with an error. Resume Setup once in this
+invocation for that exact agent, without repeating the first Message: run the
+setup-readiness FlightChecks `DA-AGENT-001` and `DA-CONTENT-001` and apply each
+result with `setup_existing_da.py maintain-flightcheck`, exactly as the
+readiness sequence in `foundation-setup/da-existing-dev.md` describes (same
+agent, environment, ring, and `--preferred-username "{SETUP_ACCOUNT}"`), then
+rerun the chooser once more. If it still does not return `ready`, or Setup
+reports a blocker, treat it as a blocked Setup: show the blocker Message above
+with the pending step in plain language as `{REASON}`, and do not resume again.
+Any other chooser error is shown as returned, without looping into Setup.
+
+After the rerun returns `ready`, show:
 
 **Message:**
 
