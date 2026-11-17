@@ -4569,7 +4569,10 @@ def test_preflight_requests_only_missing_instance_url(
     assert ENVIRONMENT_ID in manual_body
     assert "Dev realm" in manual_body
     assert "`https://<your-instance>.service-now.com`" in manual_body
-    assert "public ServiceNow HTTPS root URL" in manual_body
+    assert (
+        "which ServiceNow instance should Employee Self-Service use? Send its "
+        "public HTTPS root URL, not credentials."
+    ) in manual_body
     assert "portal or module path" in manual_body
     assert "credential" in manual_body
     assert recorded["instanceName"] == "dev123"
@@ -14288,6 +14291,10 @@ def test_agent_chooser_lists_prepared_agents_without_remote_discovery(
     assert result["agents"][0]["id"] == AGENT_ID
     assert result["agents"][0]["status"] == "prepared"
     assert "prepared in this workspace" in result["question"]["question"]
+    assert result["question"]["question"].startswith(
+        "Which Employee Self-Service HR or IT agent should we connect to "
+        "ServiceNow?\n\n"
+    )
     assert result["question"]["allowFreeformInput"] is False
     assert result["question"]["header"] != result["question"]["question"]
     assert result["question"]["options"][-1] == {
@@ -14331,8 +14338,9 @@ def test_agent_chooser_offers_link_when_no_agent_is_prepared(
             "selectionKey": "another-agent",
         }
     ]
-    assert "No Employee Self-Service agents are prepared" in (
-        result["question"]["question"]
+    assert result["question"]["question"].startswith(
+        "Which Employee Self-Service HR or IT agent should we connect to "
+        "ServiceNow?\n\nNo Employee Self-Service agents are prepared"
     )
     link_question = snow.agent_chooser_handoff(
         tmp_path,

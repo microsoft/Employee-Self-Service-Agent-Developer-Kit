@@ -3417,13 +3417,13 @@ def agent_chooser_handoff(
         }
     )
     question_text = (
-        "Choose the Employee Self-Service agent you want to set up for "
-        "ServiceNow.\n\nThe listed agents are prepared in this workspace. "
+        "Which Employee Self-Service HR or IT agent should we connect to "
+        "ServiceNow?\n\nThe listed agents are prepared in this workspace. "
         "This is not a list of every agent in the environment."
         if prepared_choices
         else (
-            "Choose the Employee Self-Service agent you want to set up for "
-            "ServiceNow.\n\nNo Employee Self-Service agents are prepared in "
+            "Which Employee Self-Service HR or IT agent should we connect to "
+            "ServiceNow?\n\nNo Employee Self-Service agents are prepared in "
             "this workspace. Use another agent by pasting its Copilot Studio "
             "link."
         )
@@ -5815,8 +5815,9 @@ def _preflight_instance_question(
         "header": "ServiceNow instance URL",
         "question": (
             f"For {agent_label} in environment `{environment_id}` and "
-            f"{realm} realm, enter the intended public ServiceNow HTTPS root "
-            "URL.\n\nExample: `https://<your-instance>.service-now.com`\n\n"
+            f"{realm} realm, which ServiceNow instance should Employee "
+            "Self-Service use? Send its public HTTPS root URL, not "
+            "credentials.\n\nExample: `https://<your-instance>.service-now.com`\n\n"
             "Use only the instance root (`https://<instance>.service-now.com`). "
             "Do not enter a portal or module path such as `/sp`, `/esc`, or "
             "`/now/...`. Do not enter a username, password, credential, token, "
