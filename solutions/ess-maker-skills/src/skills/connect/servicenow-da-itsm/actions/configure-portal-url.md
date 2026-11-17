@@ -49,16 +49,17 @@ value follows the existing guarded update/readback/rollback transaction.
 
 If no accepted saved value applies, ask for the administrator-confirmed full
 employee portal URL. Show the guarded update and manual fallback guidance in
-the ordinary current-task reply, after its controller-built lead-in, which is shown verbatim. The question body carries only the exact
-target, known instance origin, current value classification, and requested
-URL. Do not show a sample URL as the answer and do not ask for credentials.
+the ordinary current-task reply, after its controller-built lead-in, which is shown verbatim. The question body is only the requested-URL question below, with no
+target topic, node, instance origin, current value, or classification
+lines; keep those facts for your own checks.
+Use the instance root only when the administrator explicitly confirms that exact root URL; otherwise ask for the confirmed path. Do not show a sample URL as the answer and do not ask for credentials.
 
 <!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "ServiceNow employee portal",
-    "question": "Target topic: `ServiceNow ITSM Setup Configurations`\nTarget node: `Set ServiceNow Portal Base URI`\nKnown ServiceNow instance origin: `{SERVICENOW_INSTANCE_ORIGIN}`\nCurrent Portal Base URI: {CURRENT_PORTAL_VALUE_CLASSIFICATION}\n\nWhat is the full HTTPS base URL of your ServiceNow employee portal? It may differ from the instance URL, so we won't assume `/sp` or `/esc`.\n\nUse the instance root only when the administrator explicitly confirms that exact root URL; otherwise provide the confirmed path. The skill will not infer `/sp`, `/esc`, or any example path.",
+    "question": "What is the full HTTPS base URL of your ServiceNow employee portal? It may differ from the instance URL, so we won't assume `/sp` or `/esc`.",
     "allowFreeformInput": true
   }
 ]
@@ -104,7 +105,7 @@ Then use the compact completion confirmation below:
 [
   {
     "header": "Save portal Base URI manually",
-    "question": "The guarded component API did not change the exact IT target topic.\n\nTarget: `ServiceNow ITSM Setup Configurations` → `Set ServiceNow Portal Base URI`\nExpected URL: `{PORTAL_URL}`\n\nIs this exact URL now saved in the target topic?\n\nNo Publish is included. Selecting the completed option triggers one fresh read-only verification.",
+    "question": "We couldn't update the portal URL automatically, so it needs to be set in Copilot Studio. Is `{PORTAL_URL}` now saved in the target topic?\n\nYou don't need to publish. Selecting the completed option triggers one fresh read-only verification.",
     "options": [
       { "label": "Completed, the exact portal URL is saved" },
       { "label": "Not yet, the portal URL is not saved" }

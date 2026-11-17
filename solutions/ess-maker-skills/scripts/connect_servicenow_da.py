@@ -6419,18 +6419,12 @@ def portal_value_reuse_handoff(
         "question": {
             "header": "Reuse saved portal URL",
             "question": (
-                "**Current target**\n"
-                f"- Agent: {ACTIVE_PROFILE.agent_display_name} "
-                f"(`{_agent_slug(context)}`)\n"
-                f"- Environment: `{context['environment']['id']}`\n"
-                f"- Confirmed ServiceNow instance: "
-                f"`{_admin_setup(state)['preflight']['instanceName']}`\n\n"
-                "**Saved value**\n"
-                f"- Employee portal URL: `{selected['portalUrl']}`\n"
-                f"- Source: {', '.join(selected['sourceLabels'])}\n\n"
-                "Reuse this confirmed value for the current agent? The current "
-                "agent still receives its own guarded readback, update when "
-                "needed, and lifecycle validation."
+                "An administrator-confirmed employee portal URL is already "
+                f"saved for another agent in this workspace: "
+                f"`{selected['portalUrl']}` "
+                f"(from {', '.join(selected['sourceLabels'])}).\n\n"
+                "Do you want to reuse it for this agent? We'll still check "
+                "and update this agent's own portal setting if needed."
             ),
             "options": [
                 {"label": choice["label"]} for choice in decision_choices
@@ -6981,18 +6975,11 @@ def shared_reuse_handoff(
         "question": {
             "header": "Reuse shared identity",
             "question": (
-                "**Current target**\n"
-                f"- Agent: {ACTIVE_PROFILE.agent_display_name} "
-                f"(`{_agent_slug(context)}`)\n"
-                f"- Environment: `{context['environment']['id']}`\n"
-                f"- Realm: `{str(context['agent'].get('realm') or 'dev')}`\n"
-                f"- Confirmed ServiceNow instance: "
-                f"`{candidate['instanceName']}`\n\n"
-                "**Reusable source**\n"
-                f"- {candidate['sourceProfile'].upper()} agent "
-                f"`{candidate['sourceAgentSlug']}`\n\n"
-                "**Eligible recorded items**\n"
-                f"{item_lines}\n\n"
+                f"The {candidate['sourceProfile'].upper()} agent "
+                f"`{candidate['sourceAgentSlug']}` in this workspace already "
+                "has compatible administrator setup for ServiceNow instance "
+                f"`{candidate['instanceName']}`. You can reuse these "
+                f"items:\n\n{item_lines}\n\n"
                 "Reuse avoids repeating compatible administrator setup, but "
                 "each owning readiness check still runs for this agent.\n\n"
                 "What would you like to do?"
@@ -10424,7 +10411,7 @@ def _current_task_guidance(
         )
     if phase_id == "portal-url":
         return (
-            f"Next, we'll make sure the {_product_audience()} agent's case "
+            f"Next, we'll make sure the agent's {_product_audience()} case "
             "links open in the right employee portal."
         )
     if phase_id == "test":

@@ -28,7 +28,7 @@ result question:
 [
   {
     "header": "Test ServiceNow ITSM",
-    "question": "Selected agent: Employee Self-Service (IT) (`{SELECTED_AGENT_SLUG}` / `{SELECTED_AGENT_ID}`)\nRequired prompt: **List my open IT tickets**\n\nDid the ServiceNow ITSM capability work correctly for the exact saved draft and selected ServiceNow connection?\n\nReturn only Pass or Not pass. Do not include response content, personal data, ticket identifiers, tokens, or secrets.",
+    "question": "Required prompt: **List my open IT tickets**\n\nDid the ServiceNow ITSM capability work correctly for the exact saved draft and selected ServiceNow connection?\n\nReturn only Pass or Not pass. Do not include response content, personal data, ticket identifiers, tokens, or secrets.",
     "options": [
       { "label": "Pass, the ServiceNow ITSM capability worked correctly" },
       { "label": "Not pass, it failed or could not be verified" }

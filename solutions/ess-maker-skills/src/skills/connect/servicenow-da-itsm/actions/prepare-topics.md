@@ -28,10 +28,6 @@ The command-generated `replyBeforeQuestion` is an ordinary reply, not part of
 the card:
 
 ```text
-Selected agent: {AGENT_DISPLAY_NAME} (`{SELECTED_AGENT_SLUG}` / `{SELECTED_AGENT_ID}`)
-Environment: `{ENVIRONMENT_ID}`
-Component hash: `{COMPONENT_HASH}`
-
 Current topic inventory: {TOPIC_INVENTORY}
 
 Inactive {PRODUCT_NAME} topics:

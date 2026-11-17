@@ -106,15 +106,14 @@ must never run for the multiple-healthy-candidate path. Render
 exact candidate summary in the ordinary current-task reply. The reply starts
 with a controller-built lead-in (it names the saved User Claim and User Field
 only when both are recorded) and ends with a controller-built closing line;
-show both verbatim. The native question carries only the required match,
-current candidate context, and completion decision:
+show both verbatim. The native question carries only the completion decision:
 
 <!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "ServiceNow connection",
-    "question": "Required connection match:\n- Authentication Type: Microsoft Entra ID User Login (`entraIDUserLogin`)\n- Resource URI: `{APP_CLIENT_ID}`\n- Instance Name: `{INSTANCE_NAME}`\n\nCurrent exact candidates: {CONNECTION_CANDIDATE_SUMMARY}\n\nDid you create the connection, and does Copilot Studio show it as Connected for this agent? If you reply in chat instead, name the connection you used, for example: \"I created {CONNECTION_DISPLAY_NAME}. Copilot Studio shows Connected.\"\n\nSelecting the completed option triggers one fresh connection check and one check of the agent's saved settings. The name is optional guidance and is not a readiness gate.",
+    "question": "Did you create the connection, and does Copilot Studio show it as Connected for this agent? If you reply in chat instead, name the connection you used, for example: \"I created {CONNECTION_DISPLAY_NAME}. Copilot Studio shows Connected.\"\n\nSelecting the completed option triggers one fresh connection check and one check of the agent's saved settings. The name is optional guidance and is not a readiness gate.",
     "options": [
       { "label": "Completed, the connection is created and shows Connected" },
       { "label": "Not yet, the connection is not ready" }

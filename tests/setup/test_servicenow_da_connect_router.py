@@ -437,21 +437,8 @@ def test_servicenow_dev_phase_order_and_binding_intros_are_explicit() -> None:
             "<!-- visible-handoff-question:v1 -->",
             1,
         )[1]
-        auth_index = visible_question.index(
-            "Authentication Type: Microsoft Entra ID User Login"
-        )
-        resource_index = visible_question.index(
-            "Resource URI: `{APP_CLIENT_ID}`"
-        )
-        instance_index = visible_question.index(
-            "Instance Name: `{INSTANCE_NAME}`"
-        )
-        decision_index = visible_question.index(
-            "Did you create the connection",
-        )
-        assert auth_index < resource_index < instance_index < decision_index
-        required_section = visible_question[:decision_index]
-        assert "Display name" not in required_section
+        assert visible_question.index("Did you create the connection") > 0
+        assert "Required connection match" not in visible_question
         assert "is not a readiness gate" in visible_question
         assert "conditional\nremediation, not an observed current error" in (
             credential

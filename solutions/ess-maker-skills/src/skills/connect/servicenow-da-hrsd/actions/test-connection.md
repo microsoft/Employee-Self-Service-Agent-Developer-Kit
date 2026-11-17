@@ -28,7 +28,7 @@ result question:
 [
   {
     "header": "Test ServiceNow HRSD",
-    "question": "Selected agent: Employee Self-Service (HR) (`{SELECTED_AGENT_SLUG}` / `{SELECTED_AGENT_ID}`)\nRequired prompt: **List my open HR cases**\n\nDid the ServiceNow HRSD capability work correctly for the exact saved draft and selected ServiceNow connection?\n\nReturn only Pass or Not pass. Do not include response content, personal data, case identifiers, tokens, or secrets.",
+    "question": "Required prompt: **List my open HR cases**\n\nDid the ServiceNow HRSD capability work correctly for the exact saved draft and selected ServiceNow connection?\n\nReturn only Pass or Not pass. Do not include response content, personal data, case identifiers, tokens, or secrets.",
     "options": [
       { "label": "Pass, the ServiceNow HRSD capability worked correctly" },
       { "label": "Not pass, it failed or could not be verified" }

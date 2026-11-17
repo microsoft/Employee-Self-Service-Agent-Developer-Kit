@@ -215,9 +215,9 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
         (
             _ACTIONS / "verify-plugin-prerequisites.md",
             (
-                "Required evidence for the selected ServiceNow instance:",
-                "Plugin id: `com.sn_hr_core`",
-                "Version Details: `Installed`",
+                "Human Resources Scoped App: Core",
+                "`com.sn_hr_core`",
+                "listed as Installed",
                 "installed and ready for you to use",
                 "Has the ServiceNow administrator confirmed",
             ),
@@ -232,7 +232,6 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
         (
             _ACTIONS / "test-connection.md",
             (
-                "Selected agent:",
                 "Required prompt: **List my open HR cases**",
                 "exact saved draft and selected ServiceNow connection",
                 "Return only Pass or Not pass",
@@ -390,7 +389,7 @@ def test_hr_plugin_completion_header_and_question_are_distinct() -> None:
     payload = _validate_payload(
         _payloads(_ACTIONS / "verify-plugin-prerequisites.md")[0],
         required_phrases=(
-            "Required evidence for the selected ServiceNow instance:",
+            "Human Resources Scoped App: Core",
             "Has the ServiceNow administrator confirmed",
         ),
     )
@@ -452,11 +451,6 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
     completion = _validate_payload(
         payloads[0],
         required_phrases=(
-            "Required connection match:",
-            "Authentication Type: Microsoft Entra ID User Login",
-            "Resource URI: `{APP_CLIENT_ID}`",
-            "Instance Name: `{INSTANCE_NAME}`",
-            "Current exact candidates:",
             "Did you create the connection",
             "Copilot Studio show it as Connected",
             "The name is optional guidance and is not a readiness gate",
@@ -500,10 +494,9 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
         source_normalized
     )
     expected = completion["question"]
-    assert expected.index("Authentication Type:") < expected.index(
-        "Resource URI:"
-    )
-    assert expected.index("Resource URI:") < expected.index("Instance Name:")
+    assert expected.startswith("Did you create the connection")
+    assert "Required connection match" not in expected
+    assert "Current exact candidates" not in expected
     assert "Purpose:" not in expected
     assert "Owner:" not in expected
     assert "What to do:" not in expected
@@ -543,7 +536,6 @@ def test_servicenow_test_question_has_explicit_result_choices(
             _CONNECT / provider / "actions" / "test-connection.md"
         )[0],
         required_phrases=(
-            "Selected agent:",
             "Required prompt:",
             prompt,
             "exact saved draft and selected ServiceNow connection",
@@ -570,19 +562,18 @@ def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
     portal_input = _validate_payload(
         payloads[0],
         required_phrases=(
-            "Target topic:",
-            "{SERVICENOW_INSTANCE_ORIGIN}",
             "full HTTPS base URL of your ServiceNow employee portal",
-            "Set ServiceNow Portal BaseURI",
-            "will not infer `/sp`, `/esc`",
         ),
+    )
+    assert portal_input["question"] == (
+        "What is the full HTTPS base URL of your ServiceNow employee "
+        "portal? It may differ from the instance URL, so we won't assume "
+        "`/sp` or `/esc`."
     )
     fallback = _validate_payload(
         payloads[1],
         required_phrases=(
-            "guarded component API did not change the exact HR target topic",
-            "ServiceNow HRSD Setup Configurations",
-            "Set ServiceNow Portal BaseURI",
+            "couldn't update the portal URL automatically",
             "{PORTAL_URL}",
             "fresh read-only verification",
         ),
@@ -692,3 +683,56 @@ def test_rendered_visible_handoff_rejects_unresolved_placeholders() -> None:
             required_phrases=("Purpose:", "Owner:", "Instructions:"),
             rendered=True,
         )
+
+
+_TECHNICAL_QUESTION_HEADERS = (
+    "Selected agent:",
+    "Target topic:",
+    "Target node:",
+    "Target:",
+    "Known ServiceNow instance origin:",
+    "Current Portal",
+    "Component hash",
+    "Environment:",
+    "Current target",
+    "Required connection match",
+    "Current exact candidates",
+    "Required evidence for the selected",
+)
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ("servicenow-da-hrsd", "servicenow-da-itsm"),
+)
+def test_servicenow_native_questions_have_no_technical_headers(
+    provider: str,
+) -> None:
+    checked = 0
+    for path in sorted((_CONNECT / provider / "actions").glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        if not _MARKER.search(text):
+            continue
+        for payload in _payloads(path):
+            for question in payload:
+                body = question["question"]
+                for header in _TECHNICAL_QUESTION_HEADERS:
+                    assert header not in body, (path.name, header)
+                checked += 1
+    assert checked >= 5
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ("servicenow-da-hrsd", "servicenow-da-itsm"),
+)
+def test_portal_url_question_is_one_plain_paragraph(provider: str) -> None:
+    portal_input = _payloads(
+        _CONNECT / provider / "actions" / "configure-portal-url.md"
+    )[0][0]
+    assert portal_input["question"] == (
+        "What is the full HTTPS base URL of your ServiceNow employee "
+        "portal? It may differ from the instance URL, so we won't assume "
+        "`/sp` or `/esc`."
+    )
+    assert "\n" not in portal_input["question"]

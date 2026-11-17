@@ -52,7 +52,7 @@ evidence summary and completion decision:
 [
   {
     "header": "HR Service Delivery Core",
-    "question": "Required evidence for the selected ServiceNow instance:\n- Title: `Human Resources Scoped App: Core`\n- Plugin id: `com.sn_hr_core`\n- Version Details: `Installed`\n- Message: `Your application is installed and ready for you to use on your instance`\n\nHas the ServiceNow administrator confirmed that all of this HR Service Delivery Core evidence is present?",
+    "question": "Your ServiceNow administrator should see **Human Resources Scoped App: Core** (`com.sn_hr_core`) listed as Installed, with the message `Your application is installed and ready for you to use on your instance`.\n\nHas the ServiceNow administrator confirmed that all of this HR Service Delivery Core evidence is present?",
     "options": [
       { "label": "Yes, all listed installed-and-ready evidence is present" },
       { "label": "No, one or more required items are missing" },

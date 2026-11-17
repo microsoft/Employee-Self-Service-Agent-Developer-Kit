@@ -5029,10 +5029,10 @@ def test_shared_reuse_partial_hr_to_it_requires_one_maker_acceptance(
             {"label": "Not now", "decision": "not-now"},
         ]
         body = handoff["question"]["question"]
-        assert "Employee Self-Service (IT)" in body
-        assert "employee-self-service-it" in body
-        assert ENVIRONMENT_ID in body
-        assert "Confirmed ServiceNow instance: `dev123`" in body
+        assert "ServiceNow instance `dev123`" in body
+        for technical in ("Current target:", "Environment:", "Realm:", "Agent:"):
+            assert technical not in body
+        assert ENVIRONMENT_ID not in body
         assert "HRSD agent `employee-self-service-hr`" in body
         assert "Entra administrator-confirmed application" in body
         assert "Current target-bound ServiceNow user-field mapping" in body
@@ -12143,7 +12143,7 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         assert "**Expected form values" not in text
         assert "Part 2" not in text
     assert (
-        f"Next, we'll make sure the {audience} agent's case links open in "
+        f"Next, we'll make sure the agent's {audience} case links open in "
         "the right employee portal."
     ) == portal
     assert (
