@@ -259,9 +259,11 @@ fixes/revalidation.
 
 ## Four maker actions
 
-After rendering the scorecard, invoke the structured question control with the
-prompt `Choose the next step for {actual test-set name}.` and these exact option
-labels in order:
+After rendering the scorecard, invoke the structured question control with
+both `header` and `question` set to
+`Choose the next step for {actual test-set name}.` so it appears once in the
+pinned top row without a generic title or repeated body text. Use these exact
+option labels in order:
 
 1. **Do you want to mark this test set ready for review so another user can provide feedback?**
 2. **Are you ready to run this test set in Copilot Studio?**

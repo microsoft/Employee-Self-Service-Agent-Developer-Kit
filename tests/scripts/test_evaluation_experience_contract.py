@@ -106,6 +106,10 @@ def test_generated_quality_report_uses_exact_compact_scorecard(flow):
     ):
         assert duplicate_prompt not in scorecard
     assert "structured question control" in contract
+    assert (
+        "both `header` and `question` set to "
+        "`Choose the next step for {actual test-set name}.` so it appears once"
+    ) in _normalized(contract)
     assert "only place these options appear" in contract
     assert "Do not ask the same question in prose" in contract
     assert "always five blocks total" in _normalized(contract)
