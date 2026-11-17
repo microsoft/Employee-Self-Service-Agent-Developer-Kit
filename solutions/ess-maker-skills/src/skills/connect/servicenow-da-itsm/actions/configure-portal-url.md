@@ -49,7 +49,7 @@ value follows the existing guarded update/readback/rollback transaction.
 
 If no accepted saved value applies, ask for the administrator-confirmed full
 employee portal URL. Show the guarded update and manual fallback guidance in
-the ordinary current-task reply. The question body carries only the exact
+the ordinary current-task reply, after its controller-built lead-in, which is shown verbatim. The question body carries only the exact
 target, known instance origin, current value classification, and requested
 URL. Do not show a sample URL as the answer and do not ask for credentials.
 
@@ -58,7 +58,7 @@ URL. Do not show a sample URL as the answer and do not ask for credentials.
 [
   {
     "header": "ServiceNow employee portal",
-    "question": "Target topic: `ServiceNow ITSM Setup Configurations`\nTarget node: `Set ServiceNow Portal Base URI`\nKnown ServiceNow instance origin: `{SERVICENOW_INSTANCE_ORIGIN}`\nCurrent Portal Base URI: {CURRENT_PORTAL_VALUE_CLASSIFICATION}\n\nWhat is the complete HTTPS employee portal URL on this same instance?\n\nUse the instance root only when the administrator explicitly confirms that exact root URL; otherwise provide the confirmed path. The skill will not infer `/sp`, `/esc`, or any example path.",
+    "question": "Target topic: `ServiceNow ITSM Setup Configurations`\nTarget node: `Set ServiceNow Portal Base URI`\nKnown ServiceNow instance origin: `{SERVICENOW_INSTANCE_ORIGIN}`\nCurrent Portal Base URI: {CURRENT_PORTAL_VALUE_CLASSIFICATION}\n\nWhat is the full HTTPS base URL of your ServiceNow employee portal? It may differ from the instance URL, so we won't assume `/sp` or `/esc`.\n\nUse the instance root only when the administrator explicitly confirms that exact root URL; otherwise provide the confirmed path. The skill will not infer `/sp`, `/esc`, or any example path.",
     "allowFreeformInput": true
   }
 ]

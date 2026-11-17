@@ -153,7 +153,7 @@ waiting; Test requires the actual maker result, and any contract-defined
 interactive mutation requires its actual maker choice and validation. Show
 the final `renderBlock.text` only when the controller
 returns complete and every contract phase has a current invocation verified
-marker. Keep these updates short: one current step and one result update, not
+marker; its closing sentence states what the Maker-reported Test pane result does and does not cover. Keep these updates short: one current step and one result update, not
 per-subrequest heartbeats or repeated full tables.
 
 **Files:**
@@ -258,6 +258,7 @@ below.
    Show the newly returned `renderBlock.text` before any action.
    It contains the current task's target, responsible role, supported
    runbook/location, expected non-secret evidence, and completion boundary.
+   Credential, agent-connection, portal-URL, and Test reply text includes a short controller-built lead-in before **Where and how**; show it verbatim. The credential lead-in names the saved User Claim and User Field only when both are recorded.
    Availability is acknowledgement only. Continue only from the returned
    lifecycle decision and its separate action completion/evidence question.
 5. On **No**, rerun with the same group ID and context hash plus

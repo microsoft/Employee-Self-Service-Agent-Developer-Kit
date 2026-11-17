@@ -9886,8 +9886,18 @@ def _build_phase_progress(
         )
 
     grouped = render_grouped()
+    environment_id = (
+        state.get("environmentId") if isinstance(state, dict) else None
+    )
+    environment_clause = (
+        f" in environment `{environment_id}`" if environment_id else ""
+    )
     final_message = (
-        f"Complete — every {display_name} step was checked in this run."
+        f"Your ServiceNow connection worked for the request "
+        f"`{ACTIVE_PROFILE.test_prompt}`{environment_clause}. "
+        f"{ACTIVE_PROFILE.agent_display_name} returned the result you "
+        "expected in the Test pane. Other request types and sign-in for "
+        "other employees haven't been verified."
         if decision.get("decision") == "complete"
         and completed_count == len(items)
         else None
@@ -10184,6 +10194,27 @@ def _business_group_availability_question(
     )
 
 
+def _credential_lead_in(state: dict[str, Any]) -> str:
+    mapping = state.get("evidence", {}).get("identityMapping")
+    claim = field = None
+    if (
+        isinstance(mapping, dict)
+        and mapping.get("serviceNowAdministratorConfirmed") is True
+    ):
+        claim = mapping.get("tokenClaimName")
+        field = mapping.get("serviceNowUserField")
+    saved = (
+        "Your ServiceNow administrator's configuration is saved, using "
+        f"`{claim}` as the User Claim and `{field}` as the User Field. "
+        if isinstance(claim, str) and claim and isinstance(field, str) and field
+        else ""
+    )
+    return (
+        f"{saved}Next, create the sign-in connection that Employee "
+        "Self-Service will use to access ServiceNow.\n\n"
+    )
+
+
 def _current_task_guidance(
     context: dict[str, Any],
     state: dict[str, Any],
@@ -10309,7 +10340,7 @@ def _current_task_guidance(
                 else None
             ),
         )
-        return common + (
+        return common + _credential_lead_in(state) + (
             "**Where and how**\n"
             f"Open the selected environment Connections list: "
             f"{links['powerAutomateConnections']['url']}. Use "
@@ -10332,10 +10363,16 @@ def _current_task_guidance(
             "**Completion boundary**\n"
             "The separate completion card triggers a fresh API reread. A "
             "Connected physical credential does not prove agent binding or "
-            "business success."
+            "business success.\n\n"
+            "Return here when it shows Connected. You won't need to resend "
+            "the administrator replies."
         )
     if phase_id == "agent-connection":
         return common + (
+            "Now select that connection for this agent in Copilot Studio. "
+            "Return here and tell us which connection you used. After that, "
+            "we'll test a request with your account to check sign-in and "
+            "employee matching.\n\n"
             "**Where and how**\n"
             f"Open {links['copilotStudioAgent']['url']} → Settings → "
             "Connection settings → ServiceNow. Use "
@@ -10369,7 +10406,10 @@ def _current_task_guidance(
             "The topic choice is a separate card."
         )
     if phase_id == "portal-url":
+        audience = "HR" if ACTIVE_PROFILE.key == "hrsd" else "IT"
         return common + (
+            f"Next, we'll make sure the {audience} agent's case links open "
+            "in the right employee portal.\n\n"
             "**Where and how**\n"
             f"Use `{provider_root}/configure-portal-url.md` for the exact "
             f"{ACTIVE_PROFILE.product_name} Setup Configurations topic. "
@@ -10390,6 +10430,11 @@ def _current_task_guidance(
         )
     if phase_id == "test":
         return common + (
+            "We're ready to try a request. In the agent's Test pane, run a "
+            "request that should return your real ServiceNow data, for "
+            "example the required prompt below. Come back and tell us what "
+            "happened and whether it matched what you expected. You don't "
+            "need to paste case contents.\n\n"
             "**Where and how**\n"
             f"Use `{provider_root}/test-connection.md` and the Copilot Studio "
             f"Test pane. Run exactly `{ACTIVE_PROFILE.test_prompt}` against "

@@ -11,7 +11,7 @@ Open `Settings` → `Connection settings`; do not invent a tab-specific URL.
 
 Ask whether the ServiceNow row currently shows Connected. A prior attestation
 is context only and cannot answer the current question. Render the target URL
-and binding steps above in the ordinary current-task reply, then use this
+and binding steps above in the ordinary current-task reply after its controller-built lead-in, which is shown verbatim, then use this
 compact payload with the exact selected agent and connection:
 
 <!-- visible-handoff-question:v1 -->

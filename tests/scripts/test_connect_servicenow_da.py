@@ -11982,6 +11982,95 @@ def test_topic_action_handoff_has_hr_parity(
     assert "https://" not in question
 
 
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
+    profile: str,
+) -> None:
+    product = snow.PRODUCT_PROFILES[profile]
+    context = _profile_context(
+        profile,
+        agent_id=AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile == "hrsd"
+            else "employee-self-service-it"
+        ),
+    )
+
+    def state(mapping: dict | None) -> dict:
+        evidence: dict = {}
+        if mapping is not None:
+            evidence["identityMapping"] = mapping
+        return {
+            "adminSetup": {
+                "preflight": {"instanceName": "dev123"},
+                "phaseHandoffs": {},
+            },
+            "evidence": evidence,
+        }
+
+    def guidance(phase_id: str, value: dict) -> str:
+        return snow._current_task_guidance(
+            context,
+            value,
+            phase_id=phase_id,
+            role="ESS Maker / Agent Developer",
+        )
+
+    mapping = {
+        "serviceNowAdministratorConfirmed": True,
+        "tokenClaimName": "employee_id",
+        "serviceNowUserField": "employee_number",
+    }
+    with snow.product_profile_context(profile):
+        known = guidance("credential", state(mapping))
+        unknown = guidance("credential", state(None))
+        agent = guidance("agent-connection", state(None))
+        portal = guidance("portal-url", state(None))
+        test = guidance("test", state(None))
+
+    saved = (
+        "Your ServiceNow administrator's configuration is saved, using "
+        "`employee_id` as the User Claim and `employee_number` as the User "
+        "Field. Next, create the sign-in connection"
+    )
+    create = (
+        "Next, create the sign-in connection that Employee Self-Service will "
+        "use to access ServiceNow.\n\n**Where and how**"
+    )
+    assert saved in known
+    assert known.index(saved) < known.index("**Where and how**")
+    assert "Your ServiceNow administrator's configuration is saved" not in (
+        unknown
+    )
+    assert create in known and create in unknown
+    for text in (known, unknown):
+        assert text.endswith(
+            "Return here when it shows Connected. You won't need to resend "
+            "the administrator replies."
+        )
+    assert (
+        "Now select that connection for this agent in Copilot Studio. "
+        "Return here and tell us which connection you used. After that, "
+        "we'll test a request with your account to check sign-in and "
+        "employee matching.\n\n**Where and how**"
+    ) in agent
+    audience = "HR" if profile == "hrsd" else "IT"
+    assert (
+        f"Next, we'll make sure the {audience} agent's case links open in "
+        "the right employee portal.\n\n**Where and how**"
+    ) in portal
+    assert (
+        "We're ready to try a request. In the agent's Test pane, run a "
+        "request that should return your real ServiceNow data, for example "
+        "the required prompt below. Come back and tell us what happened and "
+        "whether it matched what you expected. You don't need to paste "
+        "case contents.\n\n**Where and how**"
+    ) in test
+    assert f"Run exactly `{product.test_prompt}`" in test
+    assert "finish without testing" not in test
+
+
 @pytest.mark.parametrize(
     ("profile", "phase_role"),
     (
@@ -12735,21 +12824,28 @@ def test_phase_progress_final_text_requires_every_current_verified_marker() -> N
         executed_actions=frozenset(),
         verified_phases=all_ids - {"portal-url"},
     )
-    complete = snow._build_phase_progress(
-        contract,
-        state,
-        {"decision": "complete"},
-        executed_actions=frozenset(),
-        verified_phases=all_ids,
-    )
+    with snow.product_profile_context("itsm"):
+        complete = snow._build_phase_progress(
+            contract,
+            state,
+            {"decision": "complete"},
+            executed_actions=frozenset(),
+            verified_phases=all_ids,
+        )
 
     assert incomplete["internal"]["groupedFinalText"] is None
     portal = next(i for i in incomplete["items"] if i["id"] == "portal-url")
     assert portal["status"] == "rechecking"
     final = complete["internal"]["groupedFinalText"]
     assert final.endswith(
-        "Complete — every ServiceNow ITSM step was checked in this run."
+        "Other request types and sign-in for other employees haven't been "
+        "verified."
     )
+    assert (
+        "Your ServiceNow connection worked for the request "
+        "`List my open IT tickets`. "
+    ) in final
+    assert "Employee Self-Service (IT) returned the result you expected" in final
     assert "**Phases**" in final
     assert "Responsible role:" in final
     assert "Connection progress:" not in final

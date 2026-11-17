@@ -593,7 +593,7 @@ def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
         required_phrases=(
             "Target topic:",
             "{SERVICENOW_INSTANCE_ORIGIN}",
-            "complete HTTPS employee portal URL",
+            "full HTTPS base URL of your ServiceNow employee portal",
             "Set ServiceNow Portal BaseURI",
             "will not infer `/sp`, `/esc`",
         ),

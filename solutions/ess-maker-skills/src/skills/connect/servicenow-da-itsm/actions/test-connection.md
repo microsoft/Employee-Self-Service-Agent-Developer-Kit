@@ -20,7 +20,7 @@ Do not require a non-empty ticket result, and do not automatically treat a
 sample, empty result, or conversational response as pass or fail.
 
 Render the target link, saved-draft instruction, exact prompt, and privacy
-boundary above in the ordinary current-task reply. Then use this compact
+boundary above in the ordinary current-task reply after its controller-built lead-in, which is shown verbatim. Then use this compact
 result question:
 
 <!-- visible-handoff-question:v1 -->

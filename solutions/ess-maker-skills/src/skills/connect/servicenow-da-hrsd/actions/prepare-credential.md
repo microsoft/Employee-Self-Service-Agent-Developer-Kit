@@ -118,7 +118,7 @@ repair or no exact connection exists and a new connection is required. It
 must never run for the multiple-healthy-candidate path. Render
 `{CONNECTION_DISPLAY_NAME}`, `{INSTANCE_NAME}`, `{APP_CLIENT_ID}`,
 `{POWER_AUTOMATE_CONNECTIONS_URL}`, `{POWER_APPS_URL}`, and the exact candidate
-summary in the ordinary current-task reply. The native question carries only
+summary in the ordinary current-task reply. The reply starts with a controller-built lead-in (it names the saved User Claim and User Field only when both are recorded) and ends with a controller-built closing line; show both verbatim. The native question carries only
 the required match, current candidate context, and completion decision:
 
 <!-- visible-handoff-question:v1 -->
