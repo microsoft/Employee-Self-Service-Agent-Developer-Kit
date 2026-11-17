@@ -7281,7 +7281,40 @@ def test_ready_to_send_messages_are_wrapped_in_one_fenced_block(
             "**Completion boundary**"
         )
     assert "```" not in expected_entra + expected_service_now
-
+    entra_lead_in = entra["ordinaryReply"]["text"].split(
+        "**Ready-to-send message**"
+    )[0]
+    assert entra_lead_in.endswith(
+        (
+            "The HR prerequisite is confirmed. Next, send"
+            if profile_key == "hrsd"
+            else "Next, send"
+        )
+        + " this message to your Microsoft Entra administrator to prepare "
+        "ServiceNow sign-in.\n\n"
+        "When they reply, paste their response here without secrets. "
+        "We'll use it to prepare the ServiceNow handoff; you don't need to "
+        "interpret the settings.\n\n"
+    )
+    assert entra_lead_in.index("ServiceNow instance:") < entra_lead_in.index(
+        "this message to your Microsoft Entra"
+    )
+    assert service_now["ordinaryReply"]["text"].split(
+        "**Ready-to-send message**"
+    )[0].endswith(
+        "We have the Entra values. Send this message to your ServiceNow "
+        "administrator to set up employee matching.\n\n"
+        "It includes the values already supplied. When they reply, paste "
+        "their saved-configuration confirmation, **User Field**, and "
+        "same-value confirmation here without secrets.\n\n"
+    )
+    if plugin is not None:
+        assert plugin.split("**Ready-to-send message**")[0].endswith(
+            "First, your ServiceNow administrator needs to confirm that this "
+            "instance supports the HR scenarios.\n\n"
+            "Send them this message. When they reply, paste their "
+            "confirmation here.\n\n"
+        )
 
 @pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))
 def test_direct_identity_handoff_uses_authoritative_source_and_adapter(

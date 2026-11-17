@@ -1112,6 +1112,29 @@ def _ready_to_send_block(body: str) -> str:
     return f"**Ready-to-send message**\n{fence}text\n{body}\n{fence}"
 
 
+def _identity_handoff_lead_in(stage: str) -> str:
+    if stage == "entra":
+        prerequisite = (
+            "The HR prerequisite is confirmed. Next, send"
+            if ACTIVE_PROFILE.requires_hr_core
+            else "Next, send"
+        )
+        return (
+            f"{prerequisite} this message to your Microsoft Entra "
+            "administrator to prepare ServiceNow sign-in.\n\n"
+            "When they reply, paste their response here without secrets. "
+            "We'll use it to prepare the ServiceNow handoff; you don't need "
+            "to interpret the settings."
+        )
+    return (
+        "We have the Entra values. Send this message to your ServiceNow "
+        "administrator to set up employee matching.\n\n"
+        "It includes the values already supplied. When they reply, paste "
+        "their saved-configuration confirmation, **User Field**, and "
+        "same-value confirmation here without secrets."
+    )
+
+
 def _render_identity_runtime_instruction(
     context: dict[str, Any],
     *,
@@ -1325,6 +1348,7 @@ def identity_direct_handoff(
                 "kind": "ordinary-agent-response",
                 "text": (
                     f"{target_text}\n\n"
+                    f"{_identity_handoff_lead_in(stage)}\n\n"
                     f"{_ready_to_send_block(source_text)}\n\n"
                     f"Current contract boundary\n{contract_boundary}"
                 ),
@@ -10180,6 +10204,10 @@ def _current_task_guidance(
             "Plugin ID `com.sn_hr_core`, Version Details `Installed`, the "
             "installed-and-ready message, source, timestamp, and current "
             "target binding.\n\n"
+            "First, your ServiceNow administrator needs to confirm that this "
+            "instance supports the HR scenarios.\n\n"
+            "Send them this message. When they reply, paste their "
+            "confirmation here.\n\n"
         ) + _ready_to_send_block(
             "We're connecting **Employee Self-Service HR** to ServiceNow HR "
             f"Service Delivery on [**{instance_url}**]({instance_url}).\n\n"
