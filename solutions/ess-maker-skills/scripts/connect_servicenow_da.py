@@ -9722,6 +9722,24 @@ def _phase_status_icon(status: str) -> str:
         ) from exc
 
 
+_STAGE_WAITING_TEXT = {
+    "entra-registration": (
+        "We're waiting for your Entra administrator's Application (client) ID "
+        "and, if they did Part 4, the claim name.\n\n"
+        "When you return, paste their reply without secrets. You won't need "
+        "to repeat anything you've already sent."
+    ),
+    "servicenow-oidc": (
+        "We're waiting for your ServiceNow administrator's "
+        "saved-configuration confirmation, User Field, and same-value "
+        "confirmation.\n\n"
+        "When you return, paste their non-sensitive reply. Don't include "
+        "employee identifiers or secrets. You won't need to repeat the Entra "
+        "values."
+    ),
+}
+
+
 def _build_phase_progress(
     contract: dict[str, Any],
     state: dict[str, Any] | None,
@@ -9889,7 +9907,10 @@ def _build_phase_progress(
             "groupedErrorText": render_grouped(
                 current_status=("❌", "Needs attention")
             ),
-            "waitingText": f"Waiting — {label}: please provide the requested information to continue.",
+            "waitingText": _STAGE_WAITING_TEXT.get(
+                str(current_item["id"]),
+                f"Waiting — {label}: please provide the requested information to continue.",
+            ),
             "needsAttentionText": f"{label} needs your review before setup can continue.",
         }
     return progress

@@ -70,7 +70,14 @@ Leave the selection unset.
   administrator completed the installation.
 - **No, one or more required items are missing** / **Not sure, the
   administrator still needs to check:** show the direct link and identifiers
-  above, return `ACTION_RESULT = "waiting"`, and do not record completion.
+  above, then show this fixed waiting text verbatim (do not paraphrase it),
+  return `ACTION_RESULT = "waiting"`, and do not record completion:
+
+  ```text
+  HR setup is waiting for your ServiceNow administrator to confirm that the HR Service Delivery Core plugin is installed and active.
+
+  Bring back that confirmation when it's ready, and we'll continue with the Entra handoff. You won't need to restart.
+  ```
 
 After **Yes**, record the single phase handoff:
 

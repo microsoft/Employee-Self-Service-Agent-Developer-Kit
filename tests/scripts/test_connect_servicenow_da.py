@@ -12538,12 +12538,65 @@ def test_phase_progress_distinguishes_reused_manual_recheck_and_blocked() -> Non
         "Rechecking: Confirm ServiceNow user mapping"
     )
     assert internal["waitingText"] == (
-        "Waiting — Confirm ServiceNow user mapping: please provide the requested information to continue."
+        "We're waiting for your ServiceNow administrator's "
+        "saved-configuration confirmation, User Field, and same-value "
+        "confirmation.\n\n"
+        "When you return, paste their non-sensitive reply. Don't include "
+        "employee identifiers or secrets. You won't need to repeat the Entra "
+        "values."
+    )
+    entra_progress = snow._build_phase_progress(
+        contract,
+        state,
+        {
+            "decision": "run-checkpoints",
+            "phase": {"id": "entra-registration"},
+        },
+        executed_actions=frozenset(),
+        verified_phases=frozenset({"preflight"}),
+    )
+    assert entra_progress["internal"]["currentPhase"]["waitingText"] == (
+        "We're waiting for your Entra administrator's Application (client) ID "
+        "and, if they did Part 4, the claim name.\n\n"
+        "When you return, paste their reply without secrets. You won't need "
+        "to repeat anything you've already sent."
+    )
+    other_progress = snow._build_phase_progress(
+        contract,
+        state,
+        {"decision": "run-checkpoints", "phase": {"id": "topics"}},
+        executed_actions=frozenset(),
+        verified_phases=frozenset({"preflight"}),
+    )
+    other_waiting = other_progress["internal"]["currentPhase"]["waitingText"]
+    assert other_waiting.startswith("Waiting — ")
+    assert other_waiting.endswith(
+        "please provide the requested information to continue."
     )
     grouped = progress["internal"]["groupedText"]
     assert "   - ✅ Review the current setup — Reused — checked" not in grouped
     assert "- ✅ Review the current setup — Reused — checked" in grouped
     assert "   - ❌ Turn on the ServiceNow topics — Needs attention" in grouped
+
+
+def test_hrsd_plugin_waiting_text_is_fixed_in_doc() -> None:
+    doc = (
+        Path(__file__).resolve().parents[2]
+        / "solutions"
+        / "ess-maker-skills"
+        / "src"
+        / "skills"
+        / "connect"
+        / "servicenow-da-hrsd"
+        / "actions"
+        / "verify-plugin-prerequisites.md"
+    ).read_text(encoding="utf-8")
+    assert (
+        "HR setup is waiting for your ServiceNow administrator to confirm "
+        "that the HR Service Delivery Core plugin is installed and active.\n\n"
+        "  Bring back that confirmation when it's ready, and we'll continue "
+        "with the Entra handoff. You won't need to restart."
+    ) in doc.replace("\r\n", "\n")
 
 
 def test_phase_progress_does_not_complete_after_action_only() -> None:
