@@ -60,7 +60,7 @@ def test_contracts_match_the_shipped_model_visible_tools(contracts, monkeypatch)
     actual = {contract.name: contract for contract in asyncio.run(harness.tool_contracts())}
 
     assert set(actual) == {
-        "list_agent_configs", "search_agents", "create_agent_config",
+        "list_agent_configs", "search_agents", "resolve_agent_title_id", "create_agent_config",
         "get_agent_config", "update_agent_config", "delete_agent_config",
         "open_accent_color", "open_quick_links", "open_starter_prompts",
         "view_agent_icon", "read_file", "run_command",
@@ -233,6 +233,7 @@ def test_fake_handlers_never_access_real_files_network_or_processes(backend, mon
         for name, arguments in (
             ("list_agent_configs", {}),
             ("search_agents", {"searchString": "Evaluation"}),
+            ("resolve_agent_title_id", {"botId": harness.BOT_ID}),
             ("get_agent_config", {"titleId": harness.TITLE_ID}),
             ("read_file", {"path": r".local\results\config-1.json"}),
             ("open_accent_color", {"titleId": harness.TITLE_ID}),
@@ -246,6 +247,11 @@ def test_fake_handlers_never_access_real_files_network_or_processes(backend, mon
             assert not backend.invoke(name, arguments).failed
         local_config = backend.invoke("read_file", {"path": r".local\config.json"})
         assert json.loads(local_config.result)["agent"]["titleId"] == harness.TITLE_ID
+        shared_reference = backend.invoke(
+            "read_file", {"path": "src/skills/shared/agent-title-resolution.md"}
+        )
+        assert not shared_reference.failed
+        assert shared_reference.result == backend.title_resolution_reference
         real_file = backend.invoke("read_file", {"path": str(harness.SKILL_PATH)})
         assert real_file.failed
         assert real_file.result == {"error": "File cannot be read."}

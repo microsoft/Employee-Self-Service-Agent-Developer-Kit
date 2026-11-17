@@ -3,7 +3,8 @@
 
 """ESS Org Announcements MCP server.
 
-Announcements are scoped to the authenticated tenant and deployed ESS titleId.
+Announcements are scoped to the authenticated tenant and the selected regular
+or LOB registration's deployed ESS titleId.
 The tenant comes exclusively from the AgentConfiguration access token; each
 request carries its agent identity through every read, write, and refresh.
 
@@ -25,7 +26,6 @@ from __future__ import annotations
 
 import asyncio
 import html
-import json
 import logging
 import os
 import time
@@ -42,6 +42,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from portalocker.exceptions import LockException
 from pydantic import ValidationError
+from requests import RequestException
 
 from client import (
     AgentConfigApiError,
@@ -53,7 +54,12 @@ from client import (
     build_manager_state,
     is_deleted_item,
 )
-from base_client import LocalCredentialError
+from agent_title_resolution import (
+    AgentTitleResolutionError,
+    TitleResolutionCoordinator,
+    load_configured_target,
+    resolve_configured_agent_title,
+)
 from drafts import (
     AnnouncementEditorDraft,
     AudienceGroup,
@@ -169,7 +175,7 @@ _MODEL_VISIBLE_BACKEND_MESSAGES = {
     "ServiceError": "The Org Announcements service could not complete the request.",
 }
 _BACKEND_DIAGNOSTIC_CODES = frozenset(
-    {*_MODEL_VISIBLE_BACKEND_MESSAGES, "CommittedRefreshFailed"}
+    {*_MODEL_VISIBLE_BACKEND_MESSAGES, "CommittedRefreshFailed", "RegistrationRequired"}
 )
 
 # Closed authored-content projection accepted by WeveNova's EssBulletinContent
@@ -287,9 +293,10 @@ mcp = FastMCP(
     "ess-org-announcements",
     instructions=(
         "Author ESS announcements for one deployed agent in the authenticated "
-        "tenant. A required titleId selects the agent, not an author permission "
+        "tenant. A required titleId selects the agent's regular or LOB registration, "
+        "not an author permission "
         "or an audience group. The current100/latest50 limits apply per tenant "
-        "and agent. Open the management view or the editor "
+        "and agent registration. Open the management view or the editor "
         "through open_org_announcements; the widget owns every save, lifecycle "
         "action, and audience search after it opens."
     ),
@@ -297,6 +304,7 @@ mcp = FastMCP(
 
 _client: Optional[OrgAnnouncementsClient] = None
 _client_construction_task: Optional[asyncio.Task[None]] = None
+_title_resolution = TitleResolutionCoordinator()
 _client_users: dict[OrgAnnouncementsClient, int] = {}
 _retired_clients: set[OrgAnnouncementsClient] = set()
 _graph_client: Optional[GraphDirectoryClient] = None
@@ -322,7 +330,7 @@ async def _construct_and_publish_client() -> None:
     try:
         try:
             client = await asyncio.to_thread(OrgAnnouncementsClient)
-        except (LocalCredentialError, LockException, OSError) as error:
+        except (ValueError, RuntimeError, LockException, OSError, RequestException) as error:
             raise _FailureResult(
                 "AuthenticationRequired",
                 "Organization announcement sign-in could not be completed. Try again.",
@@ -914,7 +922,11 @@ async def _discovery_tool_error(
     started: float,
     client: Optional[OrgAnnouncementsClient],
 ) -> ToolError:
-    failure = _model_visible_failure(await _failure_from(error, client))
+    failure = (
+        _FailureResult(error.code, str(error), source=error.source)
+        if isinstance(error, AgentTitleResolutionError)
+        else _model_visible_failure(await _failure_from(error, client))
+    )
     diagnostic_code = _diagnostic_code(failure)
     _LOGGER.warning("%s failed: %s", operation, diagnostic_code)
     record_operation(
@@ -924,7 +936,7 @@ async def _discovery_tool_error(
         error_code=diagnostic_code,
         error_source=failure.source,
     )
-    return ToolError(failure.message)
+    return ToolError(f"{failure.code}: {failure.message}")
 
 
 @mcp.resource(
@@ -939,48 +951,53 @@ def org_announcements_widget() -> str:
     return _widget_shell()
 
 
-@mcp.tool(
-    annotations=_READ_ONLY_ANNOTATIONS,
-)
-async def list_agent_configs() -> str:
-    """List configured deployed ESS agents; never initialize configuration."""
+async def _run_title_resolution(bot_id: str) -> dict[str, str | None]:
     started = time.monotonic()
     client = None
     try:
+        target = await asyncio.to_thread(load_configured_target, bot_id)
         async with get_client_lease() as client:
-            result = await client.list_agent_configs()
-    except (_FailureResult, AgentConfigApiError, httpx.RequestError) as error:
+            result = await asyncio.to_thread(
+                resolve_configured_agent_title,
+                target,
+                client.tenant_id,
+                client.object_id,
+            )
+    except (
+        AgentTitleResolutionError, _FailureResult, AgentConfigApiError, httpx.RequestError
+    ) as error:
         raise await _discovery_tool_error(
-            "list_agent_configs", error, started, client
+            "resolve_agent_title_id", error, started, client
         ) from None
     record_operation(
-        "list_agent_configs",
+        "resolve_agent_title_id",
         outcome="success",
         latency_ms=_elapsed_ms(started),
     )
-    return json.dumps(result, indent=2)
+    return result
 
 
 @mcp.tool(
+    meta=_shared_tool_meta(),
     annotations=_READ_ONLY_ANNOTATIONS,
 )
-async def search_agents(searchString: str) -> str:
-    """Find deployed ESS agents by name to resolve their titleId."""
-    started = time.monotonic()
-    client = None
+async def resolve_agent_title_id(botId: str) -> dict[str, str | None]:
+    """Resolve a configured DA bot's regular and LOB Microsoft 365 title IDs.
+
+    The server binds the exact bot, environment, ring and tenant from DA setup.
+    Components metadata supplies titleId; the read-only M365 publish-status
+    response supplies lobTitleId. Returns botId and both registration keys,
+    using null for an unavailable registration and requiring at least one.
+    Missing registration, malformed metadata and API/auth failures are errors.
+    A cancelled caller leaves its lookup tracked until the worker finishes.
+    This tool never persists configuration or initializes a landing page.
+    """
     try:
-        async with get_client_lease() as client:
-            result = await client.search_agents(searchString)
-    except (_FailureResult, AgentConfigApiError, httpx.RequestError) as error:
+        return await _title_resolution.run(lambda: _run_title_resolution(botId))
+    except AgentTitleResolutionError as error:
         raise await _discovery_tool_error(
-            "search_agents", error, started, client
+            "resolve_agent_title_id", error, time.monotonic(), None,
         ) from None
-    record_operation(
-        "search_agents",
-        outcome="success",
-        latency_ms=_elapsed_ms(started),
-    )
-    return json.dumps(result, indent=2)
 
 
 @mcp.tool(

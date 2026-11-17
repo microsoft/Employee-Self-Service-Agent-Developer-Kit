@@ -13,10 +13,11 @@ Token acquisition, in priority order:
   1. AGENTCONFIG_ACCESS_TOKEN_FILE/AGENTCONFIG_ACCESS_TOKEN.
   2. MSAL public-client sign-in with a local form_post callback.
 
-The workspace's configured Dataverse tenant constrains authentication and the
-resolved token's ``tid`` claim. Unavailable configuration or tenant discovery
-uses the organizations authority with a warning. The caller object id comes
-from ``oid``. The API validates the token and enforces authorization.
+The workspace's configured tenant constrains authentication and the resolved
+token's ``tid`` claim. DA uses its locked canonical setup environment without
+Dataverse; invalid DA setup fails closed. Legacy Dataverse tenant discovery
+uses the organizations authority with a warning when unavailable. The caller
+object id comes from ``oid``. The API validates tokens and authorization.
 
 A 401 allows one refresh and replay for the original account and tenant.
 The initial credential source is retained: explicit tokens are reread and
@@ -70,6 +71,10 @@ class AgentConfigApiError(RuntimeError):
 
 
 class _CredentialFailure(Enum):
+    CONFIGURATION_INVALID = (
+        "The configured DA setup environment is invalid. Complete /setup "
+        "before signing in."
+    )
     FILE_MISSING = (
         "AGENTCONFIG_ACCESS_TOKEN_FILE does not exist. Restore the configured "
         "token file for the original account and retry."
@@ -106,7 +111,13 @@ class LocalCredentialError(ValueError):
 
 def _resolve_token() -> str:
     """Resolve a token without writing it to logs or MCP configuration."""
-    expected_tenant_id = configured_tenant_id()
+    try:
+        expected_tenant_id = configured_tenant_id()
+    except ValueError as error:
+        raise LocalCredentialError(
+            _CredentialFailure.CONFIGURATION_INVALID.value,
+            _CredentialFailure.CONFIGURATION_INVALID,
+        ) from error
     token_file = os.environ.get("AGENTCONFIG_ACCESS_TOKEN_FILE", "")
     if token_file:
         return _validate_token_tenant(_read_token_file(token_file), expected_tenant_id)
@@ -145,7 +156,7 @@ def _validate_token_tenant(token: str, expected_tenant_id: str | None) -> str:
     ):
         raise LocalCredentialError(
             "The AgentConfiguration token tenant does not match the configured "
-            "Dataverse environment. Sign in to that tenant or provide a matching token.",
+            "environment. Sign in to that tenant or provide a matching token.",
             _CredentialFailure.TENANT_MISMATCH,
         )
     return token

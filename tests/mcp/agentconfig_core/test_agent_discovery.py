@@ -107,7 +107,7 @@ def test_malformed_collections_do_not_become_empty_successes(token, client_type,
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("modules", [LANDING, ANNOUNCEMENTS])
+@pytest.mark.parametrize("modules", [LANDING])
 def test_feature_owned_tools_delegate_without_initializing_configuration(monkeypatch, modules):
     calls = []
 
@@ -126,7 +126,7 @@ def test_feature_owned_tools_delegate_without_initializing_configuration(monkeyp
     server = modules["server"]
     monkeypatch.setattr(
         server, "get_client",
-        get_async_client if modules is ANNOUNCEMENTS else lambda: DiscoveryOnly(),
+        get_async_client,
     )
 
     async def run():

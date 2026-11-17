@@ -61,6 +61,7 @@ def test_server_exposes_the_skill_tool_contract() -> None:
     expected_tools = {
         "list_agent_configs": [],
         "search_agents": ["searchString"],
+        "resolve_agent_title_id": ["botId"],
         "create_agent_config": ["titleId"],
         "get_agent_config": ["titleId"],
         "view_agent_icon": ["titleId"],

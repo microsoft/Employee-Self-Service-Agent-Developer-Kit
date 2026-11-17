@@ -1943,6 +1943,56 @@ def _write_config(
         raise ExistingDASetupError(
             "Existing local config contains a malformed agents list."
         )
+    previous_matches = []
+    for candidate in agents:
+        if not isinstance(candidate, dict):
+            continue
+        try:
+            if uuid.UUID(str(candidate.get("botId") or "")) == uuid.UUID(
+                agent_entry["botId"]
+            ):
+                previous_matches.append(candidate)
+        except ValueError:
+            continue
+    if not previous_matches and isinstance(existing.get("agent"), dict):
+        candidate = existing["agent"]
+        try:
+            if uuid.UUID(str(candidate.get("botId") or "")) == uuid.UUID(
+                agent_entry["botId"]
+            ):
+                previous_matches.append(candidate)
+        except ValueError:
+            pass
+    if len(previous_matches) > 1:
+        raise ExistingDASetupError(
+            "The local config contains duplicate entries for this agent."
+        )
+    if previous_matches:
+        previous = previous_matches[0]
+        try:
+            same_environment = (
+                _normalize_environment_id(
+                    previous.get("environmentId", existing.get("environmentId", ""))
+                ) == _normalize_environment_id(environment_id)
+                and validate_environment_host(
+                    previous.get(
+                        "powerPlatformApiEndpoint",
+                        existing.get("powerPlatformApiEndpoint", ""),
+                    ),
+                    ring,
+                ) == validate_environment_host(host, ring)
+            )
+        except (ExistingDASetupError, ValueError, TypeError, AttributeError):
+            same_environment = False
+        if same_environment:
+            agent_entry = {
+                **{
+                    key: copy.deepcopy(previous[key])
+                    for key in ("titleId", "registrationTitleIds")
+                    if key in previous
+                },
+                **agent_entry,
+            }
     agents = [
         {
             key: value
@@ -1952,8 +2002,7 @@ def _write_config(
         for item in agents
         if isinstance(item, dict)
         and item.get("slug") != agent_entry["slug"]
-        and str(item.get("botId") or "").casefold()
-        != str(agent_entry["botId"]).casefold()
+        and item not in previous_matches
     ]
     agents.append(agent_entry)
     agents.sort(key=lambda item: str(item.get("name") or ""))
