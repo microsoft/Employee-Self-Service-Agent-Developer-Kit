@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Read standard Entra profile attributes and report presence, never their values."""
+"""Check public Microsoft 365 profile availability using Microsoft Graph beta."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RuntimeError, ValueError) as exc:
         report = {"status": "Error", "scope": args.scope, "error": str(exc)}
         code = 2
-    report["schemaVersion"] = "entra-profile-check.v1"
+    report["schemaVersion"] = "m365-profile-check.v2"
     report["checkedAt"] = datetime.now(timezone.utc).isoformat()
     text = json.dumps(report, indent=2) + "\n"
     if args.output:

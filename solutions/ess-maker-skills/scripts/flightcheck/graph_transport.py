@@ -9,6 +9,7 @@ import json
 import socket
 import sys
 from urllib.parse import urlsplit
+from uuid import UUID
 
 import httpx
 import requests
@@ -106,10 +107,18 @@ class BoundedGraphTransport:
             raise ValueError("Collection limit and time budget must be positive.")
         return self._run(self._read(path, params, limit, time_budget), time_budget)
 
-    def get_profile(self, *, params: dict, time_budget: float) -> dict:
+    def get_profile(self, *, params: dict, time_budget: float, path: str = "/me") -> dict:
         if time_budget <= 0:
             raise ValueError("Profile time budget must be positive.")
-        return self._run(self._read("/me", params, None, time_budget), time_budget)
+        return self._run(self._read(path, params, None, time_budget), time_budget)
+
+    def get_profiles(self, user_ids: list[str], *, select: str, time_budget: float) -> list[dict]:
+        if time_budget <= 0 or not user_ids:
+            raise ValueError("Profile identities and time budget must be positive.")
+        identities = [str(UUID(identity)) for identity in user_ids]
+        if len(set(identities)) != len(identities):
+            raise ValueError("Duplicate profile identities; coverage was not calculated.")
+        return self._run(self._read_profiles(identities, select, time_budget), time_budget)
 
     def _run(self, operation, time_budget):
         try:
@@ -130,11 +139,15 @@ class BoundedGraphTransport:
         except InvalidHeader:
             raise ValueError("Graph returned an invalid Retry-After header.") from None
 
-    async def _get_with_retries(self, session, path, url, params):
+    async def _get_with_retries(self, session, path, url, params, *, batch=None):
         retry = self.retry
         while True:
             try:
-                response = await session.get(url, headers=self.headers, params=params)
+                response = (
+                    await session.get(url, headers=self.headers, params=params)
+                    if batch is None else
+                    await session.post(url, headers=self.headers, json={"requests": batch})
+                )
             except (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
                 if not retry.total:
                     raise
@@ -179,3 +192,72 @@ class BoundedGraphTransport:
                     return CollectionRead(items, complete)
                 url, params = continuation, None
         raise ValueError("Graph collection discovery did not complete.")
+
+    async def _read_profiles(self, identities, select, time_budget):
+        profiles = {}
+        async with httpx.AsyncClient(timeout=time_budget, follow_redirects=False) as session:
+            for offset in range(0, len(identities), 20):
+                pending = {
+                    str(index): {
+                        "id": str(index), "method": "GET",
+                        "url": f"/users/{identity}/profile" + (f"?$select={select}" if select else ""),
+                    }
+                    for index, identity in enumerate(identities[offset:offset + 20], start=offset)
+                }
+                retries = {key: self.retry for key in pending}
+                while pending:
+                    # Every subrequest is GET; the batch POST is a read-only envelope.
+                    response = await self._get_with_retries(
+                        session, "/$batch", f"{self.base_url}/$batch", None,
+                        batch=list(pending.values()),
+                    )
+                    body = response.json()
+                    rows = body.get("responses") if isinstance(body, dict) else None
+                    if (
+                        not isinstance(rows, list) or len(rows) != len(pending)
+                        or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) for row in rows)
+                        or {row["id"] for row in rows} != set(pending)
+                    ):
+                        raise ValueError("Graph returned an incomplete or invalid profile batch.")
+                    retry_requests = {}
+                    delays = []
+                    for row in rows:
+                        key, status = row["id"], row.get("status")
+                        if type(status) is not int:
+                            raise ValueError("Graph returned an invalid profile response status.")
+                        if status == 403:
+                            raise GraphPermissionError("Graph denied a profile read; no partial coverage is reported.")
+                        headers = row.get("headers", {})
+                        if not isinstance(headers, dict) or any(
+                            not isinstance(k, str) or not isinstance(v, str) for k, v in headers.items()
+                        ):
+                            raise ValueError("Graph returned invalid profile response headers.")
+                        headers = httpx.Headers(headers)
+                        retry = retries[key]
+                        if status != 200 and retry.total and retry.is_retry(
+                            "GET", status, "Retry-After" in headers,
+                        ):
+                            metadata = HTTPResponse(status=status, headers=headers)
+                            retries[key] = retry.increment(method="GET", response=metadata)
+                            delay = (
+                                retries[key].get_retry_after(metadata)
+                                if retry.respect_retry_after_header else None
+                            )
+                            delays.append(delay or retries[key].get_backoff_time())
+                            retry_requests[key] = pending[key]
+                            continue
+                        if status != 200:
+                            failed = requests.Response()
+                            failed.status_code = status
+                            raise requests.HTTPError(
+                                f"Graph profile read failed (HTTP {status}); no partial coverage is reported.",
+                                response=failed,
+                            )
+                        profile = row.get("body")
+                        if not isinstance(profile, dict) or not profile or "error" in profile:
+                            raise ValueError("Graph returned an invalid profile resource.")
+                        profiles[key] = profile
+                    pending = retry_requests
+                    if pending:
+                        await asyncio.sleep(max(delays))
+        return [profiles[str(index)] for index in range(len(identities))]

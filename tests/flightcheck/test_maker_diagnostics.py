@@ -34,6 +34,7 @@ from flightcheck.runner import (
     versioned_run_result_to_dict,
 )
 from flightcheck.graph_client import GraphClient
+from tests.mocks import graph_profile
 
 
 CASSETTES = Path(__file__).resolve().parents[1] / "fixtures" / "cassettes"
@@ -91,11 +92,13 @@ def setup_workspace(tmp_path, monkeypatch):
 
     monkeypatch.setattr(GraphClient, "authenticate", authenticate_graph)
     require_validated_mock(graph_mock)
+    require_validated_mock(graph_profile)
     with respx.mock(assert_all_called=False) as httpx_mock:
         httpx_mock.get(f"{graph_mock.GRAPH_BASE}/users").respond(json={
             "value": [graph_mock.profile_user()],
         })
-        httpx_mock.get(f"{graph_mock.GRAPH_BASE}/me").respond(json=graph_mock.profile_user())
+        httpx_mock.get(f"{graph_profile.GRAPH_BASE}/me/profile").respond(json=graph_profile.profile())
+        httpx_mock.post(f"{graph_profile.GRAPH_BASE}/$batch").mock(side_effect=graph_profile.batch_response)
         yield SimpleNamespace(
             config=config, native=native, content=content, auth=auth, root=tmp_path,
             graph_http=httpx_mock,

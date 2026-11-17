@@ -24,6 +24,7 @@ from tests.flightcheck.test_maker_diagnostics import (
     setup_workspace as setup_workspace,
 )
 from tests.mocks import graph as graph_mock
+from tests.mocks import graph_profile
 from tests.mocks import azure_arm as arm_mock
 from tests.mocks import powerplatform as platform_mock
 from tests.mocks import pp_admin as admin_mock
@@ -72,13 +73,17 @@ def test_entra_coverage_has_full_checkpoint_and_profile_parity(
             raise error("Directory consent unavailable")
 
         monkeypatch.setattr(GraphClient, "authenticate", authenticate)
-    user = graph_mock.profile_user()
-    user["employeeType"] = None
+    user = graph_profile.directory_user()
+    profile_data = graph_profile.profile()
+    profile_data["positions"][0]["detail"]["employeeType"] = None
     ws.graph_http.get(f"{graph_mock.GRAPH_BASE}/users").respond(
         status_code=200 if access == "tenant" else 403, json={"value": [user]},
     )
-    ws.graph_http.get(f"{graph_mock.GRAPH_BASE}/me").respond(
-        status_code=403 if access == "neither" else 200, json=user,
+    ws.graph_http.get(f"{graph_profile.GRAPH_BASE}/me/profile").respond(
+        status_code=403 if access == "neither" else 200, json=profile_data,
+    )
+    ws.graph_http.post(f"{graph_profile.GRAPH_BASE}/$batch").mock(
+        side_effect=lambda request: graph_profile.batch_response(request, make_profile=lambda: profile_data),
     )
     key = "AUTH-PROFILE-001"
     monkeypatch.setitem(registry.PROFILES, "da:test-entra-coverage", registry.ProfileSpec(
@@ -126,8 +131,8 @@ def test_entra_coverage_has_full_checkpoint_and_profile_parity(
                 assert payload["coverage"]["automaticCompleted"] == payload["total"] - 1
         else:
             assert "Personalization opportunity" in row["remediation"]
-            assert "If ESS uses Entra for an attribute" in row["remediation"]
-            assert "HR-to-Entra sync" in row["remediation"]
+            assert "Microsoft 365 profile data" in row["remediation"]
+            assert "Organizational Data Service" in row["remediation"]
         findings.append(row)
     assert findings[0] == findings[1] == findings[2] == findings[3]
 

@@ -1,74 +1,58 @@
-# Entra profile coverage for ESS personalization
+# Microsoft 365 profile coverage for ESS personalization
 
 ## Purpose and scope
 
-`AUTH-PROFILE-001` checks standard Entra attributes for ESS knowledge personalization. It measures tenant coverage when permitted; otherwise it checks the signed-in maker's own profile. Gaps and access limitations are non-blocking.
+`AUTH-PROFILE-001` reports data available through the public Microsoft Graph beta profile API. Unlike an Entra `/users` attribute scan, rich profiles can include Entra, Organizational Data Service, people-data connectors and user-edited data. The check is read-only and uses no internal Microsoft endpoints.
 
-Guidance connects coverage to personalization and explains how to enrich relevant profile data. This scalar-attribute diagnostic does not establish complete personalization readiness.
+The diagnostic checks individual identity/current-employment fields and whether other standard profile sections contain data. It does not validate values, reproduce Sydney's search selection, or establish that ESS will use every returned attribute. Beta APIs are subject to change and are not supported for production applications; this dependency is explicit in the report.
 
-| Attributes checked | Interpretation |
+## Default checks
+
+| Group | Checks |
 | --- | --- |
-| `usageLocation` | Licensing-country coverage, not verified HR country or confirmation of the agent's runtime location source. |
-| `preferredLanguage` | Profile data relevant to language-specific knowledge answers. |
-| `country`, `officeLocation`, `jobTitle`, `department`, `employeeType`, `employeeId`, `employeeHireDate` | Additional profile coverage; no specific runtime experience or mandatory field requirement is asserted. |
+| Identity | Display name, given name, surname and user principal name |
+| Current position | Job title, secondary title, role, secondary role, level, layer, employee ID, employee type, position start/end dates, description and summary |
+| Company | Company name/code, cost center, division, department, secondary department, office location, pronunciation and website |
+| Workplace address | Street, city, state, postal code, PO box and country/region |
+| Relationships | Presence of manager and colleague data on the current position |
+| Other profile sections | Addresses, anniversaries, awards, certifications, education, emails, interests, languages, notes, patents, phones, projects, publications, responsibilities, skills, web accounts and websites |
 
-Manager relationships, custom attributes, and HR-source comparison/applicability are excluded. An Entra gap need not be a runtime gap when HR supplies the value.
+These are 50 availability checks, not 50 required employee properties. Custom extensions, source IDs, audit metadata, first-party-only pronouns and mailbox settings are excluded. Position start date is not hire date; profile languages are not Entra `preferredLanguage`; workplace country is not licensing `usageLocation`.
 
-## Access, fallback and limits
+## Reads and limits
 
-FlightCheck uses its own Graph client, not the agent's runtime permissions. Tenant reads require existing app consent for `User.Read.All`; the maker need not hold an administrator role. Both modes verify the signed-in account and token tenant before reading profiles.
+Tenant scans reuse existing delegated `User.Read.All` consent. Sequential Graph v1.0 `/users` paging lists Member IDs and user type, evaluating at most **100 profiles**. Member accounts include disabled and service accounts, not just employees.
 
-If that consent is unavailable or a tenant read is denied, read the same nine attributes from `/me` using `$select` and delegated `User.Read`, for the same verified account and tenant. Self-profile sign-in or consent follows tenant policy; never request new directory-read consent or broader permissions.
+The checker sends batches of up to **20 read-only GET requests** to Graph beta `/$batch`. Each subrequest reads `/users/{id}/profile`. Default profile reads avoid `$select` failures for advertised beta sections that live tenants do not expose; absent sections remain unverified. Batching saves network round trips; every subrequest remains subject to Graph throttling. Responses are correlated by ID, never array order. Retryable failed subrequests are retried without rereading successful profiles, honoring `Retry-After`.
 
-Fallback is access-driven, not role-driven, and affects only this checkpoint. It must not downgrade other checks' Graph clients. Other authentication/identity failures, network errors, timeouts and invalid data remain errors.
+One **30-second data-read budget**, excluding authentication, covers enumeration, batch requests, retry delays, fallback reads and aggregation. DNS resolution remains cancellable. Deadline expiry or failed/malformed requests discard partial coverage rather than publish a successful subset.
 
-Tenant mode reads Member accounts, including disabled and service accounts, not an employee roster. Sequential **999-account pages** stop at completion or **10,000 accounts**; unused final-page records are discarded. Reports label **Tenant coverage** or **Sample coverage**, with the checked count, `isSample`, and `populationComplete`. Graph page order is not random sampling.
+If directory/profile permission is unavailable, FlightCheck uses a separate `User.Read` client for `/beta/me/profile`, bound to the same account and tenant. It never prompts for new directory consent or downgrades other checks' clients. Other authentication, identity, network and data errors do not trigger fallback.
 
-The **30-second total data-read budget** spans tenant and fallback requests, retries and aggregation; authentication is excluded and fallback does not reset it. Each page shares three retries across retryable HTTP and transport failures, honoring backoff and `Retry-After` within the remaining budget.
+## Interpreting profile data
 
-Both read paths isolate OS DNS resolution in a cancellable helper process. Deadline expiry terminates and reaps that process; event-loop shutdown does not wait for a blocked DNS thread. No partial coverage is reported.
+Nonblank text and valid integers, including layer zero, are available. Explicit null/blank scalar values and empty collections are empty. Omitted or null sections are not returned; metadata-only records and continuation/truncation signals remain unverified.
 
-`GraphClient` owns authentication, constructor-selected scopes and identity validation. `graph_transport.py` owns bounded HTTP reads, paging, retries and DNS cleanup. CLI/DA client setup supplies the lazy own-profile client; the generic runner does not authenticate it.
+Current-position fields use only records explicitly marked `isCurrent`. Multiple candidate records must agree on the selected value and its presence state. Otherwise the field is unverified. The checker neither picks the first current position nor invents source precedence.
 
-## Coverage and outcomes
+For each tenant field, report available, empty, not-returned and unverified counts. Calculate `available / usersChecked * 100` only when that field has no unverified/not-returned accounts; otherwise show **Unverified**, not a misleading percentage. Every included check uses the **95% threshold**, evaluated before display rounding.
 
-Count nonblank values as `available`, null/blank as `empty`, and omitted properties as `notReturned`. Tenant coverage is `available / usersChecked * 100`; own-profile states use the same presence rules.
+## Results and reporting
 
-| ADK result | Condition |
+| Result | Meaning |
 | --- | --- |
-| `Passed` | Tenant scan: every selected attribute has at least **95%** coverage and no omitted properties, evaluated before two-decimal display rounding. |
-| `Warning` - coverage | Tenant scan: measured gap or omitted property; personalization and enrichment guidance. |
-| `Warning` - own profile only | Tenant access is unavailable; self-profile read succeeds. Show Available, Empty or Not returned per attribute, without percentages or the tenant threshold. Always Warning, even if all nine attributes are available. |
-| `Warning` - not checked | Tenant access and self-profile read permission are unavailable; neither profile availability nor tenant coverage is verified. |
-| `Error` | Other authentication/identity failures; request or budget errors; invalid responses; empty tenant populations; duplicate or out-of-population tenant records. |
+| Passed | All included tenant checks have verified coverage of at least 95%. |
+| Warning - coverage | One or more checks have lower coverage or unverified evidence. |
+| Warning - own profile only | Only the signed-in profile was checked; list per-field availability without tenant percentages. |
+| Warning - not checked | Neither tenant nor self-profile permission was available. |
+| Error | Authentication/identity, request, deadline or response-validation failure. |
 
-Access-limited findings retain ADK's existing Warning status, not a new `Not verified` type. `coverageVerified: false` means tenant coverage is unverified; `profileVerified: true` identifies a successful self-profile read. DA coverage accounting treats fallback as limited, not a completed tenant scan.
+Warnings are non-blocking. Own-profile fallback always remains Warning, even when all fields are populated. `coverageVerified: false` identifies unverified tenant coverage; `profileVerified: true` identifies a successful self-profile read. Complete and capped scans are labelled **Tenant coverage** or **Sample coverage**, with the checked count; samples follow Graph order and are not random estimates.
 
-Discard any partial tenant results before fallback. Failed or expired reads never produce coverage figures. Focused FlightCheck warnings exit `0`; errors are nonzero. Other profile checks retain their existing gates.
-
-## Report contract
-
-One HTML/JSON finding shows either tenant counts, percentages and sample metadata, or **Own profile only** with this explanation:
-
-> Tenant-wide directory-read access was unavailable for this run. Only your signed-in profile was checked; tenant-wide attribute coverage was not calculated.
-
-Own-profile evidence contains `scope: "me"`, `usersChecked: 1`, `profileVerified: true`, `coverageVerified: false`, and attribute availability states, without percentages or tenant-population/sample claims. If self-profile permission is also unavailable, report **Not checked** for both modes.
-
-Guidance links missing fields to potential personalization benefits and existing Entra/HR-to-Entra update processes. It distinguishes own-profile enrichment from tenant validation and recommends neither new HR-system setup in ESS nor placeholder values.
-
-Coverage evidence excludes profile values, user IDs, and tokens; telemetry contains outcomes only. Presence proves neither correctness nor runtime use. `hrCountryComparison` remains `NotApplicable`.
+HTML/JSON evidence contains no profile values, user IDs or tokens. Guidance explains potential personalization benefits, points to the configured data source and the [organizational attribute reference](https://learn.microsoft.com/en-us/microsoft-365-apps/org-data-service/import/orgdata-attributes), and does not ask users to fill optional fields with placeholders. Existing telemetry remains outcome-only.
 
 ## Entry points and validation
 
-The checkpoint runs in full/authentication FlightChecks and selected-DA diagnostics, with the same automatic fallback in each. The shared standalone command remains unchanged: it defaults to `--scope me` with `User.Read`; explicit `--scope tenant` does not fall back. Only standalone supports `--attributes`. Target selection uses `--tenant-id` and `--preferred-username`.
+The existing checkpoint ID works in full, authentication, focused and selected-DA runs. The standalone filename remains `scripts\check_entra_profile.py`; `--scope me` checks only the signed-in profile and explicit `--scope tenant` never silently falls back. `--attributes` selects named checks. JSON uses `m365-profile-check.v2`.
 
-```powershell
-python scripts\flightcheck\cli.py --checkpoint AUTH-PROFILE-001 --tenant-id '<tenant-guid>' --preferred-username '<work-account>' --output .local\entra-flightcheck --no-open
-python scripts\check_entra_profile.py --scope me --tenant-id '<tenant-guid>' --preferred-username '<work-account>'
-```
-
-Commands run from `solutions\ess-maker-skills`. Standalone exit codes are `0` for passed checks, `1` for either warning, and `2` for errors; `--output` saves its JSON report.
-
-Tests cover tenant thresholds and limits; fallback after consent/read denial; populated, empty and omitted self-profile fields; both reads denied; identity/error guards; shared deadlines including blocked DNS and worker cleanup; unchanged standalone behavior; and full/checkpoint/profile parity. Live validation covers tenant and own-profile fallback HTML/JSON; mocked tests cover both reads denied.
-
-API contracts: [Graph schema](https://graph.microsoft.com/v1.0/$metadata), [Get user](https://learn.microsoft.com/en-us/graph/api/user-get?view=graph-rest-1.0), [List users](https://learn.microsoft.com/en-us/graph/api/user-list?view=graph-rest-1.0).
+Tests cover the public beta schema, batched correlation/retries, source conflicts, missing sections, permissions, identity guards, deadlines/DNS cleanup and report parity. Live tests verify self-profile and permitted tenant reads. API contracts: [Profile](https://learn.microsoft.com/en-us/graph/api/profile-get?view=graph-rest-beta), [batching](https://learn.microsoft.com/en-us/graph/json-batching), [sources](https://learn.microsoft.com/en-us/graph/people-data-sources).

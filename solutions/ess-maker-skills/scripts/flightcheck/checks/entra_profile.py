@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Bounded Entra profile coverage for FlightCheck."""
+"""Bounded Microsoft 365 profile coverage for FlightCheck."""
 
 import requests
 from time import monotonic
@@ -54,23 +54,24 @@ def run_entra_profile_checks(runner) -> list[CheckResult]:
             return [CheckResult(
                 checkpoint_id="AUTH-PROFILE-001", category="Authentication",
                 priority=Priority.MEDIUM.value, status="Warning",
-                description="Entra standard profile attribute coverage",
+                description="Microsoft 365 profile attribute coverage (beta)",
                 result=f"{report['message']}\n{summary}",
                 remediation=(
                     "Personalization opportunity, not a deployment blocker. Review missing fields "
-                    "in your own profile through your organization's existing Entra or HR-to-Entra "
-                    "update process, where relevant to the ESS experiences you intend to support. "
+                    "in your own Microsoft 365 profile through the configured source: Entra, "
+                    "Organizational Data Service, people-data connectors or profile editing. "
+                    "Only enrich fields relevant to the ESS experiences you intend to support. "
                     "Do not populate placeholder values. If tenant coverage is needed, rerun "
                     "AUTH-PROFILE-001 with existing approved User.Read.All access."
                 ),
                 roles=roles, evidence=report,
-                doc_link="https://learn.microsoft.com/en-us/graph/api/user-get?view=graph-rest-1.0",
+                doc_link="https://learn.microsoft.com/en-us/microsoft-365-apps/org-data-service/import/orgdata-attributes",
             )]
-        if report["coverageVerified"] is False:
+        if report.get("reason") == "permission_unavailable":
             return [CheckResult(
                 checkpoint_id="AUTH-PROFILE-001", category="Authentication",
                 priority=Priority.MEDIUM.value, status="Warning",
-                description="Entra standard profile attribute coverage",
+                description="Microsoft 365 profile attribute coverage (beta)",
                 result=report["message"],
                 remediation=(
                     "Access limitation, not a deployment blocker. Use an account with approved "
@@ -89,7 +90,7 @@ def run_entra_profile_checks(runner) -> list[CheckResult]:
         return [CheckResult(
             checkpoint_id="AUTH-PROFILE-001", category="Authentication",
             priority=Priority.MEDIUM.value, status="Error",
-            description="Entra standard profile attribute coverage",
+            description="Microsoft 365 profile attribute coverage (beta)",
             result=message,
             remediation=(
                 "Restore the Graph read and rerun AUTH-PROFILE-001. Tenant coverage requires "
@@ -97,28 +98,30 @@ def run_entra_profile_checks(runner) -> list[CheckResult]:
             ),
             roles=roles, evidence={"executionError": True},
         )]
-    summary = "\n".join(
-        f"{row['attribute']}: {row['coveragePercent']:.2f}% "
-        f"({row['available']}/{report['usersChecked']} populated; "
-        f"{row['empty']} empty; {row['notReturned']} not returned)"
-        for row in report["results"]
-    )
+    lines = []
+    for row in report["results"]:
+        coverage = f"{row['coveragePercent']:.2f}%" if row["coveragePercent"] is not None else "Unverified"
+        lines.append(
+            f"{row['attribute']}: {coverage} "
+            f"({row['available']}/{report['usersChecked']} populated; {row['empty']} empty; "
+            f"{row['notReturned']} not returned; {row['unverified']} ambiguous or incomplete)"
+        )
+    summary = "\n".join(lines)
     warning = report["status"] == "Warning"
     return [CheckResult(
         checkpoint_id="AUTH-PROFILE-001", category="Authentication",
         priority=Priority.MEDIUM.value, status=report["status"],
-        description="Entra standard profile attribute coverage",
+        description="Microsoft 365 profile attribute coverage (beta)",
         result=f"{report['coverageLabel']}.\n"
         + ("Data-quality concern: one or more attributes have low or unavailable coverage.\n" if warning else "")
         + summary,
         remediation=(
-            "Personalization opportunity, not a deployment blocker. If ESS uses Entra for an "
-            "attribute, populating it can help ESS deliver more personalized knowledge answers. "
-            "Review the reported gaps for the experiences you intend to support. The tenant "
-            "administrator can populate the relevant standard attributes directly in Entra or "
-            "through the existing HR-to-Entra sync, then rerun AUTH-PROFILE-001. "
-            "Do not populate placeholder values to meet the threshold."
+            "Personalization opportunity, not a deployment blocker. Where ESS uses these fields, "
+            "enriching missing Microsoft 365 profile data can improve personalization. Review "
+            "the configured source: Entra, Organizational Data Service, people-data connectors "
+            "or profile editing, then rerun AUTH-PROFILE-001. Unverified fields are not evidence "
+            "of missing data. Optional fields need not be populated; do not use placeholder values."
         ) if warning else "",
         roles=roles, evidence=report,
-        doc_link="https://learn.microsoft.com/en-us/graph/api/user-list?view=graph-rest-1.0",
+        doc_link="https://learn.microsoft.com/en-us/microsoft-365-apps/org-data-service/import/orgdata-attributes",
     )]

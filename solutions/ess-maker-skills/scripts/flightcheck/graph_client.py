@@ -41,6 +41,7 @@ except ImportError:
 GRAPH_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+GRAPH_PROFILE_BASE = "https://graph.microsoft.com/beta"
 
 # Scopes needed for FlightCheck Graph queries (all read-only).
 GRAPH_SCOPES = [
@@ -521,8 +522,14 @@ class GraphClient:
 
     def get_bounded_profile(self, *, params: dict, time_budget: float) -> dict:
         """Read the signed-in profile using the collection retry/deadline policy."""
-        return BoundedGraphTransport(GRAPH_BASE, self.headers, _RETRY).get_profile(
-            params=params, time_budget=time_budget,
+        return BoundedGraphTransport(GRAPH_PROFILE_BASE, self.headers, _RETRY).get_profile(
+            params=params, time_budget=time_budget, path="/me/profile",
+        )
+
+    def get_bounded_profiles(self, user_ids: list[str], *, select: str, time_budget: float) -> list[dict]:
+        """Read public rich profiles in batches, never using internal People APIs."""
+        return BoundedGraphTransport(GRAPH_PROFILE_BASE, self.headers, _RETRY).get_profiles(
+            user_ids, select=select, time_budget=time_budget,
         )
 
     # ----- Convenience methods for common FlightCheck queries -----
