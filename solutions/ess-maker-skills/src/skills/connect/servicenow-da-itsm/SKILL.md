@@ -126,6 +126,10 @@ Maker-supplied items as "Confirmed by the Maker". Manual means human-verified,
 never Passed, and never proof of business success; Passed means verified by
 Connect checks.
 
+**Later realms:** After the Dev lifecycle is Ready, the promoted agent in a
+later realm is handled by `src/skills/connect/servicenow/realms.md`, which
+reuses this Dev tenant foundation.
+
 Only report the integration connected after the runner completes all eight
 ITSM phases. The IT lifecycle intentionally omits the HR-only ServiceNow
 plugin phase. Do not add a second completion message.

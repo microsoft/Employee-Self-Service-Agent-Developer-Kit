@@ -27,10 +27,12 @@ import requests
 from connect_lifecycle import (
     STATE_INTEGRITY_KEY,
     STATE_TAMPERED_MESSAGE,
+    LifecycleDecisionError,
     decide_next_step,
     state_integrity_digest,
     state_integrity_mismatch,
 )
+import servicenow_connect_realms as realms
 from agentbuilder import (
     AgentBuilderAccountMismatch,
     AgentBuilderClient,
@@ -38,6 +40,7 @@ from agentbuilder import (
     AgentBuilderHTTPError,
     RING_CONFIG,
     authenticate,
+    derive_environment_host,
     validate_environment_host,
 )
 from servicenow_connect_telemetry import (
@@ -11560,6 +11563,300 @@ def migrate_state(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+REALM_COMMANDS = frozenset(
+    {
+        "discover-realm-target",
+        "realm-status",
+        "check-realm",
+        "record-realm-test",
+        "select-realm",
+    }
+)
+REALM_RECOVERY_CHOICES = ("Check again", "Choose another environment", "Not now")
+
+
+def _realm_dev_state(context: dict[str, Any]) -> dict[str, Any]:
+    path = _lifecycle_state_path(context)
+    if not path.is_file():
+        raise ServiceNowConnectError(
+            "Finish the Dev lifecycle before configuring a promoted realm."
+        )
+    state = _load_json(path)
+    if state_integrity_mismatch(state):
+        raise ServiceNowConnectError(STATE_TAMPERED_MESSAGE)
+    return state
+
+
+def _realm_dev_ready(context: dict[str, Any]) -> bool:
+    root = Path(context["root"])
+    if not _lifecycle_state_path(context).is_file():
+        return False
+    contract = _load_json(root / CONTRACT_PATH)
+    phase_ids = frozenset(
+        phase["id"]
+        for phase in contract.get("phases") or []
+        if isinstance(phase, dict) and isinstance(phase.get("id"), str)
+    )
+    decision = decide_next_step(
+        root,
+        provider=ACTIVE_PROFILE.provider_key,
+        agent_slug=_agent_slug(context),
+        verified_phases=phase_ids,
+    )
+    return decision.get("decision") == "complete"
+
+
+def _realm_topic_states(components: dict[str, Any]) -> list[dict[str, Any]]:
+    """Profile topics keyed by name so promoted schema prefixes still match."""
+    namespace = (
+        "servicenowhrsd" if ACTIVE_PROFILE.key == "hrsd" else "servicenowitsm"
+    )
+    topics = []
+    for change in components.get("botComponentChanges") or []:
+        component = change.get("component") if isinstance(change, dict) else None
+        if not isinstance(component, dict) or not isinstance(
+            component.get("dialog"), dict
+        ):
+            continue
+        _prefix, _marker, name = str(component.get("schemaName") or "").partition(
+            ".topic."
+        )
+        if name.casefold().startswith(namespace):
+            topics.append(
+                {
+                    "schemaName": name,
+                    "state": component.get("state"),
+                    "status": component.get("status"),
+                }
+            )
+    return topics
+
+
+def _realm_target_context(
+    context: dict[str, Any],
+    target: dict[str, Any],
+) -> dict[str, Any]:
+    identity = target["identity"]
+    return {
+        **context,
+        "environment": {**context["environment"], "id": identity["environmentId"]},
+        "agent": {**context["agent"], "id": identity["agentId"]},
+    }
+
+
+def _realm_run_checks(
+    context: dict[str, Any],
+    target: dict[str, Any],
+) -> None:
+    """Re-read the promoted realm; nothing here writes to the agent."""
+    environment = context["environment"]
+    ring = environment["ring"]
+    identity = target["identity"]
+    foundation = target["foundation"]
+    host = derive_environment_host(identity["environmentId"], ring)
+    target_client = AgentBuilderClient(
+        host,
+        _agentbuilder_token(context),
+        ring=ring,
+        tenant_id=environment["tenant_id"],
+        api_version=environment.get("api_version", "2024-10-01"),
+    )
+    target_components = target_client.fetch_components(identity["agentId"])
+    try:
+        reference = summarize_components(target_components)["reference"]
+    except ServiceNowConnectError:
+        reference = {}
+    connections: list[dict[str, Any]] = []
+    if reference.get("connectionId"):
+        connectivity = ConnectivityClient(
+            host,
+            identity["environmentId"],
+            _authenticate_maker(
+                context,
+                scopes=tuple(connectivity_scopes(ring)),
+            ),
+            ring=ring,
+        )
+        connections = [
+            connection_summary(record)
+            for record in connectivity.list_connections()
+        ]
+    connection_result = realms.evaluate_connections(
+        foundation,
+        reference,
+        connections,
+    )
+    runtime_result = None
+    if connection_result["status"] == "done":
+        dev_components = _agentbuilder_client(context).fetch_components(
+            context["agent"]["id"]
+        )
+        try:
+            portal = portal_configuration_summary(
+                target_components,
+                expected_instance_name=foundation["instanceName"],
+            )
+        except ServiceNowConnectError:
+            portal = {"valid": False, "reason": "portal-topic-missing"}
+        runtime_result = realms.evaluate_runtime(
+            foundation,
+            _realm_topic_states(dev_components),
+            _realm_topic_states(target_components),
+            portal,
+        )
+    realms.apply_checks(
+        target,
+        connections=connection_result,
+        runtime=runtime_result,
+    )
+
+
+def _realm_check_result(
+    context: dict[str, Any],
+    registry: dict[str, Any],
+    realm: str,
+    *,
+    dev_ready: bool,
+) -> dict[str, Any]:
+    result = realms.realm_status(registry, dev_ready=dev_ready)
+    target = registry["targets"][realm]
+    result["realm"] = realm
+    result["foundationReused"] = target["foundationReused"]
+    result["promotedAgent"] = {
+        "environmentId": target["identity"]["environmentId"],
+        "agentId": target["identity"]["agentId"],
+        "copilotStudioUrl": maker_portal_links(
+            _realm_target_context(context, target)
+        )["copilotStudioAgent"]["url"],
+    }
+    connections = target["stages"]["connections"]
+    if connections.get("status") == "needs-maker":
+        target_context = _realm_target_context(context, target)
+        foundation = target["foundation"]
+        result["connectionHandoff"] = {
+            "navigation": physical_connection_navigation(
+                target_context,
+                mode=(
+                    "repair"
+                    if connections.get("reason") == "connection-unhealthy"
+                    else "create"
+                ),
+            ),
+            "expectedValues": connection_expected_values(
+                resource_uri=foundation["clientId"],
+                instance_name=foundation["instanceName"],
+            ),
+        }
+    if realms.target_status(registry, realm) == "ready":
+        result["message"] = (
+            f"{realm.title()} is Ready. Publishing and non-maker "
+            "validation happen after this guided lifecycle."
+        )
+    return result
+
+
+def _run_realm_command(
+    context: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    root = Path(context["root"])
+    provider = ACTIVE_PROFILE.provider_key
+    slug = _agent_slug(context)
+    registry = realms.load_registry(root, provider, slug)
+    dev_ready = _realm_dev_ready(context)
+    command = args.command
+    if command == "realm-status":
+        return realms.realm_status(registry, dev_ready=dev_ready)
+    if command == "select-realm":
+        realms.select_realm(registry, args.realm, dev_ready=dev_ready)
+        realms.save_registry(root, registry)
+        return realms.realm_status(registry, dev_ready=dev_ready)
+
+    if command == "discover-realm-target":
+        if not args.realm and not args.agent_link:
+            raise ServiceNowConnectError(
+                "Specify --realm test|prod, or --agent-link with the "
+                "promoted agent's Copilot Studio link."
+            )
+        if args.realm:
+            realms.require_realm_prerequisite(
+                registry,
+                args.realm,
+                dev_ready=dev_ready,
+            )
+        dev_state = _realm_dev_state(context)
+        foundation = realms.foundation_from_dev_state(dev_state)
+        environment = context["environment"]
+        realm, identity = realms.discover_realm(
+            root=root,
+            ring=environment["ring"],
+            tenant_id=environment["tenant_id"],
+            source_host=environment["power_platform_api_endpoint"],
+            api_version=environment.get("api_version", "2024-10-01"),
+            source_agent_id=context["agent"]["id"],
+            expected_schema_name=AGENT_SCHEMA_NAME,
+            realm=args.realm,
+            environment_selector=args.environment,
+            agent_link=args.agent_link,
+            account_hint=context.get("account"),
+        )
+        realms.require_realm_prerequisite(
+            registry,
+            realm,
+            dev_ready=dev_ready,
+        )
+        target = realms.record_target(registry, realm, identity, foundation)
+        realms.save_registry(root, registry)
+    else:
+        realm = args.realm
+        target = registry["targets"].get(realm)
+        if not isinstance(target, dict):
+            raise ServiceNowConnectError(
+                f"The {realm.title()} realm has not been discovered yet."
+            )
+        realms.require_realm_prerequisite(
+            registry,
+            realm,
+            dev_ready=dev_ready,
+        )
+
+    if command in {"discover-realm-target", "check-realm"}:
+        _realm_run_checks(context, target)
+    else:
+        realms.record_validation(
+            target,
+            prompt_category=args.prompt_category,
+            allowed_prompt_category=ACTIVE_PROFILE.test_prompt_category,
+            result=args.result,
+            failure_category=args.failure_category,
+        )
+    realms.save_registry(root, registry)
+    return _realm_check_result(
+        context,
+        registry,
+        realm,
+        dev_ready=dev_ready,
+    )
+
+
+def run_realm_command(
+    context: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    try:
+        return _run_realm_command(context, args)
+    except realms.ServiceNowRealmError as exc:
+        raise ServiceNowConnectError(
+            str(exc),
+            details={
+                "remediation": exc.customer_remediation,
+                "recoveryChoices": list(REALM_RECOVERY_CHOICES),
+            },
+        ) from exc
+    except LifecycleDecisionError as exc:
+        raise ServiceNowConnectError(str(exc)) from exc
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="DA-GA Employee Self-Service ServiceNow connection setup.",
@@ -12008,6 +12305,68 @@ def build_parser() -> argparse.ArgumentParser:
         "--contract-revision",
         type=int,
         required=True,
+    )
+    discover_parser = subparsers.add_parser(
+        "discover-realm-target",
+        help=(
+            "Prove the promoted sibling realm of the recorded Dev "
+            "agent, reuse the Dev tenant foundation, and check the realm."
+        ),
+    )
+    discover_parser.add_argument("--realm", choices=("test", "prod"))
+    discover_parser.add_argument(
+        "--environment",
+        help="Friendly environment name or Dataverse URL when discovery asks.",
+    )
+    discover_parser.add_argument(
+        "--agent-link",
+        help="Optional Copilot Studio link of the promoted agent.",
+    )
+    subparsers.add_parser(
+        "realm-status",
+        help="Show the active realm, targets, and stage status without APIs.",
+    )
+    check_realm_parser = subparsers.add_parser(
+        "check-realm",
+        help="Re-read the promoted realm's Connections and Runtime stages.",
+    )
+    check_realm_parser.add_argument(
+        "--realm", choices=("test", "prod"), required=True
+    )
+    realm_test_parser = subparsers.add_parser(
+        "record-realm-test",
+        help="Record the maker's Test pane attestation for a promoted realm.",
+    )
+    realm_test_parser.add_argument(
+        "--realm", choices=("test", "prod"), required=True
+    )
+    realm_test_parser.add_argument(
+        "--prompt-category",
+        choices=tuple(
+            profile.test_prompt_category
+            for profile in PRODUCT_PROFILES.values()
+        ),
+        required=True,
+    )
+    realm_test_parser.add_argument(
+        "--result", choices=("pass", "fail"), required=True
+    )
+    realm_test_parser.add_argument(
+        "--failure-category",
+        choices=(
+            "authentication",
+            "permission",
+            "empty-result",
+            "connector",
+            "unexpected",
+        ),
+    )
+    select_realm_parser = subparsers.add_parser(
+        "select-realm",
+        help="Switch the active realm after its target was discovered.",
+    )
+    select_realm_parser.add_argument(
+        "--realm", choices=("dev", "test", "prod"), required=True
     )
     return parser
 
@@ -12608,6 +12967,8 @@ def main(argv: list[str] | None = None) -> int:
                 context,
                 contract_revision=args.contract_revision,
             )
+        elif args.command in REALM_COMMANDS:
+            result = run_realm_command(context, args)
         elif args.command not in {
             "adapt-question",
             "list-agents",

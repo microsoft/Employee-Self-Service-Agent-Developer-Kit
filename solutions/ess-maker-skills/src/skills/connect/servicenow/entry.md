@@ -59,6 +59,13 @@ state mutation.
 
 Do not use the legacy `step*.md` files in this directory.
 
+## Test and Prod realms
+
+When the maker says the agent was promoted to Test or Production, chooses to
+configure either realm, or pastes a Test or Production agent link, read
+`src/skills/connect/servicenow/realms.md` and follow it after the Dev lifecycle
+is Ready. It reuses the Dev tenant foundation and never changes Dev behavior.
+
 ## Fresh ServiceNow execution boundary
 
 After the maker selects one DA ServiceNow Agent, and
