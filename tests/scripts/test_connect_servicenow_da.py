@@ -7520,7 +7520,17 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert input_card["askUserArguments"]["requestedSchema"]["properties"][
         "response"
     ]["description"] == input_card["canonicalQuestion"]["question"]
-    assert service_now_completion["ordinaryReply"] is None
+    assert service_now_completion["ordinaryReply"] == {
+        "kind": "ordinary-agent-response",
+        "text": (
+            "I recorded the User Field `u_employee_id`. I still need your "
+            "ServiceNow administrator's confirmation that the configuration "
+            "is saved and that this field holds exactly the same value as "
+            "the User Claim `employee_id`. You don't need to send the field "
+            "again."
+        ),
+    }
+    assert "```" not in service_now_completion["ordinaryReply"]["text"]
     assert service_now_completion["questions"] == []
     assert recorded_mapping["tokenClaimName"] == "employee_id"
     assert recorded_mapping["serviceNowUserField"] == "u_employee_id"
@@ -7714,6 +7724,16 @@ def test_direct_identity_handoff_pauses_before_instructions_until_ack(
     assert after_client["retainedDirectInput"] == {
         "applicationClientId": APP_CLIENT_ID,
     }
+    assert after_client["ordinaryReply"] is None
+    assert after_client["questions"][0]["canonicalQuestion"][
+        "question"
+    ].startswith(
+        f"I recorded the Application (client) ID `{APP_CLIENT_ID}`. I still "
+        "need the User Claim name. Ask your Entra administrator which claim "
+        "ServiceNow should use (`email`, `upn`, or a custom claim name). You "
+        "don't need to send the Client ID again.\n\n"
+        "Enter the User Claim name for this exact target:"
+    )
     assert all(
         item["canonicalQuestion"]["header"]
         != "Entra administrator availability"

@@ -1004,7 +1004,16 @@ def _identity_direct_questions(
             ),
         ]
         if captured_client_id is not None:
-            normalize_client_id(captured_client_id)
+            recorded_client_id = normalize_client_id(captured_client_id)
+            claim_question = canonical[1]
+            claim_question["question"] = (
+                f"I recorded the Application (client) ID "
+                f"`{recorded_client_id}`. I still need the User Claim name. "
+                "Ask your Entra administrator which claim ServiceNow should "
+                "use (`email`, `upn`, or a custom claim name). You don't "
+                "need to send the Client ID again.\n\n"
+                f"{claim_question['question']}"
+            )
             canonical = canonical[1:]
     elif stage == "servicenow":
         if not confirmed_claim_name:
@@ -1343,7 +1352,18 @@ def identity_direct_handoff(
         "ordinaryReply": (
             None
             if captured_client_id is not None
-            or captured_user_field is not None
+            else {
+                "kind": "ordinary-agent-response",
+                "text": (
+                    f"I recorded the User Field "
+                    f"`{str(captured_user_field).strip()}`. I still need your "
+                    "ServiceNow administrator's confirmation that the "
+                    "configuration is saved and that this field holds exactly "
+                    f"the same value as the User Claim `{claim_name}`. You "
+                    "don't need to send the field again."
+                ),
+            }
+            if captured_user_field is not None
             else {
                 "kind": "ordinary-agent-response",
                 "text": (

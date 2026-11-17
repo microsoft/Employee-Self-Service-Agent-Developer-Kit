@@ -109,7 +109,9 @@ the non-secret values only after the administrator answers the separate Client
 ID and User Claim prompts. Keep an accepted Client ID in the current
 conversation turn; if the handoff must be regenerated before the claim answer,
 pass `--client-id "<application-client-id-guid>"` so the next returned
-question is the claim rather than asking for Client ID again. This hint is
+question is the claim rather than asking for Client ID again. That claim
+question begins with an acknowledgement of the recorded Client ID; show the
+returned question verbatim. This hint is
 validated but not persisted, so a new chat without an atomic receipt may ask
 for Client ID again.
 
