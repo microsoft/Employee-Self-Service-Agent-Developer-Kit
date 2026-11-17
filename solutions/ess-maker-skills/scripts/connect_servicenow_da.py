@@ -3099,7 +3099,12 @@ def list_agent_choices(
 
 def _prepared_agent_choices(
     root: Path,
-) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     setup = _load_json(root / SETUP_STATE)
     config = _load_json(root / ACTIVE_CONFIG)
     if setup.get("schema_version") != SETUP_SCHEMA_VERSION:
@@ -3119,6 +3124,7 @@ def _prepared_agent_choices(
 
     choices: list[dict[str, Any]] = []
     incomplete: list[dict[str, Any]] = []
+    unsupported: list[dict[str, Any]] = []
     for raw_agent_id, canonical in canonical_agents.items():
         if not isinstance(raw_agent_id, str) or not isinstance(canonical, dict):
             continue
@@ -3133,6 +3139,17 @@ def _prepared_agent_choices(
             agent_id,
         )
         canonical_agent = canonical.get("agent")
+        if profile is None and isinstance(canonical_agent, dict):
+            unsupported.append(
+                {
+                    "id": agent_id,
+                    "name": str(
+                        canonical_agent.get("display_name")
+                        or canonical_agent.get("name")
+                        or agent_id
+                    ),
+                }
+            )
         if profile is None or not isinstance(canonical_agent, dict):
             continue
         display_name = str(
@@ -3168,7 +3185,27 @@ def _prepared_agent_choices(
             ),
         ),
         incomplete,
+        unsupported,
     )
+
+
+UNSUPPORTED_AGENT_MESSAGE = (
+    "We can connect **Employee Self-Service HR to ServiceNow HR Service "
+    "Delivery** or **Employee Self-Service IT to ServiceNow IT Service "
+    "Management**, one agent at a time. The selected agent isn't supported."
+    "\n\nSelect Employee Self-Service HR or IT to continue."
+)
+
+
+def _unsupported_agent_result(agent: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schemaVersion": "servicenow.agent-chooser.v1",
+        "status": "unsupported-agent",
+        "branch": "unsupported-agent",
+        "message": UNSUPPORTED_AGENT_MESSAGE,
+        "agent": agent,
+        "stateChanged": False,
+    }
 
 
 def _setup_incomplete_result(
@@ -3282,6 +3319,7 @@ def _resolve_explicit_agent_link(
     environment: dict[str, Any],
     prepared_choices: list[dict[str, Any]],
     incomplete_agents: list[dict[str, Any]],
+    unsupported_agents: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     target = _resolve_link_target(agent_link, "", "")
     workspace_environment = str(environment.get("id") or "")
@@ -3332,6 +3370,16 @@ def _resolve_explicit_agent_link(
             unfinished,
             _setup_handoff_for_link(agent_link, target),
         )
+    unsupported = next(
+        (
+            agent
+            for agent in unsupported_agents or []
+            if str(agent["id"]).casefold() == agent_id.casefold()
+        ),
+        None,
+    )
+    if unsupported is not None:
+        return _unsupported_agent_result(unsupported)
     return {
         "schemaVersion": "servicenow.agent-chooser.v1",
         "status": "setup-required",
@@ -3381,13 +3429,16 @@ def agent_chooser_handoff(
         )
     if _workspace_not_prepared(root):
         return _unprepared_workspace_handoff(agent_link)
-    environment, prepared_choices, incomplete_agents = _prepared_agent_choices(root)
+    environment, prepared_choices, incomplete_agents, unsupported_agents = (
+        _prepared_agent_choices(root)
+    )
     if agent_link is not None:
         return _resolve_explicit_agent_link(
             agent_link=agent_link,
             environment=environment,
             prepared_choices=prepared_choices,
             incomplete_agents=incomplete_agents,
+            unsupported_agents=unsupported_agents,
         )
     if selection_key is not None:
         if selection_key == "another-agent":

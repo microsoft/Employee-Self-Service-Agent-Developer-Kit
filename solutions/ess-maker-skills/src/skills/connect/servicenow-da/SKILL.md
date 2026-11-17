@@ -80,6 +80,11 @@ Dispatch by the canonical profile returned for `status: ready`:
 - `hrsd` -> read `src/skills/connect/servicenow-da-hrsd/SKILL.md`
 - `itsm` -> read `src/skills/connect/servicenow-da-itsm/SKILL.md`
 
+`unsupported-agent` means the pasted link points to an agent already in this
+workspace that is neither an HR nor an IT ESS agent. Show the Unsupported agent
+Message in the entry doc and offer **Choose a different agent**; do not hand
+off to Setup.
+
 The selected provider then invokes the shared lifecycle with
 `AGENT_SLUG = SELECTED_AGENT_SLUG`. Local state may label a choice
 `connected-revalidation-required`, but the provider must still perform normal

@@ -219,6 +219,60 @@ def test_servicenow_connect_hands_off_to_setup_automatically() -> None:
     assert "automatic Setup handoff" in chooser
 
 
+def test_servicenow_connect_entry_has_flow_clarification_messages() -> None:
+    skills = _SOLUTION / "src" / "skills" / "connect"
+    raw = (skills / "servicenow" / "entry.md").read_text(encoding="utf-8")
+    entry = " ".join(raw.split())
+    chooser = " ".join(
+        (skills / "servicenow-da" / "SKILL.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+
+    for message in (
+        "The selected agent isn't supported.",
+        "Select Employee Self-Service HR or IT to continue.",
+        "Your account doesn't have the required access to configure "
+        "**{AGENT_NAME} in {ENVIRONMENT_NAME}**.",
+        "Ask a maker with the Environment Maker role and permission to edit "
+        "this agent to run `/connect servicenow` using their own account.",
+        "We couldn't verify whether your account can configure "
+        "**{AGENT_NAME} in {ENVIRONMENT_NAME}**. Setup is paused; this "
+        "doesn't mean your access was denied.",
+        "Retry the permission check to continue.",
+        "HR setup is waiting for your ServiceNow administrator to confirm "
+        "that the HR Service Delivery Core plugin is installed and active.",
+        "You won't need to restart.",
+        "We're waiting for your ServiceNow administrator's "
+        "saved-configuration confirmation and User Field.",
+        "We're continuing the ServiceNow setup for **{AGENT_NAME} in "
+        "{ENVIRONMENT_NAME}**.",
+        "The reply contains more than one Client ID. Ask your Entra "
+        "administrator which **Client ID** ServiceNow should use.",
+        "We need the Entra administrator to confirm the custom claim before "
+        "ServiceNow can use it to identify employees.",
+        "Ask them to complete the custom-claim work in Part 4 of their "
+        "instructions.",
+        "Send the reported conflict to your Entra and ServiceNow "
+        "administrators.",
+        "We won't change that configuration or troubleshoot the conflict.",
+    ):
+        assert message in entry, message
+    assert "unsupported-agent" in entry
+    assert "unsupported-agent" in chooser
+    assert "\u2019" not in raw
+    section = raw.split("## Clarification and recovery Messages", 1)[1].split(
+        "## Fresh ServiceNow execution boundary", 1
+    )[0]
+    for heading in (
+        "Current task",
+        "Where and how",
+        "Expected nonsecret evidence",
+        "Completion boundary",
+    ):
+        assert heading not in section, heading
+
+
 def test_servicenow_connect_confirms_agent_only_after_ready_and_resumes_once() -> None:
     skills = _SOLUTION / "src" / "skills" / "connect"
     entry = " ".join(

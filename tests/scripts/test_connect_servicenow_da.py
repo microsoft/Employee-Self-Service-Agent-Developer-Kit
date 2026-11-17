@@ -14708,6 +14708,43 @@ def test_agent_chooser_reports_setup_incomplete_for_pending_agent(
     assert not (tmp_path / ".local" / "connect").exists()
 
 
+def test_agent_chooser_reports_unsupported_agent_for_link_to_other_agent_type(
+    tmp_path: Path,
+) -> None:
+    setup_path, config_path = _seed_it_setup(tmp_path)
+    state = json.loads(setup_path.read_text(encoding="utf-8"))
+    state["agents"][AGENT_ID]["agent"]["schema_name"] = "cr123_customAgent"
+    state["agents"][AGENT_ID]["agent"]["display_name"] = "Contoso Custom Agent"
+    setup_path.write_text(json.dumps(state), encoding="utf-8")
+    setup_before = setup_path.read_text(encoding="utf-8")
+    config_before = config_path.read_text(encoding="utf-8")
+    link = (
+        "https://copilotstudio.test.microsoft.com/environments/"
+        f"{ENVIRONMENT_ID}/bots/{AGENT_ID}"
+    )
+
+    result = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key="another-agent",
+        agent_link=link,
+    )
+
+    assert result["status"] == "unsupported-agent"
+    assert result["agent"] == {"id": AGENT_ID, "name": "Contoso Custom Agent"}
+    assert result["stateChanged"] is False
+    assert "setupHandoff" not in result
+    assert result["message"] == (
+        "We can connect **Employee Self-Service HR to ServiceNow HR Service "
+        "Delivery** or **Employee Self-Service IT to ServiceNow IT Service "
+        "Management**, one agent at a time. The selected agent isn't "
+        "supported.\n\nSelect Employee Self-Service HR or IT to continue."
+    )
+    assert "\u2019" not in result["message"]
+    assert setup_path.read_text(encoding="utf-8") == setup_before
+    assert config_path.read_text(encoding="utf-8") == config_before
+    assert not (tmp_path / ".local" / "connect").exists()
+
+
 def test_agent_chooser_keeps_unavailable_error_for_unknown_or_non_dev_agent(
     tmp_path: Path,
 ) -> None:

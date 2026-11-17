@@ -299,6 +299,150 @@ Parse the returned `servicenow.resume-handoff.v1` object:
 - any command failure, malformed result or identity mismatch blocks the
   invocation. Never fall back to a validate-only sequence.
 
+## Clarification and recovery Messages
+
+These replace the relevant point in the journey; they do not restart it. Use
+the agent and environment names already known (omit " in **{ENVIRONMENT_NAME}**"
+when no display name is recorded) and never add paths, IDs, or error codes.
+
+**Unsupported agent.** When `agent-chooser` returns `status:
+unsupported-agent`, show `message` verbatim, offer **Choose a different
+agent**, and do not enter Setup or any lifecycle for that agent:
+
+**Message:**
+
+We can connect **Employee Self-Service HR to ServiceNow HR Service Delivery**
+or **Employee Self-Service IT to ServiceNow IT Service Management**, one agent
+at a time. The selected agent isn't supported.
+
+Select Employee Self-Service HR or IT to continue.
+
+**End message.**
+
+**Permission denied.** When the target preflight read returns a permission
+denial (HTTP 401/403), show the following and stop without administrator work:
+
+**Message:**
+
+Your account doesn't have the required access to configure **{AGENT_NAME} in
+{ENVIRONMENT_NAME}**.
+
+Ask a maker with the Environment Maker role and permission to edit this agent
+to run `/connect servicenow` using their own account.
+
+**End message.**
+
+**Permission unavailable.** When the same read cannot complete (throttling,
+network, or service error), show the following. When the maker answers Retry,
+rerun the mandatory `resume-handoff`; an assurance from the maker or an
+administrator never replaces the check:
+
+**Message:**
+
+We couldn't verify whether your account can configure **{AGENT_NAME} in
+{ENVIRONMENT_NAME}**. Setup is paused; this doesn't mean your access was
+denied.
+
+Retry the permission check to continue.
+
+**End message.**
+
+**HR plugin not ready.** When the maker reports that the ServiceNow
+administrator says the HR plugin is not active yet, show the following. Do not
+install the plugin or describe this as a failed integration:
+
+**Message:**
+
+HR setup is waiting for your ServiceNow administrator to confirm that the HR
+Service Delivery Core plugin is installed and active.
+
+Bring back that confirmation when it's ready, and we'll continue with the
+Entra handoff. You won't need to restart.
+
+**End message.**
+
+**Maker pauses for an administrator.** When the maker says they will return
+later while an administrator reply is outstanding, show the first Message. When
+they return, show the second, rerun `resume-handoff` (which rechecks
+permission), and then continue with the next question it returns:
+
+**Message:**
+
+We're waiting for your ServiceNow administrator's saved-configuration
+confirmation and User Field.
+
+When you return, paste their non-sensitive reply or send those items
+individually. Don't include employee identifiers or secrets. You won't need to
+repeat the Entra values.
+
+**End message.**
+
+**Message:**
+
+We're continuing the ServiceNow setup for **{AGENT_NAME} in
+{ENVIRONMENT_NAME}**.
+
+We're rechecking your permission to configure this agent before we continue.
+Next, we'll need your ServiceNow administrator's reply.
+
+**End message.**
+
+**Conflicting Client IDs.** When the Entra reply contains more than one
+different Client ID, record nothing and show:
+
+**Message:**
+
+The reply contains more than one Client ID. Ask your Entra administrator which
+**Client ID** ServiceNow should use.
+
+Send that value here.
+
+**End message.**
+
+**Custom claim not confirmed.** When a custom claim (for example employee ID)
+is mentioned but the Entra administrator has not confirmed it, show the
+following. The maker is not asked to select an identity mapping or invent a
+claim name; a proposed name, a name alone, or a vague "done" does not establish
+readiness. When some items are already confirmed, ask only for the missing
+ones:
+
+**Message:**
+
+We need the Entra administrator to confirm the custom claim before ServiceNow
+can use it to identify employees.
+
+Ask them to complete the custom-claim work in Part 4 of their instructions.
+Bring back the exact configured claim name and confirmation that the setup is
+complete, including the appropriate format and populated source attribute for
+every intended employee.
+
+Then ask your ServiceNow administrator to confirm that the supported
+configuration is saved, with the matching User Field. Don't send employee
+identifiers or secrets.
+
+We'll keep the Client ID already supplied.
+
+**End message.**
+
+**Existing SSO or Graph configuration conflict.** When the maker reports that
+an existing OIDC configuration already serves SSO or the Microsoft Graph
+connector and cannot be changed, never change or troubleshoot it. Show:
+
+**Message:**
+
+Send the reported conflict to your Entra and ServiceNow administrators. Ask
+them to agree on a supported setup using the compatibility guidance in their
+messages.
+
+We won't change that configuration or troubleshoot the conflict. Bring back
+their non-sensitive compatibility confirmation, saved-configuration
+confirmation, User Field, and any changed registration or claim values.
+
+We'll recheck the affected setup before continuing. Don't include employee
+identifiers or secrets.
+
+**End message.**
+
 ## ServiceNow rules
 
 These extend the generic numbered rules in `.github/prompts/connect.prompt.md`.
