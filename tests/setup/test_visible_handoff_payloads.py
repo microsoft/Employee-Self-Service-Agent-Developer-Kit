@@ -112,7 +112,7 @@ def test_lifecycle_plan_confirmation_is_exact_and_separate_from_reply() -> None:
     [
         (
             "servicenow-da-hrsd",
-            9,
+            8,
             [
                 "ESS Maker / Agent Developer",
                 "ServiceNow Admin / security_admin",
@@ -122,7 +122,7 @@ def test_lifecycle_plan_confirmation_is_exact_and_separate_from_reply() -> None:
         ),
         (
             "servicenow-da-itsm",
-            8,
+            7,
             [
                 "ESS Maker / Agent Developer",
                 "ServiceNow Admin / security_admin",
@@ -230,15 +230,6 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
             ),
         ),
         (
-            _ACTIONS / "connect-agent.md",
-            (
-                "Selected agent:",
-                "Selected credential:",
-                "Does the ServiceNow row currently show Connected",
-                "Manual agent-binding evidence",
-            ),
-        ),
-        (
             _ACTIONS / "test-connection.md",
             (
                 "Selected agent:",
@@ -293,7 +284,6 @@ def test_visible_handoff_payloads_are_supported_and_complete(
     (
         _ACTIONS / "verify-plugin-prerequisites.md",
         _ACTIONS / "prepare-credential.md",
-        _ACTIONS / "connect-agent.md",
         _ACTIONS / "prepare-topics.md",
         _ACTIONS / "configure-portal-url.md",
         _ACTIONS / "test-connection.md",
@@ -301,7 +291,6 @@ def test_visible_handoff_payloads_are_supported_and_complete(
         / "servicenow-da-itsm"
         / "actions"
         / "prepare-credential.md",
-        _CONNECT / "servicenow-da-itsm" / "actions" / "connect-agent.md",
         _CONNECT
         / "servicenow-da-itsm"
         / "actions"
@@ -468,21 +457,23 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
             "Resource URI: `{APP_CLIENT_ID}`",
             "Instance Name: `{INSTANCE_NAME}`",
             "Current exact candidates:",
-            "Display name `{CONNECTION_DISPLAY_NAME}` is optional guidance",
-            "triggers one fresh supported connection inventory read",
+            "Did you create the connection",
+            "Copilot Studio show it as Connected",
+            "The name is optional guidance and is not a readiness gate",
+            "one fresh connection check and one check of the agent's saved settings",
         ),
     )
     selector = _validate_payload(
         payloads[1],
         required_phrases=(
             "Fresh read-only inventory found multiple healthy exact",
-            "Choose the connection to bind",
+            "Choose the connection to use for this agent",
             "No new connection will be created",
         ),
     )
     assert [option["label"] for option in completion["options"]] == [
-        "Completed, the exact ServiceNow connection is Connected",
-        "Not yet, the ServiceNow connection is not ready",
+        "Completed, the connection is created and shows Connected",
+        "Not yet, the connection is not ready",
     ]
     assert not any(
         option.get("recommended") for option in completion["options"]
@@ -492,10 +483,12 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
     assert "{CANDIDATE_LABEL_1}" in json.dumps(selector)
     source = action.read_text(encoding="utf-8")
     source_normalized = " ".join(source.split())
-    assert "Do not ask the Maker for a connection display name" in source_normalized
+    assert "Do not ask a second question about the agent's ServiceNow row" in (
+        source_normalized
+    )
+    assert "do not ask for a connection ID or GUID" in source_normalized
     assert "never ask them to copy the key or connection ID" in source_normalized
     assert "This is the only question for that path" in source_normalized
-    assert "do not show the **Completed / Not yet**" in source_normalized
     assert "Never ask for or display a password" in source_normalized
     assert "another maker owns it" in source_normalized
     assert "never an observed failed-connection value" in source_normalized
@@ -515,33 +508,19 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
     assert "Owner:" not in expected
     assert "What to do:" not in expected
     assert "{POWER_AUTOMATE_CONNECTIONS_URL}" not in expected
-    assert "direct form/detail route is unverified" not in expected
-    field_table = source_normalized.split(
-        "Show the exact field table from the output:",
-        1,
-    )[1]
-    display_index = field_table.index("Display name (optional)")
-    auth_index = field_table.index("Authentication Type")
-    resource_index = field_table.index("Resource URI")
-    instance_index = field_table.index("Instance Name")
-    assert display_index < auth_index < resource_index < instance_index
-    assert "direct connector-form or connection-detail URL" in (
+    assert "agent-connection" not in source
+    assert "Settings > Connection Settings > ServiceNow > Connect > Create new connection" in (
         source_normalized
     )
-    assert "does not create, repair, sign in, submit, or prefill" in (
-        source_normalized
-    )
+    for blocking_issue in (
+        "agent-reference-missing",
+        "agent-not-bound",
+        "agent-bound-elsewhere",
+        "agent-binding-mismatch",
+    ):
+        assert blocking_issue in source
     assert "conditional remediation, not an observed current error" in (
         source_normalized
-    )
-    assert source_normalized.index("choose `New connection`") < (
-        source_normalized.index("search box in the upper-right")
-    )
-    assert source_normalized.index("search box in the upper-right") < (
-        source_normalized.index("connector published by **Microsoft**")
-    )
-    assert source_normalized.index("connector published by **Microsoft**") < (
-        source_normalized.index("Choose `Microsoft Entra ID User Login`")
     )
     assert "build the supported selector options directly from" in (
         source_normalized

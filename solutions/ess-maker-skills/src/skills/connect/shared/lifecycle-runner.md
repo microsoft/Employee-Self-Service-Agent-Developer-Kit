@@ -258,7 +258,7 @@ below.
    Show the newly returned `renderBlock.text` before any action.
    It contains the current task's target, responsible role, supported
    runbook/location, expected non-secret evidence, and completion boundary.
-   Credential, agent-connection, portal-URL, and Test reply text includes a short controller-built lead-in before **Where and how**; show it verbatim. The credential lead-in names the saved User Claim and User Field only when both are recorded.
+   Credential, portal-URL, and Test reply text includes a short controller-built lead-in before **Where and how**; show it verbatim. The credential lead-in names the saved User Claim and User Field only when both are recorded.
    Availability is acknowledgement only. Continue only from the returned
    lifecycle decision and its separate action completion/evidence question.
 5. On **No**, rerun with the same group ID and context hash plus
@@ -272,7 +272,7 @@ below.
    groups are skipped through the existing verified-phase path.
 7. For **Maker configuration and validation**, the **Yes** answer asked at the
    start of that group is also the role attestation for every mutating phase
-   in it (`agent-connection`, `topics`, `portal-url`). The controller records
+   in it (`credential`, `topics`, `portal-url`). The controller records
    `roleAttestations.{requiredRole}` in the same write as the group
    acknowledgement (and backfills it for an already-acknowledged group on
    resume). Do not show `permission-gate.md`'s **Confirm role** question for

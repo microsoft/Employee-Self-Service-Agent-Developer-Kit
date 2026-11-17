@@ -410,7 +410,6 @@ def test_servicenow_dev_phase_order_and_binding_intros_are_explicit() -> None:
         "entra-registration",
         "servicenow-oidc",
         "credential",
-        "agent-connection",
         "topics",
         "portal-url",
         "test",
@@ -430,24 +429,10 @@ def test_servicenow_dev_phase_order_and_binding_intros_are_explicit() -> None:
         credential = (root / "actions" / "prepare-credential.md").read_text(
             encoding="utf-8"
         )
-        normalized_credential = " ".join(credential.split())
         assert [phase["id"] for phase in contract["phases"]] == expected_order
-        assert "Connect does not enable ServiceNow topics" in skill
-        assert "After binding is confirmed, Connect reads the topic" in skill
+        assert "does not enable ServiceNow topics before this check passes" in skill
+        assert "After the connection check passes, Connect reads the topic" in skill
         assert "After topic and portal configuration is complete" in skill
-        field_table = credential.split(
-            "Show the exact field table from the output:",
-            1,
-        )[1]
-        assert field_table.index("**Display name (optional):**") < (
-            field_table.index("**Authentication Type:**")
-        )
-        assert field_table.index("**Authentication Type:**") < (
-            field_table.index("**Resource URI:**")
-        )
-        assert field_table.index("**Resource URI:**") < (
-            field_table.index("**Instance Name:**")
-        )
         visible_question = credential.split(
             "<!-- visible-handoff-question:v1 -->",
             1,
@@ -462,18 +447,16 @@ def test_servicenow_dev_phase_order_and_binding_intros_are_explicit() -> None:
             "Instance Name: `{INSTANCE_NAME}`"
         )
         decision_index = visible_question.index(
-            "Does the exact ServiceNow connection now show Connected",
+            "Did you create the connection",
         )
         assert auth_index < resource_index < instance_index < decision_index
         required_section = visible_question[:decision_index]
         assert "Display name" not in required_section
-        assert "optional guidance and is not a readiness gate" in (
-            visible_question
+        assert "is not a readiness gate" in visible_question
+        assert "conditional\nremediation, not an observed current error" in (
+            credential
         )
-        assert "direct connector-form or connection-detail URL" in credential
-        assert "conditional remediation, not an observed current error" in (
-            normalized_credential
-        )
+        assert "agent-connection" not in credential
 
 
 def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
@@ -496,11 +479,10 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "old PR behavior, current evidence, proposed deviation" in skill
     assert "do not assume UPN or email" in skill
     assert (
-        "Connect does not enable ServiceNow topics\nbefore binding is "
-        "confirmed."
+        "does not enable ServiceNow topics before this check passes."
     ) in skill
     assert (
-        "After binding is confirmed, Connect reads the topic\nstates for "
+        "After the connection check passes, Connect reads the topic\nstates for "
         "Maker review"
     ) in skill
     assert (
@@ -521,7 +503,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         / "servicenow-da-hrsd"
         / "actions"
     )
-    agent = (actions / "connect-agent.md").read_text(encoding="utf-8")
+    assert not (actions / "connect-agent.md").exists()
     test = (actions / "test-connection.md").read_text(encoding="utf-8")
     topics = (actions / "prepare-topics.md").read_text(encoding="utf-8")
     publish = (actions / "publish-agent.md").read_text(encoding="utf-8")
@@ -546,8 +528,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     portal_normalized = " ".join(portal.split())
     credential_normalized = " ".join(credential.split())
     topics_normalized = " ".join(topics.split())
-    assert "record-agent-connection" in agent
-    assert "ACTION_RESULT = \"cancelled\"" in agent
+    assert "record-agent-connection" not in credential
     assert not (actions / "configure-parameter-sharing.md").exists()
     assert 'ACTION_RESULT = "recorded"' in test
     assert "List my open HR cases" in test
@@ -706,6 +687,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Resource URI" in credential
     assert "verified App A Application client ID" in credential
     assert "api://<client-id>" in credential
+    assert "Settings >\nConnection Settings > ServiceNow > Connect > Create new connection" in (
+        credential
+    )
     assert "opens the exact returned `manualInstanceQuestion`" in (
         preflight_normalized
     )
@@ -730,7 +714,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "record-reuse-decision" not in preflight
     assert "reuse-discovered" not in preflight
     assert "configure-missing" not in preflight
-    assert "automatically reuse one exact healthy Connected" in (
+    assert "If exactly one candidate is healthy and exact" in (
         " ".join(credential.split())
     )
     assert "wrong auth mode, Resource URI, or Instance Name" in credential
@@ -739,16 +723,13 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "Only when no exact candidate exists" in credential
     assert (
-        '"label": "Completed, the exact ServiceNow connection is Connected"'
+        '"label": "Completed, the connection is created and shows Connected"'
         in credential
     )
     assert (
-        '"label": "Not yet, the ServiceNow connection is not ready"'
-        in credential
+        '"label": "Not yet, the connection is not ready"' in credential
     )
-    assert "Do not ask the Maker for a connection display name" in (
-        credential_normalized
-    )
+    assert "do not ask\nfor a connection ID or GUID" in credential
     assert "This is the only question for that path" in credential_normalized
     assert "must never run for the multiple-healthy-candidate path" in (
         credential_normalized
@@ -775,18 +756,10 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Never infer `/sp`, `/esc`" in portal
     assert "Set ServiceNow Portal BaseURI" in portal
     assert "Do not publish the agent in this phase" in portal
-    assert (
-        "[Open connections for this environment]"
-        "({POWER_AUTOMATE_CONNECTIONS_URL})"
-    ) in credential
-    assert "[Open Power Apps]({POWER_APPS_URL})" in credential
-    expected_index = credential.index("**Authentication Type:**")
+    expected_index = credential.index("**Authentication type:**")
     resource_index = credential.index("**Resource URI:**")
-    instance_index = credential.index("**Instance Name:**")
+    instance_index = credential.index("**Instance name:**")
     assert expected_index < resource_index < instance_index
-    assert "no verified direct connector-form or connection-detail URL" in (
-        credential
-    )
     assert "This action is retired" in publish
     assert "Do not invoke `publish`" in publish
     assert "historical evidence" in publish
@@ -795,7 +768,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         "[Open Employee Self-Service (HR) in Copilot Studio]"
         "({COPILOT_STUDIO_AGENT_URL})"
     )
-    for action in (topics, agent, test):
+    for action in (topics, test):
         assert action.count(agent_link) == 1
         assert "tab-specific URL" in action
     assert "ask exactly one question" in plugins
@@ -808,7 +781,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "--reject-saved-mapping" not in oidc
     assert "record-admin-phase --phase servicenow-oidc" not in oidc
     assert "record-admin-operation" not in plugins + entra + oidc
-    assert "one complete high-level step" in credential
+    assert "one maker-visible step" in credential_normalized
     assert "one completion question" in credential
     assert "Invalid_redirect_uri" in credential
     for action in (preflight, plugins, entra, oidc, credential):
@@ -823,7 +796,6 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         + oidc
         + credential
         + topics
-        + agent
         + publish
         + test
     )
@@ -882,11 +854,10 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
     assert "never migrates,\nmerges, or copies the HRSD lifecycle" in skill
     assert "all eight\nITSM phases" in skill
     assert (
-        "Connect does not enable ServiceNow topics\nbefore binding is "
-        "confirmed."
+        "does not enable ServiceNow topics before this check passes."
     ) in skill
     assert (
-        "After binding is confirmed, Connect reads the topic\nstates for "
+        "After the connection check passes, Connect reads the topic\nstates for "
         "Maker review"
     ) in skill
     assert (

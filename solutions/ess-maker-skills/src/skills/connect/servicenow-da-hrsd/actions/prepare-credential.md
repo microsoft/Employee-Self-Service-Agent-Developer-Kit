@@ -1,21 +1,23 @@
-# Prepare the ServiceNow credential
+# Create and connect ServiceNow
 
-Treat physical connection setup as one complete high-level step with one pause
-boundary.
+Treat connection creation and agent binding as one maker-visible step with one
+pause boundary. The maker creates the connection from the agent's own
+Copilot Studio Connection Settings, which also selects it for the agent. ADK
+then verifies both facts in the background.
 
 Read `adminSetup.phaseHandoffs.credential` first. If it is already
 `completed` or `reused` and stored checkpoint results are empty or all in the
 phase's `completionStatuses`, do not ask again; return
-`ACTION_RESULT = "applied"` and let connector-scoped Direct A inventory
-reverify the exact current connection. A prior result outside
-`completionStatuses` requires one new complete physical-connection handoff.
+`ACTION_RESULT = "applied"` and let the merged connection and agent-binding
+check reverify the exact current connection and the agent's saved binding. A
+prior result outside `completionStatuses` requires one new complete handoff.
 
 ## Goal and owner
 
-- **Goal:** automatically reuse one exact healthy Connected
-  `entraIDUserLogin` ServiceNow physical connection.
-- **Owner role:** Power Platform Maker/Admin who can create the connection and
-  complete Microsoft Entra sign-in with their own Microsoft account.
+- **Goal:** one exact healthy Connected `entraIDUserLogin` ServiceNow
+  connection that this agent's saved settings use.
+- **Owner role:** ESS Maker / Agent Developer who can create the connection
+  and complete Microsoft Entra sign-in with their own Microsoft account.
 
 Run:
 
@@ -29,16 +31,16 @@ Application client ID:
 - Read `credentialResolution` from `inspect-admin-setup`.
 - If exactly one candidate is healthy and exact, run
   `python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} resolve-credential`. It performs a
-  new connector-scoped read and records that connection only if the exact
-  healthy match is still unique. Do not ask a completion question.
+  new connector-scoped read, then reads the agent's saved draft connection
+  reference. It records the step only if the healthy match is still unique
+  and the saved draft uses that connection. Do not ask a completion question
+  unless it returns a blocking issue.
 - If multiple exact healthy candidates match, use the bounded selector below.
-  This is the only question for that path: do not show the
-  **Completed / Not yet** repair/create question first. Do not create another
-  connection and do not ask the Maker to copy an ID.
+  This is the only question for that path. Do not create another connection
+  and do not ask the Maker to copy an ID.
 - If an exact candidate exists but is unhealthy, open that existing
   connection and use its `Repair`, `Fix connection`, or sign-in action to
-  reauthenticate it. Refetch inventory and require `Connected` plus the exact
-  auth mode, Resource URI, and Instance Name before recording it.
+  reauthenticate it. Then continue with the same completion question.
 - If the current maker cannot repair an unhealthy candidate because another
   maker owns it, say so plainly. Do not impersonate the owner or request their
   credentials; create a separate exact connection only when the current maker
@@ -56,106 +58,107 @@ When no exact candidate exists, run:
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} create
 ```
 
-Show the exact field table from the output:
+Show the exact field values from the output in the ordinary current-task
+reply (the controller builds the card; show it verbatim):
 
-- **Display name (optional):** `{CONNECTION_DISPLAY_NAME}`; guidance only and
-  never a readiness gate.
-- **Authentication Type:** Microsoft Entra ID User Login.
+- **Authentication type:** Microsoft Entra ID User Login.
 - **Resource URI:** the verified App A Application client ID; never
   an observed failed-connection value, `api://<client-id>`, the app object ID,
   or the connector application ID.
-- **Instance Name:** normalized from the confirmed
+- **Instance name:** normalized from the confirmed
   `https://<instance>.service-now.com` URL; never the full URL.
 
-Use the ring-aware link returned by `inspect-admin-setup` as the primary
-destination:
+The maker works in Copilot Studio: open the agent, go to **Settings >
+Connection Settings > ServiceNow > Connect > Create new connection**, enter the
+values above, and complete Microsoft Entra sign-in with their own account.
+Creating the connection here also selects it for this agent. If Copilot Studio
+is unavailable, the selected-environment Connections list in Power Apps is the
+fallback for creating the connection; the maker must then select it in the
+agent's Connection Settings and save.
 
-[Open connections for this environment]({POWER_AUTOMATE_CONNECTIONS_URL})
-
-Use `links.powerAutomateConnections.url` from `inspect-admin-setup`.
-
-If that page is unavailable, use the one alternate root:
-
-[Open Power Apps]({POWER_APPS_URL})
-
-Use `links.powerApps.url`; never substitute a production origin for a
-non-production ring.
-
-The repository has no verified direct connector-form or connection-detail URL.
-The selected-environment Connections list is the safe fallback; the link does
-not create, repair, sign in, submit, or prefill values. Then choose
-`New connection`. In the connector picker, use the search box in the
-upper-right to search for `ServiceNow`, then select the **ServiceNow**
-connector published by **Microsoft** by choosing its `+` action. Choose
-`Microsoft Entra ID User Login` only after selecting that connector, then enter
-the exact Resource URI and Instance Name shown above and complete sign-in.
-
-Guide the Maker/Admin through Copilot Studio connection creation and Entra
-sign-in with their own Microsoft account. Never ask for or display a password,
-client secret, access or refresh token, PFX, or browser/session artifact.
-While the completion question is pending, do not return an action result. If
-they are not finished, return `ACTION_RESULT = "waiting"`.
+Never ask for or display a password, client secret, access or refresh token,
+PFX, or browser/session artifact. While the completion question is pending,
+do not return an action result. If they are not finished, return
+`ACTION_RESULT = "waiting"`.
 
 Microsoft Entra ID User Login connections are not shared across makers. The
 same maker may reuse one exact healthy connection for the other ESS agent in
 the same environment only after the consolidated shared-configuration
-confirmation. This step proves the current maker's physical connection; it
-does not prove another maker can use it and does not prove Entra/OIDC setup.
+confirmation. This step proves the current maker's connection and this agent's
+binding; it does not prove another maker can use it and does not prove
+Entra/OIDC setup.
 
 If sign-in reports `Invalid_redirect_uri`, treat this as conditional
 remediation, not an observed current error. Copy the popup's `redirect_uri`,
 URL-decode it, have the ServiceNow Admin update the OIDC Application Registry
 Redirect URL to that exact value, and retry sign-in.
 
-Ask one completion question for the entire physical connection step. The Maker
-selects only **Completed, the exact ServiceNow connection is Connected** or
-**Not yet, the ServiceNow connection is not ready**. Do not
-ask the Maker for a connection display name, connection ID, GUID, or other
-manual identifier. Do not add separate pauses for create or sign-in.
+Ask one completion question for the entire step. The Maker confirms that the
+connection is created and shows Connected, and may name the connection (for
+example, "I created Contoso ServiceNow. Copilot Studio shows Connected.").
+Do not ask a second question about the agent's ServiceNow row, and do not ask
+for a connection ID or GUID.
 
 Use this exact visible handoff payload only when an exact connection needs
 repair or no exact connection exists and a new connection is required. It
 must never run for the multiple-healthy-candidate path. Render
-`{CONNECTION_DISPLAY_NAME}`, `{INSTANCE_NAME}`, `{APP_CLIENT_ID}`,
-`{POWER_AUTOMATE_CONNECTIONS_URL}`, `{POWER_APPS_URL}`, and the exact candidate
-summary in the ordinary current-task reply. The reply starts with a controller-built lead-in (it names the saved User Claim and User Field only when both are recorded) and ends with a controller-built closing line; show both verbatim. The native question carries only
-the required match, current candidate context, and completion decision:
+`{CONNECTION_DISPLAY_NAME}`, `{INSTANCE_NAME}`, `{APP_CLIENT_ID}`, and the
+exact candidate summary in the ordinary current-task reply. The reply starts
+with a controller-built lead-in (it names the saved User Claim and User Field
+only when both are recorded) and ends with a controller-built closing line;
+show both verbatim. The native question carries only the required match,
+current candidate context, and completion decision:
 
 <!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "ServiceNow connection",
-    "question": "Required connection match:\n- Authentication Type: Microsoft Entra ID User Login (`entraIDUserLogin`)\n- Resource URI: `{APP_CLIENT_ID}`\n- Instance Name: `{INSTANCE_NAME}`\n\nCurrent exact candidates: {CONNECTION_CANDIDATE_SUMMARY}\n\nDoes the exact ServiceNow connection now show Connected with these required values?\n\nDisplay name `{CONNECTION_DISPLAY_NAME}` is optional guidance and is not a readiness gate. Selecting the completed option triggers one fresh supported connection inventory read; it does not prove agent binding or business success.",
+    "question": "Required connection match:\n- Authentication Type: Microsoft Entra ID User Login (`entraIDUserLogin`)\n- Resource URI: `{APP_CLIENT_ID}`\n- Instance Name: `{INSTANCE_NAME}`\n\nCurrent exact candidates: {CONNECTION_CANDIDATE_SUMMARY}\n\nDid you create the connection, and does Copilot Studio show it as Connected for this agent? If you reply in chat instead, name the connection you used, for example: \"I created {CONNECTION_DISPLAY_NAME}. Copilot Studio shows Connected.\"\n\nSelecting the completed option triggers one fresh connection check and one check of the agent's saved settings. The name is optional guidance and is not a readiness gate.",
     "options": [
-      { "label": "Completed, the exact ServiceNow connection is Connected" },
-      { "label": "Not yet, the ServiceNow connection is not ready" }
+      { "label": "Completed, the connection is created and shows Connected" },
+      { "label": "Not yet, the connection is not ready" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
-After **Completed, the exact ServiceNow connection is Connected**, run:
+After **Completed, the connection is created and shows Connected** (or a chat
+reply that says so), run:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} resolve-credential
 ```
 
-The command performs a fresh connector-scoped read:
+The command performs a fresh connector-scoped read and reads the agent's saved
+draft connection reference:
 
-- `selected`: exactly one healthy exact connection was programmatically
-  verified and recorded; return `ACTION_RESULT = "applied"`.
+- `selected`: exactly one healthy exact connection was verified, the saved
+  draft uses it, and the step is recorded; return `ACTION_RESULT = "applied"`.
 - `choice-required`: more than one healthy exact connection exists. Use the
   selector below; do not create a duplicate and do not expose connection IDs.
-- `not-ready`: show its explicit remediation, keep the phase incomplete, and
+- `not-ready`: show its explicit remediation, keep the step incomplete, and
   return `ACTION_RESULT = "waiting"`. Do not record arbitrary fallback state.
+- A blocking issue (error with `details.blockingIssue`) means the connection
+  is fine but the agent does not use it yet. Show the error text verbatim,
+  keep the step incomplete, and return `ACTION_RESULT = "waiting"`:
+  - `agent-reference-missing`: the agent has no saved ServiceNow connection
+    reference; ask the maker to open Connection Settings > ServiceNow, create
+    or select the connection, and save.
+  - `agent-not-bound`: select the connection in Connection Settings >
+    ServiceNow and save the agent settings, then tell ADK again. The maker
+    does not need to create the connection again.
+  - `agent-bound-elsewhere`: the agent uses a different connection; select the
+    verified one and save.
+  - `agent-binding-mismatch`: the saved reference differs in authentication
+    type, instance name, or Resource URI; re-select the verified connection and
+    save.
 - A command/read error is authoritative. Report it and stop; on HTTP 429,
   honor the cooldown/Retry-After and do not immediately retry the workflow.
 
-If the Maker selects **Not yet, the ServiceNow connection is not ready**,
-return `ACTION_RESULT = "waiting"` without
-running completion or recording evidence.
+If the Maker selects **Not yet, the connection is not ready**, return
+`ACTION_RESULT = "waiting"` without running completion or recording evidence.
 
 For multiple healthy exact candidates discovered by the initial
 `inspect-admin-setup`, build the supported selector options directly from
@@ -171,7 +174,7 @@ never ask them to copy the key or connection ID.
 [
   {
     "header": "Choose ServiceNow connection",
-    "question": "Fresh read-only inventory found multiple healthy exact ServiceNow connections in this environment. Each already uses Microsoft Entra ID User Login with the required Resource URI and Instance Name.\n\nChoose the connection to bind to this lifecycle. No new connection will be created.",
+    "question": "Fresh read-only inventory found multiple healthy exact ServiceNow connections in this environment. Each already uses Microsoft Entra ID User Login with the required Resource URI and Instance Name.\n\nChoose the connection to use for this agent. No new connection will be created. Make sure this agent's Connection Settings use the same connection.",
     "options": [
       { "label": "{CANDIDATE_LABEL_1}" },
       { "label": "{CANDIDATE_LABEL_2}" }
@@ -188,11 +191,20 @@ Map the selected label to its returned `selectionKey`, then run:
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} resolve-credential --selection-key <internal-selection-key>
 ```
 
-This second command performs another fresh inventory read and records the
-selection only if it is still an exact healthy candidate. If it changed,
-report the error and re-enter the phase later with fresh discovery.
+This second command performs another fresh inventory read and saved-draft
+check, and records the selection only if it is still an exact healthy
+candidate that the agent uses. If it changed, report the error and re-enter
+the phase later with fresh discovery.
 
-Physical credential creation and sign-in are maker actions. Do not call a
-connection-create API or persist secrets. Return `ACTION_RESULT = "applied"`
-only after a currently healthy credential is selected; otherwise return
+Do not call the UI `user-connections` endpoint, reuse browser tokens, or use a
+MinimalBot connection-reference update as a substitute. Connection creation and
+sign-in are maker actions. Do not call a connection-create API or persist
+secrets. Return `ACTION_RESULT = "applied"` only after a currently healthy
+connection is verified and the agent's saved settings use it; otherwise return
 `ACTION_RESULT = "waiting"`.
+
+The recorded binding identity covers the exact provider, profile, agent,
+environment, selected connection, and ServiceNow connection-reference
+metadata. Later approved topic-state or same-instance portal changes do not
+require re-binding. A changed agent, environment, connection, auth/resource/
+instance metadata, or connection reference does.

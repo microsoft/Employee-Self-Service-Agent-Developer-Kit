@@ -57,7 +57,7 @@ SETUP_SCHEMA_VERSION = 4
 HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 IT_SCHEMA_NAME = "gptagent_copilotforemployeeselfserviceit"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
-LIFECYCLE_SCHEMA_VERSION = 12
+LIFECYCLE_SCHEMA_VERSION = 13
 CHECKPOINT_RESULT_STATUSES = frozenset(
     {
         "Passed",
@@ -1676,7 +1676,7 @@ def _invalidate_identity_dependents(
     state.pop("connectionBindingHash", None)
     setup = _admin_setup(state)
     setup["phaseHandoffs"]["credential"] = {"status": "pending"}
-    for phase_id in ("credential", "agent-connection", "test"):
+    for phase_id in ("credential", "test"):
         phase = state.setdefault("phases", {}).setdefault(
             phase_id,
             {
@@ -5266,10 +5266,10 @@ def _migrate_lifecycle_schema(
                 )
             )
         )
-        state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
+        state["schemaVersion"] = 12
         migration["schemaV12"] = {
             "from": 11 if version <= 11 else version,
-            "to": LIFECYCLE_SCHEMA_VERSION,
+            "to": 12,
             "sourceSha256": source_sha256,
             "migratedAt": _utc_now(),
             "currentCheckpointId": _entra_setup_checkpoint_id(),
@@ -5282,7 +5282,83 @@ def _migrate_lifecycle_schema(
             "completionRecomputedFromCurrentEvidence": setup_current,
             "completionInferred": False,
         }
+    if version < 13:
+        _merge_connection_phases(state, phases, migration, source_sha256, version)
     return state
+
+
+def _merge_connection_phases(
+    state: dict[str, Any],
+    phases: dict[str, Any],
+    migration: dict[str, Any],
+    source_sha256: str,
+    version: int,
+) -> None:
+    """Fold the retired `agent-connection` phase into `credential`."""
+    evidence = state.setdefault("evidence", {})
+    if not isinstance(evidence, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow lifecycle evidence must be an object."
+        )
+    retired_phases = state.setdefault("retiredPhases", {})
+    retired_evidence = state.setdefault("retiredEvidence", {})
+    if not isinstance(retired_phases, dict) or not isinstance(
+        retired_evidence, dict
+    ):
+        raise ServiceNowConnectError(
+            "ServiceNow retired lifecycle state must be an object."
+        )
+    credential_phase = phases.get("credential")
+    binding_phase = phases.pop("agent-connection", None)
+    if binding_phase is not None:
+        retired_phases["agent-connection"] = binding_phase
+    credential_done = (
+        isinstance(credential_phase, dict)
+        and credential_phase.get("status") == "done"
+    )
+    binding_done = (
+        isinstance(binding_phase, dict)
+        and binding_phase.get("status") == "done"
+    )
+    agent_record = evidence.get("agentConnection")
+    merged_done = bool(
+        credential_done
+        and binding_done
+        and isinstance(agent_record, dict)
+        and agent_record.get("makerAttested") is True
+    )
+    if merged_done:
+        assert isinstance(agent_record, dict)
+        agent_record.pop("makerAttested", None)
+        agent_record["kind"] = "binding-proof"
+        agent_record["bindingVerified"] = True
+        agent_record["verificationSource"] = "migrated-maker-attestation"
+    else:
+        if isinstance(agent_record, dict):
+            retired_evidence.setdefault(
+                "agentConnectionSchemaV12",
+                copy.deepcopy(agent_record),
+            )
+            evidence.pop("agentConnection", None)
+        state.pop("agentBindingIdentitySha256", None)
+        state.pop("connectionBindingHash", None)
+        if credential_done and isinstance(credential_phase, dict):
+            credential_phase["status"] = "pending"
+            credential_phase["checkpointResults"] = {}
+            credential_phase["checkpointAcknowledgements"] = {}
+            for key in ("actionApplied", "lastActionAt", "lastVerifiedAt"):
+                credential_phase.pop(key, None)
+    state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
+    migration["schemaV13"] = {
+        "from": 12 if version <= 12 else version,
+        "to": LIFECYCLE_SCHEMA_VERSION,
+        "sourceSha256": source_sha256,
+        "migratedAt": _utc_now(),
+        "retiredPhaseId": "agent-connection",
+        "mergedPhaseId": "credential",
+        "mergedPhaseStayedDone": merged_done,
+        "completionInferred": False,
+    }
 
 
 def _migrate_legacy_state(
@@ -5451,7 +5527,7 @@ def _load_lifecycle_state(
         if (
             isinstance(credential, dict)
             and credential.get("connectionId")
-            and _agent_connection_attestation_current(state, components)
+            and _agent_binding_proof_current(state, components)
         ):
             state["agentBindingIdentitySha256"] = (
                 _agent_binding_identity_hash(
@@ -5660,7 +5736,7 @@ def _inspection_progress(
         attestation = {}
     attested_connection_id = str(attestation.get("connectionId") or "")
     agent_connection_done = (
-        attestation.get("makerAttested") is True
+        attestation.get("bindingVerified") is True
         and attested_connection_id in connected
     )
 
@@ -5701,26 +5777,16 @@ def _inspection_progress(
             ),
         },
         "credential": {
-            "status": "done" if connected else "pending",
+            "status": (
+                "done" if connected and agent_connection_done else "pending"
+            ),
             "message": (
                 f"{len(connected)} Connected Entra user-login ServiceNow "
-                "credential(s) found."
-            ),
-        },
-        "agentConnection": {
-            "status": (
-                "confirmation-required"
-                if connected
-                else "pending"
-            ),
-            "message": (
-                "A prior maker attestation is recorded and the selected "
-                "credential is still Connected, but the current agent UI "
-                "binding requires maker confirmation."
-                if agent_connection_done
-                else (
-                    "Maker confirmation of the agent's ServiceNow row is "
-                    "required."
+                "credential(s) found. "
+                + (
+                    "The agent's saved settings use the verified connection."
+                    if agent_connection_done
+                    else "The agent's saved settings must be verified."
                 )
             ),
         },
@@ -7393,15 +7459,28 @@ def resolve_credential_completion(
                 "Select one candidate by label."
             ),
         }
+    unhealthy_exact = int(resolution.get("unhealthyExactCount") or 0)
     return {
         "status": "not-ready",
         "expected": resolution["expected"],
         "unhealthyExactCount": resolution["unhealthyExactCount"],
         "remediation": (
-            "No exact healthy Connected Microsoft Entra ID User Login "
-            "ServiceNow connection is currently visible. Finish creation or "
-            "repair in the same environment, then choose Completed so the "
-            "read-only inventory can verify it again."
+            (
+                "A ServiceNow connection with these settings exists, but it "
+                "doesn't show Connected. In Copilot Studio, open Settings > "
+                "Connection Settings > ServiceNow, sign in again so it shows "
+                "Connected, and save the agent settings. Then tell me again."
+            )
+            if unhealthy_exact
+            else (
+                "I couldn't find a Connected ServiceNow connection that "
+                "matches this setup (Microsoft Entra ID User Login, the "
+                "instance name, and the Resource URI shown in the card) in "
+                "this environment. Finish creating it in Copilot Studio "
+                "(Settings > Connection Settings > ServiceNow > Connect > "
+                "Create new connection), or check that you used the same "
+                "values and environment. Then tell me again."
+            )
         ),
     }
 
@@ -8224,7 +8303,22 @@ def record_credential_selection(
             physical.get("parameterValues") or {}
         ),
     }
-    state.setdefault("evidence", {})["credential"] = evidence
+    state_evidence = state.setdefault("evidence", {})
+    state_evidence["credential"] = evidence
+    proof = _verified_agent_binding_proof(
+        context,
+        state,
+        components,
+        physical,
+    )
+    state_evidence["agentConnection"] = proof
+    state["agentBindingIdentitySha256"] = proof["binding"][
+        "bindingIdentitySha256"
+    ]
+    state["connectionBindingHash"] = _connection_binding_hash_for_identity(
+        proof["binding"]["bindingIdentity"],
+        recorded_at=proof["recordedAt"],
+    )
     setup["phaseHandoffs"]["credential"] = {
         "status": "completed",
         "evidence": {
@@ -8238,71 +8332,96 @@ def record_credential_selection(
     return evidence
 
 
-def record_agent_connection_attestation(
+def _verified_agent_binding_proof(
     context: dict[str, Any],
-    connection_id: str,
+    state: dict[str, Any],
+    components: dict[str, Any],
+    physical: dict[str, Any],
 ) -> dict[str, Any]:
-    physical = _healthy_connection(context, connection_id)
-    components = _agentbuilder_client(context).fetch_components(
-        context["agent"]["id"]
-    )
+    """Prove the agent's saved draft references the selected connection.
 
-    normalized_connection_id = uuid.UUID(connection_id).hex
-    state = _load_lifecycle_state(context, components)
-    evidence = state.setdefault("evidence", {})
-    selected = evidence.get("credential")
-    if (
-        isinstance(selected, dict)
-        and selected.get("connectionId")
-        and str(selected["connectionId"]).casefold()
-        != normalized_connection_id.casefold()
-    ):
+    Raises a recovery-specific error before any state is persisted, so the
+    merged credential phase is never completed without both proofs.
+    """
+    credential = state["evidence"]["credential"]
+    selected_id = str(credential["connectionId"]).replace("-", "")
+    display_name = physical.get("displayName") or "the connection you created"
+    recovery_details = {
+        "provider": PROVIDER_KEY,
+        "profile": PROFILE_KEY,
+        "agentId": context["agent"]["id"],
+        "environmentId": context["environment"]["id"],
+        "requiredPhase": "credential",
+    }
+    try:
+        reference = find_servicenow_reference(components)
+    except ServiceNowConnectError as exc:
         raise ServiceNowConnectError(
-            "The attested Agent Connect credential differs from the selected "
-            "lifecycle credential. Record the intended credential first."
+            "The connection exists and shows Connected, but I could not find "
+            "this agent's ServiceNow connection in its saved settings. In "
+            "Copilot Studio, open the agent, go to Settings > Connection "
+            "Settings > ServiceNow, select the connection, and save. Then "
+            "tell me again.",
+            details={**recovery_details, "blockingIssue": "agent-reference-missing"},
+        ) from exc
+    parameters = _shared_parameters(reference)
+    reference_id = str(reference.get("connectionId") or "").replace("-", "")
+    if not reference_id:
+        raise ServiceNowConnectError(
+            f"**{display_name}** is created and Connected, but this agent's "
+            "saved settings don't use it yet. In Copilot Studio, go to "
+            "Settings > Connection Settings > ServiceNow, select "
+            f"**{display_name}**, and save the agent settings. Then tell me "
+            "again. You don't need to create the connection again.",
+            details={**recovery_details, "blockingIssue": "agent-not-bound"},
         )
-    evidence.setdefault(
-        "credential",
-        {
-            "connectionId": normalized_connection_id,
-            "displayName": physical.get("displayName"),
-            "connectorId": CONNECTOR_ID,
-            "physicalStatus": physical.get("status"),
-            "authMode": physical.get("authMode"),
-            "instanceName": (
-                physical.get("parameterValues", {}).get(
-                    "token:InstanceName"
-                )
-            ),
-            "resourceUri": (
-                physical.get("parameterValues", {}).get(
-                    "token:ResourceUri"
-                )
-            ),
-            "environmentId": context["environment"]["id"],
-            "selectedAt": _utc_now(),
-            "lastVerifiedAt": _utc_now(),
-        },
-    )
-    binding_identity = _agent_binding_identity(
-        context,
-        state,
-        components,
-    )
+    if reference_id.casefold() != selected_id.casefold():
+        raise ServiceNowConnectError(
+            "This agent's saved settings use a different ServiceNow "
+            f"connection than **{display_name}**. In Copilot Studio, go to "
+            "Settings > Connection Settings > ServiceNow, select "
+            f"**{display_name}**, and save the agent settings. Then tell me "
+            "again.",
+            details={**recovery_details, "blockingIssue": "agent-bound-elsewhere"},
+        )
+    expected = {
+        "authentication type": (parameters.get("name"), AUTH_MODE),
+        "instance name": (
+            _parameter_value(parameters, "token:InstanceName"),
+            credential.get("instanceName"),
+        ),
+        "Resource URI": (
+            _parameter_value(parameters, "token:ResourceUri"),
+            credential.get("resourceUri"),
+        ),
+    }
+    for label, (actual, wanted) in expected.items():
+        if actual and wanted and str(actual).casefold() != str(wanted).casefold():
+            raise ServiceNowConnectError(
+                f"This agent's saved ServiceNow settings use a different "
+                f"{label} than the connection you created. Select "
+                f"**{display_name}** again in Settings > Connection "
+                "Settings > ServiceNow and save the agent settings. Then "
+                "tell me again.",
+                details={**recovery_details, "blockingIssue": "agent-binding-mismatch"},
+            )
+    binding_identity = _agent_binding_identity(context, state, components)
     binding_identity_sha256 = _canonical_json_hash(binding_identity)
-    result = {
-        "kind": "maker-attestation",
+    recorded_at = _utc_now()
+    return {
+        "kind": "binding-proof",
         "status": "completed",
-        "mode": "maker-ui",
-        "connectionId": normalized_connection_id,
+        "mode": "adk-verified",
+        "verificationSource": "saved-draft-connection-reference",
+        "bindingVerified": True,
+        "connectionId": selected_id,
         "displayName": physical.get("displayName"),
         "physicalStatus": physical.get("status"),
         "authMode": physical.get("authMode"),
-        "makerAttested": True,
-        "recordedAt": _utc_now(),
-        "physicalVerifiedAt": _utc_now(),
+        "recordedAt": recorded_at,
+        "physicalVerifiedAt": recorded_at,
         "binding": {
-            "connectionId": normalized_connection_id,
+            "connectionId": selected_id,
             "environmentId": context["environment"]["id"],
             "agentId": context["agent"]["id"],
             "agentSlug": _agent_slug(context),
@@ -8312,14 +8431,6 @@ def record_agent_connection_attestation(
             "bindingIdentitySha256": binding_identity_sha256,
         },
     }
-    evidence["agentConnection"] = result
-    state["agentBindingIdentitySha256"] = binding_identity_sha256
-    state["connectionBindingHash"] = _connection_binding_hash_for_identity(
-        binding_identity,
-        recorded_at=result["recordedAt"],
-    )
-    _write_lifecycle_state(context, state)
-    return result
 
 
 def set_topic_state(
@@ -8609,7 +8720,7 @@ def _agent_binding_identity_hash(
     )
 
 
-def _agent_connection_attestation_current(
+def _agent_binding_proof_current(
     state: dict[str, Any],
     components: dict[str, Any],
 ) -> bool:
@@ -8640,9 +8751,9 @@ def _agent_connection_attestation_current(
     current_identity_sha256 = _canonical_json_hash(current_identity)
     return not (
         not isinstance(attestation, dict)
-        or attestation.get("kind") != "maker-attestation"
+        or attestation.get("kind") != "binding-proof"
         or attestation.get("status") != "completed"
-        or attestation.get("makerAttested") is not True
+        or attestation.get("bindingVerified") is not True
         or attestation.get("physicalStatus") != "Connected"
         or str(attestation.get("connectionId") or "").replace("-", "")
         != normalized_connection_id
@@ -8658,17 +8769,17 @@ def _require_current_agent_binding(
     state: dict[str, Any],
     components: dict[str, Any],
 ) -> None:
-    if not _agent_connection_attestation_current(state, components):
+    if not _agent_binding_proof_current(state, components):
         raise ServiceNowConnectError(
-            "Confirm the exact current ServiceNow agent binding after the "
-            "physical credential phase before reviewing or changing topics "
-            "or the portal URL.",
+            "Create and connect ServiceNow first: the agent's saved settings "
+            "must use the verified connection before reviewing or changing "
+            "topics or the portal URL.",
             details={
                 "provider": PROVIDER_KEY,
                 "profile": PROFILE_KEY,
                 "agentId": context["agent"]["id"],
                 "environmentId": context["environment"]["id"],
-                "requiredPhase": "agent-connection",
+                "requiredPhase": "credential",
             },
         )
 
@@ -8687,14 +8798,14 @@ def _connection_binding_hash(
             "evidence."
         )
     attestation = state.get("evidence", {}).get("agentConnection")
-    attestation_current = _agent_connection_attestation_current(
+    attestation_current = _agent_binding_proof_current(
         state,
         components,
     )
     if require_agent_attestation and not attestation_current:
         raise ServiceNowConnectError(
-            "Record a current Agent Connect observation for this saved draft "
-            "and selected credential before recording Test evidence."
+            "Verify the ServiceNow connection and agent binding for this "
+            "saved draft before recording Test evidence."
         )
     binding_identity = _agent_binding_identity(
         context,
@@ -9681,6 +9792,9 @@ def _phase_progress_completion_kind(
     return "checked"
 
 
+_CONNECTION_STEP_LABEL = "Create and connect ServiceNow"
+
+
 def _phase_customer_label(
     phase_id: str,
     contract_label: str,
@@ -9690,10 +9804,9 @@ def _phase_customer_label(
         "plugin-prerequisites": "Confirm HR ServiceNow prerequisite",
         "entra-registration": "Confirm the Microsoft Entra identity details",
         "servicenow-oidc": "Confirm ServiceNow user mapping",
-        "credential": "Check ServiceNow connection",
+        "credential": _CONNECTION_STEP_LABEL,
         "topics": "Turn on the ServiceNow topics",
         "portal-url": "Set employee portal URL",
-        "agent-connection": "Connect this agent to ServiceNow",
         "test": "Test a ServiceNow request",
         "publish": "Publish agent",
     }
@@ -10007,7 +10120,6 @@ def _business_groups(
                     phase_id
                     for phase_id in (
                         "credential",
-                        "agent-connection",
                         "topics",
                         "portal-url",
                         "test",
@@ -10203,16 +10315,39 @@ def _credential_lead_in(state: dict[str, Any]) -> str:
     ):
         claim = mapping.get("tokenClaimName")
         field = mapping.get("serviceNowUserField")
-    saved = (
-        "Your ServiceNow administrator's configuration is saved, using "
-        f"`{claim}` as the User Claim and `{field}` as the User Field. "
-        if isinstance(claim, str) and claim and isinstance(field, str) and field
-        else ""
-    )
-    return (
-        f"{saved}Next, create the sign-in connection that Employee "
-        "Self-Service will use to access ServiceNow.\n\n"
-    )
+    if isinstance(claim, str) and claim and isinstance(field, str) and field:
+        return (
+            "Your ServiceNow administrator has confirmed that the "
+            f"configuration is saved, using `{claim}` as the User Claim and "
+            f"**{field}** as the User Field.\n\n"
+        )
+    return ""
+
+
+def _product_audience() -> str:
+    return "HR" if ACTIVE_PROFILE.key == "hrsd" else "IT"
+
+
+def _first_text(container: Any, keys: tuple[str, ...]) -> str | None:
+    if isinstance(container, dict):
+        for key in keys:
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _display_agent_name(context: dict[str, Any]) -> str:
+    return _first_text(
+        context.get("agent"), ("display_name", "displayName", "name")
+    ) or ACTIVE_PROFILE.agent_display_name
+
+
+def _display_environment_name(context: dict[str, Any]) -> str:
+    return _first_text(
+        context.get("environment"),
+        ("display_name", "displayName", "name"),
+    ) or str(context["environment"]["id"])
 
 
 def _current_task_guidance(
@@ -10241,10 +10376,6 @@ def _current_task_guidance(
     client_id = _known_entra_client_id(state)
     credential = state.get("evidence", {}).get("credential")
     credential = credential if isinstance(credential, dict) else {}
-    connection_name = str(
-        credential.get("displayName")
-        or ACTIVE_PROFILE.connection_display_name
-    )
     links = maker_portal_links(
         context,
         instance_name=(
@@ -10331,62 +10462,35 @@ def _current_task_guidance(
             "employee token, request, permission, or business result."
         )
     if phase_id == "credential":
-        expected_values = _render_connection_expected_values(
-            display_name=ACTIVE_PROFILE.connection_display_name,
-            resource_uri=client_id,
-            instance_name=(
-                instance_name
-                if instance_name != "not confirmed"
-                else None
-            ),
-        )
+        audience = _product_audience()
         return common + _credential_lead_in(state) + (
-            "**Where and how**\n"
-            f"Open the selected environment Connections list: "
-            f"{links['powerAutomateConnections']['url']}. Use "
-            f"`{provider_root}/prepare-credential.md`. Repair an exact "
-            "unhealthy current-maker candidate when possible. If no exact "
-            "candidate exists and creation is authorized, use New connection "
-            "→ search `ServiceNow` → select the Microsoft-published connector "
-            "with `+` → choose Microsoft Entra ID User Login → enter the "
-            "values below → sign in with the current Maker's own account. "
-            f"Fallback root: {links['powerApps']['url']}. Never impersonate "
-            "another owner. Treat `Invalid_redirect_uri` as conditional OIDC "
-            "redirect remediation, not an observed current error.\n\n"
-            "**Expected form values, top to bottom**\n"
-            f"{expected_values}\n\n"
+            "Next, create the sign-in connection that Employee Self-Service "
+            f"{audience} will use to access ServiceNow. This part happens in "
+            "Copilot Studio:\n\n"
+            f"1. Open **{_display_agent_name(context)}** in "
+            f"**{_display_environment_name(context)}**.\n"
+            "2. Go to **Settings > Connection Settings > ServiceNow > "
+            "Connect > Create new connection**.\n"
+            "3. Use:\n"
+            "   - **Authentication type:** Microsoft Entra ID User Login\n"
+            f"   - **Resource URI:** `{client_id or 'not yet confirmed'}`\n"
+            f"   - **Instance name:** `{instance_name}`, not the full URL\n"
+            "4. Complete the connection creation.\n\n"
+            "Return here and tell us which connection you used. You won't "
+            "need to resend the administrator replies.\n\n"
+            f"After that, we'll test an {audience} request with your account "
+            "to check sign-in and employee matching.\n\n"
             "**Expected nonsecret evidence**\n"
-            "Fresh Connectivity inventory must prove exactly one Connected "
-            "current-maker connection matching the environment, auth mode, "
-            "Resource URI, and Instance Name. The optional display name is "
-            "guidance only and is never a readiness gate.\n\n"
+            "Two ADK checks run after your reply. A fresh Connectivity "
+            "inventory must prove exactly one Connected current-maker "
+            "connection matching the environment, auth mode, Resource URI, "
+            "and Instance Name. The agent's saved draft connection "
+            "reference must point at that same connection. The optional "
+            "display name is guidance only and is never a readiness gate.\n\n"
             "**Completion boundary**\n"
-            "The separate completion card triggers a fresh API reread. A "
-            "Connected physical credential does not prove agent binding or "
-            "business success.\n\n"
-            "Return here when it shows Connected. You won't need to resend "
-            "the administrator replies."
-        )
-    if phase_id == "agent-connection":
-        return common + (
-            "Now select that connection for this agent in Copilot Studio. "
-            "Return here and tell us which connection you used. After that, "
-            "we'll test a request with your account to check sign-in and "
-            "employee matching.\n\n"
-            "**Where and how**\n"
-            f"Open {links['copilotStudioAgent']['url']} → Settings → "
-            "Connection settings → ServiceNow. Use "
-            f"`{provider_root}/connect-agent.md` and select "
-            f"`{connection_name}`, save, and confirm the ServiceNow row shows "
-            "Connected. Do not substitute the UI `user-connections` endpoint, "
-            "browser tokens, or a MinimalBot connection-reference update.\n\n"
-            "**Expected nonsecret evidence**\n"
-            "Current Manual Maker confirmation bound to this provider, "
-            "profile, agent, environment, selected physical connection, and "
-            "semantic binding identity.\n\n"
-            "**Completion boundary**\n"
-            "The separate completion card records Manual binding evidence. "
-            "Connection inventory alone never proves UI binding."
+            "Your reply triggers both checks. This step completes only when "
+            "both pass; a Connected connection that the agent does not use "
+            "yet does not complete it, and neither proves business success."
         )
     if phase_id == "topics":
         return common + (
@@ -10464,6 +10568,12 @@ def _render_grouped_phases(
 
     ``current_override`` is ``(phase_id, icon, text)`` for the current step.
     """
+    visible_by_id = {
+        str(item["id"]): item for item in items
+    }
+    hidden_ids = {
+        str(item["id"]) for item in items if str(item["id"]) not in visible_by_id
+    }
     items_by_id = {str(item["id"]): item for item in items}
 
     def status_line(item: dict[str, Any]) -> str:
@@ -10486,7 +10596,9 @@ def _render_grouped_phases(
             f"{group['role']}"
         )
         for phase_id in group["phaseIds"]:
-            lines.append(f"   - {status_line(items_by_id[phase_id])}")
+            if phase_id in hidden_ids:
+                continue
+            lines.append(f"   - {status_line(visible_by_id[phase_id])}")
     lines.extend(
         [
             "",
@@ -12159,11 +12271,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     resolve_credential_parser.add_argument("--selection-key")
 
-    agent_connection_parser = subparsers.add_parser(
-        "record-agent-connection",
-        help="Record the maker's manual Connect action after health validation.",
-    )
-    agent_connection_parser.add_argument("--connection-id", required=True)
     topic_state_parser = subparsers.add_parser(
         "set-topic-state",
         help="Set one ServiceNow topic to Active or Inactive.",
@@ -12409,8 +12516,6 @@ def _command_error_recovery(
             "portal-reuse-handoff",
             "record-portal-reuse",
         }
-        else "agent-connection"
-        if command == "record-agent-connection"
         else "test"
         if command == "record-test"
         else "lifecycle"
@@ -12423,7 +12528,6 @@ def _command_error_recovery(
         "credential",
         "topics",
         "portal-url",
-        "agent-connection",
         "test",
     }:
         phase = command
@@ -12529,8 +12633,9 @@ def _command_error_recovery(
             "The bounded OIDC/user-mapping receipt is current.",
         ),
         "credential": (
-            "Power Platform Maker/Admin",
-            links["powerAutomateConnections"]["url"],
+            "ESS Maker / Agent Developer",
+            links["copilotStudioAgent"]["url"]
+            + " -> Settings -> Connection Settings -> ServiceNow",
             _render_connection_expected_values(
                 resource_uri=(
                     str(client_id) if client_id else None
@@ -12539,7 +12644,10 @@ def _command_error_recovery(
                     str(instance_name) if instance_name else None
                 ),
             ),
-            "Fresh inventory shows one exact Connected current-maker connection.",
+            (
+                "Fresh inventory shows one exact Connected current-maker "
+                "connection and the agent's saved draft uses it."
+            ),
         ),
         "topics": (
             "ESS Maker / Agent Developer",
@@ -12561,15 +12669,6 @@ def _command_error_recovery(
                 "URL on the confirmed instance; never infer `/sp` or `/esc`."
             ),
             "The saved portal literal matches the confirmed target URL.",
-        ),
-        "agent-connection": (
-            "ESS Maker / Agent Developer",
-            links["copilotStudioAgent"]["url"] + " -> Settings -> Connection settings",
-            (
-                "Bind the current maker's exact healthy connection. Do not "
-                "return a connection ID or impersonate another owner."
-            ),
-            "The ServiceNow row is Connected for the current saved draft.",
         ),
         "test": (
             "ESS Maker / Agent Developer",
@@ -12601,7 +12700,6 @@ def _command_error_recovery(
             "credential",
             "topics",
             "portal-url",
-            "agent-connection",
             "test",
         ):
             candidate_state = phases.get(candidate)
@@ -12857,11 +12955,6 @@ def main(argv: list[str] | None = None) -> int:
                 context,
                 selection_key=args.selection_key,
             )
-        elif args.command == "record-agent-connection":
-            result = record_agent_connection_attestation(
-                context,
-                args.connection_id,
-            )
         elif args.command == "set-topic-state":
             result = set_topic_state(
                 context,
@@ -12966,7 +13059,6 @@ def main(argv: list[str] | None = None) -> int:
             "create",
             "record-credential",
             "resolve-credential",
-            "record-agent-connection",
             "set-topic-state",
             "enable-all-topics",
             "rollback-topics",

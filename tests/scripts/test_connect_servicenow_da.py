@@ -161,10 +161,12 @@ def _add_current_agent_binding(
     )
     identity_sha256 = snow._canonical_json_hash(identity)
     state["evidence"]["agentConnection"] = {
-        "kind": "maker-attestation",
+        "kind": "binding-proof",
+        "mode": "adk-verified",
+        "verificationSource": "saved-draft-connection-reference",
+        "bindingVerified": True,
         "status": "completed",
         "recordedAt": "2026-10-01T00:00:00Z",
-        "makerAttested": True,
         "physicalStatus": "Connected",
         "authMode": snow.AUTH_MODE,
         "connectionId": CONNECTION_ID.replace("-", ""),
@@ -344,12 +346,14 @@ def _seed_passing_test(
     )
     identity_sha256 = snow._canonical_json_hash(identity)
     state["evidence"]["agentConnection"] = {
-        "kind": "maker-attestation",
+        "kind": "binding-proof",
+        "mode": "adk-verified",
+        "verificationSource": "saved-draft-connection-reference",
+        "bindingVerified": True,
         "status": "completed",
         "connectionId": normalized_connection_id,
         "physicalStatus": "Connected",
         "authMode": snow.AUTH_MODE,
-        "makerAttested": True,
         "recordedAt": "2026-10-01T00:00:00Z",
         "binding": {
             "bindingIdentity": identity,
@@ -460,10 +464,12 @@ def _seed_complete_dev_state(
             binding_identity
         )
         state["evidence"]["agentConnection"] = {
-            "kind": "maker-attestation",
+            "kind": "binding-proof",
+            "mode": "adk-verified",
+            "verificationSource": "saved-draft-connection-reference",
+            "bindingVerified": True,
             "status": "completed",
             "recordedAt": "2026-10-23T00:00:30Z",
-            "makerAttested": True,
             "physicalStatus": "Connected",
             "authMode": snow.AUTH_MODE,
             "connectionId": CONNECTION_ID.replace("-", ""),
@@ -662,6 +668,26 @@ def _seed_complete_dev_state(
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(json.dumps(state), encoding="utf-8")
     return context, state
+
+
+def _to_legacy_attested_shape(state: dict) -> dict:
+    """Rewrite current merged-phase evidence into the pre-v13 shape."""
+    record = state["evidence"]["agentConnection"]
+    for key in ("mode", "verificationSource", "bindingVerified"):
+        record.pop(key, None)
+    record["kind"] = "maker-attestation"
+    record["makerAttested"] = True
+    phases = {}
+    for phase_id, phase in state["phases"].items():
+        phases[phase_id] = phase
+        if phase_id == "credential":
+            phases["agent-connection"] = {
+                "status": "done",
+                "checkpointResults": {"legacy": "Manual"},
+                "checkpointAcknowledgements": {},
+            }
+    state["phases"] = phases
+    return state
 
 
 def _target_profile_components(
@@ -1193,7 +1219,6 @@ def _write_shared_target_state(
                 "credential",
                 "topics",
                 "portal-url",
-                "agent-connection",
                 "test",
             )
         }
@@ -1961,11 +1986,11 @@ def test_topic_activation_requires_current_agent_binding(
 
     with pytest.raises(
         snow.ServiceNowConnectError,
-        match="Confirm the exact current ServiceNow agent binding",
+        match="Create and connect ServiceNow first",
     ) as raised:
         snow.enable_all_servicenow_topics(_context(), confirmed=True)
 
-    assert raised.value.details["requiredPhase"] == "agent-connection"
+    assert raised.value.details["requiredPhase"] == "credential"
     assert update_calls == 0
 
 
@@ -2008,7 +2033,7 @@ def test_topic_and_portal_changes_preserve_binding_but_invalidate_final_test(
 
     loaded = snow._load_lifecycle_state(_context(), changed)
 
-    assert snow._agent_connection_attestation_current(loaded, changed) is True
+    assert snow._agent_binding_proof_current(loaded, changed) is True
     assert loaded["connectionBindingHash"] == old_binding_hash
     assert loaded["agentBindingIdentitySha256"] == state[
         "agentBindingIdentitySha256"
@@ -2064,7 +2089,7 @@ def test_binding_identity_changes_invalidate_agent_binding(
     assert current_hash != state["agentBindingIdentitySha256"]
     if change in {"connection", "reference-resource"}:
         assert (
-            snow._agent_connection_attestation_current(
+            snow._agent_binding_proof_current(
                 changed_state,
                 changed_components,
             )
@@ -2475,80 +2500,6 @@ def test_load_context_rejects_incomplete_foundation_step(
         snow.load_context(tmp_path)
 
 
-def test_record_agent_connection_validates_health_and_persists_attestation(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    state_path = (
-        tmp_path
-        / ".local"
-        / "connect"
-        / "servicenow"
-        / "agents"
-        / AGENT_ID
-        / "state.json"
-    )
-    state_path.parent.mkdir(parents=True)
-    state_path.write_text(
-        json.dumps(
-            {
-                "schemaVersion": 1,
-                "agentId": AGENT_ID,
-                "environmentId": ENVIRONMENT_ID,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    class FakeConnectivity:
-        def get_connection(self, connection_id: str) -> dict:
-            assert connection_id == CONNECTION_ID
-            return {
-                "name": CONNECTION_ID.replace("-", ""),
-                "properties": {
-                    "displayName": "ServiceNow",
-                    "statuses": [{"target": "token", "status": "Connected"}],
-                    "connectionParametersSet": {
-                        "name": "entraIDUserLogin",
-                    },
-                },
-            }
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        snow,
-        "_connectivity_client",
-        lambda _context: FakeConnectivity(),
-    )
-    monkeypatch.setattr(
-        snow,
-        "_agentbuilder_client",
-        lambda _context: type(
-            "FakeAgentBuilder",
-            (),
-            {"fetch_components": lambda self, _agent_id: _components()},
-        )(),
-    )
-
-    result = snow.record_agent_connection_attestation(
-        _context(),
-        CONNECTION_ID,
-    )
-
-    assert result["connectionId"] == CONNECTION_ID.replace("-", "")
-    assert result["status"] == "completed"
-    assert result["binding"]["connectionId"] == result["connectionId"]
-    assert result["physicalStatus"] == "Connected"
-    assert result["makerAttested"] is True
-    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
-    assert state["evidence"]["agentConnection"]["makerAttested"] is True
-    assert (
-        state["evidence"]["agentConnection"]["binding"]["connectionId"]
-        == state["evidence"]["agentConnection"]["connectionId"]
-    )
-    assert state["migration"]["legacySourcePath"].endswith("state.json")
-
-
 @pytest.mark.parametrize("profile", ("hrsd", "itsm"))
 def test_publish_is_disabled_before_any_remote_client_or_write(
     monkeypatch: pytest.MonkeyPatch,
@@ -2809,6 +2760,7 @@ def test_schema_v7_retires_legacy_publish_without_resetting_test(
         profile="hrsd",
         legacy_publish_status=legacy_status,
     )
+    _to_legacy_attested_shape(state)
     state["schemaVersion"] = 6
     state["acceptedContractRevision"] = 8
     path = snow._lifecycle_state_path(context)
@@ -2818,7 +2770,7 @@ def test_schema_v7_retires_legacy_publish_without_resetting_test(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 12
+    assert migrated["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     assert "publish" not in migrated["phases"]
     assert migrated["retiredPhases"]["publish"]["status"] == legacy_status
     assert migrated["evidence"]["publish"]["status"] == "completed"
@@ -2933,6 +2885,7 @@ def test_schema_v9_migrates_strict_binding_identity_and_final_test(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     context, state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    _to_legacy_attested_shape(state)
     state["schemaVersion"] = 9
     state["evidence"]["agentConnection"]["binding"] = {
         "provider": state["provider"],
@@ -2949,12 +2902,16 @@ def test_schema_v9_migrates_strict_binding_identity_and_final_test(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 12
+    assert migrated["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     assert migrated["migration"]["schemaV10"]["bindingEvidenceMigrated"] is True
     assert migrated["migration"]["schemaV10"]["testEvidenceMigrated"] is True
-    assert list(migrated["phases"]).index("agent-connection") < list(
-        migrated["phases"]
-    ).index("topics")
+    assert "agent-connection" not in migrated["phases"]
+    assert migrated["retiredPhases"]["agent-connection"]["status"] == "done"
+    assert migrated["phases"]["credential"]["status"] == "done"
+    assert migrated["evidence"]["agentConnection"]["kind"] == "binding-proof"
+    assert migrated["evidence"]["agentConnection"]["verificationSource"] == (
+        "migrated-maker-attestation"
+    )
     assert migrated["evidence"]["agentConnection"]["binding"][
         "bindingIdentitySha256"
     ] == migrated["agentBindingIdentitySha256"]
@@ -2963,12 +2920,40 @@ def test_schema_v9_migrates_strict_binding_identity_and_final_test(
     ] == migrated["connectionBindingHash"]
 
 
+def test_schema_v12_pending_binding_resets_merged_phase_and_keeps_retired(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    _to_legacy_attested_shape(state)
+    state["schemaVersion"] = 12
+    state["phases"]["agent-connection"]["status"] = "pending"
+    state["phases"]["agent-connection"]["checkpointResults"] = {}
+    state["evidence"]["agentConnection"]["makerAttested"] = False
+    path = snow._lifecycle_state_path(context)
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with snow.product_profile_context("hrsd"):
+        migrated = snow._load_lifecycle_state(context)
+
+    assert migrated["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
+    assert "agent-connection" not in migrated["phases"]
+    assert migrated["retiredPhases"]["agent-connection"]["status"] == "pending"
+    assert migrated["phases"]["credential"]["status"] == "pending"
+    assert "agentConnection" not in migrated["evidence"]
+    assert "agentConnectionSchemaV12" in migrated["retiredEvidence"]
+    assert "agentBindingIdentitySha256" not in migrated
+    assert "connectionBindingHash" not in migrated
+
+
 def test_schema_v9_untrusted_binding_resets_later_phases_without_remote_change(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     context, state = _seed_complete_dev_state(tmp_path, profile="itsm")
+    _to_legacy_attested_shape(state)
     state["schemaVersion"] = 9
     state["evidence"]["credential"].pop("resourceUri")
     state["phases"]["agent-connection-and-test"] = {
@@ -2980,7 +2965,7 @@ def test_schema_v9_untrusted_binding_resets_later_phases_without_remote_change(
         path.write_text(json.dumps(state), encoding="utf-8")
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 12
+    assert migrated["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     migration = migrated["migration"]["schemaV10"]
     assert migration["bindingEvidenceMigrated"] is False
     assert migration["testEvidenceMigrated"] is False
@@ -2993,7 +2978,9 @@ def test_schema_v9_untrusted_binding_resets_later_phases_without_remote_change(
     assert migrated["retiredPhases"]["agent-connection-and-test"][
         "status"
     ] == "done"
-    for phase_id in ("agent-connection", "topics", "portal-url", "test"):
+    assert "agent-connection" not in migrated["phases"]
+    assert "agent-connection" in migrated["retiredPhases"]
+    for phase_id in ("topics", "portal-url", "test"):
         assert migrated["phases"][phase_id]["status"] == "pending"
     assert migrated["componentHash"] == state["componentHash"]
 
@@ -3159,39 +3146,6 @@ def test_reconcile_publish_receipt_rejects_revision_drift(
     assert unchanged["evidence"]["publish"]["componentHash"] == "a" * 64
 
 
-def test_record_agent_connection_rejects_unsupported_auth_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeConnectivity:
-        def get_connection(self, _connection_id: str) -> dict:
-            return {
-                "name": CONNECTION_ID.replace("-", ""),
-                "properties": {
-                    "displayName": "ServiceNow",
-                    "statuses": [{"target": "token", "status": "Connected"}],
-                    "connectionParametersSet": {"name": "oauth2"},
-                },
-            }
-
-    monkeypatch.setattr(
-        snow,
-        "_connectivity_client",
-        lambda _context: FakeConnectivity(),
-    )
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="Microsoft Entra ID User Login",
-    ):
-        snow.record_agent_connection_attestation(
-            {
-                "agent": {"id": AGENT_ID},
-                "environment": {"id": ENVIRONMENT_ID},
-            },
-            CONNECTION_ID,
-        )
-
-
 def test_inspect_preserves_progress_and_reports_completed_steps(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3275,12 +3229,10 @@ def test_inspect_preserves_progress_and_reports_completed_steps(
         "maker-ui"
     )
     assert result["progress"]["topics"]["status"] == "done"
-    assert result["progress"]["credential"]["status"] == "done"
+    assert result["progress"]["credential"]["status"] == "pending"
+    assert "must be verified" in result["progress"]["credential"]["message"]
+    assert "agentConnection" not in result["progress"]
     assert result["progress"]["legacyPublish"]["status"] == "historical"
-    assert (
-        result["progress"]["agentConnection"]["status"]
-        == "confirmation-required"
-    )
     assert "parameterSharing" not in result["progress"]
     assert result["progress"]["test"]["status"] == "pending"
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
@@ -3585,7 +3537,8 @@ def test_inspect_live_uses_components_and_connection_list_only(
     assert result["connectivity"]["userConnectionBinding"]["mode"] == (
         "maker-ui"
     )
-    assert result["progress"]["credential"]["status"] == "done"
+    assert result["progress"]["credential"]["status"] == "pending"
+    assert "must be verified" in result["progress"]["credential"]["message"]
     assert persisted[-1]["evidence"]["lastInspection"] == result
     assert "connector" not in persisted[-1]["evidence"]["lastInspection"][
         "connectivity"
@@ -4718,6 +4671,114 @@ def test_resolve_credential_automatically_records_unique_healthy_exact(
     )
 
 
+@pytest.mark.parametrize(
+    ("scenario", "blocking_issue", "message_part"),
+    (
+        ("not-selected", "agent-not-bound", "don't use it yet"),
+        ("other-connection", "agent-bound-elsewhere", "different ServiceNow"),
+        ("other-instance", "agent-binding-mismatch", "instance name"),
+    ),
+)
+def test_credential_completion_blocks_without_saved_agent_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scenario: str,
+    blocking_issue: str,
+    message_part: str,
+) -> None:
+    record = _connection_record(display_name="Existing ServiceNow")
+    components = _components(CONNECTION_ID)
+    reference_change = components["connectionReferenceChanges"][0]
+    reference = reference_change["connectionReference"]
+    if scenario == "not-selected":
+        reference["connectionId"] = None
+    elif scenario == "other-connection":
+        reference["connectionId"] = "00000000-0000-4000-8000-000000009999"
+    elif scenario == "other-instance":
+        parameters = json.loads(reference["sharedConnectionParameters"])
+        parameters["values"]["token:InstanceName"]["value"] = "other"
+        reference["sharedConnectionParameters"] = json.dumps(parameters)
+
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return [record]
+
+        def get_connection(self, connection_id: str) -> dict:
+            return record
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: type(
+            "FakeAgentBuilder",
+            (),
+            {"fetch_components": lambda self, _agent_id: components},
+        )(),
+    )
+
+    with pytest.raises(snow.ServiceNowConnectError) as caught:
+        snow.resolve_credential_completion(_context())
+
+    assert message_part in str(caught.value)
+    assert caught.value.details["blockingIssue"] == blocking_issue
+    assert caught.value.details["requiredPhase"] == "credential"
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    assert "credential" not in state["evidence"]
+    assert "agentConnection" not in state["evidence"]
+    assert state["phases"].get("credential", {}).get("status") != "done"
+
+
+def test_credential_completion_records_both_proofs_together(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    record = _connection_record(display_name="Existing ServiceNow")
+
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return [record]
+
+        def get_connection(self, connection_id: str) -> dict:
+            return record
+
+    components = _components(CONNECTION_ID)
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: type(
+            "FakeAgentBuilder",
+            (),
+            {"fetch_components": lambda self, _agent_id: components},
+        )(),
+    )
+
+    snow.resolve_credential_completion(_context())
+
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    proof = state["evidence"]["agentConnection"]
+    assert proof["kind"] == "binding-proof"
+    assert proof["verificationSource"] == "saved-draft-connection-reference"
+    assert state["agentBindingIdentitySha256"] == proof["binding"][
+        "bindingIdentitySha256"
+    ]
+    assert state["connectionBindingHash"]
+    assert snow._agent_binding_proof_current(state, components) is True
+
+
 def test_resolve_credential_requires_bounded_choice_for_multiple_exact(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -4755,7 +4816,7 @@ def test_resolve_credential_requires_bounded_choice_for_multiple_exact(
             (),
             {
                 "fetch_components": lambda self, _agent_id: _components(
-                    first_id
+                    second_id
                 )
             },
         )(),
@@ -4821,7 +4882,8 @@ def test_resolve_credential_rejects_nonhealthy_or_nonexact_candidates(
     result = snow.resolve_credential_completion(_context())
 
     assert result["status"] == "not-ready"
-    assert "No exact healthy Connected" in result["remediation"]
+    assert "Connected" in result["remediation"]
+    assert "Copilot Studio" in result["remediation"]
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
     assert "credential" not in state["evidence"]
 
@@ -4858,7 +4920,7 @@ def test_resolve_credential_read_failure_is_explicit_nonzero(
     recovery = error["details"]["recoveryHandoff"]
     _assert_recovery_handoff(recovery)
     assert recovery["category"] == "Read or network error"
-    assert recovery["owner"] == "Power Platform Maker/Admin"
+    assert recovery["owner"] == "ESS Maker / Agent Developer"
 
 
 def test_resolve_credential_rejects_stale_selection_key(
@@ -5535,7 +5597,7 @@ def test_resume_offers_shared_reuse_before_entra_availability(
     assert saved["phases"]["credential"]["status"] == "pending"
     assert saved["phases"]["topics"]["status"] == "pending"
     assert saved["phases"]["portal-url"]["status"] == "pending"
-    assert saved["phases"]["agent-connection"]["status"] == "pending"
+    assert "agent-connection" not in saved["phases"]
     assert saved["phases"]["test"]["status"] == "pending"
 
 
@@ -5732,7 +5794,6 @@ def test_it_cli_resume_offers_compatible_hr_reuse_before_availability(
                 assert key not in saved["evidence"]
             for phase in (
                 "credential",
-                "agent-connection",
                 "topics",
                 "portal-url",
                 "test",
@@ -6813,7 +6874,6 @@ def test_legacy_candidate_receipt_does_not_replace_setup_confirmation(
                 "credential",
                 "topics",
                 "portal-url",
-                "agent-connection",
                 "test",
                 "publish",
             )
@@ -7127,7 +7187,7 @@ def test_historical_graph_pass_reapproval_advances_without_new_admin_handoff(
         )
 
     migrated = json.loads(state_path.read_text(encoding="utf-8"))
-    assert migrated["schemaVersion"] == 12
+    assert migrated["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     migrated_evidence = migrated["adminSetup"]["phaseHandoffs"][
         "entra-registration"
     ]["evidence"]
@@ -8955,7 +9015,7 @@ def test_v2_lifecycle_migrates_to_v8_without_obsolete_preflight_gates(
     state_again = snow._load_lifecycle_state(_context())
     snow._write_lifecycle_state(_context(), state_again)
 
-    assert state["schemaVersion"] == 12
+    assert state["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     assert state["acceptedContractRevision"] == 1
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
     assert set(state["adminSetup"]["phaseHandoffs"]) == {
@@ -8969,8 +9029,10 @@ def test_v2_lifecycle_migrates_to_v8_without_obsolete_preflight_gates(
     assert state["phases"]["preflight"]["status"] == "in-progress"
     assert state["phases"]["credential"]["status"] == "in-progress"
     assert "actionApplied" not in state["phases"]["credential"]
-    for phase_id in ("topics", "agent-connection", "test"):
+    for phase_id in ("topics", "test"):
         assert state["phases"][phase_id]["status"] == "pending"
+    assert "agent-connection" not in state["phases"]
+    assert state["retiredPhases"]["agent-connection"]["status"] == "pending"
     assert "parameter-sharing" not in state["phases"]
     assert state["retiredPhases"]["parameter-sharing"]["status"] == "pending"
     assert "publish" not in state["phases"]
@@ -9138,7 +9200,7 @@ def test_v4_migration_removes_obsolete_gates_and_keeps_completed_discovery(
 
     state = snow._load_lifecycle_state(_context())
 
-    assert state["schemaVersion"] == 12
+    assert state["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     assert state["adminSetup"]["schemaVersion"] == 4
     assert "scenario" not in state["adminSetup"]["preflight"]
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
@@ -9690,10 +9752,10 @@ def test_phase_command_error_returns_customer_visible_recovery(
     assert error["status"] == "error"
     recovery = error["details"]["recoveryHandoff"]
     _assert_recovery_handoff(recovery)
-    assert recovery["owner"] == "Power Platform Maker/Admin"
+    assert recovery["owner"] == "ESS Maker / Agent Developer"
     assert "dev123" in recovery["values"]
     assert APP_CLIENT_ID in recovery["values"]
-    assert "/connections" in recovery["where"]
+    assert "Connection Settings -> ServiceNow" in recovery["where"]
     assert "rerun only `create`" in recovery["recheck"].casefold()
 
 
@@ -9781,8 +9843,8 @@ def test_resume_error_uses_current_credential_phase_recovery(
     error = json.loads(capsys.readouterr().out)
     recovery = error["details"]["recoveryHandoff"]
     _assert_recovery_handoff(recovery)
-    assert recovery["owner"] == "Power Platform Maker/Admin"
-    assert "/connections" in recovery["where"]
+    assert recovery["owner"] == "ESS Maker / Agent Developer"
+    assert "Connection Settings -> ServiceNow" in recovery["where"]
     assert "credential" in recovery["recheck"]
 
 
@@ -9912,7 +9974,7 @@ def test_record_test_attestation_keeps_legacy_failure_category_compatible(
     assert result["failureCategory"] == "permission"
 
 
-def test_record_test_requires_current_agent_connection_attestation(
+def test_record_test_requires_current_connection_and_binding_proof(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -9934,7 +9996,7 @@ def test_record_test_requires_current_agent_connection_attestation(
 
     with pytest.raises(
         snow.ServiceNowConnectError,
-        match="current Agent Connect observation",
+        match="Verify the ServiceNow connection and agent binding",
     ):
         snow.record_test_attestation(
             _context(),
@@ -12025,37 +12087,47 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
     with snow.product_profile_context(profile):
         known = guidance("credential", state(mapping))
         unknown = guidance("credential", state(None))
-        agent = guidance("agent-connection", state(None))
+        with pytest.raises(snow.ServiceNowConnectError):
+            guidance("agent-connection", state(None))
         portal = guidance("portal-url", state(None))
         test = guidance("test", state(None))
 
+    audience = "HR" if profile == "hrsd" else "IT"
     saved = (
-        "Your ServiceNow administrator's configuration is saved, using "
-        "`employee_id` as the User Claim and `employee_number` as the User "
-        "Field. Next, create the sign-in connection"
+        "Your ServiceNow administrator has confirmed that the configuration "
+        "is saved, using `employee_id` as the User Claim and "
+        "**employee_number** as the User Field.\n\n"
+        "Next, create the sign-in connection"
     )
     create = (
-        "Next, create the sign-in connection that Employee Self-Service will "
-        "use to access ServiceNow.\n\n**Where and how**"
+        f"Next, create the sign-in connection that Employee Self-Service "
+        f"{audience} will use to access ServiceNow. This part happens in "
+        "Copilot Studio:\n\n1. Open **"
     )
     assert saved in known
-    assert known.index(saved) < known.index("**Where and how**")
-    assert "Your ServiceNow administrator's configuration is saved" not in (
-        unknown
-    )
+    assert known.index(saved) < known.index(create)
+    assert "has confirmed that the configuration is saved" not in unknown
     assert create in known and create in unknown
     for text in (known, unknown):
-        assert text.endswith(
-            "Return here when it shows Connected. You won't need to resend "
-            "the administrator replies."
+        assert "2. Go to **Settings > Connection Settings > ServiceNow > " in (
+            text
         )
-    assert (
-        "Now select that connection for this agent in Copilot Studio. "
-        "Return here and tell us which connection you used. After that, "
-        "we'll test a request with your account to check sign-in and "
-        "employee matching.\n\n**Where and how**"
-    ) in agent
-    audience = "HR" if profile == "hrsd" else "IT"
+        assert "   - **Authentication type:** Microsoft Entra ID User Login\n" in (
+            text
+        )
+        assert "   - **Resource URI:** `" in text
+        assert (
+            "   - **Instance name:** `dev123`, not the full URL\n"
+            "4. Complete the connection creation.\n\n"
+            "Return here and tell us which connection you used. You won't "
+            "need to resend the administrator replies.\n\n"
+            f"After that, we'll test an {audience} request with your "
+            "account to check sign-in and employee matching."
+        ) in text
+        assert "**Expected nonsecret evidence**" in text
+        assert "**Completion boundary**" in text
+        assert "**Expected form values" not in text
+        assert "Part 2" not in text
     assert (
         f"Next, we'll make sure the {audience} agent's case links open in "
         "the right employee portal.\n\n**Where and how**"
@@ -12571,8 +12643,7 @@ def test_phase_progress_uses_provider_contract_labels_and_order(
         ),
         "Confirm the Microsoft Entra identity details",
         "Confirm ServiceNow user mapping",
-        "Check ServiceNow connection",
-        "Connect this agent to ServiceNow",
+        "Create and connect ServiceNow",
         "Turn on the ServiceNow topics",
         "Set employee portal URL",
         "Test a ServiceNow request",
@@ -12605,7 +12676,6 @@ def test_phase_progress_distinguishes_reused_manual_recheck_and_blocked() -> Non
         "entra-registration": ("done", {"B": "Manual"}),
         "servicenow-oidc": ("done", {"C": "Passed"}),
         "credential": ("pending", {}),
-        "agent-connection": ("pending", {}),
         "topics": ("blocked", {"E": "Failed"}),
         "portal-url": ("pending", {}),
         "test": ("pending", {}),
@@ -12637,7 +12707,6 @@ def test_phase_progress_distinguishes_reused_manual_recheck_and_blocked() -> Non
         "complete-reused",
         "complete-manual",
         "rechecking",
-        "pending",
         "pending",
         "needs-attention",
         "pending",
@@ -13048,7 +13117,7 @@ def test_resume_handoff_cli_initializes_preflight_without_role_question(
     )
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["attested"] is True
-    assert state["acceptedContractRevision"] == 11
+    assert state["acceptedContractRevision"] == 12
     assert state["businessGroupAcknowledgements"] == {}
 
 
@@ -13486,7 +13555,6 @@ def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
         "entra-registration": ("current", "In progress"),
         "servicenow-oidc": ("rechecking", "Rechecking"),
         "credential": ("checking", "Checking"),
-        "agent-connection": ("pending", "Pending"),
         "topics": ("needs-attention", "Needs attention"),
         "portal-url": ("pending", "Pending"),
         "test": ("complete-manual", "Complete — admin confirmed"),
@@ -13535,8 +13603,7 @@ def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
     )
     assert "   - 🔄 Confirm the Microsoft Entra identity details — In progress" in ordinary
     assert "   - 🔄 Confirm ServiceNow user mapping — Rechecking" in ordinary
-    assert "   - 🔄 Check ServiceNow connection — Checking" in ordinary
-    assert "   - ⬜ Connect this agent to ServiceNow — Pending" in ordinary
+    assert "   - 🔄 Create and connect ServiceNow — Checking" in ordinary
     assert "   - ❌ Turn on the ServiceNow topics — Needs attention" in ordinary
     assert "   - ⬜ Set employee portal URL — Pending" in ordinary
     assert "   - ✅ Test a ServiceNow request — Complete — admin confirmed" in ordinary
@@ -13767,17 +13834,14 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             availability_context_sha256=maker["contextIdentitySha256"],
         )
         maker_guidance = maker_yes["transport"]["internal"]["ordinaryReply"]["text"]
-        assert "Check ServiceNow connection" in maker_guidance
-        display_index = maker_guidance.index("Display name (optional)")
-        auth_index = maker_guidance.index("Authentication Type")
+        assert "Create and connect ServiceNow" in maker_guidance
+        auth_index = maker_guidance.index("Authentication type")
         resource_index = maker_guidance.index("Resource URI")
-        instance_index = maker_guidance.index("Instance Name")
-        assert display_index < auth_index < resource_index < instance_index
-        assert "optional display name is guidance only" in maker_guidance
+        instance_index = maker_guidance.index("Instance name")
+        assert auth_index < resource_index < instance_index
 
         for phase_id in (
             "credential",
-            "agent-connection",
             "topics",
             "portal-url",
         ):
@@ -13800,7 +13864,6 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             )
             assert availability["question"] is None
             assert resumed["lifecycle"]["phase"]["id"] in {
-                "agent-connection",
                 "topics",
                 "portal-url",
                 "test",
@@ -13865,7 +13928,7 @@ def test_maker_role_is_asked_once_at_maker_phase_start(
             if phase["id"] in maker_group["phaseIds"]
             and phase.get("mutates") is True
         ]
-        assert {"agent-connection", "topics", "portal-url"} <= set(
+        assert {"credential", "topics", "portal-url"} <= set(
             mutating_maker_phases
         )
         assert all(
@@ -13957,7 +14020,6 @@ def test_maker_role_is_asked_once_at_maker_phase_start(
 
         for phase_id in (
             "credential",
-            "agent-connection",
             "topics",
             "portal-url",
         ):
@@ -14290,7 +14352,7 @@ def test_schema_v10_does_not_migrate_global_role_acknowledgements(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 12
+    assert migrated["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     assert migrated["businessGroupAcknowledgements"] == {}
     assert migrated["migration"]["schemaV11"][
         "legacyRoleAvailabilityMigrated"
@@ -16200,7 +16262,7 @@ def test_progress_render_block_is_grouped_and_shows_reused_status(
     progress = snow._build_phase_progress(
         contract,
         state,
-        {"decision": "run-action", "phase": {"id": "agent-connection"}},
+        {"decision": "run-action", "phase": {"id": "topics"}},
         executed_actions=frozenset(),
         verified_phases=frozenset(done),
     )
@@ -16213,9 +16275,9 @@ def test_progress_render_block_is_grouped_and_shows_reused_status(
 
     assert block["kind"] == "progress"
     _assert_grouped_phase_view(block["text"], contract)
-    assert "- ✅ Check ServiceNow connection — Reused — checked" in block["text"]
+    assert "- ✅ Create and connect ServiceNow — Reused — checked" in block["text"]
     assert block["text"].count("Starting:") == 1
-    assert block["text"].endswith("Starting: Connect this agent to ServiceNow")
+    assert block["text"].endswith("Starting: Turn on the ServiceNow topics")
     serialized = json.dumps({"progress": progress, "block": block})
     for removed in (
         "checklistText",

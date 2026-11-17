@@ -2173,7 +2173,7 @@ def test_servicenow_lifecycle_targets_cover_both_profiles() -> None:
     assert "SN-DA-HRSD-ADMIN-PREFLIGHT-001" in targets
     assert "SN-DA-ITSM-ADMIN-PREFLIGHT-001" in targets
     assert "SN-DA-ITSM-PLUGIN-001" not in targets
-    assert len(targets) >= 19
+    assert len(targets) >= 17
 
 
 @pytest.mark.parametrize(("profile", "target"), _SERVICENOW_LIFECYCLE_TARGETS)

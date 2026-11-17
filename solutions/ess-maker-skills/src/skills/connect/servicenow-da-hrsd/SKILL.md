@@ -79,19 +79,20 @@ consent, or Test completion.
 The runner loads
 `src/skills/connect/servicenow-da-hrsd/contract.json`, persists state at
 `.local/connect/servicenow-da-hrsd/agents/{AGENT_SLUG}/lifecycle.json`, and
-live-reverifies every phase. Agent binding and Test pane results remain
-maker-confirmed evidence; topic mutation requires explicit confirmation.
+live-reverifies every phase. The connection and the agent's saved binding are
+verified together by ADK; Test pane results remain maker-confirmed evidence; topic mutation requires explicit confirmation.
 Publishing is outside ServiceNow Connect. Parameter-sharing is not a
 standalone lifecycle phase; legacy
 evidence is retained only as historical state and never treated as proof that
 the direct connector-action path was independently verified.
 
-**Agent Binding:** The Maker binds the verified ServiceNow connection to the
-selected ESS agent in Copilot Studio. FlightCheck checks the Maker’s
-confirmation as Manual evidence. Connect does not enable ServiceNow topics
-before binding is confirmed.
+**Create and connect ServiceNow:** The Maker creates the ServiceNow connection from
+the agent's Copilot Studio Connection Settings, which also selects it for the
+agent, then confirms it shows Connected. FlightCheck verifies one exact healthy
+connection and that the agent's saved draft uses it in a single check. Connect
+does not enable ServiceNow topics before this check passes.
 
-**Topics and Portal:** After binding is confirmed, Connect reads the topic
+**Topics and Portal:** After the connection check passes, Connect reads the topic
 states for Maker review and saves only approved changes. It also saves the
 administrator-provided portal URL after Maker confirmation. FlightCheck
 verifies the resulting topic states and portal value.
