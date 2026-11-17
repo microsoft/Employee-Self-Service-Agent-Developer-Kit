@@ -7257,9 +7257,21 @@ def test_ready_to_send_messages_are_wrapped_in_one_fenced_block(
     )
     if plugin is not None:
         body = _ready_to_send_body(plugin)
-        assert body.startswith("**Where and how**\n")
-        assert body.endswith("current target binding.")
-        assert "**Expected nonsecret evidence**" in body
+        instance_url = "https://dev123.service-now.com"
+        assert body == (
+            "We're connecting **Employee Self-Service HR** to ServiceNow HR "
+            f"Service Delivery on [**{instance_url}**]({instance_url}).\n\n"
+            "Please confirm that the **HR Service Delivery Core** plugin "
+            "(`com.sn_hr_core`) is installed and active:\n\n"
+            "1. In ServiceNow, go to **All > System Definition > Plugins**.\n"
+            "2. Search for **Human Resources Scoped App: Core**.\n"
+            "3. Confirm whether it is installed and active.\n\n"
+            "**Please send back:** confirmation that the plugin is "
+            "installed and active on this instance. If it isn't, tell us "
+            "what remains to be completed."
+        )
+        assert "src/skills" not in body
+        assert "timestamp" not in body
         assert "**Current task**" not in body
         assert "**Completion boundary**" not in body
         assert plugin.index("**Current task**") < plugin.index(
@@ -13363,6 +13375,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             instance_name="dev123",
         ))
         state["attested"] = True
+        state["adminSetup"]["preflight"]["instanceName"] = "dev123"
         state["attestedAt"] = "2026-11-02T00:00:00Z"
         state["acceptedContractRevision"] = contract["contractRevision"]
         state["phases"] = {

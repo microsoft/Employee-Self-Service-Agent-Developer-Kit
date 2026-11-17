@@ -10162,15 +10162,15 @@ def _current_task_guidance(
         f"- Responsible role: {role}\n\n"
     )
     if phase_id == "plugin-prerequisites":
-        plugin_url = (
-            links.get("hrCorePlugin", {}).get("url")
-            or (
-                "ServiceNow Application Manager for the confirmed instance; "
-                "the URL is unavailable until preflight instance evidence is "
-                "current"
+        instance_url = links.get("serviceNowInstance", {}).get("url")
+        plugin_url = links.get("hrCorePlugin", {}).get("url")
+        if not instance_url or not plugin_url:
+            raise ServiceNowConnectError(
+                "The plugin prerequisite message requires the confirmed "
+                "ServiceNow instance URL."
             )
-        )
-        return common + _ready_to_send_block(
+        instance_url = instance_url.rstrip("/")
+        return common + (
             "**Where and how**\n"
             "ServiceNow Application Manager → Human Resources Scoped App: "
             "Core. Use "
@@ -10179,7 +10179,18 @@ def _current_task_guidance(
             "**Expected nonsecret evidence**\n"
             "Plugin ID `com.sn_hr_core`, Version Details `Installed`, the "
             "installed-and-ready message, source, timestamp, and current "
-            "target binding."
+            "target binding.\n\n"
+        ) + _ready_to_send_block(
+            "We're connecting **Employee Self-Service HR** to ServiceNow HR "
+            f"Service Delivery on [**{instance_url}**]({instance_url}).\n\n"
+            "Please confirm that the **HR Service Delivery Core** plugin "
+            "(`com.sn_hr_core`) is installed and active:\n\n"
+            "1. In ServiceNow, go to **All > System Definition > Plugins**.\n"
+            "2. Search for **Human Resources Scoped App: Core**.\n"
+            "3. Confirm whether it is installed and active.\n\n"
+            "**Please send back:** confirmation that the plugin is "
+            "installed and active on this instance. If it isn't, tell us "
+            "what remains to be completed."
         ) + (
             "\n\n**Completion boundary**\n"
             "A separate completion card records current Manual administrator "
