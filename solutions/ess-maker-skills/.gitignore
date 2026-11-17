@@ -11,6 +11,7 @@ workspace/**
 # Kit-internal state can also land under scripts/.local/ when tools are run
 # from the scripts dir (e.g. `python adk_telemetry.py --selftest`). Never commit.
 scripts/.local/
+src/mcp/agentconfig_prompt_cards/.local/
 
 # Generated local MCP configuration and Copilot worktrees
 .vscode/mcp.json
