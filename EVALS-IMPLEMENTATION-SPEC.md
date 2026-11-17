@@ -443,6 +443,74 @@ File names, row order, display names, a fingerprint alone, or a status flag do n
 
 **Proposed fingerprint rule:** Compute SHA-256 over a fixed, versioned UTF-8 text made from the exact question, expected answer, grading settings, and the policy text's ID and digest. Do not change case, reword, or tidy the test before computing it. Leave out display order, quality scores, and run times. A fingerprint shows that a test changed. It does not link a test to old runs, and it does not identify a fixed agent version.
 
+**Example of what one save writes (made-up data, proposed shape pending OQ-10).** This uses the USB policy from section 8. A single save in this step writes three kinds of file into the set folder:
+
+```text
+evaluations\usb-policy\
+  usb-policy.mcs.yml            existing format: set name and grading method
+  usb-formal.mcs.yml            existing format: one test (question + expected answer)
+  usb-everyday.mcs.yml          existing format: one test
+  provenance.json               proposed: local only, never sent to Copilot Studio
+  ..\exports\usb-policy.csv     existing: rebuilt from the YAML
+```
+
+The YAML uses the existing EvaluationSet/EvaluationData format and is the copy sent to Copilot Studio. It holds no excerpt, source, or confirmation details:
+
+```yaml
+# usb-policy.mcs.yml
+kind: EvaluationSet
+displayName: USB policy
+graders:
+  - kind: CompareMeaningGrader
+    threshold: 0.7
+```
+
+```yaml
+# usb-everyday.mcs.yml
+kind: EvaluationData
+rows:
+  - input: "Can I use my own encrypted USB stick for work files?"
+    expectedOutput: "No. Personal drives are not allowed, even if encrypted."
+```
+
+`provenance.json` links each test to the excerpt it is based on (the section 7.9 record) and records what the maker confirmed. Field names are illustrative only:
+
+```json
+{
+  "schemaVersion": "1",
+  "set": { "slug": "usb-policy", "linkedAgent": "employee-self-service-it" },
+  "evidence": [
+    {
+      "evidenceId": "ev-1",
+      "sourceReference": "https://contoso.service-now.com/kb?id=KB0012345",
+      "sourceIdentity": { "kb": "IT Policies", "article": "KB0012345", "language": "en-US" },
+      "acquisition": "pasted-by-maker",
+      "approvedText": "Only company-issued, encrypted USB drives may be used. Personal drives are not allowed.",
+      "sourceVersion": null,
+      "obtainedAt": "2026-11-17T09:00:00Z",
+      "textDigest": "sha256:…",
+      "limitations": ["Article version not shown by the source"],
+      "accessState": "accessible"
+    }
+  ],
+  "tests": [
+    {
+      "file": "usb-everyday.mcs.yml",
+      "caseId": null,
+      "caseIdState": "missing",
+      "evidenceIds": ["ev-1"],
+      "fingerprint": "sha256:…",
+      "confirmed": true,
+      "confirmedFingerprint": "sha256:…",
+      "confirmedAt": "2026-11-17T09:05:00Z",
+      "confirmedHow": "confirm-all-shown",
+      "quality": { "fingerprint": "sha256:…", "source": "automatic" }
+    }
+  ]
+}
+```
+
+The `file` value is shown only to make the example readable; as stated above, a file name does not prove which test this is. If `fingerprint` and `confirmedFingerprint` differ, the test was edited after confirmation and needs confirming again (section 9.4).
 **Open:** Check whether case IDs stay stable for imported tests and deployed copies. If not, ask for fresh confirmation and mark old links as unknown.
 
 ### 9.3 Save and promote rules
@@ -681,6 +749,29 @@ Copilot Studio documents keeping results for 89 days. That does not set rules fo
 
 ## 15. Example from start to finish (made-up data)
 
+The whole flow, start to finish:
+
+```mermaid
+flowchart TD
+    Start["1. Maker starts with /evaluate<br/>or a plain-language request"]
+    Source["2. ADK finds the agent's knowledge source;<br/>maker confirms the ServiceNow KB"]
+    Topic["3. Maker picks the policy topic to test"]
+    Excerpt["4. ADK gets the policy text<br/>(supplied, read, or pasted by the maker)"]
+    Draft["5. ADK drafts formal and everyday questions<br/>with expected answers"]
+    Confirm["6. Maker confirms the tests and saves them"]
+    Quality["7. ADK shows test quality"]
+    Approve["8. Maker approves the target, connection, and run"]
+    Run["9. ADK runs the tests against the agent"]
+    Grade["10. Copilot Studio grades each reply"]
+    Results["11. ADK shows pass/fail with evidence,<br/>how to find this run later (FR-50),<br/>and offers a regression test (FR-51)"]
+    Fix["12. Agent owner fixes the agent"]
+    Rerun["13. Maker reruns the same tests;<br/>ADK reports fixed or still failing"]
+
+    Start --> Source --> Topic --> Excerpt --> Draft --> Confirm --> Quality --> Approve --> Run --> Grade --> Results --> Fix --> Rerun
+```
+
+The numbered example below walks through the same flow with made-up data.
+
 1. The maker types `/evaluate` or asks in plain language. (The automatic ServiceNow offer is deferred.)
 2. ADK lists the selected agent's sources where it can, and the maker confirms the ServiceNow source.
 3. The maker picks "personal USB use". Any change details the maker gives are kept. Missing details stay unknown.
@@ -698,18 +789,17 @@ This example does not prove a real agent will fail, or that the needed services 
 
 ## 16. Work split across the user stories
 
-Stories are under feature 7644611 and numbered by PM priority.
+The five stories are under Feature 8199402 (ServiceNow Knowledge Evaluations for ESS Makers) and numbered by PM priority. The sprints match the iteration paths in Azure DevOps.
 
 | # | Story | What to build | Effort | Sprint | Depends on |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Writing tests from policy and confirming them (8147415) | Full excerpt flow, conditional reader, formal/everyday tests, "confirm all shown" / "review one by one", handling source changes, local provenance. | 3.5 days | Current (ends Nov 20) | OQ-9/OQ-10 approval to store excerpts; reader proof if we build one. |
-| 2 | Starting evals and managing tests (8147416) | Shared entry and result format, `/evaluate` and plain-language start, exact source/set selection, limited edits. No ServiceNow offer (deferred). | 3 days | Current (ends Nov 20) | Source lookup proven to work, or maker selection. |
-| 3 | Running tests safely (8147417) | Pre-run checks, no-write check, chosen connection/mode, native prepare/start, no duplicate starts, recovery. | 4 days | Current (ends Nov 20) | OQ-4; OQ-9 sign-off on the no-write check. |
-| 4 | Test quality and grading replies (8147418) | Quality tied to exact test version, reading Copilot Studio grading, complete vs. missing evidence, tuning. | 3 days | Next | PR-2/PR-4 and the real grading/reply format. |
-| 5 | Results, recovery, and release (8147419) | Complete results, unchanged reruns using existing history, recovery, accessibility, measurements, maker testing. | 3 days | Next | OQ-13; design sign-off; OQ-7 support owner. |
-| 6 | Task checks and advanced comparison (8147420) | Deferred: business-task checks, matching across new copies, comparing partly edited sets. | Later | Not planned | Not in the first release. |
+| 1 | Shared flow and knowledge source (8147416) | Shared entry and result format, `/evaluate` and plain-language start, finding the agent's knowledge source, exact source/set selection, limited edits. No ServiceNow offer (deferred). | 3 days | 2601 (current, ends Nov 20) | Source lookup proven to work, or maker selection. |
+| 2 | Policy-based test creation (8147415) | Full excerpt flow, conditional reader, formal/everyday tests, "confirm all shown" / "review one by one", handling source changes, local provenance. | 3.5 days | 2601 (current, ends Nov 20) | Story 1; OQ-9/OQ-10 approval to store excerpts; reader proof if we build one. |
+| 3 | Run approved tests and grade replies (8147417) | Pre-run checks, no-write check, chosen connection/mode, native prepare/start, no duplicate starts, run recovery, quality tied to exact test version, reading Copilot Studio grading, complete vs. missing evidence, tuning. | 7 days (4 run + 3 grading; not re-estimated after the merge) | 2602 (next) | Story 2; OQ-4; OQ-9 sign-off on the no-write check; PR-2/PR-4 and the real grading/reply format. |
+| 4 | Baseline comparison and recovery (8147419) | Complete results, unchanged reruns using existing history, FR-50 guidance (section 13.1), FR-51 regression-test offer (section 12.4), recovery, accessibility, measurements, maker testing. | 3 days | 2602 (next) | Story 3; OQ-13; design sign-off; OQ-7 support owner. |
+| 5 | Task checks and advanced comparison (8147420) | Deferred: business-task checks, matching across new copies, comparing partly edited sets. | Later | Not planned for the first release (parked in 2602 in Azure DevOps) | Not in the first release. |
 
-**Commitment:** stories 1, 2, and 3 (10.5 days) in the current sprint, which ends Nov 20. Stories 4 and 5 (6 days) in the next sprint. This is tight. It depends on the OQ-4, OQ-9, and OQ-10 approvals arriving by about Nov 10–12. If they are late, the unfinished part of story 3 moves to the next sprint.
+**Commitment:** stories 1 and 2 (6.5 days) in sprint 2601, which ends Nov 20. Stories 3 and 4 (10 days) in sprint 2602. Story 5 is later. Story 3 cannot start real runs until the OQ-4 and OQ-9 approvals arrive. If they are late, the grading part of story 3 and then story 4 slip first.
 
 ## 17. How we will verify it
 
@@ -777,7 +867,7 @@ Developers must not fill these in with guesses.
 | OQ-13 | Enough links between old and new tests, runs, grading, target, and context. | Clear rerun comparisons where those links are missing. |
 | OQ-7 | **Partly decided:** ship to everyone, no on/off switch. Still open: the support owner. | Release readiness. |
 | Design | Approved screens/steps for picking sources, pasting excerpts, confirming tests ("confirm all shown" and "review one by one", approved by PM), results, recovery, and accessibility. Goes to design review; who signs off on UX is still to be confirmed. | Customer-facing experience sign-off. |
-| OQ-15 | **Decided:** stories 1–3 in the current sprint (ends Nov 20), stories 4–5 in the next sprint, story 6 later (section 16). | Depends on the approvals listed in section 16 arriving on time. |
+| OQ-15 | **Decided:** five stories under Feature 8199402. Stories 1–2 in sprint 2601 (ends Nov 20), stories 3–4 in sprint 2602, story 5 later (section 16). | Depends on the approvals listed in section 16 arriving on time. |
 
 We can start now on local formats, pasting excerpts, policy-based test writing, and the design for saving drafts. Do not claim the full first release until the safety, run, provenance, and acceptance gates are closed.
 
