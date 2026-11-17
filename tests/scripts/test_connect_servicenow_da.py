@@ -7335,14 +7335,13 @@ def test_ready_to_send_messages_are_wrapped_in_one_fenced_block(
         )
         assert "src/skills" not in body
         assert "timestamp" not in body
-        assert "**Current task**" not in body
-        assert "**Completion boundary**" not in body
-        assert plugin.index("**Current task**") < plugin.index(
-            "**Ready-to-send message**"
-        )
-        assert plugin.index("**Ready-to-send message**") < plugin.index(
-            "**Completion boundary**"
-        )
+        for technical in (
+            "**Current task**",
+            "**Where and how**",
+            "**Expected nonsecret evidence**",
+            "**Completion boundary**",
+        ):
+            assert technical not in plugin
     assert "```" not in expected_entra + expected_service_now
     entra_lead_in = entra["ordinaryReply"]["text"].split(
         "**Ready-to-send message**"
@@ -7359,9 +7358,15 @@ def test_ready_to_send_messages_are_wrapped_in_one_fenced_block(
         "We'll use it to prepare the ServiceNow handoff; you don't need to "
         "interpret the settings.\n\n"
     )
-    assert entra_lead_in.index("ServiceNow instance:") < entra_lead_in.index(
-        "this message to your Microsoft Entra"
-    )
+    for technical in (
+        "Target agent:",
+        "Tenant:",
+        "ServiceNow instance:",
+        "Current contract boundary",
+    ):
+        assert technical not in entra["ordinaryReply"]["text"]
+        assert technical not in service_now["ordinaryReply"]["text"]
+    assert "contractBoundary" in entra and "target" in entra
     assert service_now["ordinaryReply"]["text"].split(
         "**Ready-to-send message**"
     )[0].endswith(
@@ -11934,11 +11939,9 @@ def test_topic_action_handoff_returns_complete_it_question(
     assert "ServiceNowITSMSystemReadExecution" in reply
     assert "ServiceNowITSMSystemWriteExecution" in reply
     assert "13 active and 2 inactive" in reply
-    assert "Employee Self-Service (IT)" in reply
-    assert "employee-self-service-it" in reply
-    assert AGENT_ID in reply
-    assert ENVIRONMENT_ID in reply
-    assert result["componentHash"] in reply
+    for technical in ("Selected agent:", "Environment:", "Component hash"):
+        assert technical not in reply
+    assert result["componentHash"]
     assert "Do you want to enable all listed inactive" in question
     assert "ServiceNowITSMSystemReadExecution" not in question
     for instruction in (
@@ -12018,8 +12021,9 @@ def test_topic_action_handoff_has_hr_parity(
     question = result["question"]["question"]
     reply = result["replyBeforeQuestion"]
     assert "Inactive ServiceNow HRSD topics" in reply
-    assert "Employee Self-Service (HR)" in reply
-    assert result["componentHash"] in reply
+    for technical in ("Selected agent:", "Environment:", "Component hash"):
+        assert technical not in reply
+    assert result["componentHash"]
     assert question == (
         "Do you want to enable all listed inactive ServiceNow topics, or "
         "keep their current states? Only topics in the inventory listed "
@@ -12042,6 +12046,16 @@ def test_topic_action_handoff_has_hr_parity(
     assert "Owner:" not in question
     assert "Copilot Studio" not in question
     assert "https://" not in question
+
+
+_TECHNICAL_CARD_BLOCKS = (
+    "**Current task**",
+    "**Where and how**",
+    "**Expected nonsecret evidence**",
+    "**Completion boundary**",
+    "Responsible role:",
+    "Realm:",
+)
 
 
 @pytest.mark.parametrize("profile", ("hrsd", "itsm"))
@@ -12124,22 +12138,22 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
             f"After that, we'll test an {audience} request with your "
             "account to check sign-in and employee matching."
         ) in text
-        assert "**Expected nonsecret evidence**" in text
-        assert "**Completion boundary**" in text
+        for technical in _TECHNICAL_CARD_BLOCKS:
+            assert technical not in text
         assert "**Expected form values" not in text
         assert "Part 2" not in text
     assert (
         f"Next, we'll make sure the {audience} agent's case links open in "
-        "the right employee portal.\n\n**Where and how**"
-    ) in portal
+        "the right employee portal."
+    ) == portal
     assert (
         "We're ready to try a request. In the agent's Test pane, run a "
         "request that should return your real ServiceNow data, for example "
         "the required prompt below. Come back and tell us what happened and "
         "whether it matched what you expected. You don't need to paste "
-        "case contents.\n\n**Where and how**"
-    ) in test
-    assert f"Run exactly `{product.test_prompt}`" in test
+        "case contents.\n\n"
+        f"**Required prompt:** `{product.test_prompt}`"
+    ) == test
     assert "finish without testing" not in test
 
 
@@ -12183,14 +12197,15 @@ def test_topic_operational_guidance_is_in_ordinary_reply(
             "copilotStudioAgent"
         ]["url"]
 
-    assert f"Open {expected_url} → Topics" in ordinary
-    assert f"{product.provider_key}/actions/prepare-topics.md" in ordinary
-    assert "Enable only the listed inactive topics" in ordinary
-    assert "explicitly keep the current states" in ordinary
-    assert "unrelated topics remain unchanged" in ordinary
-    assert "**Current task**" in ordinary
-    assert "**Expected nonsecret evidence**" in ordinary
-    assert "**Completion boundary**" in ordinary
+    assert ordinary == (
+        f"We'll turn on the built-in ServiceNow "
+        f"{'HR' if profile == 'hrsd' else 'IT'} topics, including system "
+        "topics. Unrelated topics will stay unchanged."
+    )
+    for technical in _TECHNICAL_CARD_BLOCKS:
+        assert technical not in ordinary
+    assert expected_url not in ordinary
+    assert product.provider_key not in ordinary
 
 
 def test_topic_action_handoff_reuses_only_current_keep_current(
@@ -13694,11 +13709,13 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             "question"
         ] is None
         plugin_guidance = plugin_yes["transport"]["internal"]["ordinaryReply"]["text"]
-        assert "**Current task**" in plugin_guidance
+        assert "**Current task**" not in plugin_guidance
         assert "Confirm HR ServiceNow prerequisite" in plugin_guidance
-        assert "ServiceNow Application Manager" in plugin_guidance
+        assert "First, your ServiceNow administrator needs to confirm" in (
+            plugin_guidance
+        )
         assert "com.sn_hr_core" in plugin_guidance
-        assert "Availability alone never completes this check" in (
+        assert "Availability alone never completes this check" not in (
             plugin_guidance
         )
         after_plugin_yes = json.loads(path.read_text(encoding="utf-8"))
@@ -13733,10 +13750,11 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         )
         entra_guidance = entra_yes["transport"]["internal"]["ordinaryReply"]["text"]
         assert "Confirm the Microsoft Entra identity details" in entra_guidance
-        assert "guide-entra-registration.md" in entra_guidance
-        assert "valid Application client ID GUID" in entra_guidance
-        assert "one explicit safe User Claim name" in entra_guidance
-        assert "does not prove app configuration" in entra_guidance
+        for technical in _TECHNICAL_CARD_BLOCKS[:4] + (
+            "guide-entra-registration.md",
+            "does not prove app configuration",
+        ):
+            assert technical not in entra_guidance
 
         state = json.loads(path.read_text(encoding="utf-8"))
         state["phases"]["entra-registration"]["status"] = "done"
@@ -13793,10 +13811,11 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         )
         sso_guidance = sso_yes["transport"]["internal"]["ordinaryReply"]["text"]
         assert "Confirm ServiceNow user mapping" in sso_guidance
-        assert "guide-servicenow-oidc.md" in sso_guidance
-        assert "Manual evidence does not prove a real employee token" in (
-            sso_guidance
-        )
+        for technical in _TECHNICAL_CARD_BLOCKS[:4] + (
+            "guide-servicenow-oidc.md",
+            "Manual evidence does not prove a real employee token",
+        ):
+            assert technical not in sso_guidance
 
         state = json.loads(path.read_text(encoding="utf-8"))
         state["phases"]["servicenow-oidc"]["status"] = "done"

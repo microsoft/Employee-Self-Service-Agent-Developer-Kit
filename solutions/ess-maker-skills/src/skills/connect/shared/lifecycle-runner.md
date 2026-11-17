@@ -256,9 +256,13 @@ below.
    records an acknowledgement scoped to that business group, provider,
    profile, agent, environment, contract revision, and group definition.
    Show the newly returned `renderBlock.text` before any action.
-   It contains the current task's target, responsible role, supported
-   runbook/location, expected non-secret evidence, and completion boundary.
-   Credential, portal-URL, and Test reply text includes a short controller-built lead-in before **Where and how**; show it verbatim. The credential lead-in names the saved User Claim and User Field only when both are recorded.
+   It is maker-facing wording only: a short lead-in that connects to the
+   previous step, the numbered steps or Ready-to-send message when the
+   phase has one, and nothing else. Show it verbatim. It never renders the
+   target, responsible role, runbook path, expected evidence, or completion
+   boundary; those stay in the controller JSON and the action docs for the
+   agent. The credential lead-in names the saved User Claim and User Field
+   only when both are recorded.
    Availability is acknowledgement only. Continue only from the returned
    lifecycle decision and its separate action completion/evidence question.
 5. On **No**, rerun with the same group ID and context hash plus

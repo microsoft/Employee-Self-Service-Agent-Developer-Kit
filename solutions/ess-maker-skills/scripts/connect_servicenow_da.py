@@ -1367,10 +1367,8 @@ def identity_direct_handoff(
             else {
                 "kind": "ordinary-agent-response",
                 "text": (
-                    f"{target_text}\n\n"
                     f"{_identity_handoff_lead_in(stage)}\n\n"
-                    f"{_ready_to_send_block(source_text)}\n\n"
-                    f"Current contract boundary\n{contract_boundary}"
+                    f"{_ready_to_send_block(source_text)}"
                 ),
             }
         ),
@@ -1383,6 +1381,8 @@ def identity_direct_handoff(
             "question": None,
             "askUserArguments": None,
         },
+        "target": target_text,
+        "contractBoundary": contract_boundary,
         "lockedValues": locked_values,
         "retainedDirectInput": (
             {
@@ -9743,10 +9743,6 @@ def topic_action_handoff(
         for topic in inactive
     ]
     reply_before_question = (
-        f"Selected agent: {ACTIVE_PROFILE.agent_display_name} "
-        f"(`{_agent_slug(context)}` / `{context['agent']['id']}`)\n"
-        f"Environment: `{context['environment']['id']}`\n"
-        f"Component hash: `{component_hash}`\n\n"
         f"Current topic inventory: {total} {ACTIVE_PROFILE.product_name} "
         f"topics; {active} active and {len(inactive)} inactive.\n\n"
         f"Inactive {ACTIVE_PROFILE.product_name} topics:\n"
@@ -10362,20 +10358,7 @@ def _current_task_guidance(
     preflight = setup.get("preflight")
     preflight = preflight if isinstance(preflight, dict) else {}
     instance_name = str(preflight.get("instanceName") or "not confirmed")
-    environment_id = str(context["environment"]["id"])
-    agent_slug = _agent_slug(context)
-    target = (
-        f"- Agent: {ACTIVE_PROFILE.agent_display_name} (`{agent_slug}`)\n"
-        f"- Environment: `{environment_id}`\n"
-        "- Realm: `dev`\n"
-        f"- Confirmed ServiceNow instance: `{instance_name}`"
-    )
-    provider_root = (
-        f"src/skills/connect/{ACTIVE_PROFILE.provider_key}/actions"
-    )
     client_id = _known_entra_client_id(state)
-    credential = state.get("evidence", {}).get("credential")
-    credential = credential if isinstance(credential, dict) else {}
     links = maker_portal_links(
         context,
         instance_name=(
@@ -10384,30 +10367,15 @@ def _current_task_guidance(
             else None
         ),
     )
-    common = (
-        "**Current task**\n"
-        f"{target}\n"
-        f"- Responsible role: {role}\n\n"
-    )
     if phase_id == "plugin-prerequisites":
         instance_url = links.get("serviceNowInstance", {}).get("url")
-        plugin_url = links.get("hrCorePlugin", {}).get("url")
-        if not instance_url or not plugin_url:
+        if not instance_url or not links.get("hrCorePlugin", {}).get("url"):
             raise ServiceNowConnectError(
                 "The plugin prerequisite message requires the confirmed "
                 "ServiceNow instance URL."
             )
         instance_url = instance_url.rstrip("/")
-        return common + (
-            "**Where and how**\n"
-            "ServiceNow Application Manager → Human Resources Scoped App: "
-            "Core. Use "
-            f"`{provider_root}/verify-plugin-prerequisites.md` and "
-            f"{plugin_url}.\n\n"
-            "**Expected nonsecret evidence**\n"
-            "Plugin ID `com.sn_hr_core`, Version Details `Installed`, the "
-            "installed-and-ready message, source, timestamp, and current "
-            "target binding.\n\n"
+        return (
             "First, your ServiceNow administrator needs to confirm that this "
             "instance supports the HR scenarios.\n\n"
             "Send them this message. When they reply, paste their "
@@ -10423,47 +10391,14 @@ def _current_task_guidance(
             "**Please send back:** confirmation that the plugin is "
             "installed and active on this instance. If it isn't, tell us "
             "what remains to be completed."
-        ) + (
-            "\n\n**Completion boundary**\n"
-            "A separate completion card records current Manual administrator "
-            "evidence. Availability alone never completes this check and the "
-            "result is not automatic API proof."
         )
-    if phase_id == "entra-registration":
-        return common + (
-            "**Where and how**\n"
-            "Use the Microsoft Entra admin center and "
-            f"`{provider_root}/guide-entra-registration.md`. The Maker "
-            "transports and imports the handoff only.\n\n"
-            "**Expected nonsecret evidence**\n"
-            "One target-bound handoff containing a valid Application client "
-            "ID GUID and one explicit safe User Claim name, with current "
-            "binding, provenance, and hashes.\n\n"
-            "**Completion boundary**\n"
-            "The two-field handoff completes this Manual identity phase. It "
-            "does not prove app configuration, claim emission, scope, "
-            "pre-authorization, a real token, authentication, permission, or "
-            "a business result."
-        )
-    if phase_id == "servicenow-oidc":
-        return common + (
-            "**Where and how**\n"
-            "Use ServiceNow Application Registry and "
-            f"`{provider_root}/guide-servicenow-oidc.md` with "
-            "`security_admin`.\n\n"
-            "**Expected nonsecret evidence**\n"
-            f"Application client ID `{client_id or 'not current'}`, one "
-            "Entra-confirmed claim name, one ServiceNow `sys_user` field, "
-            "saved-configuration confirmation, target binding, timestamp, "
-            "candidate-set hash, and relationship hash.\n\n"
-            "**Completion boundary**\n"
-            "The mapping handoff input and completion confirmation are "
-            "separate questions. Manual evidence does not prove a real "
-            "employee token, request, permission, or business result."
-        )
+    if phase_id in {"entra-registration", "servicenow-oidc"}:
+        # The administrator handoff and its lead-in are rendered by the
+        # identity direct handoff, not by this card.
+        return ""
     if phase_id == "credential":
         audience = _product_audience()
-        return common + _credential_lead_in(state) + (
+        return _credential_lead_in(state) + (
             "Next, create the sign-in connection that Employee Self-Service "
             f"{audience} will use to access ServiceNow. This part happens in "
             "Copilot Studio:\n\n"
@@ -10479,78 +10414,27 @@ def _current_task_guidance(
             "Return here and tell us which connection you used. You won't "
             "need to resend the administrator replies.\n\n"
             f"After that, we'll test an {audience} request with your account "
-            "to check sign-in and employee matching.\n\n"
-            "**Expected nonsecret evidence**\n"
-            "Two ADK checks run after your reply. A fresh Connectivity "
-            "inventory must prove exactly one Connected current-maker "
-            "connection matching the environment, auth mode, Resource URI, "
-            "and Instance Name. The agent's saved draft connection "
-            "reference must point at that same connection. The optional "
-            "display name is guidance only and is never a readiness gate.\n\n"
-            "**Completion boundary**\n"
-            "Your reply triggers both checks. This step completes only when "
-            "both pass; a Connected connection that the agent does not use "
-            "yet does not complete it, and neither proves business success."
+            "to check sign-in and employee matching."
         )
     if phase_id == "topics":
-        return common + (
-            "**Where and how**\n"
-            f"Open {links['copilotStudioAgent']['url']} → Topics; do not "
-            "invent a tab-specific URL. Use "
-            f"`{provider_root}/prepare-topics.md`. A fresh supported "
-            "component read lists the exact in-scope ServiceNow topics and "
-            "their current states. Enable only the listed inactive topics, "
-            "or explicitly keep the current states; unrelated topics remain "
-            "unchanged.\n\n"
-            "**Expected nonsecret evidence**\n"
-            "Either fresh readback proves every in-scope topic Active, or the "
-            "Maker records a current component-hash-bound keep-current "
-            "decision. Unrelated topics remain unchanged.\n\n"
-            "**Completion boundary**\n"
-            "The topic choice is a separate card."
+        return (
+            f"We'll turn on the built-in ServiceNow {_product_audience()} "
+            "topics, including system topics. Unrelated topics will stay "
+            "unchanged."
         )
     if phase_id == "portal-url":
-        audience = "HR" if ACTIVE_PROFILE.key == "hrsd" else "IT"
-        return common + (
-            f"Next, we'll make sure the {audience} agent's case links open "
-            "in the right employee portal.\n\n"
-            "**Where and how**\n"
-            f"Use `{provider_root}/configure-portal-url.md` for the exact "
-            f"{ACTIVE_PROFILE.product_name} Setup Configurations topic. "
-            "Provide the administrator-confirmed complete HTTPS URL. The "
-            "supported path first uses a guarded single-node component update "
-            "with fresh-token readback and rollback. If that path is "
-            "unsupported or permission denied without changing the topic, "
-            "open the exact agent → Topics → Setup Configurations → portal "
-            "SetVariable node, enter the same URL, and save without "
-            "publishing.\n\n"
-            "**Expected nonsecret evidence**\n"
-            f"One administrator-confirmed complete HTTPS portal URL on "
-            f"`{instance_name}` plus guarded readback of the exact authored "
-            "portal node. The flow never infers `/sp` or `/esc`.\n\n"
-            "**Completion boundary**\n"
-            "The URL input and any Manual fallback completion are separate "
-            "questions. No Publish occurs."
+        return (
+            f"Next, we'll make sure the {_product_audience()} agent's case "
+            "links open in the right employee portal."
         )
     if phase_id == "test":
-        return common + (
+        return (
             "We're ready to try a request. In the agent's Test pane, run a "
             "request that should return your real ServiceNow data, for "
             "example the required prompt below. Come back and tell us what "
             "happened and whether it matched what you expected. You don't "
             "need to paste case contents.\n\n"
-            "**Where and how**\n"
-            f"Use `{provider_root}/test-connection.md` and the Copilot Studio "
-            f"Test pane. Run exactly `{ACTIVE_PROFILE.test_prompt}` against "
-            "the final saved draft and selected connection.\n\n"
-            "**Expected nonsecret evidence**\n"
-            "Pass or Not pass plus one allowed bounded failure category. Do "
-            "not return response content, employee data, identifiers, tokens, "
-            "or secrets.\n\n"
-            "**Completion boundary**\n"
-            "A separate Test result card records the Maker-reported Test pane "
-            "result as current human-verified evidence. It is not a Connect "
-            "API check and does not claim business success."
+            f"**Required prompt:** `{ACTIVE_PROFILE.test_prompt}`"
         )
     raise ServiceNowConnectError(
         "ServiceNow current-task guidance is missing."
@@ -10667,15 +10551,14 @@ def _business_group_transport(
         and isinstance(current_phase, dict)
         and isinstance(current_phase.get("id"), str)
     ):
-        ordinary_text += (
-            "\n\n"
-            + _current_task_guidance(
-                context,
-                state or {},
-                phase_id=current_phase["id"],
-                role=current_group["role"],
-            )
+        guidance = _current_task_guidance(
+            context,
+            state or {},
+            phase_id=current_phase["id"],
+            role=current_group["role"],
         )
+        if guidance:
+            ordinary_text += "\n\n" + guidance
     question = (
         _business_group_availability_question(current_group)
         if gate_required
