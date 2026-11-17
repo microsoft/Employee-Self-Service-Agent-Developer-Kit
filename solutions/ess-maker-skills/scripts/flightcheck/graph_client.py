@@ -10,18 +10,10 @@ Provides authenticated access to Microsoft Graph for FlightCheck checks
 Reuses the same MSAL token cache as auth.py so users don't sign in twice.
 """
 
-import asyncio
-from contextlib import contextmanager
-from dataclasses import dataclass
-import json
 import os
-import socket
 import sys
-from urllib.parse import urlsplit
 
-import httpx
-from urllib3.exceptions import InvalidHeader
-from urllib3.response import HTTPResponse
+from .graph_transport import BoundedGraphTransport, CollectionRead, GraphPermissionError, collection_page
 
 try:
     import msal
@@ -105,60 +97,6 @@ _RETRY = Retry(
 _SESSION = requests.Session()
 _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
 
-# Keep the OS resolver in a killable process: cancelling getaddrinfo() in
-# asyncio's thread pool otherwise leaves Runner.close() waiting on DNS.
-_DNS_LOOKUP = """
-import json
-import socket
-import sys
-
-try:
-    addresses = socket.getaddrinfo(**json.load(sys.stdin))
-except OSError as exc:
-    json.dump({"error": exc.errno}, sys.stdout)
-else:
-    json.dump({"addresses": addresses}, sys.stdout)
-"""
-
-
-async def _bounded_getaddrinfo(host, port, *, family=0, type=0, proto=0, flags=0):
-    options = {
-        "host": host.decode("ascii") if isinstance(host, bytes) else host,
-        "port": port.decode("ascii") if isinstance(port, bytes) else port,
-        "family": family, "type": type, "proto": proto, "flags": flags,
-    }
-    process = await asyncio.create_subprocess_exec(
-        sys.executable, "-I", "-S", "-c", _DNS_LOOKUP,
-        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    try:
-        output, _ = await process.communicate(json.dumps(options).encode("utf-8"))
-    finally:
-        if process.returncode is None:
-            process.kill()
-        await process.wait()
-    if process.returncode != 0:
-        raise RuntimeError("Graph DNS resolver process failed.")
-    result = json.loads(output)
-    if "error" in result:
-        raise socket.gaierror(result["error"], "Graph DNS resolution failed.")
-    return [
-        (family, kind, proto, canonical, tuple(address))
-        for family, kind, proto, canonical, address in result["addresses"]
-    ]
-
-
-def _bounded_event_loop():
-    loop = asyncio.new_event_loop()
-    loop.getaddrinfo = _bounded_getaddrinfo
-    return loop
-
-
-class GraphPermissionError(PermissionError):
-    """Graph consent or a directory read was explicitly denied."""
-
-
 class GraphConsentError(RuntimeError):
     """Required Graph authentication failed because consent is unavailable."""
 
@@ -171,30 +109,6 @@ def _consent_unavailable(result: dict | None) -> bool:
         or result.get("suberror") == "consent_required"
         or bool({65001, 65004, 90094}.intersection(result.get("error_codes") or []))
     )
-
-
-@dataclass(frozen=True)
-class CollectionRead:
-    items: list[dict]
-    complete: bool
-
-
-def _collection_page(data, path: str) -> tuple[list[dict], str | None]:
-    if (
-        not isinstance(data, dict) or not isinstance(data.get("value"), list)
-        or any(not isinstance(row, dict) for row in data["value"])
-    ):
-        raise ValueError("Graph returned an invalid resource collection.")
-    continuation = data.get("@odata.nextLink")
-    if continuation is not None:
-        expected, actual = urlsplit(f"{GRAPH_BASE}{path}"), urlsplit(str(continuation))
-        if (
-            not isinstance(continuation, str) or not continuation
-            or actual.scheme != expected.scheme or actual.netloc != expected.netloc
-            or actual.path != expected.path or actual.fragment
-        ):
-            raise ValueError("Graph returned an invalid collection continuation.")
-    return data["value"], continuation
 
 
 def _persist_token_cache(cache: "msal.SerializableTokenCache", cache_path: str) -> None:
@@ -397,6 +311,14 @@ def _try_me_company_name_lookup(app, account) -> str:
         return ""
 
 
+def authenticate_self_profile(tenant_id: str, preferred_username: str | None) -> "GraphClient":
+    """Create a separate, identity-bound client without downgrading shared clients."""
+    client = GraphClient(tenant_id, scopes=_USER_READ_SCOPE, strict_reads=True)
+    client.authenticate(preferred_username=preferred_username)
+    client.verify_identity(preferred_username)
+    return client
+
+
 class GraphClient:
     """Lightweight Microsoft Graph client with MSAL interactive auth."""
 
@@ -421,11 +343,10 @@ class GraphClient:
         self,
         preferred_username: str | None = None,
         *,
-        scopes: list[str] | None = None,
         require_existing_consent: bool = False,
     ) -> str:
         """Acquire a Graph access token, reusing the shared MSAL cache."""
-        requested_scopes = self._scopes if scopes is None else scopes
+        requested_scopes = self._scopes
         if not requested_scopes:
             raise ValueError("At least one Graph scope is required.")
         authority = f"https://login.microsoftonline.com/{self.tenant_id}"
@@ -583,7 +504,7 @@ class GraphClient:
             resp.raise_for_status()
             data = resp.json()
             if self.strict_reads:
-                page, url = _collection_page(data, path)
+                page, url = collection_page(data, f"{GRAPH_BASE}{path}")
             else:
                 page, url = data.get("value", []), data.get("@odata.nextLink")
             items.extend(page)
@@ -594,100 +515,15 @@ class GraphClient:
         self, path: str, *, params: dict, limit: int, time_budget: float,
     ) -> CollectionRead:
         """Read sequential pages with a cancellable budget, including retry sleeps."""
-        if limit <= 0 or time_budget <= 0:
-            raise ValueError("Collection limit and time budget must be positive.")
-        with self._bounded_errors(time_budget), asyncio.Runner(loop_factory=_bounded_event_loop) as runner:
-            return runner.run(self._bounded_collection(path, params, limit, time_budget))
+        return BoundedGraphTransport(GRAPH_BASE, self.headers, _RETRY).get_collection(
+            path, params=params, limit=limit, time_budget=time_budget,
+        )
 
     def get_bounded_profile(self, *, params: dict, time_budget: float) -> dict:
         """Read the signed-in profile using the collection retry/deadline policy."""
-        if time_budget <= 0:
-            raise ValueError("Profile time budget must be positive.")
-        with self._bounded_errors(time_budget), asyncio.Runner(loop_factory=_bounded_event_loop) as runner:
-            return runner.run(self._bounded_profile(params, time_budget))
-
-    @contextmanager
-    def _bounded_errors(self, time_budget):
-        try:
-            yield
-        except TimeoutError:
-            raise TimeoutError(
-                f"The {time_budget:g}-second coverage budget expired; no partial coverage is reported."
-            ) from None
-        except httpx.HTTPStatusError as exc:
-            response = requests.Response()
-            response.status_code = exc.response.status_code
-            raise requests.HTTPError(
-                f"Graph read failed (HTTP {response.status_code}).", response=response,
-            ) from None
-        except httpx.RequestError as exc:
-            raise requests.ConnectionError(f"Graph request failed ({type(exc).__name__}).") from None
-        except InvalidHeader:
-            raise ValueError("Graph returned an invalid Retry-After header.") from None
-
-    async def _bounded_collection(self, path, params, limit, time_budget):
-        return await asyncio.wait_for(
-            self._read_bounded_collection(path, params, limit, time_budget),
-            timeout=time_budget,
+        return BoundedGraphTransport(GRAPH_BASE, self.headers, _RETRY).get_profile(
+            params=params, time_budget=time_budget,
         )
-
-    async def _bounded_profile(self, params, time_budget):
-        return await asyncio.wait_for(self._read_bounded_profile(params, time_budget), timeout=time_budget)
-
-    async def _read_bounded_profile(self, params, time_budget):
-        async with httpx.AsyncClient(timeout=time_budget, follow_redirects=False) as session:
-            response = await self._get_with_retries(session, "/me", f"{GRAPH_BASE}/me", params)
-            data = response.json()
-            if not isinstance(data, dict):
-                raise ValueError("Graph returned an invalid user profile.")
-            return data
-
-    async def _get_with_retries(self, session, path, url, params):
-        retry = _RETRY
-        while True:
-            try:
-                response = await session.get(url, headers=self.headers, params=params)
-            except (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
-                if not retry.total:
-                    raise
-                retry = retry.increment(method="GET", url=url, error=exc)
-                await asyncio.sleep(retry.get_backoff_time())
-                continue
-            if retry.total and retry.is_retry(
-                "GET", response.status_code, "Retry-After" in response.headers,
-            ):
-                metadata = HTTPResponse(status=response.status_code, headers=response.headers)
-                retry = retry.increment(method="GET", url=url, response=metadata)
-                delay = retry.get_retry_after(metadata) if retry.respect_retry_after_header else None
-                await asyncio.sleep(delay or retry.get_backoff_time())
-                continue
-            if response.status_code == 403:
-                raise GraphPermissionError(f"Graph returned HTTP 403 on {path}.")
-            response.raise_for_status()
-            return response
-
-    async def _read_bounded_collection(self, path, params, limit, time_budget):
-        items: list[dict] = []
-        seen_urls: set[str] = set()
-        url = f"{GRAPH_BASE}{path}"
-        # Async I/O lets the outer deadline cancel a slow response or Retry-After
-        # sleep; a requests socket timeout alone does not bound either sequence.
-        async with httpx.AsyncClient(timeout=time_budget, follow_redirects=False) as session:
-            while url:
-                if url in seen_urls:
-                    raise ValueError("Graph returned a repeated collection continuation.")
-                seen_urls.add(url)
-                response = await self._get_with_retries(session, path, url, params)
-                page, continuation = _collection_page(response.json(), path)
-                if continuation in seen_urls:
-                    raise ValueError("Graph returned a repeated collection continuation.")
-                remaining = limit - len(items)
-                items.extend(page[:remaining])
-                complete = continuation is None and len(page) <= remaining
-                if len(items) == limit or complete:
-                    return CollectionRead(items, complete)
-                url, params = continuation, None
-        raise ValueError("Graph collection discovery did not complete.")
 
     # ----- Convenience methods for common FlightCheck queries -----
 

@@ -37,6 +37,7 @@ import sys
 import traceback
 import uuid
 import webbrowser
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -64,7 +65,7 @@ from flightcheck.runner import (
     maker_diagnostic_outcome,
 )
 from flightcheck.agent_scope import active_agent, configured_agents, is_declarative_agent, validate_agent_slug
-from flightcheck.graph_client import GraphClient, GraphConsentError, GraphPermissionError
+from flightcheck.graph_client import GraphClient, GraphConsentError, GraphPermissionError, authenticate_self_profile
 from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
 from flightcheck.pva_client import PVAClient
 from flightcheck.powerplatform_client import PowerPlatformClient
@@ -1486,11 +1487,12 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     if registry.GRAPH in needed:
         if not quiet_auth:
             print("Authenticating to Microsoft Graph...")
-        graph = GraphClient(tenant_id)
+        graph = GraphClient(
+            tenant_id, **({"scopes": list(plan.graph_scopes)} if plan.graph_scopes is not None else {}),
+        )
         try:
             graph.authenticate(
                 preferred_username=canonical_username,
-                **({"scopes": list(plan.graph_scopes)} if plan.graph_scopes is not None else {}),
                 **({"require_existing_consent": True} if plan.graph_permission_optional else {}),
             )
             verify_authenticated_account(
@@ -1751,6 +1753,7 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     runner.client_availability = client_availability
     runner.tenant_id = tenant_id
     runner.authenticated_account = canonical_username
+    runner.self_profile_graph = partial(authenticate_self_profile, tenant_id, canonical_username)
     runner.pp_admin = pp_admin
     runner.pva = pva
     runner.powerplatform = powerplatform
@@ -2456,11 +2459,12 @@ def _run_profile(args):
     if registry.GRAPH in needed:
         if not quiet_auth:
             print("Authenticating to Microsoft Graph...")
-        graph = GraphClient(tenant_id)
+        graph = GraphClient(
+            tenant_id, **({"scopes": list(plan.graph_scopes)} if plan.graph_scopes is not None else {}),
+        )
         try:
             graph.authenticate(
                 preferred_username=canonical_username,
-                **({"scopes": list(plan.graph_scopes)} if plan.graph_scopes is not None else {}),
                 **({"require_existing_consent": True} if plan.graph_permission_optional else {}),
             )
             mark_available(
@@ -2769,6 +2773,7 @@ def _run_profile(args):
     runner.client_availability = client_availability
     runner.tenant_id = tenant_id
     runner.authenticated_account = canonical_username
+    runner.self_profile_graph = partial(authenticate_self_profile, tenant_id, canonical_username)
     runner.pp_admin = pp_admin
     runner.pva = pva
     runner.powerplatform = powerplatform
@@ -3557,6 +3562,7 @@ def main():
     runner.authenticated_account = (
         getattr(args, "preferred_username", None) or getattr(graph, "signed_in_username", None)
     )
+    runner.self_profile_graph = partial(authenticate_self_profile, tenant_id, runner.authenticated_account)
     runner.client_availability = {"graph": {"permissionUnavailable": graph_permission_unavailable}}
     runner.pp_admin = pp_admin
     runner.pva = pva

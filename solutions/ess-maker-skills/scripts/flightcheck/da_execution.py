@@ -210,12 +210,14 @@ class DAExecutor:
         if self._graph_error is not None:
             raise self._graph_error
         if self.runner.graph is None:
-            client = GraphClient(self.runner.tenant_id, strict_reads=True)
+            scopes = graph_scopes_for_specs(self.specs)
+            client = GraphClient(
+                self.runner.tenant_id, strict_reads=True,
+                **({"scopes": list(scopes)} if scopes is not None else {}),
+            )
             try:
-                scopes = graph_scopes_for_specs(self.specs)
                 token = client.authenticate(
                     preferred_username=self.runner.authenticated_account,
-                    **({"scopes": list(scopes)} if scopes is not None else {}),
                     **({"require_existing_consent": True} if graph_permission_is_optional(self.specs) else {}),
                 )
                 account = client.signed_in_username

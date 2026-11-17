@@ -140,14 +140,17 @@ def test_cli_requests_only_its_scope_and_writes_aggregate_json(monkeypatch, tmp_
     output = tmp_path / "report.json"
     code = check.main(["--scope", scope, "--preferred-username", "maker@example.test", "--output", str(output)])
     assert code == 0
-    assert client.authenticate.call_args.kwargs["scopes"] == [f"https://graph.microsoft.com/{expected}"]
+    assert constructor.call_args.kwargs["scopes"] == [f"https://graph.microsoft.com/{expected}"]
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report == json.loads(capsys.readouterr().out)
     assert "maker@example.test" not in output.read_text(encoding="utf-8")
 
 
-def test_cli_rejects_wrong_account_before_reading_profile(monkeypatch, capsys):
-    client = Mock(signed_in_username="someone-else@example.test")
+def test_cli_rejects_wrong_account_before_reading_profile(client, monkeypatch, capsys):
+    client.signed_in_username = "someone-else@example.test"
+    monkeypatch.setattr(client, "authenticate", Mock())
+    monkeypatch.setattr(client, "get", Mock())
+    monkeypatch.setattr(client, "get_bounded_collection", Mock())
     monkeypatch.setattr(check, "GraphClient", Mock(return_value=client))
     assert check.main(["--preferred-username", "maker@example.test"]) == 2
     assert "different or unverifiable account" in json.loads(capsys.readouterr().out)["error"]
@@ -253,7 +256,7 @@ def test_bounded_reads_keep_retry_after_and_backoff_policy(client, monkeypatch):
         delays.append(delay)
         await original_sleep(0)
 
-    monkeypatch.setattr("flightcheck.graph_client.asyncio.sleep", sleep)
+    monkeypatch.setattr("flightcheck.graph_transport.asyncio.sleep", sleep)
     route = respx.get(f"{graph.GRAPH_BASE}/users").mock(side_effect=[
         httpx.Response(429, headers={"Retry-After": "7"}),
         httpx.Response(503),
@@ -279,7 +282,7 @@ def test_transient_transport_failure_retries_without_duplicating_completed_pages
         delays.append(delay)
         await original_sleep(0)
 
-    monkeypatch.setattr("flightcheck.graph_client.asyncio.sleep", sleep)
+    monkeypatch.setattr("flightcheck.graph_transport.asyncio.sleep", sleep)
     route = respx.get(f"{graph.GRAPH_BASE}/users").mock(side_effect=[
         httpx.Response(200, json={
             "value": [graph.profile_user(user_id="one")],
@@ -304,7 +307,7 @@ def test_transport_and_http_failures_share_one_retry_limit(client, monkeypatch):
         delays.append(delay)
         await original_sleep(0)
 
-    monkeypatch.setattr("flightcheck.graph_client.asyncio.sleep", sleep)
+    monkeypatch.setattr("flightcheck.graph_transport.asyncio.sleep", sleep)
     route = respx.get(f"{graph.GRAPH_BASE}/users").mock(side_effect=[
         httpx.Response(200, json={
             "value": [graph.profile_user()],
@@ -344,7 +347,7 @@ def test_retry_exhaustion_on_a_later_page_does_not_report_partial_coverage(clien
     async def sleep(_delay):
         await original_sleep(0)
 
-    monkeypatch.setattr("flightcheck.graph_client.asyncio.sleep", sleep)
+    monkeypatch.setattr("flightcheck.graph_transport.asyncio.sleep", sleep)
     route = respx.get(f"{graph.GRAPH_BASE}/users").mock(side_effect=[
         httpx.Response(200, json={
             "value": [graph.profile_user()],
@@ -426,9 +429,9 @@ def test_registered_flightcheck_writes_html_json_and_nonblocking_warnings(
     ) if fallback else None
     scopes_used = []
 
-    def authenticate(self, preferred_username=None, *, scopes=None, require_existing_consent=False):
-        assert scopes == [f"https://graph.microsoft.com/{'User.Read.All' if require_existing_consent else 'User.Read'}"]
-        scopes_used.extend(scopes)
+    def authenticate(self, preferred_username=None, *, require_existing_consent=False):
+        assert self._scopes == [f"https://graph.microsoft.com/{'User.Read.All' if require_existing_consent else 'User.Read'}"]
+        scopes_used.extend(self._scopes)
         self._token = _token()
         self.signed_in_username = preferred_username
         return self._token
@@ -581,8 +584,8 @@ def test_focused_permission_fallback_does_not_hide_other_authentication_failures
         "network": requests.ConnectionError("Network unavailable."),
     }
 
-    def authenticate(self, preferred_username=None, *, scopes=None, require_existing_consent=False):
-        assert require_existing_consent is (scopes == ["https://graph.microsoft.com/User.Read.All"])
+    def authenticate(self, preferred_username=None, *, require_existing_consent=False):
+        assert require_existing_consent is (self._scopes == ["https://graph.microsoft.com/User.Read.All"])
         raise failures[failure]
 
     monkeypatch.setattr(GraphClient, "authenticate", authenticate)
@@ -705,11 +708,11 @@ def test_fallback_does_not_hide_nonpermission_read_failures(failure):
 
 @pytest.mark.parametrize("identity", ["matching", "other_account", "missing_account", "other_tenant", "missing_tenant"])
 def test_self_profile_authentication_verifies_account_and_tenant(monkeypatch, identity):
-    from flightcheck.runner import FlightCheckRunner
+    from flightcheck.graph_client import authenticate_self_profile
 
-    def authenticate(client, preferred_username=None, *, scopes=None):
+    def authenticate(client, preferred_username=None):
         assert preferred_username == "maker@example.test"
-        assert scopes == ["https://graph.microsoft.com/User.Read"]
+        assert client._scopes == ["https://graph.microsoft.com/User.Read"]
         client.signed_in_username = {
             "other_account": "other@example.test", "missing_account": None,
         }.get(identity, preferred_username)
@@ -720,17 +723,13 @@ def test_self_profile_authentication_verifies_account_and_tenant(monkeypatch, id
         return client._token
 
     monkeypatch.setattr(GraphClient, "authenticate", authenticate)
-    runner = FlightCheckRunner()
-    runner.tenant_id = graph.MOCK_TENANT_ID
-    runner.authenticated_account = "maker@example.test"
-    runner.graph = Mock()
-    original = runner.graph
     if identity == "matching":
-        assert runner.self_profile_graph().signed_in_username == "maker@example.test"
+        assert authenticate_self_profile(
+            graph.MOCK_TENANT_ID, "maker@example.test",
+        ).signed_in_username == "maker@example.test"
     else:
         with pytest.raises(ValueError, match="different|unreadable tenant identity"):
-            runner.self_profile_graph()
-    assert runner.graph is original
+            authenticate_self_profile(graph.MOCK_TENANT_ID, "maker@example.test")
 
 
 @respx.mock
@@ -746,7 +745,7 @@ def test_self_profile_retry_after_is_cancelled_by_its_remaining_deadline(client)
 @pytest.mark.parametrize("scope", ["tenant", "me"])
 def test_slow_dns_does_not_delay_bounded_read_shutdown(client, monkeypatch, scope):
     """Cancellation must include DNS and event-loop shutdown, not just HTTP I/O."""
-    from flightcheck import graph_client
+    from flightcheck import graph_transport
 
     for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
         monkeypatch.delenv(key, raising=False)
@@ -766,7 +765,7 @@ def test_slow_dns_does_not_delay_bounded_read_shutdown(client, monkeypatch, scop
         raise socket.gaierror(socket.EAI_AGAIN, "Simulated slow DNS")
 
     monkeypatch.setattr(
-        graph_client, "_DNS_LOOKUP", "import time; time.sleep(10)\n" + graph_client._DNS_LOOKUP,
+        graph_transport, "_DNS_LOOKUP", "import time; time.sleep(10)\n" + graph_transport._DNS_LOOKUP,
     )
     monkeypatch.setattr(asyncio, "create_subprocess_exec", record_process)
     monkeypatch.setattr(socket, "getaddrinfo", slow_dns)
@@ -786,15 +785,15 @@ def test_slow_dns_does_not_delay_bounded_read_shutdown(client, monkeypatch, scop
     ("127.0.0.1", socket.AF_INET), ("::1", socket.AF_INET6),
 ])
 def test_bounded_dns_preserves_address_families_and_reaps_worker(host, family, monkeypatch):
-    from flightcheck import graph_client
+    from flightcheck import graph_transport
 
     def forbidden(*_args, **_kwargs):
         pytest.fail("Bounded reads must not use the parent process's DNS thread pool.")
 
     monkeypatch.setattr(socket, "getaddrinfo", forbidden)
-    with asyncio.Runner(loop_factory=graph_client._bounded_event_loop) as runner:
+    with asyncio.Runner(loop_factory=graph_transport._bounded_event_loop) as runner:
         addresses = runner.run(asyncio.wait_for(
-            graph_client._bounded_getaddrinfo(
+            graph_transport._bounded_getaddrinfo(
                 host.encode("ascii"), 443, family=family,
                 type=socket.SOCK_STREAM, flags=socket.AI_NUMERICHOST,
             ),
@@ -806,24 +805,24 @@ def test_bounded_dns_preserves_address_families_and_reaps_worker(host, family, m
 
 
 def test_bounded_dns_failure_preserves_transport_error_semantics(monkeypatch):
-    from flightcheck import graph_client
+    from flightcheck import graph_transport
 
-    monkeypatch.setattr(graph_client, "_DNS_LOOKUP", (
+    monkeypatch.setattr(graph_transport, "_DNS_LOOKUP", (
         f"import json; json.dump({{'error': {socket.EAI_AGAIN}}}, __import__('sys').stdout)"
     ))
-    with asyncio.Runner(loop_factory=graph_client._bounded_event_loop) as runner:
+    with asyncio.Runner(loop_factory=graph_transport._bounded_event_loop) as runner:
         with pytest.raises(socket.gaierror) as failed:
-            runner.run(graph_client._bounded_getaddrinfo("example.test", 443))
+            runner.run(graph_transport._bounded_getaddrinfo("example.test", 443))
     assert failed.value.errno == socket.EAI_AGAIN
 
 
 def test_failed_dns_worker_is_an_explicit_error(monkeypatch):
-    from flightcheck import graph_client
+    from flightcheck import graph_transport
 
-    monkeypatch.setattr(graph_client, "_DNS_LOOKUP", "raise SystemExit(1)")
-    with asyncio.Runner(loop_factory=graph_client._bounded_event_loop) as runner:
+    monkeypatch.setattr(graph_transport, "_DNS_LOOKUP", "raise SystemExit(1)")
+    with asyncio.Runner(loop_factory=graph_transport._bounded_event_loop) as runner:
         with pytest.raises(RuntimeError, match="DNS resolver process failed"):
-            runner.run(graph_client._bounded_getaddrinfo("example.test", 443))
+            runner.run(graph_transport._bounded_getaddrinfo("example.test", 443))
 
 
 @pytest.mark.parametrize("entrypoint", ["checkpoint", "profile", "standalone-me", "standalone-tenant"])
@@ -891,8 +890,8 @@ def test_own_profile_fallback_preserves_required_graph_client_blockers(monkeypat
         "entra:test-mixed", ("AUTH-PROFILE-001", required.key), "Mixed Graph access requirements.",
     ))
 
-    def authenticate(client, preferred_username=None, *, scopes=None, require_existing_consent=False):
-        if scopes != ["https://graph.microsoft.com/User.Read"]:
+    def authenticate(client, preferred_username=None, *, require_existing_consent=False):
+        if client._scopes != ["https://graph.microsoft.com/User.Read"]:
             raise GraphConsentError("Directory consent unavailable")
         client.signed_in_username = preferred_username
         client._token = _token()

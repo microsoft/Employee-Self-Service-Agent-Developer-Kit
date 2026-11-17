@@ -83,7 +83,7 @@ def setup_workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(maker, "authenticate_flightcheck", auth)
     monkeypatch.setattr(maker, "authenticate_flightcheck_dependency", Mock(return_value="read-token"))
 
-    def authenticate_graph(client, preferred_username=None, *, scopes=None, require_existing_consent=False):
+    def authenticate_graph(client, preferred_username=None, *, require_existing_consent=False):
         claims = base64.urlsafe_b64encode(json.dumps({"tid": TENANT_ID}).encode()).decode().rstrip("=")
         client._token = f"header.{claims}.signature"
         client.signed_in_username = "maker@example.test"

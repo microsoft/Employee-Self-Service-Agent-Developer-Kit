@@ -65,9 +65,9 @@ def test_entra_coverage_has_full_checkpoint_and_profile_parity(
 
         original_authenticate = GraphClient.authenticate
 
-        def authenticate(client, preferred_username=None, *, scopes=None, require_existing_consent=False):
-            if scopes == ["https://graph.microsoft.com/User.Read"]:
-                return original_authenticate(client, preferred_username, scopes=scopes)
+        def authenticate(client, preferred_username=None, *, require_existing_consent=False):
+            if client._scopes == ["https://graph.microsoft.com/User.Read"]:
+                return original_authenticate(client, preferred_username)
             error = GraphPermissionError if require_existing_consent else GraphConsentError
             raise error("Directory consent unavailable")
 

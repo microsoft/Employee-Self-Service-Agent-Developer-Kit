@@ -50,9 +50,10 @@ def test_empty_tenant_id_returns_empty():
     assert graph_client.resolve_tenant_display_name_silent("") == ""
 
 
-@pytest.mark.parametrize("scopes", [None, ["https://graph.microsoft.com/User.Read"]])
-@pytest.mark.parametrize("client_scopes", [None, graph_client.PERSON_RESOLUTION_SCOPES])
-def test_authenticate_uses_preferred_cached_account(monkeypatch, scopes, client_scopes):
+@pytest.mark.parametrize("scopes", [
+    None, ["https://graph.microsoft.com/User.Read"], graph_client.PERSON_RESOLUTION_SCOPES,
+])
+def test_authenticate_uses_preferred_cached_account(monkeypatch, scopes):
     selected_accounts = []
     client_ids = []
     requested_scopes = []
@@ -94,19 +95,20 @@ def test_authenticate_uses_preferred_cached_account(monkeypatch, scopes, client_
         FakeApp,
     )
 
-    client = graph_client.GraphClient("organizations", scopes=client_scopes)
-    token = client.authenticate(preferred_username="maker@example.com", scopes=scopes)
+    client = graph_client.GraphClient("organizations", scopes=scopes)
+    token = client.authenticate(preferred_username="maker@example.com")
 
     assert token == "preferred-token"
     assert selected_accounts == [{"username": "Maker@Example.com"}]
     assert client_ids == [graph_client.GRAPH_CLIENT_ID]
-    assert requested_scopes == [scopes if scopes is not None else client_scopes or graph_client.GRAPH_SCOPES]
+    assert requested_scopes == [scopes or graph_client.GRAPH_SCOPES]
     assert client.signed_in_username == "Maker@Example.com"
 
 
-@pytest.mark.parametrize("scopes", [None, ["https://graph.microsoft.com/User.Read"]])
-@pytest.mark.parametrize("client_scopes", [None, graph_client.PERSON_RESOLUTION_SCOPES])
-def test_interactive_auth_does_not_reuse_stale_cached_identity(monkeypatch, scopes, client_scopes):
+@pytest.mark.parametrize("scopes", [
+    None, ["https://graph.microsoft.com/User.Read"], graph_client.PERSON_RESOLUTION_SCOPES,
+])
+def test_interactive_auth_does_not_reuse_stale_cached_identity(monkeypatch, scopes):
     interactive_options = {}
     interactive_scopes = []
 
@@ -139,11 +141,11 @@ def test_interactive_auth_does_not_reuse_stale_cached_identity(monkeypatch, scop
         FakeApp,
     )
 
-    client = graph_client.GraphClient("organizations", scopes=client_scopes)
-    client.authenticate(preferred_username="maker@example.com", scopes=scopes)
+    client = graph_client.GraphClient("organizations", scopes=scopes)
+    client.authenticate(preferred_username="maker@example.com")
 
     assert client.signed_in_username is None
-    assert interactive_scopes == [scopes if scopes is not None else client_scopes or graph_client.GRAPH_SCOPES]
+    assert interactive_scopes == [scopes or graph_client.GRAPH_SCOPES]
     assert interactive_options == {
         "prompt": "select_account",
         "login_hint": "maker@example.com",
@@ -176,11 +178,10 @@ def test_optional_read_uses_existing_consent_and_preserves_real_auth_errors(monk
         lambda: SimpleNamespace(has_state_changed=False),
     )
     monkeypatch.setattr(graph_client.msal, "PublicClientApplication", lambda *_a, **_k: app)
-    client = graph_client.GraphClient("organizations")
     scopes = ["https://graph.microsoft.com/User.Read.All"]
+    client = graph_client.GraphClient("organizations", scopes=scopes)
     options = {
         "preferred_username": "maker@example.test",
-        "scopes": scopes,
         "require_existing_consent": True,
     }
     if "consent" in outcome:
@@ -216,11 +217,11 @@ def test_consent_denial_preserves_required_auth_gates(monkeypatch, tmp_path, sel
     }
     monkeypatch.setattr(graph_client.msal, "SerializableTokenCache", MagicMock())
     monkeypatch.setattr(graph_client.msal, "PublicClientApplication", lambda *_a, **_k: app)
-    client = graph_client.GraphClient("organizations")
     scopes = ["https://graph.microsoft.com/User.Read"] if self_profile else None
+    client = graph_client.GraphClient("organizations", scopes=scopes)
     expected_error = graph_client.GraphPermissionError if self_profile else graph_client.GraphConsentError
     with pytest.raises(expected_error, match="consent") as failed:
-        client.authenticate(preferred_username="maker@example.test", scopes=scopes)
+        client.authenticate(preferred_username="maker@example.test")
     app.acquire_token_interactive.assert_called_once_with(
         scopes or graph_client.GRAPH_SCOPES, prompt="select_account", login_hint="maker@example.test",
     )

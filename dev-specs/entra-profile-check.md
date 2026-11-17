@@ -28,6 +28,8 @@ The **30-second total data-read budget** spans tenant and fallback requests, ret
 
 Both read paths isolate OS DNS resolution in a cancellable helper process. Deadline expiry terminates and reaps that process; event-loop shutdown does not wait for a blocked DNS thread. No partial coverage is reported.
 
+`GraphClient` owns authentication, constructor-selected scopes and identity validation. `graph_transport.py` owns bounded HTTP reads, paging, retries and DNS cleanup. CLI/DA client setup supplies the lazy own-profile client; the generic runner does not authenticate it.
+
 ## Coverage and outcomes
 
 Count nonblank values as `available`, null/blank as `empty`, and omitted properties as `notReturned`. Tenant coverage is `available / usersChecked * 100`; own-profile states use the same presence rules.

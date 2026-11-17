@@ -287,18 +287,6 @@ class FlightCheckRunner:
         """Register a check function. fn(runner) -> list[CheckResult]."""
         self._check_fns.append((category, fn))
 
-    def self_profile_graph(self):
-        """Authenticate a separate, identity-bound client for this user's profile."""
-        from .graph_client import GraphClient
-
-        client = GraphClient(self.tenant_id, strict_reads=True)
-        expected = self.authenticated_account
-        client.authenticate(
-            preferred_username=expected, scopes=["https://graph.microsoft.com/User.Read"],
-        )
-        client.verify_identity(expected)
-        return client
-
     def should_execute(self, checkpoint_id: str) -> bool:
         """Return whether the current target/profile requests this checkpoint."""
         return (

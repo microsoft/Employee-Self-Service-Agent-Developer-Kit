@@ -37,18 +37,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, help="Optional aggregate-only JSON report.")
     args = parser.parse_args(argv)
     try:
-        client = GraphClient(args.tenant_id, strict_reads=True)
+        client = GraphClient(args.tenant_id, scopes=SCOPES[args.scope], strict_reads=True)
         with redirect_stdout(sys.stderr):
             client.authenticate(
                 preferred_username=args.preferred_username,
-                scopes=SCOPES[args.scope],
                 **({"require_existing_consent": True} if args.scope == "tenant" else {}),
             )
-        if args.preferred_username and (
-            not client.signed_in_username
-            or client.signed_in_username.casefold() != args.preferred_username.casefold()
-        ):
-            raise ValueError("Authentication selected a different or unverifiable account; no profile was read.")
         client.verify_identity(args.preferred_username)
         report = check_attributes(client, args.scope, args.attributes)
         code = int(report["status"] == "Warning")
