@@ -1,0 +1,1 @@
+-r ../agentconfig_landing_page/requirements.txt
