@@ -94,7 +94,8 @@ For Entra and ServiceNow identity actions, the `resume-handoff` business-group
 availability gate is the only availability question. Do not invoke
 `identity-direct-handoff`, render its ordinary instructions, or ask its data
 questions until that acknowledgement is current. Once current, require
-`decision: instructions-required`, render its `ordinaryReply.text` verbatim,
+`decision: instructions-required`, render its `ordinaryReply.text` verbatim
+(it already contains the Ready-to-send fenced block),
 and ask only its returned data questions. `decision: no-action`
 means current completed/reused evidence skips both availability and
 instructions.

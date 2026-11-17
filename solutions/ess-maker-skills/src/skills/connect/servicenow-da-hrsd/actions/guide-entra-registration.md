@@ -101,7 +101,8 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
 ```
 
 Require `decision: instructions-required`. Render `ordinaryReply.text`
-verbatim, then pass every returned `askUserArguments` object verbatim through
+verbatim; it already contains the Ready-to-send fenced block, so do not rewrap
+or edit it. Then pass every returned `askUserArguments` object verbatim through
 the active `ask_user` tool. The returned question list intentionally excludes
 availability because `resume-handoff` owns and deduplicates that gate. Record
 the non-secret values only after the administrator answers the separate Client

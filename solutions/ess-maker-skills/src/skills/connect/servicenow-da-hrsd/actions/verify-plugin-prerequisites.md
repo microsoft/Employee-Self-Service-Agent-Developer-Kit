@@ -40,7 +40,8 @@ verification.
 Return this exact compact canonical payload to the shared lifecycle runner's
 `adapt-question` path.
 Render the target link and complete instructions above in the ordinary
-current-task reply first. The native question carries only the required
+current-task reply first; its Ready-to-send fenced block is already in the
+controller text, so render it verbatim. The native question carries only the required
 evidence summary and completion decision:
 
 <!-- visible-handoff-question:v1 -->

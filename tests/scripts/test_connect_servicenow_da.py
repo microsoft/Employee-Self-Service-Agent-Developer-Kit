@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import io
 import json
+import re
 import subprocess
 import sys
 import uuid
@@ -7176,6 +7177,100 @@ def test_historical_graph_pass_reapproval_advances_without_new_admin_handoff(
         )
 
 
+def _ready_to_send_body(ordinary: str) -> str:
+    assert ordinary.count("**Ready-to-send message**") == 1
+    match = re.search(
+        r"\*\*Ready-to-send message\*\*\n(`{3,})text\n(.*?)\n\1(?:\n|$)",
+        ordinary,
+        re.DOTALL,
+    )
+    assert match is not None
+    return match.group(2)
+
+
+@pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))
+def test_ready_to_send_messages_are_wrapped_in_one_fenced_block(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile_key: str,
+) -> None:
+    scenario = tmp_path / profile_key
+    scenario.mkdir()
+    monkeypatch.chdir(scenario)
+    context = _profile_context(
+        profile_key,
+        agent_id=AGENT_ID if profile_key == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile_key == "hrsd"
+            else "employee-self-service-it"
+        ),
+    )
+    context["root"] = scenario
+    with snow.product_profile_context(profile_key):
+        state = snow._state_base(
+            context,
+            _components() if profile_key == "hrsd" else _itsm_components(),
+        )
+        state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+        snow._write_json_atomic(snow._lifecycle_state_path(context), state)
+        _ack_identity_availability(context, stage="entra")
+        entra = snow.identity_direct_handoff(context, stage="entra")
+        snow.record_identity_direct(
+            context,
+            stage="entra",
+            client_id=APP_CLIENT_ID,
+            claim_name="employee_id",
+            user_field=None,
+            confirmed=True,
+        )
+        _ack_identity_availability(context, stage="servicenow")
+        service_now = snow.identity_direct_handoff(
+            context,
+            stage="servicenow",
+        )
+        expected_service_now, _, _ = snow._render_identity_runtime_instruction(
+            context,
+            stage="servicenow",
+            application_client_id=APP_CLIENT_ID,
+            claim_name="employee_id",
+        )
+        _, expected_entra, _ = snow._identity_runtime_instruction_source(
+            "entra"
+        )
+        plugin = (
+            snow._current_task_guidance(
+                context,
+                snow._load_lifecycle_state(context),
+                phase_id="plugin-prerequisites",
+                role="ServiceNow administrator",
+            )
+            if profile_key == "hrsd"
+            else None
+        )
+
+    assert _ready_to_send_body(entra["ordinaryReply"]["text"]) == (
+        expected_entra
+    )
+    assert _ready_to_send_body(service_now["ordinaryReply"]["text"]) == (
+        expected_service_now
+    )
+    if plugin is not None:
+        body = _ready_to_send_body(plugin)
+        assert body.startswith("**Where and how**\n")
+        assert body.endswith("current target binding.")
+        assert "**Expected nonsecret evidence**" in body
+        assert "**Current task**" not in body
+        assert "**Completion boundary**" not in body
+        assert plugin.index("**Current task**") < plugin.index(
+            "**Ready-to-send message**"
+        )
+        assert plugin.index("**Ready-to-send message**") < plugin.index(
+            "**Completion boundary**"
+        )
+    assert "```" not in expected_entra + expected_service_now
+
+
 @pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))
 def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     monkeypatch: pytest.MonkeyPatch,
@@ -7235,10 +7330,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert "sourceWorkbookSha256" not in entra
     assert "sourceWorkbookRole" not in entra
     ordinary = entra["ordinaryReply"]["text"]
-    source_text = ordinary.split("\n\n", 1)[1].split(
-        "\n\nCurrent contract boundary\n",
-        1,
-    )[0]
+    source_text = _ready_to_send_body(ordinary)
     _, canonical_entra, _ = snow._identity_runtime_instruction_source(
         "entra"
     )
@@ -7365,10 +7457,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert ("8. **HR agent only:**" in ordinary) is (
         profile_key == "hrsd"
     )
-    source_text = ordinary.split("\n\n", 1)[1].split(
-        "\n\nCurrent contract boundary\n",
-        1,
-    )[0]
+    source_text = _ready_to_send_body(ordinary)
     with snow.product_profile_context(profile_key):
         expected_text, _, _ = snow._render_identity_runtime_instruction(
             context,

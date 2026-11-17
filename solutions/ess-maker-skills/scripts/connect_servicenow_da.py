@@ -1103,6 +1103,15 @@ def _identity_runtime_instruction_source(
     )
 
 
+def _ready_to_send_block(body: str) -> str:
+    longest_run = max(
+        (len(run) for run in re.findall(r"`+", body)),
+        default=0,
+    )
+    fence = "`" * max(3, longest_run + 1)
+    return f"**Ready-to-send message**\n{fence}text\n{body}\n{fence}"
+
+
 def _render_identity_runtime_instruction(
     context: dict[str, Any],
     *,
@@ -1315,7 +1324,8 @@ def identity_direct_handoff(
             else {
                 "kind": "ordinary-agent-response",
                 "text": (
-                    f"{target_text}\n\n{source_text}\n\n"
+                    f"{target_text}\n\n"
+                    f"{_ready_to_send_block(source_text)}\n\n"
                     f"Current contract boundary\n{contract_boundary}"
                 ),
             }
@@ -10160,7 +10170,7 @@ def _current_task_guidance(
                 "current"
             )
         )
-        return common + (
+        return common + _ready_to_send_block(
             "**Where and how**\n"
             "ServiceNow Application Manager → Human Resources Scoped App: "
             "Core. Use "
@@ -10169,8 +10179,9 @@ def _current_task_guidance(
             "**Expected nonsecret evidence**\n"
             "Plugin ID `com.sn_hr_core`, Version Details `Installed`, the "
             "installed-and-ready message, source, timestamp, and current "
-            "target binding.\n\n"
-            "**Completion boundary**\n"
+            "target binding."
+        ) + (
+            "\n\n**Completion boundary**\n"
             "A separate completion card records current Manual administrator "
             "evidence. Availability alone never completes this check and the "
             "result is not automatic API proof."
