@@ -1654,8 +1654,12 @@ def test_agentbuilder_rejects_unreadable_token_tenant() -> None:
     (None, False),
     ("maker@example.com", True),
 ])
+@pytest.mark.parametrize("scope", [
+    "read-scope",
+    "https://service.powerapps.com//.default",
+])
 def test_dependency_auth_is_pinned_to_selected_account_and_tenant(
-    monkeypatch, tmp_path, account, other_tenant,
+    monkeypatch, tmp_path, account, other_tenant, scope,
 ):
     from unittest.mock import Mock
 
@@ -1674,12 +1678,61 @@ def test_dependency_auth_is_pinned_to_selected_account_and_tenant(
 
     if account != "maker@example.com" or other_tenant:
         with pytest.raises(agentbuilder.AgentBuilderError, match="different"):
-            agentbuilder.authenticate_flightcheck_dependency("read-scope", **kwargs)
+            agentbuilder.authenticate_flightcheck_dependency(scope, **kwargs)
     else:
-        assert agentbuilder.authenticate_flightcheck_dependency("read-scope", **kwargs) == token
+        assert agentbuilder.authenticate_flightcheck_dependency(scope, **kwargs) == token
     assert acquire.call_args.kwargs["authority"].endswith(tenant)
     assert acquire.call_args.kwargs["cache_path"] == kwargs["cache_path"]
-    assert acquire.call_args.kwargs["scopes"] == ("read-scope",)
+    assert acquire.call_args.kwargs["scopes"] == (scope,)
+
+
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("scope,powerapps", [
+    ("https://service.powerapps.com//.default", True),
+    ("https://service.flow.microsoft.com//.default", False),
+    ("https://orgmocktenant.crm.dynamics.com/user_impersonation", False),
+    ("https://api.powerplatform.com/CopilotStudio.MinimalBot.Read", False),
+])
+def test_dependency_auth_selects_client_for_resource(
+    monkeypatch, tmp_path, cached, scope, powerapps,
+):
+    from unittest.mock import ANY, Mock
+
+    from flightcheck.pp_admin_client import CLIENT_ID as POWER_PLATFORM_CLIENT_ID
+
+    account = {"username": "maker@example.test"}
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": ENVIRONMENT_ID}).encode()
+    ).decode().rstrip("=")
+    token = f"header.{payload}.signature"
+    app = Mock()
+    app.get_accounts.return_value = [account] if cached else []
+    app.acquire_token_silent.return_value = {"access_token": token}
+    app.acquire_token_interactive.return_value = {
+        "access_token": token,
+        "id_token_claims": {"preferred_username": account["username"]},
+    }
+    factory = Mock(return_value=app)
+    monkeypatch.setattr(agentbuilder.msal, "PublicClientApplication", factory)
+
+    assert agentbuilder.authenticate_flightcheck_dependency(
+        scope, tenant_id=ENVIRONMENT_ID, ring="prod",
+        account_hint=account["username"], cache_path=tmp_path / "cache.bin",
+    ) == token
+
+    factory.assert_called_once_with(
+        POWER_PLATFORM_CLIENT_ID if powerapps else agentbuilder.CLIENT_ID,
+        authority=f"https://login.microsoftonline.com/{ENVIRONMENT_ID}",
+        token_cache=ANY,
+    )
+    if cached:
+        app.acquire_token_silent.assert_called_once_with([scope], account=account)
+        app.acquire_token_interactive.assert_not_called()
+    else:
+        app.acquire_token_silent.assert_not_called()
+        app.acquire_token_interactive.assert_called_once_with(
+            scopes=[scope], login_hint=account["username"],
+        )
 
 
 def test_dependency_auth_requires_known_account_before_login(monkeypatch):
