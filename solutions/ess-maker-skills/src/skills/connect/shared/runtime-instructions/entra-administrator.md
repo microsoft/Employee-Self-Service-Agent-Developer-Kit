@@ -12,7 +12,7 @@ If your organization already has an app registration that ServiceNow uses to ver
 2. Go to **App registrations** and select **New registration**.
 3. Enter a name that shows its purpose, for example *ESS ServiceNow sign-in*. Keep the default account type and leave **Redirect URI** empty.
 4. Select **Register**.
-5. On the app's **Overview** page, copy the **Application (client) ID** and the **Directory (tenant) ID**.
+5. On the app's **Overview** page, copy the **Application (client) ID**.
 
 **Part 2: Add the user claims to the token**
 
@@ -35,4 +35,4 @@ If your organization already has an app registration that ServiceNow uses to ver
 3. Change the claim's format from the default email format to a format that fits the value. If the format stays email, sign-in fails.
 4. If Microsoft Entra returns an error after you add the claim, set `acceptMappedClaims` to `true` in the app's **Manifest** (single-tenant apps), or configure a custom signing key.
 
-**Send back to the maker:** the Application (client) ID, the Directory (tenant) ID, and, if you did Part 4, the claim name. Don't send any secret.
+**Send back to the maker:** the Application (client) ID and, if you did Part 4, the claim name. Don't send any secret.

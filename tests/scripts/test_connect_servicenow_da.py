@@ -7230,7 +7230,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "runtime-instructions/entra-administrator.md"
     )
     assert entra["runtimeInstructionSha256"] == (
-        "7671335136F75FBC32D23A77A5DEA0FD79A2CF670994452A8CA20F2A086CB82B"
+        "0306CE216C696E56C02CBEC78DB152096867B2D26C7AC06BE8AD89D8B01B4D04"
     )
     assert "sourceWorkbookSha256" not in entra
     assert "sourceWorkbookRole" not in entra
@@ -7401,7 +7401,7 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
         "runtime-instructions/servicenow-administrator.md"
     )
     assert entra_sha == (
-        "7671335136F75FBC32D23A77A5DEA0FD79A2CF670994452A8CA20F2A086CB82B"
+        "0306CE216C696E56C02CBEC78DB152096867B2D26C7AC06BE8AD89D8B01B4D04"
     )
     assert service_now_sha == (
         "D969B92C889E943F98238D105F2636A33801F1B1164D575B01AFB4F25A389F7A"
