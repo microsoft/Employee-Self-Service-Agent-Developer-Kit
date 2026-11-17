@@ -7336,7 +7336,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "runtime-instructions/servicenow-administrator.md"
     )
     assert service_now["runtimeInstructionSha256"] == (
-        "D969B92C889E943F98238D105F2636A33801F1B1164D575B01AFB4F25A389F7A"
+        "B50B3BA9706C2AD3A8A505B4A1BFAA5F40A17F468A54180EF79AB80931AFE6D8"
     )
     assert service_now["lockedValues"] == {
         "applicationClientId": APP_CLIENT_ID,
@@ -7352,8 +7352,15 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert "<tenant ID>" not in ordinary
     assert "<instance>" not in ordinary
     assert "`employee_id`" in ordinary
-    assert "custom claim name `employee_id`" in ordinary
-    assert "or `employee_id`." in ordinary
+    assert (
+        "and User Claim `employee_id`, confirmed by the Entra administrator."
+        in ordinary
+    )
+    assert (
+        "- **User Claim:** `employee_id`, the claim confirmed by the Entra "
+        "administrator. Don't change it." in ordinary
+    )
+    assert "<claim>" not in ordinary
     assert "`https://dev123.service-now.com`" in ordinary
     assert ("8. **HR agent only:**" in ordinary) is (
         profile_key == "hrsd"
@@ -7404,7 +7411,7 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
         "0306CE216C696E56C02CBEC78DB152096867B2D26C7AC06BE8AD89D8B01B4D04"
     )
     assert service_now_sha == (
-        "D969B92C889E943F98238D105F2636A33801F1B1164D575B01AFB4F25A389F7A"
+        "B50B3BA9706C2AD3A8A505B4A1BFAA5F40A17F468A54180EF79AB80931AFE6D8"
     )
     assert "\u00a0" not in entra + service_now
     assert entra.startswith("#### Instructions for the Entra administrator")
@@ -7438,6 +7445,9 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
         "#### Instructions for the ServiceNow administrator"
     )
     assert "**Values from the maker:** Client ID `<client ID>`" in service_now
+    assert "User Claim `<claim>`, confirmed by the Entra administrator." in (
+        service_now
+    )
     assert "1. Sign in to `https://<instance>.service-now.com`." in (
         service_now
     )

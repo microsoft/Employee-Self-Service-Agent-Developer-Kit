@@ -6,7 +6,7 @@ Your organization is connecting the Employee Self-Service (ESS) HR or IT agent t
 
 ServiceNow allows only one OIDC configuration per Microsoft Entra tenant. If one already exists for your tenant, for example for the Microsoft Graph connector or single sign-on, don't change it. See [Coexistence with the Microsoft Graph connector for ServiceNow](https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service/declarative-agent-servicenow-hr-it#coexistence-with-the-microsoft-graph-connector-for-servicenow) and the [ServiceNow Knowledge connector guidance](https://learn.microsoft.com/en-us/microsoftsearch/servicenow-knowledge-connector).
 
-**Values from the maker:** Client ID `<client ID>`, tenant ID `<tenant ID>`, and the custom claim name if the Entra administrator added one.
+**Values from the maker:** Client ID `<client ID>`, tenant ID `<tenant ID>`, and User Claim `<claim>`, confirmed by the Entra administrator.
 
 1. Sign in to `https://<instance>.service-now.com`.
 2. From the profile menu at the top right, select **Elevate role**, select `security_admin`, and select **Update**. If the **New** button is missing in the next steps, the role isn't elevated.
@@ -22,12 +22,12 @@ ServiceNow allows only one OIDC configuration per Microsoft Entra tenant. If one
    - **OIDC Metadata URL:** `https://login.microsoftonline.com/<tenant ID>/.well-known/openid-configuration`. Don't use the `/v2.0` URL from Entra's **Endpoints** page.
    - **OIDC Configuration Cache Life Span:** 120.
    - **Application:** Global, if the field is shown.
-   - **User Claim:** `upn` or `email`, whichever your user records use to identify users, or the custom claim name from the Entra administrator.
-   - **User Field:** the user record field that holds exactly that value for every employee, for example **Email** for `email`, or the field that stores the UPN or employee ID.
+   - **User Claim:** `<claim>`, the claim confirmed by the Entra administrator. Don't change it.
+   - **User Field:** the user record field that stores exactly the same value as the User Claim `<claim>` for every employee, for example **Email** for `email`, or the field that stores the UPN or employee ID.
    - **Enable JTI claim verification:** off.
 
    Select **Submit**.
 7. Back on the application registry form, confirm that the new configuration is selected, and select **Submit**.
 8. **HR agent only:** employees who use HR scenarios need one of the roles `sn_hr_core.basic`, `sn_hr_core.manager`, or `sn_hr_core.admin`.
 
-**Send back to the maker:** confirmation that the configuration is saved, and the User Claim and User Field you used.
+**Send back to the maker:** confirmation that the configuration is saved, the User Field you selected, and confirmation that it holds exactly the same value as the User Claim `<claim>`.

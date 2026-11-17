@@ -1128,15 +1128,8 @@ def _render_identity_runtime_instruction(
         text.replace("<client ID>", application_client_id)
         .replace("<tenant ID>", tenant_id)
         .replace("<instance>", instance_name)
+        .replace("<claim>", claim_name)
     )
-    if claim_name.casefold() not in {"email", "upn"}:
-        rendered = rendered.replace(
-            "the custom claim name if the Entra administrator added one",
-            f"custom claim name `{claim_name}`",
-        ).replace(
-            "the custom claim name from the Entra administrator",
-            f"`{claim_name}`",
-        )
     if ACTIVE_PROFILE.key != "hrsd":
         rendered = re.sub(
             r"(?m)^8\. \*\*HR agent only:\*\*.*(?:\n|$)",
@@ -1145,7 +1138,12 @@ def _render_identity_runtime_instruction(
         ).rstrip()
     if any(
         placeholder in rendered
-        for placeholder in ("<client ID>", "<tenant ID>", "<instance>")
+        for placeholder in (
+            "<client ID>",
+            "<tenant ID>",
+            "<instance>",
+            "<claim>",
+        )
     ):
         raise ServiceNowConnectError(
             "ServiceNow runtime instruction placeholders were not resolved."
