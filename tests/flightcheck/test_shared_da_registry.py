@@ -24,6 +24,7 @@ from tests.flightcheck.test_maker_diagnostics import (
     setup_workspace as setup_workspace,
 )
 from tests.mocks import graph as graph_mock
+from tests.mocks import graph_profile
 from tests.mocks import azure_arm as arm_mock
 from tests.mocks import powerplatform as platform_mock
 from tests.mocks import pp_admin as admin_mock
@@ -53,6 +54,87 @@ def _run_cli(ws, monkeypatch, http, options, output="report"):
 
 def _row(payload, key):
     return next(row for row in payload["results"] if row["checkpoint_id"] == key)
+
+
+@pytest.mark.parametrize("access", ["tenant", "own", "neither", "consent"])
+def test_entra_coverage_has_full_checkpoint_and_profile_parity(
+    setup_workspace, monkeypatch, access,
+):
+    ws = setup_workspace
+    if access == "consent":
+        from flightcheck.graph_client import GraphClient, GraphConsentError, GraphPermissionError
+
+        original_authenticate = GraphClient.authenticate
+
+        def authenticate(client, preferred_username=None, *, require_existing_consent=False):
+            if client._scopes == ["https://graph.microsoft.com/User.Read"]:
+                return original_authenticate(client, preferred_username)
+            error = GraphPermissionError if require_existing_consent else GraphConsentError
+            raise error("Directory consent unavailable")
+
+        monkeypatch.setattr(GraphClient, "authenticate", authenticate)
+    user = graph_profile.directory_user()
+    profile_data = graph_profile.profile()
+    profile_data["positions"][0]["detail"]["employeeType"] = None
+    ws.graph_http.get(f"{graph_mock.GRAPH_BASE}/users").respond(
+        status_code=200 if access == "tenant" else 403, json={"value": [user]},
+    )
+    ws.graph_http.get(f"{graph_profile.GRAPH_BASE}/me/profile").respond(
+        status_code=403 if access == "neither" else 200, json=profile_data,
+    )
+    ws.graph_http.post(f"{graph_profile.GRAPH_BASE}/$batch").mock(
+        side_effect=lambda request: graph_profile.batch_response(request, make_profile=lambda: profile_data),
+    )
+    key = "AUTH-PROFILE-001"
+    monkeypatch.setitem(registry.PROFILES, "da:test-entra-coverage", registry.ProfileSpec(
+        "da:test-entra-coverage", (key,), "Bounded Entra coverage.",
+    ))
+    findings = []
+    for index, options in enumerate((
+        ["--scope", "full", "--invocation-source", "adk"],
+        ["--scope", "full", "--invocation-source", "cli"],
+        ["--checkpoint", key],
+        ["--profile", "da:test-entra-coverage", "--validation-realm", "dev"],
+    )):
+        with responses.RequestsMock(assert_all_requests_are_fired=False) as http:
+            _register_native(http, ws)
+            if index < 2:
+                _register_maker_baseline(http)
+            payload, code = _run_cli(ws, monkeypatch, http, options, f"entra-{index}")
+        if access != "consent" or index >= 2:
+            assert code == 0
+        if index < 2 and access != "consent":
+            assert payload["overall"] == "CHECKED_WITH_NOTES"
+        elif index < 2:
+            assert _row(payload, "PRE-001")["status"] == "Error"
+        row = _row(payload, key)
+        assert row["status"] == "Warning"
+        assert {
+            "tenant": "Data-quality concern", "own": "Own profile only",
+            "consent": "Own profile only", "neither": "Not checked",
+        }[access] in row["result"]
+        assert "not a deployment blocker" in row["remediation"]
+        assert "manualVerificationSteps" not in row["evidence"]
+        assert row["evidence"]["coverageVerified"] is (access == "tenant")
+        if access != "tenant":
+            assert row["evidence"]["profileVerified"] is (access in {"own", "consent"})
+            if access == "neither":
+                assert "usersChecked" not in row["evidence"] and "results" not in row["evidence"]
+            else:
+                assert row["evidence"]["scope"] == "me"
+                assert row["evidence"]["usersChecked"] == 1
+                assert "coveragePercent" not in json.dumps(row["evidence"])
+                assert "tenant-wide attribute coverage was not calculated" in row["result"]
+            assert payload["coverage"]["limitations"] >= 1
+            if index >= 2:
+                assert payload["coverage"]["limitations"] == 1
+                assert payload["coverage"]["automaticCompleted"] == payload["total"] - 1
+        else:
+            assert "Personalization opportunity" in row["remediation"]
+            assert "Microsoft 365 profile data" in row["remediation"]
+            assert "Organizational Data Service" in row["remediation"]
+        findings.append(row)
+    assert findings[0] == findings[1] == findings[2] == findings[3]
 
 
 def test_standalone_selection_runs_real_shared_da_report(setup_workspace, monkeypatch):

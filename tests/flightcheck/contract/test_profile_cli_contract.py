@@ -511,6 +511,8 @@ def test_profile_rejects_mixed_authenticated_accounts_without_hint(
     )
     plan = SimpleNamespace(
         clients=frozenset({registry.DATAVERSE, registry.GRAPH}),
+        graph_scopes=None,
+        graph_permission_optional=False,
         requires_config=True,
         requires_dataverse_endpoint=True,
         ordered_fns=[("Test", lambda _runner: [_passed()])],
@@ -1210,6 +1212,8 @@ def test_preferred_account_requires_observed_graph_identity(
     )
     plan = SimpleNamespace(
         clients=frozenset({registry.GRAPH}),
+        graph_scopes=None,
+        graph_permission_optional=False,
         requires_config=True,
         requires_dataverse_endpoint=False,
         ordered_fns=[("Test", lambda _runner: [_passed()])],

@@ -47,6 +47,7 @@ from .da_checks import DAValidation, attach_inventory, validate_da_definitions
 
 from flightcheck.runner import Priority, Role
 from flightcheck.checks.entra_app import run_entra_app_checks
+from flightcheck.checks.entra_profile import run_entra_profile_checks
 from flightcheck.checks.environment import (
     run_capacity_check,
     run_environment_checks,
@@ -166,6 +167,8 @@ class CheckpointSpec:
     da: DAValidation | None = None
     legacy_family: str = ""
     custom_tags: tuple[str, ...] = ()
+    graph_scopes: tuple[str, ...] | None = None
+    graph_permission_optional: bool = False
 
 
 @dataclass
@@ -181,6 +184,8 @@ class ResolvedPlan:
     # (category_label, category_fn) pairs to register on the runner, ordered
     # by CATEGORY_ORDER (prerequisites' functions first), de-duped by function.
     ordered_fns: list = field(default_factory=list)
+    graph_scopes: tuple[str, ...] | None = None
+    graph_permission_optional: bool = False
 
 
 @dataclass(frozen=True)
@@ -198,6 +203,17 @@ class ProfileSpec:
 # table and the owned-prefix allow-list below.
 # ---------------------------------------------------------------------------
 _SPECS: list[CheckpointSpec] = [
+    CheckpointSpec(
+        key="AUTH-PROFILE-001",
+        category_fn=run_entra_profile_checks,
+        category_label="Authentication",
+        clients=frozenset({GRAPH}),
+        requires_config=False,
+        priority=Priority.MEDIUM.value,
+        roles=(Role.ENTRA_ADMIN.value,),
+        graph_scopes=("https://graph.microsoft.com/User.Read.All",),
+        graph_permission_optional=True,
+    ),
     # ---- Environment (skill-1 reuse) ----
     CheckpointSpec(
         key="ENV-001",
@@ -1196,6 +1212,27 @@ def _closure(checkpoint_id: str, _seen: Optional[set] = None) -> list[Checkpoint
     return specs
 
 
+def _graph_specs(specs) -> list[CheckpointSpec]:
+    return [
+        spec for spec in specs
+        if GRAPH in spec.clients or (spec.da is not None and spec.da.strategy == "graph")
+    ]
+
+
+def graph_permission_is_optional(specs) -> bool:
+    graph_specs = _graph_specs(specs)
+    return bool(graph_specs) and all(spec.graph_permission_optional for spec in graph_specs)
+
+
+def graph_scopes_for_specs(specs) -> tuple[str, ...] | None:
+    graph_specs = _graph_specs(specs)
+    if not graph_specs or any(spec.graph_scopes is None for spec in graph_specs):
+        return None
+    return tuple(sorted({
+        scope for spec in graph_specs for scope in (spec.graph_scopes or ())
+    }))
+
+
 def transitive_requirements(checkpoint_id: str) -> ResolvedPlan:
     """Resolve a target to its full execution plan.
 
@@ -1259,6 +1296,12 @@ def transitive_requirements(checkpoint_id: str) -> ResolvedPlan:
         requires_config=requires_config,
         requires_dataverse_endpoint=requires_dataverse_endpoint,
         ordered_fns=unique,
+        graph_scopes=graph_scopes_for_specs(
+            closure if target_spec.inherit_prereq_clients else [target_spec]
+        ),
+        graph_permission_optional=graph_permission_is_optional(
+            closure if target_spec.inherit_prereq_clients else [target_spec]
+        ),
     )
 
 
@@ -1288,10 +1331,13 @@ def profile_requirements(profile_name: str) -> ResolvedPlan:
     requires_dataverse_endpoint = False
     seen_fns: set = set()
     unique: list[tuple] = []
+    graph_plans = []
 
     for checkpoint_id in profile.checkpoint_ids:
         plan = transitive_requirements(checkpoint_id)
         clients = clients | plan.clients
+        if GRAPH in plan.clients:
+            graph_plans.append(plan)
         pp_admin_flow_required = (
             pp_admin_flow_required or plan.pp_admin_flow_required
         )
@@ -1321,6 +1367,14 @@ def profile_requirements(profile_name: str) -> ResolvedPlan:
         requires_config=requires_config,
         requires_dataverse_endpoint=requires_dataverse_endpoint,
         ordered_fns=unique,
+        graph_scopes=(
+            tuple(sorted({scope for plan in graph_plans for scope in (plan.graph_scopes or ())}))
+            if graph_plans and all(plan.graph_scopes is not None for plan in graph_plans)
+            else None
+        ),
+        graph_permission_optional=(
+            bool(graph_plans) and all(plan.graph_permission_optional for plan in graph_plans)
+        ),
     )
 
 
