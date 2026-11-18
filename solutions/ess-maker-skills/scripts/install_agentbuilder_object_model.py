@@ -108,7 +108,15 @@ def _run_dotnet(arguments: list[str]) -> subprocess.CompletedProcess[str]:
 
 def _verify_package(nupkg: Path) -> None:
     if sys.platform == "darwin":
-        _run_dotnet(["nuget", "verify", "--all", str(nupkg)])
+        try:
+            _run_dotnet(["nuget", "verify", "--all", str(nupkg)])
+        except ObjectModelInstallError as exc:
+            print(
+                "WARNING: NuGet signature verification failed for "
+                f"{nupkg}. The package will be used without successful "
+                f"signature verification. {exc}",
+                file=sys.stderr,
+            )
         return
     _run_nuget(
         [

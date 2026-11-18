@@ -120,6 +120,33 @@ def test_macos_verifies_packages_with_dotnet_nuget(
     ]
 
 
+def test_macos_verification_failure_warns_and_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    nupkg = tmp_path / "package.nupkg"
+
+    monkeypatch.setattr(package_installer.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        package_installer,
+        "_run_dotnet",
+        lambda _arguments: (_ for _ in ()).throw(
+            package_installer.ObjectModelInstallError(
+                "signature validity period expired"
+            )
+        ),
+    )
+
+    package_installer._verify_package(nupkg)
+
+    warning = capsys.readouterr().err
+    assert "WARNING: NuGet signature verification failed" in warning
+    assert str(nupkg) in warning
+    assert "used without successful signature verification" in warning
+    assert "signature validity period expired" in warning
+
+
 def test_install_packages_rejects_conflicting_source_options(
     tmp_path: Path,
 ) -> None:
