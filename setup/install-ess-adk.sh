@@ -338,18 +338,49 @@ install_optional_brew_pkg() {
     fi
 }
 
-install_optional_brew_cask() {
-    local cask="$1"
-    local name="$2"
-    if brew list --cask "$cask" &>/dev/null; then
-        ok "$name (already installed)"
-    elif brew install --cask "$cask"; then
-        ok "$name"
-    else
-        warn "Serialization support dependency '$name' was not installed."
-        warn "ESS ADK setup will continue."
-        warn "Install it later with: brew install --cask $cask"
+activate_user_dotnet() {
+    export DOTNET_ROOT="$HOME/.dotnet"
+    export PATH="$DOTNET_ROOT:$PATH"
+    hash -r
+}
+
+install_optional_dotnet_sdk() {
+    if command -v dotnet &>/dev/null &&
+        dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then
+        ok ".NET 10 SDK (already installed)"
+        return
     fi
+    if [[ -x "$HOME/.dotnet/dotnet" ]] &&
+        "$HOME/.dotnet/dotnet" --list-sdks 2>/dev/null | grep -q '^10\.'; then
+        activate_user_dotnet
+        ok ".NET 10 SDK (already installed for the current user)"
+        return
+    fi
+
+    local installer
+    installer="$(mktemp)"
+    echo "    Installing .NET 10 SDK for the current user..."
+    if curl --proto '=https' --tlsv1.2 -fsSL \
+        https://dot.net/v1/dotnet-install.sh \
+        -o "$installer" &&
+        bash "$installer" \
+            --channel 10.0 \
+            --install-dir "$HOME/.dotnet" \
+            --no-path; then
+        rm -f "$installer"
+        activate_user_dotnet
+        if dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then
+            ok ".NET 10 SDK (installed for the current user)"
+            return
+        fi
+    else
+        rm -f "$installer"
+    fi
+
+    warn "Serialization support dependency '.NET 10 SDK' was not installed."
+    warn "ESS ADK setup will continue."
+    warn "Install it later for the current user with:"
+    warn "  bash dotnet-install.sh --channel 10.0 --install-dir \"$HOME/.dotnet\""
 }
 
 # Core tools (always needed)
@@ -366,11 +397,7 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     # Full maker kit tools
     install_brew_pkg "gh" "GitHub CLI"
     install_brew_cask "visual-studio-code" "Visual Studio Code" "/Applications/Visual Studio Code.app"
-    if command -v dotnet &>/dev/null && dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then
-        ok ".NET 10 SDK (already installed)"
-    else
-        install_optional_brew_cask "dotnet-sdk" ".NET 10 SDK"
-    fi
+    install_optional_dotnet_sdk
     if command -v nuget &>/dev/null; then
         ok "NuGet (already installed at $(command -v nuget))"
     else
