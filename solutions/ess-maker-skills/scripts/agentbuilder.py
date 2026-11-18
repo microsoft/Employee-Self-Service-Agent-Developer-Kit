@@ -104,6 +104,8 @@ class AgentBuilderHTTPError(AgentBuilderError):
 
 def normalize_environment_id(environment_id: str) -> str:
     """Return a compact lowercase GUID suitable for a PPAPI hostname."""
+    if environment_id.casefold().startswith("default-"):
+        environment_id = environment_id[len("Default-"):]
     try:
         return uuid.UUID(environment_id).hex
     except ValueError as exc:
@@ -963,88 +965,137 @@ class ConnectivityClient:
         self,
         environment_id: str,
         connector_name: str,
+        *,
+        follow_continuations: bool = False,
     ) -> list[dict[str, Any]]:
-        """List one connector's connections with one logical HTTP attempt."""
+        """List maker-visible connections, optionally following all pages.
+
+        Existing readiness callers retain their single-attempt contract.
+        Paginated evaluation discovery fails rather than returning a partial list.
+        """
         if not self.environment_host:
             raise AgentBuilderError(
                 "Connector-scoped connection listing requires an environment host."
             )
-        normalized_environment_id = str(uuid.UUID(environment_id))
+        normalized_environment_id = str(
+            uuid.UUID(normalize_environment_id(environment_id))
+        )
+        environment_name = (
+            f"Default-{normalized_environment_id}"
+            if environment_id.casefold().startswith("default-")
+            else normalized_environment_id
+        )
         normalized_connector_name = connector_name.strip()
         if not normalized_connector_name:
             raise ValueError("connector_name must not be empty")
-        response = self._single_attempt_session.request(
-            "GET",
-            (
-                f"{self.environment_host}/connectivity/connectors/"
-                f"{quote(normalized_connector_name, safe='')}/connections"
-            ),
-            params={
-                "api-version": "1",
-                "$filter": (
-                    f"environment eq '{normalized_environment_id}'"
-                ),
-            },
-            headers=self.headers,
-            timeout=120,
+        url = (
+            f"{self.environment_host}/connectivity/connectors/"
+            f"{quote(normalized_connector_name, safe='')}/connections"
         )
-        if not response.ok:
-            _response_error(response, "Connector-scoped connection listing")
-        try:
-            body = response.json()
-        except ValueError as exc:
-            raise AgentBuilderError(
-                "Connector-scoped connection listing returned a non-JSON response."
-            ) from exc
-        values = body.get("value") if isinstance(body, dict) else None
-        if not isinstance(values, list) or not all(
-            isinstance(value, dict) for value in values
-        ):
-            raise AgentBuilderError(
-                "Connector-scoped connection listing returned an invalid shape."
+        expected = urlparse(url)
+        params: dict[str, str] | None = {
+            "api-version": "1",
+            "$filter": f"environment eq '{environment_name}'",
+        }
+        items: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        while True:
+            if url in seen_urls:
+                raise AgentBuilderError(
+                    "Connector-scoped connection listing repeated a continuation."
+                )
+            seen_urls.add(url)
+            response = self._single_attempt_session.request(
+                "GET", url, params=params, headers=self.headers, timeout=120,
             )
-        if body.get("nextLink") or body.get("@odata.nextLink"):
-            raise AgentBuilderError(
-                "Connector-scoped connection listing returned an unsupported "
-                "continuation page."
-            )
-        for value in values:
-            properties = value.get("properties")
-            properties = properties if isinstance(properties, dict) else {}
-            api_id = str(properties.get("apiId") or "")
-            if (
-                api_id
-                and api_id.rstrip("/").rsplit("/", 1)[-1].casefold()
-                != normalized_connector_name.casefold()
+            if not response.ok:
+                _response_error(response, "Connector-scoped connection listing")
+            try:
+                body = response.json()
+            except ValueError as exc:
+                raise AgentBuilderError(
+                    "Connector-scoped connection listing returned a non-JSON response."
+                ) from exc
+            values = body.get("value") if isinstance(body, dict) else None
+            if not isinstance(values, list) or not all(
+                isinstance(value, dict) for value in values
             ):
                 raise AgentBuilderError(
-                    "Connector-scoped connection listing returned a different "
-                    "connector identity."
+                    "Connector-scoped connection listing returned an invalid shape."
                 )
-            environment = properties.get("environment")
-            if environment:
-                if isinstance(environment, dict):
-                    raw_environment = str(
-                        environment.get("name")
-                        or environment.get("id")
-                        or ""
-                    )
-                else:
-                    raw_environment = str(environment)
-                raw_environment = raw_environment.rstrip("/").rsplit("/", 1)[-1]
-                try:
-                    returned_environment_id = str(uuid.UUID(raw_environment))
-                except ValueError as exc:
+            for value in values:
+                properties = value.get("properties")
+                properties = properties if isinstance(properties, dict) else {}
+                api_id = str(properties.get("apiId") or "")
+                if (
+                    api_id
+                    and api_id.rstrip("/").rsplit("/", 1)[-1].casefold()
+                    != normalized_connector_name.casefold()
+                ):
                     raise AgentBuilderError(
-                        "Connector-scoped connection listing returned an "
-                        "invalid environment identity."
-                    ) from exc
-                if returned_environment_id != normalized_environment_id:
-                    raise AgentBuilderError(
-                        "Connector-scoped connection listing returned a "
-                        "different environment identity."
+                        "Connector-scoped connection listing returned a different "
+                        "connector identity."
                     )
-        return values
+                environment = properties.get("environment")
+                if environment:
+                    if isinstance(environment, dict):
+                        raw_environment = str(
+                            environment.get("name") or environment.get("id") or ""
+                        )
+                    else:
+                        raw_environment = str(environment)
+                    raw_environment = raw_environment.rstrip("/").rsplit("/", 1)[-1]
+                    try:
+                        returned_environment_id = str(
+                            uuid.UUID(normalize_environment_id(raw_environment))
+                        )
+                    except ValueError as exc:
+                        raise AgentBuilderError(
+                            "Connector-scoped connection listing returned an "
+                            "invalid environment identity."
+                        ) from exc
+                    if returned_environment_id != normalized_environment_id:
+                        raise AgentBuilderError(
+                            "Connector-scoped connection listing returned a "
+                            "different environment identity."
+                        )
+            items.extend(values)
+            if not follow_continuations:
+                if body.get("nextLink") or body.get("@odata.nextLink"):
+                    raise AgentBuilderError(
+                        "Connector-scoped connection listing returned an unsupported "
+                        "continuation page."
+                    )
+                return items
+            continuations = [
+                body[key] for key in ("nextLink", "@odata.nextLink")
+                if body.get(key) is not None
+            ]
+            if not continuations:
+                return items
+            if (
+                any(not isinstance(link, str) or not link for link in continuations)
+                or len(set(continuations)) != 1
+            ):
+                raise AgentBuilderError(
+                    "Connector-scoped connection listing returned an invalid continuation."
+                )
+            url = continuations[0]
+            actual = urlparse(url)
+            if (
+                actual.scheme != "https"
+                or actual.hostname != expected.hostname
+                or actual.port not in (None, 443)
+                or actual.username is not None
+                or actual.password is not None
+                or actual.path != expected.path
+                or actual.params
+                or actual.fragment
+            ):
+                raise AgentBuilderError(
+                    "Connector-scoped connection listing returned an unsafe continuation."
+                )
+            params = None
 
 
 class AgentBuilderClient:
