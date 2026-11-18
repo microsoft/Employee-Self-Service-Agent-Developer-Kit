@@ -965,6 +965,15 @@ def test_authoring_carries_context_and_honors_scoped_debugging():
     assert "Honor explicit no-activation requests" in _read("src/skills/topics/testing-experience.md")
 
 
+def test_mixed_operation_results_preserve_owner_outcomes_unless_composition_is_defined():
+    foundation = _read("src/skills/topics/experience-contract.md")
+    mixed = foundation.split("For mixed-operation results,", 1)[1].split("\n\n", 1)[0]
+    assert "use a consolidated report only where the owning experience explicitly defines one" in mixed
+    assert "push-experience.md#composed-push-report-composed_push_report" in mixed
+    assert "Otherwise retain each operation's required outcome heading and facts" in mixed
+    assert "showing shared [Target context](#target-context) once" in mixed
+
+
 def test_target_context_uses_realm_and_retains_uncertain_and_local_outcomes():
     foundation = _read("src/skills/topics/experience-contract.md")
     target = foundation.split("### Target context\n", 1)[1].split(
