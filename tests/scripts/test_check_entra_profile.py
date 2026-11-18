@@ -63,61 +63,81 @@ def test_own_profile_uses_beta_and_never_reports_values_or_tenant_percentages(cl
 
 @pytest.mark.parametrize("scope", ["me", "tenant"])
 @respx.mock
-def test_default_checks_ignore_properties_outside_the_profile_overlap(client, scope):
+def test_default_checks_cover_only_the_twelve_core_properties(client, scope):
     profile = profiles.profile()
+    profile["names"][0].update(first=[], last={})
+    profile["positions"][0].update(manager=[], colleagues={})
+    profile["positions"][0]["colleagues@odata.nextLink"] = "https://graph.microsoft.com/beta/next"
     detail = profile["positions"][0]["detail"]
-    detail.update(description={}, summary={})
-    detail["company"].update(pronunciation={}, webUrl={})
+    detail.update(description={}, summary={}, layer=[], role={}, startMonthYear={})
+    detail["company"].update(pronunciation={}, webUrl={}, division={})
     detail["company"]["address"]["postOfficeBox"] = {}
     profile["responsibilities"] = {}
+    profile["anniversaries"] = {}
+    profile["emails"] = [{"type": "work", "address": "maker@example.test"}]
     if scope == "me":
         respx.get(f"{profiles.GRAPH_BASE}/me/profile").respond(json=profile)
     else:
         _tenant_routes(2, lambda: profile)
     report = check.check_attributes(client, scope, list(check.ATTRIBUTES))
     rows = {row["attribute"]: row for row in report["results"]}
-    assert not {
-        "description", "summary", "companyPronunciation", "companyWebUrl", "postOfficeBox", "responsibilities",
-    }.intersection(rows)
-    assert rows["jobTitle"].get("availability") == "Available" or rows["jobTitle"].get("coveragePercent") == 100
+    assert set(rows) == {
+        "displayName", "userPrincipalName", "emails", "jobTitle", "employeeType", "employeeId",
+        "department", "companyName", "companyCode", "costCenter", "officeLocation", "workCountry",
+    }
+    assert report["status"] == "Passed"
+    assert "maker@example.test" not in json.dumps(report)
 
 
-@pytest.mark.parametrize("anniversaries,expected", [
-    ([{"type": "work", "date": "2020-01-01"}], "Available"),
-    ([{"type": kind, "date": "2020-01-01"} for kind in ("birthday", "wedding", "other")], "Empty"),
-    ([{"type": "work", "displayName": "A label without a date"}], "Unverified"),
-    ([{"type": "work", "date": None}], "Empty"),
-    ([{"type": "unknownFutureValue", "date": "2020-01-01"}], "Unverified"),
-    ([{"date": "2020-01-01"}], "Unverified"),
-    ([{"type": "work", "date": date} for date in ("2020-01-01", "2021-01-01")], "Available"),
+@pytest.mark.parametrize("emails,expected", [
+    ([{"type": "work", "address": "work@example.test"}], "Available"),
+    ([{"type": "main", "address": "main@example.test"}], "Available"),
+    ([{"type": kind, "address": "personal@example.test"} for kind in ("personal", "other")], "Empty"),
+    ([{"type": "work", "address": "  "}], "Empty"),
+    ([{"type": "work", "displayName": "A label without an address"}], "Unverified"),
+    ([{"type": "unknown", "address": "unknown@example.test"}], "Unverified"),
+    ([{"address": "unknown@example.test"}], "Unverified"),
+    ([{"type": "work", "address": "work@example.test"}, {"type": "unknown"}], "Available"),
+    ([{"type": "work"}, {"type": "main", "address": "main@example.test"}], "Available"),
+    ([{"type": "work", "address": address} for address in ("first@example.test", "second@example.test")], "Available"),
 ])
 @respx.mock
-def test_anniversary_coverage_counts_only_work_dates(client, anniversaries, expected):
+def test_email_coverage_requires_a_primary_or_work_address(client, emails, expected):
     profile = profiles.profile()
-    profile["anniversaries"] = anniversaries
+    profile["emails"] = emails
     _tenant_routes(2, lambda: profile)
-    report = check.check_attributes(client, "tenant", ["anniversaries"])
+    report = check.check_attributes(client, "tenant", ["emails"])
     row = report["results"][0]
     assert row["coveragePercent"] == {"Available": 100, "Empty": 0, "Unverified": None}[expected]
     assert row[{"Available": "available", "Empty": "empty", "Unverified": "unverified"}[expected]] == 2
     assert report["status"] == ("Passed" if expected == "Available" else "Warning")
-    assert "2020-01-01" not in json.dumps(report)
+    assert "@example.test" not in json.dumps(report)
 
 
-@pytest.mark.parametrize("field,value", [("type", 42), ("date", {})])
+@pytest.mark.parametrize("field,value", [("type", 42), ("address", {})])
 @respx.mock
-def test_malformed_work_anniversary_properties_are_errors(client, field, value):
+def test_malformed_email_properties_are_errors(client, field, value):
     profile = profiles.profile()
-    profile["anniversaries"] = [{"type": "work", "date": "2020-01-01", field: value}]
+    profile["emails"] = [{"type": "work", "address": "work@example.test", field: value}]
     respx.get(f"{profiles.GRAPH_BASE}/me/profile").respond(json=profile)
     with pytest.raises(ValueError, match="invalid"):
-        check.check_attributes(client, "me", ["anniversaries"])
+        check.check_attributes(client, "me", ["emails"])
+
+
+@pytest.mark.parametrize("attribute", ["givenName", "surname", "manager"])
+def test_removed_attribute_options_are_rejected_before_authentication(monkeypatch, attribute):
+    create_client = Mock(side_effect=AssertionError("Removed checks must not authenticate"))
+    monkeypatch.setattr(check, "GraphClient", create_client)
+    with pytest.raises(SystemExit) as exited:
+        check.main(["--attributes", attribute])
+    assert exited.value.code == 2
+    create_client.assert_not_called()
 
 
 @pytest.mark.parametrize("variant,expected", [
     ("null", "Empty"), ("blank", "Empty"), ("omitted", "Not returned"),
-    ("zero", "Available"), ("empty_section", "Empty"), ("omitted_section", "Not returned"),
-    ("metadata_only", "Unverified"), ("continued", "Unverified"),
+    ("empty_section", "Empty"), ("omitted_section", "Not returned"),
+    ("metadata_only", "Unverified"), ("continued", "Unverified"), ("nested_continued", "Unverified"),
     ("same_current", "Available"), ("conflicting_current", "Unverified"),
     ("unknown_current", "Unverified"), ("no_current", "Empty"),
 ])
@@ -130,16 +150,16 @@ def test_profile_presence_distinguishes_empty_omitted_and_source_ambiguity(clien
         detail["jobTitle"] = None if variant == "null" else "  "
     elif variant == "omitted":
         del detail["jobTitle"]
-    elif variant == "zero":
-        field = "layer"
     elif variant in {"empty_section", "omitted_section", "metadata_only"}:
-        field = "skills"
+        field = "emails"
         if variant == "omitted_section":
-            del profile["skills"]
+            del profile["emails"]
         elif variant == "metadata_only":
-            profile["skills"] = [{"id": "test", "source": {"type": ["user"]}}]
+            profile["emails"] = [{"id": "test", "source": {"type": ["user"]}}]
     elif variant == "continued":
         profile["positions@odata.nextLink"] = "https://graph.microsoft.com/beta/me/profile/positions?$skip=1"
+    elif variant == "nested_continued":
+        profile["positions"][0]["detail@odata.nextLink"] = "https://graph.microsoft.com/beta/next"
     elif variant in {"same_current", "conflicting_current"}:
         second = deepcopy(profile["positions"][0])
         if variant == "conflicting_current":
@@ -155,66 +175,7 @@ def test_profile_presence_distinguishes_empty_omitted_and_source_ambiguity(clien
     assert report["status"] == ("Passed" if expected == "Available" else "Warning")
 
 
-@pytest.mark.parametrize("difference", ["order", "person", "relationship", "missing_person"])
-@respx.mock
-def test_colleague_comparison_ignores_order_but_preserves_real_conflicts(client, difference):
-    profile = profiles.profile()
-    current = profile["positions"][0]
-    current["colleagues"] = [
-        {"userId": "first", "relationship": "colleague"},
-        {"userId": "second", "relationship": "colleague"},
-    ]
-    other = deepcopy(current)
-    other["colleagues"].reverse()
-    if difference == "person":
-        other["colleagues"][0]["userId"] = "third"
-    elif difference == "relationship":
-        other["colleagues"][0]["relationship"] = "assistant"
-    elif difference == "missing_person":
-        other["colleagues"].pop()
-    profile["positions"].append(other)
-    _tenant_routes(2, lambda: profile)
-    report = check.check_attributes(client, "tenant", ["colleagues"])
-    row = report["results"][0]
-    if difference == "order":
-        assert report["status"] == "Passed"
-        assert row["coveragePercent"] == 100
-        assert row["available"] == 2 and row["unverified"] == 0
-    else:
-        assert report["status"] == "Warning"
-        assert row["coveragePercent"] is None and row["unverified"] == 2
-    assert "first" not in json.dumps(report)
-
-
-@pytest.mark.parametrize("field", ["manager", "colleagues"])
-@pytest.mark.parametrize("person,expected", [
-    ({"relationship": "manager"}, "Unverified"),
-    ({"userId": "test-person"}, "Available"),
-    (None, "Empty"),
-])
-@respx.mock
-def test_relationship_availability_requires_a_person_not_only_a_label(client, field, person, expected):
-    profile = profiles.profile()
-    profile["positions"][0][field] = person if field == "manager" or person is None else [person]
-    respx.get(f"{profiles.GRAPH_BASE}/me/profile").respond(json=profile)
-    report = check.check_attributes(client, "me", [field])
-    assert report["results"] == [{"attribute": field, "availability": expected}]
-    assert report["status"] == ("Passed" if expected == "Available" else "Warning")
-    assert "test-person" not in json.dumps(report)
-
-
-@pytest.mark.parametrize("field", ["manager", "colleagues"])
-@respx.mock
-def test_malformed_relationship_identities_are_errors(client, field):
-    profile = profiles.profile()
-    person = {"userId": 42}
-    profile["positions"][0][field] = person if field == "manager" else [person]
-    respx.get(f"{profiles.GRAPH_BASE}/me/profile").respond(json=profile)
-    with pytest.raises(ValueError, match="invalid"):
-        check.check_attributes(client, "me", [field])
-
-
-@pytest.mark.parametrize("variant", ["bad_section", "bad_record", "bad_nested", "bad_integer", "bad_text"])
+@pytest.mark.parametrize("variant", ["bad_section", "bad_record", "bad_nested", "bad_text"])
 @respx.mock
 def test_malformed_profile_data_is_an_error_not_an_empty_attribute(client, variant):
     profile = profiles.profile()
@@ -225,33 +186,11 @@ def test_malformed_profile_data_is_an_error_not_an_empty_attribute(client, varia
         profile["positions"] = [42]
     elif variant == "bad_nested":
         profile["positions"][0]["detail"] = []
-    elif variant == "bad_integer":
-        field = "layer"
-        profile["positions"][0]["detail"]["layer"] = True
     else:
         profile["positions"][0]["detail"]["jobTitle"] = 42
     respx.get(f"{profiles.GRAPH_BASE}/me/profile").respond(json=profile)
     with pytest.raises(ValueError, match="invalid"):
         check.check_attributes(client, "me", [field])
-
-
-@respx.mock
-def test_section_checks_count_real_content_but_not_metadata_only_notes(client):
-    profile = profiles.profile()
-    profile["skills"] = [{"displayName": "Mock skill"}]
-    profile["anniversaries"] = [{"type": "work", "date": "2020-01-01"}]
-    profile["notes"] = [{
-        "detail": {"contentType": "text", "content": None},
-        "extensions": [{"customField": "Not a standard profile value"}],
-    }]
-    respx.get(f"{profiles.GRAPH_BASE}/me/profile").respond(json=profile)
-    report = check.check_attributes(client, "me", ["skills", "anniversaries", "notes"])
-    assert report["results"] == [
-        {"attribute": "skills", "availability": "Available"},
-        {"attribute": "anniversaries", "availability": "Available"},
-        {"attribute": "notes", "availability": "Unverified"},
-    ]
-    assert "Mock skill" not in json.dumps(report)
 
 
 @pytest.mark.parametrize("size,is_sample", [(1, False), (99, False), (100, False), (101, True)])

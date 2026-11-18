@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from time import monotonic
 from uuid import UUID
 
@@ -16,49 +15,26 @@ from .graph_client import GraphClient
 @dataclass(frozen=True)
 class Attribute:
     family: str
-    path: tuple[str, ...] = ()
-    kind: str = "string"
+    path: tuple[str, ...]
 
 
 FIELDS = {
     "displayName": Attribute("names", ("displayName",)),
-    "givenName": Attribute("names", ("first",)),
-    "surname": Attribute("names", ("last",)),
     "userPrincipalName": Attribute("account", ("userPrincipalName",)),
+    "emails": Attribute("emails", ("address",)),
     **{
-        name: Attribute("positions", ("detail", name), "integer" if name == "layer" else "string")
-        for name in (
-            "jobTitle", "secondaryJobTitle", "role", "secondaryRole", "level", "layer",
-            "employeeId", "employeeType", "startMonthYear", "endMonthYear",
-        )
+        name: Attribute("positions", ("detail", name))
+        for name in ("jobTitle", "employeeType", "employeeId")
     },
     **{
         name: Attribute("positions", ("detail", "company", source))
         for name, source in (
             ("companyName", "displayName"), ("companyCode", "companyCode"),
-            ("costCenter", "costCenter"), ("division", "division"),
-            ("department", "department"), ("secondaryDepartment", "secondaryDepartment"),
+            ("costCenter", "costCenter"), ("department", "department"),
             ("officeLocation", "officeLocation"),
         )
     },
-    **{
-        name: Attribute("positions", ("detail", "company", "address", source))
-        for name, source in (
-            ("streetAddress", "street"), ("city", "city"), ("state", "state"),
-            ("postalCode", "postalCode"), ("workCountry", "countryOrRegion"),
-        )
-    },
-    "manager": Attribute("positions", ("manager",), "object"),
-    "colleagues": Attribute("positions", ("colleagues",), "collection"),
-    "anniversaries": Attribute("anniversaries", ("date",), "work-anniversary"),
-    **{
-        name: Attribute(name, kind="section")
-        for name in (
-            "addresses", "awards", "certifications", "educationalActivities",
-            "emails", "interests", "languages", "notes", "patents", "phones", "projects",
-            "publications", "skills", "webAccounts", "websites",
-        )
-    },
+    "workCountry": Attribute("positions", ("detail", "company", "address", "countryOrRegion")),
 }
 ATTRIBUTES = tuple(FIELDS)
 SCOPES = {
@@ -68,11 +44,6 @@ SCOPES = {
 SAMPLE_LIMIT = 100
 TIME_BUDGET_SECONDS = 30
 _MISSING = object()
-_METADATA = {
-    "id", "source", "sources", "createdBy", "createdDateTime", "lastModifiedBy",
-    "lastModifiedDateTime", "allowedAudiences", "inference", "type", "isCurrent",
-    "thumbnailUrl", "categories", "collaborationTags", "contentType", "extensions",
-}
 
 
 def permission_unavailable_report() -> dict:
@@ -91,25 +62,6 @@ def _remaining(deadline: float) -> float:
     return remaining
 
 
-def _content(value) -> bool:
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, dict):
-        return any(_content(item) for key, item in value.items() if key not in _METADATA and not key.startswith("@"))
-    if isinstance(value, list):
-        return any(_content(item) for item in value)
-    return type(value) in (int, float)
-
-
-def _incomplete(value) -> bool:
-    if isinstance(value, dict):
-        return any(
-            key.endswith("@odata.nextLink") or _incomplete(item)
-            for key, item in value.items()
-        )
-    return isinstance(value, list) and any(_incomplete(item) for item in value)
-
-
 def _value(row: dict, attribute: Attribute):
     value = row
     for component in attribute.path:
@@ -117,42 +69,18 @@ def _value(row: dict, attribute: Attribute):
             return "Empty", None
         if not isinstance(value, dict):
             raise ValueError("Graph returned an invalid nested profile property.")
+        if "@odata.nextLink" in value or f"{component}@odata.nextLink" in value:
+            return "Unverified", None
         if component not in value:
             return "Not returned", None
         value = value[component]
     if value is None:
         return "Empty", None
-    if attribute.kind == "integer":
-        if type(value) is not int:
-            raise ValueError("Graph returned an invalid integer profile property.")
-        return "Available", value
-    if attribute.kind == "object":
-        if not isinstance(value, dict):
-            raise ValueError("Graph returned an invalid profile relationship.")
-    elif attribute.kind == "collection":
-        if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
-            raise ValueError("Graph returned an invalid profile relationship collection.")
-    elif not isinstance(value, str):
+    if not isinstance(value, str):
         raise ValueError("Graph returned an invalid text profile property.")
-    if attribute.kind in ("object", "collection") and value:
-        people = [value] if attribute.kind == "object" else value
-        identities = [
-            person.get(key) for person in people
-            for key in ("userId", "userPrincipalName", "displayName")
-        ]
-        if any(identity is not None and not isinstance(identity, str) for identity in identities):
-            raise ValueError("Graph returned an invalid profile relationship identity.")
-        if not any(_content(identity) for identity in identities):
-            return "Unverified", None
-    if not _content(value):
+    if not value.strip():
         return "Empty", None
-    if isinstance(value, str):
-        normalized = value.strip().casefold()
-    elif attribute.kind == "collection":
-        normalized = tuple(sorted(json.dumps(item, sort_keys=True) for item in value))
-    else:
-        normalized = json.dumps(value, sort_keys=True)
-    return "Available", normalized
+    return "Available", value.strip().casefold()
 
 
 def _availability(profile: dict, attribute: Attribute) -> str:
@@ -161,20 +89,20 @@ def _availability(profile: dict, attribute: Attribute) -> str:
         return "Not returned"
     if not isinstance(family, list) or any(not isinstance(item, dict) for item in family):
         raise ValueError("Graph returned an invalid profile section.")
-    if "@odata.nextLink" in profile or f"{attribute.family}@odata.nextLink" in profile or _incomplete(family):
+    if "@odata.nextLink" in profile or f"{attribute.family}@odata.nextLink" in profile:
         return "Unverified"
-    if attribute.kind == "work-anniversary":
+    if attribute.family == "emails":
         types = [row.get("type") for row in family]
         if any(kind is not None and not isinstance(kind, str) for kind in types):
-            raise ValueError("Graph returned an invalid anniversary type.")
-        if any(kind not in ("birthday", "wedding", "work", "other") for kind in types):
-            return "Unverified"
-        dates = [_value(row, attribute)[0] for row in family if row["type"] == "work"]
-        if "Available" in dates:
+            raise ValueError("Graph returned an invalid email type.")
+        values = [_value(row, attribute)[0] for row in family if row.get("type") in ("work", "main")]
+        if "Available" in values:
             return "Available"
-        return "Unverified" if "Not returned" in dates else "Empty"
-    if attribute.kind == "section":
-        return "Available" if _content(family) else "Unverified" if family else "Empty"
+        if any(kind not in ("work", "main", "personal", "other") for kind in types) or any(
+            state in ("Not returned", "Unverified") for state in values
+        ):
+            return "Unverified"
+        return "Empty"
     if attribute.family == "positions":
         if any(type(position.get("isCurrent")) is not bool for position in family):
             return "Unverified"
@@ -250,7 +178,7 @@ def check_attributes(
         "limitations": [
             "Returned profile availability does not prove which values an ESS search or answer will include.",
             "Omitted, truncated and conflicting source records are unverified, not empty.",
-            "Optional profile fields and sections are not deployment requirements.",
+            "Profile enrichment opportunities are not deployment requirements.",
         ],
     }
     if scope == "me":

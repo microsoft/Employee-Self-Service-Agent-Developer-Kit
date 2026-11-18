@@ -21,6 +21,7 @@ def profile():
       profile: account/names/positions and other section navigation collections.
       userAccountInformation.userPrincipalName, personName.displayName/first/last:
         Edm.String. workPosition.isCurrent: Edm.Boolean.
+      itemEmail.address: Edm.String; emailType: unknown, work, personal, main, other.
       positionDetail.layer: Edm.Int32; startMonthYear/endMonthYear: Edm.Date;
         remaining selected scalar detail/company/address fields: Edm.String.
       relatedPerson.userId: Edm.String; workPosition.colleagues: collection.
