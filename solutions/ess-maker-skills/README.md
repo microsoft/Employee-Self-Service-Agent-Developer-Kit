@@ -120,6 +120,37 @@ The kit ships with a complete reference library that the AI agent reads at task 
 
 The agent uses this knowledge automatically when generating topics, workflows, or test sets.
 
+### Manage topics
+
+Run `/manage-topics` to enable or disable whole ISV-based topic sets on the
+selected ESS agent, or list their current states. The skill recognizes
+**Workday HR Topics**, **Workday IT Topics**, **ServiceNow HR Topics**, and
+**ServiceNow IT Topics**, and offers only the sets present in your agent.
+`/topic-actions` remains a compatibility alias.
+
+Use Copilot Chat in the `solutions/ess-maker-skills` workspace. Your agent must
+already be selected and its local workspace prepared through `/setup`; a
+completed Workday or ServiceNow connection is not required.
+
+Choose **Enable**, **Disable**, or **List**, then select one or more available
+sets when prompted. Listing is read-only. For enable or disable, review the
+agent, account, current topic states, and planned changes before approving.
+Choose **Not now** to make no changes. If all selected topics already match
+the requested state, the skill reports that without asking for approval.
+After a change, it reads back the topic states and reports the result.
+
+| Example prompt in Copilot Chat | Result |
+|--------------------------------|--------|
+| `/manage-topics list topic sets` | Show available sets, topic counts, and current states |
+| `/manage-topics enable Workday HR Topics` | Review and approve enabling that set |
+| `/manage-topics disable ServiceNow HR Topics` | Review and approve disabling that set |
+| `/manage-topics disable Workday HR Topics and ServiceNow HR Topics` | Review both sets in one request, when both are available |
+
+This changes topic states on the selected agent, not just local files. It does
+not configure ISV connections or publish the agent. See the
+[Manage topics walkthrough](src/skills/manage-topics/SKILL.md) for the detailed
+flow.
+
 ### ✏️ Create, Update & Delete Topics
 
 Create or update simple conversation topics from plain English, an approved
@@ -210,7 +241,7 @@ execution or inspect its history/results.
 
 ### 🚀 Local-First Authoring
 
-Every supported change follows the same safe local pipeline:
+Local topic and workflow authoring follows this pipeline:
 
 ```
 Checkpoint (backup) → Local edit → Error scan
@@ -325,6 +356,7 @@ This toolkit is designed for:
 - **Planning ESS rollouts before environment setup**, with grounded scenarios,
   dependency-ordered tasks, role ownership, and shared progress
 - **Connecting to an existing editable DA Dev agent**
+- **Listing, enabling, and disabling ISV-based topic sets on the selected agent**
 - **Authoring supported Copilot Studio components locally**
 - **Generating evaluation files**
 - **Local validation** via `/flightcheck`, `/scan`, and `/review`
@@ -497,6 +529,8 @@ first** when setup offers it, or run **`/planner`** directly.
 | `/landing-page` | Configure landing-page branding and content |
 | `/connect` | Choose an available integration |
 | `/connect-workday` | Connect the ESS HR agent to Workday |
+| `/manage-topics` | List current ISV topic-set states, or review and approve enabling or disabling sets |
+| `/topic-actions` | Compatibility alias for `/manage-topics` |
 | `/create` | Create a topic, workflow, or evaluation test set locally |
 | `/update` | Update a topic, workflow, or evaluation test set locally |
 | `/delete` | Report that DA-GA deletion is not yet available |
@@ -520,6 +554,8 @@ You can also describe what you want in plain English — the agent will figure o
 Start with `/planner` when rollout scope or ownership is not settled. It saves
 the plan and hands ready work to the existing setup and authoring experience
 below; presenting a plan does not execute its tasks.
+
+For local authoring:
 
 ```
 You describe what you need
