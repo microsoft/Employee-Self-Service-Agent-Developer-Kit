@@ -593,6 +593,117 @@ def test_stages_reach_ready_after_maker_validation() -> None:
     assert status["targets"]["test"]["expected"]["devRecordReused"] is True
 
 
+def test_untested_finish_is_saved_but_never_a_pass() -> None:
+    registry = _registry()
+    target = registry["targets"]["test"]
+    realms.apply_checks(
+        target,
+        connections={"status": "done", "connectionId": CONNECTION_ID},
+        runtime={"status": "done"},
+    )
+    stage = realms.record_validation(
+        target,
+        prompt_category=PROMPT,
+        allowed_prompt_category=PROMPT,
+        result="untested",
+        failure_category=None,
+    )
+    assert stage["status"] == "untested"
+    assert stage["result"] == "untested"
+    assert realms.target_status(registry, "test") == "untested"
+    status = realms.realm_status(registry)
+    assert status["targets"]["test"]["deploymentStatus"] == "untested"
+    assert status["nextPhaseId"] == "maker-validation"
+    phase = next(p for p in status["phases"] if p["id"] == "maker-validation")
+    assert phase["status"] == "untested"
+    assert phase["status"] != "complete"
+    # A later check keeps it untested while setup is unchanged.
+    realms.apply_checks(
+        target,
+        connections={"status": "done", "connectionId": CONNECTION_ID},
+        runtime={"status": "done"},
+    )
+    assert target["stages"]["maker-validation"]["status"] == "untested"
+    # A later pass replaces it.
+    realms.record_validation(
+        target,
+        prompt_category=PROMPT,
+        allowed_prompt_category=PROMPT,
+        result="pass",
+        failure_category=None,
+    )
+    assert realms.target_status(registry, "test") == "ready"
+    # And a later fail replaces an untested result too.
+    realms.record_validation(
+        target,
+        prompt_category=PROMPT,
+        allowed_prompt_category=PROMPT,
+        result="untested",
+        failure_category=None,
+    )
+    realms.record_validation(
+        target,
+        prompt_category=PROMPT,
+        allowed_prompt_category=PROMPT,
+        result="fail",
+        failure_category="unexpected",
+    )
+    assert realms.target_status(registry, "test") == "blocked"
+
+
+def test_untested_requires_earlier_stages_and_goes_stale_when_setup_breaks() -> None:
+    registry = _registry()
+    target = registry["targets"]["test"]
+    with pytest.raises(realms.ServiceNowRealmError, match="Complete Connections"):
+        realms.record_validation(
+            target,
+            prompt_category=PROMPT,
+            allowed_prompt_category=PROMPT,
+            result="untested",
+            failure_category=None,
+        )
+    realms.apply_checks(
+        target,
+        connections={"status": "done", "connectionId": CONNECTION_ID},
+        runtime={"status": "done"},
+    )
+    with pytest.raises(realms.ServiceNowRealmError, match="failure category"):
+        realms.record_validation(
+            target,
+            prompt_category=PROMPT,
+            allowed_prompt_category=PROMPT,
+            result="untested",
+            failure_category="unexpected",
+        )
+    realms.record_validation(
+        target,
+        prompt_category=PROMPT,
+        allowed_prompt_category=PROMPT,
+        result="untested",
+        failure_category=None,
+    )
+    realms.apply_checks(
+        target,
+        connections={"status": "blocked", "reason": "connection-unhealthy"},
+        runtime={"status": "done"},
+    )
+    assert target["stages"]["maker-validation"]["status"] == "pending"
+    assert realms.target_status(registry, "test") == "blocked"
+
+
+def test_untested_message_is_plain_and_names_no_success() -> None:
+    import connect_servicenow_da as snow
+
+    message = snow._realm_untested_message("test")
+    assert message.startswith(
+        "**The applicable ServiceNow setup steps in Test are finished, but "
+        "this destination integration remains untested.**"
+    )
+    assert "Test this agent before employees use it." in message
+    assert "Your progress is saved at the destination Test-pane request." in message
+    assert "worked" not in message
+
+
 def test_validation_requires_earlier_stages_and_goes_stale() -> None:
     registry = _registry()
     target = registry["targets"]["test"]
@@ -829,6 +940,56 @@ def test_controller_dev_changes_do_not_invalidate_a_target(
     assert result["phases"][0]["status"] == "complete"
 
 
+def test_controller_records_untested_persists_and_pass_replaces_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import connect_servicenow_da as snow
+
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    context = _controller_context(tmp_path)
+    snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    prompt = snow.ACTIVE_PROFILE.test_prompt_category
+    untested = snow.run_realm_command(
+        context,
+        _args(
+            "record-realm-test",
+            realm="test",
+            prompt_category=prompt,
+            result="untested",
+            failure_category=None,
+        ),
+    )
+    assert untested["targets"]["test"]["deploymentStatus"] == "untested"
+    assert untested["nextPhaseId"] == "maker-validation"
+    assert untested["message"].startswith(
+        "**The applicable ServiceNow setup steps in Test are finished, but "
+        "this destination integration remains untested.**"
+    )
+    assert "worked" not in untested["message"]
+    registry = realms.load_registry(
+        tmp_path, snow.ACTIVE_PROFILE.provider_key, "ess-hr"
+    )
+    assert registry["targets"]["test"]["stages"]["maker-validation"]["result"] == (
+        "untested"
+    )
+    on_return = snow.run_realm_command(context, _args("check-realm", realm="test"))
+    assert on_return["targets"]["test"]["deploymentStatus"] == "untested"
+    status = snow.run_realm_command(context, _args("realm-status"))
+    assert status["targets"]["test"]["deploymentStatus"] == "untested"
+    passed = snow.run_realm_command(
+        context,
+        _args(
+            "record-realm-test",
+            realm="test",
+            prompt_category=prompt,
+            result="pass",
+            failure_category=None,
+        ),
+    )
+    assert passed["targets"]["test"]["deploymentStatus"] == "ready"
+    assert passed["message"].startswith("**Your ")
+
+
 def test_controller_requires_a_realm_or_link(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -923,10 +1084,20 @@ def test_realms_guide_carries_the_spec_questions() -> None:
         "That's a {Dev|Test} result; we still need",
         "The HR service-area list is empty.",
         "doesn't switch this run to the Test environment",
+        "You can also finish without testing; this integration in {Environment} "
+        "will remain untested.",
+        "You can also finish without testing; the Prod integration will remain "
+        "untested. Test it before employees use it.",
+        "**The applicable ServiceNow setup steps in {Environment} are finished, "
+        "but this destination integration remains untested.** Test this agent "
+        "before employees use it.",
+        "Your progress is saved at the destination Test-pane request. When you "
+        "return, we'll continue there.",
+        "This destination remains untested; its setup isn't complete.",
+        "--result untested",
     ):
         assert phrase in text, phrase
     assert "publishing and non-maker validation" not in text
-    assert "finish without testing" not in text
 
 
 def test_realms_guide_carries_the_s5_recovery_wording() -> None:

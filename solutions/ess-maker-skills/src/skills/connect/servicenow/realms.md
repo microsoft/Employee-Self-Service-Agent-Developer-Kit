@@ -165,7 +165,7 @@ result (pass, fail, or not checked).
 |---|---|
 | Connections | Read-only. Done when the connection exists in this environment, is Connected, is bound to this agent, uses Microsoft Entra ID User Login, and its instance and client ID match the expected values. When expected values are missing, ask only for the missing ones, then have the administrator confirm; do not check until confirmed. |
 | Runtime configuration | Read-only. Done when the required ServiceNow topics are turned on and the portal URL is set. Otherwise show `observations` and the returned guidance: fix it in Dev, promote again through your own deployment process, then check again. |
-| Maker validation | The maker runs the ServiceNow scenario in this realm's Test pane. Record it with `record-realm-test --realm {test|prod} --prompt-category {CATEGORY} --result {pass|fail}`. |
+| Maker validation | The maker runs the ServiceNow scenario in this realm's Test pane. Record it with `record-realm-test --realm {test|prod} --prompt-category {CATEGORY} --result {pass|fail|untested}`. Use `untested` only when the maker chooses to finish without testing; it is never a pass, never completes validation, and a later pass or fail replaces it. |
 
 ### Connection problems
 
@@ -247,10 +247,50 @@ Do not treat an inconclusive result as denied or as success.
 >
 > Return here and tell us what happened and whether it matched what you
 > expected. You don't need to paste case contents or employee identifiers.
+>
+> You can also finish without testing; this integration in {Environment} will
+> remain untested.
 
-For Prod, add before the last paragraph: "The Test pane is where you try the
-Prod agent; it doesn't switch this run to the Test environment." In the IT
-agent say "ticket contents" instead of "case contents".
+For Prod, add before the last two paragraphs: "The Test pane is where you try
+the Prod agent; it doesn't switch this run to the Test environment." and end
+with "You can also finish without testing; the Prod integration will remain
+untested. Test it before employees use it." In the IT agent say "ticket
+contents" instead of "case contents".
+
+**Maker pauses**
+
+When the maker says they will run the request later, record nothing and say:
+
+> We're waiting for your real-data request in **{Agent} in {Environment}**.
+>
+> When you return, tell us what happened and whether it matched what you
+> expected. Don't include case contents, employee identifiers, tokens, or other
+> secrets. The completed setup information stays in place.
+
+**Finish without testing (untested)**
+
+When the maker asks to finish without testing and no setup blocker remains, run
+`record-realm-test --realm {test|prod} --prompt-category {CATEGORY} --result
+untested` and show the controller's message with the real environment name:
+
+> **The applicable ServiceNow setup steps in {Environment} are finished, but
+> this destination integration remains untested.** Test this agent before
+> employees use it.
+>
+> Your progress is saved at the destination Test-pane request. When you return,
+> we'll continue there.
+
+An untested finish is never a pass: no completion message, no final validation,
+and no success claim. The Dev result does not substitute for Test, and a Test
+result does not substitute for Prod. When the maker returns, run
+`check-realm --realm {test|prod}` to recheck permission and the affected setup,
+then resume at the Test-pane request; a later pass or fail replaces the
+untested result.
+
+If a setup blocker remains when the maker asks to finish without testing, do
+not record untested. Show the specific validation-paused message for that
+blocker, then add: "This destination remains untested; its setup isn't
+complete. Your progress is saved at the destination connection repair."
 
 **Reply gives no usable result**
 
@@ -303,7 +343,7 @@ what to do next.
   > whether the agent can retrieve your HR data.
   >
   > Try a supported request for data you know exists for your account, then tell
-  > us whether the result matches.
+  > us whether the result matches. You can also finish without testing.
 
   In the IT agent say "your IT data" instead of "your HR data".
 - **Maker offers the Dev connection.** For example "Use the connection from Dev.
@@ -406,6 +446,8 @@ what to do next.
 | Maker asks to check ServiceNow after promotion without saying Test or Prod | We ask "Which destination should we check, Test or Prod?" and do not guess. |
 | Account lacks access (denied) vs. access check could not finish | Denied: ask a maker with the Environment Maker role to run it. Inconclusive: validation is paused, not denied, retry the access check. |
 | Maker replies only "Done." to the Test-pane request | We don't record pass or fail and ask what the request from the agent in that environment returned and whether it matched. |
+| Maker says "Finish without testing" and no setup blocker remains | `record-realm-test --result untested` saves it as untested (not a pass) and we show the untested-finish message. A later pass or fail replaces it. |
+| Maker says "Finish without testing" while a setup blocker remains | Nothing is recorded as untested; we show the specific validation-paused message for the blocker. |
 | Maker tested the Dev agent instead of the promoted one | We ask for a result from the promoted environment and record nothing. |
 | Maker's expected data came back empty | We check setup first, then ask whether the Test pane showed an error or only an empty result. |
 | Pass is recorded in Test or Prod | The completion message says what was verified and what was not, and does not mention publishing. |

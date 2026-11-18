@@ -12069,6 +12069,17 @@ def _realm_completion_message(realm: str) -> str:
     )
 
 
+def _realm_untested_message(realm: str) -> str:
+    label = realm.title()
+    return (
+        f"**The applicable ServiceNow setup steps in {label} are finished, "
+        "but this destination integration remains untested.** Test this "
+        "agent before employees use it.\n\n"
+        "Your progress is saved at the destination Test-pane request. When "
+        "you return, we'll continue there."
+    )
+
+
 def _realm_check_result(
     context: dict[str, Any],
     registry: dict[str, Any],
@@ -12086,6 +12097,8 @@ def _realm_check_result(
     }
     if realms.target_status(registry, realm) == "ready":
         result["message"] = _realm_completion_message(realm)
+    elif realms.target_status(registry, realm) == "untested":
+        result["message"] = _realm_untested_message(realm)
     return result
 
 
@@ -12701,7 +12714,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     realm_test_parser.add_argument(
-        "--result", choices=("pass", "fail"), required=True
+        "--result", choices=("pass", "fail", "untested"), required=True
     )
     realm_test_parser.add_argument(
         "--failure-category",

@@ -1168,7 +1168,7 @@ def apply_checks(
     ready = connections.get("status") == "done" and runtime.get("status") == "done"
     bound = (validation.get("binding") or {}).get("connectionId")
     if (
-        validation.get("status") == "done"
+        validation.get("status") in {"done", "untested"}
         and ready
         and _same_connection_id(bound, connections.get("connectionId"))
     ):
@@ -1204,11 +1204,17 @@ def record_validation(
         raise ServiceNowRealmError(
             "Unsupported privacy-safe Test pane prompt category."
         )
-    if result not in {"pass", "fail"}:
-        raise ServiceNowRealmError("Test pane result must be pass or fail.")
+    if result not in {"pass", "fail", "untested"}:
+        raise ServiceNowRealmError(
+            "Test pane result must be pass, fail, or untested."
+        )
     if result == "pass" and failure_category is not None:
         raise ServiceNowRealmError(
             "A passing Test pane result cannot have a failure category."
+        )
+    if result == "untested" and failure_category is not None:
+        raise ServiceNowRealmError(
+            "An untested finish cannot have a failure category."
         )
     stages = target["stages"]
     if (
@@ -1220,8 +1226,9 @@ def record_validation(
             "recording the Test pane result."
         )
     identity = target["identity"]
+    stage_status = {"pass": "done", "fail": "blocked", "untested": "untested"}
     stages["maker-validation"] = {
-        "status": "done" if result == "pass" else "blocked",
+        "status": stage_status[result],
         "kind": "maker-attestation",
         "promptCategory": prompt_category,
         "result": result,
@@ -1246,6 +1253,10 @@ def target_status(registry: Mapping[str, Any], realm: str) -> str:
         return "ready"
     if "blocked" in statuses:
         return "blocked"
+    if statuses[-1] == "untested" and all(
+        status == "done" for status in statuses[:-1]
+    ):
+        return "untested"
     return "in-progress"
 
 
