@@ -50,6 +50,7 @@ def test_install_packages_uses_exact_versions_and_verifies_signatures(
             (package_dir / f"{package.directory_name}.nupkg").touch()
         return subprocess.CompletedProcess(arguments, 0, "", "")
 
+    monkeypatch.setattr(package_installer.sys, "platform", "linux")
     monkeypatch.setattr(package_installer, "_run_nuget", fake_run)
 
     installed = package_installer.install_packages(tmp_path)
@@ -145,6 +146,23 @@ def test_macos_verification_failure_warns_and_continues(
     assert str(nupkg) in warning
     assert "used without successful signature verification" in warning
     assert "signature validity period expired" in warning
+
+
+def test_dotnet_command_finds_user_local_sdk_outside_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dotnet_root = tmp_path / ".dotnet"
+    dotnet = dotnet_root / "dotnet"
+    dotnet.parent.mkdir()
+    dotnet.touch()
+    (dotnet_root / "sdk" / "10.0.100").mkdir(parents=True)
+
+    monkeypatch.delenv("DOTNET_ROOT", raising=False)
+    monkeypatch.setattr(package_installer.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(package_installer.shutil, "which", lambda _name: None)
+
+    assert package_installer._dotnet_command() == str(dotnet.resolve())
 
 
 def test_install_packages_rejects_conflicting_source_options(

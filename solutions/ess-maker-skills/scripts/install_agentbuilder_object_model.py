@@ -79,16 +79,36 @@ def _run_nuget(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     return completed
 
 
+def _dotnet_command() -> str:
+    roots: list[Path] = []
+    if os.environ.get("DOTNET_ROOT"):
+        roots.append(Path(os.environ["DOTNET_ROOT"]))
+    roots.append(Path.home() / ".dotnet")
+
+    candidates: list[Path] = []
+    for root in roots:
+        candidates.extend((root / "dotnet", root / "dotnet.exe"))
+
+    path_command = shutil.which("dotnet")
+    if path_command:
+        candidates.append(Path(path_command))
+
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        sdk_directory = resolved.parent / "sdk"
+        if resolved.is_file() and sdk_directory.is_dir():
+            return str(resolved)
+
+    raise ObjectModelInstallError(
+        "The .NET SDK is not installed. See `setup/README.md` and "
+        "`setup/install-ess-adk.sh`."
+    )
+
+
 def _run_dotnet(arguments: list[str]) -> subprocess.CompletedProcess[str]:
-    command = shutil.which("dotnet")
-    if not command:
-        raise ObjectModelInstallError(
-            "The .NET SDK is not installed. See `setup/README.md` and "
-            "`setup/install-ess-adk.sh`."
-        )
     try:
         completed = subprocess.run(
-            [command, *arguments],
+            [_dotnet_command(), *arguments],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
