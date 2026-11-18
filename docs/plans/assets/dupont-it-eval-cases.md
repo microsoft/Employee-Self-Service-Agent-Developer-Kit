@@ -1,0 +1,54 @@
+# DuPont IT agent eval cases — support resources & escalation
+
+Tests the 5 scenarios added to
+[`dupont-ess-it-agent-prompt.md`](dupont-ess-it-agent-prompt.md)'s "Support resources and
+escalation" section, plus a regression check analogous to the HR agent's ABBR bug. Retrieval is
+simulated manually against [`dupont-kb-sandbox/`](dupont-kb-sandbox/) — there is no live agent
+wired up in this repo.
+
+**Key asymmetry vs. the HR agent:** the ServiceNow portal is a *standing* destination the IT
+agent may always offer, regardless of retrieval (see the design doc). So IT's "negative" cases
+don't end in "no resource at all" the way HR's did — they end in "no *specific* named resource,
+just the standing portal."
+
+| # | Rule tested | User turn(s) | Simulated retrieval | Expected behavior |
+|---|---|---|---|---|
+| 1 | Rule 1 — opening request to contact support | "How do I open an IT case?" | None run yet | Don't troubleshoot yet. Confirm help is available and ask the employee to describe the issue. |
+| 2 | Rule 1 — opening request, "contact IT" phrasing | "How do I contact IT?" | None run yet | Same as #1. |
+| 3 | Rule 1 negative + Rule 3 — subject already stated, spans multiple sub-categories | "I want to open a ticket, my VPN keeps failing to connect" | KB9000004 (auth error) + KB9000005 (SSL certificate issue) — 2 distinct sub-categories | Skip the "describe the issue" question (subject already stated) and go straight to retrieval. Since retrieval spans 2 distinct sub-categories, ask one clarifying question naming them — no resource at this step. |
+| 4 | Rule 3 — broad/Dupont problem | "How do I reset my password?" | 3 distinct sub-categories: KB9000001 (Windows known), KB9000002 (Windows locked/forgotten), KB9000003 (SAP) | Ask one clarifying question naming those 3 — not a generic list, no resource. |
+| 5 | Rule 3 — single cluster | "How do I reset my Windows password? I still know my current one." | KB9000001 only | Answer directly — no clarification needed. |
+| 6 | Rule 2 — in-scope, unanswerable, no specific resource exists | "How do I get a standing desk for my home office?" | No article covers this | Say the information isn't available; direct to the standing ServiceNow portal — no specific named contact, since none was retrieved. |
+| 7 | Resource named because the source names it (contrast, not escalation) | "My laptop was stolen, what do I do?" | KB9000022 (names a specific form + process) | Answer directly from KB9000022, including its named action (Information Security Reporting Form in ServiceNow, remote lock/wipe, police report if applicable) — resource appears because retrieval for this exact subject named it. |
+| 8 | Rule 4 — out of scope | "How do I check my health benefits enrollment?" | N/A — HR subject, no IT article is responsive | Say this agent handles IT, not HR, and stop. Do not offer the ServiceNow portal or any resource. |
+| 9 | Rule 5 — stuck after reasonable attempts (2 turns) | Turn 1: "My office printer has a paper jam, what do I do?" → Turn 2 (after trying): "I pulled the paper out twice like you said and it's still jammed, can you help me further?" | KB9000023-chunk1 + chunk2 | Turn 1: diagnosis + resolution steps, no resource yet. Turn 2: the chunk's own named condition ("if the jam error persists after two attempts, submit a ServiceNow hardware ticket") is now met and the employee explicitly asked for help — offer that specific resource. |
+| 10 | Regression — unrelated-document leak (ABBR-bug analog) | "What does SSL stand for?" | KB9000005 is retrieved as topically nearest (mentions "SSL certificate issue") but doesn't define the acronym and isn't responsive to a definition question | Say the definition isn't available. Do **not** surface KB9000005's "open a ServiceNow ticket for certificate reissue" line — not responsive to this question, must not leak in. |
+| 11 | Rule 5 negative — stuck, but no specific resource was ever retrieved | Turn 1: "How do I get noise-canceling headphones for my desk?" (no coverage) → Turn 2: "I've asked around and no one can tell me — can you help?" | No article covers this, on either turn | Still say the information isn't available on both turns. The standing ServiceNow portal may still be offered (unlike HR, IT always has this fallback) — but no specific contact is invented. |
+| 12 | Rule 3 negative — broad question, zero retrieval matches | "How do I change my desktop background color in Windows?" | No article matches; zero sub-categories retrieved, not several | Falls to Rule 2, not Rule 3: say the information isn't available and point to the standing portal — no fabricated clarifying menu. |
+| 13 | Rule 4 negative — HR-adjacent but in-scope question | "I'm a contractor and need Copilot access approved by my manager" | KB9000015 (Copilot access — contractor), single cluster | Answer directly (sponsor-manager approval required, submit ServiceNow request citing "Copilot - Contractor Provisioning", 3-5 business days) — stays in scope because an IT source is responsive, despite "manager approval" sounding HR-adjacent. |
+| 14 | Rule 1 negative — opening message states subject, single cluster | "I want to open a ticket, I can't get Adobe Creative Cloud approved for my role" | KB9000017, single cluster | Skip the "describe the issue" question (subject stated) and answer directly from KB9000017 (submit ServiceNow software request with manager approval and justification, ~2-3 business days). |
+
+## Cases sourced from real UAT feedback (Gold Prompt validation, tester: UAT reviewer)
+
+These cases come from an actual UAT test pass — **against the pre-update "Gold Prompt," not this
+repo's revised `dupont-ess-it-agent-prompt.md`** — so they are a real-world failure census, not a
+synthetic exercise. Each maps to our existing KB sandbox articles and tests whether the *current*
+prompt's clarify-first rule actually prevents the specific failure the tester observed. Several
+also surface sandbox-fidelity gaps (our synthetic KB is narrower than the real one) or a
+platform-level bug that no prompt wording can fix — both are called out explicitly rather than
+forced into a pass/fail.
+
+| # | Rule tested | User turn(s) | Simulated retrieval | Expected behavior | Real-world failure this targets |
+|---|---|---|---|---|---|
+| 15 | Rule 3 — sequential/nested clarification | Turn 1: "How to reset my password?" → Turn 2 (after agent asks system): "Windows login" | Turn 1: KB9000001 + KB9000002 + KB9000003 (3 categories: Windows-known, Windows-locked, SAP). Turn 2, narrowed to Windows: KB9000001 + KB9000002 still 2 distinct sub-categories | Turn 1: ask which system. Turn 2: the narrowed retrieval *still* spans 2 distinct sub-categories (known password vs. locked/forgotten) — ask a second clarifying question rather than answering for both at once. | Row 1: agent asked system but never asked the known-vs-locked follow-up. |
+| 16 | Rule 3 — clarify before a long combined answer | "I cannot log in to VPN" | KB9000004 (auth error) + KB9000005 (SSL certificate issue) — 2 distinct sub-categories | Ask one clarifying question ("is this an authentication error or a certificate error message?") — do not combine both articles' troubleshooting into one long multi-branch answer. | Row 2: agent gave a long script covering password expiry, MFA, *and* lockout all at once, never asked which issue type applied. |
+| 17 | Rule 3 — broad request, 2 categories | "How do I request SAP access?" | KB9000008 (P23) + KB9000009 (P80) | Ask which SAP system (P23 or P80) — do not answer generically or cover both. | Row 7: answered without asking which system. |
+| 18 | Rule 3 — broad request, 2 categories | "I need more Copilot training" | KB9000012 (self-paced) + KB9000013 (live) | Ask self-paced or live — do not describe both tracks in one answer. | Row 14 + confirmed by transcript: agent listed self-paced *and* live training together with zero clarifying question. |
+| 19 | Rule 3 — single article with an internal field, not retrieval ambiguity | "I need a new keyboard" | KB9000018 only (one article; region is a field within it, not a second competing article) | Open question — see verdict notes; this may not be genuine retrieval-level ambiguity the way SAP/Copilot/Adobe are. | Row 18: agent didn't ask for region. |
+| 20 | Rule 3 — broad request, 2 categories | "How do I get SAP GUI?" | KB9000010 (managed device) + KB9000011 (unmanaged/BYOD) | Ask which device type — do not answer generically. | Row 21: answered without asking managed vs. unmanaged. |
+| 21 | Rule 3 — broad request, 2 categories | "How do I install Adobe?" | KB9000016 (Reader) + KB9000017 (Creative Cloud) | Ask which Adobe product — do not default to one or describe both. | Row 27: answered without asking Reader vs. Creative. |
+| 22 | Rule 3 — broad request, 2 categories | "How do I request access to Copilot?" | KB9000014 (employee) + KB9000015 (contractor) | Ask employee or contractor — do not answer generically. | Row 29: answered without asking. |
+| 23 | Rule 3 — sandbox-fidelity gap | "What are the peripheral standards?" | Only KB9000018 exists in our sandbox (keyboard/peripherals catalog item) | Cannot be meaningfully evaluated against our sandbox — production likely has multiple peripheral-category articles (mouse, monitor, headset, dock, etc.) our synthetic KB doesn't model. | Row 30: agent didn't ask which peripheral — real KB breadth needed to test this properly. |
+| 24 | Accuracy and safety — anti-hallucination on clarifying options | "How do I register for MFA?" | KB9000019 (Microsoft Authenticator) + KB9000020 (Deepnet hardware token) | Ask which method, naming only "Microsoft Authenticator app," "Deepnet hardware token," or a generic "something else" catch-all — must **never** mention "OKTA" or any term absent from retrieved content. | Row 28: agent asked a clarifying question (correctly conversational) but hallucinated "OKTA" as an option — a term that appears in no KB article. |
+| 25 | Rule 3 — sandbox-fidelity gap | "I need to install a home printer" | Only KB9000007 exists in our sandbox (no OS-version variant) | Cannot be fully evaluated against our sandbox — if production has separate Windows 10/11 printer articles, the same clarify-first rule should apply once they're modeled. | Row 5: tester suggests OS version (10/11) should also be asked. |
+| 26 | Citations — platform/connector bug, not prompt-evaluable | "I cannot log in to VPN" (same as #16) | N/A — this is about citation rendering, not response content | Cannot be evaluated via text simulation. The complaint (missing KB number, SharePoint icon instead of ServiceNow link) is about how the citation panel renders/links, which depends on the ServiceNow Knowledge connector's indexing — no prompt wording fixes a UI/connector rendering bug. Flag to whoever owns that connector. | Row 2: KB number missing from citations, link shows a SharePoint icon instead of a ServiceNow one. |
