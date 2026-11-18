@@ -229,7 +229,6 @@ def check_attributes(
         "usersChecked": len(profiles), "results": results,
         "coverageVerified": scope == "tenant" and all(row["coveragePercent"] is not None for row in results),
         "limitations": [
-            "Microsoft Graph beta is subject to change and is not supported for production applications.",
             "Returned profile availability does not prove which values an ESS search or answer will include.",
             "Omitted, truncated and conflicting source records are unverified, not empty.",
             "Optional profile fields and sections are not deployment requirements.",

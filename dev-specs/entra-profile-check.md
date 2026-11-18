@@ -4,7 +4,7 @@
 
 `AUTH-PROFILE-001` measures Microsoft 365 profile availability to highlight enrichment opportunities for ESS personalization. It reads the public Microsoft Graph beta profile API rather than only Entra `/users` attributes. Returned profiles can include data contributed by Entra, Organizational Data Service, people-data connectors, SharePoint profiles and user edits. The check is read-only and uses no internal Microsoft endpoints.
 
-The diagnostic checks individual identity/current-employment fields and whether other standard profile sections contain data. Coverage describes the API response, not the correctness of profile values or end-to-end agent behavior. Beta APIs are subject to change and are not supported for production applications; this dependency is explicit in the report.
+The diagnostic checks individual identity/current-employment fields and whether other standard profile sections contain data. Coverage describes the API response, not the correctness of profile values or end-to-end agent behavior.
 
 ## Default checks
 
