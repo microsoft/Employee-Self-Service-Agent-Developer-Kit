@@ -63,8 +63,9 @@ Do not use the legacy `step*.md` files in this directory.
 
 When the maker says the agent was promoted to Test or Production, chooses to
 configure either realm, or pastes a Test or Production agent link, read
-`src/skills/connect/servicenow/realms.md` and follow it after the Dev lifecycle
-is Ready. It reuses the Dev tenant foundation and never changes Dev behavior.
+`src/skills/connect/servicenow/realms.md` and follow it. Test and Prod checks
+are independent of the Dev lifecycle and never reuse the Dev connection. It
+never changes Dev behavior.
 
 ## Fresh ServiceNow execution boundary
 

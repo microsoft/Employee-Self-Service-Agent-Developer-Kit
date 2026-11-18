@@ -4,10 +4,12 @@
 """Promoted Test and Prod realm support for ServiceNow Connect.
 
 Discovery proves the exact sibling realm of the recorded Dev agent through
-AgentBuilder. The registry records one verified target per realm and the
-three target-specific stages: Connections, Runtime configuration, and Maker
-validation. This module never mutates an agent; the controller supplies live
-component and connection reads.
+AgentBuilder. The registry records one verified target per realm, the values
+its connection is expected to use, and the three target-specific stages:
+Connections, Runtime configuration, and Maker validation. Each realm is
+checked on its own: the Dev lifecycle record is only an optional reference
+for the expected values. This module never mutates an agent; the controller
+supplies live component and connection reads.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import copy
 import datetime as dt
 import json
 import os
+import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -60,6 +63,11 @@ TARGET_IDENTITY_FIELDS = (
     "sourceAgentId",
 )
 EXPECTED_AUTH_MODE = "entraIDUserLogin"
+EXPECTED_KEYS = ("instanceName", "clientId")
+EXPECTED_LABELS = {
+    "instanceName": "ServiceNow instance",
+    "clientId": "Entra application (client) ID",
+}
 
 
 class ServiceNowRealmError(RuntimeError):
@@ -681,8 +689,8 @@ def save_registry(root: Path, registry: dict[str, Any]) -> None:
         raise
 
 
-def foundation_from_dev_state(state: Mapping[str, Any]) -> dict[str, str]:
-    """Read the reusable tenant foundation recorded by the Dev lifecycle."""
+def dev_reference_from_state(state: Mapping[str, Any]) -> dict[str, str]:
+    """Read whatever the Dev lifecycle recorded; every value is optional."""
     setup = state.get("adminSetup")
     setup = setup if isinstance(setup, Mapping) else {}
     preflight = setup.get("preflight")
@@ -693,62 +701,154 @@ def foundation_from_dev_state(state: Mapping[str, Any]) -> dict[str, str]:
     entra = entra if isinstance(entra, Mapping) else {}
     evidence = entra.get("evidence")
     evidence = evidence if isinstance(evidence, Mapping) else {}
-    foundation = {
-        "instanceName": str(preflight.get("instanceName") or "").casefold(),
-        "clientId": str(evidence.get("clientId") or "").casefold(),
-        "tenantId": str(state.get("tenantId") or "").casefold(),
+    reference = {
+        "instanceName": _normalize_instance(preflight.get("instanceName")),
+        # Only an administrator-confirmed registration is reliable evidence.
+        "clientId": (
+            str(evidence.get("clientId") or "").strip().casefold()
+            if entra.get("status") in ("completed", "reused")
+            else ""
+        ),
+        "tenantId": str(state.get("tenantId") or "").strip().casefold(),
     }
-    missing = [key for key, value in foundation.items() if not value]
-    if missing:
-        raise ServiceNowRealmError(
-            "The Dev tenant foundation is incomplete ("
-            + ", ".join(missing)
-            + "). Finish the Dev lifecycle before configuring Test or Prod."
-        )
-    return foundation
+    return {key: value for key, value in reference.items() if value}
 
 
-def require_realm_prerequisite(
-    registry: Mapping[str, Any],
-    realm: str,
+def _normalize_instance(value: Any) -> str:
+    text = str(value or "").strip().casefold()
+    text = text.removeprefix("https://").removesuffix("/")
+    return text.removesuffix(".service-now.com")
+
+
+def _normalize_provided(provided: Mapping[str, Any] | None) -> dict[str, str]:
+    provided = provided or {}
+    values: dict[str, str] = {}
+    instance = _normalize_instance(provided.get("instanceName"))
+    if instance:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", instance):
+            raise ServiceNowRealmError(
+                "The ServiceNow instance must be the instance name, for "
+                "example contoso, or its service-now.com address."
+            )
+        values["instanceName"] = instance
+    if str(provided.get("clientId") or "").strip():
+        values["clientId"] = _guid(
+            provided["clientId"],
+            "The Entra application (client) ID",
+        ).casefold()
+    return values
+
+
+def resolve_expected(
+    identity: Mapping[str, str],
     *,
-    dev_ready: bool,
-) -> None:
-    if realm not in PROMOTED_REALMS:
-        raise ServiceNowRealmError("Realm must be test or prod.")
-    if not dev_ready:
-        raise ServiceNowRealmError(
-            "Finish the Dev lifecycle, including the Test pane validation, "
-            "before configuring a promoted realm."
-        )
-    if realm == "prod" and target_status(registry, "test") != "ready":
-        raise ServiceNowRealmError(
-            "Test must be Ready before Prod. Finish Test Maker validation first."
-        )
+    dev_reference: Mapping[str, str] | None,
+    previous: Mapping[str, Any] | None,
+    provided: Mapping[str, Any] | None,
+    admin_confirmed: bool,
+) -> dict[str, Any]:
+    """Decide what this realm's connection is expected to use.
+
+    Each value comes from the maker (provided), then the value already
+    recorded for this realm, then the Dev record as an optional reference.
+    Values the maker supplied need the ServiceNow administrator's
+    confirmation before they are trusted.
+    """
+    reference = dict(dev_reference or {})
+    reference_tenant = reference.pop("tenantId", "")
+    if reference_tenant and reference_tenant != str(
+        identity.get("tenantId") or ""
+    ).casefold():
+        reference = {}
+    given = _normalize_provided(provided)
+    prior = previous if isinstance(previous, Mapping) else {}
+    prior_values = prior.get("values") if isinstance(prior.get("values"), Mapping) else {}
+    prior_sources = (
+        prior.get("sources") if isinstance(prior.get("sources"), Mapping) else {}
+    )
+    values: dict[str, str] = {}
+    sources: dict[str, str] = {}
+    for key in EXPECTED_KEYS:
+        if key in given:
+            values[key], sources[key] = given[key], "maker"
+        elif prior_values.get(key):
+            values[key] = str(prior_values[key])
+            sources[key] = str(prior_sources.get(key) or "maker")
+        elif reference.get(key):
+            values[key], sources[key] = reference[key], "dev-record"
+    maker_sourced = any(source == "maker" for source in sources.values())
+    changed = any(given.get(key) != prior_values.get(key) for key in given)
+    if not maker_sourced:
+        confirmed = True
+    elif changed:
+        confirmed = admin_confirmed
+    else:
+        confirmed = admin_confirmed or bool(prior.get("adminConfirmed"))
+    differences = [
+        {
+            "item": EXPECTED_LABELS[key],
+            "dev": reference[key],
+            "expected": value,
+        }
+        for key, value in values.items()
+        if sources[key] == "maker" and reference.get(key) not in (None, value)
+    ]
+    return {
+        "values": values,
+        "sources": sources,
+        "adminConfirmed": confirmed,
+        "devRecordDifferences": differences,
+    }
+
+
+def expected_blocker(expected: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return why the expected values cannot be used yet, if they cannot."""
+    values = expected.get("values", {})
+    missing = [EXPECTED_LABELS[key] for key in EXPECTED_KEYS if not values.get(key)]
+    if missing:
+        return {
+            "reason": "expected-values-missing",
+            "missing": missing,
+            "message": (
+                "No administrator-confirmed values apply to this agent, "
+                "tenant and ServiceNow instance yet. Provide the missing "
+                "values: " + ", ".join(missing) + "."
+            ),
+        }
+    if not expected.get("adminConfirmed"):
+        return {
+            "reason": "expected-values-unconfirmed",
+            "missing": [],
+            "message": (
+                "The ServiceNow administrator must confirm the values the "
+                "maker provided before they are used to check this realm."
+            ),
+        }
+    return None
+
+
+def foundation_reused(expected: Mapping[str, Any]) -> bool:
+    sources = expected.get("sources", {})
+    return all(sources.get(key) == "dev-record" for key in EXPECTED_KEYS)
 
 
 def record_target(
     registry: dict[str, Any],
     realm: str,
     identity: Mapping[str, str],
-    foundation: Mapping[str, str],
+    expected: Mapping[str, Any],
 ) -> dict[str, Any]:
-    if str(identity.get("tenantId") or "").casefold() != foundation["tenantId"]:
-        raise ServiceNowRealmError(
-            "The promoted target's Microsoft Entra tenant differs from the "
-            "Dev foundation, so the foundation cannot be reused."
-        )
     previous = registry["targets"].get(realm)
     same_target = (
         isinstance(previous, dict)
         and previous.get("identity", {}).get("agentId") == identity["agentId"]
         and previous.get("identity", {}).get("environmentId")
         == identity["environmentId"]
+        and previous.get("expected", {}).get("values") == expected.get("values")
     )
     target = {
         "identity": dict(identity),
-        "foundation": dict(foundation),
-        "foundationReused": True,
+        "expected": dict(expected),
         "discoveredAt": _utc_now(),
         "stages": (
             copy.deepcopy(previous["stages"])
@@ -761,8 +861,21 @@ def record_target(
     return target
 
 
-def _difference(label: str, dev: str | None, target: str | None) -> dict[str, Any]:
-    return {"item": label, "dev": dev or "not set", "target": target or "not set"}
+def update_expected(
+    registry: dict[str, Any],
+    realm: str,
+    expected: Mapping[str, Any],
+) -> dict[str, Any]:
+    target = registry["targets"][realm]
+    return record_target(registry, realm, target["identity"], expected)
+
+
+def _difference(label: str, expected: str | None, actual: str | None) -> dict[str, Any]:
+    return {
+        "item": label,
+        "expected": expected or "not set",
+        "actual": actual or "not set",
+    }
 
 
 def _same_connection_id(left: Any, right: Any) -> bool:
@@ -772,144 +885,219 @@ def _same_connection_id(left: Any, right: Any) -> bool:
         return False
 
 
+def _item(label: str, status: str, detail: str | None = None) -> dict[str, str]:
+    item = {"item": label, "status": status}
+    if detail:
+        item["detail"] = detail
+    return item
+
+
+def _blocked_connection(finding: str) -> str:
+    return (
+        f"BLOCKED. {finding} The supported repair for connections in this "
+        "environment is not yet defined, so Connect does not offer one and "
+        "never reuses the Dev connection. Check again once your own process "
+        "has resolved it."
+    )
+
+
 def evaluate_connections(
-    foundation: Mapping[str, str],
+    expected: Mapping[str, Any],
     reference: Mapping[str, Any],
     connections: list[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    """Read-only check of this realm's own connection.
+
+    Nothing here reads Dev: the connection must exist in this environment,
+    be bound to this agent, be connected, and use the expected values.
+    """
+    values = expected.get("values", {})
+    blocker = expected_blocker(expected)
+    items: list[dict[str, str]] = []
     connection_id = reference.get("connectionId")
-    if not connection_id:
-        return {
-            "status": "needs-maker",
-            "reason": "connection-not-bound",
-            "message": (
-                "No ServiceNow connection is bound to this agent in this realm yet."
+    match = None
+    if connection_id:
+        match = next(
+            (
+                item
+                for item in connections
+                if _same_connection_id(item.get("connectionId"), connection_id)
             ),
-        }
-    match = next(
-        (
-            item
-            for item in connections
-            if _same_connection_id(item.get("connectionId"), connection_id)
-        ),
-        None,
+            None,
+        )
+    items.append(
+        _item(
+            "ServiceNow connection is bound to this agent",
+            "pass" if connection_id else "fail",
+        )
     )
-    if match is None:
-        return {
-            "status": "needs-maker",
-            "reason": "connection-not-found",
-            "message": (
-                "The bound ServiceNow connection is not available in this "
-                "environment. Create or share it for this maker."
-            ),
-        }
-    values = match.get("parameterValues")
-    values = values if isinstance(values, Mapping) else {}
-    instance = str(
-        values.get("token:InstanceName")
-        or values.get("instance")
-        or reference.get("instanceName")
-        or ""
-    ).strip()
-    instance = instance.removesuffix(".service-now.com").casefold()
-    resource = (
-        str(values.get("token:ResourceUri") or reference.get("resourceUri") or "")
-        .strip()
-        .casefold()
+    nothing_exists = not connections
+    items.append(
+        _item(
+            "Connection exists in this environment",
+            "pass"
+            if match
+            else ("fail" if connection_id or nothing_exists else "not-checked"),
+        )
     )
-    differences = []
-    if match.get("authMode") != EXPECTED_AUTH_MODE:
-        differences.append(
-            _difference(
-                "Authentication type",
-                "Microsoft Entra ID User Login",
-                str(match.get("authMode") or ""),
-            )
-        )
-    if instance != foundation["instanceName"]:
-        differences.append(
-            _difference("ServiceNow instance", foundation["instanceName"], instance)
-        )
-    if resource != foundation["clientId"]:
-        differences.append(
-            _difference(
-                "Entra application (client) ID", foundation["clientId"], resource
-            )
-        )
-    if differences:
-        return {
-            "status": "blocked",
-            "reason": "foundation-mismatch",
-            "differences": differences,
-            "message": (
-                "The connection in this realm does not match the Dev "
-                "foundation, so the Dev administrator setup is not reused."
+    observed: dict[str, str] = {}
+    differences: list[dict[str, Any]] = []
+    connected = False
+    if match is not None:
+        parameters = match.get("parameterValues")
+        parameters = parameters if isinstance(parameters, Mapping) else {}
+        observed = {
+            "instanceName": _normalize_instance(
+                parameters.get("token:InstanceName")
+                or parameters.get("instance")
+                or reference.get("instanceName")
             ),
+            "clientId": str(
+                parameters.get("token:ResourceUri")
+                or reference.get("resourceUri")
+                or ""
+            )
+            .strip()
+            .casefold(),
         }
-    if match.get("status") != "Connected":
-        return {
-            "status": "needs-maker",
-            "reason": "connection-unhealthy",
-            "message": (
-                "The ServiceNow connection in this realm is not connected. "
-                "Repair or sign in again."
+        connected = match.get("status") == "Connected"
+        if match.get("authMode") != EXPECTED_AUTH_MODE:
+            differences.append(
+                _difference(
+                    "Authentication type",
+                    "Microsoft Entra ID User Login",
+                    str(match.get("authMode") or ""),
+                )
+            )
+        for key in EXPECTED_KEYS:
+            if values.get(key) and observed[key] != values[key]:
+                differences.append(
+                    _difference(EXPECTED_LABELS[key], values[key], observed[key])
+                )
+    mismatched = {entry["item"] for entry in differences}
+    items.append(
+        _item(
+            "Connection is connected",
+            "not-checked" if match is None else ("pass" if connected else "fail"),
+        )
+    )
+    items.append(
+        _item(
+            "Authentication type is Microsoft Entra ID User Login",
+            "not-checked"
+            if match is None
+            else ("fail" if "Authentication type" in mismatched else "pass"),
+        )
+    )
+    for key in EXPECTED_KEYS:
+        label = EXPECTED_LABELS[key]
+        if match is None or not values.get(key):
+            status = "not-checked"
+        else:
+            status = "fail" if label in mismatched else "pass"
+        items.append(_item(f"{label} matches", status))
+    result: dict[str, Any] = {"items": items}
+    if observed:
+        result["observed"] = observed
+    if blocker is not None:
+        result.update(
+            status="needs-maker",
+            reason=blocker["reason"],
+            missing=blocker["missing"],
+            message=blocker["message"],
+        )
+    elif not connection_id and connections:
+        result.update(
+            status="blocked",
+            reason="connection-not-bound",
+            message=_blocked_connection(
+                "A ServiceNow connection exists in this environment, but it "
+                "is not bound to this agent."
             ),
-        }
-    return {
-        "status": "done",
-        "connectionId": str(connection_id),
-        "message": "The ServiceNow connection matches the Dev foundation.",
-    }
+        )
+    elif match is None:
+        result.update(
+            status="blocked",
+            reason="connection-not-found",
+            message=_blocked_connection(
+                "No ServiceNow connection was found for this agent in this "
+                "environment."
+            ),
+        )
+    elif differences:
+        result.update(
+            status="blocked",
+            reason="connection-mismatch",
+            differences=differences,
+            message=_blocked_connection(
+                "The ServiceNow connection does not use the expected values."
+            ),
+        )
+    elif not connected:
+        result.update(
+            status="blocked",
+            reason="connection-unhealthy",
+            message=_blocked_connection(
+                "The ServiceNow connection for this agent is disconnected."
+            ),
+        )
+    else:
+        result.update(
+            status="done",
+            connectionId=str(connection_id),
+            message="The ServiceNow connection in this realm is verified.",
+        )
+    return result
 
 
 def evaluate_runtime(
-    foundation: Mapping[str, str],
-    dev_topics: list[Mapping[str, Any]],
+    expected: Mapping[str, Any],
     target_topics: list[Mapping[str, Any]],
     target_portal: Mapping[str, Any],
 ) -> dict[str, Any]:
-    def states(topics: list[Mapping[str, Any]]) -> dict[str, tuple[Any, Any]]:
-        return {
-            str(topic.get("schemaName") or "").casefold(): (
-                topic.get("state"),
-                topic.get("status"),
-            )
-            for topic in topics
-        }
-
-    dev_states = states(dev_topics)
-    target_states = states(target_topics)
+    """Read-only check of this realm's own topics and portal URL."""
+    instance = expected.get("values", {}).get("instanceName")
     observations = []
-    if not target_states:
-        observations.append("No ServiceNow topics were promoted to this realm.")
-    for schema, expected in sorted(dev_states.items()):
-        if schema not in target_states:
-            observations.append(f"Topic `{schema}` was not promoted.")
-        elif target_states[schema] != expected:
-            observations.append(
-                f"Topic `{schema}` is {target_states[schema][0]} here but "
-                f"{expected[0]} in Dev."
-            )
-    if not target_portal.get("valid"):
+    off = sorted(
+        str(topic.get("schemaName") or "")
+        for topic in target_topics
+        if topic.get("state") != "Active" or topic.get("status") != "Active"
+    )
+    if not target_topics:
+        observations.append("No ServiceNow topics were found in this realm.")
+    for name in off:
+        observations.append(f"Topic `{name}` is not turned on in this realm.")
+    reason = target_portal.get("reason") or "missing"
+    portal_ok = bool(target_portal.get("valid"))
+    if not portal_ok:
         observations.append(
-            "The portal URL is not valid for the Dev ServiceNow instance "
-            f"`{foundation['instanceName']}` ("
-            f"{target_portal.get('reason') or 'missing'})."
+            "The portal URL is not set to a valid ServiceNow URL"
+            + (f" for `{instance}`" if instance else "")
+            + f" in this realm ({reason})."
         )
+    items = [
+        _item(
+            "Required ServiceNow topics are turned on",
+            "pass" if target_topics and not off else "fail",
+        ),
+        _item("Portal URL is set", "pass" if portal_ok else "fail", None),
+    ]
     if observations:
         return {
             "status": "blocked",
             "reason": "promoted-configuration-differs",
+            "items": items,
             "observations": observations,
             "message": (
-                "Connect only reads topic states and the portal URL in Test "
-                "and Prod. Fix the configuration in Dev, promote again, then "
-                "check again."
+                "Connect only reads topics and the portal URL in Test and "
+                "Prod. Fix them in Dev, promote again through your own ALM "
+                "process, then check again."
             ),
         }
     return {
         "status": "done",
-        "message": "Promoted topic states and portal URL verified read-only.",
+        "items": items,
+        "message": "Topics and the portal URL verified read-only.",
     }
 
 
@@ -917,41 +1105,33 @@ def apply_checks(
     target: dict[str, Any],
     *,
     connections: dict[str, Any],
-    runtime: dict[str, Any] | None,
+    runtime: dict[str, Any],
 ) -> None:
+    """Record this realm's stage results; no other realm is consulted."""
     stages = target["stages"]
     now = _utc_now()
     stages["connections"] = {**connections, "checkedAt": now}
-    if connections["status"] != "done" or runtime is None:
-        stages["runtime-configuration"] = {
-            "status": "pending",
-            "message": "Waiting for the Connections stage.",
-        }
-    else:
-        stages["runtime-configuration"] = {**runtime, "checkedAt": now}
-    validation = stages.get("maker-validation", {})
+    stages["runtime-configuration"] = {**runtime, "checkedAt": now}
+    validation = stages.get("maker-validation") or {}
+    ready = connections.get("status") == "done" and runtime.get("status") == "done"
     bound = (validation.get("binding") or {}).get("connectionId")
-    stale = validation.get("status") == "done" and (
-        connections.get("status") != "done"
-        or stages["runtime-configuration"]["status"] != "done"
-        or not _same_connection_id(bound, connections.get("connectionId"))
-    )
-    if stale or validation.get("status") not in {"done", "needs-maker"}:
-        stages["maker-validation"] = {
-            "status": "pending",
-            "message": "Waiting for the earlier stages.",
-        }
-    elif validation.get("status") != "done":
-        stages["maker-validation"] = {"status": "pending"}
-    previous = stages["maker-validation"]
     if (
-        previous.get("status") == "pending"
-        and stages["runtime-configuration"]["status"] == "done"
+        validation.get("status") == "done"
+        and ready
+        and _same_connection_id(bound, connections.get("connectionId"))
     ):
-        stages["maker-validation"] = {
+        return
+    stages["maker-validation"] = (
+        {
             "status": "needs-maker",
             "message": "Run the Test pane scenario in this realm.",
         }
+        if ready
+        else {
+            "status": "pending",
+            "message": "Waiting for the earlier stages.",
+        }
+    )
 
 
 def record_validation(
@@ -1011,18 +1191,12 @@ def target_status(registry: Mapping[str, Any], realm: str) -> str:
     return "in-progress"
 
 
-def select_realm(
-    registry: dict[str, Any],
-    realm: str,
-    *,
-    dev_ready: bool,
-) -> None:
+def select_realm(registry: dict[str, Any], realm: str) -> None:
     if realm == "dev":
         registry["activeTargetRealm"] = "dev"
         return
     if realm not in PROMOTED_REALMS:
         raise ServiceNowRealmError("Realm must be dev, test, or prod.")
-    require_realm_prerequisite(registry, realm, dev_ready=dev_ready)
     if realm not in registry["targets"]:
         raise ServiceNowRealmError(
             f"The {realm.title()} realm has not been discovered yet."
@@ -1030,15 +1204,21 @@ def select_realm(
     registry["activeTargetRealm"] = realm
 
 
-def realm_status(
-    registry: Mapping[str, Any],
-    *,
-    dev_ready: bool,
-) -> dict[str, Any]:
-    active = str(registry.get("activeTargetRealm") or "dev")
-    targets: dict[str, Any] = {
-        "dev": {"deploymentStatus": "ready" if dev_ready else "in-progress"}
+def expected_summary(expected: Mapping[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "values": dict(expected.get("values", {})),
+        "sources": dict(expected.get("sources", {})),
+        "adminConfirmed": bool(expected.get("adminConfirmed")),
+        "devRecordReused": foundation_reused(expected),
     }
+    if expected.get("devRecordDifferences"):
+        summary["devRecordDifferences"] = expected["devRecordDifferences"]
+    return summary
+
+
+def realm_status(registry: Mapping[str, Any]) -> dict[str, Any]:
+    active = str(registry.get("activeTargetRealm") or "dev")
+    targets: dict[str, Any] = {}
     for realm in PROMOTED_REALMS:
         targets[realm] = {"deploymentStatus": target_status(registry, realm)}
         recorded = registry["targets"].get(realm)
@@ -1047,7 +1227,7 @@ def realm_status(
                 key: recorded["identity"][key]
                 for key in ("environmentId", "agentId", "agentSchemaName")
             }
-            targets[realm]["foundationReused"] = recorded["foundationReused"]
+            targets[realm]["expected"] = expected_summary(recorded["expected"])
     phases: list[dict[str, Any]] = []
     next_phase = None
     recorded = registry["targets"].get(active)
@@ -1063,6 +1243,9 @@ def realm_status(
             for key in (
                 "message",
                 "reason",
+                "missing",
+                "items",
+                "observed",
                 "differences",
                 "observations",
             ):

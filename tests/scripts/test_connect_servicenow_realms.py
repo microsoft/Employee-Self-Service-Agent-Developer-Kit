@@ -30,11 +30,36 @@ CLIENT_ID = "11111111-2222-4333-8444-555555555555"
 CONNECTION_ID = "99999999-aaaa-4bbb-8ccc-dddddddddddd"
 PROMPT = "workday-style-prompt"
 
-FOUNDATION = {
-    "instanceName": "contoso",
-    "clientId": CLIENT_ID,
+IDENTITY = {
+    "environmentId": TEST_ENV,
+    "environmentUrl": TEST_URL,
     "tenantId": TENANT,
+    "agentId": TEST_AGENT,
+    "agentSchemaName": SCHEMA,
+    "almFamilyId": FAMILY,
+    "commitSha": "abc123",
+    "sourceAgentId": DEV_AGENT,
 }
+DEV_RECORD = {"instanceName": "contoso", "clientId": CLIENT_ID, "tenantId": TENANT}
+
+
+def _expected(
+    *,
+    dev_reference: dict[str, str] | None = None,
+    previous: dict[str, Any] | None = None,
+    provided: dict[str, str] | None = None,
+    admin_confirmed: bool = False,
+) -> dict[str, Any]:
+    return realms.resolve_expected(
+        IDENTITY,
+        dev_reference=dev_reference,
+        previous=previous,
+        provided=provided,
+        admin_confirmed=admin_confirmed,
+    )
+
+
+FOUNDATION = _expected(dev_reference=DEV_RECORD)
 
 
 class FakeClient:
@@ -287,47 +312,124 @@ def test_agent_link_is_rejected_unless_it_is_the_dev_sibling(
         )
 
 
-def _registry(*, test_ready: bool = False) -> dict[str, Any]:
+def _registry(*, test_ready: bool = False, expected: dict[str, Any] | None = None):
     registry = realms.new_registry("servicenow", "ess-hr")
-    identity = {
-        "environmentId": TEST_ENV,
-        "environmentUrl": TEST_URL,
-        "tenantId": TENANT,
-        "agentId": TEST_AGENT,
-        "agentSchemaName": SCHEMA,
-        "almFamilyId": FAMILY,
-        "commitSha": "abc123",
-        "sourceAgentId": DEV_AGENT,
-    }
-    target = realms.record_target(registry, "test", identity, FOUNDATION)
+    target = realms.record_target(registry, "test", IDENTITY, expected or FOUNDATION)
     if test_ready:
         for stage_id in realms.STAGE_IDS:
             target["stages"][stage_id] = {"status": "done"}
     return registry
 
 
-def test_prod_requires_dev_ready_and_ready_test() -> None:
+def test_prod_and_test_are_independent_of_dev_and_each_other() -> None:
     registry = _registry()
-    with pytest.raises(realms.ServiceNowRealmError, match="Finish the Dev lifecycle"):
-        realms.require_realm_prerequisite(registry, "test", dev_ready=False)
-    with pytest.raises(realms.ServiceNowRealmError, match="Test must be Ready"):
-        realms.require_realm_prerequisite(registry, "prod", dev_ready=True)
-    realms.require_realm_prerequisite(
-        _registry(test_ready=True), "prod", dev_ready=True
+    prod_identity = {**IDENTITY, "agentId": PROD_AGENT, "environmentId": OTHER_ENV}
+    realms.record_target(registry, "prod", prod_identity, FOUNDATION)
+    assert realms.target_status(registry, "test") == "in-progress"
+    assert realms.target_status(registry, "prod") == "in-progress"
+    realms.select_realm(registry, "prod")
+    assert registry["activeTargetRealm"] == "prod"
+    status = realms.realm_status(registry)
+    assert "dev" not in status["targets"]
+    assert status["targets"]["test"]["deploymentStatus"] == "in-progress"
+
+
+def test_dev_record_is_an_optional_reference_for_expected_values() -> None:
+    from_dev = _expected(dev_reference=DEV_RECORD)
+    assert from_dev["values"] == {"instanceName": "contoso", "clientId": CLIENT_ID}
+    assert realms.expected_blocker(from_dev) is None
+    assert realms.foundation_reused(from_dev) is True
+
+    none = _expected()
+    blocker = realms.expected_blocker(none)
+    assert blocker["reason"] == "expected-values-missing"
+    assert blocker["missing"] == [
+        "ServiceNow instance",
+        "Entra application (client) ID",
+    ]
+    assert realms.foundation_reused(none) is False
+
+
+def test_only_missing_values_are_asked_for() -> None:
+    partial = _expected(dev_reference={"instanceName": "contoso", "tenantId": TENANT})
+    assert realms.expected_blocker(partial)["missing"] == [
+        "Entra application (client) ID"
+    ]
+
+
+def test_maker_values_need_admin_confirmation() -> None:
+    provided = {"instanceName": "Contoso.service-now.com", "clientId": CLIENT_ID}
+    unconfirmed = _expected(provided=provided)
+    assert unconfirmed["values"]["instanceName"] == "contoso"
+    assert (
+        realms.expected_blocker(unconfirmed)["reason"] == "expected-values-unconfirmed"
+    )
+    confirmed = _expected(provided=provided, admin_confirmed=True)
+    assert realms.expected_blocker(confirmed) is None
+    again = _expected(previous=confirmed)
+    assert realms.expected_blocker(again) is None
+    changed = _expected(
+        previous=confirmed, provided={"instanceName": "other"}
+    )
+    assert realms.expected_blocker(changed)["reason"] == "expected-values-unconfirmed"
+
+
+def test_invalid_maker_values_are_rejected() -> None:
+    with pytest.raises(realms.ServiceNowRealmError, match="GUID"):
+        _expected(provided={"clientId": "not-a-guid"})
+    with pytest.raises(realms.ServiceNowRealmError, match="instance name"):
+        _expected(provided={"instanceName": "bad host!"})
+
+
+def test_maker_values_override_dev_record_and_report_the_difference() -> None:
+    expected = _expected(
+        dev_reference=DEV_RECORD,
+        provided={"instanceName": "contoso-test"},
+        admin_confirmed=True,
+    )
+    assert expected["values"]["instanceName"] == "contoso-test"
+    assert expected["values"]["clientId"] == CLIENT_ID
+    assert expected["sources"]["clientId"] == "dev-record"
+    assert expected["devRecordDifferences"] == [
+        {
+            "item": "ServiceNow instance",
+            "dev": "contoso",
+            "expected": "contoso-test",
+        }
+    ]
+    assert realms.foundation_reused(expected) is False
+
+
+def test_dev_record_from_another_tenant_is_not_reused() -> None:
+    other = {**DEV_RECORD, "tenantId": OTHER_TENANT}
+    expected = _expected(dev_reference=other)
+    assert expected["values"] == {}
+
+
+def test_recorded_values_do_not_follow_later_dev_changes() -> None:
+    registry = _registry()
+    previous = registry["targets"]["test"]["expected"]
+    changed_dev = {**DEV_RECORD, "instanceName": "new-dev"}
+    kept = _expected(dev_reference=changed_dev, previous=previous)
+    assert kept["values"]["instanceName"] == "contoso"
+    realms.record_target(registry, "test", IDENTITY, kept)
+    assert registry["targets"]["test"]["expected"]["values"]["instanceName"] == (
+        "contoso"
     )
 
 
-def test_foundation_is_reused_and_tenant_difference_is_rejected() -> None:
-    registry = _registry()
-    assert registry["targets"]["test"]["foundationReused"] is True
-    assert registry["activeTargetRealm"] == "test"
-    with pytest.raises(realms.ServiceNowRealmError, match="tenant differs"):
-        realms.record_target(
-            registry,
-            "test",
-            {**registry["targets"]["test"]["identity"], "tenantId": OTHER_TENANT},
-            FOUNDATION,
-        )
+def test_changing_expected_values_resets_stage_results() -> None:
+    registry = _registry(test_ready=True)
+    changed = _expected(
+        previous=registry["targets"]["test"]["expected"],
+        provided={"instanceName": "other"},
+        admin_confirmed=True,
+    )
+    target = realms.update_expected(registry, "test", changed)
+    assert all(
+        target["stages"][stage_id]["status"] == "pending"
+        for stage_id in realms.STAGE_IDS
+    )
 
 
 def _connection(**overrides: Any) -> dict[str, Any]:
@@ -344,11 +446,18 @@ def _connection(**overrides: Any) -> dict[str, Any]:
     return connection
 
 
-def test_matching_connection_reuses_foundation() -> None:
-    result = realms.evaluate_connections(
-        FOUNDATION, {"connectionId": CONNECTION_ID}, [_connection()]
-    )
+def _bound() -> dict[str, str]:
+    return {"connectionId": CONNECTION_ID}
+
+
+def _statuses(result: dict[str, Any]) -> dict[str, str]:
+    return {entry["item"]: entry["status"] for entry in result["items"]}
+
+
+def test_matching_connection_is_verified_item_by_item() -> None:
+    result = realms.evaluate_connections(FOUNDATION, _bound(), [_connection()])
     assert result["status"] == "done"
+    assert set(_statuses(result).values()) == {"pass"}
 
 
 @pytest.mark.parametrize(
@@ -361,44 +470,96 @@ def test_matching_connection_reuses_foundation() -> None:
         ),
     ],
 )
-def test_foundation_mismatch_blocks_with_exact_difference(
+def test_instance_or_client_id_mismatch_blocks_with_exact_difference(
     values: dict[str, str], item: str
 ) -> None:
     result = realms.evaluate_connections(
-        FOUNDATION,
-        {"connectionId": CONNECTION_ID},
-        [_connection(parameterValues=values)],
+        FOUNDATION, _bound(), [_connection(parameterValues=values)]
     )
     assert result["status"] == "blocked"
-    assert result["reason"] == "foundation-mismatch"
+    assert result["reason"] == "connection-mismatch"
     assert len(result["differences"]) == 1
     assert item in result["differences"][0]["item"].casefold()
+    assert "not yet defined" in result["message"]
 
 
-def test_unbound_or_unhealthy_connection_needs_the_maker() -> None:
-    assert realms.evaluate_connections(FOUNDATION, {}, [])["status"] == "needs-maker"
-    unhealthy = realms.evaluate_connections(
-        FOUNDATION,
-        {"connectionId": CONNECTION_ID},
-        [_connection(status="Error")],
+@pytest.mark.parametrize(
+    ("reference", "connections", "reason", "named"),
+    [
+        ({}, [_connection()], "connection-not-bound", "not bound"),
+        ({}, [], "connection-not-found", "No ServiceNow connection"),
+        (
+            {"connectionId": OTHER_ENV},
+            [_connection()],
+            "connection-not-found",
+            "No ServiceNow connection",
+        ),
+        (
+            _bound(),
+            [_connection(status="Error")],
+            "connection-unhealthy",
+            "disconnected",
+        ),
+    ],
+)
+def test_connection_problems_are_blocked_without_a_repair(
+    reference: dict[str, str],
+    connections: list[dict[str, Any]],
+    reason: str,
+    named: str,
+) -> None:
+    result = realms.evaluate_connections(FOUNDATION, reference, connections)
+    assert result["status"] == "blocked"
+    assert result["reason"] == reason
+    assert result["message"].startswith("BLOCKED.")
+    assert named in result["message"]
+    assert "not yet defined" in result["message"]
+    assert "Dev connection" in result["message"]
+    assert "connectionHandoff" not in result
+
+
+def test_dev_on_but_test_off_is_detected_per_item() -> None:
+    result = realms.evaluate_connections(FOUNDATION, {}, [])
+    assert _statuses(result)["ServiceNow connection is bound to this agent"] == "fail"
+    assert _statuses(result)["Connection exists in this environment"] == "fail"
+    assert result["status"] != "done"
+
+
+def test_missing_expected_values_stop_the_connection_check() -> None:
+    result = realms.evaluate_connections(_expected(), _bound(), [_connection()])
+    assert result["status"] == "needs-maker"
+    assert result["reason"] == "expected-values-missing"
+    unconfirmed = realms.evaluate_connections(
+        _expected(provided={"instanceName": "contoso", "clientId": CLIENT_ID}),
+        _bound(),
+        [_connection()],
     )
-    assert unhealthy["status"] == "needs-maker"
+    assert unconfirmed["reason"] == "expected-values-unconfirmed"
 
 
-def test_runtime_is_read_only_comparison_with_dev() -> None:
-    dev = [{"schemaName": "a", "state": "Active", "status": "Active"}]
+def _topic(name: str, state: str = "Active") -> dict[str, str]:
+    return {"schemaName": name, "state": state, "status": state}
+
+
+def test_runtime_checks_required_topics_and_portal_read_only() -> None:
     portal = {"valid": True}
     assert (
-        realms.evaluate_runtime(FOUNDATION, dev, list(dev), portal)["status"] == "done"
+        realms.evaluate_runtime(FOUNDATION, [_topic("a"), _topic("b")], portal)[
+            "status"
+        ]
+        == "done"
     )
-    differs = realms.evaluate_runtime(
+    off = realms.evaluate_runtime(
         FOUNDATION,
-        dev,
-        [{"schemaName": "a", "state": "Inactive", "status": "Inactive"}],
+        [_topic("a"), _topic("b", "Inactive")],
         {"valid": False, "reason": "portal-topic-missing"},
     )
-    assert differs["status"] == "blocked"
-    assert len(differs["observations"]) == 2
+    assert off["status"] == "blocked"
+    assert len(off["observations"]) == 2
+    assert "Fix them in Dev" in off["message"]
+    assert "promote again" in off["message"]
+    empty = realms.evaluate_runtime(FOUNDATION, [], portal)
+    assert empty["status"] == "blocked"
 
 
 def test_stages_reach_ready_after_maker_validation() -> None:
@@ -418,10 +579,10 @@ def test_stages_reach_ready_after_maker_validation() -> None:
         failure_category=None,
     )
     assert realms.target_status(registry, "test") == "ready"
-    status = realms.realm_status(registry, dev_ready=True)
+    status = realms.realm_status(registry)
     assert status["activeTargetRealm"] == "test"
     assert status["nextPhaseId"] is None
-    assert status["targets"]["test"]["foundationReused"] is True
+    assert status["targets"]["test"]["expected"]["devRecordReused"] is True
 
 
 def test_validation_requires_earlier_stages_and_goes_stale() -> None:
@@ -449,8 +610,8 @@ def test_validation_requires_earlier_stages_and_goes_stale() -> None:
     )
     realms.apply_checks(
         target,
-        connections={"status": "blocked", "reason": "foundation-mismatch"},
-        runtime=None,
+        connections={"status": "blocked", "reason": "connection-unhealthy"},
+        runtime={"status": "done"},
     )
     assert target["stages"]["maker-validation"]["status"] == "pending"
 
@@ -469,19 +630,26 @@ def test_registry_round_trips_and_detects_tampering(tmp_path: Path) -> None:
         realms.load_registry(tmp_path, "servicenow", "ess-hr")
 
 
-def test_foundation_is_read_from_dev_state() -> None:
-    state = {
+def _dev_state(**entra: Any) -> dict[str, Any]:
+    return {
         "tenantId": TENANT.upper(),
         "adminSetup": {
             "preflight": {"instanceName": "Contoso"},
             "phaseHandoffs": {
-                "entra-registration": {"evidence": {"clientId": CLIENT_ID}}
+                "entra-registration": {
+                    "status": entra.get("status", "completed"),
+                    "evidence": {"clientId": CLIENT_ID},
+                }
             },
         },
     }
-    assert realms.foundation_from_dev_state(state) == FOUNDATION
-    with pytest.raises(realms.ServiceNowRealmError, match="incomplete"):
-        realms.foundation_from_dev_state({"tenantId": TENANT})
+
+
+def test_dev_reference_is_read_from_confirmed_dev_state_only() -> None:
+    assert realms.dev_reference_from_state(_dev_state()) == DEV_RECORD
+    unconfirmed = realms.dev_reference_from_state(_dev_state(status="pending"))
+    assert unconfirmed == {"instanceName": "contoso", "tenantId": TENANT}
+    assert realms.dev_reference_from_state({}) == {}
 
 
 def _controller_context(root: Path) -> dict[str, Any]:
@@ -507,91 +675,160 @@ def _args(command: str, **values: Any) -> argparse.Namespace:
         "realm": None,
         "environment": None,
         "agent_link": None,
+        "expected_instance": None,
+        "expected_client_id": None,
+        "admin_confirmed": False,
     }
     return argparse.Namespace(command=command, **{**defaults, **values})
 
 
-def _prepare_controller(monkeypatch: pytest.MonkeyPatch, *, dev_ready: bool) -> None:
+def _prepare_controller(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    dev_reference: dict[str, str] | None,
+    world: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fake the promoted realm; `world` is what the realm actually contains."""
     import connect_servicenow_da as snow
 
-    monkeypatch.setattr(snow, "_realm_dev_ready", lambda _context: dev_ready)
+    realm_world: dict[str, Any] = world if world is not None else {}
+    realm_world.setdefault("reference", _bound())
+    realm_world.setdefault("connections", [_connection()])
+    realm_world.setdefault("topics", [_topic("a")])
+    realm_world.setdefault("portal", {"valid": True})
     monkeypatch.setattr(
-        snow,
-        "_realm_dev_state",
-        lambda _context: {
-            "tenantId": TENANT,
-            "adminSetup": {
-                "preflight": {"instanceName": "contoso"},
-                "phaseHandoffs": {
-                    "entra-registration": {"evidence": {"clientId": CLIENT_ID}}
-                },
-            },
-        },
+        snow, "_realm_dev_reference", lambda _context: dict(dev_reference or {})
     )
 
     def run_checks(_context: dict[str, Any], target: dict[str, Any]) -> None:
+        expected = target["expected"]
         realms.apply_checks(
             target,
-            connections={"status": "done", "connectionId": CONNECTION_ID},
-            runtime={"status": "done"},
+            connections=realms.evaluate_connections(
+                expected, realm_world["reference"], realm_world["connections"]
+            ),
+            runtime=realms.evaluate_runtime(
+                expected, realm_world["topics"], realm_world["portal"]
+            ),
         )
 
     monkeypatch.setattr(snow, "_realm_run_checks", run_checks)
-    monkeypatch.setattr(
-        realms,
-        "discover_realm",
-        lambda **kwargs: (
-            kwargs["realm"] or "test",
-            {
-                "environmentId": TEST_ENV,
-                "environmentUrl": TEST_URL,
-                "tenantId": TENANT,
-                "agentId": TEST_AGENT,
-                "agentSchemaName": SCHEMA,
-                "almFamilyId": FAMILY,
-                "commitSha": "abc123",
-                "sourceAgentId": DEV_AGENT,
-            },
-        ),
-    )
+
+    def discover(**kwargs: Any):
+        realm = kwargs["realm"] or "test"
+        agent = TEST_AGENT if realm == "test" else PROD_AGENT
+        return realm, {**IDENTITY, "agentId": agent}
+
+    monkeypatch.setattr(realms, "discover_realm", discover)
+    return realm_world
 
 
-def test_controller_discovers_test_and_blocks_prod_until_test_is_ready(
+def test_controller_checks_test_without_any_dev_record(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import connect_servicenow_da as snow
 
-    _prepare_controller(monkeypatch, dev_ready=True)
+    _prepare_controller(monkeypatch, dev_reference=None)
     context = _controller_context(tmp_path)
-    result = snow.run_realm_command(
-        context, _args("discover-realm-target", realm="test")
-    )
-    assert result["activeTargetRealm"] == "test"
-    assert result["foundationReused"] is True
-    assert result["nextPhaseId"] == "maker-validation"
-    assert result["targets"]["test"]["deploymentStatus"] == "in-progress"
-    with pytest.raises(
-        snow.ServiceNowConnectError, match="Test must be Ready"
-    ) as excinfo:
-        snow.run_realm_command(context, _args("discover-realm-target", realm="prod"))
-    assert excinfo.value.details["recoveryChoices"] == [
-        "Check again",
-        "Choose another environment",
-        "Not now",
+    asked = snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    connections = asked["phases"][0]
+    assert connections["reason"] == "expected-values-missing"
+    assert connections["missing"] == [
+        "ServiceNow instance",
+        "Entra application (client) ID",
     ]
+    provided = {"expected_instance": "contoso", "expected_client_id": CLIENT_ID}
+    unconfirmed = snow.run_realm_command(
+        context, _args("check-realm", realm="test", **provided)
+    )
+    assert unconfirmed["phases"][0]["reason"] == "expected-values-unconfirmed"
+    confirmed = snow.run_realm_command(
+        context, _args("check-realm", realm="test", admin_confirmed=True)
+    )
+    assert confirmed["phases"][0]["status"] == "complete"
+    assert confirmed["nextPhaseId"] == "maker-validation"
+    assert confirmed["targets"]["test"]["deploymentStatus"] == "in-progress"
 
 
-def test_controller_requires_ready_dev_and_a_realm_or_link(
+def test_controller_detects_dev_on_but_test_off(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import connect_servicenow_da as snow
 
-    _prepare_controller(monkeypatch, dev_ready=False)
+    world = _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    world.update(
+        reference={}, connections=[], topics=[_topic("a", "Inactive")], portal={}
+    )
+    result = snow.run_realm_command(
+        _controller_context(tmp_path), _args("discover-realm-target", realm="test")
+    )
+    by_id = {phase["id"]: phase for phase in result["phases"]}
+    assert by_id["connections"]["status"] == "blocked"
+    assert by_id["connections"]["message"].startswith("BLOCKED.")
+    assert "connectionHandoff" not in result
+    assert by_id["runtime-configuration"]["status"] == "blocked"
+    assert result["targets"]["test"]["deploymentStatus"] == "blocked"
+    assert result["activeTargetRealm"] == "test"
+
+
+def test_controller_prod_does_not_need_test_ready_or_dev(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import connect_servicenow_da as snow
+
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
     context = _controller_context(tmp_path)
-    with pytest.raises(snow.ServiceNowConnectError, match="Finish the Dev lifecycle"):
-        snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    prod = snow.run_realm_command(context, _args("discover-realm-target", realm="prod"))
+    assert prod["activeTargetRealm"] == "prod"
+    assert prod["nextPhaseId"] == "maker-validation"
+    assert prod["targets"]["test"]["deploymentStatus"] == "not-discovered"
+
+
+def test_controller_realm_states_are_independent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import connect_servicenow_da as snow
+
+    world = _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    context = _controller_context(tmp_path)
+    snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    snow.run_realm_command(context, _args("discover-realm-target", realm="prod"))
+    world["connections"] = [_connection(status="Error")]
+    after_prod = snow.run_realm_command(context, _args("check-realm", realm="prod"))
+    assert after_prod["phases"][0]["reason"] == "connection-unhealthy"
+    status = snow.run_realm_command(context, _args("realm-status"))
+    assert "dev" not in status["targets"]
+    registry = realms.load_registry(
+        tmp_path, snow.ACTIVE_PROFILE.provider_key, "ess-hr"
+    )
+    assert registry["targets"]["test"]["stages"]["connections"]["status"] == "done"
+    assert registry["targets"]["prod"]["stages"]["connections"]["status"] == "blocked"
+
+
+def test_controller_dev_changes_do_not_invalidate_a_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import connect_servicenow_da as snow
+
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    context = _controller_context(tmp_path)
+    snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    _prepare_controller(
+        monkeypatch, dev_reference={**DEV_RECORD, "instanceName": "new-dev"}
+    )
+    result = snow.run_realm_command(context, _args("check-realm", realm="test"))
+    assert result["targets"]["test"]["expected"]["values"]["instanceName"] == "contoso"
+    assert result["phases"][0]["status"] == "complete"
+
+
+def test_controller_requires_a_realm_or_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import connect_servicenow_da as snow
+
+    _prepare_controller(monkeypatch, dev_reference=None)
+    context = _controller_context(tmp_path)
     with pytest.raises(snow.ServiceNowConnectError, match="--realm test\\|prod"):
         snow.run_realm_command(context, _args("discover-realm-target"))
     status = snow.run_realm_command(context, _args("realm-status"))
     assert status["activeTargetRealm"] == "dev"
-    assert status["targets"]["dev"]["deploymentStatus"] == "in-progress"

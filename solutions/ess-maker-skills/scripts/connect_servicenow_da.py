@@ -27,7 +27,6 @@ import requests
 from connect_lifecycle import (
     STATE_INTEGRITY_KEY,
     STATE_TAMPERED_MESSAGE,
-    LifecycleDecisionError,
     decide_next_step,
     state_integrity_digest,
     state_integrity_mismatch,
@@ -11575,35 +11574,18 @@ REALM_COMMANDS = frozenset(
 REALM_RECOVERY_CHOICES = ("Check again", "Choose another environment", "Not now")
 
 
-def _realm_dev_state(context: dict[str, Any]) -> dict[str, Any]:
+def _realm_dev_reference(context: dict[str, Any]) -> dict[str, str]:
+    """Optional Dev record values; a missing or unreadable record is not an error."""
     path = _lifecycle_state_path(context)
     if not path.is_file():
-        raise ServiceNowConnectError(
-            "Finish the Dev lifecycle before configuring a promoted realm."
-        )
-    state = _load_json(path)
+        return {}
+    try:
+        state = _load_json(path)
+    except ServiceNowConnectError:
+        return {}
     if state_integrity_mismatch(state):
-        raise ServiceNowConnectError(STATE_TAMPERED_MESSAGE)
-    return state
-
-
-def _realm_dev_ready(context: dict[str, Any]) -> bool:
-    root = Path(context["root"])
-    if not _lifecycle_state_path(context).is_file():
-        return False
-    contract = _load_json(root / CONTRACT_PATH)
-    phase_ids = frozenset(
-        phase["id"]
-        for phase in contract.get("phases") or []
-        if isinstance(phase, dict) and isinstance(phase.get("id"), str)
-    )
-    decision = decide_next_step(
-        root,
-        provider=ACTIVE_PROFILE.provider_key,
-        agent_slug=_agent_slug(context),
-        verified_phases=phase_ids,
-    )
-    return decision.get("decision") == "complete"
+        return {}
+    return realms.dev_reference_from_state(state)
 
 
 def _realm_topic_states(components: dict[str, Any]) -> list[dict[str, Any]]:
@@ -11652,7 +11634,7 @@ def _realm_run_checks(
     environment = context["environment"]
     ring = environment["ring"]
     identity = target["identity"]
-    foundation = target["foundation"]
+    expected = target["expected"]
     host = derive_environment_host(identity["environmentId"], ring)
     target_client = AgentBuilderClient(
         host,
@@ -11681,33 +11663,25 @@ def _realm_run_checks(
             connection_summary(record)
             for record in connectivity.list_connections()
         ]
-    connection_result = realms.evaluate_connections(
-        foundation,
-        reference,
-        connections,
-    )
-    runtime_result = None
-    if connection_result["status"] == "done":
-        dev_components = _agentbuilder_client(context).fetch_components(
-            context["agent"]["id"]
+    try:
+        portal = portal_configuration_summary(
+            target_components,
+            expected_instance_name=expected["values"].get("instanceName"),
         )
-        try:
-            portal = portal_configuration_summary(
-                target_components,
-                expected_instance_name=foundation["instanceName"],
-            )
-        except ServiceNowConnectError:
-            portal = {"valid": False, "reason": "portal-topic-missing"}
-        runtime_result = realms.evaluate_runtime(
-            foundation,
-            _realm_topic_states(dev_components),
-            _realm_topic_states(target_components),
-            portal,
-        )
+    except ServiceNowConnectError:
+        portal = {"valid": False, "reason": "portal-topic-missing"}
     realms.apply_checks(
         target,
-        connections=connection_result,
-        runtime=runtime_result,
+        connections=realms.evaluate_connections(
+            expected,
+            reference,
+            connections,
+        ),
+        runtime=realms.evaluate_runtime(
+            expected,
+            _realm_topic_states(target_components),
+            portal,
+        ),
     )
 
 
@@ -11715,13 +11689,10 @@ def _realm_check_result(
     context: dict[str, Any],
     registry: dict[str, Any],
     realm: str,
-    *,
-    dev_ready: bool,
 ) -> dict[str, Any]:
-    result = realms.realm_status(registry, dev_ready=dev_ready)
+    result = realms.realm_status(registry)
     target = registry["targets"][realm]
     result["realm"] = realm
-    result["foundationReused"] = target["foundationReused"]
     result["promotedAgent"] = {
         "environmentId": target["identity"]["environmentId"],
         "agentId": target["identity"]["agentId"],
@@ -11729,30 +11700,19 @@ def _realm_check_result(
             _realm_target_context(context, target)
         )["copilotStudioAgent"]["url"],
     }
-    connections = target["stages"]["connections"]
-    if connections.get("status") == "needs-maker":
-        target_context = _realm_target_context(context, target)
-        foundation = target["foundation"]
-        result["connectionHandoff"] = {
-            "navigation": physical_connection_navigation(
-                target_context,
-                mode=(
-                    "repair"
-                    if connections.get("reason") == "connection-unhealthy"
-                    else "create"
-                ),
-            ),
-            "expectedValues": connection_expected_values(
-                resource_uri=foundation["clientId"],
-                instance_name=foundation["instanceName"],
-            ),
-        }
     if realms.target_status(registry, realm) == "ready":
         result["message"] = (
             f"{realm.title()} is Ready. Publishing and non-maker "
             "validation happen after this guided lifecycle."
         )
     return result
+
+
+def _realm_expected_args(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "instanceName": getattr(args, "expected_instance", None),
+        "clientId": getattr(args, "expected_client_id", None),
+    }
 
 
 def _run_realm_command(
@@ -11763,14 +11723,13 @@ def _run_realm_command(
     provider = ACTIVE_PROFILE.provider_key
     slug = _agent_slug(context)
     registry = realms.load_registry(root, provider, slug)
-    dev_ready = _realm_dev_ready(context)
     command = args.command
     if command == "realm-status":
-        return realms.realm_status(registry, dev_ready=dev_ready)
+        return realms.realm_status(registry)
     if command == "select-realm":
-        realms.select_realm(registry, args.realm, dev_ready=dev_ready)
+        realms.select_realm(registry, args.realm)
         realms.save_registry(root, registry)
-        return realms.realm_status(registry, dev_ready=dev_ready)
+        return realms.realm_status(registry)
 
     if command == "discover-realm-target":
         if not args.realm and not args.agent_link:
@@ -11778,14 +11737,6 @@ def _run_realm_command(
                 "Specify --realm test|prod, or --agent-link with the "
                 "promoted agent's Copilot Studio link."
             )
-        if args.realm:
-            realms.require_realm_prerequisite(
-                registry,
-                args.realm,
-                dev_ready=dev_ready,
-            )
-        dev_state = _realm_dev_state(context)
-        foundation = realms.foundation_from_dev_state(dev_state)
         environment = context["environment"]
         realm, identity = realms.discover_realm(
             root=root,
@@ -11800,12 +11751,19 @@ def _run_realm_command(
             agent_link=args.agent_link,
             account_hint=context.get("account"),
         )
-        realms.require_realm_prerequisite(
+        previous = registry["targets"].get(realm)
+        target = realms.record_target(
             registry,
             realm,
-            dev_ready=dev_ready,
+            identity,
+            realms.resolve_expected(
+                identity,
+                dev_reference=_realm_dev_reference(context),
+                previous=(previous or {}).get("expected"),
+                provided=_realm_expected_args(args),
+                admin_confirmed=args.admin_confirmed,
+            ),
         )
-        target = realms.record_target(registry, realm, identity, foundation)
         realms.save_registry(root, registry)
     else:
         realm = args.realm
@@ -11814,11 +11772,18 @@ def _run_realm_command(
             raise ServiceNowConnectError(
                 f"The {realm.title()} realm has not been discovered yet."
             )
-        realms.require_realm_prerequisite(
-            registry,
-            realm,
-            dev_ready=dev_ready,
-        )
+        if command == "check-realm":
+            target = realms.update_expected(
+                registry,
+                realm,
+                realms.resolve_expected(
+                    target["identity"],
+                    dev_reference=_realm_dev_reference(context),
+                    previous=target["expected"],
+                    provided=_realm_expected_args(args),
+                    admin_confirmed=args.admin_confirmed,
+                ),
+            )
 
     if command in {"discover-realm-target", "check-realm"}:
         _realm_run_checks(context, target)
@@ -11831,12 +11796,7 @@ def _run_realm_command(
             failure_category=args.failure_category,
         )
     realms.save_registry(root, registry)
-    return _realm_check_result(
-        context,
-        registry,
-        realm,
-        dev_ready=dev_ready,
-    )
+    return _realm_check_result(context, registry, realm)
 
 
 def run_realm_command(
@@ -11853,8 +11813,22 @@ def run_realm_command(
                 "recoveryChoices": list(REALM_RECOVERY_CHOICES),
             },
         ) from exc
-    except LifecycleDecisionError as exc:
-        raise ServiceNowConnectError(str(exc)) from exc
+
+
+def _add_realm_expectation_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--expected-instance",
+        help="ServiceNow instance this realm should use; ask only when missing.",
+    )
+    parser.add_argument(
+        "--expected-client-id",
+        help="Entra application (client) ID this realm should use; ask only when missing.",
+    )
+    parser.add_argument(
+        "--admin-confirmed",
+        action="store_true",
+        help="The ServiceNow administrator confirmed the values the maker gave.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -12322,6 +12296,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--agent-link",
         help="Optional Copilot Studio link of the promoted agent.",
     )
+    _add_realm_expectation_arguments(discover_parser)
     subparsers.add_parser(
         "realm-status",
         help="Show the active realm, targets, and stage status without APIs.",
@@ -12333,6 +12308,7 @@ def build_parser() -> argparse.ArgumentParser:
     check_realm_parser.add_argument(
         "--realm", choices=("test", "prod"), required=True
     )
+    _add_realm_expectation_arguments(check_realm_parser)
     realm_test_parser = subparsers.add_parser(
         "record-realm-test",
         help="Record the maker's Test pane attestation for a promoted realm.",
