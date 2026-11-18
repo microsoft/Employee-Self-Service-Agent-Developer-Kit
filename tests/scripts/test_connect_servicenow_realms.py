@@ -480,25 +480,31 @@ def test_instance_or_client_id_mismatch_blocks_with_exact_difference(
     assert result["reason"] == "connection-mismatch"
     assert len(result["differences"]) == 1
     assert item in result["differences"][0]["item"].casefold()
-    assert "not yet defined" in result["message"]
+    assert "doesn't use the expected sign-in values" in result["message"]
+    assert result["message"].startswith("**Validation is paused:**")
 
 
 @pytest.mark.parametrize(
     ("reference", "connections", "reason", "named"),
     [
-        ({}, [_connection()], "connection-not-bound", "not bound"),
-        ({}, [], "connection-not-found", "No ServiceNow connection"),
+        ({}, [_connection()], "connection-not-bound", "isn't linked to this agent"),
+        (
+            {},
+            [],
+            "connection-not-found",
+            "has no ServiceNow connection available",
+        ),
         (
             {"connectionId": OTHER_ENV},
             [_connection()],
             "connection-not-found",
-            "No ServiceNow connection",
+            "has no ServiceNow connection available",
         ),
         (
             _bound(),
             [_connection(status="Error")],
             "connection-unhealthy",
-            "disconnected",
+            "is disconnected",
         ),
     ],
 )
@@ -509,12 +515,14 @@ def test_connection_problems_are_blocked_without_a_repair(
     named: str,
 ) -> None:
     result = realms.evaluate_connections(FOUNDATION, reference, connections)
+    message = result["message"]
     assert result["status"] == "blocked"
     assert result["reason"] == reason
-    assert result["message"].startswith("BLOCKED.")
-    assert named in result["message"]
-    assert "not yet defined" in result["message"]
-    assert "Dev connection" in result["message"]
+    assert message.startswith("**Validation is paused:**")
+    assert named in message
+    assert "BLOCKED" not in message
+    assert "recheck before you run the request" in message
+    assert "administrator-confirmed sign-in setup stays in place" in message
     assert "connectionHandoff" not in result
 
 
@@ -764,7 +772,7 @@ def test_controller_detects_dev_on_but_test_off(
     )
     by_id = {phase["id"]: phase for phase in result["phases"]}
     assert by_id["connections"]["status"] == "blocked"
-    assert by_id["connections"]["message"].startswith("BLOCKED.")
+    assert by_id["connections"]["message"].startswith("**Validation is paused:**")
     assert "connectionHandoff" not in result
     assert by_id["runtime-configuration"]["status"] == "blocked"
     assert result["targets"]["test"]["deploymentStatus"] == "blocked"
@@ -861,7 +869,7 @@ def test_denied_and_inconclusive_access_have_separate_messages(
     inconclusive = failure(500)
     assert "couldn't verify" in str(inconclusive)
     assert "doesn't mean your access was denied" in str(inconclusive)
-    assert "Check again" in inconclusive.customer_remediation
+    assert "Retry the access check to continue." in inconclusive.customer_remediation
 
 
 @pytest.mark.parametrize(
@@ -886,7 +894,7 @@ def test_completion_says_what_was_and_was_not_verified(
     monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.PRODUCT_PROFILES[profile])
     message = snow._realm_completion_message(realm)
     label = realm.title()
-    assert f"{lookup} worked in {label}" in message
+    assert message.startswith(f"**Your {lookup} worked in {label}.**")
     assert f"not {not_covered}" in message
     assert "other employees' sign-in mapping" in message
     assert message.endswith(f"{limit}.")
@@ -911,7 +919,7 @@ def test_realms_guide_carries_the_spec_questions() -> None:
         "that what you expected?",
         "do not treat it as pass or fail and do not run `record-realm-test`",
         "Use the agent in {Environment}, not the Dev agent.",
-        "Did the Test pane show an error, or only an empty result?",
+        "Did the Test pane show an error or only an empty result?",
         "That's a {Dev|Test} result; we still need",
         "The HR service-area list is empty.",
         "doesn't switch this run to the Test environment",
@@ -919,6 +927,33 @@ def test_realms_guide_carries_the_spec_questions() -> None:
         assert phrase in text, phrase
     assert "publishing and non-maker validation" not in text
     assert "finish without testing" not in text
+
+
+def test_realms_guide_carries_the_s5_recovery_wording() -> None:
+    text = " ".join(
+        line.strip().removeprefix(">").strip()
+        for line in REALMS_GUIDE.read_text(encoding="utf-8").splitlines()
+    )
+    for phrase in (
+        "**Validation is paused:**",
+        "Retry the access check to continue.",
+        "A working Dev connection doesn't tell us whether a usable connection is "
+        "available and linked to this agent in **{Environment}**.",
+        "The Dev integration was left untested",
+        "This run will establish the result for **{Agent} in {Environment}**.",
+        "We'll switch to **{Agent} in {Environment}**, verify your permission "
+        "there, and revalidate",
+        "won't count as a {Prod|Test} result.",
+        "That doesn't match the result you expected. We'll check the available "
+        "setup information",
+        "That matches what you expected, but an empty result alone doesn't show "
+        "whether the agent can retrieve your HR data.",
+        "That changes the shared-instance assumption behind this promotion path.",
+        "your own deployment process",
+    ):
+        assert phrase in text, phrase
+    for stale in ("BLOCKED.", "Connect does not offer", "ALM tool", "ALM process"):
+        assert stale not in text, stale
 
 
 def test_realms_guide_maker_text_has_no_technical_headers() -> None:

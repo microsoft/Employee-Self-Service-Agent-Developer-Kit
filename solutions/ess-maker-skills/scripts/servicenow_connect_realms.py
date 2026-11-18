@@ -115,7 +115,7 @@ def _access_failure(
         f"{label}. Validation is paused; this doesn't mean your access was "
         "denied.",
         remediation=(
-            "Check again to continue. If it keeps failing, confirm that "
+            "Retry the access check to continue. If it keeps failing, confirm that "
             "promotion finished or choose the environment by name or "
             "Dataverse URL. Your existing ServiceNow setup progress is "
             "preserved."
@@ -530,7 +530,7 @@ def discover_from_agent_link(
     if agent_id.casefold() == _guid(source_agent_id, "Dev agent ID").casefold():
         raise ServiceNowRealmError(
             "This link is the Dev agent. Paste the Test or Prod agent link, "
-            "or say the agent was promoted and Connect will find it."
+            "or say the agent was promoted and we'll find it."
         )
     candidates = [
         entry
@@ -858,9 +858,10 @@ def expected_blocker(expected: Mapping[str, Any]) -> dict[str, Any] | None:
             "reason": "expected-values-missing",
             "missing": missing,
             "message": (
-                "No administrator-confirmed values apply to this agent, "
-                "tenant and ServiceNow instance yet. Provide the missing "
-                "values: " + ", ".join(missing) + "."
+                "We still need administrator confirmation for: "
+                + ", ".join(missing)
+                + ". You don't need to resend earlier replies unless a "
+                "specific confirmation is missing."
             ),
         }
     if not expected.get("adminConfirmed"):
@@ -942,10 +943,11 @@ def _item(label: str, status: str, detail: str | None = None) -> dict[str, str]:
 
 def _blocked_connection(finding: str) -> str:
     return (
-        f"BLOCKED. {finding} The supported repair for connections in this "
-        "environment is not yet defined, so Connect does not offer one and "
-        "never reuses the Dev connection. Check again once your own process "
-        "has resolved it."
+        f"**Validation is paused:** {finding} This agent can't make the "
+        "request yet. Once the supported repair for this destination is "
+        "complete, return here and tell us, and we'll recheck before you run "
+        "the request. Your administrator-confirmed sign-in setup stays in "
+        "place."
     )
 
 
@@ -1059,8 +1061,8 @@ def evaluate_connections(
             status="blocked",
             reason="connection-not-bound",
             message=_blocked_connection(
-                "A ServiceNow connection exists in this environment, but it "
-                "is not bound to this agent."
+                "A ServiceNow connection is available in this environment, "
+                "but it isn't linked to this agent."
             ),
         )
     elif match is None:
@@ -1068,8 +1070,8 @@ def evaluate_connections(
             status="blocked",
             reason="connection-not-found",
             message=_blocked_connection(
-                "No ServiceNow connection was found for this agent in this "
-                "environment."
+                "This agent has no ServiceNow connection available for this "
+                "setup in this environment."
             ),
         )
     elif differences:
@@ -1078,7 +1080,8 @@ def evaluate_connections(
             reason="connection-mismatch",
             differences=differences,
             message=_blocked_connection(
-                "The ServiceNow connection does not use the expected values."
+                "The ServiceNow connection in this environment doesn't use "
+                "the expected sign-in values."
             ),
         )
     elif not connected:
@@ -1086,7 +1089,8 @@ def evaluate_connections(
             status="blocked",
             reason="connection-unhealthy",
             message=_blocked_connection(
-                "The ServiceNow connection for this agent is disconnected."
+                "The ServiceNow connection in this environment is "
+                "disconnected."
             ),
         )
     else:
@@ -1137,8 +1141,8 @@ def evaluate_runtime(
             "items": items,
             "observations": observations,
             "message": (
-                "Connect only reads topics and the portal URL in Test and "
-                "Prod. Fix them in Dev, promote again through your own ALM "
+                "We only read topics and the portal URL in Test and Prod. "
+                "Fix them in Dev, promote again through your own deployment "
                 "process, then check again."
             ),
         }

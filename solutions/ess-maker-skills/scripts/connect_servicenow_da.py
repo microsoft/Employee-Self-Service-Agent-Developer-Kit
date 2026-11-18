@@ -12059,7 +12059,8 @@ def _realm_completion_message(realm: str) -> str:
     lookup, not_covered = REALM_COMPLETION_SCOPE[ACTIVE_PROFILE.key]
     label = realm.title()
     return (
-        f"Your {lookup} worked in {label}. {ACTIVE_PROFILE.agent_display_name} "
+        f"**Your {lookup} worked in {label}.** "
+        f"{ACTIVE_PROFILE.agent_display_name} "
         "returned the result you expected for your account. This confirms the "
         f"lookup for your tested account and this agent in {label}, not "
         f"{not_covered}, other employees' sign-in mapping, or "
