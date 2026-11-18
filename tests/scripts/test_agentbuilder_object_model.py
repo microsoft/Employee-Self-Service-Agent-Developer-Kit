@@ -20,8 +20,11 @@ def test_package_manifest_pins_complete_runtime_graph() -> None:
     ] == [
         ("Microsoft.Agents.ObjectModel", "2026.8.27.235-prerelease"),
         ("Microsoft.Agents.ObjectModel.Json", "2026.8.27.235-prerelease"),
-        ("Microsoft.Bcl.HashCode", "1.1.0"),
+        ("Microsoft.Bcl.HashCode", "6.0.0"),
     ]
+    assert package_manifest.PACKAGES[-1].assembly_path == Path(
+        "lib/netstandard2.0/Microsoft.Bcl.HashCode.dll"
+    )
 
 
 def test_install_packages_uses_exact_versions_and_verifies_signatures(
@@ -67,6 +70,54 @@ def test_install_packages_uses_exact_versions_and_verifies_signatures(
             package.version,
         ]
         assert command[command.index("-DependencyVersion") + 1] == "Ignore"
+
+
+def test_macos_verifies_packages_with_dotnet_nuget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nuget_commands: list[list[str]] = []
+    dotnet_commands: list[list[str]] = []
+
+    def fake_nuget(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        nuget_commands.append(arguments)
+        package = next(
+            item
+            for item in package_manifest.PACKAGES
+            if item.package_id == arguments[1]
+        )
+        package_dir = package_manifest.package_directory(package, tmp_path)
+        (package_dir / package.assembly_path).parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        (package_dir / package.assembly_path).touch()
+        (package_dir / f"{package.directory_name}.nupkg").touch()
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    def fake_dotnet(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        dotnet_commands.append(arguments)
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr(package_installer.sys, "platform", "darwin")
+    monkeypatch.setattr(package_installer, "_run_nuget", fake_nuget)
+    monkeypatch.setattr(package_installer, "_run_dotnet", fake_dotnet)
+
+    package_installer.install_packages(tmp_path)
+
+    assert all(command[0] == "install" for command in nuget_commands)
+    assert dotnet_commands == [
+        [
+            "nuget",
+            "verify",
+            "--all",
+            str(
+                package_manifest.package_directory(package, tmp_path)
+                / f"{package.directory_name}.nupkg"
+            ),
+        ]
+        for package in package_manifest.PACKAGES
+    ]
 
 
 def test_install_packages_rejects_conflicting_source_options(

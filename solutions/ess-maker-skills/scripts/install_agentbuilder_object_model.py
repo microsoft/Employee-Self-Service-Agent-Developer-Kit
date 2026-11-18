@@ -79,6 +79,49 @@ def _run_nuget(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     return completed
 
 
+def _run_dotnet(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    command = shutil.which("dotnet")
+    if not command:
+        raise ObjectModelInstallError(
+            "The .NET SDK is not installed. See `setup/README.md` and "
+            "`setup/install-ess-adk.sh`."
+        )
+    try:
+        completed = subprocess.run(
+            [command, *arguments],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=NUGET_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ObjectModelInstallError(
+            ".NET did not complete while verifying Object Model dependencies."
+        ) from exc
+    if completed.returncode != 0:
+        raise ObjectModelInstallError(
+            f".NET package verification failed: {_process_detail(completed)}"
+        )
+    return completed
+
+
+def _verify_package(nupkg: Path) -> None:
+    if sys.platform == "darwin":
+        _run_dotnet(["nuget", "verify", "--all", str(nupkg)])
+        return
+    _run_nuget(
+        [
+            "verify",
+            "-All",
+            str(nupkg),
+            "-NonInteractive",
+            "-Verbosity",
+            "quiet",
+        ]
+    )
+
+
 def install_packages(
     output_directory: Path,
     *,
@@ -130,16 +173,7 @@ def install_packages(
             raise ObjectModelInstallError(
                 f"NuGet did not retain the expected package archive: {nupkg}"
             )
-        _run_nuget(
-            [
-                "verify",
-                "-All",
-                str(nupkg),
-                "-NonInteractive",
-                "-Verbosity",
-                "quiet",
-            ]
-        )
+        _verify_package(nupkg)
 
     installed_assemblies = assembly_paths(output_directory)
     missing = [str(path) for path in installed_assemblies if not path.is_file()]

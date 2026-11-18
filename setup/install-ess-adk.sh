@@ -3,7 +3,7 @@
 # ESS ADK — macOS One-Shot Installer
 #
 # Installs the full ESS Maker Kit toolchain on macOS:
-#   Homebrew, Python 3.12, Git, GitHub CLI, VS Code, the .NET 10 runtime,
+#   Homebrew, Python 3.12, Git, GitHub CLI, VS Code, the .NET 10 SDK,
 #   NuGet, Copilot extensions, pip and Object Model dependencies, clones
 #   the repo, and launches VS Code. /setup is user-driven — run it yourself
 #   in Copilot Chat when ready (requires VS Code 1.102+).
@@ -366,10 +366,10 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     # Full maker kit tools
     install_brew_pkg "gh" "GitHub CLI"
     install_brew_cask "visual-studio-code" "Visual Studio Code" "/Applications/Visual Studio Code.app"
-    if command -v dotnet &>/dev/null && dotnet --list-runtimes 2>/dev/null | grep -q '^Microsoft\.NETCore\.App 10\.'; then
-        ok ".NET 10 Runtime (already installed)"
+    if command -v dotnet &>/dev/null && dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then
+        ok ".NET 10 SDK (already installed)"
     else
-        install_optional_brew_cask "dotnet-runtime" ".NET 10 Runtime"
+        install_optional_brew_cask "dotnet-sdk" ".NET 10 SDK"
     fi
     if command -v nuget &>/dev/null; then
         ok "NuGet (already installed at $(command -v nuget))"
