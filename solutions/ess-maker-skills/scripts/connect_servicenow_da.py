@@ -989,34 +989,34 @@ def _identity_direct_questions(
             _native_question(
                 header="Application client ID",
                 question=(
-                    "Enter the Application (client) ID GUID confirmed from "
-                    "the app registration Overview page for this exact target."
-                ),
-                allow_freeform_input=True,
-            ),
-            _native_question(
-                header="Selected User Claim",
-                question=(
-                    "Enter the User Claim name for this exact target: `email`, "
-                    "`upn`, or the custom claim name used for Part 4. Enter a "
-                    "claim name only; do not enter `aud` or a personal claim "
-                    "value."
+                    "Paste your Entra administrator's non-sensitive reply, or "
+                    "enter the Application (client) ID GUID they confirmed "
+                    "from the app registration Overview page for this exact "
+                    "target. If their reply names the claim ServiceNow should "
+                    "use, or says the standard email claim applies, we'll "
+                    "use that; otherwise we'll ask for the claim name next."
                 ),
                 allow_freeform_input=True,
             ),
         ]
         if captured_client_id is not None:
             recorded_client_id = normalize_client_id(captured_client_id)
-            claim_question = canonical[1]
-            claim_question["question"] = (
-                f"I recorded the Application (client) ID "
-                f"`{recorded_client_id}`. I still need the User Claim name. "
-                "Ask your Entra administrator which claim ServiceNow should "
-                "use (`email`, `upn`, or a custom claim name). You don't "
-                "need to send the Client ID again.\n\n"
-                f"{claim_question['question']}"
-            )
-            canonical = canonical[1:]
+            canonical = [
+                _native_question(
+                    header="Entra claim name",
+                    question=(
+                        f"We have the Client ID `{recorded_client_id}`. "
+                        "Next, we need the **exact claim name** your Entra "
+                        "administrator configured for ServiceNow to use "
+                        "(`email`, `upn`, or a custom claim name).\n\n"
+                        "Ask your Entra administrator for that name, or paste "
+                        "the rest of their non-sensitive reply. You don't "
+                        "need to resend the Client ID. Enter a claim name "
+                        "only; do not enter `aud` or a personal claim value."
+                    ),
+                    allow_freeform_input=True,
+                )
+            ]
     elif stage == "servicenow":
         if not confirmed_claim_name:
             raise ServiceNowConnectError(
@@ -1135,7 +1135,16 @@ def _identity_handoff_lead_in(stage: str) -> str:
             "administrator to prepare ServiceNow sign-in.\n\n"
             "When they reply, paste their response here without secrets. "
             "We'll use it to prepare the ServiceNow handoff; you don't need "
-            "to interpret the settings."
+            "to interpret the settings.\n\n"
+            "If your ServiceNow administrator identifies employees by "
+            "something other than email or UPN, such as a payroll ID, the "
+            "custom-claim part of the message applies. Ask your Entra "
+            "administrator to coordinate with them first, to confirm the "
+            "exact claim name, its format, and that its source attribute is "
+            "populated for every intended employee, and to say whether an "
+            "existing setup was reused and whether the setup is complete. "
+            "You don't need to choose the identifier or send anyone's "
+            "payroll ID."
         )
     return (
         "We have the Entra values. Send this message to your ServiceNow "

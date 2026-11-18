@@ -4,6 +4,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SOLUTION = _ROOT / "solutions" / "ess-maker-skills"
@@ -217,6 +219,123 @@ def test_servicenow_connect_hands_off_to_setup_automatically() -> None:
     assert "does not authorize setup" not in entry
     assert "show the returned typed `/setup` handoff and stop" not in chooser
     assert "automatic Setup handoff" in chooser
+
+
+def test_servicenow_connect_entry_has_custom_claim_and_knowledge_messages() -> None:
+    raw = (
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow" / "entry.md"
+    ).read_text(encoding="utf-8")
+    section = raw.split("## Clarification and recovery Messages", 1)[1].split(
+        "## ServiceNow rules", 1
+    )[0]
+    normalized = " ".join(section.split())
+
+    for message in (
+        # S4 E: claim name omitted, two names, name without completion.
+        "Next, we need the **exact claim name** your Entra administrator "
+        "configured for ServiceNow to use.",
+        "Ask your Entra administrator for that name, or paste the rest of "
+        "their non-sensitive reply. You don't need to resend the Client ID.",
+        "The reply contains two claim names, and we can't tell which one the "
+        "app emits for this setup.",
+        "We have the claim name `{CLAIM_NAME}`. Ask your Entra administrator "
+        "to confirm that its setup is complete, including the appropriate "
+        "format and populated source attribute for every intended employee",
+        # S4 G, H, I.
+        "The custom-claim setup is paused until the identifiers are "
+        "populated for the intended employees.",
+        "You don't need to send an employee list or anyone's identifier here.",
+        "The claim setup isn't ready yet.",
+        "Ask your Entra administrator to review the format guidance in Part "
+        "4 of their message and confirm the completed claim setup.",
+        "Ask your Entra administrator to review the error using the "
+        "claim-customization guidance in Part 4 of their message.",
+        "Don't send tokens, signing keys, or certificate material here.",
+        # S4 K, M, N.
+        "The administrator replies name different claims: Entra confirmed "
+        "`{ENTRA_CLAIM}`, while ServiceNow reported `{SERVICENOW_CLAIM}`.",
+        "We're waiting for your Entra administrator's confirmation of the "
+        "configured claim.",
+        "Then, bring back your Entra administrator's confirmation that the "
+        "custom-claim setup is complete and its exact configured name.",
+        "The connection's **Resource URI** is set to `{CLAIM_NAME}`. That "
+        "field needs the Entra app's **Client ID**, not the claim name.",
+        "If it is shared, select or create a separate supported ESS "
+        "connection for this agent rather than changing the shared "
+        "connection.",
+        # S3 Knowledge-only exit, E, I, K.
+        "We can connect Employee Self-Service HR or IT to ServiceNow, but we "
+        "can't configure the ServiceNow Knowledge connector.",
+        "[ServiceNow Knowledge connector guidance]"
+        "(https://learn.microsoft.com/en-us/microsoftsearch/"
+        "servicenow-knowledge-connector)",
+        "Ask your ServiceNow administrator to confirm that the configuration "
+        "is saved and supports ESS, and name its **User Claim** and **User "
+        "Field**.",
+        "Ask your ServiceNow administrator which **User Claim** and **User "
+        "Field** they confirmed for ESS. Send those values here.",
+        "We won't carry forward confirmation tied to the earlier Client ID.",
+        "That is the Knowledge connector, not the ServiceNow connection used "
+        "by **{AGENT_NAME}**.",
+        "Leave the Knowledge connector unchanged.",
+        "You can select that existing ESS ServiceNow connection instead of "
+        "creating a duplicate.",
+        "ServiceNow Knowledge wasn't retested.",
+    ):
+        assert message in normalized, message
+
+    for guardrail in (
+        "never guess a name from the phrase",
+        "Never infer `email` or **Email**",
+        "never reuse the old metadata URL",
+        "Never add it when Knowledge was not mentioned",
+        "Never delete or silently replace a shared connection",
+    ):
+        assert guardrail in normalized, guardrail
+
+    messages = [
+        block.split("**End message.**", 1)[0]
+        for block in section.split("**Message:**")[1:]
+    ]
+    assert len(messages) >= 25
+    for message in messages:
+        for technical in (
+            "--",
+            "scripts/",
+            "python ",
+            "connectionId",
+            "Current task",
+            "Where and how",
+            "Expected nonsecret evidence",
+            "Completion boundary",
+        ):
+            assert technical not in message, (technical, message)
+    assert "\u2019" not in raw
+
+
+@pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))
+def test_servicenow_entra_guide_reads_claim_from_reply_not_upfront(
+    profile_key: str,
+) -> None:
+    guide = " ".join(
+        (
+            _SOLUTION
+            / "src"
+            / "skills"
+            / "connect"
+            / f"servicenow-da-{profile_key}"
+            / "actions"
+            / "guide-entra-registration.md"
+        )
+        .read_text(encoding="utf-8")
+        .split()
+    )
+
+    assert "Do not ask the maker for the claim up front" in guide
+    assert "Never guess a name from a phrase" in guide
+    assert "never accept `aud`" in guide
+    assert "Selected User Claim" not in guide
+    assert "Clarification and recovery Messages" in guide
 
 
 def test_servicenow_connect_entry_has_flow_clarification_messages() -> None:
@@ -961,7 +1080,10 @@ def test_entra_guides_use_direct_two_field_handoff() -> None:
         assert "Do not add a separate\nEmail/UPN/Pay ID routing question" in guide
         assert "identity-direct-handoff --stage entra" in guide
         assert "record-identity-direct --stage entra" in guide
-        assert "Client ID and User Claim prompts" in " ".join(guide.split())
+        assert (
+            "Do not ask the maker for the claim up front"
+            in " ".join(guide.split())
+        )
         assert "--directory-tenant-id" not in guide
         assert "record-identity-requirement --choice" not in guide
         assert "`identityRequirementChoices`" not in guide

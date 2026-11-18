@@ -7357,6 +7357,14 @@ def test_ready_to_send_messages_are_wrapped_in_one_fenced_block(
         "When they reply, paste their response here without secrets. "
         "We'll use it to prepare the ServiceNow handoff; you don't need to "
         "interpret the settings.\n\n"
+        "If your ServiceNow administrator identifies employees by something "
+        "other than email or UPN, such as a payroll ID, the custom-claim "
+        "part of the message applies. Ask your Entra administrator to "
+        "coordinate with them first, to confirm the exact claim name, its "
+        "format, and that its source attribute is populated for every "
+        "intended employee, and to say whether an existing setup was reused "
+        "and whether the setup is complete. You don't need to choose the "
+        "identifier or send anyone's payroll ID.\n\n"
     )
     for technical in (
         "Target agent:",
@@ -7449,13 +7457,16 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     )
     assert source_text == canonical_entra
     assert "The Entra administrator should:" not in ordinary
-    assert len(entra["questions"]) == 2
+    assert len(entra["questions"]) == 1
     assert [
         item["canonicalQuestion"]["header"]
         for item in entra["questions"]
     ] == [
         "Application client ID",
-        "Selected User Claim",
+    ]
+    assert "Selected User Claim" not in json.dumps(entra["questions"])
+    assert "non-sensitive reply" in entra["questions"][0]["canonicalQuestion"][
+        "question"
     ]
     for item in entra["questions"]:
         canonical = item["canonicalQuestion"]
@@ -7692,7 +7703,7 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
         )
         assert "--directory-tenant-id" not in entra_guide
         assert (
-            "Client ID and User Claim prompts"
+            "Do not ask the maker for the claim up front"
             in " ".join(entra_guide.split())
         )
         assert (
@@ -7784,21 +7795,23 @@ def test_direct_identity_handoff_pauses_before_instructions_until_ack(
         item["canonicalQuestion"]["header"]
         for item in after_client["questions"]
     ] == [
-        "Selected User Claim",
+        "Entra claim name",
     ]
     assert after_client["retainedDirectInput"] == {
         "applicationClientId": APP_CLIENT_ID,
     }
     assert after_client["ordinaryReply"] is None
-    assert after_client["questions"][0]["canonicalQuestion"][
+    claim_followup = after_client["questions"][0]["canonicalQuestion"][
         "question"
-    ].startswith(
-        f"I recorded the Application (client) ID `{APP_CLIENT_ID}`. I still "
-        "need the User Claim name. Ask your Entra administrator which claim "
-        "ServiceNow should use (`email`, `upn`, or a custom claim name). You "
-        "don't need to send the Client ID again.\n\n"
-        "Enter the User Claim name for this exact target:"
+    ]
+    assert claim_followup.startswith(
+        f"We have the Client ID `{APP_CLIENT_ID}`. Next, we need the "
+        "**exact claim name** your Entra administrator configured for "
+        "ServiceNow to use (`email`, `upn`, or a custom claim name).\n\n"
+        "Ask your Entra administrator for that name, or paste the rest of "
+        "their non-sensitive reply. You don't need to resend the Client ID."
     )
+    assert "do not enter `aud`" in claim_followup
     assert all(
         item["canonicalQuestion"]["header"]
         != "Entra administrator availability"
@@ -8320,7 +8333,7 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
     after_client = json.loads(capsys.readouterr().out)
     assert after_client["questions"][0]["askUserArguments"][
         "message"
-    ] == "Selected User Claim"
+    ] == "Entra claim name"
     assert snow.main(
         [
             "record-identity-direct",

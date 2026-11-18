@@ -432,6 +432,260 @@ We'll keep the Client ID already supplied.
 
 **End message.**
 
+**Claim name omitted.** When the Entra reply gives a Client ID but only says a
+custom claim "is configured" without naming it, record nothing about the claim,
+never guess a name from the phrase, and show the first Message. When the reply
+contains two possible claim names, show the second. When an exact name is given
+without confirmation that its setup is complete, show the third, substituting
+the stated name:
+
+**Message:**
+
+We have the Client ID. Next, we need the **exact claim name** your Entra
+administrator configured for ServiceNow to use.
+
+Ask your Entra administrator for that name, or paste the rest of their
+non-sensitive reply. You don't need to resend the Client ID.
+
+**End message.**
+
+**Message:**
+
+The reply contains two claim names, and we can't tell which one the app emits
+for this setup.
+
+Ask your Entra administrator to confirm the exact one ServiceNow should use.
+The confirmed Client ID stays in place.
+
+**End message.**
+
+**Message:**
+
+We have the claim name `{CLAIM_NAME}`. Ask your Entra administrator to confirm
+that its setup is complete, including the appropriate format and populated
+source attribute for every intended employee, as requested in their message.
+
+Bring back their non-sensitive confirmation; you don't need to resend the name
+or the Client ID. Don't include employee identifiers or secrets.
+
+**End message.**
+
+**Claim attributes missing.** When the Entra administrator says the identifiers
+are not populated for every employee who will use this agent, pause the claim
+and show the following. Never populate directory attributes or audit employee
+records:
+
+**Message:**
+
+The custom-claim setup is paused until the identifiers are populated for the
+intended employees.
+
+Ask your Entra administrator to complete that work and return confirmation
+that the claim setup is complete. You don't need to send an employee list or
+anyone's identifier here.
+
+**End message.**
+
+**Claim still in email format.** When the Entra administrator says the custom
+claim still has the default email format, show the following. Never ask the
+maker to choose a claim transformation or edit the application:
+
+**Message:**
+
+The claim setup isn't ready yet.
+
+Ask your Entra administrator to review the format guidance in Part 4 of their
+message and confirm the completed claim setup. The Client ID stays in place.
+
+**End message.**
+
+**Entra error during claim configuration.** When the Entra administrator hits
+an error after adding the custom claim, show the following. Never claim that a
+particular setting will fix an error the available information does not
+establish:
+
+**Message:**
+
+Ask your Entra administrator to review the error using the claim-customization
+guidance in Part 4 of their message.
+
+Return with their confirmation that the claim setup is complete before we
+continue. Don't send tokens, signing keys, or certificate material here.
+
+**End message.**
+
+**Administrator replies contradict each other.** When the Entra and ServiceNow
+replies name different claims, record nothing new and never change either
+administrator's mapping. Treat optional email claims as no evidence that email
+is the intended identifier. Show the following with the two claim names
+substituted:
+
+**Message:**
+
+The administrator replies name different claims: Entra confirmed
+`{ENTRA_CLAIM}`, while ServiceNow reported `{SERVICENOW_CLAIM}`.
+
+Send both replies to the administrators and ask them to agree on a supported
+claim and matching ServiceNow field that accounts for any existing uses. Bring
+back their non-sensitive confirmation of the completed claim setup, saved
+mapping, and any changed registration or claim values.
+
+We'll recheck the affected setup before continuing. Don't include employee
+identifiers or secrets.
+
+The confirmed Client ID stays in place.
+
+**End message.**
+
+**Maker waits for the claim.** When the maker says they are waiting for the
+custom claim to be configured, show the first Message. When they return, show
+the second, rerun `resume-handoff` (which rechecks permission), and resume at
+that waiting action rather than restarting the administrator instructions:
+
+**Message:**
+
+We're waiting for your Entra administrator's confirmation of the configured
+claim.
+
+When they reply, paste their non-sensitive confirmation that the claim setup is
+complete, plus the exact configured claim name. Don't include employee
+identifiers or secrets. The confirmed Client ID is already recorded for this
+run.
+
+**End message.**
+
+**Message:**
+
+We're continuing the ServiceNow setup for **{AGENT_NAME} in
+{ENVIRONMENT_NAME}**.
+
+We're rechecking your permission before we continue. Then, bring back your
+Entra administrator's confirmation that the custom-claim setup is complete and
+its exact configured name.
+
+**End message.**
+
+**Resource URI holds the claim name.** When a supported connection check shows
+that the connection's Resource URI contains the claim name instead of the Entra
+app's Client ID, show the following with the claim name, the recorded Client
+ID, and the agent substituted. Never delete or silently replace a shared
+connection, and never return to Entra registration:
+
+**Message:**
+
+The connection's **Resource URI** is set to `{CLAIM_NAME}`. That field needs
+the Entra app's **Client ID**, not the claim name.
+
+If this connection is only used by this agent, correct it to `{CLIENT_ID}` in
+the supported connection setup. If it is shared, select or create a separate
+supported ESS connection for this agent rather than changing the shared
+connection.
+
+Return here and tell us which connection you used. We'll check this agent's
+connection and link before continuing. The administrator-confirmed mapping stays
+in place.
+
+**End message.**
+
+**Knowledge-only request.** When the maker asks to configure ServiceNow
+Knowledge instead of connecting an ESS agent, show the following and do not
+start or infer an ESS target from the existence of Knowledge:
+
+**Message:**
+
+We can connect Employee Self-Service HR or IT to ServiceNow, but we can't
+configure the ServiceNow Knowledge connector.
+
+Use the [ServiceNow Knowledge connector guidance](https://learn.microsoft.com/en-us/microsoftsearch/servicenow-knowledge-connector)
+for that setup.
+
+**End message.**
+
+**Administrator says only "already working".** A bare statement such as
+"Knowledge already works" or "we use email" never confirms the setup and never
+establishes the User Claim or User Field. Never infer `email` or **Email**.
+Show the first Message for the bare statement and the second for "we use
+email":
+
+**Message:**
+
+Ask your ServiceNow administrator to confirm that the configuration is saved
+and supports ESS, and name its **User Claim** and **User Field**.
+
+Paste their reply here without secrets, or send the missing items individually.
+You don't need to repeat the Entra values.
+
+**End message.**
+
+**Message:**
+
+Ask your ServiceNow administrator which **User Claim** and **User Field** they
+confirmed for ESS. Send those values here.
+
+**End message.**
+
+**Different registration returned.** When the administrators resolve a
+conflict manually and return a different Client ID, discard the earlier
+confirmations tied to the old Client ID, never reuse the old metadata URL,
+connection Resource URI, or mapping evidence, and show:
+
+**Message:**
+
+We'll check the setup information tied to the newly confirmed Client ID before
+continuing.
+
+Ask your ServiceNow administrator to confirm that the configuration for that
+registration is saved and supports ESS, and provide its **User Claim** and
+**User Field**. Bring back their non-sensitive reply and any other changed
+setup values. We won't carry forward confirmation tied to the earlier Client
+ID.
+
+**End message.**
+
+**Maker selects the Knowledge connector.** When the maker asks whether to
+select the ServiceNow Knowledge connection for the ESS agent, show the first
+Message, substituting the agent, the confirmed Client ID, and the ServiceNow
+instance name. When the maker already has a supported ESS ServiceNow
+connection, show the second. Reuse is never inferred merely because a
+connection is named "ServiceNow":
+
+**Message:**
+
+That is the Knowledge connector, not the ServiceNow connection used by
+**{AGENT_NAME}**.
+
+In **{AGENT_NAME} > Settings > Connection Settings > ServiceNow**, create the
+connection using **Microsoft Entra ID User Login**, `{CLIENT_ID}` as **Resource
+URI**, and `{INSTANCE_NAME}` as **Instance name**.
+
+Leave the Knowledge connector unchanged. Return here and tell us which ESS
+connection you used. We'll check this agent's connection and link before
+continuing.
+
+**End message.**
+
+**Message:**
+
+You can select that existing ESS ServiceNow connection instead of creating a
+duplicate.
+
+Return here and tell us which one you selected. We'll check that
+**{AGENT_NAME}** can use it.
+
+**End message.**
+
+**Knowledge not retested.** When the maker disclosed during this run that
+ServiceNow Knowledge shares the same sign-in configuration, append this
+sentence to the final success paragraph as the last sentence, after the
+statement that other requests and sign-in for other employees haven't been
+verified. Never add it when Knowledge was not mentioned:
+
+**Message:**
+
+ServiceNow Knowledge wasn't retested.
+
+**End message.**
+
 **Existing SSO or Graph configuration conflict.** When the maker reports that
 an existing OIDC configuration already serves SSO or the Microsoft Graph
 connector and cannot be changed, never change or troubleshoot it. Show:
