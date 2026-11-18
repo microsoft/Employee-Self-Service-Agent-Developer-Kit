@@ -30,12 +30,9 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-sl
 
 Before running discovery, tell the Maker:
 
-> Preparing read-only ServiceNow connection discovery. If Microsoft sign-in
-> opens, complete it; while the browser is waiting, setup is waiting for
-> authorization, not processing the ServiceNow API. After authorization, the
-> connection inventory request uses a 60-second HTTP connect/read timeout.
-> That is not a 60-second limit for the whole invocation, and a server that
-> continues returning bytes may keep a read active.
+> We're checking your ServiceNow connections, read-only. If a Microsoft
+> sign-in window opens, please complete it, and we'll continue once you're
+> signed in.
 
 Parse the first `DA_ADMIN_PREFLIGHT_PROGRESS_JSON:` marker with
 `stage: authentication` as client/auth preparation. Do not say that the HTTP

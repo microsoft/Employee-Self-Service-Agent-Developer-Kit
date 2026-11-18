@@ -623,13 +623,13 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Local state absence is not evidence" in preflight
     preflight_normalized = " ".join(preflight.split())
     assert "two separate terminal invocations" in preflight_normalized
-    assert "60-second HTTP connect/read timeout" in preflight_normalized
-    assert "not a 60-second limit for the whole invocation" in (
+    assert "We're checking your ServiceNow connections, read-only." in (
         preflight_normalized
     )
-    assert "continues returning bytes may keep a read active" in (
-        preflight_normalized
+    assert "please complete it, and we'll continue once you're signed in" in (
+        preflight_normalized.replace("> ", "")
     )
+    assert "60-second" not in preflight_normalized.split("Parse the first")[0]
     assert "Do not describe authorization waiting as API processing" in (
         preflight_normalized
     )
@@ -932,7 +932,10 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
         " ".join(test.split())
     )
     normalized_preflight = " ".join(preflight.split())
-    assert "60-second HTTP connect/read timeout" in normalized_preflight
+    assert "We're checking your ServiceNow connections, read-only." in (
+        normalized_preflight
+    )
+    assert "60-second" not in normalized_preflight.split("Parse the first")[0]
     assert "stage: authentication" in preflight
     assert "stage: connection-inventory" in preflight
     assert "category: throttled" in preflight
