@@ -15,7 +15,7 @@ import requests
 import respx
 
 import check_entra_profile as check
-from flightcheck import cli, registry
+from flightcheck import cli, graph_client, registry
 from flightcheck.checks.entra_profile import run_entra_profile_checks
 from flightcheck.graph_client import GraphClient, GraphPermissionError
 from tests.conftest import require_validated_mock
@@ -396,6 +396,75 @@ def test_real_cli_reports_beta_coverage_and_nonblocking_access_limits(
         assert "usersChecked" not in row["evidence"]
     assert "Warnings tab" in html and "Needs manual verification" not in html
     assert "--scope checkpoint:" not in html
+
+
+@pytest.mark.parametrize("scope", ["full", "authentication"])
+@pytest.mark.parametrize("access", ["tenant", "own", "default_account", "wrong_account", "wrong_tenant"])
+@respx.mock
+def test_legacy_cli_preserves_requested_account_through_profile_reads(monkeypatch, tmp_path, scope, access):
+    require_validated_mock(graph)
+    require_validated_mock(profiles)
+    monkeypatch.chdir(tmp_path)
+    local = tmp_path / ".local"
+    local.mkdir()
+    local.joinpath("config.json").write_text(json.dumps({
+        "dataverseEndpoint": "https://org.example.test", "ring": "prod", "agents": [],
+    }), encoding="utf-8")
+    requested = "maker@example.test"
+    selected_accounts = []
+    app = Mock()
+    app.get_accounts.return_value = [{"username": "other@example.test"}, {"username": requested}]
+    def cached_grant(scopes, account):
+        selected_accounts.append(account["username"])
+        tenant = str(__import__("uuid").UUID(int=999)) if access == "wrong_tenant" else graph.MOCK_TENANT_ID
+        username = "other@example.test" if access == "wrong_account" else account["username"]
+        return {"access_token": _token(tenant), "id_token_claims": {"preferred_username": username}}
+    app.acquire_token_silent.side_effect = cached_grant
+    app.acquire_token_interactive.side_effect = AssertionError("The requested account has cached credentials")
+    monkeypatch.setattr(graph_client.msal, "SerializableTokenCache", lambda: SimpleNamespace(has_state_changed=False))
+    monkeypatch.setattr(graph_client.msal, "PublicClientApplication", lambda *_a, **_k: app)
+    monkeypatch.setattr("auth.authenticate", Mock(return_value="dataverse-token"))
+    monkeypatch.setattr("auth.discover_tenant", Mock(return_value=graph.MOCK_TENANT_ID))
+    for name in ("PPAdminClient", "PVAClient", "PowerPlatformClient", "AzureArmClient"):
+        monkeypatch.setattr(cli, name, Mock(return_value=SimpleNamespace(
+            authenticate=Mock(), is_configured=False,
+        )))
+    monkeypatch.setattr(cli, "_resolve_target_selection", lambda *_a: None)
+    checks = [("Authentication", run_entra_profile_checks)]
+    monkeypatch.setattr(cli, "FULL_SCOPE", checks)
+    monkeypatch.setitem(cli.SCOPE_MAP, "authentication", checks)
+    profile = profiles.profile()
+    profile["emails"] = [{"address": requested}]
+    if access in {"tenant", "default_account"}:
+        _tenant_routes(2, lambda: profile)
+    elif access == "own":
+        respx.get(f"{graph.GRAPH_BASE}/users").respond(status_code=403)
+        respx.get(f"{profiles.GRAPH_BASE}/me/profile").respond(json=profile)
+    output = tmp_path / "report"
+    account_options = [] if access == "default_account" else ["--preferred-username", requested]
+    monkeypatch.setattr("sys.argv", [
+        "flightcheck", "--scope", scope, *account_options,
+        "--environment-id", "test-environment", "--output", str(output), "--no-open", "--no-telemetry",
+    ])
+    with pytest.raises(SystemExit) as exited:
+        cli.main()
+    payload = json.loads(output.joinpath("results.json").read_text(encoding="utf-8"))
+    row = next(item for item in payload["results"] if item["checkpoint_id"] == "AUTH-PROFILE-001")
+    if access in {"wrong_account", "wrong_tenant"}:
+        assert exited.value.code == 1 and row["status"] == "Error"
+        assert "different" in row["result"] and "Restore the Graph read" in row["remediation"]
+        assert not respx.calls
+    elif access == "own":
+        assert exited.value.code == 0 and row["status"] == "Warning"
+        assert "Own profile only" in row["result"] and "not a deployment blocker" in row["remediation"]
+        assert row["evidence"]["profileVerified"] is True
+        assert app.acquire_token_silent.call_args.args[0] == ["https://graph.microsoft.com/User.Read"]
+    else:
+        assert exited.value.code == 0 and row["status"] == "Passed"
+        assert "2 profiles checked" in row["result"] and row["remediation"] == ""
+    expected_account = "other@example.test" if access == "default_account" else requested
+    assert selected_accounts == [expected_account] * (2 if access == "own" else 1)
+    app.acquire_token_interactive.assert_not_called()
 
 
 @pytest.mark.parametrize("scope,permission", [("me", "User.Read"), ("tenant", "User.Read.All")])

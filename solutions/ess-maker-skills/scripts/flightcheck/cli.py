@@ -3404,7 +3404,7 @@ def main():
         print("Authenticating to Microsoft Graph...")
         graph = GraphClient(tenant_id)
         try:
-            graph.authenticate()
+            graph.authenticate(preferred_username=getattr(args, "preferred_username", None))
             print("  Graph: OK")
         except Exception as e:
             print(f"  Graph: WARNING — {e}")
