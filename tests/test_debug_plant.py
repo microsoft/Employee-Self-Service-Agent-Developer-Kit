@@ -18,6 +18,8 @@ These tests exercise local text only, not a deployed-topic cleanup path.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 import yaml
 
@@ -139,6 +141,45 @@ def test_strip_round_trip_is_byte_identical():
         node_id="sendActivity_DBG_cacheHit", activity="DBG branch=cache-hit")
     out, _ = strip_debug_nodes(planted, node_ids=["sendActivity_DBG_cacheHit"])
     assert out == _TOPIC   # guaranteed-revert property
+
+
+@pytest.mark.parametrize("binding", ["{}", "\n            {}"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_empty_mapping_stays_inside_anchor_and_cleanup_round_trips(binding, newline):
+    source = (
+        "kind: AdaptiveDialog\n"
+        "beginDialog:\n"
+        "  kind: OnRecognizedIntent\n"
+        "  actions:\n"
+        "    - kind: BeginDialog\n"
+        "      id: anchor\n"
+        "      output:\n"
+        f"        binding: {binding}\n"
+        "    # Keep the following action's comment.\n"
+        "    - kind: EndDialog\n"
+        "      id: end\n"
+    ).replace("\n", newline)
+    planted, count = plant_debug_node(
+        source, after_action_id="anchor", node_id="owned_probe", activity="DBG probe",
+    )
+    actions = yaml.safe_load(planted)["beginDialog"]["actions"]
+    assert count == 1
+    assert [action["id"] for action in actions] == ["anchor", "owned_probe", "end"]
+    assert actions[0]["output"]["binding"] == {}
+    cleaned, removed = strip_debug_nodes(planted, node_ids=["owned_probe"])
+    assert (cleaned.encode(), removed) == (source.encode(), ["owned_probe"])
+
+
+def test_serialized_activity_preserves_colon_and_interpolation():
+    message = "DBG Ready for review: total={Topic.Total}"
+    planted, count = plant_debug_node(
+        _TOPIC, after_action_id="beginDialog_fetch",
+        node_id="owned_probe", activity=json.dumps(message),
+    )
+    actions = yaml.safe_load(planted)["beginDialog"]["actions"][0]["elseActions"]
+    assert count == 1 and actions[1]["activity"] == message
+    cleaned, removed = strip_debug_nodes(planted, node_ids=["owned_probe"])
+    assert (cleaned, removed) == (_TOPIC, ["owned_probe"])
 
 
 def test_strip_by_marker_removes_all_dbg_nodes():

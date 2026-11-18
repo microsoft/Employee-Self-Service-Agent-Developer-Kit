@@ -329,6 +329,104 @@ def test_component_gates_block_before_browser_start(exercise, component, failure
     assert not args.output.exists()
 
 
+@pytest.mark.parametrize("field,value", [
+    ("component", None),
+    ("component", []),
+    ("component.id", None),
+    ("component.id", 42),
+    ("component.id", "not-a-guid"),
+    ("target", None),
+])
+def test_invalid_inspection_reports_file_and_field_before_browser(
+    exercise, tmp_path, monkeypatch, capsys, field, value,
+):
+    args, client, calls = exercise
+    inspection = topic_test._read(args.inspection)
+    owner = inspection
+    parts = field.split(".")
+    for part in parts[:-1]:
+        owner = owner[part]
+    if value is None:
+        owner.pop(parts[-1])
+    else:
+        owner[parts[-1]] = value
+    args.inspection.write_text(json.dumps(inspection) + "\n", encoding="utf-8")
+    monkeypatch.setattr(topic_test, "connect_selected_dev_workspace", lambda *_args: (
+        client, TARGET, client.fetch_components(AGENT_ID),
+    ))
+    code = topic_test.main([
+        "capture", "--kit-root", str(tmp_path), "--inspection", str(args.inspection),
+        "--prompt", PROMPT, "--cdp", args.cdp, "--url", URL, "--output", str(args.output),
+    ])
+    result = json.loads(capsys.readouterr().err)
+    assert code == 2 and result["outcome"] == "blocked"
+    assert str(args.inspection) in result["error"]["message"]
+    assert field in result["error"]["message"]
+    assert not calls and not args.output.exists()
+
+
+@pytest.mark.parametrize("filename,field,value,remove", [
+    ("execution.json", "prompt", None, True),
+    ("execution.json", "cdp", None, False),
+    ("execution.json", "url", [], False),
+    ("execution.json", "url", "https://example.test", False),
+    ("execution.json", "target", None, True),
+    ("execution.json", "boundary", None, False),
+    ("execution.json", "boundary.pageTargetId", None, True),
+    ("execution.json", "boundary.expectedTurnIndex", "0", False),
+    ("execution.json", "boundary.chatDocumentTimeOrigin", None, False),
+    ("execution.json", "requireEmptyConversation", "false", False),
+    ("components-before.json", "component", None, False),
+    ("components-before.json", "componentHashes", [], False),
+    ("components-before.json", "componentHashes", {COMPONENT_ID: None}, False),
+    ("capture.json", "observation", None, True),
+    ("capture.json", "observation", None, False),
+    ("capture.json", "observation.responseId", [], False),
+    ("result.json", "observation", [], False),
+])
+def test_invalid_observation_evidence_blocks_before_browser_or_new_output(
+    exercise, tmp_path, monkeypatch, capsys, filename, field, value, remove,
+):
+    args, client, calls = exercise
+    topic_test._exercise(args, tmp_path, client, TARGET)
+    calls.clear()
+    path = args.output / filename
+    evidence = topic_test._read(path)
+    owner = evidence
+    parts = field.split(".")
+    for part in parts[:-1]:
+        owner = owner[part]
+    if remove:
+        owner.pop(parts[-1])
+    else:
+        owner[parts[-1]] = value
+    path.write_text(json.dumps(evidence) + "\n", encoding="utf-8")
+    if filename == "result.json":
+        (args.output / "capture.json").unlink()
+    existing = set(args.output.parent.iterdir())
+    monkeypatch.setattr(topic_test, "connect_selected_dev_workspace", lambda *_args: (
+        client, TARGET, client.fetch_components(AGENT_ID),
+    ))
+    code = topic_test.main([
+        "observe", "--kit-root", str(tmp_path), "--previous", str(args.output),
+    ])
+    result = json.loads(capsys.readouterr().err)
+    assert code == 2 and result["outcome"] == "blocked"
+    assert str(path) in result["error"]["message"]
+    assert field in result["error"]["message"]
+    assert not calls and set(args.output.parent.iterdir()) == existing
+
+
+def test_invalid_json_keeps_parse_cause_and_evidence_path(exercise, tmp_path):
+    args, client, calls = exercise
+    args.inspection.write_text('{"component":', encoding="utf-8")
+    with pytest.raises(ValueError) as raised:
+        topic_test._exercise(args, tmp_path, client, TARGET)
+    assert str(args.inspection) in str(raised.value)
+    assert isinstance(raised.value.__cause__, json.JSONDecodeError)
+    assert not calls
+
+
 def test_timeout_then_observe_preserves_original_and_does_not_send(exercise, tmp_path):
     args, client, calls = exercise
     original, code = topic_test._exercise(args, tmp_path, client, TARGET)
@@ -951,8 +1049,9 @@ def test_capture_cli_returns_observations_without_counting_a_pass(
     assert calls.count(("send", args.prompt)) == 1
 
 
-def test_basic_only_browser_testing_is_explicitly_unsupported(
-    general_exercise, tmp_path, monkeypatch, capsys,
+@pytest.mark.parametrize("operation", ["capture", "new-conversation", "prepare-browser"])
+def test_missing_browser_dependency_preserves_cause_and_manual_fallback(
+    general_exercise, tmp_path, monkeypatch, capsys, operation,
 ):
     args, client, calls = general_exercise
     monkeypatch.setattr(topic_test, "connect_selected_dev_workspace", lambda *_args: (
@@ -966,20 +1065,26 @@ def test_basic_only_browser_testing_is_explicitly_unsupported(
         return import_module(name, *import_args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", missing_driver)
-    code = topic_test.main([
-        "capture", "--kit-root", str(tmp_path), "--inspection", str(args.inspection),
-        "--prompt", args.prompt, "--cdp", args.cdp, "--url", URL, "--output", str(args.output),
-    ])
+    command = [operation, "--kit-root", str(tmp_path), "--cdp", args.cdp, "--url", URL]
+    if operation == "capture":
+        command.extend([
+            "--inspection", str(args.inspection), "--prompt", args.prompt,
+            "--output", str(args.output),
+        ])
+    code = topic_test.main(command)
     output = capsys.readouterr()
     result = json.loads(output.err)
     assert code == 2 and not output.out
     assert result["outcome"] == "blocked"
-    assert "Basic-only installations do not support browser testing" in result["error"]["message"]
+    message = result["error"]["message"]
+    assert "scripts/requirements.txt" in message and "Python environment" in message
+    assert "manual debugging" in message and "Copilot Studio Test pane" in message
+    assert "playwright install" not in message and "Basic-only" not in message
     assert result["error"]["cause"]["message"] == "No module named 'playwright'"
     assert not calls and not args.output.exists()
 
 
-@pytest.mark.parametrize("failure", ["changed", "readback"])
+@pytest.mark.parametrize("failure", ["changed", "readback", "generated-fields"])
 def test_capture_component_integrity_failure_preserves_non_graded_reply(
     general_exercise, component, tmp_path, monkeypatch, failure,
 ):
@@ -993,7 +1098,10 @@ def test_capture_component_integrity_failure_preserves_non_graded_reply(
         if reads > 1:
             if failure == "readback":
                 raise topic_test.requests.ConnectionError("AgentBuilder readback unavailable")
-            component["status"] = "Inactive"
+            if failure == "generated-fields":
+                component["dialog"]["diagnostics"] = [{"message": "Changed generated evidence"}]
+            else:
+                component["status"] = "Inactive"
         return fetch(agent_id)
 
     monkeypatch.setattr(client, "fetch_components", component_read)
@@ -1066,6 +1174,38 @@ def test_activation_preview_is_readonly_and_confirmation_changes_only_selected_s
     assert result["componentReadback"]["component"] == desired
     assert all(value == [] for key, value in writes[0].items() if key.endswith("Changes")
                and key != "botComponentChanges")
+
+
+@pytest.mark.parametrize("generated_only", [True, False])
+def test_activation_normalizes_only_generated_dialog_fields_and_keeps_raw_evidence(
+    activation, component, tmp_path, monkeypatch, generated_only,
+):
+    args, client, _calls, runtime, writes = activation
+    args.yes = True
+    original = deepcopy(component)
+    save = runtime.update_dialog_components
+
+    def save_with_readback_changes(*save_args, **kwargs):
+        saved = save(*save_args, **kwargs)
+        component["dialog"]["diagnostics"] = [{"message": "Generated validation evidence"}]
+        component["dialog"]["beginDialog"]["structuredCondition"] = {"generated": True}
+        if not generated_only:
+            component["dialog"]["modelDescription"] = "Different authored behavior"
+        return saved
+
+    monkeypatch.setattr(runtime, "update_dialog_components", save_with_readback_changes)
+    result, code = topic_test._activate(args, tmp_path, client, TARGET)
+    assert code == (0 if generated_only else 2)
+    assert result["outcome"] == ("activated" if generated_only else "incomplete")
+    assert result["writeAccepted"] is result["verified"] is True
+    assert result["stateMatchesRequest"] is generated_only
+    assert len(writes) == 1
+    assert result["componentReadback"]["component"] == component
+    assert result["componentDrift"]["changed"] == [COMPONENT_ID]
+    assert topic_test._read(args.output / "components-before.json")["component"] == original
+    assert topic_test._read(args.output / "components-after.json") == result["componentReadback"]
+    if not generated_only:
+        assert "componentReadbackError" in result["error"]
 
 
 @pytest.mark.parametrize("change", ["target", "dialog", "schema", "parent", "state"])

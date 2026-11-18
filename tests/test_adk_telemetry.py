@@ -74,6 +74,10 @@ def test_script_entry_point_observes_crash_without_changing_exception(script_id,
     assert data["failure_line"] == 2
     assert data["agent_type"] == "declarative_agent"
     assert "customer content" not in json.dumps(events)
+    assert not any(
+        event["name"] == "adk.capability.use"
+        for event in _captured_events(captured_post)
+    )
 
 
 @pytest.mark.parametrize("failure", [OSError, ValueError])

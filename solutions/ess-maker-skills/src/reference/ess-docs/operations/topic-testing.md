@@ -51,6 +51,8 @@ The operation checks target/content again, changes only the selected topic's sta
 
 Reuse a valid dedicated browser and its connection facts when available.
 
+If the browser-testing dependency cannot be loaded, retain the underlying import error and restore `scripts/requirements.txt` in the same Python environment that runs the command. No Playwright browser download is required. If automation remains unavailable, guide the maker through manual debugging in the selected agent's Copilot Studio Test pane, retaining the current permissions and evidence.
+
 Before calling `prepare-browser`, recover existing connection facts from the session or this workspace's `.local/topic-tests/` evidence. When the record is not already known, use filesystem discovery that includes ignored folders:
 
 ```powershell
@@ -94,7 +96,7 @@ Prepare a fresh window when the existing one is unavailable or unusable, after i
 
 ### Browser refresh signals
 
-If expected controls are not visible, try CDP `Emulation.clearDeviceMetricsOverride` on the selected test page, then recheck visibility.
+If expected controls are not visible, the session may use an available browser/CDP tool to issue `Emulation.clearDeviceMetricsOverride` against the exact selected test page, then recheck visibility. This is a separate session-directed action, not an option of the testing CLI or an automatic capture step.
 
 Consider refreshing when:
 
@@ -105,7 +107,7 @@ Consider refreshing when:
 
 Treat these as indicators, not proof. Missing diagnostic output alone is insufficient.
 
-Make a best-effort refresh of the same signed-in window, preserving evidence and reconciling any uncertain Send first. Reopen Test and establish a new conversation before retesting. Use a fresh window only when the existing one remains unusable; leave normal closure to the maker.
+Make a best-effort refresh of the same signed-in window through available browser controls, preserving evidence and reconciling any uncertain Send first. When browser tooling is unavailable, guide the maker to refresh that selected page and reopen Test manually. Establish a new conversation before retesting. Use a fresh window only when the existing one remains unusable; leave normal closure to the maker. The session chooses each recovery action from the observed state; do not add refresh, reset or retries inside capture.
 
 ## Confirm browser readiness
 
@@ -195,7 +197,7 @@ Allow for LLM synthesis of topic output; do not assume a `SendActivity` is displ
 Ready for review: total={Topic.Total}
 ```
 
-Use `plant_debug_node` from `scripts/debug_plant.py` to prepare the local delta. Require exactly one insertion at the intended sibling boundary, an unambiguous anchor and an unused diagnostic ID. Preserve valid text interpolation rather than turning a variable reference into literal text. Convert/preview the proposed YAML through ordinary topic authoring and inspect the resulting action and diagnostics. Conversion alone does not establish runtime reachability or value visibility.
+Use `plant_debug_node` from `scripts/debug_plant.py` to prepare the local delta. Its `activity` argument takes an already-serialized, single-line YAML string scalar, such as `json.dumps(message)`, not raw unquoted message text; the helper does not quote it again. Require exactly one insertion at the intended sibling boundary, an unambiguous anchor and an unused diagnostic ID. Preserve valid text interpolation rather than turning a variable reference into literal text. Convert/preview the proposed YAML through ordinary topic authoring and inspect the resulting action and diagnostics. Conversion alone does not establish runtime reachability or value visibility.
 
 Before any possible save, retain a small workspace-local cleanup record under the attempt's `.local/topic-tests/` evidence directory: selected target and mapped topic identity, action anchor, exact diagnostic action ID, intended owned node content and the original read/proposed-save evidence paths. Keep the record if save acceptance or readback is uncertain. This records ownership, not a second debugging workflow.
 

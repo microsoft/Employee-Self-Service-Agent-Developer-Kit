@@ -52,7 +52,10 @@ def _content_end(node) -> int:
     if isinstance(node, ScalarNode):
         return node.end_mark.line + bool(node.end_mark.column)
     if isinstance(node, MappingNode):
-        return max(_content_end(child) for pair in node.value for child in pair)
+        return max(
+            (_content_end(child) for pair in node.value for child in pair),
+            default=node.end_mark.line + bool(node.end_mark.column),
+        )
     return max((_content_end(child) for child in node.value), default=node.end_mark.line)
 
 
@@ -116,7 +119,12 @@ def plant_debug_node(
     ``id:`` is ``after_action_id``. Returns (modified_data, count). count==0 (and
     data unchanged) when the anchor action id is absent — the caller treats that
     as fatal (a mis-targeted plant). Duplicate anchors and an already-used
-    diagnostic action ID raise DebugPlantError before returning a plant."""
+    diagnostic action ID raise DebugPlantError before returning a plant.
+
+    ``activity`` is an already-serialized, single-line YAML string scalar.
+    Pass ``json.dumps(message)`` for message text; it is inserted without
+    another quoting pass so interpolation and literal punctuation are preserved.
+    """
     # The node is written as single-line YAML scalars; a line break in either
     # value would inject additional YAML lines (extra nodes) at the anchor indent.
     for field, value in (("node_id", node_id), ("activity", activity)):

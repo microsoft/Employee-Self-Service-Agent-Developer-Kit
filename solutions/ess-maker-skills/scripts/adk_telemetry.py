@@ -135,6 +135,7 @@ SCRIPT_ERROR_ENTRY_POINTS = {
     "setup_alm_import": "setup",
     "setup_existing_da": "setup",
     "setup_mos_starter": "setup",
+    "topic_test": "topic_test",
     "validate_branding": "",
     "workday_connect": "connect",
 }
