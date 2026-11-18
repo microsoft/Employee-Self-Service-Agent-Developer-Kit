@@ -21,10 +21,10 @@ Read the applicable section and its subsections before its operation. Read the c
 
 Use the canonical ready workspace and its selected Maker identity. Never borrow another workspace's authentication cache or change global profiles. If authentication needs a human action, tell the maker and pause for it. Do not silently select the first account.
 
-Carry the selected topic and intended behavior from authoring or the request. When identity is unknown, use `python scripts/native_topic_test.py list` and disambiguate only as needed. A missing local YAML file does not establish remote absence.
+Carry the selected topic and intended behavior from authoring or the request. When identity is unknown, use `python scripts/topic_test.py list` and disambiguate only as needed. A missing local YAML file does not establish remote absence.
 
 ```powershell
-python scripts/native_topic_test.py inspect --component-id "<selected id>"
+python scripts/topic_test.py inspect --component-id "<selected id>"
 ```
 
 Inspection returns the authoritative component, triggers/state and a workspace-local inspection file. Ordinary dialogs can be inspected; `exactMode.supported` only describes compatibility with the optional fixed-response `run` assertion. Plan testing against intended behavior, not whatever reply happens to be saved. If current content materially differs from the authorized target or intent, resolve that difference rather than silently substituting an expectation.
@@ -36,13 +36,13 @@ Run commands from the Maker Kit folder. `--kit-root` can explicitly identify tha
 Saving a topic does not activate or publish it. For an inactive selected topic, preview the separate activation operation:
 
 ```powershell
-python scripts/native_topic_test.py activate --inspection "<inspection file>"
+python scripts/topic_test.py activate --inspection "<inspection file>"
 ```
 
 Show the effect and use the shared [Testing offers](../../../skills/topics/testing-experience.md#testing-offers) explanations and native control when activation permission is missing. For already-requested testing, use its activation-only variation to obtain only the missing activation permission and retain test-only or test-and-fix scope. Honor no-activation requests. Only after explicit authorization for this selected topic:
 
 ```powershell
-python scripts/native_topic_test.py activate --inspection "<inspection file>" --yes
+python scripts/topic_test.py activate --inspection "<inspection file>" --yes
 ```
 
 The operation checks target/content again, changes only the selected topic's state/status, and reads back its state without publishing or changing competitors. Continue only after authoritative Active state is confirmed. Reinspect after activation to obtain the current capture boundary. Preserve known write acceptance and `activationOutcome`, `writeAccepted` and `verified` facts when later readback or local output fails; inspect actual state before any retry, never blindly activate again.
@@ -78,7 +78,7 @@ Preserve and inspect any error before declaring the browser unavailable.
 Otherwise, prepare a new Microsoft Edge InPrivate window for the selected agent:
 
 ```powershell
-python scripts\native_topic_test.py prepare-browser `
+python scripts\topic_test.py prepare-browser `
   --url "<trusted selected-agent Studio URL>"
 ```
 
@@ -122,7 +122,7 @@ Preparation is separate from capture and is not recovery from an uncertain Send.
 When a fresh scenario or post-save retest needs a new conversation, use the existing browser connection:
 
 ```powershell
-python scripts\native_topic_test.py new-conversation `
+python scripts\topic_test.py new-conversation `
   --cdp "<confirmed numeric-loopback endpoint>" `
   --url "<confirmed full Studio URL>"
 ```
@@ -131,14 +131,14 @@ The operation validates the selected agent and browser target, calls `DagaChatDr
 
 Fresh browser loads or browser resets may not show the direct New chat button. Absence alone does not establish a broken browser or a fresh conversation. Failure output retains the original cause, navigation-expansion facts and `newChatClickAttempted`; inspect those facts and the current pane before ad hoc recovery. After an attempted New chat click with an uncertain outcome, inspect without replaying it. Do not send a message merely to make the button appear.
 
-The session chooses when to call this operation and how to continue after its result or error. Reuse valid readiness and test-and-fix permission; starting a new conversation does not itself require another readiness question. Follow [post-save conversation freshness](native-topic-debugging.md#establish-post-save-conversation-freshness) for the next capture, and preserve conversation context between related turns.
+The session chooses when to call this operation and how to continue after its result or error. Reuse valid readiness and test-and-fix permission; starting a new conversation does not itself require another readiness question. Follow [post-save conversation freshness](topic-debugging.md#establish-post-save-conversation-freshness) for the next capture, and preserve conversation context between related turns.
 
 ## Capture an approved turn
 
 Choose a unique output directory for each authorized turn:
 
 ```powershell
-python scripts/native_topic_test.py capture `
+python scripts/topic_test.py capture `
   --inspection "<current inspection file>" `
   --prompt "<approved test message>" `
   --cdp "<confirmed numeric-loopback endpoint>" `
@@ -150,7 +150,7 @@ Capture accepts an approved prompt rather than requiring a saved trigger. It rec
 
 The result includes the existing reply classifier's `signal` (`ok`, `consent_gate`, `timeout` or `empty`) and `errorShaped` advisory. These do not grade the topic or prove a backend ran. Read every captured bubble, not just the first message.
 
-After a saved change or when an independent conversation is required, follow [post-save conversation freshness](native-topic-debugging.md#establish-post-save-conversation-freshness). `capture` and `run` accept `--require-empty-conversation` to reject a nonempty or unverified prepared turn boundary before Send. The flag never resets the conversation and never falls back to an old one. It verifies an empty transcript, not a new server-side conversation or execution of the saved version; retain the actual preparation and observed-version evidence separately. `observe` preserves the original gate facts without applying a new empty-conversation requirement.
+After a saved change or when an independent conversation is required, follow [post-save conversation freshness](topic-debugging.md#establish-post-save-conversation-freshness). `capture` and `run` accept `--require-empty-conversation` to reject a nonempty or unverified prepared turn boundary before Send. The flag never resets the conversation and never falls back to an old one. It verifies an empty transcript, not a new server-side conversation or execution of the saved version; retain the actual preparation and observed-version evidence separately. `observe` preserves the original gate facts without applying a new empty-conversation requirement.
 
 Use further completed turns to exercise authorized paraphrases or conversation branches. A card is observed evidence, not automatically a failure. The current driver does not submit interactive-card actions, inject backend faults or provide exact-topic invocation traces. Report a specific unperformed interaction or collaborate with the maker when needed; do not claim those capabilities or reject all ordinary dialogs because optional exact-mode is incompatible.
 
@@ -163,7 +163,7 @@ Use `run` instead of `capture` only when the intended assertion is a saved trigg
 The default observation is bounded to 90 seconds. A timeout is incomplete evidence, not proof of product failure. Do not replay the message by choosing another output path or silently increase every timeout. Wait for a still-running command to finish.
 
 ```powershell
-python scripts/native_topic_test.py observe `
+python scripts/topic_test.py observe `
   --previous ".local/topic-tests/<original attempt>"
 ```
 
@@ -203,7 +203,7 @@ Before any possible save, retain a small workspace-local cleanup record under th
 
 Use the ordinary topic update preview/save with the fresh read as `--expected`, retaining its concurrency checks and authoritative readback. The existing scoped debugging authorization covers this in-scope temporary edit without an independent per-node approval. Inspect the saved diagnostic content and retain its canonical identity/content for precise cleanup.
 
-Obtain a fresh `native_topic_test.py inspect` result after the save, establish [post-save conversation freshness](native-topic-debugging.md#establish-post-save-conversation-freshness), then use a bounded `capture --require-empty-conversation` with the authorized scenario and current browser readiness. Fresh AgentBuilder readback and a page reload alone do not establish updated-content execution. Read values actually present in the correlated reply alongside the normal reply and cards. A saved expression, accepted save or absent bubble does not establish the variable's runtime value. Card DOM text can omit information such as dropdown options; a deliberately chosen count or safe projected field can provide evidence that the rendering alone lacks.
+Obtain a fresh `topic_test.py inspect` result after the save, establish [post-save conversation freshness](topic-debugging.md#establish-post-save-conversation-freshness), then use a bounded `capture --require-empty-conversation` with the authorized scenario and current browser readiness. Fresh AgentBuilder readback and a page reload alone do not establish updated-content execution. Read values actually present in the correlated reply alongside the normal reply and cards. A saved expression, accepted save or absent bubble does not establish the variable's runtime value. Card DOM text can omit information such as dropdown options; a deliberately chosen count or safe projected field can provide evidence that the rendering alone lacks.
 
 If a value is unavailable, inspect the capture, message wording, conversation freshness and diagnostics before drawing conclusions. A failure before the diagnostic boundary can prevent observation. When useful, move the owned message one boundary earlier, before the suspected `Split`, `First`, parse, card or other consumer, and repeat a deliberate probe within scope. Reconcile and remove the previous owned message before moving it; keep the ownership record current before another possible save. Compare observed values and message content across boundaries without assuming that an absent message alone proves reachability or the cause. Do not move it later as a substitute for earlier-boundary localization. Do not assume exact-topic invocation or reset/reload the conversation to conceal an uncertain Send; use independent `observe` against that attempt first.
 

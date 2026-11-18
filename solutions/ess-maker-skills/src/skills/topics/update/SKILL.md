@@ -109,6 +109,6 @@ Unchanged-intent recovery does not require approval merely because another opera
 
 ## 5. Testing and evaluation handoff
 
-Read [Topic testing continuation](../testing-experience.md#topic-testing-continuation) when reaching this handoff. Carry the selected topic, latest intended behavior, actual save/state, existing authorization and declined corrections. Check `scripts/native_topic_test.py` before offering runnable testing; if unavailable, report conversation acceptance as pending. Enter [the testing owner](../test/SKILL.md) only within the shared consent rules. Do not activate or publish as a save side effect.
+Read [Topic testing continuation](../testing-experience.md#topic-testing-continuation) when reaching this handoff. Carry the selected topic, latest intended behavior, actual save/state, existing authorization and declined corrections. Check `scripts/topic_test.py` before offering runnable testing; if unavailable, report conversation acceptance as pending. Enter [the testing owner](../test/SKILL.md) only within the shared consent rules. Do not activate or publish as a save side effect.
 
 At the end of the authoring iteration, identify relevant affected evaluation cases across sets, including routing, negative, fallback, and cross-topic cases. A topic-only save may leave disclosed evaluation mismatches. Separately requested evaluation changes remain owned by `src/skills/evaluations/dispatcher/SKILL.md`.

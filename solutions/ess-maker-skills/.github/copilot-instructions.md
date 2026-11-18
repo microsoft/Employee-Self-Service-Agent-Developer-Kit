@@ -355,7 +355,7 @@ After canonical DA setup is complete:
   authorize changes;
 - local authoring, review, and scan remain available; conversation testing
   requires the installed bounded testing capability. If
-  `scripts/native_topic_test.py` is absent, report conversation acceptance as
+  `scripts/topic_test.py` is absent, report conversation acceptance as
   pending;
 - general `/push` follows `.github/prompts/push.prompt.md`: inspect local
   pending changes, then compose selected topic, instruction, and evaluation

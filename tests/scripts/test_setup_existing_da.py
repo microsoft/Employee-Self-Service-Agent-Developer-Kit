@@ -3019,11 +3019,11 @@ def test_selected_dev_connection_rejects_explicit_blank_account(
     auth.assert_not_called()
 
 
-@pytest.mark.parametrize("operation", ["topic-list", "native-list", "prepare-browser"])
+@pytest.mark.parametrize("operation", ["topic-list", "topic-test-list", "prepare-browser"])
 def test_topic_operations_reuse_the_validated_connection_inventory(
     tmp_path, monkeypatch, capsys, operation,
 ):
-    import native_topic_test
+    import topic_test
     import topic_authoring
 
     client = FakeClient()
@@ -3041,14 +3041,14 @@ def test_topic_operations_reuse_the_validated_connection_inventory(
     monkeypatch.setattr(setup_existing_da, "AgentBuilderClient", lambda *_args, **_kwargs: client)
     if operation == "topic-list":
         code = topic_authoring.main(["list", "--kit-root", str(tmp_path)])
-    elif operation == "native-list":
-        code = native_topic_test.main(["list", "--kit-root", str(tmp_path)])
+    elif operation == "topic-test-list":
+        code = topic_test.main(["list", "--kit-root", str(tmp_path)])
     else:
         monkeypatch.setattr(
-            native_topic_test, "_prepare_browser",
+            topic_test, "_prepare_browser",
             lambda *_args: ({"outcome": "prepared"}, 0),
         )
-        code = native_topic_test.main([
+        code = topic_test.main([
             "prepare-browser", "--kit-root", str(tmp_path), "--url", AGENT_URL,
         ])
     assert code == 0

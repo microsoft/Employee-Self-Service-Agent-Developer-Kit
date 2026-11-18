@@ -12,7 +12,7 @@ from daga_chat_driver import (
     DagaChatDriver, NewChatError, _Snapshot, validate_cdp_endpoint, validate_studio_url,
 )
 from drive_surface import Bubble, aggregate_turn
-from native_topic_test import assess
+from topic_test import assess
 
 TARGET = {
     "environment": {"id": "00000000-0000-4000-8000-000000001111", "ring": "test"},

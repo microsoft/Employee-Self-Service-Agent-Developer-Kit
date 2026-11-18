@@ -2578,7 +2578,7 @@ def test_da_workflow_authoring_routes_are_notice_only() -> None:
 
     test_prompt = (_PROMPTS / "test.prompt.md").read_text(encoding="utf-8")
     normalized_test = " ".join(test_prompt.split()).casefold()
-    assert "scripts/native_topic_test.py" in normalized_test
+    assert "scripts/topic_test.py" in normalized_test
     assert "conversation acceptance as pending" in normalized_test
     assert "power automate authoring and runtime changes take place outside adk" in normalized_test
     assert "independent target/authentication prerequisites" in normalized_test

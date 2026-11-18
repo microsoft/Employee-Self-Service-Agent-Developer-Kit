@@ -215,6 +215,6 @@ Each owner acknowledges only captured submitted content or approved deletion sco
 remain pending. Do not concatenate owner reports or menus, blindly replay an
 uncertain write, refresh setup automatically or reset the whole baseline.
 
-For created or updated topics, read [Topic testing continuation](../../src/skills/topics/testing-experience.md#topic-testing-continuation) when reaching the handoff. Carry each selected topic's actual save/state, existing authorization and declined corrections. If `scripts/native_topic_test.py` is absent, report conversation acceptance as pending. Do not offer activation or conversation testing for deleted topics; carry their outcomes and remaining reference issues into the report without starting repairs.
+For created or updated topics, read [Topic testing continuation](../../src/skills/topics/testing-experience.md#topic-testing-continuation) when reaching the handoff. Carry each selected topic's actual save/state, existing authorization and declined corrections. If `scripts/topic_test.py` is absent, report conversation acceptance as pending. Do not offer activation or conversation testing for deleted topics; carry their outcomes and remaining reference issues into the report without starting repairs.
 
 A save does not activate, publish, refresh review coverage, resolve findings or authorize evaluation execution. Preserve per-component results when topic and instruction outcomes differ. Finish without a generic What next form when no follow-up applies.

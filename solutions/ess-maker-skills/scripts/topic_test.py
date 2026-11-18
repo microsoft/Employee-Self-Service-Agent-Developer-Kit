@@ -26,7 +26,7 @@ from drive_surface import DriveResult, DriveSurface
 from minimalbot_evaluation import ComponentEditError, MinimalBotEvaluationError
 from reply_signal import ReplySignal, classify_reply_signal, looks_like_error
 from setup_existing_da import _expanded_literal_activity, connect_selected_dev_workspace
-from topic_authoring import _native_client
+from topic_authoring import _native_client as _component_client
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -308,7 +308,7 @@ def _inspection(component: dict[str, Any], target: dict[str, Any]) -> dict[str, 
         "response": response, "triggers": triggers,
         "exactMode": exact_mode,
         "inspectionEvidence": {
-            "source": "native-components", "componentHash": _hash(component),
+            "source": "agentbuilder-components", "componentHash": _hash(component),
             "triggerKind": begin.get("$kind") if isinstance(begin, dict) else None,
         },
     }
@@ -365,7 +365,7 @@ def assess(
     capture: DriveResult | None,
     expected: str,
     selected_unchanged: bool | None,
-    native_drift: dict[str, list[str]] | None = None,
+    component_drift: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     signal = (
         classify_reply_signal(capture.reply_text, timed_out=capture.timed_out)
@@ -379,7 +379,7 @@ def assess(
     return {
         "signal": signal.value if signal is not None else None,
         "errorShaped": looks_like_error(capture.reply_text) if capture is not None else None,
-        "componentDrift": native_drift,
+        "componentDrift": component_drift,
         "checks": {
             "savedResponse": {
                 "requirementType": "requiredOutcome", "requirementId": "saved-response",
@@ -438,7 +438,7 @@ def _exercise(
         if execution["target"] != inspection["target"]:
             raise ValueError("The original execution and inspection target differ.")
         cdp, url = execution["cdp"], execution["url"]
-        original_baseline = _read(original / "native-before.json")
+        original_baseline = _read(original / "components-before.json")
         require_empty_conversation = execution.get("requireEmptyConversation", False)
     before = _components(client, target, payload=initial_components)
     component_id, component = _selected(inspection, target, before)
@@ -462,9 +462,9 @@ def _exercise(
     output = _new_output(root, args.output, args.operation)
     _write(output / "inspection.json", inspection)
     baseline = _snapshot(before, component_id)
-    _write(output / "native-before.json", baseline)
+    _write(output / "components-before.json", baseline)
     _write(output / "case.json", {
-        "testCaseId": "native-fixed-response",
+        "testCaseId": "fixed-response",
         "description": "The selected fixed-response topic returns its approved saved response.",
         "requiredOutcomes": [{
             "id": "saved-response",
@@ -576,9 +576,9 @@ def _exercise(
         comparison = original_baseline if original_baseline is not None else baseline
         drift = _drift(comparison["componentHashes"], after["componentHashes"])
         selected_unchanged = _topic_state(comparison["component"]) == _topic_state(after["component"])
-        record("native-after.json", after)
+        record("components-after.json", after)
     except (AgentBuilderError, requests.RequestException, ValueError) as exc:
-        errors["nativeReadbackError"] = _error_facts(exc)
+        errors["componentReadbackError"] = _error_facts(exc)
     assessment = assess(capture, expected, selected_unchanged, drift) if exact_mode else {
         "graded": False,
         "signal": (
@@ -604,7 +604,7 @@ def _exercise(
         "submissionMayHaveOccurred": submission_may_have_occurred,
         "requireEmptyConversation": require_empty_conversation,
         "capture": capture_facts,
-        "nativeReadback": after,
+        "componentReadback": after,
         **({"originalRun": str(original)} if original is not None else {}),
         **assessment,
         "limitations": [
@@ -651,14 +651,14 @@ def _activate(
     output = _new_output(root, args.output, "activate")
     baseline = _snapshot(before, component_id)
     _write(output / "inspection.json", inspection)
-    _write(output / "native-before.json", baseline)
+    _write(output / "components-before.json", baseline)
     result: dict[str, Any] = {
         "schemaVersion": 1, "operation": "activate",
         "target": _identity(target), "componentId": component_id,
         "evidenceDirectory": str(output), "before": baseline,
         "requestedState": {"state": "Active", "status": "Active"},
         "writeAttempted": False, "writeAccepted": None, "verified": False,
-        "nativeReadback": None, "stateMatchesRequest": None, "componentDrift": None,
+        "componentReadback": None, "stateMatchesRequest": None, "componentDrift": None,
         "published": False, "outcome": "preview",
     }
     errors = {}
@@ -679,13 +679,13 @@ def _activate(
             "requestedState": result["requestedState"], "writeMayHaveOccurred": True,
         })
         try:
-            saved = _native_client(client, target).update_dialog_components([{
+            saved = _component_client(client, target).update_dialog_components([{
                 "componentId": component["id"], "schemaName": component["schemaName"],
                 "expectedComponent": component,
                 "state": "Active", "status": "Active",
             }], _retry_on_conflict=False)
             result.update({
-                "nativeResult": saved, "writeAttempted": saved["writeAttempted"],
+                "saveResult": saved, "writeAttempted": saved["writeAttempted"],
                 "writeAccepted": True if saved["writeAttempted"] else None,
                 "verified": saved["verified"],
                 "outcome": "activated" if saved["writeAttempted"] else "unchanged",
@@ -706,15 +706,15 @@ def _activate(
             after = _snapshot(_components(client, target), component_id)
             desired = {**_topic_state(component), "state": "Active", "status": "Active"}
             result.update({
-                "nativeReadback": after,
+                "componentReadback": after,
                 "stateMatchesRequest": _topic_state(after["component"]) == desired,
                 "componentDrift": _drift(baseline["componentHashes"], after["componentHashes"]),
             })
-            record("native-after.json", after)
+            record("components-after.json", after)
             if not result["stateMatchesRequest"]:
                 raise ValueError("AgentBuilder readback differs from the inspected topic with Active state.")
         except (AgentBuilderError, requests.RequestException, ValueError) as exc:
-            errors["nativeReadbackError"] = _error_facts(exc)
+            errors["componentReadbackError"] = _error_facts(exc)
     result["activationOutcome"] = result["outcome"]
     if errors:
         result["error"] = errors

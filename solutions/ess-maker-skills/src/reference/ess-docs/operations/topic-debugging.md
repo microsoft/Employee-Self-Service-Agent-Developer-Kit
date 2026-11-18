@@ -1,6 +1,6 @@
 # Debug topic behavior
 
-Use this procedure with the topic-testing owner, the applicable [bounded operations](native-topic-testing.md), the [shared foundation](../../../skills/topics/experience-contract.md) and [Testing experience](../../../skills/topics/testing-experience.md). The session selects probes, interprets evidence, chooses the fault surface and coordinates authorized corrections. Do not generate a second workflow engine or batch runner.
+Use this procedure with the topic-testing owner, the applicable [bounded operations](topic-testing.md), the [shared foundation](../../../skills/topics/experience-contract.md) and [Testing experience](../../../skills/topics/testing-experience.md). The session selects probes, interprets evidence, chooses the fault surface and coordinates authorized corrections. Do not generate a second workflow engine or batch runner.
 
 ## Contents
 
@@ -57,12 +57,12 @@ After saving a correction or diagnostic, inspect the updated saved component. A 
 Before retesting an affected scenario after a save:
 
 1. Retain the prior turn's result and correlation evidence. If a Send is uncertain, observe that attempt first; do not reset, reload, navigate or open another browser to hide its uncertainty.
-2. Use [Start a new Test conversation](native-topic-testing.md#start-a-new-test-conversation) with the existing browser's `cdp` and `url`. It clicks **New chat** in the selected Test pane. Keep timing and recovery in the session; ask the maker only when a genuine human action is needed. Clearing visible bubbles, reloading a page and obtaining an empty transcript are not independently proof of a fresh runtime conversation.
+2. Use [Start a new Test conversation](topic-testing.md#start-a-new-test-conversation) with the existing browser's `cdp` and `url`. It clicks **New chat** in the selected Test pane. Keep timing and recovery in the session; ask the maker only when a genuine human action is needed. Clearing visible bubbles, reloading a page and obtaining an empty transcript are not independently proof of a fresh runtime conversation.
 3. Keep the selected agent and test identity, confirm the pane is idle and the composer empty, and reuse still-valid readiness. Do not re-prompt for known connection facts or sign-in.
 4. Capture the first turn of the fresh scenario with the additional empty-boundary precondition:
 
    ```powershell
-   python scripts\native_topic_test.py capture `
+   python scripts\topic_test.py capture `
      --inspection "<post-save inspection file>" `
      --prompt "<approved probe>" `
      --cdp "<confirmed numeric-loopback endpoint>" `
@@ -99,7 +99,7 @@ Correct the evidenced topic expression or card through ordinary authoring, confi
 
 ## Observe internal state and narrow the boundary
 
-Use [owned temporary value observation](native-topic-testing.md#observe-topic-values-temporarily) when replies, run history or diagnostics cannot explain a branch or value. Bind each temporary `SendActivity` to the exact selected topic, action boundary, unique action ID and expected owned content before saving. Choose only non-sensitive synthetic or explicitly authorized values.
+Use [owned temporary value observation](topic-testing.md#observe-topic-values-temporarily) when replies, run history or diagnostics cannot explain a branch or value. Bind each temporary `SendActivity` to the exact selected topic, action boundary, unique action ID and expected owned content before saving. Choose only non-sensitive synthetic or explicitly authorized values.
 
 Place the message after the relevant assignment and before the suspected consumer. Follow the temporary-value reference's message-wording guidance and use valid text interpolation, for example `Ready for review: total={Topic.Total}`. The prefix is optional, not a capture or cleanup requirement. Save with ordinary target/concurrency guards, establish post-save conversation freshness and capture all bubbles.
 

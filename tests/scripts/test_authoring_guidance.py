@@ -437,7 +437,7 @@ def test_testing_handoff_checks_runtime_availability_not_legacy_skill_presence()
         ".github/prompts/test.prompt.md",
     ):
         guidance = _read(path)
-        assert "scripts/native_topic_test.py" in guidance
+        assert "scripts/topic_test.py" in guidance
         assert "conversation acceptance as pending" in guidance
         assert "`src/skills/topics/test/SKILL.md` exists" not in guidance
 

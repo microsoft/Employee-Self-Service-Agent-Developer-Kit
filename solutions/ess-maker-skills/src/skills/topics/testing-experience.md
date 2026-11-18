@@ -37,7 +37,7 @@ For a selected pause or stop, use [Pause, stop and resume](#pause-stop-and-resum
 
 ## Topic testing continuation
 
-Check `scripts/native_topic_test.py` directly before offering runnable conversation testing. If unavailable, report conversation acceptance as pending and the actual capability gap; do not imply that a save/readback tested the conversation.
+Check `scripts/topic_test.py` directly before offering runnable conversation testing. If unavailable, report conversation acceptance as pending and the actual capability gap; do not imply that a save/readback tested the conversation.
 
 ### Scoped runtime correctness goal
 
