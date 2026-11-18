@@ -39,7 +39,7 @@ Saving a topic does not activate or publish it. For an inactive selected topic, 
 python scripts/topic_test.py activate --inspection "<inspection file>"
 ```
 
-Show the effect and use the shared [Testing offers](../../../skills/topics/testing-experience.md#testing-offers) explanations and native control when activation permission is missing. For already-requested testing, use its activation-only variation to obtain only the missing activation permission and retain test-only or test-and-fix scope. Honor no-activation requests. Only after explicit authorization for this selected topic:
+Show the effect and use the shared [Testing offers](../../../skills/topics/testing-experience.md#testing-offers) review and native control when activation permission is missing. For already-requested testing, use its activation-only variation to obtain only the missing activation permission and retain test-only or test-and-fix scope. Honor no-activation requests. Only after explicit authorization for this selected topic:
 
 ```powershell
 python scripts/topic_test.py activate --inspection "<inspection file>" --yes
@@ -86,7 +86,7 @@ python scripts\topic_test.py prepare-browser `
 
 Resolve the full URL internally from the selected setup context and the exact supported host/path contract in `daga_chat_driver.validate_studio_url`. Bind it to the selected environment and agent, retaining `agentBackend=cosmos` when present. The operation validates it against the authenticated agent target before launch. Browser connection facts are operation inputs/outputs; the maker's part is sign-in and Test-pane readiness.
 
-Preparation creates a fresh temporary profile, opens the selected URL, requests an ephemeral numeric-loopback debug port and verifies that browser metadata matches its dedicated debug descriptor. It returns `pid`, `profile`, `cdp`, `url`, the target and browser metadata, with workspace-local launch/result evidence. `prepared` means browser/connection preparation, not sign-in, Test-pane readiness or a passing test. No conversation Send, activation or publication is performed.
+Preparation creates a fresh temporary profile and explicitly launches Edge InPrivate with sign-in popups allowed, browser sync disabled and forced browser-profile sign-in disabled. Site sign-in remains a human action. It opens the selected URL, requests an ephemeral numeric-loopback debug port and verifies that browser metadata matches its dedicated debug descriptor. It returns `pid`, `profile`, `cdp`, `url`, the target and browser metadata, with workspace-local launch/result evidence. `prepared` means browser/connection preparation, not sign-in, Test-pane readiness or a passing test. No conversation Send, activation or publication is performed.
 
 Feed the returned `cdp` and `url` to capture after readiness is confirmed. Preserve a live browser and all known process/endpoint facts when preparation or local evidence recording is incomplete; inspect that attempt before deciding whether another browser is needed. The temporary profile contains browser state, not test evidence: keep its contents out of logs, reports and galleries.
 
