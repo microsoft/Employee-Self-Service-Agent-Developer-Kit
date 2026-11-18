@@ -17,7 +17,7 @@ Read the [shared foundation](../experience-contract.md) before interacting with 
 
 ## 1. Resolve and read the selected topic
 
-Infer or carry the selected topic from the request and context when unambiguous. Discover available local mapped and current saved topics using `topic_authoring.py list`. Topic selection is a fallback, not a mandatory question: when needed, use the shared [Topic selection](../experience-contract.md#topic-selection) explanations and native control, with discovered titles, short purposes and free text for a name or description. Disambiguate and resolve exact component identity before proceeding; do not require name recall.
+Infer or carry the selected topic from the request and context when unambiguous. Discover available local mapped and current saved topics using `topic_authoring.py list`. Topic selection is a fallback, not a mandatory question: when needed, use the shared [Topic selection](../experience-contract.md#topic-selection) discovery and native control, with discovered titles, short purposes and free text for a name or description. Disambiguate and resolve exact component identity before proceeding; do not require name recall.
 
 Read `.local/config.json`, resolve exactly one mapped path, and run:
 

@@ -178,7 +178,8 @@ scoped batch consent is not a bypass for these safeguards. Do not treat an
 advisory override as permission for unsupported operations or blind replay.
 
 Render actual discovered exclusions using the shared Not included heading,
-component-type sections and individual component-name/reason bullets. Retain
+conversational individual component-name/reason bullets with the subgroup
+bolded within each sentence, not component-type subheadings or label prefixes. Retain
 the inventory's readable names in comparisons and results and leave excluded
 changes pending.
 Do not advertise retired workflow/template-config deployment or deployed

@@ -51,7 +51,7 @@ Preserve supplied or accepted response wording and links during debugging unless
 
 Use `{topic_test_results}` to summarize the requested goal and current observed runtime outcome in normal chat. Describe behavior and its limits rather than attempts or iterations. This is an informational report, not another approval gate. Ask separately only for genuine human input or a new scope decision; necessary in-scope fixes and retests already have authorization. Finish without an automatic follow-up form.
 
-Resolve `{Topic title}`, `{Agent name}` and `{Environment name}` from the selected target. `{Latest authoring goal}` is the requested behavior, not whatever reply happens to be saved. `{Observed runtime outcome}` states the behavior actually observed without claiming exhaustive validation.
+Resolve `{Topic title}` and [Target context](experience-contract.md#target-context) from the selected run's target, including when retrieving earlier results. `{Latest authoring goal}` is the requested behavior, not whatever reply happens to be saved. `{Observed runtime outcome}` states the behavior actually observed without claiming exhaustive validation.
 
 When the requested behavior is observed, render:
 
@@ -63,7 +63,7 @@ When the requested behavior is observed, render:
 >
 > ##### TARGET
 >
-> {Agent name}, {Environment name}
+> {Target context}
 >
 > ##### GOAL
 >
@@ -83,7 +83,7 @@ When a change or assistance is needed, render:
 >
 > ##### TARGET
 >
-> {Agent name}, {Environment name}
+> {Target context}
 >
 > ##### GOAL
 >
@@ -115,16 +115,9 @@ Carry the selected topic forward. Creation stays inactive; updating preserves cu
 
 After authoring, honor the initial routing-conflict decision. Use the [combined routing-conflict/testing decision](authoring-experience.md#combined-routing-conflict-and-testing-follow-up) only for a newly discovered or materially changed conflict after Push. A selected test-anyway continuation enters testing directly with the declined instruction correction excluded; do not repeat the ordinary testing offer or silently fix that conflict. After Push topic anyway, use the ordinary question matching the saved topic's active state, carrying the declined correction as an explicit exclusion and retaining a concise conflict reminder. The topic-only Push did not authorize testing. Without a conflict, or after a verified instruction correction, use the same ordinary question. Do not offer runnable testing of topic changes left local or repeat an offer when testing has already been requested. Honor explicit requests to test without making changes.
 
-For an inactive topic after any confirmed authoring or Push outcome, explain the choices in normal chat immediately before the separate control:
+For an inactive topic after any confirmed authoring or Push outcome, use the separate control below. Before any testing offer, the review identifies the saved topic, its actual active state, intended testing goal and editable scope, including necessary fixes and pushes when offering test-and-fix. State any activation requirement and preserve the no-publication boundary. Reuse an immediately preceding review rather than repeating it; do not add per-option explanations.
 
-> ##### YOUR CHOICES
->
-> | Choice            | What happens                                                                                            |
-> | ----------------- | ------------------------------------------------------------------------------------------------------- |
-> | Activate and test | Activate the topic in Dev, test its behavior, and fix issues within the selected scope. Do not publish. |
-> | Not now           | Leave the topic saved and inactive. Defer conversation testing.                                         |
-
-Keep these explanations outside the picker. Call `ask_user` with this JSON. Keep the top message empty, use the contextual panel title and fixed inner question below, and allow custom text. The JSON defines the control; do not print it in chat. Submit, keyboard hints and close/collapse controls belong to the host.
+Call `ask_user` with this JSON. Keep the top message empty, use the contextual panel title and fixed inner question below, and allow custom text. The JSON defines the control; do not print it in chat. Submit, keyboard hints and close/collapse controls belong to the host.
 
 ```json
 {
@@ -142,23 +135,9 @@ Keep these explanations outside the picker. Call `ask_user` with this JSON. Keep
 }
 ```
 
-For an active topic, use this same JSON with `enum` set to `["Test topic now", "Not now"]`, and replace the explanation rows with:
+For an active topic, use this same JSON with `enum` set to `["Test topic now", "Not now"]`. Preserve its active state; do not publish.
 
-> ##### YOUR CHOICES
->
-> | Choice         | What happens                                                                                              |
-> | -------------- | --------------------------------------------------------------------------------------------------------- |
-> | Test topic now | Test the saved topic and fix issues within the selected scope. Preserve its active state; do not publish. |
-> | Not now        | Leave the saved topic unchanged. Defer conversation testing.                                              |
-
-When testing has already been requested but activation permission is missing, use the following activation-only explanations and control. Preserve the existing test-only or test-and-fix scope; activation permission adds no edit permission.
-
-> ##### YOUR CHOICES
->
-> | Choice            | What happens                                                                                                                 |
-> | ----------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-> | Activate and test | Activate this topic for the already-requested testing. Continue only after verified Active state, within the existing scope. |
-> | Not now           | Leave the topic inactive and defer testing.                                                                                  |
+When testing has already been requested but activation permission is missing, use the following activation-only control. Preserve the existing test-only or test-and-fix scope; activation permission adds no edit permission.
 
 ```json
 {
@@ -184,11 +163,13 @@ Not now uses the following outcome, then stops:
 
 > ##### TESTING DEFERRED
 >
+> {Target context}
+>
 > {Contextual trailer}
 
 ### Browser readiness and testing goal
 
-Prepare or reuse the test browser, open the selected agent and resolve the browser connection internally. The maker opens the Test chat pane. Render the following readiness message in normal chat when confirmation is needed. Resolve `{Topic title}`, `{Agent name}` and `{Environment name}` from the selected context rather than asking for known values again. Omit the sign-in paragraph when the browser is already signed in with a test account. Reuse valid readiness confirmation instead of repeating this exchange. Use the test-and-fix goal below for an authorized test-and-fix request; preserve explicit test-only scope.
+Prepare or reuse the test browser, open the selected agent and resolve the browser connection internally. The maker opens the Test chat pane. Render the following readiness message in normal chat when confirmation is needed. Resolve `{Topic title}` and `{Target context}` from the selected context rather than asking for known values again. Omit the sign-in paragraph when the browser is already signed in with a test account. Reuse valid readiness confirmation instead of repeating this exchange. Use the test-and-fix goal below for an authorized test-and-fix request; preserve explicit test-only scope.
 
 > ##### TEST BROWSER READINESS
 >
@@ -198,7 +179,7 @@ Prepare or reuse the test browser, open the selected agent and resolve the brows
 >
 > ##### TARGET
 >
-> {Agent name}, {Environment name}
+> {Target context}
 >
 > In the prepared test browser, sign in with a test account.
 >
@@ -211,14 +192,6 @@ Prepare or reuse the test browser, open the selected agent and resolve the brows
 Render the readiness message using the quoted wording, emphasis and paragraph breaks. Start any additional scope context after a blank line following the readiness message.
 
 Follow with this separate readiness-only control. Missing activation permission remains a separate requirement; this choice does not expand the testing/editing scope.
-
-> ##### YOUR CHOICES
->
-> | Choice                 | What happens                                                                                    |
-> | ---------------------- | ----------------------------------------------------------------------------------------------- |
-> | Ready to test          | Confirm this browser is ready. Continue only within the existing permissions and testing scope. |
-> | Not ready, keep paused | Pause without sending a test message. Keep completed work.                                      |
-> | Stop without sending   | End further testing without sending. Keep completed work and the browser available.             |
 
 ```json
 {
