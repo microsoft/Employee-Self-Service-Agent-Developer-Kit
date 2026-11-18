@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.30 (POC)
+
+- Integrated the current main-ca landing-page action and tutorial with
+  agent-scoped announcement authoring, preserving the CA setup flow.
+- Rebuilt the extension package with both features and the supported
+  Stay up to date-only landing-page settings.
+
 ## 0.4.29 (POC)
 
 - Added **Post an announcement** to Quick Actions. The setup-gated action opens
@@ -8,6 +15,11 @@
   across every agent in the organization.
 - Bumped the package version so existing installs can receive the new Quick
   Action.
+
+## 0.4.26 (POC)
+
+- The landing-page tutorial presents accent colors, categorized starter prompts, quick links, and Stay up to date. ([PR 393 - Stay up to date-only configuration (CA)](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/pull/393))
+- **Customize landing page** opens `/landing-page` and appears after **Push to Copilot Studio** at the bottom of Quick Actions. The tutorial follows the same action order. ([PR 311 - Align landing-page quick action](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/pull/311))
 
 ## 0.4.25 (POC)
 

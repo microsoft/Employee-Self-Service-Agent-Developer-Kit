@@ -79,6 +79,19 @@ beginDialog:
           isSuccess: Topic.isSuccess
           workdayResponse: Topic.workdayResponse
 
+    - kind: ConditionGroup
+      id: checkWorkdaySuccess
+      conditions:
+        - id: workdayFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendWorkdayError
+              activity: I encountered an error retrieving your team's service anniversaries. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endOnWorkdayError
+
     - kind: ParseValue
       id: Nh88X0
       displayName: Parse Workday response
@@ -202,6 +215,10 @@ beginDialog:
       displayName: Clear workday response
       variable: Topic.workdayResponse
       value: "\"\""
+
+    - kind: SendActivity
+      id: sendActivity_gO8pkz
+      activity: "{Topic.response}"
 
     - kind: EndDialog
       id: Y2VqKn

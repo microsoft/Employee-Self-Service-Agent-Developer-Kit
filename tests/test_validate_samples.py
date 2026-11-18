@@ -204,8 +204,8 @@ def test_workday_subgroup_topic_folder_resolves(tmp_path: Path) -> None:
 def test_workday_subgroup_readme_not_treated_as_topic(tmp_path: Path) -> None:
     # A subgroup-level README plus a real topic edit must not be flagged as
     # touching multiple topic folders.
-    sub_readme = "samples/WorkdayDeclarativeAgent/Employee/README.md"
-    topic_yaml = "samples/WorkdayDeclarativeAgent/Employee/EmployeeGetX/topic.yaml"
+    sub_readme = "samples/WorkdayDeclarativeAgentPreview/Employee/README.md"
+    topic_yaml = "samples/WorkdayDeclarativeAgentPreview/Employee/EmployeeGetX/topic.yaml"
     _write(tmp_path, sub_readme, VALID_README)
     _write(tmp_path, topic_yaml, VALID_TOPIC_YAML)
     changed = [
@@ -214,6 +214,13 @@ def test_workday_subgroup_readme_not_treated_as_topic(tmp_path: Path) -> None:
     ]
     results = run_all_checks(tmp_path, changed, whitelist={})
     assert _by_name(results)["Diff scope (samples/ only)"].status is Status.PASS
+
+
+def test_workday_preview_diff_touching_multiple_topic_folders_fails(tmp_path: Path) -> None:
+    changed = _new_topic(tmp_path, "samples/WorkdayDeclarativeAgentPreview/Employee/EmployeeGetX")
+    changed += _new_topic(tmp_path, "samples/WorkdayDeclarativeAgentPreview/Employee/EmployeeGetY")
+    results = run_all_checks(tmp_path, changed, whitelist={})
+    assert _by_name(results)["Diff scope (samples/ only)"].status is Status.FAIL
 
 
 def test_area_level_readme_alongside_topic_edit_not_multi_topic(tmp_path: Path) -> None:
@@ -243,7 +250,7 @@ def test_whitelisted_filename_inconsistency_not_flagged(tmp_path: Path) -> None:
 
 
 def test_whitelisted_folder_inconsistency_not_flagged(tmp_path: Path) -> None:
-    topic = "samples/WorkdayDeclarativeAgent/Employee/WorkdayEmployeesviewtheirjobtaxonomy"
+    topic = "samples/WorkdayDeclarativeAgentPreview/Employee/WorkdayEmployeesviewtheirjobtaxonomy"
     _write(tmp_path, f"{topic}/topic.yaml", VALID_TOPIC_YAML)
     _write(tmp_path, f"{topic}/msdyn_X.xml", VALID_XML)
     _write(tmp_path, f"{topic}/README.md", VALID_README)

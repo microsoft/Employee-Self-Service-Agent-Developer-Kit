@@ -37,6 +37,19 @@ beginDialog:
           isSuccess: Topic.isSuccess
           workdayResponse: Topic.workdayResponse
 
+    - kind: ConditionGroup
+      id: checkWorkdaySuccess
+      conditions:
+        - id: workdayFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendWorkdayError
+              activity: I encountered an error retrieving your team's time in position information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endOnWorkdayError
+
     - kind: ParseValue
       id: aXVFNu
       displayName: Parse value to a record
@@ -158,6 +171,12 @@ beginDialog:
                 }
             )
         )
+
+    - kind: SendActivity
+      id: sendActivity_bDM9UT
+      activity: |-
+        Here is your team's time in position information:
+        {Topic.workdayResponseTableWithTimeInPosition}
 
 inputType: {}
 outputType:

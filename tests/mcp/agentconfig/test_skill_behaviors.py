@@ -68,6 +68,12 @@ def _assert_no_writes(backend: FakeLandingPage) -> None:
     )
 
 
+def _assert_no_quick_access(replies: list[str]) -> None:
+    for reply in replies:
+        assert "quick access" not in reply.lower()
+        assert "quickaccess" not in reply.lower()
+
+
 def test_submit_entered_values_uses_the_matching_complete_widget_draft(tmp_path) -> None:
     backend = _backend("1")
     draft = {"quickLinksConfig": {"quickLinks": [quick_link("3"), quick_link("2")]}}
@@ -264,8 +270,10 @@ def test_empty_starter_prompts_explain_defaults_and_offer_capability_grounded_he
     assert "end users" in reply and "within a few hours" in reply
 
 
-def test_plain_invocation_reports_five_settings_and_configuration_help(tmp_path) -> None:
+@pytest.mark.parametrize("quick_access", [False, True])
+def test_plain_invocation_reports_four_settings_and_configuration_help(tmp_path, quick_access) -> None:
     backend = _backend("1", "2", "3")
+    backend.configs[TITLE_ID]["insightCardsConfig"]["isQuickAccessEnabled"] = quick_access
     result = asyncio.run(run_eval(backend, [EvalTurn("/landing-page")], tmp_path))
 
     assert any(call.name == "get_agent_config" for call in backend.calls)
@@ -274,11 +282,12 @@ def test_plain_invocation_reports_five_settings_and_configuration_help(tmp_path)
     reply = result.replies[-1].lower()
     for expected in (
         "accent color", "quick links", "starter prompts", "stay up to date",
-        "quick access", "3 links configured", "not configured", "enabled", "disabled",
+        "3 links configured", "not configured", "enabled",
         "suggest", "icon",
     ):
         assert expected in reply
     assert "agent identity" not in reply
+    _assert_no_quick_access(result.replies)
     assert_overview_states(
         reply,
         {
@@ -286,7 +295,6 @@ def test_plain_invocation_reports_five_settings_and_configuration_help(tmp_path)
             "quick links": "3 links configured",
             "starter prompts": "not configured",
             "stay up to date": "enabled",
-            "quick access": "disabled",
         },
     )
 
@@ -354,17 +362,62 @@ def test_starter_prompt_clear_waits_for_explicit_confirmation(tmp_path) -> None:
     assert "?" in result.replies[0] or "confirm" in result.replies[0].lower()
 
 
-def test_partial_insight_toggle_preserves_the_other_published_toggle(tmp_path) -> None:
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("quick_access", [False, True])
+def test_insight_toggle_sends_only_stay_up_to_date(
+    tmp_path, monkeypatch, enabled, quick_access,
+) -> None:
     backend = _backend()
-    asyncio.run(
-        run_eval(backend, [EvalTurn("Enable Quick Access for my agent.")], tmp_path)
+    backend.configs[TITLE_ID]["insightCardsConfig"] = {
+        "isStayUpToDateEnabled": not enabled,
+        "isQuickAccessEnabled": quick_access,
+    }
+    invoke = backend.invoke
+
+    def invoke_with_backend_response(name, arguments):
+        call = invoke(name, arguments)
+        if name == "update_agent_config":
+            # The service response includes both fields even for a supported-field-only write.
+            call.result["insightCardsConfig"]["isQuickAccessEnabled"] = quick_access
+        return call
+
+    monkeypatch.setattr(backend, "invoke", invoke_with_backend_response)
+    action = "Enable" if enabled else "Disable"
+    result = asyncio.run(
+        run_eval(backend, [EvalTurn(f"{action} Stay up to date for my agent.")], tmp_path)
     )
     assert len(backend.updates()) == 1
     assert_fresh_updates(backend)
     assert backend.updates()[0].arguments == {
         "titleId": TITLE_ID,
-        "config": {"insightCardsConfig": {"isStayUpToDateEnabled": True, "isQuickAccessEnabled": True}},
+        "config": {"insightCardsConfig": {"isStayUpToDateEnabled": enabled}},
     }
+    assert backend.configs[TITLE_ID]["insightCardsConfig"] == {"isStayUpToDateEnabled": enabled}
+    assert backend.configs[OTHER_TITLE_ID] == configuration("other", title_id=OTHER_TITLE_ID)
+    _assert_no_quick_access(result.replies)
+    assert "stay up to date" in result.replies[-1].lower()
+
+
+def test_insight_card_current_state_silently_ignores_quick_access(tmp_path) -> None:
+    backend = _backend()
+    result = asyncio.run(
+        run_eval(backend, [EvalTurn("Show all my current insight-card settings.")], tmp_path)
+    )
+    assert any(call.name == "get_agent_config" for call in backend.calls)
+    _assert_no_writes(backend)
+    _assert_no_quick_access(result.replies)
+    assert "stay up to date" in result.replies[-1].lower()
+    assert "enabled" in result.replies[-1].lower()
+
+
+def test_quick_access_only_request_offers_supported_settings_without_writing(tmp_path) -> None:
+    backend = _backend()
+    result = asyncio.run(
+        run_eval(backend, [EvalTurn("Enable Quick Access for my agent.")], tmp_path)
+    )
+    _assert_no_writes(backend)
+    _assert_no_quick_access(result.replies)
+    assert "stay up to date" in result.replies[-1].lower()
 
 
 @pytest.mark.parametrize("low_contrast", [False, True], ids=["valid-color", "confirmed-low-contrast"])
