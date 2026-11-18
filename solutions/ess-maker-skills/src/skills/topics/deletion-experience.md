@@ -39,7 +39,7 @@ Use **Push** for applying the deletion to the agent. Reserve **Publish** for the
 
 ### Deletion summary: `{delete_summary}`
 
-Bind the topic, agent and behavior to current evidence. Also removed lists contained content and affected local files beyond the selected topic. References needing attention identifies other topic references, evaluation dependencies and their practical consequences. Put known instruction-routing references in Routing Conflicts instead, without duplicating them in References needing attention. Inspect relevant current topics and agent instructions; local files alone do not prove there are no remote references. Omit genuinely empty sections and identify unresolved impact explicitly.
+Bind the topic, agent and behavior to current evidence. Apply [Target context](experience-contract.md#target-context) to deletion and draft-discard reviews and standalone outcomes, including local-only, cancelled, failed and uncertain outcomes. Also removed lists contained content and affected local files beyond the selected topic. References needing attention identifies other topic references, evaluation dependencies and their practical consequences. Put known instruction-routing references in Routing Conflicts instead, without duplicating them in References needing attention. Inspect relevant current topics and agent instructions; local files alone do not prove there are no remote references. Omit genuinely empty sections and identify unresolved impact explicitly.
 
 Use the Create/Update heading treatment and one grouped SUGGESTED ACTIONS block after all routing conflicts. `{Deletion routing impact}` describes the dangling routing that deletion would leave, not a claim that the deleted topic should execute. Suggest the smallest instruction correction for review; do not promise to change instructions before that correction is selected and approved.
 
@@ -51,7 +51,7 @@ Use the Create/Update heading treatment and one grouped SUGGESTED ACTIONS block 
 >
 > ##### AGENT
 >
-> {Destination agent}
+> {Target context}
 >
 > ##### BEHAVIOR BEING REMOVED
 >
@@ -76,17 +76,9 @@ Use the Create/Update heading treatment and one grouped SUGGESTED ACTIONS block 
 
 ### Deletion decision
 
-When a known instruction-routing conflict applies, use the [routing-conflict decision](#routing-conflict-decision) instead of the default choices below. Without a known conflict, show the completed deletion summary and these explanations before the separate native control. Unavailable instruction evidence is unverified alignment, not an established conflict or proof that no references exist.
+When a known instruction-routing conflict applies, use the [routing-conflict decision](#routing-conflict-decision) instead of the default choices below. Without a known conflict, show the completed deletion summary before the separate native control. Unavailable instruction evidence is unverified alignment, not an established conflict or proof that no references exist.
 
 Local staging alone leaves the upstream topic available. When the request is explicitly local-only, follow that variation without adding a remote routing-cleanup decision unless instruction work was independently requested.
-
-> ##### YOUR CHOICES
->
-> | Choice                 | What happens                                                                                           |
-> | ---------------------- | ------------------------------------------------------------------------------------------------------ |
-> | Push deletion to agent | Delete the displayed topic and contained content from the agent, then update the approved local files. |
-> | Keep deletion locally  | Remove only the displayed working files. Keep the saved topic and tracking for a later reviewed Push.  |
-> | Not now                | Leave the current local and remote state unchanged.                                                    |
 
 ```json
 {
@@ -110,16 +102,7 @@ Keep deletion locally authorizes removing the displayed working files only. Reta
 
 ### Routing-conflict decision
 
-For deletion with a known instruction-routing conflict, use the same resolution label and first-choice positioning as Create/Update. Show the completed deletion summary, including Routing Conflicts, then these explanations and the native control:
-
-> ##### YOUR CHOICES
->
-> | Choice                                                 | What happens                                                                                                                               |
-> | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-> | Resolve the routing conflict in the Agent Instructions | Prepare a targeted instruction correction for review. Push neither change yet.                                                             |
-> | Push deletion anyway                                   | Delete only the displayed topic and contained content, then update the approved local files. Leave the conflicting instructions unchanged. |
-> | Keep deletion locally                                  | Remove only the displayed working files. Leave the saved topic and instructions unchanged.                                                 |
-> | Not now                                                | Leave the current local and remote state unchanged.                                                                                        |
+For deletion with a known instruction-routing conflict, use the same resolution label and first-choice positioning as Create/Update. Show the completed deletion summary, including Routing Conflicts and the consequence of leaving instructions unchanged, then the native control:
 
 ```json
 {
@@ -185,14 +168,7 @@ Use the shared instruction preparation/save status definitions and instruction o
 
 If a routing conflict is newly discovered or materially changed after deletion, report the actual deletion outcome first, then Routing Conflicts with the same grouped Suggested actions treatment. Describe the existing dangling reference rather than a future deletion consequence. Do not re-offer a correction already declined for the same unchanged conflict.
 
-Offer instruction-only cleanup with these explanations and the separate control:
-
-> ##### YOUR CHOICES
->
-> | Choice                                                 | What happens                                                                 |
-> | ------------------------------------------------------ | ---------------------------------------------------------------------------- |
-> | Resolve the routing conflict in the Agent Instructions | Prepare a targeted correction for review. Do not push it or repeat deletion. |
-> | Not now                                                | Leave the instructions unchanged. Keep the existing deletion outcome.        |
+Offer instruction-only cleanup with the separate control:
 
 ```json
 {
@@ -221,6 +197,8 @@ For an existing topic with deletion deferred to a later Push, use:
 
 > ##### DELETION KEPT LOCALLY AGENT UNCHANGED
 >
+> {Target context}
+>
 > {Topic title} is removed from your VS Code working files. Its deletion has not been pushed to {Destination agent}.
 
 A missing working file is a pending change, not proof of intent or permission to delete the topic from the agent. A later Push requires fresh state, impact review and scoped destructive approval.
@@ -229,20 +207,15 @@ For a draft established as never pushed, distinguish discarding that draft from 
 
 > ##### DISCARD LOCAL TOPIC DRAFT
 >
+> {Target context}
+>
 > ##### TOPIC
 >
 > {Topic title}
 >
 > This removes the unsaved draft from your VS Code workspace. It does not push a deletion to the agent.
 
-Follow with these explanations and the native control:
-
-> ##### YOUR CHOICES
->
-> | Choice              | What happens                                                                                        |
-> | ------------------- | --------------------------------------------------------------------------------------------------- |
-> | Discard local draft | Remove only this established never-pushed draft. No remote deletion or pending deletion is created. |
-> | Keep draft          | Retain the local draft unchanged.                                                                   |
+Follow with the native control:
 
 ```json
 {
@@ -264,11 +237,13 @@ After approved removal of only that draft, use:
 
 > ##### LOCAL DRAFT DISCARDED AGENT UNCHANGED
 >
+> {Target context}
+>
 > {Topic title} was removed from your VS Code workspace. No agent deletion is pending.
 
 ### Deletion outcomes: `{delete_outcome_heads}`
 
-Use at least these headings, followed by factual details naming the topic and agent, actual local and remote state, and any remaining action. Do not present this catalog to the maker.
+Use at least these headings, followed by `{Target context}` and factual details naming the topic and agent, actual local and remote state, and any remaining action. Do not present this catalog to the maker.
 
 | Established outcome                                                        | Heading                                           |
 | -------------------------------------------------------------------------- | ------------------------------------------------- |
@@ -290,7 +265,7 @@ For confirmed deletion and local reconciliation, render:
 >
 > ##### AGENT
 >
-> {Destination agent}
+> {Target context}
 >
 > The deletion was pushed to the agent, and your local workspace is updated.
 

@@ -865,7 +865,7 @@ def test_deletion_routing_conflict_matches_authoring_wording_and_control_positio
     initial = authoring.split("### Initial routing-conflict decision\n", 1)[1].split(
         "### Topic outcomes\n", 1
     )[0]
-    resolution = re.findall(r"^> \|\s*(Resolve[^|]+)\|", initial, re.MULTILINE)[0].strip()
+    resolution = re.findall(r"\*\*(Resolve[^*]+)\*\*", initial)[0]
     deletion = _read("src/skills/topics/deletion-experience.md")
     summary = deletion.split("### Deletion summary:", 1)[1].split(
         "### Deletion decision\n", 1
@@ -891,9 +891,8 @@ def test_deletion_routing_conflict_matches_authoring_wording_and_control_positio
         assert field["title"] == "Topic deletion"
         assert field["description"] == "How would you like to continue?"
         assert field["enum"] == choices
-        rows = re.findall(r"^> \|\s*([^|]+)\|", section, re.MULTILINE)[2:]
-        assert [row.strip() for row in rows] == choices
-    assert "Prepare a targeted instruction correction for review. Push neither change yet." in section
+        assert "> ##### YOUR CHOICES" not in section
+    assert "not deleting local files, deleting the saved topic or pushing instructions" in section
     assert "Do not immediately offer the same resolution decision again" in section
 
 
@@ -944,7 +943,8 @@ def test_rollout_reviews_and_native_choices_keep_the_shared_presentation_contrac
     ):
         guidance = _read(f"src/skills/{relative}")
         headings = re.findall(r"^>\s*(#{1,6}) (.+)$", guidance, re.MULTILINE)
-        assert headings, relative
+        if relative != "topics/experience-contract.md":
+            assert headings, relative
         for level, label in headings:
             assert level in {"#####", "######"}, (relative, label)
             literal_label = re.sub(r"\{[^}]+\}", "", label)
@@ -953,16 +953,11 @@ def test_rollout_reviews_and_native_choices_keep_the_shared_presentation_contrac
 
         controls = list(re.finditer(r"```json\n(.*?)\n```", guidance, re.DOTALL))
         assert controls, relative
+        assert "> ##### YOUR CHOICES" not in guidance, relative
+        assert not re.search(r"^> \|\s*Choice\s*\|", guidance, re.MULTILINE), relative
         for control in controls:
             question = json.loads(control[1])
             assert question["message"] == "", relative
-            explanation = guidance[:control.start()].rsplit("> ##### YOUR CHOICES", 1)[1]
-            rows = {
-                label.strip(): meaning.strip()
-                for label, meaning in re.findall(
-                    r"^> \|\s*([^|]+)\|\s*([^|]+)\|", explanation, re.MULTILINE
-                )
-            }
             for field in question["requestedSchema"]["properties"].values():
                 assert field["title"], relative
                 assert field["description"] == "How would you like to continue?", relative
@@ -971,9 +966,68 @@ def test_rollout_reviews_and_native_choices_keep_the_shared_presentation_contrac
                     choices = field["items"]["enum"]
                 else:
                     choices = field["enum"]
-                for choice in choices:
-                    assert rows.get(choice), (relative, choice)
-                    assert rows[choice] != choice, (relative, choice)
+                assert choices, relative
+                assert len(choices) == len(set(choices)), relative
+                assert all(isinstance(choice, str) and choice.strip() for choice in choices)
+
+
+def test_target_context_uses_realm_and_retains_uncertain_and_local_outcomes():
+    foundation = _read("src/skills/topics/experience-contract.md")
+    target = foundation.split("### Target context\n", 1)[1].split(
+        "## Topic selection", 1
+    )[0]
+    assert "> {Agent name}\\\n> {Environment name} - {ALM realm}" in target
+    assert "`target.agent.realm`" in target
+    assert "Do not infer ALM realm from service ring" in target
+    assert "same environment ID" in target
+    assert "use the known environment ID" in target
+    assert "say Not established" in target
+    assert "Retrieved results use their recorded target" in target
+    assert "Local-only outcomes identify the intended destination" in target
+    assert "once per complete review or report, not once per component row" in target
+    assert "without adding Environment or ALM Realm headings" in target
+    assert "immediate pause/stop acknowledgement" in target
+    for outcome in (
+        "local drafts", "no-change", "cancellation", "deferred testing",
+        "failed", "uncertain", "partial", "zero-error cleanup",
+    ):
+        assert outcome in target
+    for relative in (
+        "topics/authoring-experience.md", "topics/push-experience.md",
+        "topics/deletion-experience.md", "topics/testing-experience.md",
+        "cleanup/SKILL.md",
+    ):
+        guidance = _read(f"src/skills/{relative}")
+        assert "#target-context)" in guidance, relative
+        assert "> {Target context}" in guidance, relative
+    push = _read("src/skills/topics/push-experience.md")
+    for heading in ("NO CHANGES TO PUSH", "COULD NOT INSPECT LOCAL CHANGES", "PUSH RESULTS"):
+        assert f"> ##### {heading}\n>\n> {{Target context}}" in push
+
+
+def test_new_topic_link_requires_verified_creation_and_topic_editor_identity():
+    authoring = _read("src/skills/topics/authoring-experience.md")
+    navigation = authoring.split("### Topic navigation\n", 1)[1].split("\n### ", 1)[0]
+    assert "[View your new Topic in MCS]({Topic MCS URL})" in navigation
+    assert (
+        "{MCS origin}/environments/{Environment ID}/copilots/{Agent ID}"
+        "/adaptive/{Topic component ID}?agentBackend=cosmos"
+    ) in navigation
+    assert "verified environment, agent and topic component IDs" in navigation
+    assert "STUDIO_RING_BY_HOST" in navigation
+    assert "target's service ring" in navigation
+    assert "previously retained draft pushed later" in navigation
+    assert "local bookkeeping remains incomplete" in navigation
+    assert "local-only draft, an unconfirmed creation or a deleted topic" in navigation
+    assert "topic link could not be established" in navigation
+    assert "do not invent a URL or retry creation" in navigation
+    assert "Link generation does not open a browser, activate, test or publish" in navigation
+    create = _read("src/skills/topics/create/SKILL.md")
+    assert "authoring-experience.md#topic-navigation" in create
+    push = _read("src/skills/topics/push-experience.md")
+    composed = push.split("### Composed Push report:", 1)[1].split("## Push telemetry", 1)[0]
+    assert "authoring-experience.md#topic-navigation" in composed
+    assert "in that topic's Details cell" in composed
 
 
 def test_shared_experience_preserves_approved_copy_and_template_boundary():
@@ -1107,10 +1161,7 @@ def test_push_handoffs_and_selections_retain_named_exclusions():
     component = contract.split("### Component-level review", 1)[1].split(
         "### Compact change comparison", 1
     )[0]
-    assert (
-        "> ##### NOT INCLUDED\n>\n> ###### {COMPONENT TYPE}\n>\n"
-        "> - {Component name}: {Exclusion reason}"
-    ) in component
+    assert "> ##### NOT INCLUDED\n>\n> - {Exclusion sentence}" in component
     for relative in (
         "src/skills/topics/authoring-experience.md",
         "src/skills/topics/deletion-experience.md",
@@ -1434,62 +1485,3 @@ def test_authoring_carries_context_and_honors_scoped_debugging():
         in _read("src/skills/topics/testing-experience.md")
     )
     assert "Honor explicit no-activation requests" in _read("src/skills/topics/testing-experience.md")
-
-
-def test_target_context_uses_realm_and_retains_uncertain_and_local_outcomes():
-    foundation = _read("src/skills/topics/experience-contract.md")
-    target = foundation.split("### Target context\n", 1)[1].split(
-        "## Topic selection", 1
-    )[0]
-    assert "> {Agent name}\\\n> {Environment name} - {ALM realm}" in target
-    assert "`target.agent.realm`" in target
-    assert "Do not infer ALM realm from service ring" in target
-    assert "same environment ID" in target
-    assert "use the known environment ID" in target
-    assert "say Not established" in target
-    assert "Retrieved results use their recorded target" in target
-    assert "Local-only outcomes identify the intended destination" in target
-    assert "once per complete review or report, not once per component row" in target
-    assert "without adding Environment or ALM Realm headings" in target
-    assert "immediate pause/stop acknowledgement" in target
-    for outcome in (
-        "local drafts", "no-change", "cancellation", "deferred testing",
-        "failed", "uncertain", "partial", "zero-error cleanup",
-    ):
-        assert outcome in target
-    for relative in (
-        "topics/authoring-experience.md", "topics/push-experience.md",
-        "topics/testing-experience.md",
-        "cleanup/SKILL.md",
-    ):
-        guidance = _read(f"src/skills/{relative}")
-        assert "#target-context)" in guidance, relative
-        assert "> {Target context}" in guidance, relative
-    push = _read("src/skills/topics/push-experience.md")
-    for heading in ("NO CHANGES TO PUSH", "COULD NOT INSPECT LOCAL CHANGES", "PUSH RESULTS"):
-        assert f"> ##### {heading}\n>\n> {{Target context}}" in push
-
-
-def test_new_topic_link_requires_verified_creation_and_topic_editor_identity():
-    authoring = _read("src/skills/topics/authoring-experience.md")
-    navigation = authoring.split("### Topic navigation\n", 1)[1].split("\n### ", 1)[0]
-    assert "[View your new Topic in MCS]({Topic MCS URL})" in navigation
-    assert (
-        "{MCS origin}/environments/{Environment ID}/copilots/{Agent ID}"
-        "/adaptive/{Topic component ID}?agentBackend=cosmos"
-    ) in navigation
-    assert "verified environment, agent and topic component IDs" in navigation
-    assert "STUDIO_RING_BY_HOST" in navigation
-    assert "target's service ring" in navigation
-    assert "previously retained draft pushed later" in navigation
-    assert "local bookkeeping remains incomplete" in navigation
-    assert "local-only draft, an unconfirmed creation or a deleted topic" in navigation
-    assert "topic link could not be established" in navigation
-    assert "do not invent a URL or retry creation" in navigation
-    assert "Link generation does not open a browser, activate, test or publish" in navigation
-    create = _read("src/skills/topics/create/SKILL.md")
-    assert "authoring-experience.md#topic-navigation" in create
-    push = _read("src/skills/topics/push-experience.md")
-    composed = push.split("### Composed Push report:", 1)[1].split("## Push telemetry", 1)[0]
-    assert "authoring-experience.md#topic-navigation" in composed
-    assert "in that topic's Details cell" in composed

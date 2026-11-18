@@ -182,13 +182,6 @@ For each file with errors:
 - Offer to review deletion or skip. A choice to review enters `src/skills/topics/delete/SKILL.md`; it is not destructive approval. Use that owner's policy, impact review, choices and scoped execution.
 - If the file also has other fixable errors, use this review/skip decision first. Skip the other fixes only after the delete owner confirms removal; selecting a deletion review alone does not remove anything.
 
-> ##### YOUR CHOICES
->
-> | Choice                | What happens                                                                                                        |
-> | --------------------- | ------------------------------------------------------------------------------------------------------------------- |
-> | Review topic deletion | Inspect deletion eligibility and effects, then review the available removal options. This does not approve removal. |
-> | Skip                  | Leave this issue unchanged and continue to other proposed fixes.                                                    |
-
 ```json
 {
   "message": "",

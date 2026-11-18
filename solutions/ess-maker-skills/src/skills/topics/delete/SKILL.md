@@ -8,7 +8,7 @@ For a selected instruction correction, load [Authoring status updates](../author
 
 ## 1. Resolve the topic and effects
 
-Require completed canonical setup for the selected Dev agent. Read `.local/config.json` and resolve the intended topic from the request and context. Use `topic_authoring.py list` and the selected workspace's component mapping. Clarify ambiguity using the shared [Topic selection](../experience-contract.md#topic-selection) explanations and native control; do not silently retarget by display name.
+Require completed canonical setup for the selected Dev agent. Read `.local/config.json` and resolve the intended topic from the request and context. Use `topic_authoring.py list` and the selected workspace's component mapping. Clarify ambiguity using the shared [Topic selection](../experience-contract.md#topic-selection) discovery and native control; do not silently retarget by display name.
 
 For instruction-only cleanup after an established deletion or absence, carry the known exact topic and agent into [Routing cleanup after deletion](../deletion-experience.md#routing-cleanup-after-deletion). Do not require the deleted local file or repeat the deletion preview/write. Missing local mapping alone does not establish remote absence.
 
@@ -30,7 +30,7 @@ For an unmapped local draft, establish that it was never pushed before using the
 
 ## 2. Review and obtain scoped approval
 
-Render `{delete_summary}` and its applicable choice explanations in normal chat, then use Deletion experience's separate native control. Use its routing-conflict branch when an instruction reference is known; otherwise use the default deletion decision. For an unsaved draft, use its draft-discard explanations and control instead.
+Render `{delete_summary}` in normal chat, then use Deletion experience's separate native control. Use its routing-conflict branch when an instruction reference is known; otherwise use the default deletion decision. For an unsaved draft, use its draft-discard review and control instead.
 
 Not now and Keep draft leave the selected state unchanged and return without checkpointing or deletion.
 
