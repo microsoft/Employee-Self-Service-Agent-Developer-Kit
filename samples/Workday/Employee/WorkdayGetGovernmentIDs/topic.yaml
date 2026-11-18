@@ -12,18 +12,37 @@ beginDialog:
   actions:
     - kind: BeginDialog
       id: 3bFDxH
-      displayName: Redirect to Workday System Get Common Execution
+      displayName: Read employee government IDs through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
           scenarioName: msdyn_WorkdayHCMRuntimeEmployeeGetGovernmentIds
+          requestParametersJson: |-
+            =JSON({
+              Employee_ID: Global.ESS_UserContext_Employee_Id,
+              As_Of_Effective_Date: Text(Today(), "yyyy-MM-dd")
+            }, JSONFormat.Compact)
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.errorResponse
+          connectorStatus: Topic.connectorStatus
+          errorMessage: Topic.errorResponse
+          failureReason: Topic.failureReason
           isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
+          responseJson: Topic.workdayResponse
+
+    - kind: ConditionGroup
+      id: checkGovernmentIdsSuccess
+      conditions:
+        - id: governmentIdsFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendGovernmentIdsError
+              activity: I encountered an error retrieving your government ID information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endGovernmentIdsOnError
 
     - kind: ParseValue
       id: v0OBu2
@@ -38,8 +57,9 @@ beginDialog:
               properties:
                 Country_Reference:
                   type:
-                    kind: Record
+                    kind: Table
                     properties:
+                      "@Descriptor": String
                       ID:
                         type:
                           kind: Table
@@ -47,12 +67,23 @@ beginDialog:
                             "@type": String
                             "#text": String
 
-                Expiration_Date: String
-                ID: String
+                Expiration_Date:
+                  type:
+                    kind: Table
+                    properties:
+                      Value: String
+
+                ID:
+                  type:
+                    kind: Table
+                    properties:
+                      Value: String
+
                 ID_Type_Reference:
                   type:
-                    kind: Record
+                    kind: Table
                     properties:
+                      "@Descriptor": String
                       ID:
                         type:
                           kind: Table
@@ -60,9 +91,14 @@ beginDialog:
                             "@type": String
                             "#text": String
 
-                Issued_Date: String
+                Issued_Date:
+                  type:
+                    kind: Table
+                    properties:
+                      Value: String
 
       value: =Topic.workdayResponse
+      errorPolicy: DefaultBlank
 
     - kind: BeginDialog
       id: 6k3mYE
@@ -90,29 +126,53 @@ beginDialog:
       variable: Topic.finalizedResponseTableData
       value: |-
         =ForAll(
-            Topic.parsedWorkdayResponse.GovernmentId,
+            Topic.parsedWorkdayResponse.GovernmentId As GovernmentIdRecord,
             With(
-                {currentRecord: ThisRecord},
                 {
-                    EmployeeName: Global.ESS_UserContext_Employee_Firstname & " " & Global.ESS_UserContext_Employee_Lastname,
-                    CountryName: LookUp(
-                            Global.CountryNameLookupTable,
-                            ID = LookUp(
-                                currentRecord.Country_Reference.ID, 
+                    countryReference: First(GovernmentIdRecord.Country_Reference),
+                    idTypeReference: First(GovernmentIdRecord.ID_Type_Reference),
+                    rawId: IfError(First(GovernmentIdRecord.ID).Value, "")
+                },
+                With(
+                    {
+                        countryKey: IfError(
+                            LookUp(
+                                countryReference.ID,
                                 '@type' = First(Global.CountryNameLookupTable).Reference_ID_Type
-                            ).'#text'
-                        ).Referenced_Object_Descriptor,
-                    ExpirationDate: currentRecord.Expiration_Date,
-                    IDType: LookUp(
-                            Global.GovernmentIdTypeLookupTable,
-                            ID = LookUp(
-                                currentRecord.ID_Type_Reference.ID, 
+                            ).'#text',
+                            ""
+                        ),
+                        idTypeKey: IfError(
+                            LookUp(
+                                idTypeReference.ID,
                                 '@type' = First(Global.GovernmentIdTypeLookupTable).Reference_ID_Type
-                            ).'#text'
-                        ).Referenced_Object_Descriptor,
-                    IssuedDate: currentRecord.Issued_Date,
-                    ID: ID
-                }
+                            ).'#text',
+                            ""
+                        )
+                    },
+                    {
+                        EmployeeName: Global.ESS_UserContext_Employee_Firstname & " " & Global.ESS_UserContext_Employee_Lastname,
+                        CountryName: Coalesce(
+                            LookUp(
+                                Global.CountryNameLookupTable,
+                                ID = countryKey
+                            ).Referenced_Object_Descriptor,
+                            IfError(countryReference.'@Descriptor', ""),
+                            countryKey
+                        ),
+                        ExpirationDate: IfError(First(GovernmentIdRecord.Expiration_Date).Value, ""),
+                        IDType: Coalesce(
+                            LookUp(
+                                Global.GovernmentIdTypeLookupTable,
+                                ID = idTypeKey
+                            ).Referenced_Object_Descriptor,
+                            IfError(idTypeReference.'@Descriptor', ""),
+                            idTypeKey
+                        ),
+                        IssuedDate: IfError(First(GovernmentIdRecord.Issued_Date).Value, ""),
+                        ID: If(IsBlank(rawId), Blank(), If(Len(rawId) > 4, "****" & Right(rawId, 4), "****"))
+                    }
+                )
             )
         )
 
