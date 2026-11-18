@@ -225,7 +225,7 @@ For an existing topic with deletion deferred to a later Push, use:
 
 A missing working file is a pending change, not proof of intent or permission to delete the topic from the agent. A later Push requires fresh state, impact review and scoped destructive approval.
 
-For a draft established as never pushed, distinguish discarding that draft from staging deletion of an existing topic. An absent mapping alone does not establish that it was never pushed. If its remote status is unknown, resolve that uncertainty first. Render:
+For a draft established as never pushed, distinguish discarding that draft from staging deletion of an existing topic. An absent mapping alone does not establish that it was never pushed. Reconcile current selected-agent inventory by exact full schema identity and any known component ID with retained create results and uncertain-write or registration-failure evidence. Current absence is not proof that the draft was never pushed. If its remote status is unknown, resolve that uncertainty first. Preserve the draft while that uncertainty remains. Render:
 
 > ##### DISCARD LOCAL TOPIC DRAFT
 >

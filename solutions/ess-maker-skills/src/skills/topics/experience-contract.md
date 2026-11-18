@@ -118,6 +118,8 @@ Before deleting a local topic or dispatching its remote deletion, apply the foll
 
 For a template-protected deletion, name the topic, explain its deletion protection, and identify the next safe action. Say that the deletion was not started. Preserve an existing draft unchanged. In a Push inventory, keep the deletion pending with its specific reason under Not included; do not offer a runnable deletion for it. If the restriction is discovered after approval, report the actual no-write outcome using the existing outcome contract. Preserve earlier successful operations and pause any dependent routing correction.
 
+The topic deletion helper also matches full topic schema identities across the reviewed root and contained topics against catalog rows for the DA-GA Core, HR and IT agent-template source families. It does not translate topic prefixes to the selected agent's schema; an unchanged full template identity remains protected in an agent with a different schema name. An established match stops preview or apply before any removal. Its `templateProtection` evidence retains matches and catalog-read errors; `coverageVerified: false` is not a claim of complete installed-version coverage or customer ownership. An unavailable catalog or nonmatch alone adds no blanket deletion prohibition. Inspect reported gaps and retain the session's policy checks, including other established template origin and local-only deletion protection.
+
 Approval, a debugging objective or a request to fix compile errors does not authorize template-topic deletion. Read-only inspection and reporting remain available.
 
 ## Authorization and recovery

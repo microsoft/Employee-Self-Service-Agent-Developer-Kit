@@ -47,6 +47,95 @@ class TopicBookkeepingError(ComponentEditError):
     """A local tracking failure after a verified remote topic result."""
 
 
+_TEMPLATE_CATALOG_DIRECTORY = (
+    Path(__file__).resolve().parents[1] / "src" / "reference" / "topic-actions"
+)
+_DELETION_TEMPLATE_FAMILIES = {
+    f"gptagent_copilotforemployeeselfservice{persona}"
+    for persona in ("core", "hr", "it")
+}
+
+
+def _deletion_template_protection(
+    components: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Match known DA-GA template identities without asserting inventory coverage."""
+    protection: dict[str, Any] = {
+        "protectedTopics": [], "catalogErrors": [], "coverageVerified": False,
+    }
+    by_schema: dict[str, list[dict[str, Any]]] = {}
+    for component in components:
+        if component.get("$kind") == "DialogComponent":
+            by_schema.setdefault(
+                str(component.get("schemaName") or "").casefold(), [],
+            ).append(component)
+    paths = sorted(
+        set(_TEMPLATE_CATALOG_DIRECTORY.glob("catalog.*.json"))
+        | {
+            _TEMPLATE_CATALOG_DIRECTORY / "catalog.provisional.json",
+            _TEMPLATE_CATALOG_DIRECTORY / "catalog.authoring-additions.json",
+        }
+    )
+    for path in paths:
+        if path.name == "catalog.schema.json":
+            continue
+        try:
+            catalog = json.loads(path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(catalog, dict) or catalog.get("schemaVersion") != 1
+                or not isinstance(catalog.get("packages"), list)
+            ):
+                raise ValueError(f"{path.name}: expected schemaVersion 1 and packages.")
+            for package in catalog["packages"]:
+                if not isinstance(package, dict):
+                    raise ValueError(f"{path.name}: package must be an object.")
+                key = str(package.get("key") or "")
+                family = key.removeprefix("source-family:").casefold()
+                source_path = package.get("sourcePath")
+                if (
+                    key != f"source-family:{family}"
+                    or family not in _DELETION_TEMPLATE_FAMILIES
+                    or not isinstance(source_path, str)
+                    or not source_path.startswith("/sources/dev/AgentTemplates/")
+                ):
+                    continue
+                names = package.get("agentSchemaNames")
+                if (
+                    not isinstance(names, list)
+                    or any(not isinstance(name, str) for name in names)
+                    or family not in {name.casefold() for name in names}
+                ):
+                    raise ValueError(f"{path.name}: agentSchemaNames does not identify {family}.")
+                topics = package.get("topics")
+                if not isinstance(topics, list):
+                    raise ValueError(f"{path.name}: topics must be a list.")
+                for topic in topics:
+                    if not isinstance(topic, dict) or not isinstance(topic.get("schemaName"), str):
+                        raise ValueError(f"{path.name}: topic.schemaName must be a string.")
+                    for component in by_schema.get(topic["schemaName"].casefold(), []):
+                        protection["protectedTopics"].append({
+                            "componentId": component["id"],
+                            "schemaName": component["schemaName"],
+                            "catalog": path.name,
+                            "source": catalog.get("source"),
+                            "packageKey": package["key"],
+                            "packageVersion": package.get("packageVersion"),
+                            "sourcePath": source_path,
+                            "sourceRevision": package.get("sourceRevision"),
+                        })
+        except (OSError, ValueError) as exc:
+            protection["catalogErrors"].append({
+                "file": str(path), "errors": _exception_chain(exc),
+            })
+    if protection["protectedTopics"]:
+        raise ComponentEditError(
+            "The deletion scope includes protected DA-GA agent-template topics. "
+            "Deletion was not started; inspect the matched identities and source evidence.",
+            {"writeAttempted": False, "deleted": False, "templateProtection": protection},
+        )
+    return protection
+
+
 def _active_agent_folder(root: Path) -> Path:
     config = read_json(root / ".local" / "config.json")
     folder = config.get("agent", {}).get("folder")
@@ -315,9 +404,11 @@ def _delete_topic(
     if expected is None:
         entry, component = _mapped_component(mapping, relative, _components(payload))
         scope = client.dialog_deletion_scope(payload, entry["componentId"])
+        protection = _deletion_template_protection(scope)
         return {
             "operation": "delete", "target": target, "path": relative,
             "component": component, "components": scope,
+            "templateProtection": protection,
             "workspace": _deletion_workspace(agent_folder, scope),
             "writeAttempted": False, "deleted": False,
         }
@@ -337,14 +428,17 @@ def _delete_topic(
         or mapping[relative].get("componentKind") != "DialogComponent"
         or str(mapping[relative].get("componentId") or "").casefold()
         != str(scope[0].get("id") or "").casefold()
-        or mapping[relative].get("schemaName") != scope[0].get("schemaName")
+        or str(mapping[relative].get("schemaName") or "").casefold()
+        != str(scope[0].get("schemaName") or "").casefold()
     ):
         raise ValueError("The deletion preview no longer identifies the mapped topic.")
     if _deletion_workspace(agent_folder, scope) != workspace:
         raise ValueError("Local deletion scope changed since preview. No write was sent.")
+    protection = _deletion_template_protection(scope)
     remote = client.delete_dialog_component(scope)
     result = {
         "operation": "delete", "target": target, "path": relative,
+        "templateProtection": protection,
         **remote, "deleted": True, "bookkeepingComplete": False,
     }
     try:

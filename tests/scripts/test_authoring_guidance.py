@@ -112,6 +112,19 @@ def test_topic_routes_share_policy_and_inventory_protection_is_deletion_only():
         assert "catalog.*.json" not in guidance, relative
 
 
+def test_discard_reconciles_exact_inventory_identity_and_prior_write_evidence():
+    skill = _read("src/skills/topics/delete/SKILL.md")
+    experience = _read("src/skills/topics/deletion-experience.md")
+    assert "current `topic_authoring.py list` inventory" in skill
+    for guidance in (skill, experience):
+        assert "exact full schema identity and any known component ID" in guidance
+        assert "create results" in guidance
+        assert "absence" in guidance and "never pushed" in guidance
+        assert "preserve the draft" in guidance.lower()
+    assert "A matching live component rules out the never-pushed variation" in skill
+    assert "uncertain-write evidence and local registration errors" in skill
+
+
 def test_retained_drafts_are_reconciled_before_using_fresh_expected_state():
     update = _read("src/skills/topics/update/SKILL.md")
     push = _read("src/skills/topics/push-experience.md")

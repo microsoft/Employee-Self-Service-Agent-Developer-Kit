@@ -24,7 +24,7 @@ Read relevant current topics and instructions to assess references and practical
 
 Identify instruction-routing references separately from other dependencies. A known dangling-routing consequence uses [Routing-conflict decision](../deletion-experience.md#routing-conflict-decision), not a warning that instructions must remain unchanged. Other referenced resources are not included in that correction automatically.
 
-For an unmapped local draft, establish that it was never pushed before using the shared discard variation. Resolve ambiguous or uncertain remote state rather than treating missing tracking as absence.
+For an unmapped local draft, establish that it was never pushed before using the shared discard variation. Reconcile it against the selected agent's current `topic_authoring.py list` inventory using its exact full schema identity and any known component ID, not display name alone. Retain prior create results, uncertain-write evidence and local registration errors. A matching live component rules out the never-pushed variation; current absence alone does not prove that no earlier create succeeded. Preserve the draft while identity or remote status remains unresolved. Resolve ambiguous or uncertain remote state rather than treating missing tracking as absence.
 
 {EMIT_STATUS_UPDATE: deletion-review}
 
