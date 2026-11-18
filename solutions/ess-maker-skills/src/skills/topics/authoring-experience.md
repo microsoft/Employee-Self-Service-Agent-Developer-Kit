@@ -98,11 +98,9 @@ Put instruction-routing conflicts in Routing Conflicts, separate from topic stat
 > ##### ROUTING CONFLICTS
 >
 > - {Routing conflict}. This routing conflict will likely block topic execution.
->
->   ###### SUGGESTED ACTIONS
->   - {Concrete next action}.
+>   - I recommend we {Concrete next action} to resolve this.
 
-List all applicable conflicts first, then include this single grouped action block. Repeat action bullets as needed, identifying which conflicts they address.
+Repeat the parent bullet for each applicable conflict, keeping its consequence in that bullet and its recommendation in a nested sub-bullet without a Suggested actions subheading. Within the recommendation, bind `{Concrete next action}` to a specific verb phrase for the targeted instruction correction.
 
 `{Routing conflict}` identifies the observed instruction constraint and affected topic behavior. The execution-impact statement describes a likely consequence, not a confirmed conversation-test failure. Recommend a targeted instruction correction before testing.
 
@@ -112,7 +110,7 @@ For Create, state that creation is inactive and unpublished; activation is a sep
 
 Under Outputs, render child labels, including Response text and Suggested response, as indented level-six headings in ALL CAPS within the corresponding output bullet. Nest the response quotation at the same content indentation. Use RESPONSE TEXT for supplied or explicitly accepted wording, as shown below; use SUGGESTED RESPONSE for newly generated wording that has not been accepted. Omit the response heading and quotation for outputs without literal response wording. Apply the same treatment in Update and component reviews.
 
-List all applicable routing conflicts first, repeating the conflict bullet as needed. Follow the complete conflict list with exactly one indented level-six SUGGESTED ACTIONS block, even when there is only one action. Nest the heading and action bullets as shown below. Repeat the action bullet as needed, making clear which conflicts each action addresses. Do not repeat this block for each conflict.
+Apply [Routing Conflicts](#routing-conflicts), repeating the conflict parent bullet and its recommendation sub-bullet for each applicable conflict.
 
 Render:
 
@@ -156,9 +154,7 @@ Render:
 > ##### ROUTING CONFLICTS
 >
 > - {Routing conflict}. This routing conflict will likely block topic execution.
->
->   ###### SUGGESTED ACTIONS
->   - {Concrete next action}.
+>   - I recommend we {Concrete next action} to resolve this.
 >
 > [Full draft]({Draft link})
 
@@ -214,9 +210,7 @@ For Update, include only affected fields, concise before/after details where use
 > ##### ROUTING CONFLICTS
 >
 > - {Routing conflict}. This routing conflict will likely block topic execution.
->
->   ###### SUGGESTED ACTIONS
->   - {Concrete next action}.
+>   - I recommend we {Concrete next action} to resolve this.
 >
 > [Full draft]({Draft link})
 
@@ -348,9 +342,7 @@ For a newly discovered or materially changed conflict after a confirmed topic pu
 > ##### ROUTING CONFLICTS
 >
 > - {Routing conflict}. This routing conflict will likely block topic execution.
->
->   ###### SUGGESTED ACTIONS
->   - {Concrete next action}.
+>   - I recommend we {Concrete next action} to resolve this.
 
 For a verified no-write result or a confirmed save with a local issue, retain the corresponding truthful `{topic_outcome_heads}` head and factual trailer rather than claiming a new push. `{Verified topic state}` comes from observed remote state, not the save itself.
 

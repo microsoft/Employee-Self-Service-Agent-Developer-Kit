@@ -591,17 +591,12 @@ def test_create_review_uses_h5_fields_nested_h6_headings_and_short_choices():
     conflicts = summary.split("> ##### ROUTING CONFLICTS\n", 1)[1].split(
         "> [Full draft]", 1
     )[0]
-    assert re.findall(r"^>   ###### (.+)$", conflicts, re.MULTILINE) == [
-        "SUGGESTED ACTIONS",
-    ]
+    assert not re.search(r"^>\s+#{1,6} ", conflicts, re.MULTILINE)
     assert (
-        "> - {Routing conflict}. This routing conflict will likely block topic execution.\n>\n"
-        ">   ###### SUGGESTED ACTIONS\n"
-        ">   - {Concrete next action}."
+        "> - {Routing conflict}. This routing conflict will likely block topic execution.\n"
+        ">   - I recommend we {Concrete next action} to resolve this."
     ) in conflicts
-    assert "Follow the complete conflict list with exactly one indented level-six" in summary
-    assert "even when there is only one action" in summary
-    assert "Do not repeat this block for each conflict." in summary
+    assert "repeating the conflict parent bullet and its recommendation sub-bullet" in summary
     assert "Other operations retain" not in summary
     decision = authoring.split("### Topic save decision\n", 1)[1].split(
         "### Suggested-response decision\n", 1
@@ -1079,6 +1074,28 @@ def test_authoring_carries_context_and_honors_scoped_debugging():
         in _read("src/skills/topics/testing-experience.md")
     )
     assert "Honor explicit no-activation requests" in _read("src/skills/topics/testing-experience.md")
+
+
+def test_routing_recommendations_are_nested_across_authoring_reviews_and_outcomes():
+    authoring = _read("src/skills/topics/authoring-experience.md")
+    for heading in (
+        "Routing Conflicts",
+        "Update summary",
+        "Combined routing-conflict and testing follow-up",
+    ):
+        section = authoring.split(f"### {heading}\n", 1)[1].split("\n### ", 1)[0]
+        assert (
+            "> - {Routing conflict}. This routing conflict will likely block topic execution.\n"
+            ">   - I recommend we {Concrete next action} to resolve this."
+        ) in section
+        assert "###### SUGGESTED ACTIONS" not in section
+    routing = authoring.split("### Routing Conflicts\n", 1)[1].split("\n### ", 1)[0]
+    assert "Repeat the parent bullet for each applicable conflict" in routing
+    assert "a specific verb phrase for the targeted instruction correction" in routing
+    foundation = _read("src/skills/topics/experience-contract.md")
+    assert "Put its recommendation in a nested sub-bullet" in foundation
+    assert "Do not add a Suggested actions subheading" in foundation
+    assert "Notes' SUGGESTED ACTION headings remain level five" in foundation
 
 
 def test_mixed_operation_results_preserve_owner_outcomes_unless_composition_is_defined():
