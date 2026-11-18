@@ -144,12 +144,12 @@ class BoundedGraphTransport:
     ) -> CollectionRead:
         if limit <= 0 or time_budget <= 0:
             raise ValueError("Collection limit and time budget must be positive.")
-        return self._run(self._read(path, params, limit, time_budget), time_budget)
+        return self._run(self._read(path, params, limit), time_budget)
 
     def get_profile(self, *, params: dict, time_budget: float, path: str = "/me") -> dict:
         if time_budget <= 0:
             raise ValueError("Profile time budget must be positive.")
-        return self._run(self._read(path, params, None, time_budget), time_budget)
+        return self._run(self._read(path, params, None), time_budget)
 
     def get_profiles(self, user_ids: list[str], *, time_budget: float) -> list[dict]:
         if time_budget <= 0 or not user_ids:
@@ -157,7 +157,7 @@ class BoundedGraphTransport:
         identities = [str(UUID(identity)) for identity in user_ids]
         if len(set(identities)) != len(identities):
             raise ValueError("Duplicate profile identities; coverage was not calculated.")
-        return self._run(self._read_profiles(identities, time_budget), time_budget)
+        return self._run(self._read_profiles(identities), time_budget)
 
     def _run(self, operation, time_budget):
         try:
@@ -203,11 +203,12 @@ class BoundedGraphTransport:
             response.raise_for_status()
             return response
 
-    async def _read(self, path, params, limit, time_budget):
+    async def _read(self, path, params, limit):
         items: list[dict] = []
         seen_urls: set[str] = set()
         url = f"{self.base_url}{path}"
-        async with httpx.AsyncClient(timeout=time_budget, follow_redirects=False) as session:
+        # A competing request timeout can convert budget cancellation into a retry.
+        async with httpx.AsyncClient(timeout=None, follow_redirects=False) as session:
             while url:
                 if url in seen_urls:
                     raise ValueError("Graph returned a repeated collection continuation.")
@@ -229,9 +230,9 @@ class BoundedGraphTransport:
                 url, params = continuation, None
         raise ValueError("Graph collection discovery did not complete.")
 
-    async def _read_profiles(self, identities, time_budget):
+    async def _read_profiles(self, identities):
         profiles = {}
-        async with httpx.AsyncClient(timeout=time_budget, follow_redirects=False) as session:
+        async with httpx.AsyncClient(timeout=None, follow_redirects=False) as session:
             for offset in range(0, len(identities), 20):
                 pending = {
                     str(index): {

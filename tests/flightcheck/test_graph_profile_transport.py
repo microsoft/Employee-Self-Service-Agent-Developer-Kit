@@ -6,6 +6,7 @@
 import asyncio
 import json
 import socket
+import ssl
 import threading
 from time import monotonic
 
@@ -204,6 +205,10 @@ def test_slow_dns_does_not_delay_shutdown_and_worker_is_reaped(client, monkeypat
     monkeypatch.setattr(graph_transport, "_DNS_LOOKUP", "import time; time.sleep(10)\n" + graph_transport._DNS_LOOKUP)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", record_process)
     monkeypatch.setattr(socket, "getaddrinfo", slow_dns)
+    # Keep TLS initialization outside this DNS-specific timing window.
+    tls = ssl.create_default_context()
+    create_client = httpx.AsyncClient
+    monkeypatch.setattr(graph_transport.httpx, "AsyncClient", lambda **kwargs: create_client(verify=tls, **kwargs))
     started = monotonic()
     with pytest.raises(TimeoutError, match="budget expired; no partial coverage"):
         if scope == "tenant":
