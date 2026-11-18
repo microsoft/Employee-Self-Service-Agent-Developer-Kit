@@ -27,6 +27,8 @@ python scripts\topic_authoring.py read --topic "{agent.folder}\topics\{Topic}.mc
 
 The returned component is authoritative current state. The optional projection is evidence, not permission to overwrite the working draft. Read the full local draft and surrounding components whose contracts matter.
 
+When pushing a previously retained draft, compare it with freshly read remote content. Use the acknowledged baseline or earlier read, when available, to distinguish the intended local edits from newer remote changes. Preserve unrelated remote changes in the proposal. Resolve overlapping edits through the existing review process before using the fresh snapshot as `--expected`.
+
 Apply the shared **Authoring policy for this release** to this component identity before editing and again before saving.
 
 ## 2. Draft and review the change

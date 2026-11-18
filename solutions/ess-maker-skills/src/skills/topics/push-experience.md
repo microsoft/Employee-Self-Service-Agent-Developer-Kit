@@ -41,6 +41,8 @@ Discover the component inventory for the selected agent. Preserve each entry's c
 
 Classify changes by their actual content, not their containing filename or YAML formatting. For `agent.mcs.yml`, compare the instruction section with its acknowledged baseline separately from other fields. List an unchanged instruction section as neither pending nor excluded. Represent a changed display name as **Display name**, naming the proposed value and its actual save limitation; do not relabel metadata as instruction changes.
 
+Before pushing retained topic or instruction drafts, compare their complete proposed content with freshly read saved content. Use the acknowledged baseline or earlier read, when available, to distinguish intended local edits from newer remote changes. Preserve unrelated remote changes in the proposal. Resolve overlapping edits through the existing review and authorization rules before supplying the fresh snapshot as `--expected` to the save command.
+
 Account for at least these component types:
 
 - **Topics:** new or updated topic drafts.
@@ -391,11 +393,11 @@ python -c "import sys; sys.path.insert(0, 'scripts'); import adk_telemetry; prin
 
 When the SKU is unavailable, the SDK's empty/unknown-SKU fallback is `production`; this is a telemetry default, not proof of environment type. Do not make an additional environment API request solely for telemetry. Do not switch identity, prompt for authentication or mutate environment configuration solely for telemetry.
 
-Substitute the table's outcome and error fields, using empty strings for successful error fields. Invoke the applicable commands once, in this order. For verified already-current execution, omit the `agent-deploy` command and use build `success` with empty error fields; still emit one `push` usage event:
+Substitute only the table's outcome values. The CLI accepts Push lifecycle events with a GUID agent ID and derives the table's error codes/categories; do not pass error text or separate error fields. Invalid lifecycle inputs produce a diagnostic without emitting an event and must not block the save operation. Invoke the applicable commands once, in this order. For verified already-current execution, omit the `agent-deploy` command and use build `success` with empty error fields; still emit one `push` usage event:
 
 ```powershell
-python scripts\emit_capability.py push --event build-complete --agent-id "{AgentId}" --outcome "{BuildOutcome}" --duration-ms {DurationMs} --error-code "{BuildErrorCode}" --error-category "{ErrorCategory}"
-python scripts\emit_capability.py push --event agent-deploy --agent-id "{AgentId}" --outcome "{DeployOutcome}" --duration-ms {DurationMs} --deploy-target "{DeployTarget}" --error-code "{DeployErrorCode}" --error-category "{ErrorCategory}"
+python scripts\emit_capability.py push --event build-complete --agent-id "{AgentId}" --outcome "{BuildOutcome}" --duration-ms {DurationMs}
+python scripts\emit_capability.py push --event agent-deploy --agent-id "{AgentId}" --outcome "{DeployOutcome}" --duration-ms {DurationMs} --deploy-target "{DeployTarget}"
 python scripts\emit_capability.py push
 ```
 
