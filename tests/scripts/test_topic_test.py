@@ -1470,6 +1470,9 @@ def test_browser_preparation_cli_returns_connection_without_human_readiness_or_s
     assert len(launches) == 1
     arguments, options = launches[0]
     assert "--inprivate" in arguments
+    assert "--disable-popup-blocking" in arguments
+    assert "--disable-sync" in arguments
+    assert "--disable-features=msForceBrowserSignIn" in arguments
     assert "--remote-debugging-port=0" in arguments
     assert "--remote-debugging-address=127.0.0.1" in arguments
     assert f"--user-data-dir={result['profile']}" in arguments

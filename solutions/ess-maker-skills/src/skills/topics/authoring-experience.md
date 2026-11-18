@@ -17,6 +17,7 @@ Apply the [shared foundation](experience-contract.md). Use this reference for Cr
 - [Suggested-response decision](#suggested-response-decision)
 - [Initial routing-conflict decision](#initial-routing-conflict-decision)
 - [Topic outcomes](#topic-outcomes)
+- [Topic navigation](#topic-navigation)
 - [Combined routing-conflict and testing follow-up](#combined-routing-conflict-and-testing-follow-up)
 - [Targeted instruction-change preview and approval](#targeted-instruction-change-preview-and-approval)
 - [Instruction-push outcomes and testing](#instruction-push-outcomes-and-testing)
@@ -42,7 +43,7 @@ Keep the full Create or Update review and existing outcome report after the appl
 
 ## Authoring summaries
 
-Resolve `{Topic title}` and `{Destination agent}` from the selected topic and target. Describe Behavior, accepted parameters/collected information under Inputs, returned values and employee-visible behavior under Outputs, and triggering scope under Starts when. `{Draft link}` is the actual local draft. An advisory alone does not add an acknowledgement gate.
+Resolve `{Topic title}` and `{Destination agent}` from the selected topic and target. Use [Target context](experience-contract.md#target-context) in reviews and standalone outcomes, including instruction-only and draft-only results. Describe Behavior, accepted parameters/collected information under Inputs, returned values and employee-visible behavior under Outputs, and triggering scope under Starts when. `{Draft link}` is the actual local draft. An advisory alone does not add an acknowledgement gate.
 
 Apply [Advisory entries in Notes](#advisory-entries-in-notes) and [Routing Conflicts](#routing-conflicts) when those sections are relevant to either summary.
 
@@ -121,7 +122,7 @@ Render:
 >
 > ##### AGENT
 >
-> {Destination agent}
+> {Target context}
 >
 > ##### BEHAVIOR
 >
@@ -171,7 +172,7 @@ For Update, include only affected fields, concise before/after details where use
 >
 > ##### AGENT
 >
-> {Destination agent}
+> {Target context}
 >
 > ##### BEHAVIOR
 >
@@ -223,18 +224,9 @@ For Update, include only affected fields, concise before/after details where use
 
 Follow either summary with the [initial routing-conflict decision](#initial-routing-conflict-decision) when an instruction-routing conflict is known. Otherwise use the [suggested-response decision](#suggested-response-decision) for unaccepted suggested wording, or this separate short choice control for supplied or accepted wording:
 
-For Create or Update without a routing conflict, explain the choices in normal chat immediately before that control:
+Keep **Push topic to agent** and **Keep as draft** as separate choices. The draft is already saved locally before this control; Keep as draft performs no remote save. Creation stays inactive and unpublished; Update preserves its active state and does not publish. When suggested wording is unaccepted, state in the review that pushing accepts the displayed response. Retain the existing short picker labels without per-option explanations.
 
-> ##### YOUR CHOICES
->
-> | Choice              | What happens                                                         |
-> | ------------------- | -------------------------------------------------------------------- |
-> | Push topic to agent | Save and verify the topic in Dev. Leave it inactive and unpublished. |
-> | Keep as draft       | Keep the local draft without changing the agent.                     |
-
-For Update, replace the Push explanation with `Save and verify the displayed topic changes in Dev. Preserve its active state; do not publish.` When suggested wording is unaccepted, the Push explanation also states that it accepts the displayed response. Add the applicable I want to update the response row, explaining that it revises the draft without pushing it. Retain the existing short picker labels; do not put these explanations in option labels or replace the separate decision control with the table.
-
-For a conflicting-save re-review, use the same control after the complete Update summary. The Push explanation names the conflicting content that the reviewed proposal would replace and the unrelated content preserved. Keep as draft retains the proposal locally without replacing the saved content. Retain the owner's concurrency checks; a revised approval does not bypass them.
+For a conflicting-save re-review, use the same control after the complete Update summary. The review names the conflicting content that the proposal would replace and the unrelated content preserved. Keep as draft retains the proposal locally without replacing the saved content. Retain the owner's concurrency checks; a revised approval does not bypass them.
 
 For every Create or Update topic-save decision, call `ask_user` with this JSON shape. Keep the top message empty, use the contextual panel title and fixed inner question below, and allow custom text. The shown `enum` applies to supplied or accepted wording without a routing conflict. For the suggested-response or initial routing-conflict branch, replace only `enum` with that branch's applicable choices, including any conditional response-revision choice. The JSON defines the control; do not print it in chat. Submit, keyboard hints and close/collapse controls belong to the host.
 
@@ -260,7 +252,7 @@ Keep as draft leaves the draft saved locally in the VS Code workspace without a 
 
 After displaying the suggested wording and completed summary, present the applicable control.
 
-For Create and Update, use the [Topic save control](#topic-save-decision) with **Push topic to agent**, **I want to update the response** and **Keep as draft**, in that order, and its corresponding explanation rows.
+For Create and Update, use the [Topic save control](#topic-save-decision) with **Push topic to agent**, **I want to update the response** and **Keep as draft**, in that order.
 
 Push topic to agent accepts the displayed suggested wording and approves the topic save together. Do not add a separate mandatory wording-approval step. Activation, testing and publication retain their separate permission requirements.
 
@@ -276,15 +268,7 @@ Keep as draft retains the suggestion locally without accepting it. Use the draft
 
 When the initial Create or Update review identifies an instruction-routing conflict, offer resolution before any topic or instruction push. Follow the completed summary with the applicable control.
 
-For Create and Update, use the [Topic save control](#topic-save-decision) with **Resolve the routing conflict in the Agent Instructions**, **Push topic anyway** and **Keep as draft**, in that order. Explain these choices immediately before that control:
-
-> ##### YOUR CHOICES
->
-> | Choice                                                 | What happens                                                                         |
-> | ------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-> | Resolve the routing conflict in the Agent Instructions | Prepare a targeted instruction correction for review. Push neither change yet.       |
-> | Push topic anyway                                      | Save only the displayed topic changes. Leave the conflicting instructions unchanged. |
-> | Keep as draft                                          | Keep the local topic draft without a remote save.                                    |
+For Create and Update, use the [Topic save control](#topic-save-decision) with **Resolve the routing conflict in the Agent Instructions**, **Push topic anyway** and **Keep as draft**, in that order. The review identifies the unresolved routing consequence of a topic-only Push.
 
 When suggested wording remains unaccepted, include **I want to update the response** before Keep as draft and use the response-revision continuation above. Explain before the control that Push topic anyway also accepts the displayed suggestion; resolving the instruction conflict alone does not accept it.
 
@@ -317,6 +301,8 @@ The flexible trailer carries relevant identity, observed state, draft link, caus
 
 > ##### {Outcome head}
 >
+> {Target context}
+>
 > {Contextual trailer}
 
 For a retained draft with unaccepted suggested wording, `{Contextual trailer}` begins with the following fixed block. Resolve `{Topic title}` from the selected draft; put additional factual context after a blank line.
@@ -327,6 +313,24 @@ During composed Push, contribute these known facts to the single composed report
 
 Use the draft-only Agent unchanged head only when none of this operation's components were remotely changed. For partial saves, use the composed report with actual per-component outcomes rather than a global unchanged claim.
 
+### Topic navigation
+
+After confirmed creation of a new topic, including a previously retained draft pushed later, include:
+
+> [View your new Topic in MCS]({Topic MCS URL})
+
+Place the link after the standalone saved-topic summary, or in that topic's Details cell in a composed Push report. Keep it when remote creation is confirmed but local bookkeeping remains incomplete; retain the local warning. Do not add a remote-topic link for a local-only draft, an unconfirmed creation or a deleted topic. Keep Full draft for local review before Push. Do not describe an already-existing topic as newly created.
+
+Resolve `{Topic MCS URL}` from the owning result's verified environment, agent and topic component IDs, not its display name, filename or schema suffix. Use this topic-editor route:
+
+```text
+{MCS origin}/environments/{Environment ID}/copilots/{Agent ID}/adaptive/{Topic component ID}?agentBackend=cosmos
+```
+
+Use the selected agent's established HTTPS MCS origin and check its host against `STUDIO_RING_BY_HOST` in `scripts/setup_existing_da.py` for the target's service ring. If no origin is retained, use the standard production host `https://copilotstudio.microsoft.com` for prod, or the corresponding supported test/preprod host from that mapping. Do not choose the preview host unless it is the established selected-agent origin. Preserve `agentBackend=cosmos` as a query parameter; do not use the Power Platform API host or substitute an agent-overview link.
+
+If verified IDs or a supported origin are unavailable, preserve the actual save outcome and state that the topic link could not be established; do not invent a URL or retry creation. Opening the link may require human site sign-in. Link generation does not open a browser, activate, test or publish the topic.
+
 ### Combined routing-conflict and testing follow-up
 
 Use this combined decision only when a routing conflict is newly discovered or materially changed after Push. If the maker already chose Push topic anyway, or deliberately omitted the reviewed correction, honor that decision: retain the unresolved-conflict reminder and offer ordinary state-aware testing once, with the correction excluded. Do not repeat the resolution choice for the same conflict.
@@ -334,6 +338,8 @@ Use this combined decision only when a routing conflict is newly discovered or m
 For a newly discovered or materially changed conflict after a confirmed topic push, present the saved result, verified topic state and pending testing separately from Routing Conflicts:
 
 > ##### TOPIC PUSHED TO AGENT
+>
+> {Target context}
 >
 > Saved **{Topic title}** to **{Destination agent}**.
 >
@@ -350,14 +356,7 @@ For a verified no-write result or a confirmed save with a local issue, retain th
 
 Follow with one combined decision, not a routing-resolution offer followed by another testing offer. Check the installed testing capability before offering a runnable test; report an actual capability gap rather than advertising unavailable testing. Without a routing conflict, use the ordinary state-aware testing offer.
 
-For an inactive topic, explain the following choices and use the JSON below:
-
-> ##### YOUR CHOICES
->
-> | Choice                                                 | What happens                                                                                                |
-> | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-> | Resolve the routing conflict in the Agent Instructions | Prepare a targeted correction for review. Do not push it, activate or test yet.                             |
-> | Not now, Activate and test anyway.                     | Leave the conflict unchanged; activate and test this saved topic within the existing scope. Do not publish. |
+For an inactive topic, use the JSON below. Before the control, identify the scope of testing and any authorized fixes, the activation requirement and the unresolved routing consequence. This review does not authorize publication.
 
 ```json
 {
@@ -378,7 +377,7 @@ For an inactive topic, explain the following choices and use the JSON below:
 }
 ```
 
-For an active topic, replace the second `enum` entry and its explanation row with **Not now, Test anyway.** Explain that it leaves the conflict unchanged and tests the saved topic within the existing scope, without activation or publication. Keep the other control metadata unchanged.
+For an active topic, replace the second `enum` entry with **Not now, Test anyway.** The review retains the unresolved conflict and existing testing scope, without activation or publication. Keep the other control metadata unchanged.
 
 Resolve the routing conflict in the Agent Instructions prepares the targeted preview below. This choice does not approve an instruction push, activation or testing.
 
@@ -410,7 +409,7 @@ Use actual instruction text. Show the affected current wording, exact proposed w
 >
 > ##### AGENT
 >
-> {agent_name}
+> {Target context}
 >
 > ##### RELATED TOPIC
 >
@@ -462,13 +461,6 @@ Include concise factual detail and preserve earlier confirmed saves. Do not desc
 
 **Only when the proposed topic content is already authoritatively saved:** use this two-item control for the instruction correction:
 
-> ##### YOUR CHOICES
->
-> | Choice                  | What happens                                                                                   |
-> | ----------------------- | ---------------------------------------------------------------------------------------------- |
-> | Push instruction change | Save and verify only this correction for the selected agent. Do not activate, test or publish. |
-> | Keep as draft           | Retain the instruction correction locally without pushing it.                                  |
-
 ```json
 {
   "message": "",
@@ -505,6 +497,8 @@ Keep as draft retains the correction locally without an instruction push, activa
 
 > ##### INSTRUCTION DRAFT KEPT LOCALLY
 >
+> {Target context}
+>
 > No instruction change was pushed. {topic_save_state} The routing conflict remains unresolved.
 
 If both changes remain local, explicitly report that neither was pushed. Preserve any earlier confirmed remote changes; do not describe the entire agent as unchanged after a confirmed write.
@@ -529,6 +523,8 @@ Outside composed Push, when the saved wording addresses the identified conflict,
 
 > ##### {Instruction outcome head}
 >
+> {Target context}
+>
 > {Verified instruction-save result}
 >
 > The saved wording addresses the identified routing conflict. Topic execution has not yet been verified.
@@ -551,6 +547,6 @@ For a confirmed save followed by a local recording issue, retain the confirmed-s
 
 `{Testing readiness}` gives the verified active or inactive state and pending testing only when the proposed topic content is authoritatively saved or verified already current. Otherwise state that topic Push is still pending and do not offer runnable conversation testing. For partial saves, report each component's actual result rather than claiming the whole agent is unchanged.
 
-Omit the resolved Routing Conflicts advisory. For authoritatively saved topic content, reuse [Testing offers](testing-experience.md#testing-offers). Render the applicable choice explanations and native control, following their consent, continuation and deferral rules. Use [Scoped runtime correctness goal](testing-experience.md#scoped-runtime-correctness-goal) for the authorized testing, fixes and retesting. Reuse existing authorization rather than presenting another offer. Instruction-push approval does not supply topic-push, testing or activation consent.
+Omit the resolved Routing Conflicts advisory. For authoritatively saved topic content, reuse [Testing offers](testing-experience.md#testing-offers). Render the applicable review and native control, following their consent, continuation and deferral rules. Use [Scoped runtime correctness goal](testing-experience.md#scoped-runtime-correctness-goal) for the authorized testing, fixes and retesting. Reuse existing authorization rather than presenting another offer. Instruction-push approval does not supply topic-push, testing or activation consent.
 
 For a failed or uncertain instruction push, or a remaining conflict after readback, preserve the actual result and uncertainty. Recover within the approved scope without blindly repeating an uncertain write. Do not claim resolution or enter the resolved-conflict testing path. If the maker explicitly requests testing despite the remaining conflict, require authoritatively saved topic content, obtain only missing testing or activation permission and carry the declined correction as an explicit exclusion. Do not automatically repeat resolution for the same conflict. No publication is authorized.

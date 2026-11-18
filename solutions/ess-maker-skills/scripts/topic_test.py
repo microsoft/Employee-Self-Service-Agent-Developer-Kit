@@ -199,6 +199,8 @@ def _prepare_browser(
         arguments = [
             str(executable), "--inprivate", f"--user-data-dir={profile}",
             "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1",
+            "--disable-popup-blocking", "--disable-sync",
+            "--disable-features=msForceBrowserSignIn",
             "--no-first-run", "--no-default-browser-check", url,
         ]
         result["launchArguments"] = arguments
