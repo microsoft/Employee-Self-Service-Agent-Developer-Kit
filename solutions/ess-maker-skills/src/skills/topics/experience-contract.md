@@ -42,23 +42,32 @@ Extensibility does not reintroduce explicitly excluded rules or options, invent 
 
 Use ordinary chat for open-ended requirements and revisions. Do not put a free-text-only exchange in a structured question. Retain structured controls for genuine choices; render summaries and previews in normal chat before a separate short control, not inside a long question description.
 
-Use terse, external, semi-technical language about behavior and interfaces, without internal node labels. For topic-workflow reviews, previews, reports and choice explanations, render field labels as own-line level-five Markdown headings in ALL CAPS, followed by a blank line and content, without horizontal rules or trailing colons. Under Outputs, nest child labels and literal quotations within their output bullet using indented level-six headings. After the complete Routing Conflicts list, use one indented level-six SUGGESTED ACTIONS block with action bullets. Notes' SUGGESTED ACTION headings remain level five outside list indentation, immediately after their issue. Nested component-type labels under Not included use level six. Keep status/outcome sentences, literal responses, field values and picker options in their original casing and wording. Use short bullets for multiple inputs/outputs and required/optional markings where useful, inline code only for technical names the developer needs, and a link to the full draft where its template defines one.
+Use terse, external, semi-technical language about behavior and interfaces, without internal node labels. For topic-workflow reviews, previews and reports, render field labels as own-line level-five Markdown headings in ALL CAPS, followed by a blank line and content, without horizontal rules or trailing colons. Under Outputs, nest child labels and literal quotations within their output bullet using indented level-six headings. After the complete Routing Conflicts list, use one indented level-six SUGGESTED ACTIONS block with action bullets. Notes' SUGGESTED ACTION headings remain level five outside list indentation, immediately after their issue. Not included uses conversational bullets with the component subgroup bolded within each sentence, not subgroup headings or label-colon prefixes. Keep status/outcome sentences, literal responses, field values and picker options in their original casing and wording. Use short bullets for multiple inputs/outputs and required/optional markings where useful, inline code only for technical names the developer needs, and a link to the full draft where its template defines one.
 
 Omit genuinely empty sections. Unresolved information is not absence: identify it as unresolved rather than omitting it or calling it absent. Apply [Response wording and local drafts](authoring-experience.md#response-wording-and-local-drafts) when presenting literal response text. Describe dynamic content without inventing its rendered response. For lengthy wording, provide a clearly labeled excerpt and access to the full text.
 
-Before each genuine choice control, render the applicable YOUR CHOICES table in normal chat with one concise explanation per offered option. Keep it separate from the control. Use the owning JSON with an empty top message, contextual title and fixed inner question, allowing custom text. Substitute discovered values and documented conditional choices only; never display JSON or unresolved placeholders to the maker. Submit, keyboard hints and close/collapse controls belong to the host. A table explains the decision but does not replace consent.
+Present the applicable review, then the short choice control without a YOUR CHOICES table or per-option explanatory text. Keep material effects, destructive consequences and the scope of consent in the review, not in expanded picker labels. Use the owning JSON with an empty top message, contextual title and fixed inner question, allowing custom text. Substitute discovered values and documented conditional choices only; never display JSON or unresolved placeholders to the maker. Submit, keyboard hints and close/collapse controls belong to the host.
+
+### Target context
+
+Resolve `{Target context}` from the selected operation's target and render these two lines, with a Markdown line break between them:
+
+> {Agent name}\
+> {Environment name} - {ALM realm}
+
+Use the existing Agent or Target section when present. Otherwise place this context immediately after the review or outcome heading, without adding Environment or ALM Realm headings. When an inventory's opening sentence already names the agent, append only the environment-and-realm line there. Include context once per complete review or report, not once per component row. A nested owner summary reuses the enclosing report's context.
+
+Include context in authoring and instruction reviews, Push inventories and selected/component reviews, deletion and draft-discard reviews, testing readiness, and cleanup reviews. Retain it in standalone completion summaries, including local drafts, no-change, cancellation, deferred testing, failed, uncertain and partial outcomes, debugging results and zero-error cleanup results. For an empty or failed Push inspection, identify the target that was inspected or could not be established.
+
+Do not repeat this block in short status updates, choice controls, free-text revision questions, or the immediate pause/stop acknowledgement. Any separate outcome report still includes it.
+
+Use `target.agent.realm` from the owning operation when available; `dev`, `test` and `prod` display as Dev, Test and Prod. Resolve the environment name from matching target metadata or canonical setup evidence tied to the same environment ID. If the name is unavailable, use the known environment ID; if identity or realm is not established, say Not established rather than guessing or hiding the missing value. Do not infer ALM realm from service ring, environment name or SKU. Retrieved results use their recorded target, not a different currently selected agent. Local-only outcomes identify the intended destination without implying a remote save. Presentation does not relax an owner's target-verification prerequisites.
 
 ## Topic selection
 
 Carry a known topic forward without another question. When identity is genuinely ambiguous, use the operation's current discovery and readback to show candidate titles and short purposes. Bind each option to its exact discovered identity; distinguish duplicate titles with useful target context. Accept a free-text name or description without requiring name recall, then resolve identity before proceeding. Selection alone authorizes no edit, save, deletion, activation or test.
 
-> ##### YOUR CHOICES
->
-> | Choice                   | What happens                        |
-> | ------------------------ | ----------------------------------- |
-> | {Discovered topic title} | Select this topic: {Short purpose}. |
-
-Repeat the row and `enum` entry for each actual candidate. Call `ask_user`:
+Show candidate titles and short purposes as discovery information, not an explanation of each picker option. Repeat the `enum` entry for each actual candidate. Call `ask_user`:
 
 ```json
 {

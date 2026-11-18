@@ -115,6 +115,8 @@ python scripts\agent_instructions.py update --draft "{agent.folder}\agent.mcs.ym
 
 Report through [Topic outcomes](../authoring-experience.md#topic-outcomes) and, when applicable, [Instruction-push outcomes and testing](../authoring-experience.md#instruction-push-outcomes-and-testing). A joint approval uses the [composed Push report](../push-experience.md#composed-push-report-composed_push_report), not stacked owner blocks. Preserve known remote success when local result-file or bookkeeping output fails. Do not blind-retry an uncertain create.
 
+For confirmed creation, include [Topic navigation](../authoring-experience.md#topic-navigation) using the verified topic identity, including when a later Push saves an existing local draft. Do not substitute the local draft link or an agent-overview URL for the topic-editor link.
+
 ## 6. Testing and evaluation handoff
 
 Read [Topic testing continuation](../testing-experience.md#topic-testing-continuation) when reaching this handoff. Carry the selected topic, latest intended behavior, actual save/state, existing authorization and declined corrections. Check `scripts/topic_test.py` before offering runnable testing; if unavailable, report conversation acceptance as pending. Enter [the testing owner](../test/SKILL.md) only within the shared consent rules. Do not activate or publish as a save side effect.

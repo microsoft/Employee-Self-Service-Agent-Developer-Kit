@@ -554,7 +554,7 @@ def test_authoring_status_markers_resolve_local_copy_at_the_reporting_points():
         assert message not in create
 
 
-def test_create_review_uses_h5_fields_nested_h6_headings_and_explained_choices():
+def test_create_review_uses_h5_fields_nested_h6_headings_and_short_choices():
     authoring = _read("src/skills/topics/authoring-experience.md")
     summary = authoring.split("### Create summary\n", 1)[1].split(
         "### Update summary\n", 1
@@ -606,13 +606,14 @@ def test_create_review_uses_h5_fields_nested_h6_headings_and_explained_choices()
     decision = authoring.split("### Topic save decision\n", 1)[1].split(
         "### Suggested-response decision\n", 1
     )[0]
-    assert "> ##### YOUR CHOICES" in decision
-    assert "immediately before that control" in decision
+    assert "> ##### YOUR CHOICES" not in decision
+    assert "draft is already saved locally before this control" in decision
+    assert "Keep as draft performs no remote save" in decision
     assert "Retain the existing short picker labels" in decision
     assert '"enum": ["Push topic to agent", "Keep as draft"]' in decision
     testing = _read("src/skills/topics/testing-experience.md")
     assert "For an inactive topic after any confirmed authoring or Push outcome" in testing
-    assert "> ##### YOUR CHOICES" in testing
+    assert "> ##### YOUR CHOICES" not in testing
     for section, title, choices in (
         (decision, "Topic save", ["Push topic to agent", "Keep as draft"]),
         (testing, "Topic testing", ["Activate and test", "Not now"]),
@@ -717,10 +718,11 @@ def test_push_uses_one_inventory_scoped_consent_and_composed_results():
         "### Push statuses:", 1
     )[0]
     assert "> [Full draft]" not in comparison
-    assert (
-        "> ##### NOT INCLUDED\n>\n> ###### {COMPONENT TYPE}\n>\n"
-        "> - {Component name}: {Exclusion reason}"
-    ) in comparison
+    assert "> ##### NOT INCLUDED\n>\n> - {Exclusion sentence}" in comparison
+    assert "> ###### {COMPONENT TYPE}" not in contract
+    assert "with the subgroup bolded within the sentence" in contract
+    assert "Do not use subgroup headings or label-colon prefixes" in contract
+    assert "conversational individual component-name/reason bullets" in push
     assert "even when those entries appeared earlier in the conversation" in comparison
     assert "one named bullet with its reason per component" in contract
     assert "parsed instruction section with the baseline separately from metadata" in push
@@ -732,7 +734,7 @@ def test_push_uses_one_inventory_scoped_consent_and_composed_results():
         "dropping them from the inventory"
     ) in push
     assert "entry review, compact comparison and results" in contract
-    assert "Do not collapse exclusions into prose" in contract
+    assert "Do not collapse exclusions into a collective paragraph" in contract
 
 
 def test_already_satisfied_topic_outcome_does_not_claim_a_new_push():
@@ -969,7 +971,7 @@ def test_readiness_message_has_maker_actions_and_a_separate_readiness_control():
     assert (
         "> ##### TEST BROWSER READINESS\n>\n"
         "> ##### TOPIC\n>\n> {Topic title}\n>\n"
-        "> ##### TARGET\n>\n> {Agent name}, {Environment name}\n>\n"
+        "> ##### TARGET\n>\n> {Target context}\n>\n"
         "> In the prepared test browser, sign in with a test account.\n>\n"
         "> Open the Test chat pane and leave its message box empty and idle.\n>\n"
         "> After you confirm readiness,"
@@ -1008,7 +1010,7 @@ def test_testing_reports_and_missing_permissions_reuse_scoped_contracts():
     assert "A missing screenshot does not make a saved result file unavailable." in contract
     assert "For pause/stop, keep the fixed acknowledgement separate" in contract
     assert "unfinished or unobserved behavior and material uncertainty" in contract
-    assert "activation-only explanations and control" in contract
+    assert "activation-only control" in contract
     assert "activation permission adds no edit permission" in contract
     assert '"title": "Topic activation"' in contract
     assert "Preserve completed work and report it separately using `{topic_test_results}`." in contract
@@ -1024,7 +1026,7 @@ def test_debugging_outcome_has_goal_and_only_needed_recommendation_without_loop_
     prefix = (
         "> ##### TOPIC DEBUGGING OUTCOME\n>\n"
         "> ##### TOPIC\n>\n> {Topic title}\n>\n"
-        "> ##### TARGET\n>\n> {Agent name}, {Environment name}\n>\n"
+        "> ##### TARGET\n>\n> {Target context}\n>\n"
         "> ##### GOAL\n>\n> {Latest authoring goal}\n>\n"
     )
     assert prefix + "> ##### OUTCOME\n>\n> {Observed runtime outcome}\n\n" in report
@@ -1077,3 +1079,62 @@ def test_authoring_carries_context_and_honors_scoped_debugging():
         in _read("src/skills/topics/testing-experience.md")
     )
     assert "Honor explicit no-activation requests" in _read("src/skills/topics/testing-experience.md")
+
+
+def test_target_context_uses_realm_and_retains_uncertain_and_local_outcomes():
+    foundation = _read("src/skills/topics/experience-contract.md")
+    target = foundation.split("### Target context\n", 1)[1].split(
+        "## Topic selection", 1
+    )[0]
+    assert "> {Agent name}\\\n> {Environment name} - {ALM realm}" in target
+    assert "`target.agent.realm`" in target
+    assert "Do not infer ALM realm from service ring" in target
+    assert "same environment ID" in target
+    assert "use the known environment ID" in target
+    assert "say Not established" in target
+    assert "Retrieved results use their recorded target" in target
+    assert "Local-only outcomes identify the intended destination" in target
+    assert "once per complete review or report, not once per component row" in target
+    assert "without adding Environment or ALM Realm headings" in target
+    assert "immediate pause/stop acknowledgement" in target
+    for outcome in (
+        "local drafts", "no-change", "cancellation", "deferred testing",
+        "failed", "uncertain", "partial", "zero-error cleanup",
+    ):
+        assert outcome in target
+    for relative in (
+        "topics/authoring-experience.md", "topics/push-experience.md",
+        "topics/testing-experience.md",
+        "cleanup/SKILL.md",
+    ):
+        guidance = _read(f"src/skills/{relative}")
+        assert "#target-context)" in guidance, relative
+        assert "> {Target context}" in guidance, relative
+    push = _read("src/skills/topics/push-experience.md")
+    for heading in ("NO CHANGES TO PUSH", "COULD NOT INSPECT LOCAL CHANGES", "PUSH RESULTS"):
+        assert f"> ##### {heading}\n>\n> {{Target context}}" in push
+
+
+def test_new_topic_link_requires_verified_creation_and_topic_editor_identity():
+    authoring = _read("src/skills/topics/authoring-experience.md")
+    navigation = authoring.split("### Topic navigation\n", 1)[1].split("\n### ", 1)[0]
+    assert "[View your new Topic in MCS]({Topic MCS URL})" in navigation
+    assert (
+        "{MCS origin}/environments/{Environment ID}/copilots/{Agent ID}"
+        "/adaptive/{Topic component ID}?agentBackend=cosmos"
+    ) in navigation
+    assert "verified environment, agent and topic component IDs" in navigation
+    assert "STUDIO_RING_BY_HOST" in navigation
+    assert "target's service ring" in navigation
+    assert "previously retained draft pushed later" in navigation
+    assert "local bookkeeping remains incomplete" in navigation
+    assert "local-only draft, an unconfirmed creation or a deleted topic" in navigation
+    assert "topic link could not be established" in navigation
+    assert "do not invent a URL or retry creation" in navigation
+    assert "Link generation does not open a browser, activate, test or publish" in navigation
+    create = _read("src/skills/topics/create/SKILL.md")
+    assert "authoring-experience.md#topic-navigation" in create
+    push = _read("src/skills/topics/push-experience.md")
+    composed = push.split("### Composed Push report:", 1)[1].split("## Push telemetry", 1)[0]
+    assert "authoring-experience.md#topic-navigation" in composed
+    assert "in that topic's Details cell" in composed

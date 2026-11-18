@@ -59,16 +59,11 @@ If the error count is **greater than zero**, continue to Step 2b.
 
 Tell the user:
 
+> {Target context}
+>
 > I found {count} errors. Before making any changes, I'll save a checkpoint of your agent files. This lets you restore the local files if needed; it does not restore changes already pushed to the agent.
->
-> ##### YOUR CHOICES
->
-> | Choice          | What happens                                                                                     |
-> | --------------- | ------------------------------------------------------------------------------------------------ |
-> | Save checkpoint | Save a local snapshot, then review proposed fixes. This does not approve edits or a remote Push. |
-> | Not now         | Leave files unchanged and stop before fixing errors.                                             |
 
-Use the shared native-question conventions. Call `ask_user`:
+Resolve `{Target context}` using the shared [Target context](../topics/experience-contract.md#target-context) binding. A checkpoint does not approve edits or a remote Push. Use the shared native-question conventions. Call `ask_user`:
 
 ```json
 {
@@ -143,6 +138,8 @@ Show the user a summary table:
 
 > ##### SCAN RESULTS
 >
+> {Target context}
+>
 > I found {total} errors across {file_count} files:
 >
 > | Error Type                | Files Affected | Fix                             |
@@ -160,8 +157,8 @@ Work through errors **one file at a time**. If a single file has multiple error 
 For each file with errors:
 
 1. Read the full topic file.
-2. Name the topic under an H5 TOPIC heading and list all its errors under H5 ERRORS.
-3. Propose fixes under H5 PROPOSED FIXES using the applicable guidance below, then show the corresponding choice explanations and native control.
+2. Name the topic under an H5 TOPIC heading, include `{Target context}` once in the review and list all its errors under H5 ERRORS.
+3. Propose fixes under H5 PROPOSED FIXES using the applicable guidance below, identifying the local-only edit scope, then show the native control.
 
 ### ModelDescription Too Long
 
@@ -183,14 +180,7 @@ For each file with errors:
 - Tell the user the topic references a workflow that wasn't included in the clone. Include the topic's `componentName` and what it appears to do.
 - Leave this reference unresolved without deleting the topic. Report the limitation and continue to other independently fixable errors.
 
-After presenting all remaining proposed fixes for the file, explain the choices and call `ask_user`:
-
-> ##### YOUR CHOICES
->
-> | Choice               | What happens                                                                                          |
-> | -------------------- | ----------------------------------------------------------------------------------------------------- |
-> | Apply proposed fixes | Apply only the displayed local changes, then check their effect. This does not approve a remote Push. |
-> | Skip                 | Leave these proposed changes unapplied and continue.                                                  |
+After presenting all remaining proposed fixes for the file, call `ask_user`:
 
 ```json
 {
@@ -229,6 +219,8 @@ Show a final summary:
 
 > ##### CLEANUP RESULTS
 >
+> {Target context}
+>
 > ##### ERRORS BEFORE
 >
 > {original_count}
@@ -241,7 +233,7 @@ Show a final summary:
 >
 > {remaining_count}
 
-Use only observed counts; if verification is unavailable or stale, replace the affected count with the actual unresolved state rather than a guessed number. Include actual owner save outcomes separately when any changes were pushed.
+Include target context even on the initial zero-error path. Use only observed counts; if verification is unavailable or stale, replace the affected count with the actual unresolved state rather than a guessed number. Include actual owner save outcomes separately when any changes were pushed.
 
 If zero local errors remain, report that scope without claiming remote validation or completed Push. If errors remain, report their known effects and unresolved evidence. Do not promise that skipped items cannot affect other topics.
 
@@ -252,14 +244,7 @@ After showing the results, add this note:
 Show this note only for changes that remain local. If an owner already pushed
 a change, retain its confirmed or uncertain outcome instead.
 
-Explain these choices and use the native control:
-
-> ##### YOUR CHOICES
->
-> | Choice         | What happens                                                                                  |
-> | -------------- | --------------------------------------------------------------------------------------------- |
-> | Run scan again | Inspect the local files again. Any additional fixes still need their own review and approval. |
-> | Done           | Finish cleanup with the reported changes and unresolved issues unchanged.                     |
+Use the native control. Any additional fixes after a new scan still require their own review and approval:
 
 ```json
 {
