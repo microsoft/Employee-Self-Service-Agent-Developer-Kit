@@ -33,7 +33,7 @@ If directory/profile permission is unavailable, FlightCheck uses a separate `Use
 
 Nonblank text and valid integers, including layer zero, are available. Explicit null/blank scalar values and empty collections are empty. Omitted or null sections are not returned; metadata-only records and continuation/truncation signals remain unverified.
 
-Current-position fields use only records explicitly marked `isCurrent`. Multiple candidate records must agree on the selected value and its presence state. Otherwise the field is unverified. The checker neither picks the first current position nor invents source precedence.
+Current-position fields use only records explicitly marked `isCurrent`. Multiple candidate records must agree on the selected value and its presence state; relationship collection order does not affect agreement. Otherwise the field is unverified. The checker neither picks the first current position nor invents source precedence.
 
 For each tenant field, report available, empty, not-returned and unverified counts. Calculate `available / usersChecked * 100` only when that field has no unverified/not-returned accounts; otherwise show **Unverified**, not a misleading percentage. Every included check uses the **95% threshold**, evaluated before display rounding.
 

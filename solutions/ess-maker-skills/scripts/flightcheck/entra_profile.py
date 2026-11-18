@@ -137,7 +137,12 @@ def _value(row: dict, attribute: Attribute):
         raise ValueError("Graph returned an invalid text profile property.")
     if not _content(value):
         return "Empty", None
-    normalized = value.strip().casefold() if isinstance(value, str) else json.dumps(value, sort_keys=True)
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+    elif attribute.kind == "collection":
+        normalized = tuple(sorted(json.dumps(item, sort_keys=True) for item in value))
+    else:
+        normalized = json.dumps(value, sort_keys=True)
     return "Available", normalized
 
 
@@ -192,7 +197,7 @@ def check_attributes(
             raise ValueError("Graph returned an empty or duplicate user population; coverage was not calculated.")
         # Some advertised beta sections reject $select on live tenants. The
         # default profile read succeeds and keeps omissions explicitly unknown.
-        profiles = client.get_bounded_profiles(identities, select="", time_budget=_remaining(deadline))
+        profiles = client.get_bounded_profiles(identities, time_budget=_remaining(deadline))
         if len(profiles) != len(identities):
             raise ValueError("Graph returned incomplete profile coverage.")
         complete = collection.complete

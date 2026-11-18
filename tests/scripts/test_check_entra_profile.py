@@ -102,6 +102,37 @@ def test_profile_presence_distinguishes_empty_omitted_and_source_ambiguity(clien
     assert report["status"] == ("Passed" if expected == "Available" else "Warning")
 
 
+@pytest.mark.parametrize("difference", ["order", "person", "relationship", "missing_person"])
+@respx.mock
+def test_colleague_comparison_ignores_order_but_preserves_real_conflicts(client, difference):
+    profile = profiles.profile()
+    current = profile["positions"][0]
+    current["colleagues"] = [
+        {"userId": "first", "relationship": "colleague"},
+        {"userId": "second", "relationship": "colleague"},
+    ]
+    other = deepcopy(current)
+    other["colleagues"].reverse()
+    if difference == "person":
+        other["colleagues"][0]["userId"] = "third"
+    elif difference == "relationship":
+        other["colleagues"][0]["relationship"] = "assistant"
+    elif difference == "missing_person":
+        other["colleagues"].pop()
+    profile["positions"].append(other)
+    _tenant_routes(2, lambda: profile)
+    report = check.check_attributes(client, "tenant", ["colleagues"])
+    row = report["results"][0]
+    if difference == "order":
+        assert report["status"] == "Passed"
+        assert row["coveragePercent"] == 100
+        assert row["available"] == 2 and row["unverified"] == 0
+    else:
+        assert report["status"] == "Warning"
+        assert row["coveragePercent"] is None and row["unverified"] == 2
+    assert "first" not in json.dumps(report)
+
+
 @pytest.mark.parametrize("variant", ["bad_section", "bad_record", "bad_nested", "bad_integer", "bad_text"])
 @respx.mock
 def test_malformed_profile_data_is_an_error_not_an_empty_attribute(client, variant):

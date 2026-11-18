@@ -31,7 +31,7 @@ def client():
 def _read(client, count=2, budget=30):
     return client.get_bounded_profiles(
         [profiles.directory_user(i + 1)["id"] for i in range(count)],
-        select="names,positions", time_budget=budget,
+        time_budget=budget,
     )
 
 

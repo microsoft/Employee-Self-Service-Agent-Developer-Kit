@@ -526,10 +526,10 @@ class GraphClient:
             params=params, time_budget=time_budget, path="/me/profile",
         )
 
-    def get_bounded_profiles(self, user_ids: list[str], *, select: str, time_budget: float) -> list[dict]:
+    def get_bounded_profiles(self, user_ids: list[str], *, time_budget: float) -> list[dict]:
         """Read public rich profiles in batches, never using internal People APIs."""
         return BoundedGraphTransport(GRAPH_PROFILE_BASE, self.headers, _RETRY).get_profiles(
-            user_ids, select=select, time_budget=time_budget,
+            user_ids, time_budget=time_budget,
         )
 
     # ----- Convenience methods for common FlightCheck queries -----
