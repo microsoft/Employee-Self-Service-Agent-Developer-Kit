@@ -7,15 +7,15 @@ from dataclasses import replace
 
 import pytest
 
-from topic_actions_discovery import (
+from manage_topics_discovery import (
     DiscoveryTarget, SourceBinding, TopicEvidence, TopicSet, build_provisional_snapshot,
 )
-from topic_actions_flat_discovery import (
+from manage_topics_flat_discovery import (
     FlatCatalog, FlatMember, FlatSet, InventoryTopic, NativeInventory, compare_flat_catalog,
 )
-from topic_actions_planning import TopicChange, TopicSkip, build_provisional_plan, plan_topic_actions
-from topic_actions_review import (
-    ReviewError, prepare_review, record_synthetic_decision, review_topic_actions,
+from manage_topics_planning import TopicChange, TopicSkip, build_provisional_plan, plan_manage_topics
+from manage_topics_review import (
+    ReviewError, prepare_review, record_synthetic_decision, review_manage_topics,
 )
 
 
@@ -174,7 +174,7 @@ def test_flat_chain_keeps_observations_separate_from_eligible_changes_and_live_c
         InventoryTopic("shared", "exact.hr.topic.Shared", "On"),
     ), "read-r1")
     discovery = replace(compare_flat_catalog(catalog, inventory, ("alpha", "beta")), evidence_kind=kind)
-    plan = plan_topic_actions(discovery, "enable")
+    plan = plan_manage_topics(discovery, "enable")
     context = {"retained_progress": True}
     direct = prepare_review(plan, ACCOUNT)
     called = prepare_review(plan, ACCOUNT, entry="called", caller_context=context)
@@ -187,7 +187,7 @@ def test_flat_chain_keeps_observations_separate_from_eligible_changes_and_live_c
     fresh_inventory = replace(inventory, revision="read-r2", topics=(
         replace(inventory.topics[0], state="On"), inventory.topics[1],
     ))
-    fresh = plan_topic_actions(
+    fresh = plan_manage_topics(
         replace(compare_flat_catalog(catalog, fresh_inventory, ("alpha", "beta")), evidence_kind=kind),
         "enable",
     )
@@ -202,5 +202,5 @@ def test_flat_chain_keeps_observations_separate_from_eligible_changes_and_live_c
     assert decision.live_actions_available is False
     assert prepare_review(fresh, ACCOUNT).status == "blocked"
     with pytest.raises(ReviewError) as error:
-        review_topic_actions(plan, ACCOUNT)
+        review_manage_topics(plan, ACCOUNT)
     assert error.value.reason == "implementation_pending"

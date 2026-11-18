@@ -14,7 +14,7 @@ import responses
 from agentbuilder import AgentBuilderClient, AgentBuilderError
 from tests.conftest import require_validated_mock
 from tests.mocks import agentbuilder_connectivity as native
-from topic_actions_components import ComponentReadError, normalize_state, read_component_states
+from manage_topics_components import ComponentReadError, normalize_state, read_component_states
 
 
 AGENT_ID = native.MOCK_AGENT_ID

@@ -18,11 +18,11 @@ from typing import Callable, Protocol
 from requests import RequestException
 
 from agentbuilder import AgentBuilderError, AgentBuilderHTTPError
-from topic_actions_catalog import Catalog, CatalogSnapshot, plan_catalog_actions
-from topic_actions_components import normalize_state
-from topic_actions_discovery import _identity
-from topic_actions_planning import TopicPlan, _digest
-from topic_actions_presentation import approval_question, result_text, review_text
+from manage_topics_catalog import Catalog, CatalogSnapshot, plan_catalog_actions
+from manage_topics_components import normalize_state
+from manage_topics_discovery import _identity
+from manage_topics_planning import TopicPlan, _digest
+from manage_topics_presentation import approval_question, result_text, review_text
 
 
 _LOCKS_GUARD = threading.Lock()
@@ -325,7 +325,7 @@ def _reconcile(
     return results, containment and stable_authority, preservation
 
 
-class TopicActionSession:
+class ManageTopicsSession:
     """One review and at most one dispatch. No saved approval or replay."""
 
     def __init__(
@@ -544,7 +544,7 @@ class TopicActionSession:
             ) if plan else None,
             "callerContext": deepcopy(self.caller_context),
             "message": {
-                "blocked": "Topic actions are blocked. No changes were attempted.",
+                "blocked": "Manage topics is blocked. No changes were attempted.",
                 "preview": "Preview only. No changes were attempted and no executable approval was collected.",
                 "review_ready": "Review ready. No approval has been collected and no changes were attempted.",
                 "cancelled": "Cancelled. No changes were attempted.",

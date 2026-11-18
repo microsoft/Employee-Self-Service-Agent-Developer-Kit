@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Topic-action entry, recovery guidance and caller-progress boundaries."""
+"""Manage topics entry, recovery guidance and caller-progress boundaries."""
 
 from copy import deepcopy
 from dataclasses import replace
@@ -14,7 +14,7 @@ import sys
 import pytest
 import responses
 
-import topic_actions as entry
+import manage_topics as entry
 from agentbuilder import DEFAULT_API_VERSION, AgentBuilderError, AgentBuilderHTTPError
 from tests.conftest import require_validated_mock
 from tests.mocks import agentbuilder_connectivity as native
@@ -143,7 +143,7 @@ def test_read_only_check_verifies_exact_target_and_preserves_progress(
     }
 
 
-def _materialize_for_topic_actions(workspace):
+def _materialize_for_manage_topics(workspace):
     def update(document):
         record = document["agents"][AGENT_ID]
         record["connect_ready"] = False
@@ -152,13 +152,13 @@ def _materialize_for_topic_actions(workspace):
     _change_json(workspace / ".local" / "setup" / "config.json", update)
 
 
-def test_topic_actions_requires_preparation_not_connection_health(workspace, request_value):
-    _materialize_for_topic_actions(workspace)
+def test_manage_topics_requires_preparation_not_connection_health(workspace, request_value):
+    _materialize_for_manage_topics(workspace)
     connection = entry._workspace_target(
         workspace, request_value["target"], require_connect_ready=False,
     )
     assert connection["host"] == HOST
-    with pytest.raises(entry.TopicActionsError) as error:
+    with pytest.raises(entry.ManageTopicsError) as error:
         entry._workspace_target(workspace, request_value["target"])
     assert error.value.reason == "setup_incomplete"
 
@@ -168,7 +168,7 @@ def test_new_entry_stops_before_auth_when_workspace_preparation_is_missing(works
         workspace / ".local" / "setup" / "config.json",
         lambda value: value["agents"][AGENT_ID].update(steps={}),
     )
-    result = entry.run_topic_actions(
+    result = entry.run_manage_topics(
         request_value, workspace_root=workspace,
         confirm=lambda _: pytest.fail("Missing preparation cannot ask for consent."),
     )
@@ -180,14 +180,14 @@ def test_new_entry_stops_before_auth_when_workspace_preparation_is_missing(works
 def test_new_direct_and_caller_entries_share_controller_without_completing_caller(
     workspace, request_value, monkeypatch,
 ):
-    from tests.scripts.test_topic_actions_runtime import SyntheticBackend, operation_evidence
+    from tests.scripts.test_manage_topics_runtime import SyntheticBackend, operation_evidence
 
-    _materialize_for_topic_actions(workspace)
+    _materialize_for_manage_topics(workspace)
     _auth(monkeypatch)
     backends = []
 
     def backend(*args):
-        assert isinstance(args[-1], entry.TopicActionsClient)
+        assert isinstance(args[-1], entry.ManageTopicsClient)
         assert args[-1].single_attempt is True
         assert args[-1].read_only is False
         assert args[-1].signed_in_username == "maker@example.com"
@@ -195,10 +195,10 @@ def test_new_direct_and_caller_entries_share_controller_without_completing_calle
         backends.append(result)
         return result
 
-    monkeypatch.setattr("topic_actions_native.NativeActionBackend", backend)
+    monkeypatch.setattr("manage_topics_native.NativeActionBackend", backend)
     direct = {**request_value, "entry": "direct", "callerContext": {}}
     results = [
-        entry.run_topic_actions(
+        entry.run_manage_topics(
             value, workspace_root=workspace,
             confirm=lambda _: pytest.fail("Release blocker cannot ask for consent."),
         )
@@ -213,7 +213,7 @@ def test_new_direct_and_caller_entries_share_controller_without_completing_calle
 
 
 def test_new_entry_cancellation_preserves_context_without_setup_or_auth(tmp_path, request_value):
-    result = entry.run_topic_actions(
+    result = entry.run_manage_topics(
         request_value, workspace_root=tmp_path, cancelled=True,
         confirm=lambda _: pytest.fail("Cancellation cannot ask for consent."),
     )
@@ -248,9 +248,9 @@ def test_chat_output_rejects_interactive_execution_before_reading_input(monkeypa
 def test_agent_set_listing_cli_uses_read_only_discovery_without_set_keys_or_approval(
     workspace, request_value, monkeypatch, capsys, chat_output,
 ):
-    from topic_actions_catalog import parse_catalog
-    from topic_actions_discovery import DiscoveryTarget
-    from tests.scripts.test_topic_actions_runtime import SyntheticBackend, catalog_document, operation_evidence
+    from manage_topics_catalog import parse_catalog
+    from manage_topics_discovery import DiscoveryTarget
+    from tests.scripts.test_manage_topics_runtime import SyntheticBackend, catalog_document, operation_evidence
 
     calls = _auth(monkeypatch)
     catalog = parse_catalog(catalog_document())
@@ -262,12 +262,12 @@ def test_agent_set_listing_cli_uses_read_only_discovery_without_set_keys_or_appr
         packet, snapshot=replace(packet.snapshot, evidence=replace(packet.snapshot.evidence, target=target)),
     )
     backend = SyntheticBackend([packet])
-    monkeypatch.setattr("topic_actions_catalog.load_catalog", lambda: catalog)
+    monkeypatch.setattr("manage_topics_catalog.load_catalog", lambda: catalog)
     def adapter(*args):
         assert args[2] == ("alpha", "beta")
         assert args[-1].read_only
         return backend
-    monkeypatch.setattr("topic_actions_native.NativeActionBackend", adapter)
+    monkeypatch.setattr("manage_topics_native.NativeActionBackend", adapter)
     value = {key: item for key, item in request_value.items() if key not in ("action", "setKeys")}
     monkeypatch.setattr(entry.sys, "stdin", io.StringIO(json.dumps(value)))
     args = ["--list-agent-sets", "--workspace-root", str(workspace)]
@@ -296,7 +296,7 @@ def test_agent_set_listing_cli_uses_read_only_discovery_without_set_keys_or_appr
     assert backend.reads == 1 and not backend.submissions
     assert "do-not-emit" not in output and "private-token" not in output
     assert entry.REVIEW_MARKER not in output
-    assert not (workspace / ".local" / "topic-actions").exists()
+    assert not (workspace / ".local" / "manage-topics").exists()
 
 
 @pytest.mark.parametrize("update", [
@@ -306,18 +306,18 @@ def test_agent_set_listing_rejects_mutation_or_selection_inputs_before_auth(requ
     value = {
         key: item for key, item in request_value.items() if key not in ("action", "setKeys")
     }
-    with pytest.raises(entry.TopicActionsError):
+    with pytest.raises(entry.ManageTopicsError):
         entry.validate_request({**value, **update}, list_sets=True)
 
 
 def test_failed_agent_set_read_is_not_reported_as_an_empty_agent(workspace, request_value, monkeypatch):
-    from tests.scripts.test_topic_actions_runtime import SyntheticBackend
+    from tests.scripts.test_manage_topics_runtime import SyntheticBackend
 
     _auth(monkeypatch)
     backend = SyntheticBackend([entry.requests.Timeout("private-service-detail")])
-    monkeypatch.setattr("topic_actions_native.NativeActionBackend", lambda *args: backend)
+    monkeypatch.setattr("manage_topics_native.NativeActionBackend", lambda *args: backend)
     value = {key: item for key, item in request_value.items() if key not in ("action", "setKeys")}
-    result = entry.run_topic_actions(
+    result = entry.run_manage_topics(
         value, workspace_root=workspace, confirm=None, list_sets=True,
     )
     assert result["status"] == "blocked"
@@ -337,8 +337,8 @@ def test_failed_agent_set_read_is_not_reported_as_an_empty_agent(workspace, requ
 def test_execute_cli_reviews_then_uses_explicit_same_session_consent(
     workspace, request_value, monkeypatch, capsys, answer, status, completed,
 ):
-    from tests.scripts.test_topic_actions_runtime import SyntheticBackend, operation_evidence
-    from topic_actions_discovery import DiscoveryTarget
+    from tests.scripts.test_manage_topics_runtime import SyntheticBackend, operation_evidence
+    from manage_topics_discovery import DiscoveryTarget
 
     auth_calls = _auth(monkeypatch)
     before = operation_evidence({"a": "On", "shared": "On"})
@@ -352,7 +352,7 @@ def test_execute_cli_reviews_then_uses_explicit_same_session_consent(
         )
     before, after = bind(before), bind(after)
     backend = SyntheticBackend([before, before, after])
-    monkeypatch.setattr("topic_actions_native.NativeActionBackend", lambda *args: backend)
+    monkeypatch.setattr("manage_topics_native.NativeActionBackend", lambda *args: backend)
     monkeypatch.setattr(entry.sys, "stdin", io.StringIO(json.dumps(request_value) + "\n" + answer))
 
     exit_code = entry.main(["--execute", "--workspace-root", str(workspace)])
@@ -385,11 +385,11 @@ def test_execute_cli_reviews_then_uses_explicit_same_session_consent(
 def test_preview_is_truthful_nonmutating_and_uses_read_only_auth(
     workspace, request_value, monkeypatch, capsys,
 ):
-    from tests.scripts.test_topic_actions_runtime import SyntheticBackend, operation_evidence
+    from tests.scripts.test_manage_topics_runtime import SyntheticBackend, operation_evidence
 
     auth_calls = _auth(monkeypatch)
     backend = SyntheticBackend([operation_evidence({"a": "On", "shared": "On"})])
-    monkeypatch.setattr("topic_actions_native.NativeActionBackend", lambda *args: backend)
+    monkeypatch.setattr("manage_topics_native.NativeActionBackend", lambda *args: backend)
     monkeypatch.setattr(entry.sys, "stdin", io.StringIO(json.dumps(request_value)))
 
     assert entry.main(["--preview", "--workspace-root", str(workspace)]) == 0
@@ -409,7 +409,7 @@ def test_restore_request_is_not_supported(request_value):
     value = {**request_value, "action": "restore"}
     value.pop("setKeys")
     for update in ({}, {"setKeys": []}, {"setKeys": ["synthetic-set"]}):
-        with pytest.raises(entry.TopicActionsError):
+        with pytest.raises(entry.ManageTopicsError):
             entry.validate_request({**value, **update})
 
 
@@ -419,7 +419,7 @@ def test_restore_request_is_not_supported(request_value):
 ])
 def test_removed_inputs_stop_without_authentication(workspace, request_value, update):
     value = {**request_value, **update}
-    result = entry.run_topic_actions(
+    result = entry.run_manage_topics(
         value, workspace_root=workspace,
         confirm=lambda _: pytest.fail("Unsupported requests cannot ask for consent."),
     )
@@ -562,7 +562,7 @@ def test_cli_cancel_preserves_private_caller_context(
 
     monkeypatch.setattr(entry, "_result", capture)
     monkeypatch.setattr(entry, "_workspace_target", forbidden)
-    monkeypatch.setattr(entry, "review_topic_actions", forbidden)
+    monkeypatch.setattr(entry, "review_manage_topics", forbidden)
     monkeypatch.setattr(entry, "_confirm_stdin", forbidden)
 
     assert entry.main([*mode, "--cancel"]) == 0
@@ -686,7 +686,7 @@ def test_cli_rejects_malformed_json_without_echoing_it(monkeypatch, capsys):
     assert json.loads(output.removeprefix(entry.RESULT_MARKER))["reason"] == "invalid_request"
 
 
-@pytest.mark.parametrize("runner", [entry.inspect_request, entry.run_topic_actions])
+@pytest.mark.parametrize("runner", [entry.inspect_request, entry.run_manage_topics])
 @pytest.mark.parametrize(("state", "reason", "explanation", "setup_route"), [
     ("missing", "setup_not_run", "has not established the account, agent and environment", True),
     ("incomplete", "setup_incomplete", "local workspace", True),
@@ -716,7 +716,7 @@ def test_entry_recovery_is_specific_and_preserves_existing_progress(
     files = {path: path.read_bytes() for path in workspace.rglob("*") if path.is_file()}
     original = deepcopy(request_value)
     options = {"workspace_root": workspace}
-    if runner is entry.run_topic_actions:
+    if runner is entry.run_manage_topics:
         options["confirm"] = lambda _: pytest.fail("A blocked entry cannot ask for consent.")
 
     result = runner(request_value, **options)
@@ -743,7 +743,7 @@ def test_entry_recovery_is_specific_and_preserves_existing_progress(
 def test_m1_inspection_does_not_require_business_connection_readiness(
     workspace, request_value, monkeypatch,
 ):
-    _materialize_for_topic_actions(workspace)
+    _materialize_for_manage_topics(workspace)
     _auth(monkeypatch)
     require_validated_mock(native)
     response = native.get_agent()
@@ -759,7 +759,7 @@ def test_m1_inspection_does_not_require_business_connection_readiness(
     assert responses.calls[0].request.method == "GET"
 
 
-@pytest.mark.parametrize("runner", [entry.inspect_request, entry.run_topic_actions])
+@pytest.mark.parametrize("runner", [entry.inspect_request, entry.run_manage_topics])
 def test_authentication_http_failure_is_not_reported_as_agent_read_denial(
     workspace, request_value, runner, monkeypatch,
 ):
@@ -768,7 +768,7 @@ def test_authentication_http_failure_is_not_reported_as_agent_read_denial(
 
     monkeypatch.setattr(entry, "authenticate_flightcheck", fail)
     options = {"workspace_root": workspace}
-    if runner is entry.run_topic_actions:
+    if runner is entry.run_manage_topics:
         options["confirm"] = lambda _: pytest.fail("Authentication failure cannot ask for consent.")
 
     result = runner(request_value, **options)
@@ -803,8 +803,8 @@ def test_runtime_entry_distinguishes_denied_reads_from_unavailable_evidence(
         def submit_once(self, *args):
             pytest.fail("Unavailable evidence cannot submit changes.")
 
-    monkeypatch.setattr("topic_actions_native.NativeActionBackend", lambda *args: UnavailableBackend())
-    result = entry.run_topic_actions(
+    monkeypatch.setattr("manage_topics_native.NativeActionBackend", lambda *args: UnavailableBackend())
+    result = entry.run_manage_topics(
         request_value, workspace_root=workspace,
         confirm=lambda _: pytest.fail("Unavailable evidence cannot ask for consent."),
     )
@@ -825,7 +825,7 @@ def test_runtime_entry_distinguishes_denied_reads_from_unavailable_evidence(
 def test_unverified_package_and_topic_evidence_does_not_claim_verified_absence(
     workspace, request_value, monkeypatch,
 ):
-    from tests.scripts.test_topic_actions_runtime import SyntheticBackend, operation_evidence
+    from tests.scripts.test_manage_topics_runtime import SyntheticBackend, operation_evidence
 
     _auth(monkeypatch)
     evidence = replace(operation_evidence(), blockers=(
@@ -833,9 +833,9 @@ def test_unverified_package_and_topic_evidence_does_not_claim_verified_absence(
         "unresolved_member:selected-set:topic",
     ))
     backend = SyntheticBackend([evidence])
-    monkeypatch.setattr("topic_actions_native.NativeActionBackend", lambda *args: backend)
+    monkeypatch.setattr("manage_topics_native.NativeActionBackend", lambda *args: backend)
 
-    result = entry.run_topic_actions(
+    result = entry.run_manage_topics(
         request_value, workspace_root=workspace,
         confirm=lambda _: pytest.fail("Unresolved evidence cannot ask for consent."),
     )
@@ -851,12 +851,12 @@ def test_unverified_package_and_topic_evidence_does_not_claim_verified_absence(
     assert not backend.submissions
 
 
-@pytest.mark.parametrize("runner", [entry.inspect_request, entry.run_topic_actions])
+@pytest.mark.parametrize("runner", [entry.inspect_request, entry.run_manage_topics])
 def test_cancellation_has_truthful_copy_without_marking_caller_steps_complete(
     tmp_path, request_value, runner,
 ):
     options = {"workspace_root": tmp_path, "cancelled": True}
-    if runner is entry.run_topic_actions:
+    if runner is entry.run_manage_topics:
         options["confirm"] = lambda _: pytest.fail("Cancellation cannot ask for consent.")
     original = deepcopy(request_value)
 
@@ -879,7 +879,7 @@ def test_authentication_cannot_change_requested_account_or_tenant(
     workspace, request_value, monkeypatch, tenant, account,
 ):
     _auth(monkeypatch, tenant=tenant, account=account)
-    result = entry.run_topic_actions(
+    result = entry.run_manage_topics(
         request_value, workspace_root=workspace, account_hint="maker@example.com",
         confirm=lambda _: pytest.fail("A mismatched account cannot request approval."),
     )
@@ -887,7 +887,7 @@ def test_authentication_cannot_change_requested_account_or_tenant(
     assert result["writeStatus"] == "not_attempted"
 
 
-def test_topic_actions_imports_without_connect_workday_or_evaluation_runtime():
+def test_manage_topics_imports_without_connect_workday_or_evaluation_runtime():
     script = """
 import importlib
 import importlib.abc
@@ -897,10 +897,10 @@ import sys
 class ForbidConnectDependencies(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname.startswith(("minimalbot_evaluation", "connect_workday", "setup_existing_da")):
-            raise ImportError("Topic actions must not depend on " + fullname)
+            raise ImportError("Manage topics must not depend on " + fullname)
 
 sys.meta_path.insert(0, ForbidConnectDependencies())
-for module in Path.cwd().glob("topic_actions*.py"):
+for module in Path.cwd().glob("manage_topics*.py"):
     importlib.import_module(module.stem)
 """
     result = subprocess.run(
@@ -908,3 +908,20 @@ for module in Path.cwd().glob("topic_actions*.py"):
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_renamed_cli_loads_bundled_catalog_without_setup_or_mutation(tmp_path):
+    process = subprocess.run(
+        [sys.executable, entry.__file__, "--list-sets", "--chat-output"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+    )
+    assert process.returncode == 0, process.stderr
+    lines = process.stdout.splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("MANAGE_TOPICS_RESULT_JSON:")
+    result = json.loads(lines[0].removeprefix("MANAGE_TOPICS_RESULT_JSON:"))
+    assert result["status"] == "source_catalog_only"
+    assert result["sets"]
+    assert result["writeStatus"] == "not_attempted"
+    assert not result["completed"]
+    assert not list(tmp_path.iterdir())

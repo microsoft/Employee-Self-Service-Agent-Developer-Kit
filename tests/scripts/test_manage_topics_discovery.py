@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import pytest
 
-from topic_actions_discovery import (
+from manage_topics_discovery import (
     DiscoveryError,
     DiscoveryTarget,
     SourceBinding,
@@ -221,7 +221,7 @@ def test_live_entry_never_uses_synthetic_adapter_or_mutates(monkeypatch, tmp_pat
     def forbidden(*args, **kwargs):
         pytest.fail("Production entry must not invoke the synthetic boundary.")
 
-    monkeypatch.setattr("topic_actions_discovery.build_provisional_snapshot", forbidden)
+    monkeypatch.setattr("manage_topics_discovery.build_provisional_snapshot", forbidden)
     with pytest.raises(DiscoveryError) as error:
         discover_topic_sets(TARGET, ("workday",))
     assert error.value.reason == "implementation_pending"

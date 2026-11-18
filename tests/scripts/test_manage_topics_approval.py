@@ -14,10 +14,10 @@ import sys
 
 import pytest
 
-import topic_actions as entry
-from topic_actions_approval import TopicReviewError, TopicReviewStore
-from topic_actions_execution import TopicActionSession
-from tests.scripts.test_topic_actions_runtime import TARGET, SyntheticBackend, operation_evidence
+import manage_topics as entry
+from manage_topics_approval import TopicReviewError, TopicReviewStore
+from manage_topics_execution import ManageTopicsSession
+from tests.scripts.test_manage_topics_runtime import TARGET, SyntheticBackend, operation_evidence
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,10 +37,10 @@ import json, sys
 from pathlib import Path
 sys.path.insert(0, {scripts!r})
 sys.path.insert(0, {root!r})
-import topic_actions as entry
-import topic_actions_native
+import manage_topics as entry
+import manage_topics_native
 from agentbuilder import derive_environment_host
-from tests.scripts.test_topic_actions_runtime import TARGET, dev_native_backend
+from tests.scripts.test_manage_topics_runtime import TARGET, dev_native_backend
 
 scenario = {scenario!r}
 root = Path({workspace!r})
@@ -71,7 +71,7 @@ def submitted(*args):
     if scenario == "failure":
         raise TimeoutError("Synthetic uncertain submission")
 backend.components.submit_state_payload.side_effect = submitted
-topic_actions_native.NativeActionBackend = lambda *a: backend
+manage_topics_native.NativeActionBackend = lambda *a: backend
 raise SystemExit(entry.main(sys.argv[1:]))
 '''
 
@@ -147,7 +147,7 @@ def test_noop_finishes_without_pending_review_approval_or_baseline(tmp_path, cha
     assert "approvalQuestion" not in result
     assert "No change needed." in result["userMessage"]
     assert "| **#** | **Integration** | **Topic** | **Result** |" in result["userMessage"]
-    assert not (tmp_path / ".local" / "topic-actions").exists()
+    assert not (tmp_path / ".local" / "manage-topics").exists()
     assert not (tmp_path / "submissions.txt").exists()
 
 
@@ -226,8 +226,8 @@ def test_enable_disable_review_uses_live_states_without_baseline_or_history_ques
     assert "original" not in result["userMessage"].lower()
     assert "history" not in result["userMessage"].lower()
     assert "Unknown" not in result["userMessage"]
-    assert list((tmp_path / ".local" / "topic-actions").iterdir()) == [
-        tmp_path / ".local" / "topic-actions" / "reviews.sqlite3",
+    assert list((tmp_path / ".local" / "manage-topics").iterdir()) == [
+        tmp_path / ".local" / "manage-topics" / "reviews.sqlite3",
     ]
     assert not (tmp_path / "submissions.txt").exists()
 
@@ -263,12 +263,15 @@ def test_restore_is_rejected_without_review_or_write(tmp_path):
     assert result["status"] == "blocked"
     assert "reviewId" not in result
     assert "Restore is not supported." in result["userMessage"]
-    assert not (tmp_path / ".local" / "topic-actions").exists()
+    assert not (tmp_path / ".local" / "manage-topics").exists()
 
 
 @pytest.mark.parametrize("action,scenario", [("disable", "normal"), ("enable", "enable")])
-def test_legacy_baseline_files_do_not_block_or_change_during_operations(tmp_path, action, scenario):
-    directory = tmp_path / ".local" / "topic-actions"
+@pytest.mark.parametrize("directory_name", ["topic-actions", "manage-topics"])
+def test_legacy_baseline_files_do_not_block_or_change_during_operations(
+    tmp_path, action, scenario, directory_name,
+):
+    directory = tmp_path / ".local" / directory_name
     directory.mkdir(parents=True)
     legacy = directory / f"{TARGET.tenant_id}_{TARGET.environment_id}_{TARGET.agent_id}.sqlite3"
     legacy.write_bytes(b"corrupt legacy original-state record")
@@ -282,6 +285,34 @@ def test_legacy_baseline_files_do_not_block_or_change_during_operations(tmp_path
     assert result["completed"]
     assert legacy.read_bytes() == original
     assert (tmp_path / "submissions.txt").read_text().splitlines() == ["submitted"]
+
+
+@pytest.mark.parametrize("new_store_exists", [False, True])
+def test_pre_rename_reviews_require_fresh_consent_without_modifying_legacy_store(
+    tmp_path, monkeypatch, new_store_exists,
+):
+    legacy = TopicReviewStore(tmp_path)
+    legacy.path = tmp_path / ".local" / "topic-actions" / "reviews.sqlite3"
+    review = legacy.create(REQUEST, "a" * 64)
+    original = legacy.path.read_bytes()
+    current = TopicReviewStore(tmp_path)
+    if new_store_exists:
+        current.create(REQUEST, "b" * 64)
+    monkeypatch.setattr(
+        entry, "run_manage_topics",
+        lambda *a, **k: pytest.fail("A pre-rename review cannot authorize execution."),
+    )
+
+    result = entry.apply_topic_review(review["reviewId"], "approve", workspace_root=tmp_path)
+
+    assert result["status"] == "review_required"
+    assert result["reason"] == (
+        "review_unavailable" if new_store_exists else "review_storage_unavailable"
+    )
+    assert result["writeStatus"] == "not_attempted"
+    assert not result["completed"]
+    assert legacy.path.read_bytes() == original
+    assert current.path.exists() == new_store_exists
 
 
 def test_uncertain_write_consumes_review_and_cannot_replay(tmp_path):
@@ -299,7 +330,7 @@ def test_uncertain_write_consumes_review_and_cannot_replay(tmp_path):
 def test_expired_review_cannot_authenticate_or_execute(tmp_path, monkeypatch):
     store = TopicReviewStore(tmp_path, clock=lambda: 0, monotonic=lambda: 0)
     review = store.create(REQUEST, "a" * 64)
-    monkeypatch.setattr(entry, "run_topic_actions", lambda *a, **k: pytest.fail("No execution allowed"))
+    monkeypatch.setattr(entry, "run_manage_topics", lambda *a, **k: pytest.fail("No execution allowed"))
     result = entry.apply_topic_review(review["reviewId"], "approve", workspace_root=tmp_path)
     assert result["status"] == "review_required"
     assert result["reason"] == "approval_expired"
@@ -322,13 +353,13 @@ def test_review_preparation_has_no_write_scope_and_no_baseline_mutation(tmp_path
     def adapter(*args):
         assert args[-1].read_only
         return backend
-    monkeypatch.setattr("topic_actions_native.NativeActionBackend", adapter)
-    review = entry.review_topic_actions(REQUEST, workspace_root=tmp_path)
+    monkeypatch.setattr("manage_topics_native.NativeActionBackend", adapter)
+    review = entry.review_manage_topics(REQUEST, workspace_root=tmp_path)
     assert review["status"] == "review_ready"
     assert calls[0]["allow_write"] is False
     assert not backend.submissions
-    assert len(list((tmp_path / ".local" / "topic-actions").glob("*.sqlite3"))) == 1
-    assert (tmp_path / ".local" / "topic-actions" / "reviews.sqlite3").exists()
+    assert len(list((tmp_path / ".local" / "manage-topics").glob("*.sqlite3"))) == 1
+    assert (tmp_path / ".local" / "manage-topics" / "reviews.sqlite3").exists()
 
 
 @pytest.mark.parametrize("decision", [
@@ -337,7 +368,7 @@ def test_review_preparation_has_no_write_scope_and_no_baseline_mutation(tmp_path
 def test_ambiguous_decision_consumes_review_without_auth_or_write(tmp_path, decision, monkeypatch):
     store = TopicReviewStore(tmp_path)
     review = store.create(REQUEST, "a" * 64)
-    monkeypatch.setattr(entry, "run_topic_actions", lambda *a, **k: pytest.fail("No execution allowed"))
+    monkeypatch.setattr(entry, "run_manage_topics", lambda *a, **k: pytest.fail("No execution allowed"))
     result = entry.apply_topic_review(review["reviewId"], decision, workspace_root=tmp_path)
     assert result["reason"] == "explicit_approval_required"
     assert result["writeStatus"] == "not_attempted"
@@ -375,7 +406,7 @@ def test_only_one_concurrent_process_can_consume_a_review(tmp_path):
     review = store.create(REQUEST, "a" * 64)
     command = (
         f"import sys; sys.path.insert(0, {str(SCRIPTS)!r}); from pathlib import Path; "
-        "from topic_actions_approval import TopicReviewStore; "
+        "from manage_topics_approval import TopicReviewStore; "
         f"TopicReviewStore(Path({str(tmp_path)!r})).consume({review['reviewId']!r})"
     )
     def consume(_):
@@ -398,7 +429,7 @@ def test_corrupt_pending_review_is_consumed_without_execution(tmp_path):
 
 
 def test_review_created_before_restore_removal_requires_a_new_review(tmp_path, monkeypatch):
-    from topic_actions_planning import _digest
+    from manage_topics_planning import _digest
 
     store = TopicReviewStore(tmp_path)
     review = store.create(REQUEST, "a" * 64)
@@ -410,7 +441,7 @@ def test_review_created_before_restore_removal_requires_a_new_review(tmp_path, m
             "UPDATE pending_reviews SET payload=?, checksum=?",
             (json.dumps(payload), _digest(payload)),
         )
-    monkeypatch.setattr(entry, "run_topic_actions", lambda *a, **k: pytest.fail("Old review cannot execute"))
+    monkeypatch.setattr(entry, "run_manage_topics", lambda *a, **k: pytest.fail("Old review cannot execute"))
     result = entry.apply_topic_review(review["reviewId"], "approve", workspace_root=tmp_path)
     assert result["status"] == "review_required"
     assert result["reason"] == "review_invalid"
@@ -420,12 +451,12 @@ def test_review_created_before_restore_removal_requires_a_new_review(tmp_path, m
 
 
 def test_restore_is_rejected_by_controller_and_catalog_planner():
-    from topic_actions_catalog import plan_catalog_actions
-    from topic_actions_discovery import DiscoveryError
+    from manage_topics_catalog import plan_catalog_actions
+    from manage_topics_discovery import DiscoveryError
 
     backend = SyntheticBackend([operation_evidence()])
     with pytest.raises(ValueError, match="Unsupported action"):
-        TopicActionSession(backend, "restore")
+        ManageTopicsSession(backend, "restore")
     assert backend.reads == 0
     assert not backend.submissions
     with pytest.raises(DiscoveryError) as error:
@@ -436,7 +467,7 @@ def test_restore_is_rejected_by_controller_and_catalog_planner():
 @pytest.mark.parametrize("change", ["account", "body", "state", "membership"])
 def test_pending_binding_covers_complete_evidence_not_only_visible_plan(change):
     before = operation_evidence({"a": "On", "shared": "On"})
-    review = TopicActionSession(SyntheticBackend([before]), "disable").run(None, review_only=True)
+    review = ManageTopicsSession(SyntheticBackend([before]), "disable").run(None, review_only=True)
     fresh = deepcopy(before)
     if change == "account":
         fresh = replace(fresh, account_id="another-account")
@@ -447,7 +478,7 @@ def test_pending_binding_covers_complete_evidence_not_only_visible_plan(change):
     else:
         fresh = operation_evidence({"a": "On", "shared": "On"}, selected=("alpha", "beta"))
     backend = SyntheticBackend([fresh])
-    result = TopicActionSession(backend, "disable").run(
+    result = ManageTopicsSession(backend, "disable").run(
         lambda _: pytest.fail("Changed review cannot approve"), approved_binding=review["_reviewBinding"],
     )
     assert result["status"] == "review_required"
@@ -457,9 +488,9 @@ def test_pending_binding_covers_complete_evidence_not_only_visible_plan(change):
 
 def test_original_deadline_is_not_reset_during_authentication_or_discovery():
     before = operation_evidence({"a": "On", "shared": "On"})
-    review = TopicActionSession(SyntheticBackend([before]), "disable").run(None, review_only=True)
+    review = ManageTopicsSession(SyntheticBackend([before]), "disable").run(None, review_only=True)
     backend = SyntheticBackend([before])
-    result = TopicActionSession(backend, "disable", clock=lambda: 301).run(
+    result = ManageTopicsSession(backend, "disable", clock=lambda: 301).run(
         lambda _: "approve", approved_binding=review["_reviewBinding"], approval_deadline=300,
     )
     assert result["blockers"] == ["approval_expired"]
@@ -467,17 +498,17 @@ def test_original_deadline_is_not_reset_during_authentication_or_discovery():
 
 
 def test_changed_rendered_review_invalidates_consent_without_weakening_binding(monkeypatch):
-    import topic_actions_execution
+    import manage_topics_execution
 
     before = operation_evidence({"a": "On", "shared": "On"})
-    review = TopicActionSession(SyntheticBackend([before]), "disable").run(None, review_only=True)
-    original_renderer = topic_actions_execution.review_text
+    review = ManageTopicsSession(SyntheticBackend([before]), "disable").run(None, review_only=True)
+    original_renderer = manage_topics_execution.review_text
     monkeypatch.setattr(
-        topic_actions_execution, "review_text",
+        manage_topics_execution, "review_text",
         lambda value: original_renderer(value) + "\nChanged presentation",
     )
     backend = SyntheticBackend([before])
-    result = TopicActionSession(backend, "disable").run(
+    result = ManageTopicsSession(backend, "disable").run(
         lambda _: pytest.fail("Consent to older presentation must not authorize this review."),
         approved_binding=review["_reviewBinding"],
     )
@@ -488,11 +519,11 @@ def test_changed_rendered_review_invalidates_consent_without_weakening_binding(m
 
 @pytest.mark.parametrize("field", ["header", "option"])
 def test_changed_approval_card_invalidates_consent_without_weakening_binding(monkeypatch, field):
-    import topic_actions_execution
+    import manage_topics_execution
 
     before = operation_evidence({"a": "On", "shared": "On"})
-    review = TopicActionSession(SyntheticBackend([before]), "disable").run(None, review_only=True)
-    original_question = topic_actions_execution.approval_question
+    review = ManageTopicsSession(SyntheticBackend([before]), "disable").run(None, review_only=True)
+    original_question = manage_topics_execution.approval_question
 
     def changed_question(value):
         question = original_question(value)
@@ -502,9 +533,9 @@ def test_changed_approval_card_invalidates_consent_without_weakening_binding(mon
             question["options"][0]["label"] += " Changed wording"
         return question
 
-    monkeypatch.setattr(topic_actions_execution, "approval_question", changed_question)
+    monkeypatch.setattr(manage_topics_execution, "approval_question", changed_question)
     backend = SyntheticBackend([before])
-    result = TopicActionSession(backend, "disable").run(
+    result = ManageTopicsSession(backend, "disable").run(
         lambda _: pytest.fail("Consent to an older card must not authorize this review."),
         approved_binding=review["_reviewBinding"],
     )
