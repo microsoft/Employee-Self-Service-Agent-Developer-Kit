@@ -54,6 +54,15 @@ target topic, node, instance origin, current value, or classification
 lines; keep those facts for your own checks.
 Use the instance root only when the administrator explicitly confirms that exact root URL; otherwise ask for the confirmed path. Do not show a sample URL as the answer and do not ask for credentials.
 
+Before the question, always write this as a normal reply to the Maker (not only
+inside the question form), exactly as shown:
+
+**Message:**
+
+Next, we'll make sure the agent's IT ticket links open in the right employee portal.
+
+**End message.**
+
 <!-- visible-handoff-question:v1 -->
 ```json
 [

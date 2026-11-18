@@ -557,6 +557,20 @@ def test_servicenow_test_question_has_explicit_result_choices(
 
 
 def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
+    for provider, noun in (("servicenow-da-hrsd", "HR case"), ("servicenow-da-itsm", "IT ticket")):
+        doc = (_CONNECT / provider / "actions" / "configure-portal-url.md").read_text(
+            encoding="utf-8"
+        )
+        sentence = (
+            f"Next, we'll make sure the agent's {noun} links open in the "
+            "right employee portal."
+        )
+        message = doc.split("**Message:**", 1)[1].split("**End message.**", 1)[0]
+        assert message.strip() == sentence
+        assert doc.index("**End message.**") < doc.index(
+            "<!-- visible-handoff-question:v1 -->"
+        )
+        assert sentence not in doc.split("<!-- visible-handoff-question:v1 -->", 1)[1]
     payloads = _payloads(_ACTIONS / "configure-portal-url.md")
     assert len(payloads) == 2
     portal_input = _validate_payload(

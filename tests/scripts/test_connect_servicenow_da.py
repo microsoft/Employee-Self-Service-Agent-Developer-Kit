@@ -12142,9 +12142,10 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
             assert technical not in text
         assert "**Expected form values" not in text
         assert "Part 2" not in text
+    record_noun = "case" if profile == "hrsd" else "ticket"
     assert (
-        f"Next, we'll make sure the agent's {audience} case links open in "
-        "the right employee portal."
+        f"Next, we'll make sure the agent's {audience} {record_noun} links "
+        "open in the right employee portal."
     ) == portal
     assert (
         "We're ready to try a request. In the agent's Test pane, run a "

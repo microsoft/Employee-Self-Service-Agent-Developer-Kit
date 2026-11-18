@@ -10463,9 +10463,10 @@ def _current_task_guidance(
             "unchanged."
         )
     if phase_id == "portal-url":
+        record_noun = "case" if ACTIVE_PROFILE.key == "hrsd" else "ticket"
         return (
-            f"Next, we'll make sure the agent's {_product_audience()} case "
-            "links open in the right employee portal."
+            f"Next, we'll make sure the agent's {_product_audience()} "
+            f"{record_noun} links open in the right employee portal."
         )
     if phase_id == "test":
         return (
