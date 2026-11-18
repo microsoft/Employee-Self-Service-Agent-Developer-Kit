@@ -4,7 +4,7 @@
 
 `AUTH-PROFILE-001` measures Microsoft 365 profile availability to highlight enrichment opportunities for ESS personalization. It reads the public Microsoft Graph beta profile API rather than only Entra `/users` attributes. Returned profiles can include data contributed by Entra, Organizational Data Service (ODS), people-data connectors, SharePoint profiles and user edits. The check is read-only.
 
-The scope is a selected core of identity and organizational properties defined by the public Microsoft 365 profile, ODS and Entra contracts. It is not a requirement to populate every property supported by those services. Coverage describes returned data availability, not the correctness of values or end-to-end agent behavior.
+This diagnostic checks a selected **subset of attributes supported by Microsoft 365 People Profile**, focused on identity and organizational context. It does not cover the full profile or require every supported property to be populated. Coverage describes returned data availability, not the correctness of values or end-to-end agent behavior.
 
 ## Default checks
 
@@ -29,7 +29,15 @@ The source column describes possible contributors, not inferred provenance. Actu
 
 Only these 12 properties are checked. Given name, surname, manager/colleague relationships, hire/position dates and other profile enrichment fields are excluded; there is no optional check group. The selected properties are enrichment opportunities, not deployment requirements.
 
-Public basis: [ODS profile-supported attributes and mappings](https://learn.microsoft.com/en-us/microsoft-365-apps/org-data-service/import/orgdata-attributes), [Entra user properties](https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0#properties), [profile data sources](https://learn.microsoft.com/en-us/graph/people-data-sources), [people-data connector mappings](https://learn.microsoft.com/en-us/plugins/build-connectors-with-people-data), and the [live beta schema](https://graph.microsoft.com/beta/$metadata).
+## Attribute references and data ingestion
+
+For attribute definitions and more information on ingesting data into Microsoft 365 People Profile:
+
+- [ODS attribute reference](https://learn.microsoft.com/en-us/microsoft-365-apps/org-data-service/import/orgdata-attributes): reserved attributes, Microsoft 365 Profile support and attribute-to-profile mappings.
+- [Microsoft Entra user attributes](https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0#properties): directory properties exposed through Microsoft Graph.
+- [People data sources in Microsoft 365](https://learn.microsoft.com/en-us/graph/people-data-sources): how Entra, ODS, people-data connectors, SharePoint and user edits contribute profile data, with links to ingestion options.
+
+Additional technical references: [people-data connector mappings](https://learn.microsoft.com/en-us/plugins/build-connectors-with-people-data) and the [live beta schema](https://graph.microsoft.com/beta/$metadata).
 
 ## Reads and limits
 
