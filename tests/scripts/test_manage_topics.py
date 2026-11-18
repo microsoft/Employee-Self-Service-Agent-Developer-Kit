@@ -8,6 +8,7 @@ from dataclasses import replace
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -908,6 +909,29 @@ for module in Path.cwd().glob("manage_topics*.py"):
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_manage_topics_commands_route_to_one_existing_skill_before_setup():
+    maker = Path(entry.__file__).resolve().parents[1]
+    canonical = maker / ".github" / "prompts" / "manage-topics.prompt.md"
+    alias = maker / ".github" / "prompts" / "topic-actions.prompt.md"
+    skill_path = "src/skills/manage-topics/SKILL.md"
+    canonical_path = ".github/prompts/manage-topics.prompt.md"
+
+    for prompt in (canonical, alias):
+        text = prompt.read_text(encoding="utf-8")
+        assert skill_path in text
+        for reference in re.findall(r"`((?:src/skills|\.github/prompts)/[^`]+\.md)`", text):
+            assert (maker / reference).is_file(), reference
+    assert canonical_path in alias.read_text(encoding="utf-8")
+
+    instructions = (maker / ".github" / "copilot-instructions.md").read_text(encoding="utf-8")
+    setup_independent = instructions.split("### Setup-independent routes", 1)[1].split(
+        "### Setup gate for all other requests", 1,
+    )[0]
+    assert "`/manage-topics`" in setup_independent
+    assert "`/topic-actions`" in setup_independent
+    assert skill_path in setup_independent
 
 
 def test_renamed_cli_loads_bundled_catalog_without_setup_or_mutation(tmp_path):

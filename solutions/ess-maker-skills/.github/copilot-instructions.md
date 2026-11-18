@@ -73,9 +73,12 @@ The selected entry point owns any metadata checks and missing-state handling.
   configuration is available. Deleting deployed sets still requires setup.
 - If the user typed `/flightcheck` or explicitly asked to validate setup or
   environment readiness, follow the **FlightCheck entry contract** below.
-- If the user typed `/topic-actions`, explicitly asked to enable or disable
-  whole ESS topic sets, list their current states, or undo earlier Topic Actions changes,
-  re-read `src/skills/topic-actions/SKILL.md` from disk for this invocation.
+- If the user typed `/manage-topics` or its compatibility alias `/topic-actions`,
+  explicitly asked to manage ESS topic-set states, enable or disable whole ESS
+  topic sets, list their current states, or undo earlier Manage topics changes,
+  re-read `src/skills/manage-topics/SKILL.md` from disk for this invocation.
+  Use **Manage topics** as the skill name. Both commands enter the same flow;
+  do not ask the maker to repeat the request or confirm the rename.
   That entry verifies canonical selected-agent identity and workspace
   preparation without requiring connection health or `connect_ready: true`.
   It never starts setup or repairs a connection automatically. Native
@@ -139,7 +142,7 @@ The selected entry point owns any metadata checks and missing-state handling.
   failure heading, repeated inventory or unchanged-topic footer.
   Put that guidance under a standalone **NEXT STEPS** heading, not an inline
   "Next step:" label; do not invent unrelated setup or connection suggestions.
-  Use this pattern for all Topic Actions next-step guidance, including partial
+  Use this pattern for all Manage topics next-step guidance, including partial
   and unverified outcomes. Do not add unsolicited next steps to other responses.
   Use explicit bold table headers. Normal listing, preview, review
   and apply commands use `--chat-output`; capture its envelope without echoing
