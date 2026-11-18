@@ -191,10 +191,16 @@ def _minimalbot_push(
                 "Preserved newer live content while applying the scoped "
                 "topic change."
             )
-        print(
-            f"\n✅ Updated and verified "
-            f"{result['verifiedComponents']} topic component(s)."
-        )
+        if result.get("writeAttempted") is False:
+            print(
+                f"\nAlready current: verified {result['verifiedComponents']} "
+                "topic component(s). No remote write was needed."
+            )
+        else:
+            print(
+                f"\n✅ Updated {result['updatedComponents']} and verified "
+                f"{result['verifiedComponents']} topic component(s)."
+            )
         diagnostics = result.get("blockingDiagnostics") or []
         if diagnostics:
             print(

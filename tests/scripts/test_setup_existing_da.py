@@ -2999,6 +2999,26 @@ def test_selected_dev_connection_enforces_workspace_and_identity(
     assert auth.call_args.kwargs["emit_account_identity"] is False
 
 
+@pytest.mark.parametrize("account", ["", " ", "\t"])
+@pytest.mark.parametrize("accounts", [[], ["one@example.test", "two@example.test"]])
+def test_selected_dev_connection_rejects_explicit_blank_account(
+    tmp_path, monkeypatch, account, accounts,
+):
+    from unittest.mock import Mock
+
+    client = FakeClient()
+    _attach(client, tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    auth = Mock()
+    monkeypatch.setattr(setup_existing_da, "cached_account_names", lambda _path: accounts)
+    monkeypatch.setattr(setup_existing_da, "_acquire_token", auth)
+
+    with pytest.raises(setup_existing_da.ExistingDASetupError, match="--account"):
+        setup_existing_da.connect_selected_dev_workspace(tmp_path, account)
+
+    auth.assert_not_called()
+
+
 @pytest.mark.parametrize("operation", ["topic-list", "native-list", "prepare-browser"])
 def test_topic_operations_reuse_the_validated_connection_inventory(
     tmp_path, monkeypatch, capsys, operation,

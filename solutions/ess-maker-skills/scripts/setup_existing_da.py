@@ -1648,6 +1648,8 @@ def connect_selected_dev_workspace(
     account: str | None = None,
 ) -> tuple[AgentBuilderClient, dict[str, Any], dict[str, Any]]:
     """Return the validated Dev client, target and initial component snapshot."""
+    if account is not None and not account.strip():
+        raise ExistingDASetupError("--account must not be empty or whitespace.")
     config = _load_json(kit_root / ".local" / "config.json")
     state = _load_canonical_setup_state(kit_root)
     selected = [
