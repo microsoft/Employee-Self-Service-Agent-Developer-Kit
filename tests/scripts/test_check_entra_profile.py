@@ -92,17 +92,18 @@ def test_default_checks_cover_only_the_twelve_core_properties(client, scope):
 @pytest.mark.parametrize("emails,expected", [
     ([{"type": "work", "address": "work@example.test"}], "Available"),
     ([{"type": "main", "address": "main@example.test"}], "Available"),
-    ([{"type": kind, "address": "personal@example.test"} for kind in ("personal", "other")], "Empty"),
+    ([{"type": kind, "address": "personal@example.test"} for kind in ("personal", "other")], "Available"),
     ([{"type": "work", "address": "  "}], "Empty"),
+    ([{"address": None}], "Empty"),
     ([{"type": "work", "displayName": "A label without an address"}], "Unverified"),
-    ([{"type": "unknown", "address": "unknown@example.test"}], "Unverified"),
-    ([{"address": "unknown@example.test"}], "Unverified"),
+    ([{"type": "unknown", "address": "unknown@example.test"}], "Available"),
+    ([{"address": "unknown@example.test"}], "Available"),
     ([{"type": "work", "address": "work@example.test"}, {"type": "unknown"}], "Available"),
     ([{"type": "work"}, {"type": "main", "address": "main@example.test"}], "Available"),
     ([{"type": "work", "address": address} for address in ("first@example.test", "second@example.test")], "Available"),
 ])
 @respx.mock
-def test_email_coverage_requires_a_primary_or_work_address(client, emails, expected):
+def test_email_coverage_counts_any_nonblank_address(client, emails, expected):
     profile = profiles.profile()
     profile["emails"] = emails
     _tenant_routes(2, lambda: profile)
@@ -114,11 +115,10 @@ def test_email_coverage_requires_a_primary_or_work_address(client, emails, expec
     assert "@example.test" not in json.dumps(report)
 
 
-@pytest.mark.parametrize("field,value", [("type", 42), ("address", {})])
 @respx.mock
-def test_malformed_email_properties_are_errors(client, field, value):
+def test_malformed_email_addresses_are_errors(client):
     profile = profiles.profile()
-    profile["emails"] = [{"type": "work", "address": "work@example.test", field: value}]
+    profile["emails"] = [{"address": {}}]
     respx.get(f"{profiles.GRAPH_BASE}/me/profile").respond(json=profile)
     with pytest.raises(ValueError, match="invalid"):
         check.check_attributes(client, "me", ["emails"])

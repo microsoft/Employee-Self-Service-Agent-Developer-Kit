@@ -92,15 +92,10 @@ def _availability(profile: dict, attribute: Attribute) -> str:
     if "@odata.nextLink" in profile or f"{attribute.family}@odata.nextLink" in profile:
         return "Unverified"
     if attribute.family == "emails":
-        types = [row.get("type") for row in family]
-        if any(kind is not None and not isinstance(kind, str) for kind in types):
-            raise ValueError("Graph returned an invalid email type.")
-        values = [_value(row, attribute)[0] for row in family if row.get("type") in ("work", "main")]
+        values = [_value(row, attribute)[0] for row in family]
         if "Available" in values:
             return "Available"
-        if any(kind not in ("work", "main", "personal", "other") for kind in types) or any(
-            state in ("Not returned", "Unverified") for state in values
-        ):
+        if any(state in ("Not returned", "Unverified") for state in values):
             return "Unverified"
         return "Empty"
     if attribute.family == "positions":

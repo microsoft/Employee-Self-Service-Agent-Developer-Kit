@@ -2,19 +2,19 @@
 
 ## Purpose and scope
 
-`AUTH-PROFILE-001` measures Microsoft 365 profile availability to highlight enrichment opportunities for ESS personalization. It reads the public Microsoft Graph beta profile API rather than only Entra `/users` attributes. Returned profiles can include data contributed by Entra, Organizational Data Service (ODS), people-data connectors, SharePoint profiles and user edits. The check is read-only.
+`AUTH-PROFILE-001` checks profile data availability for ESS personalization using the read-only [Microsoft Graph beta profile API](https://learn.microsoft.com/en-us/graph/api/profile-get?view=graph-rest-beta).
 
-This diagnostic checks a selected **subset of attributes supported by Microsoft 365 People Profile**, focused on identity and organizational context. It does not cover the full profile or require every supported property to be populated. Coverage describes returned data availability, not the correctness of values or end-to-end agent behavior.
+The properties below are a **subset of attributes supported by Microsoft 365 People Profile**. The check can be expanded to include additional supported properties in the future.
 
-## Default checks
+## Properties currently checked
 
-These are the **12 default availability checks**. All paths below are relative to `/beta/users/{id}/profile` or `/beta/me/profile`; position fields use explicitly current records.
+Property paths are relative to `/beta/users/{id}/profile` or `/beta/me/profile`.
 
 | Property | Public profile field | Potential sources |
 | --- | --- | --- |
 | Display name | `names[].displayName` | Entra, ODS, people-data connectors |
 | User principal name | `account[].userPrincipalName` | Entra account identity |
-| Primary/work email | `emails[].address`, with type `main` or `work` | Entra email identities, people-data connectors |
+| Email | `emails[].address` | Entra email identities, people-data connectors |
 | Job title | `positions[].detail.jobTitle` | Entra, ODS, people-data connectors |
 | Employment type | `positions[].detail.employeeType` | Entra, ODS, people-data connectors |
 | Department | `positions[].detail.company.department` | Entra, ODS, people-data connectors |
@@ -25,56 +25,50 @@ These are the **12 default availability checks**. All paths below are relative t
 | Company code | `positions[].detail.company.companyCode` | ODS, people-data connectors |
 | Cost center | `positions[].detail.company.costCenter` | Entra organizational data, ODS, people-data connectors |
 
-The source column describes possible contributors, not inferred provenance. Actual contribution depends on tenant configuration and the profile's `sources` metadata. ODS `Microsoft_PersonEmail` is a record-matching key, not evidence that the returned email collection is populated. UPN and email are checked separately and need not be equal.
+## Populating profile data
 
-Only these 12 properties are checked. Given name, surname, manager/colleague relationships, hire/position dates and other profile enrichment fields are excluded; there is no optional check group. The selected properties are enrichment opportunities, not deployment requirements.
+When a property is missing, update the configured source system. These references describe supported attributes and ways to ingest data into Microsoft 365 People Profile:
 
-## Attribute references and data ingestion
-
-For attribute definitions and more information on ingesting data into Microsoft 365 People Profile:
-
-- [ODS attribute reference](https://learn.microsoft.com/en-us/microsoft-365-apps/org-data-service/import/orgdata-attributes): reserved attributes, Microsoft 365 Profile support and attribute-to-profile mappings.
-- [Microsoft Entra user attributes](https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0#properties): directory properties exposed through Microsoft Graph.
-- [People data sources in Microsoft 365](https://learn.microsoft.com/en-us/graph/people-data-sources): how Entra, ODS, people-data connectors, SharePoint and user edits contribute profile data, with links to ingestion options.
-
-Additional technical references: [people-data connector mappings](https://learn.microsoft.com/en-us/plugins/build-connectors-with-people-data) and the [live beta schema](https://graph.microsoft.com/beta/$metadata).
+- [Organizational Data Service (ODS) attributes](https://learn.microsoft.com/en-us/microsoft-365-apps/org-data-service/import/orgdata-attributes): reserved attributes and their mappings into the profile.
+- [Microsoft Entra user attributes](https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0#properties): directory properties Entra can provide.
+- [People data sources in Microsoft 365](https://learn.microsoft.com/en-us/graph/people-data-sources): how Entra, ODS, people-data connectors, SharePoint and user edits supply profile data, with links to ingestion guidance.
 
 ## Reads and limits
 
-Tenant scans reuse existing delegated `User.Read.All` consent. Sequential Graph v1.0 `/users` paging lists Member IDs and user type, evaluating at most **100 profiles**. Member accounts include disabled and service accounts, not just employees.
+Tenant scans use existing delegated `User.Read.All` consent to list up to **100 Member accounts** through Graph v1.0 `/users`, including disabled and service accounts.
 
-The checker sends batches of up to **20 read-only GET requests** to Graph beta `/$batch`. Each subrequest reads `/users/{id}/profile`; only the configured properties are evaluated. Batching saves network round trips; every subrequest remains subject to Graph throttling. Responses are correlated by ID, never array order. Retryable failed subrequests are retried without rereading successful profiles, honoring `Retry-After`.
+Profiles are read through Graph beta `/$batch`, with up to **20 GET requests per batch**. Results are matched to request IDs. Retryable failures are retried, honoring `Retry-After` when provided.
 
-One **30-second data-read budget**, excluding authentication, covers enumeration, batch requests, retry delays, fallback reads and aggregation. DNS resolution remains cancellable. Deadline expiry or failed/malformed requests discard partial coverage rather than publish a successful subset.
+One **30-second budget**, excluding authentication, covers data reads, retries, fallback reads and aggregation. A failed or timed-out scan produces an Error without partial coverage.
 
-If directory/profile permission is unavailable, FlightCheck uses a separate `User.Read` client for `/beta/me/profile`, bound to the same account and tenant. It never prompts for new directory consent or downgrades other checks' clients. Other authentication, identity, network and data errors do not trigger fallback. Authentication, malformed-response and terminal request errors take precedence over a permission denial in the same batch, regardless of response order.
+On a permission-only failure, FlightCheck falls back to `/beta/me/profile` with `User.Read`, using the same verified account and tenant. Other authentication, request and data failures produce errors.
 
 ## Interpreting profile data
 
-Nonblank text is available. Explicit null/blank values and empty collections are empty. Omitted or null sections are not returned. Continuation/truncation signals affecting the selected family or property path remain unverified; unrelated fields and their continuations are ignored.
+Nonblank text is **Available**. Explicit null/blank values and empty collections are **Empty**. Properties omitted from the response are **Not returned**. Incomplete or ambiguous data is **Unverified**.
 
-The email check requires a nonblank address on a `work` or `main` (primary) email record; a label alone does not count. Personal/other addresses do not satisfy it. If no qualifying address is available, missing/unknown types or omitted qualifying addresses remain unverified. Explicit null/blank qualifying addresses are empty. Multiple qualifying addresses establish presence without requiring them to be identical.
+Email is available when at least one record contains a nonblank address, regardless of email type.
 
-Current-position fields use only records explicitly marked `isCurrent`. Multiple candidate records must agree on the selected value and its presence state. Otherwise the field is unverified. The checker neither picks the first current position nor invents source precedence.
+Employment properties use records marked `isCurrent`. If current records disagree on a property's value or availability, that property is unverified.
 
-For each tenant field, report available, empty, not-returned and unverified counts. Calculate `available / usersChecked * 100` only when that field has no unverified/not-returned accounts; otherwise show **Unverified**, not a misleading percentage. Every included check uses the **95% threshold**, evaluated before display rounding.
+For each property, report available, empty, not-returned and unverified counts. Coverage is `available / usersChecked * 100` when all observations for that property are verified; otherwise show **Unverified**. The **95% threshold** is evaluated before display rounding.
 
 ## Results and reporting
 
 | Result | Meaning |
 | --- | --- |
-| Passed | All included tenant checks have verified coverage of at least 95%. |
-| Warning - coverage | One or more checks have lower coverage or unverified evidence. |
-| Warning - own profile only | Only the signed-in profile was checked; list per-field availability without tenant percentages. |
+| Passed | All checked properties have verified coverage of at least 95%. |
+| Warning - coverage | One or more properties have lower coverage or unverified data. |
+| Warning - own profile only | Tenant access was unavailable; report the signed-in profile's availability. |
 | Warning - not checked | Neither tenant nor self-profile permission was available. |
 | Error | Authentication/identity, request, deadline or response-validation failure. |
 
-Warnings are non-blocking. Own-profile fallback always remains Warning, even when all fields are populated. `coverageVerified: false` identifies unverified tenant coverage; `profileVerified: true` identifies a successful self-profile read. Complete and capped scans are labelled **Tenant coverage** or **Sample coverage**, with the checked count; samples follow Graph order and are not random estimates.
+Warnings are non-blocking. Reports distinguish **Tenant coverage**, capped **Sample coverage** and **Own profile only** results. Samples follow Graph order.
 
-HTML/JSON evidence contains no profile values, user IDs or tokens. Guidance explains potential personalization benefits, points to the configured data source and the [organizational attribute reference](https://learn.microsoft.com/en-us/microsoft-365-apps/org-data-service/import/orgdata-attributes), and does not ask users to fill gaps with placeholders. Existing telemetry remains outcome-only.
+HTML/JSON reports contain counts and availability states, excluding profile values, user IDs and tokens. Telemetry remains outcome-only.
 
-## Entry points and validation
+## Entry points
 
-The existing checkpoint ID works in full, authentication, focused and selected-DA runs. The standalone filename remains `scripts\check_entra_profile.py`; `--scope me` checks only the signed-in profile and explicit `--scope tenant` never silently falls back. `--attributes` selects named checks. JSON uses `m365-profile-check.v2`.
+The checkpoint runs in full, authentication, focused and declarative-agent diagnostics.
 
-Tests cover the exact core property set, primary/work email filtering, public beta schema, batched correlation/retries, source conflicts, missing fields, permissions, identity guards, deadlines/DNS cleanup and report parity. Live tests verify self-profile and permitted tenant reads. API contracts: [Profile](https://learn.microsoft.com/en-us/graph/api/profile-get?view=graph-rest-beta), [email records](https://learn.microsoft.com/en-us/graph/api/resources/itememail?view=graph-rest-beta), [batching](https://learn.microsoft.com/en-us/graph/json-batching).
+The standalone script is `scripts\check_entra_profile.py`. Use `--scope me` for the signed-in profile or `--scope tenant` for tenant coverage without fallback. `--attributes` selects properties to check. JSON uses `m365-profile-check.v2`.
