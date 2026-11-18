@@ -172,6 +172,14 @@ Use the canonical `environment.display_name` from `.local/setup/config.json`
 
 Do not use the legacy `step*.md` files in this directory.
 
+## Test and Prod realms
+
+When the maker says the agent was promoted to Test or Production, chooses to
+configure either realm, or pastes a Test or Production agent link, read
+`src/skills/connect/servicenow/realms.md` and follow it. Test and Prod checks
+are independent of the Dev lifecycle and never reuse the Dev connection. It
+never changes Dev behavior.
+
 ## Fresh ServiceNow execution boundary
 
 After the maker selects one DA ServiceNow Agent, and
