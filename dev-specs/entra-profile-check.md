@@ -47,11 +47,13 @@ The checker sends batches of up to **20 read-only GET requests** to Graph beta `
 
 One **30-second data-read budget**, excluding authentication, covers enumeration, batch requests, retry delays, fallback reads and aggregation. DNS resolution remains cancellable. Deadline expiry or failed/malformed requests discard partial coverage rather than publish a successful subset.
 
-If directory/profile permission is unavailable, FlightCheck uses a separate `User.Read` client for `/beta/me/profile`, bound to the same account and tenant. It never prompts for new directory consent or downgrades other checks' clients. Other authentication, identity, network and data errors do not trigger fallback.
+If directory/profile permission is unavailable, FlightCheck uses a separate `User.Read` client for `/beta/me/profile`, bound to the same account and tenant. It never prompts for new directory consent or downgrades other checks' clients. Other authentication, identity, network and data errors do not trigger fallback. Authentication, malformed-response and terminal request errors take precedence over a permission denial in the same batch, regardless of response order.
 
 ## Interpreting profile data
 
 Nonblank text and valid integers, including layer zero, are available. Explicit null/blank scalar values and empty collections are empty. Omitted or null sections are not returned; metadata-only records and continuation/truncation signals remain unverified.
+
+Manager and colleague availability requires a nonblank person ID, user principal name or display name. A relationship type or label alone is unverified; malformed identity values are errors.
 
 For anniversaries, only `type: work` dates contribute to coverage. Birthday, wedding and other personal/general anniversary types do not satisfy this check. Missing or unknown types remain unverified. A work record with an omitted date is unverified unless another work record supplies a date; explicit null/blank dates are empty. Multiple work dates establish presence without selecting one as the hire date.
 

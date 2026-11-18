@@ -113,12 +113,11 @@ def _batch_responses(data, expected_ids: set[str]):
         or {row["id"] for row in rows} != expected_ids
     ):
         raise ValueError("Graph returned an incomplete or invalid profile batch.")
+    permission_denied = False
     for row in rows:
         status = row.get("status")
         if type(status) is not int:
             raise ValueError("Graph returned an invalid profile response status.")
-        if status == 403:
-            raise GraphPermissionError("Graph denied a profile read; no partial coverage is reported.")
         headers = row.get("headers", {})
         if not isinstance(headers, dict) or any(
             not isinstance(key, str) or not isinstance(value, str) for key, value in headers.items()
@@ -127,7 +126,13 @@ def _batch_responses(data, expected_ids: set[str]):
         profile = row.get("body")
         if status == 200 and (not isinstance(profile, dict) or not profile or "error" in profile):
             raise ValueError("Graph returned an invalid profile resource.")
+        if status == 403:
+            permission_denied = True
+            continue
         yield row["id"], status, httpx.Headers(headers), profile
+    # Permission fallback must not hide another response's authentication or data error.
+    if permission_denied:
+        raise GraphPermissionError("Graph denied a profile read; no partial coverage is reported.")
 
 
 class BoundedGraphTransport:

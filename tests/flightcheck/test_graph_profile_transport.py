@@ -83,6 +83,28 @@ def test_batch_success_does_not_hide_failed_subrequests(client, status):
         _read(client)
 
 
+@pytest.mark.parametrize("denied_first", [True, False])
+@pytest.mark.parametrize("failure", ["unauthorized", "bad_profile", "bad_headers"])
+@respx.mock
+def test_batch_permission_denial_does_not_hide_other_errors(client, denied_first, failure):
+    other = {"id": "1", "status": 200, "body": profiles.profile()}
+    if failure == "unauthorized":
+        other.update(status=401, body={"error": {"code": "InvalidAuthenticationToken"}})
+    elif failure == "bad_profile":
+        other["body"] = []
+    else:
+        other["headers"] = []
+    rows = [
+        {"id": "0", "status": 403, "body": {"error": {"code": "Authorization_RequestDenied"}}},
+        other,
+    ]
+    if not denied_first:
+        rows.reverse()
+    respx.post(f"{profiles.GRAPH_BASE}/$batch").respond(json={"responses": rows})
+    with pytest.raises(requests.HTTPError if failure == "unauthorized" else ValueError):
+        _read(client)
+
+
 @respx.mock
 def test_only_throttled_subrequests_are_retried_with_retry_after(client, monkeypatch):
     delays = []

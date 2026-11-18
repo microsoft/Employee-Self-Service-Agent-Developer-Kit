@@ -186,6 +186,34 @@ def test_colleague_comparison_ignores_order_but_preserves_real_conflicts(client,
     assert "first" not in json.dumps(report)
 
 
+@pytest.mark.parametrize("field", ["manager", "colleagues"])
+@pytest.mark.parametrize("person,expected", [
+    ({"relationship": "manager"}, "Unverified"),
+    ({"userId": "test-person"}, "Available"),
+    (None, "Empty"),
+])
+@respx.mock
+def test_relationship_availability_requires_a_person_not_only_a_label(client, field, person, expected):
+    profile = profiles.profile()
+    profile["positions"][0][field] = person if field == "manager" or person is None else [person]
+    respx.get(f"{profiles.GRAPH_BASE}/me/profile").respond(json=profile)
+    report = check.check_attributes(client, "me", [field])
+    assert report["results"] == [{"attribute": field, "availability": expected}]
+    assert report["status"] == ("Passed" if expected == "Available" else "Warning")
+    assert "test-person" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("field", ["manager", "colleagues"])
+@respx.mock
+def test_malformed_relationship_identities_are_errors(client, field):
+    profile = profiles.profile()
+    person = {"userId": 42}
+    profile["positions"][0][field] = person if field == "manager" else [person]
+    respx.get(f"{profiles.GRAPH_BASE}/me/profile").respond(json=profile)
+    with pytest.raises(ValueError, match="invalid"):
+        check.check_attributes(client, "me", [field])
+
+
 @pytest.mark.parametrize("variant", ["bad_section", "bad_record", "bad_nested", "bad_integer", "bad_text"])
 @respx.mock
 def test_malformed_profile_data_is_an_error_not_an_empty_attribute(client, variant):

@@ -134,6 +134,16 @@ def _value(row: dict, attribute: Attribute):
             raise ValueError("Graph returned an invalid profile relationship collection.")
     elif not isinstance(value, str):
         raise ValueError("Graph returned an invalid text profile property.")
+    if attribute.kind in ("object", "collection") and value:
+        people = [value] if attribute.kind == "object" else value
+        identities = [
+            person.get(key) for person in people
+            for key in ("userId", "userPrincipalName", "displayName")
+        ]
+        if any(identity is not None and not isinstance(identity, str) for identity in identities):
+            raise ValueError("Graph returned an invalid profile relationship identity.")
+        if not any(_content(identity) for identity in identities):
+            return "Unverified", None
     if not _content(value):
         return "Empty", None
     if isinstance(value, str):
