@@ -12088,12 +12088,51 @@ def _realm_untested_message(realm: str) -> str:
     )
 
 
+def _realm_render_context(
+    context: dict[str, Any],
+    registry: dict[str, Any],
+    realm: str,
+) -> dict[str, Any] | None:
+    target = registry["targets"].get(realm)
+    if realm not in realms.PROMOTED_REALMS or not isinstance(target, dict):
+        return None
+    hr = ACTIVE_PROFILE.key == "hrsd"
+    status = realms.target_status(registry, realm)
+    footer = None
+    if status == "ready":
+        footer = _realm_completion_message(realm)
+    elif status == "untested":
+        footer = _realm_untested_message(realm)
+    return {
+        "agent": ACTIVE_PROFILE.agent_display_name,
+        "kind": "HR" if hr else "IT",
+        "record": "case" if hr else "ticket",
+        "example": "Show my open HR cases" if hr else "Show my open IT tickets",
+        "agentUrl": maker_portal_links(_realm_target_context(context, target))[
+            "copilotStudioAgent"
+        ]["url"],
+        "footer": footer,
+    }
+
+
+def _realm_status_result(
+    context: dict[str, Any],
+    registry: dict[str, Any],
+) -> dict[str, Any]:
+    active = str(registry.get("activeTargetRealm") or "dev")
+    return realms.realm_status(
+        registry, render=_realm_render_context(context, registry, active)
+    )
+
+
 def _realm_check_result(
     context: dict[str, Any],
     registry: dict[str, Any],
     realm: str,
 ) -> dict[str, Any]:
-    result = realms.realm_status(registry)
+    result = realms.realm_status(
+        registry, render=_realm_render_context(context, registry, realm)
+    )
     target = registry["targets"][realm]
     result["realm"] = realm
     result["promotedAgent"] = {
@@ -12127,11 +12166,11 @@ def _run_realm_command(
     registry = realms.load_registry(root, provider, slug)
     command = args.command
     if command == "realm-status":
-        return realms.realm_status(registry)
+        return _realm_status_result(context, registry)
     if command == "select-realm":
         realms.select_realm(registry, args.realm)
         realms.save_registry(root, registry)
-        return realms.realm_status(registry)
+        return _realm_status_result(context, registry)
 
     if command == "discover-realm-target":
         if not args.realm and not args.agent_link:

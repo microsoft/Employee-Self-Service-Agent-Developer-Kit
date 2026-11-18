@@ -156,41 +156,51 @@ environment selection on **Check again**. Do not send the maker back to Dev.
 
 ## Realm stages
 
-After discovery succeeds, run `realm-status` and use `phases` and
-`nextPhaseId` for every message. Test and Production use the same three
-stages, completed separately per realm. Show each item in `items` with its
-result (pass, fail, or not checked).
+After discovery succeeds, `discover-realm-target`, `check-realm`,
+`realm-status`, `select-realm`, and `record-realm-test` each return
+`renderBlock.text`: a step checklist for the active Test or Prod run. Emit it
+verbatim as an assistant message before any other tool call. Never write your
+own checklist, status table, or item list, and do not paraphrase its rows or
+its instruction. Use `phases` and `nextPhaseId` only to decide what to do next.
+
+The checklist uses the same icons as the Dev view: ✅ done, ⏳ waiting, ❌ needs
+attention, ⬜ not checked yet. Its steps are permission to configure the agent,
+the ServiceNow connection, topics, the portal URL, and the real-data test in the
+Test pane. The checks are read-only API reads. They stop at the first step that
+needs attention, so later steps stay ⬜. When a step needs attention, the block
+ends with that step's own instruction; emit it as part of the block. When the
+maker replies "Done", run `check-realm --realm {test|prod}` and emit the new
+block; only the step that needed attention is expected to change. When every
+check passes, the real-data row shows ⏳ Waiting for you, followed by the
+request to run in the Test pane.
+
+Test and Production use the same three stages, completed separately per realm.
 
 | Stage | Result |
 |---|---|
 | Connections | Read-only. Done when the connection exists in this environment, is Connected, is bound to this agent, uses Microsoft Entra ID User Login, and its instance and client ID match the expected values. When expected values are missing, ask only for the missing ones, then have the administrator confirm; do not check until confirmed. |
-| Runtime configuration | Read-only. Done when the required ServiceNow topics are turned on and the portal URL is set. Otherwise show `observations` and the returned guidance: fix it in Dev, promote again through your own deployment process, then check again. |
+| Runtime configuration | Read-only. Done when the required ServiceNow topics are turned on and the portal URL is set. Otherwise the block says to go back to Dev, update the topics or portal URL, publish the agent in Dev, deploy (promote) it to the destination again through your own deployment process, and reply "Done". Nothing is edited in Test or Prod. |
 | Maker validation | The maker runs the ServiceNow scenario in this realm's Test pane. Record it with `record-realm-test --realm {test|prod} --prompt-category {CATEGORY} --result {pass|fail|untested}`. Use `untested` only when the maker chooses to finish without testing; it is never a pass, never completes validation, and a later pass or fail replaces it. |
 
 ### Connection problems
 
 When the connection is missing, is not linked to this agent, is disconnected,
-or does not use the expected values, the controller returns a validation-paused
-message that names the condition found. Show it, replacing "this agent" and
-"this environment" with the real agent and environment names, for example:
+or does not use the expected values, the block shows ❌ on the connection step
+and ends with "Validation is paused" naming the condition found, followed by
+numbered steps in the destination environment:
 
-> **Validation is paused:** {Agent} has no ServiceNow connection available for
-> this setup in **{Environment}**. {Agent} can't make the request yet. Once the
-> supported repair for this destination is complete, return here and tell us,
-> and we'll recheck before you run the request. Your administrator-confirmed
-> sign-in setup stays in place.
+- Missing, or different from the expected values: create the connection in
+  Copilot Studio under **Settings > Connection Settings > ServiceNow > Connect
+  > Create new connection** with Microsoft Entra ID User Login, the expected
+  Resource URI and Instance name, and the maker's own sign-in.
+- Not linked to the agent: select the connection under **Settings > Connection
+  Settings > ServiceNow** and save the agent settings.
+- Disconnected: reconnect it until Copilot Studio shows **Connected**.
 
-The finding is one of: "has no ServiceNow connection available for this setup
-in {Environment}", "a ServiceNow connection is available in {Environment}, but
-it isn't linked to {Agent}", or "the ServiceNow connection in {Environment} is
-disconnected". The supported repair for connections in a promoted environment
-is not yet defined, so:
-
-- Do not give instructions to create, bind, share, or repair the connection,
-  and do not show a connection handoff.
-- Never suggest reusing the Dev connection and never claim success.
-- Keep the check read-only. When the maker says their own process resolved the
-  condition, run `check-realm --realm {test|prod}` again.
+Each ends with: reply "Done" and we'll recheck this step only. Never suggest
+reusing the Dev connection and never claim success. The checks stay read-only:
+nothing is created, linked, or changed for the maker. When the maker replies
+"Done", run `check-realm --realm {test|prod}` again.
 
 Use `check-realm` to re-read the stages, and `select-realm --realm
 {dev|test|prod}` to switch between realms that were already discovered.
@@ -232,7 +242,7 @@ of maker-visible text.
 
 > We couldn't verify whether your account can configure **{Agent} in
 > {Environment}**. Validation is paused; this doesn't mean your access was
-> denied. Retry the access check to continue.
+> denied. Retry the permission check to continue.
 
 Do not treat an inconclusive result as denied or as success.
 
@@ -381,7 +391,8 @@ what to do next.
   > instance.
   >
   > This destination run is paused while support for the different-instance path
-  > is resolved.
+  > is resolved. We'll retain the earlier result only for its original instance
+  > and identify which setup information needs review.
 - **Sign-in identity does not match (HR and IT).** Say:
 
   > The supplied evidence shows that the sign-in claim value doesn't match the
@@ -425,26 +436,44 @@ what to do next.
   > **Do not send employee identifiers, record contents, or secrets.**
 
   Re-check after the maker says it is fixed.
-- **Empty HR service areas (HR only).** "The HR service-area list is empty.
-  Employees using HR scenarios need one of the ServiceNow roles
-  `sn_hr_core.basic`, `sn_hr_core.manager`, or `sn_hr_core.admin`. Ask your
-  ServiceNow administrator to review the access for the account used in this
-  request. This skill doesn't check or assign those roles."
+- **Empty HR service areas (HR only).** Say:
+
+  > The HR service-area list is empty. Employees using HR scenarios need one of
+  > the ServiceNow roles `sn_hr_core.basic`, `sn_hr_core.manager`, or
+  > `sn_hr_core.admin`.
+  >
+  > Ask your ServiceNow administrator to review the access for the account used
+  > in this request. This skill doesn't check or assign those roles.
+  >
+  > Bring back their non-sensitive reply after any required access work is
+  > complete. We'll recheck the applicable setup before you repeat the request in
+  > the destination agent's Test pane.
+- **Maker returns after leaving mid-validation.** Say:
+
+  > We're continuing ServiceNow validation for **{Agent} in {Environment}**.
+  >
+  > We're rechecking your permission and the affected destination setup before we
+  > continue. If those checks find no blocking issue, the outstanding step is
+  > your real-data request in this agent's Test pane.
+
+  Then run `check-realm --realm {test|prod}` and emit its block.
 
 ## Manual validation
 
 | Check | Expected result |
 |---|---|
 | Dev has no lifecycle record, then Test is checked | We ask only for the missing instance and client ID, wait for administrator confirmation, then check Test. |
-| Connection is on in Dev but missing in Test | Validation is paused: no connection available for this setup. No repair steps, no Dev connection suggested. |
-| Connection exists in Test but is not bound to the agent | Validation is paused: the connection isn't linked to the agent. |
-| Connection in Test is disconnected | Validation is paused: the connection is disconnected. |
-| Instance or client ID differs from the expected value | Validation is paused with the exact difference. |
-| Required topic off, or portal URL not set, in Prod | Validation is paused with the Dev fix and re-promote guidance. Nothing is edited. |
+| Connection is on in Dev but missing in Test | The checklist shows ❌ on the connection step with "Validation is paused", then Dev-style steps to create the connection in Test, ending with reply "Done". The Dev connection is never suggested. |
+| Connection exists in Test but is not bound to the agent | ❌ on the connection step; steps to select the connection under Connection Settings and save, then reply "Done". |
+| Connection in Test is disconnected | ❌ on the connection step; steps to reconnect until it shows Connected, then reply "Done". |
+| Instance or client ID differs from the expected value | ❌ on the connection step with the exact difference and the steps to create a matching connection in the destination. |
+| Required topic off, or portal URL not set, in Prod | ❌ on the Topics or Portal URL step; go back to Dev, update, publish the agent in Dev, deploy (promote) it to the destination again, then reply "Done". Nothing is edited in Test or Prod. |
+| Everything passes before the Test-pane request | Permission, connection, topics, and portal rows show ✅ and the real-data row shows ⏳ Waiting for you, followed by the Test-pane request. |
+| A step fails | Later rows stay ⬜ and only the failing step's instruction is shown. |
 | Prod is checked before Test is Ready | Prod is checked on its own. |
-| Condition is resolved by the maker, then `check-realm` runs | The item turns to pass without repeating earlier answers. |
+| Maker replies "Done" after fixing a step | `check-realm` reruns; the step turns ✅ without repeating earlier answers. |
 | Maker asks to check ServiceNow after promotion without saying Test or Prod | We ask "Which destination should we check, Test or Prod?" and do not guess. |
-| Account lacks access (denied) vs. access check could not finish | Denied: ask a maker with the Environment Maker role to run it. Inconclusive: validation is paused, not denied, retry the access check. |
+| Account lacks access (denied) vs. access check could not finish | Denied: ask a maker with the Environment Maker role to run it. Inconclusive: validation is paused, not denied, retry the permission check. |
 | Maker replies only "Done." to the Test-pane request | We don't record pass or fail and ask what the request from the agent in that environment returned and whether it matched. |
 | Maker says "Finish without testing" and no setup blocker remains | `record-realm-test --result untested` saves it as untested (not a pass) and we show the untested-finish message. A later pass or fail replaces it. |
 | Maker says "Finish without testing" while a setup blocker remains | Nothing is recorded as untested; we show the specific validation-paused message for the blocker. |

@@ -368,9 +368,7 @@ def test_maker_values_need_admin_confirmation() -> None:
     assert realms.expected_blocker(confirmed) is None
     again = _expected(previous=confirmed)
     assert realms.expected_blocker(again) is None
-    changed = _expected(
-        previous=confirmed, provided={"instanceName": "other"}
-    )
+    changed = _expected(previous=confirmed, provided={"instanceName": "other"})
     assert realms.expected_blocker(changed)["reason"] == "expected-values-unconfirmed"
 
 
@@ -849,7 +847,9 @@ def test_controller_checks_test_without_any_dev_record(
 
     _prepare_controller(monkeypatch, dev_reference=None)
     context = _controller_context(tmp_path)
-    asked = snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    asked = snow.run_realm_command(
+        context, _args("discover-realm-target", realm="test")
+    )
     connections = asked["phases"][0]
     assert connections["reason"] == "expected-values-missing"
     assert connections["missing"] == [
@@ -1030,7 +1030,9 @@ def test_denied_and_inconclusive_access_have_separate_messages(
     inconclusive = failure(500)
     assert "couldn't verify" in str(inconclusive)
     assert "doesn't mean your access was denied" in str(inconclusive)
-    assert "Retry the access check to continue." in inconclusive.customer_remediation
+    assert (
+        "Retry the permission check to continue." in inconclusive.customer_remediation
+    )
 
 
 @pytest.mark.parametrize(
@@ -1106,8 +1108,8 @@ def test_realms_guide_carries_the_s5_recovery_wording() -> None:
         for line in REALMS_GUIDE.read_text(encoding="utf-8").splitlines()
     )
     for phrase in (
-        "**Validation is paused:**",
-        "Retry the access check to continue.",
+        'ends with "Validation is paused"',
+        "Retry the permission check to continue.",
         "A working Dev connection doesn't tell us whether a usable connection is "
         "available and linked to this agent in **{Environment}**.",
         "The Dev integration was left untested",
@@ -1121,8 +1123,17 @@ def test_realms_guide_carries_the_s5_recovery_wording() -> None:
         "whether the agent can retrieve your HR data.",
         "That changes the shared-instance assumption behind this promotion path.",
         "your own deployment process",
+        "We'll retain the earlier result only for its original instance and "
+        "identify which setup information needs review.",
+        "Bring back their non-sensitive reply after any required access work is "
+        "complete.",
+        "We're continuing ServiceNow validation for **{Agent} in {Environment}**.",
+        "Emit it verbatim as an assistant message",
+        'reply "Done" and we\'ll recheck this step only',
+        "publish the agent in Dev",
     ):
         assert phrase in text, phrase
+    assert "Show each item in" not in text
     for stale in ("BLOCKED.", "Connect does not offer", "ALM tool", "ALM process"):
         assert stale not in text, stale
 
@@ -1149,3 +1160,249 @@ def test_realms_guide_maker_text_has_no_technical_headers() -> None:
     for line in quoted + form_text:
         for token in forbidden:
             assert token not in line, (token, line)
+
+
+def _render_context(**overrides: Any) -> dict[str, Any]:
+    return {
+        "agent": "Employee Self-Service (HR)",
+        "kind": "HR",
+        "record": "case",
+        "example": "Show my open HR cases",
+        "agentUrl": None,
+        **overrides,
+    }
+
+
+def _rendered(
+    realm: str = "test",
+    *,
+    connections: dict[str, Any] | None = None,
+    runtime: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
+) -> str:
+    registry = _registry()
+    if realm == "prod":
+        prod_identity = {**IDENTITY, "agentId": PROD_AGENT, "environmentId": OTHER_ENV}
+        realms.record_target(registry, "prod", prod_identity, FOUNDATION)
+    realms.select_realm(registry, realm)
+    target = registry["targets"][realm]
+    realms.apply_checks(
+        target,
+        connections=connections
+        or realms.evaluate_connections(FOUNDATION, _bound(), [_connection()]),
+        runtime=runtime
+        or realms.evaluate_runtime(FOUNDATION, [_topic("a")], {"valid": True}),
+    )
+    result = realms.realm_status(registry, render=context or _render_context())
+    assert result["renderBlock"]["kind"] == "realm-checklist"
+    return result["renderBlock"]["text"]
+
+
+def _icons(block: str) -> list[str]:
+    return [
+        line.split(" ", 1)[0]
+        for line in block.splitlines()
+        if line and line[0] in "✅🔄⬜⏳❌"
+    ]
+
+
+def test_realm_block_all_pass_waits_for_the_test_pane_request() -> None:
+    block = _rendered()
+    assert block.startswith(
+        "**ServiceNow validation: Employee Self-Service (HR) in Test**"
+    )
+    assert _icons(block) == ["✅", "✅", "✅", "✅", "⏳"]
+    assert "Real-data test in the Test pane — Waiting for you" in block
+    assert "run an HR request in that agent's **Test pane**" in block
+    assert "Use the agent in Test, not the Dev agent." in block
+    assert (
+        "You can also finish without testing; this integration in Test will "
+        "remain untested."
+    ) in block
+
+
+def test_realm_block_prod_request_matches_the_spec_variant() -> None:
+    block = _rendered("prod")
+    assert "in Prod**" in block
+    assert "doesn't switch this run to the Test environment" in block
+    assert (
+        "You can also finish without testing; the Prod integration will remain "
+        "untested. Test it before employees use it."
+    ) in block
+
+
+@pytest.mark.parametrize(
+    ("reference", "connections", "named", "step"),
+    [
+        ({}, [], "has no ServiceNow connection available", "Create new connection"),
+        (
+            {},
+            [_connection()],
+            "isn't linked to",
+            "Select the ServiceNow connection available in Test",
+        ),
+        (_bound(), [_connection(status="Error")], "is disconnected", "**Connected**"),
+        (
+            _bound(),
+            [
+                _connection(
+                    parameterValues={
+                        "token:InstanceName": "other",
+                        "token:ResourceUri": CLIENT_ID,
+                    }
+                )
+            ],
+            "doesn't use the expected sign-in values",
+            "expected `contoso`, found `other`",
+        ),
+    ],
+)
+def test_realm_block_connection_problems_carry_dev_style_steps(
+    reference: dict[str, str],
+    connections: list[dict[str, Any]],
+    named: str,
+    step: str,
+) -> None:
+    block = _rendered(
+        connections=realms.evaluate_connections(FOUNDATION, reference, connections)
+    )
+    assert _icons(block) == ["✅", "❌", "⬜", "⬜", "⬜"]
+    assert "**Validation is paused:**" in block
+    assert named in block
+    assert step in block
+    assert 'reply "Done" and we\'ll recheck this step only.' in block
+    assert "Dev connection" not in block
+    assert "BLOCKED" not in block
+    assert "Show my open HR cases" not in block
+
+
+def test_realm_block_topics_disabled_points_back_to_dev_and_publish() -> None:
+    block = _rendered(
+        runtime=realms.evaluate_runtime(
+            FOUNDATION,
+            [_topic("a"), _topic("b", "Inactive")],
+            {"valid": True},
+        )
+    )
+    assert _icons(block) == ["✅", "✅", "❌", "⬜", "⬜"]
+    assert "`b`" in block
+    assert "Test is a managed environment" in block
+    assert (
+        "Go back to Dev and update the topics: run `/connect servicenow` again."
+        in block
+    )
+    assert "Publish the agent in Dev." in block
+    assert (
+        "Deploy (promote) Employee Self-Service (HR) to Test again through your "
+        "own deployment process."
+    ) in block
+    assert 'Reply "Done" and we\'ll recheck this step only.' in block
+    assert "manually" not in block
+
+
+def test_realm_block_portal_problem_keeps_topics_green() -> None:
+    block = _rendered(
+        "prod",
+        runtime=realms.evaluate_runtime(
+            FOUNDATION, [_topic("a")], {"valid": False, "reason": "missing"}
+        ),
+        context=_render_context(kind="IT", record="ticket"),
+    )
+    assert _icons(block) == ["✅", "✅", "✅", "❌", "⬜"]
+    assert "ticket links" in block
+    assert "Prod is a managed environment" in block
+    assert "Go back to Dev and update the portal URL" in block
+    assert "Publish the agent in Dev." in block
+    assert "to Prod again" in block
+
+
+def test_realm_block_untested_and_ready_footers() -> None:
+    registry = _registry()
+    target = registry["targets"]["test"]
+    realms.apply_checks(
+        target,
+        connections={"status": "done", "connectionId": CONNECTION_ID},
+        runtime={"status": "done"},
+    )
+    realms.record_validation(
+        target,
+        prompt_category=PROMPT,
+        allowed_prompt_category=PROMPT,
+        result="untested",
+        failure_category=None,
+    )
+    context = _render_context(footer="Untested footer.")
+    untested = realms.realm_status(registry, render=context)["renderBlock"]["text"]
+    assert _icons(untested) == ["✅", "✅", "✅", "✅", "⏳"]
+    assert "Untested; your progress is saved" in untested
+    assert untested.endswith("Untested footer.")
+    realms.record_validation(
+        target,
+        prompt_category=PROMPT,
+        allowed_prompt_category=PROMPT,
+        result="pass",
+        failure_category=None,
+    )
+    ready = realms.realm_status(registry, render=_render_context(footer="Ready."))
+    assert _icons(ready["renderBlock"]["text"]) == ["✅"] * 5
+    assert ready["renderBlock"]["text"].endswith("Ready.")
+
+
+def test_realm_status_without_render_context_has_no_block() -> None:
+    assert "renderBlock" not in realms.realm_status(_registry())
+
+
+def test_realm_block_has_no_technical_headers() -> None:
+    blocks = [
+        _rendered(),
+        _rendered(connections=realms.evaluate_connections(FOUNDATION, {}, [])),
+        _rendered(runtime=realms.evaluate_runtime(FOUNDATION, [], {"valid": False})),
+    ]
+    for block in blocks:
+        for token in ("connectionId", "BotId", "nextPhaseId", "scripts/", "python"):
+            assert token not in block, token
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_controller_returns_the_checklist_first_for_hr_and_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str
+) -> None:
+    import connect_servicenow_da as snow
+
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.PRODUCT_PROFILES[profile])
+    world = _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    context = _controller_context(tmp_path)
+    kind = "HR" if profile == "hrsd" else "IT"
+    record = "case" if profile == "hrsd" else "ticket"
+    waiting = snow.run_realm_command(
+        context, _args("discover-realm-target", realm="test")
+    )
+    text = waiting["renderBlock"]["text"]
+    assert next(iter(snow._with_agent_rules(waiting, "discover-realm-target"))) == (
+        "renderBlock"
+    )
+    assert snow.ACTIVE_PROFILE.agent_display_name in text
+    assert "Waiting for you" in text
+    assert f"run an {kind} request" in text or f"run a {kind} request" in text
+    assert f"open {'HR cases' if kind == 'HR' else 'IT tickets'}" in text
+    assert f"paste {record} contents" in text
+    world["topics"] = [_topic("a", "Inactive")]
+    failed = snow.run_realm_command(context, _args("check-realm", realm="test"))
+    assert _icons(failed["renderBlock"]["text"]) == ["✅", "✅", "❌", "⬜", "⬜"]
+    assert "Publish the agent in Dev." in failed["renderBlock"]["text"]
+    status = snow.run_realm_command(context, _args("realm-status"))
+    assert status["renderBlock"]["text"] == failed["renderBlock"]["text"]
+    world["topics"] = [_topic("a")]
+    snow.run_realm_command(context, _args("check-realm", realm="test"))
+    ready = snow.run_realm_command(
+        context,
+        _args(
+            "record-realm-test",
+            realm="test",
+            prompt_category=snow.ACTIVE_PROFILE.test_prompt_category,
+            result="pass",
+            failure_category=None,
+        ),
+    )
+    assert _icons(ready["renderBlock"]["text"]) == ["✅"] * 5
+    assert ready["renderBlock"]["text"].endswith(ready["message"])
