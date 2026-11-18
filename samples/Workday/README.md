@@ -61,9 +61,6 @@ The shared template-config setup topic merges its templates into `Global.ESS_Wor
 
 The configuration covers all scenarios, even if you create only one. Running it does **not** create or enable unused scenario topics, call Workday, or submit employee changes.
 
-{: .note }
-> Contact Information requires `msdyn_WorkdayHCMRuntimeEmployeeGetWorkAddress` and `msdyn_WorkdayHCMRuntimeEmployeeGetWorkContactInformation` from your existing OOB configuration.
-
 ## Add a scenario
 
 Choose the [employee scenarios](./Employee/) and [manager scenarios](./Manager/) you need.
