@@ -37,6 +37,7 @@ import sys
 import traceback
 import uuid
 import webbrowser
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -64,7 +65,7 @@ from flightcheck.runner import (
     maker_diagnostic_outcome,
 )
 from flightcheck.agent_scope import active_agent, configured_agents, is_declarative_agent, validate_agent_slug
-from flightcheck.graph_client import GraphClient
+from flightcheck.graph_client import GraphClient, GraphConsentError, GraphPermissionError, authenticate_self_profile
 from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
 from flightcheck.pva_client import PVAClient
 from flightcheck.powerplatform_client import PowerPlatformClient
@@ -85,6 +86,7 @@ from agentbuilder import (
 from flightcheck.checks.prerequisites import run_prerequisites_checks
 from flightcheck.checks.environment import run_capacity_check, run_environment_checks
 from flightcheck.checks.authentication import run_authentication_checks
+from flightcheck.checks.entra_profile import run_entra_profile_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
 from flightcheck.checks.entra_app import run_entra_app_checks
@@ -112,7 +114,10 @@ SCOPE_MAP = {
     "infrastructure": [("Infrastructure", run_infrastructure_checks)],
     "environment": [("Environment", run_environment_checks)],
     "solution": [("Solution", run_solution_checks)],
-    "authentication": [("Authentication", run_authentication_checks)],
+    "authentication": [
+        ("Authentication", run_authentication_checks),
+        ("Authentication", run_entra_profile_checks),
+    ],
     "entraapp": [("Entra App", run_entra_app_checks)],
     "workdaytenant": [("Workday Tenant", run_workday_tenant_checks)],
     "external": [("External Systems", run_external_systems_checks)],
@@ -148,6 +153,7 @@ FULL_SCOPE = [
     ("Environment", run_environment_checks),
     ("Solution", run_solution_checks),
     ("Authentication", run_authentication_checks),
+    ("Authentication", run_entra_profile_checks),
     ("Entra App", run_entra_app_checks),
     ("Workday Tenant", run_workday_tenant_checks),
     ("External Systems", run_external_systems_checks),
@@ -1481,9 +1487,14 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     if registry.GRAPH in needed:
         if not quiet_auth:
             print("Authenticating to Microsoft Graph...")
-        graph = GraphClient(tenant_id)
+        graph = GraphClient(
+            tenant_id, **({"scopes": list(plan.graph_scopes)} if plan.graph_scopes is not None else {}),
+        )
         try:
-            graph.authenticate(preferred_username=canonical_username)
+            graph.authenticate(
+                preferred_username=canonical_username,
+                **({"require_existing_consent": True} if plan.graph_permission_optional else {}),
+            )
             verify_authenticated_account(
                 "Microsoft Graph",
                 getattr(graph, "signed_in_username", None),
@@ -1494,6 +1505,7 @@ def _run_single_checkpoint(args, *, compact_stream=None):
         except Exception as e:
             print(f"  Graph: WARNING — {e}")
             mark_unavailable(registry.GRAPH, e)
+            _record_graph_permission_failure(client_availability, plan.graph_permission_optional, e)
             graph = None
 
     if registry.PP_ADMIN in needed:
@@ -1738,6 +1750,10 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     runner.dv_token = dv_token
     runner.env_id = env_id
     runner.graph = graph
+    runner.client_availability = client_availability
+    runner.tenant_id = tenant_id
+    runner.authenticated_account = canonical_username
+    runner.self_profile_graph = partial(authenticate_self_profile, tenant_id, canonical_username)
     runner.pp_admin = pp_admin
     runner.pva = pva
     runner.powerplatform = powerplatform
@@ -1971,7 +1987,9 @@ def _client_blockers(
 ) -> list[CheckResult]:
     blockers: list[CheckResult] = []
     for client_name, state in sorted(availability.items()):
-        if state.get("available") is True:
+        if state.get("available") is True or (
+            state.get("required") is False and state.get("permissionUnavailable") is True
+        ):
             continue
         label = client_name.replace("_", " ").title()
         blockers.append(CheckResult(
@@ -2001,6 +2019,16 @@ def _client_blockers(
             ),
         ))
     return blockers
+
+
+def _record_graph_permission_failure(availability, optional: bool, error: BaseException) -> None:
+    status = getattr(getattr(error, "response", None), "status_code", None)
+    if isinstance(error, (GraphPermissionError, GraphConsentError)) or status == 403:
+        state = availability["graph"]
+        state["permissionUnavailable"] = True
+        state["reason"] = "permission_unavailable"
+        if optional:
+            state["required"] = False
 
 
 def _profile_client_blockers(
@@ -2431,9 +2459,14 @@ def _run_profile(args):
     if registry.GRAPH in needed:
         if not quiet_auth:
             print("Authenticating to Microsoft Graph...")
-        graph = GraphClient(tenant_id)
+        graph = GraphClient(
+            tenant_id, **({"scopes": list(plan.graph_scopes)} if plan.graph_scopes is not None else {}),
+        )
         try:
-            graph.authenticate(preferred_username=canonical_username)
+            graph.authenticate(
+                preferred_username=canonical_username,
+                **({"require_existing_consent": True} if plan.graph_permission_optional else {}),
+            )
             mark_available(
                 registry.GRAPH,
                 verified_account(
@@ -2446,6 +2479,7 @@ def _run_profile(args):
         except Exception as e:
             print(f"  Graph: WARNING — {e}")
             mark_unavailable(registry.GRAPH, e)
+            _record_graph_permission_failure(client_availability, plan.graph_permission_optional, e)
             graph = None
 
     if registry.PP_ADMIN in needed:
@@ -2736,6 +2770,10 @@ def _run_profile(args):
     runner.dv_token = dv_token
     runner.env_id = env_id
     runner.graph = graph
+    runner.client_availability = client_availability
+    runner.tenant_id = tenant_id
+    runner.authenticated_account = canonical_username
+    runner.self_profile_graph = partial(authenticate_self_profile, tenant_id, canonical_username)
     runner.pp_admin = pp_admin
     runner.pva = pva
     runner.powerplatform = powerplatform
@@ -3207,6 +3245,7 @@ def main():
     connectivity = None
     powerplatform = None
     azure_arm = None
+    graph_permission_unavailable = False
     if da_local_scope:
         tenant_id = None
         dv_token = None
@@ -3365,11 +3404,12 @@ def main():
         print("Authenticating to Microsoft Graph...")
         graph = GraphClient(tenant_id)
         try:
-            graph.authenticate()
+            graph.authenticate(preferred_username=getattr(args, "preferred_username", None))
             print("  Graph: OK")
         except Exception as e:
             print(f"  Graph: WARNING — {e}")
             print("  (Some checks will be skipped)")
+            graph_permission_unavailable = isinstance(e, (GraphPermissionError, GraphConsentError))
             # Discard the unauthenticated client so Graph-dependent checks see a
             # clean None and emit SKIPPED, rather than each call raising
             # "Call authenticate() first". Mirrors the pp_admin / powerplatform /
@@ -3518,6 +3558,12 @@ def main():
     runner.dv_token = dv_token
     runner.env_id = env_id
     runner.graph = graph
+    runner.tenant_id = tenant_id
+    runner.authenticated_account = (
+        getattr(args, "preferred_username", None) or getattr(graph, "signed_in_username", None)
+    )
+    runner.self_profile_graph = partial(authenticate_self_profile, tenant_id, runner.authenticated_account)
+    runner.client_availability = {"graph": {"permissionUnavailable": graph_permission_unavailable}}
     runner.pp_admin = pp_admin
     runner.pva = pva
     runner.powerplatform = powerplatform
@@ -3690,7 +3736,8 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
         return
     buckets = bucket_results(result.results)
     action = buckets[BUCKET_ACTION]
-    manual = buckets[BUCKET_MANUAL]
+    warnings = [row for row in buckets[BUCKET_MANUAL] if row.status == Status.WARNING.value]
+    manual = [row for row in buckets[BUCKET_MANUAL] if row.status != Status.WARNING.value]
     completed = buckets[BUCKET_PASSED]
     passed = [r for r in completed if r.status == Status.PASSED.value]
     skipped = [r for r in completed if r.status == Status.SKIPPED.value]
@@ -3708,14 +3755,13 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
                   "verification -- see below)")
     elif result.overall == "READY_WITH_WARNINGS":
         print(f"  [WARN]  Ready with warnings -- {result.warnings} "
-              "warning(s) to verify")
+              "warning(s) to review")
     else:
         # Headline counts the blocking items: failures, errors, and
         # blocked essential capabilities. A blocked row is a hard release
         # gate (runner scores the run NOT_READY), so omitting it made a
         # blocked-only run print "0 issues need attention" while still
-        # exiting non-zero. Warnings stay out — they live in the
-        # manual-verification section and aren't blockers.
+        # exiting non-zero. Warnings stay out because they aren't blockers.
         failing = result.failed + result.errors + result.blocked
         word = "issue" if failing == 1 else "issues"
         verb = "needs" if failing == 1 else "need"
@@ -3753,16 +3799,16 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
                     print(f"          {cont}")
             print()
 
-    # Section 2 — NEEDS MANUAL VERIFICATION. In scope runs this stays a
-    # one-liner per row (the full prose lives in report.html so the terminal
-    # stays scannable). In single-checkpoint mode (verbose_manual) we print
-    # the full result + verification steps inline so the manual steps surface
-    # directly in Copilot chat — no HTML popup needed.
-    if manual:
+    for heading, rows in (
+        ("NON-BLOCKING WARNINGS", warnings),
+        ("NEEDS MANUAL VERIFICATION", manual),
+    ):
+        if not rows:
+            continue
         print()
-        print(f"  NEEDS MANUAL VERIFICATION ({len(manual)})")
+        print(f"  {heading} ({len(rows)})")
         print("  " + "-" * 62)
-        for r in manual:
+        for r in rows:
             tag = _status_tag(r.status)
             role_text = f" | {', '.join(r.roles)}" if r.roles else ""
             if verbose_manual:
@@ -3781,8 +3827,7 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
                 print(f"  {tag} {r.checkpoint_id} [{r.priority}{role_text}]: "
                       f"{r.description}")
         if not verbose_manual:
-            print("  (Open report.html for the full result + verification "
-                  "steps.)")
+            print("  (Open report.html for the full result and next steps.)")
 
     if skipped:
         print()
