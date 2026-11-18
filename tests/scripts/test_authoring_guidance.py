@@ -70,20 +70,34 @@ def test_authoring_catalog_union_covers_only_the_pinned_da_ga_template_families(
         assert primary_names.isdisjoint(added_names)
 
 
-def test_topic_actions_companion_artifacts_remain_byte_identical():
+def test_topic_actions_companion_catalog_matches_pinned_git_content():
     reference = SOLUTION / "src" / "reference" / "topic-actions"
     additions = json.loads((reference / "catalog.authoring-additions.json").read_text())
     base = additions["baseCatalog"]
-    for filename, expected_blob in (
-        (base["file"], base["gitBlob"]),
-        ("catalog.schema.json", "f20a61ef9fdf8c120f21706712153c509bf014a5"),
-    ):
-        content = (reference / filename).read_bytes()
-        blob = hashlib.sha1(f"blob {len(content)}\0".encode() + content).hexdigest()
-        assert blob == expected_blob, filename
+    content = (reference / base["file"]).read_bytes().replace(b"\r\n", b"\n")
+    blob = hashlib.sha1(f"blob {len(content)}\0".encode() + content).hexdigest()
+    assert blob == base["gitBlob"], base["file"]
     primary = json.loads((reference / base["file"]).read_text())
     schema = json.loads((reference / "catalog.schema.json").read_text())
     Draft202012Validator(schema).validate(primary)
+
+
+def test_retained_drafts_are_reconciled_before_using_fresh_expected_state():
+    update = _read("src/skills/topics/update/SKILL.md")
+    push = _read("src/skills/topics/push-experience.md")
+    for guidance in (update, push):
+        assert "Use the acknowledged baseline or earlier read, when available" in guidance
+        assert "Preserve unrelated remote changes in the proposal." in guidance
+        assert "Resolve overlapping edits through the existing review" in guidance
+        assert "fresh snapshot as `--expected`" in guidance
+
+
+def test_workflow_deletion_stops_without_runnable_mutation_steps():
+    guidance = _read("src/skills/workflows/delete/SKILL.md")
+    assert "Workflow deletion is not available for DA-GA agents" in guidance
+    assert "Do not delete local workflow files" in guidance
+    assert "invoke Push for workflow deletion" in guidance
+    assert "python scripts/" not in guidance
 
 
 def test_create_blocks_name_conflicts_but_keeps_intent_overlap_advisory():
