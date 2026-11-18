@@ -11685,6 +11685,25 @@ def _realm_run_checks(
     )
 
 
+REALM_COMPLETION_SCOPE = {
+    "hrsd": ("HR case lookup", "case creation"),
+    "itsm": ("IT ticket lookup", "ticket creation, the HR agent"),
+}
+REALM_COMPLETION_LIMIT = {"test": "Prod behavior", "prod": "release readiness"}
+
+
+def _realm_completion_message(realm: str) -> str:
+    lookup, not_covered = REALM_COMPLETION_SCOPE[ACTIVE_PROFILE.key]
+    label = realm.title()
+    return (
+        f"Your {lookup} worked in {label}. {ACTIVE_PROFILE.agent_display_name} "
+        "returned the result you expected for your account. This confirms the "
+        f"lookup for your tested account and this agent in {label}, not "
+        f"{not_covered}, other employees' sign-in mapping, or "
+        f"{REALM_COMPLETION_LIMIT[realm]}."
+    )
+
+
 def _realm_check_result(
     context: dict[str, Any],
     registry: dict[str, Any],
@@ -11701,10 +11720,7 @@ def _realm_check_result(
         )["copilotStudioAgent"]["url"],
     }
     if realms.target_status(registry, realm) == "ready":
-        result["message"] = (
-            f"{realm.title()} is Ready. Publishing and non-maker "
-            "validation happen after this guided lifecycle."
-        )
+        result["message"] = _realm_completion_message(realm)
     return result
 
 

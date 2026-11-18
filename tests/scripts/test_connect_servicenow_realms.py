@@ -832,3 +832,114 @@ def test_controller_requires_a_realm_or_link(
         snow.run_realm_command(context, _args("discover-realm-target"))
     status = snow.run_realm_command(context, _args("realm-status"))
     assert status["activeTargetRealm"] == "dev"
+
+
+class _DeniedClient(FakeClient):
+    def __init__(self, status_code: int) -> None:
+        super().__init__()
+        self.status_code = status_code
+
+    def get_agent(self, agent_id: str) -> dict[str, Any]:
+        raise AgentBuilderHTTPError("access", status_code=self.status_code)
+
+
+def test_denied_and_inconclusive_access_have_separate_messages(
+    tmp_path: Path, no_dns: None
+) -> None:
+    def failure(status_code: int) -> realms.ServiceNowRealmError:
+        clients = {
+            "dev-host": FakeClient(),
+            f"https://{TEST_ENV}.prod": _DeniedClient(status_code),
+        }
+        with pytest.raises(realms.ServiceNowRealmError) as excinfo:
+            _discover_realm(tmp_path, clients, _environments(TEST_ENV))
+        return excinfo.value
+
+    denied = failure(403)
+    assert "doesn't have the required access" in str(denied)
+    assert "Environment Maker role" in denied.customer_remediation
+    inconclusive = failure(500)
+    assert "couldn't verify" in str(inconclusive)
+    assert "doesn't mean your access was denied" in str(inconclusive)
+    assert "Check again" in inconclusive.customer_remediation
+
+
+@pytest.mark.parametrize(
+    ("profile", "realm", "lookup", "not_covered", "limit"),
+    [
+        ("hrsd", "test", "HR case lookup", "case creation", "Prod behavior"),
+        ("hrsd", "prod", "HR case lookup", "case creation", "release readiness"),
+        ("itsm", "test", "IT ticket lookup", "ticket creation", "Prod behavior"),
+        ("itsm", "prod", "IT ticket lookup", "ticket creation", "release readiness"),
+    ],
+)
+def test_completion_says_what_was_and_was_not_verified(
+    monkeypatch: pytest.MonkeyPatch,
+    profile: str,
+    realm: str,
+    lookup: str,
+    not_covered: str,
+    limit: str,
+) -> None:
+    import connect_servicenow_da as snow
+
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.PRODUCT_PROFILES[profile])
+    message = snow._realm_completion_message(realm)
+    label = realm.title()
+    assert f"{lookup} worked in {label}" in message
+    assert f"not {not_covered}" in message
+    assert "other employees' sign-in mapping" in message
+    assert message.endswith(f"{limit}.")
+    assert "publish" not in message.lower()
+    assert "Ready" not in message
+
+
+REALMS_GUIDE = (
+    Path(__file__).resolve().parents[2]
+    / "solutions/ess-maker-skills/src/skills/connect/servicenow/realms.md"
+)
+
+
+def test_realms_guide_carries_the_spec_questions() -> None:
+    text = " ".join(
+        line.removeprefix("> ").removeprefix(">").strip()
+        for line in REALMS_GUIDE.read_text(encoding="utf-8").splitlines()
+    )
+    for phrase in (
+        "Which destination should we check, Test or Prod?",
+        "What did the request from **{Agent} in {Environment}** return, and was "
+        "that what you expected?",
+        "do not treat it as pass or fail and do not run `record-realm-test`",
+        "Use the agent in {Environment}, not the Dev agent.",
+        "Did the Test pane show an error, or only an empty result?",
+        "That's a {Dev|Test} result; we still need",
+        "The HR service-area list is empty.",
+        "doesn't switch this run to the Test environment",
+    ):
+        assert phrase in text, phrase
+    assert "publishing and non-maker validation" not in text
+    assert "finish without testing" not in text
+
+
+def test_realms_guide_maker_text_has_no_technical_headers() -> None:
+    text = REALMS_GUIDE.read_text(encoding="utf-8")
+    quoted = [line for line in text.splitlines() if line.startswith(">")]
+    form_text = [
+        line
+        for line in text.splitlines()
+        if line.strip().startswith(('"title"', '"description"'))
+    ]
+    forbidden = (
+        "activeTargetRealm",
+        "connectionId",
+        "BotId",
+        "schemaName",
+        "nextPhaseId",
+        "python",
+        "scripts/",
+        "--",
+    )
+    assert quoted and form_text
+    for line in quoted + form_text:
+        for token in forbidden:
+            assert token not in line, (token, line)

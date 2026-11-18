@@ -54,6 +54,31 @@ Connect configures ServiceNow after promotion but does not promote or publish,
 show the Dev agent's Copilot Studio link, and direct the deployment owner to
 the organization's approved promotion process.
 
+If the maker asks to check ServiceNow after promotion but does not say Test or
+Production, and the controller's `activeTargetRealm` does not settle it, ask
+with `ask_user`. Never infer the destination from conversation text. If the
+agent is also unknown, ask for that next, and do not ask again for context that
+is already established.
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "destination": {
+        "type": "string",
+        "title": "Destination",
+        "description": "Which destination should we check, Test or Prod?",
+        "oneOf": [
+          { "const": "test", "title": "Test" },
+          { "const": "prod", "title": "Prod" }
+        ]
+      }
+    }
+  }
+}
+```
+
 If promotion completion is unknown, ask once with `ask_user`:
 
 ```json
@@ -148,9 +173,111 @@ connections in a promoted environment is not yet defined, so:
   condition, run `check-realm --realm {test|prod}` again.
 
 Use `check-realm` to re-read the stages, and `select-realm --realm
-{dev|test|prod}` to switch between realms that were already discovered. When
-Test or Production is Ready, publishing and non-maker validation happen after
-this guided lifecycle.
+{dev|test|prod}` to switch between realms that were already discovered.
+
+## Maker-facing wording
+
+Use these messages for Test and Prod. Fill in the agent name, the environment
+name (or its URL when no name is known) and the ServiceNow instance from the
+controller status. Use "Prod" and "Test" as the maker would. In the HR agent
+use "HR case" and "Show my open HR cases"; in the IT agent use "IT ticket" and
+"Show my open IT tickets". Keep identifiers, command names and field names out
+of maker-visible text.
+
+**Start of a realm run**
+
+> We'll check the ServiceNow setup for **{Agent} in {Environment}**, then
+> you'll run an {HR|IT} request to confirm the result.
+>
+> We're working with:
+>
+> - **Agent:** {Agent}
+> - **Environment:** {Environment}
+> - **ServiceNow instance:** {Instance URL}
+>
+> We'll retain the administrator-confirmed sign-in setup and mapping that still
+> applies. You don't need to resend earlier replies unless a specific
+> confirmation is missing or no longer applies.
+>
+> We're checking whether your account can configure this agent in
+> {Environment}. Validation will wait until that check completes.
+
+**Account cannot configure the agent (denied)**
+
+> Your account doesn't have the required access to configure **{Agent} in
+> {Environment}**. Ask a maker with the Environment Maker role and permission
+> to edit this agent to run `/connect servicenow` using their own account.
+
+**Access could not be verified (inconclusive)**
+
+> We couldn't verify whether your account can configure **{Agent} in
+> {Environment}**. Validation is paused; this doesn't mean your access was
+> denied. Check again to continue.
+
+Do not treat an inconclusive result as denied or as success.
+
+**Request for the maker to run in the Test pane**
+
+> In Copilot Studio, open **{Agent} in {Environment}** and run an {HR|IT}
+> request in that agent's **Test pane** that should return your real ServiceNow
+> data.
+>
+> For example, use **"Show my open {HR cases|IT tickets},"** if you have open
+> ones. Use the agent in {Environment}, not the Dev agent.
+>
+> Return here and tell us what happened and whether it matched what you
+> expected. You don't need to paste case contents or employee identifiers.
+
+For Prod, add before the last paragraph: "The Test pane is where you try the
+Prod agent; it doesn't switch this run to the Test environment." In the IT
+agent say "ticket contents" instead of "case contents".
+
+**Reply gives no usable result**
+
+When the maker replies with only "Done", "Finished", or anything else that does
+not say what the request returned, do not treat it as pass or fail and do not
+run `record-realm-test`. Ask once, and keep asking until the reply says what
+was returned and whether it matched:
+
+> What did the request from **{Agent} in {Environment}** return, and was that
+> what you expected?
+
+Record `record-realm-test` only when the maker states a result: pass when it
+returned what they expected, fail when it did not.
+
+**Result recorded as pass (lookup worked)**
+
+Show the controller's completion message as is. It says what was verified (the
+lookup for the tested account and this agent in that environment) and what was
+not (creation of records, other employees' sign-in mapping, and, for Test,
+Prod behavior or, for Prod, release readiness). Do not add anything about
+publishing or what to do next.
+
+### Recovery rules
+
+- **Wrong environment tested.** When the result came from the Dev agent (or from
+  Test while Prod is being checked): "That's a {Dev|Test} result; we still need
+  a result from **{Environment}**. Open **{Agent} in {Environment}** and run
+  the request in that agent's Test pane, then tell us what happened." Do not
+  record the result.
+- **Expected empty result.** Check the setup items first. If no cause shows,
+  ask: "Did the Test pane show an error, or only an empty result?" Tell the
+  maker to send only the error text. If the maker may simply have no records,
+  suggest a request for data they know exists. Never blame sign-in mapping,
+  connection references or promotion without evidence.
+- **Sign-in identity does not match (HR and IT).** Tell the maker the account
+  used in the Test pane could not be matched to a ServiceNow user, and offer a
+  ready-to-send message for the ServiceNow administrator: "The sign-in identity
+  claim from Microsoft Entra ID does not match the ServiceNow user field used
+  to find users. Please correct the mapping for the integration used by this
+  agent. Do not change an OIDC configuration serving single sign-on or the
+  Graph connector. Reply with a confirmation and the values you used, without
+  employee identifiers or secrets." Re-check after the maker says it is fixed.
+- **Empty HR service areas (HR only).** "The HR service-area list is empty.
+  Employees using HR scenarios need one of the ServiceNow roles
+  `sn_hr_core.basic`, `sn_hr_core.manager`, or `sn_hr_core.admin`. Ask your
+  ServiceNow administrator to review the access for the account used in this
+  request. This skill doesn't check or assign those roles."
 
 ## Manual validation
 
@@ -164,3 +291,9 @@ this guided lifecycle.
 | Required topic off, or portal URL not set, in Prod | Blocked with the Dev fix and re-promote guidance. Nothing is edited. |
 | Prod is checked before Test is Ready | Prod is checked on its own. |
 | Condition is resolved by the maker, then `check-realm` runs | The item turns to pass without repeating earlier answers. |
+| Maker asks to check ServiceNow after promotion without saying Test or Prod | Connect asks "Which destination should we check, Test or Prod?" and does not guess. |
+| Account lacks access (denied) vs. access check could not finish | Denied: ask a maker with the Environment Maker role to run it. Inconclusive: validation is paused, not denied, check again. |
+| Maker replies only "Done." to the Test-pane request | Connect does not record pass or fail and asks what the request from the agent in that environment returned and whether it matched. |
+| Maker tested the Dev agent instead of the promoted one | Connect asks for a result from the promoted environment and records nothing. |
+| Maker's expected data came back empty | Connect checks setup first, then asks whether the Test pane showed an error or only an empty result. |
+| Pass is recorded in Test or Prod | The completion message says what was verified and what was not, and does not mention publishing. |

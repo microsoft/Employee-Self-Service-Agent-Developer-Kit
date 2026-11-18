@@ -77,8 +77,49 @@ class ServiceNowRealmError(RuntimeError):
         "Your existing ServiceNow setup progress is preserved. Confirm that "
         "promotion finished, then check again or choose the target "
         "environment by name or Dataverse URL using the recorded maker "
-        "account. If access is denied, ask the Power Platform environment "
-        "administrator to grant that maker access before checking again."
+        "account."
+    )
+
+    def __init__(self, message: str, *, remediation: str | None = None) -> None:
+        super().__init__(message)
+        if remediation is not None:
+            self.customer_remediation = remediation
+
+
+def _access_failure(
+    exc: Exception,
+    realm: str | None,
+    unproven: str,
+) -> ServiceNowRealmError:
+    """Split a denied read from one that could not be verified.
+
+    A missing agent (404) is a target problem, not an access problem, so it
+    keeps the caller's `unproven` message.
+    """
+    label = str(realm).title() if realm else "the promoted environment"
+    status = getattr(exc, "status_code", None)
+    if status == 404:
+        return ServiceNowRealmError(unproven)
+    if status in (401, 403):
+        return ServiceNowRealmError(
+            f"Your account doesn't have the required access to configure this "
+            f"agent in {label}.",
+            remediation=(
+                "Ask a maker with the Environment Maker role and permission to "
+                "edit this agent to run `/connect servicenow` using their own "
+                "account. Your existing ServiceNow setup progress is preserved."
+            ),
+        )
+    return ServiceNowRealmError(
+        f"We couldn't verify whether your account can configure this agent in "
+        f"{label}. Validation is paused; this doesn't mean your access was "
+        "denied.",
+        remediation=(
+            "Check again to continue. If it keeps failing, confirm that "
+            "promotion finished or choose the environment by name or "
+            "Dataverse URL. Your existing ServiceNow setup progress is "
+            "preserved."
+        ),
     )
 
 
@@ -419,9 +460,11 @@ def discover_promoted_realm(
                     continue
                 raise
     except AgentBuilderError as exc:
-        raise ServiceNowRealmError(
+        raise _access_failure(
+            exc,
+            realm,
             "The promoted target could not be verified. Confirm maker "
-            "access, environment selection, and deployment state."
+            "access, environment selection, and deployment state.",
         ) from exc
     if len(discovered) != 1:
         detail = (
@@ -499,6 +542,7 @@ def discover_from_agent_link(
             "recorded maker account."
         )
     environment_id, environment_url, _name = candidates[0]
+    realm_name: str | None = None
     try:
         target_client = client_factory(
             derive_environment_host(environment_id, ring),
@@ -537,10 +581,12 @@ def discover_from_agent_link(
             expected_target_agent_id=agent_id,
         )
     except AgentBuilderError as exc:
-        raise ServiceNowRealmError(
+        raise _access_failure(
+            exc,
+            realm_name or realm,
             "The agent link could not be verified as the promoted sibling "
             "of the recorded Dev agent. Confirm maker access and that "
-            "promotion finished."
+            "promotion finished.",
         ) from exc
 
 
@@ -616,9 +662,11 @@ def discover_realm(
     except ServiceNowRealmError:
         raise
     except (AgentBuilderError, OSError, ValueError) as exc:
-        raise ServiceNowRealmError(
+        raise _access_failure(
+            exc,
+            realm,
             "The promoted target could not be verified. Confirm maker "
-            "access, environment selection, and deployment state."
+            "access, environment selection, and deployment state.",
         ) from exc
 
 
@@ -1124,7 +1172,13 @@ def apply_checks(
     stages["maker-validation"] = (
         {
             "status": "needs-maker",
-            "message": "Run the Test pane scenario in this realm.",
+            "message": (
+                "In Copilot Studio, run a request in this agent's Test pane "
+                "that should return your real ServiceNow data. Use this "
+                "environment's agent, not the Dev agent. Then tell us what "
+                "happened and whether it matched what you expected. You "
+                "don't need to paste record contents or employee identifiers."
+            ),
         }
         if ready
         else {
