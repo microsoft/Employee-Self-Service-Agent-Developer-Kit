@@ -414,7 +414,7 @@ what to do next.
   >
   > **Please send back:** confirmation that the corrected configuration is saved
   > and supports this ESS setup, the exact User Claim and User Field, and any
-  > changed Client ID, tenant ID, or custom claim name that applies. If the
+  > changed Client ID or custom claim name that applies. If the
   > custom claim setup changed, include its exact configured name and
   > confirmation that it is complete, including the appropriate format and
   > populated source attribute for every intended employee.

@@ -42,7 +42,7 @@ exact group ID and context hash.
 
 After that acknowledgement, return the canonical runtime instructions from
 [the shared ServiceNow administrator source](../../shared/runtime-instructions/servicenow-administrator.md)
-with the confirmed Client ID, tenant ID, and User Claim already locked:
+with the confirmed Client ID and User Claim already locked:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage servicenow

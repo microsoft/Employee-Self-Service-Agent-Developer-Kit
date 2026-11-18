@@ -6,7 +6,7 @@ Your organization is connecting the Employee Self-Service (ESS) HR or IT agent t
 
 ServiceNow allows only one OIDC configuration per Microsoft Entra tenant. If one already exists for your tenant, for example for the Microsoft Graph connector or single sign-on, don't change it. See [Coexistence with the Microsoft Graph connector for ServiceNow](https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service/declarative-agent-servicenow-hr-it#coexistence-with-the-microsoft-graph-connector-for-servicenow) and the [ServiceNow Knowledge connector guidance](https://learn.microsoft.com/en-us/microsoftsearch/servicenow-knowledge-connector).
 
-**Values from the maker:** Client ID `<client ID>`, tenant ID `<tenant ID>`, and User Claim `<claim>`, confirmed by the Entra administrator.
+**Values from the maker:** Client ID `<client ID>` and User Claim `<claim>`, confirmed by the Entra administrator.
 
 1. Sign in to `https://<instance>.service-now.com`.
 2. From the profile menu at the top right, select **Elevate role**, select `security_admin`, and select **Update**. If the **New** button is missing in the next steps, the role isn't elevated.

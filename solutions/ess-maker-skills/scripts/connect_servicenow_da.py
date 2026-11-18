@@ -2131,8 +2131,7 @@ def record_identity_direct(
         ):
             raise ServiceNowConnectError(
                 "The ServiceNow stage uses the locked Entra-confirmed client "
-                "ID, tenant ID, and User Claim; do not re-enter or change "
-                "them."
+                "ID and User Claim; do not re-enter or change them."
             )
         if not user_field:
             raise ServiceNowConnectError(

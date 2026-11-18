@@ -7552,7 +7552,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "runtime-instructions/servicenow-administrator.md"
     )
     assert service_now["runtimeInstructionSha256"] == (
-        "B50B3BA9706C2AD3A8A505B4A1BFAA5F40A17F468A54180EF79AB80931AFE6D8"
+        "ED080226F6E6A956BFAB0AFD1AA2D3DD2EFD449DE16869B18CC82282E4B35632"
     )
     assert service_now["lockedValues"] == {
         "applicationClientId": APP_CLIENT_ID,
@@ -7563,7 +7563,11 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert APP_CLIENT_ID in ordinary
     assert "employee_id" in ordinary
     assert TENANT_ID in ordinary
-    assert "CONFIRMED_" not in ordinary
+    assert f"tenant ID `{TENANT_ID}`" not in ordinary
+    assert (
+        f"https://login.microsoftonline.com/{TENANT_ID}/.well-known/"
+        "openid-configuration"
+    ) in ordinary
     assert "<client ID>" not in ordinary
     assert "<tenant ID>" not in ordinary
     assert "<instance>" not in ordinary
@@ -7634,7 +7638,7 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
         "0306CE216C696E56C02CBEC78DB152096867B2D26C7AC06BE8AD89D8B01B4D04"
     )
     assert service_now_sha == (
-        "B50B3BA9706C2AD3A8A505B4A1BFAA5F40A17F468A54180EF79AB80931AFE6D8"
+        "ED080226F6E6A956BFAB0AFD1AA2D3DD2EFD449DE16869B18CC82282E4B35632"
     )
     assert "\u00a0" not in entra + service_now
     assert entra.startswith("#### Instructions for the Entra administrator")
@@ -7668,9 +7672,15 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
         "#### Instructions for the ServiceNow administrator"
     )
     assert "**Values from the maker:** Client ID `<client ID>`" in service_now
+    assert "tenant ID" not in service_now.split("**Send back")[0].split(
+        "OIDC Metadata URL"
+    )[0]
+    assert "login.microsoftonline.com/<tenant ID>/.well-known" in service_now
     assert "User Claim `<claim>`, confirmed by the Entra administrator." in (
         service_now
     )
+    assert "Client ID `<client ID>` and User Claim `<claim>`" in service_now
+    assert "tenant ID" not in entra
     assert "1. Sign in to `https://<instance>.service-now.com`." in (
         service_now
     )

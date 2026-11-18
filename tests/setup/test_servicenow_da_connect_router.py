@@ -221,6 +221,38 @@ def test_servicenow_connect_hands_off_to_setup_automatically() -> None:
     assert "automatic Setup handoff" in chooser
 
 
+def test_servicenow_connect_does_not_ask_the_maker_for_a_tenant_id() -> None:
+    connect = _SOLUTION / "src" / "skills" / "connect"
+    entry = (connect / "servicenow" / "entry.md").read_text(encoding="utf-8")
+    messages = entry.split("## Clarification and recovery Messages", 1)[
+        1
+    ].split("## ServiceNow rules", 1)[0]
+    assert "tenant ID" not in messages
+    realms = (connect / "servicenow" / "realms.md").read_text(
+        encoding="utf-8"
+    )
+    assert "changed Client ID or custom claim name that applies" in realms
+    assert "Client ID, tenant ID" not in realms
+    for profile in ("hrsd", "itsm"):
+        guide = (
+            connect
+            / f"servicenow-da-{profile}"
+            / "actions"
+            / "guide-servicenow-oidc.md"
+        ).read_text(encoding="utf-8")
+        assert "confirmed Client ID and User Claim already locked" in guide
+        assert "tenant ID, and User Claim" not in guide
+    shared = connect / "shared" / "runtime-instructions"
+    assert "tenant ID" not in (
+        shared / "entra-administrator.md"
+    ).read_text(encoding="utf-8")
+    snow_admin = (shared / "servicenow-administrator.md").read_text(
+        encoding="utf-8"
+    )
+    assert "tenant ID `<tenant ID>`" not in snow_admin
+    assert "login.microsoftonline.com/<tenant ID>/.well-known" in snow_admin
+
+
 def test_servicenow_connect_entry_has_custom_claim_and_knowledge_messages() -> None:
     raw = (
         _SOLUTION / "src" / "skills" / "connect" / "servicenow" / "entry.md"
