@@ -4,7 +4,7 @@
 
 `AUTH-PROFILE-001` checks profile data availability for ESS personalization using the read-only [Microsoft Graph beta profile API](https://learn.microsoft.com/en-us/graph/api/profile-get?view=graph-rest-beta).
 
-The properties below are a **subset of attributes supported by Microsoft 365 People Profile**. The check can be expanded to include additional supported properties in the future.
+The properties below are a **subset of attributes supported by Microsoft 365 People Profile** that assist with ESS personalization.
 
 ## Properties currently checked
 
@@ -35,9 +35,9 @@ When a property is missing, update the configured source system. These reference
 
 ## Reads and limits
 
-Tenant scans use existing delegated `User.Read.All` consent to list up to **100 Member accounts** through Graph v1.0 `/users`, including disabled and service accounts.
+Tenant scans use existing delegated `User.Read.All` consent. Graph v1.0 `/users` is used only to list up to **100 Member user IDs**; disabled and service user accounts can be included.
 
-Profiles are read through Graph beta `/$batch`, with up to **20 GET requests per batch**. Results are matched to request IDs. Retryable failures are retried, honoring `Retry-After` when provided.
+Profile data is then read from **Graph beta `/users/{id}/profile`**. These GET requests are sent through Graph beta `/$batch`, with up to **20 requests per batch**. Results are matched to request IDs. Retryable failures are retried, honoring `Retry-After` when provided.
 
 One **30-second budget**, excluding authentication, covers data reads, retries, fallback reads and aggregation. A failed or timed-out scan produces an Error without partial coverage.
 
