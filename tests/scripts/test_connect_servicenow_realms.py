@@ -799,10 +799,26 @@ def _args(command: str, **values: Any) -> argparse.Namespace:
     return argparse.Namespace(command=command, **{**defaults, **values})
 
 
+def _complete_dev_state() -> dict[str, Any]:
+    state = _dev_state()
+    state["adminSetup"]["preflight"].update(
+        instanceSource="maker-confirmed", recordedAt="2026-01-01T00:00:00Z"
+    )
+    state["adminSetup"]["phaseHandoffs"]["entra-registration"]["evidence"][
+        "selectedClaimName"
+    ] = "email"
+    state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] = {
+        "status": "completed",
+        "evidence": {"serviceNowUserField": "email"},
+    }
+    return state
+
+
 def _prepare_controller(
     monkeypatch: pytest.MonkeyPatch,
     *,
     dev_reference: dict[str, str] | None,
+    dev_state: dict[str, Any] | None = None,
     world: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fake the promoted realm; `world` is what the realm actually contains."""
@@ -816,6 +832,12 @@ def _prepare_controller(
     monkeypatch.setattr(
         snow, "_realm_dev_reference", lambda _context: dict(dev_reference or {})
     )
+    recorded_dev = (
+        dev_state
+        if dev_state is not None
+        else (_complete_dev_state() if dev_reference else {})
+    )
+    monkeypatch.setattr(snow, "_realm_dev_state", lambda _context: recorded_dev)
 
     def run_checks(_context: dict[str, Any], target: dict[str, Any]) -> None:
         expected = target["expected"]
@@ -850,23 +872,259 @@ def test_controller_checks_test_without_any_dev_record(
     asked = snow.run_realm_command(
         context, _args("discover-realm-target", realm="test")
     )
-    connections = asked["phases"][0]
-    assert connections["reason"] == "expected-values-missing"
-    assert connections["missing"] == [
-        "ServiceNow instance",
-        "Entra application (client) ID",
+    assert asked["phases"][0]["status"] == "pending"
+    assert asked["renderBlock"]["case"] == "independent"
+    with pytest.raises(snow.ServiceNowConnectError, match="never typed in"):
+        snow.run_realm_command(
+            context,
+            _args("check-realm", realm="test", expected_client_id=CLIENT_ID),
+        )
+    with pytest.raises(snow.ServiceNowConnectError, match="never typed in"):
+        snow.run_realm_command(
+            context, _args("check-realm", realm="test", admin_confirmed=True)
+        )
+
+
+def _admin_args(stage: str, **values: Any) -> argparse.Namespace:
+    defaults = {
+        "client_id": None,
+        "claim_name": None,
+        "user_field": None,
+        "directory_tenant_id": None,
+        "confirm_saved_mapping": False,
+    }
+    return _args(
+        "record-realm-admin", realm="test", stage=stage, **{**defaults, **values}
+    )
+
+
+def _block(result: dict[str, Any]) -> str:
+    return result["renderBlock"]["text"]
+
+
+def test_case_two_runs_the_full_administrator_flow_then_the_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import connect_servicenow_da as snow
+
+    _prepare_controller(monkeypatch, dev_reference=None)
+    context = _controller_context(tmp_path)
+    first = snow.run_realm_command(
+        context, _args("discover-realm-target", realm="test")
+    )
+    text = _block(first)
+    assert first["renderBlock"]["case"] == "independent"
+    assert (
+        "We couldn't find a completed Dev setup for this agent, so we'll run "
+        "the full ServiceNow setup for Test. We'll start with your "
+        "administrators, then check the connection, topics, and portal."
+    ) in text
+    assert [
+        line.split(" — ")[0][2:]
+        for line in text.splitlines()
+        if line and line[0] in "✅🔄⬜⏳❌"
+    ] == [
+        "Permission to configure this agent",
+        "Microsoft Entra administrator (Client ID and claim)",
+        "ServiceNow administrator (employee mapping / User Field)",
+        "ServiceNow connection",
+        "Topics",
+        "Portal URL",
+        "Real-data test in the Test pane",
     ]
-    provided = {"expected_instance": "contoso", "expected_client_id": CLIENT_ID}
-    unconfirmed = snow.run_realm_command(
-        context, _args("check-realm", realm="test", **provided)
+    assert _icons(text) == ["✅", "⏳", "⬜", "⬜", "⬜", "⬜", "⬜"]
+    assert "What is your ServiceNow instance name" in text
+    assert "Instructions for the Entra administrator" not in text
+    assert "Test pane" in text and "Waiting for you" not in text
+
+    entra = snow.run_realm_command(
+        context, _args("check-realm", realm="test", expected_instance="Contoso")
     )
-    assert unconfirmed["phases"][0]["reason"] == "expected-values-unconfirmed"
-    confirmed = snow.run_realm_command(
-        context, _args("check-realm", realm="test", admin_confirmed=True)
+    text = _block(entra)
+    assert _icons(text) == ["✅", "⏳", "⬜", "⬜", "⬜", "⬜", "⬜"]
+    assert "Instructions for the Entra administrator" in text
+    assert "Instructions for the ServiceNow administrator" not in text
+    assert "Tenant ID" not in text.split("Ready-to-send message")[1]
+
+    with pytest.raises(snow.ServiceNowConnectError, match="aud"):
+        snow.run_realm_command(
+            context,
+            _admin_args("entra", client_id=CLIENT_ID, claim_name="AUD"),
+        )
+    with pytest.raises(snow.ServiceNowConnectError, match="does not match"):
+        snow.run_realm_command(
+            context,
+            _admin_args(
+                "entra",
+                client_id=CLIENT_ID,
+                claim_name="email",
+                directory_tenant_id=OTHER_ENV,
+            ),
+        )
+    with pytest.raises(snow.ServiceNowConnectError, match="comes first"):
+        snow.run_realm_command(
+            context,
+            _admin_args("servicenow", user_field="email", confirm_saved_mapping=True),
+        )
+
+    mapping = snow.run_realm_command(
+        context,
+        _admin_args("entra", client_id=CLIENT_ID.upper(), claim_name="email"),
     )
-    assert confirmed["phases"][0]["status"] == "complete"
-    assert confirmed["nextPhaseId"] == "maker-validation"
-    assert confirmed["targets"]["test"]["deploymentStatus"] == "in-progress"
+    text = _block(mapping)
+    assert _icons(text) == ["✅", "✅", "⏳", "⬜", "⬜", "⬜", "⬜"]
+    assert "Instructions for the ServiceNow administrator" in text
+    assert f"`{CLIENT_ID}`" in text
+    assert "https://contoso.service-now.com" in text
+    assert f"login.microsoftonline.com/{TENANT}/.well-known" in text
+    for placeholder in ("<client ID>", "<tenant ID>", "<instance>", "<claim>"):
+        assert (
+            placeholder not in text.split("Ready-to-send message")[1].split("Part 1")[0]
+        )
+
+    with pytest.raises(snow.ServiceNowConnectError, match="saved"):
+        snow.run_realm_command(context, _admin_args("servicenow", user_field="email"))
+    with pytest.raises(snow.ServiceNowConnectError, match="field name"):
+        snow.run_realm_command(
+            context,
+            _admin_args(
+                "servicenow", user_field="bad field!", confirm_saved_mapping=True
+            ),
+        )
+    done = snow.run_realm_command(
+        context,
+        _admin_args("servicenow", user_field="email", confirm_saved_mapping=True),
+    )
+    text = _block(done)
+    assert _icons(text) == ["✅"] * 6 + ["⏳"]
+    assert "Instructions for the" not in text
+    assert done["nextPhaseId"] == "maker-validation"
+    registry = realms.load_registry(
+        tmp_path, snow.ACTIVE_PROFILE.provider_key, "ess-hr"
+    )
+    assert registry["targets"]["test"]["expected"]["sources"] == {
+        "instanceName": "maker",
+        "clientId": "entra-administrator",
+    }
+
+    again = snow.run_realm_command(
+        context, _args("discover-realm-target", realm="test")
+    )
+    assert again["renderBlock"]["case"] == "independent"
+    assert _icons(_block(again)) == ["✅"] * 6 + ["⏳"]
+
+
+def test_case_two_rechecks_only_the_failing_step_after_the_admin_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import connect_servicenow_da as snow
+
+    world = _prepare_controller(monkeypatch, dev_reference=None)
+    world["connections"] = []
+    world["reference"] = {}
+    context = _controller_context(tmp_path)
+    snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    snow.run_realm_command(
+        context, _args("check-realm", realm="test", expected_instance="contoso")
+    )
+    snow.run_realm_command(
+        context, _admin_args("entra", client_id=CLIENT_ID, claim_name="email")
+    )
+    blocked = snow.run_realm_command(
+        context,
+        _admin_args("servicenow", user_field="email", confirm_saved_mapping=True),
+    )
+    assert _icons(_block(blocked)) == ["✅", "✅", "✅", "❌", "⬜", "⬜", "⬜"]
+    world["connections"] = [_connection()]
+    world["reference"] = _bound()
+    fixed = snow.run_realm_command(context, _args("check-realm", realm="test"))
+    assert _icons(_block(fixed)) == ["✅"] * 6 + ["⏳"]
+
+
+def test_case_one_reuses_the_dev_setup_without_any_administrator_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import connect_servicenow_da as snow
+
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    context = _controller_context(tmp_path)
+    result = snow.run_realm_command(
+        context, _args("discover-realm-target", realm="test")
+    )
+    text = _block(result)
+    assert result["renderBlock"]["case"] == "dev-reuse"
+    assert (
+        "We'll reuse the administrator-confirmed sign-in setup and employee "
+        "mapping from Dev for this ServiceNow instance. You don't need to ask "
+        "your administrators again. We'll only check the Test connection, "
+        "topics, portal URL, and a real-data test."
+    ) in text
+    assert _icons(text) == ["✅", "✅", "✅", "✅", "⏳"]
+    assert "Microsoft Entra administrator" not in text
+    assert "ServiceNow administrator" not in text
+    assert "Instructions for the" not in text
+    assert "adminInstruction" not in text
+    with pytest.raises(snow.ServiceNowConnectError, match="reuses"):
+        snow.run_realm_command(
+            context,
+            _admin_args("entra", client_id=CLIENT_ID, claim_name="email"),
+        )
+
+
+def _state_without(path: tuple[str, ...]) -> dict[str, Any]:
+    state = _complete_dev_state()
+    node = state
+    for key in path[:-1]:
+        node = node[key]
+    del node[path[-1]]
+    return state
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        _state_without(("adminSetup", "phaseHandoffs", "servicenow-oidc")),
+        _state_without(
+            (
+                "adminSetup",
+                "phaseHandoffs",
+                "entra-registration",
+                "evidence",
+                "selectedClaimName",
+            )
+        ),
+        _state_without(("adminSetup", "phaseHandoffs", "entra-registration")),
+        _state_without(("adminSetup", "preflight", "instanceSource")),
+        {**_complete_dev_state(), "tenantId": OTHER_ENV},
+        {},
+    ],
+    ids=[
+        "no-employee-mapping",
+        "no-claim",
+        "no-entra",
+        "instance-not-confirmed",
+        "other-tenant",
+        "no-record",
+    ],
+)
+def test_any_missing_dev_value_means_the_full_administrator_flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: dict[str, Any]
+) -> None:
+    import connect_servicenow_da as snow
+
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD, dev_state=state)
+    result = snow.run_realm_command(
+        _controller_context(tmp_path), _args("discover-realm-target", realm="test")
+    )
+    assert result["renderBlock"]["case"] == "independent"
+    assert "Microsoft Entra administrator" in _block(result)
+    assert _icons(_block(result))[1] == "⏳"
+
+
+def test_complete_dev_state_is_case_one_for_the_same_tenant_only() -> None:
+    assert realms.dev_admin_setup_complete(_complete_dev_state(), TENANT)
+    assert not realms.dev_admin_setup_complete(_complete_dev_state(), OTHER_ENV)
+    assert not realms.dev_admin_setup_complete({}, TENANT)
 
 
 def test_controller_detects_dev_on_but_test_off(
@@ -1136,6 +1394,22 @@ def test_realms_guide_carries_the_s5_recovery_wording() -> None:
     assert "Show each item in" not in text
     for stale in ("BLOCKED.", "Connect does not offer", "ALM tool", "ALM process"):
         assert stale not in text, stale
+
+
+def test_realms_guide_describes_both_administrator_cases() -> None:
+    guide = " ".join(REALMS_GUIDE.read_text(encoding="utf-8").split())
+    assert "Do not re-issue an administrator handoff automatically" not in guide
+    for expected in (
+        "`dev-reuse`",
+        "`independent`",
+        "Partial reuse is never offered",
+        "record-realm-admin --realm {test|prod} --stage entra",
+        "record-realm-admin --realm {test|prod} --stage servicenow",
+        "Never pass `--expected-client-id` or `--admin-confirmed` in an independent run",
+        "never ask the maker for a tenant ID",
+        "do not paraphrase its rows, its explanation, or its instruction",
+    ):
+        assert expected in guide, expected
 
 
 def test_realms_guide_maker_text_has_no_technical_headers() -> None:

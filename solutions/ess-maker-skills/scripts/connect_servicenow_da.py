@@ -11940,14 +11940,15 @@ REALM_COMMANDS = frozenset(
         "realm-status",
         "check-realm",
         "record-realm-test",
+        "record-realm-admin",
         "select-realm",
     }
 )
 REALM_RECOVERY_CHOICES = ("Check again", "Choose another environment", "Not now")
 
 
-def _realm_dev_reference(context: dict[str, Any]) -> dict[str, str]:
-    """Optional Dev record values; a missing or unreadable record is not an error."""
+def _realm_dev_state(context: dict[str, Any]) -> dict[str, Any]:
+    """Dev lifecycle record; a missing or unreadable record is not an error."""
     path = _lifecycle_state_path(context)
     if not path.is_file():
         return {}
@@ -11957,7 +11958,96 @@ def _realm_dev_reference(context: dict[str, Any]) -> dict[str, str]:
         return {}
     if state_integrity_mismatch(state):
         return {}
-    return realms.dev_reference_from_state(state)
+    return state
+
+
+def _realm_dev_reference(context: dict[str, Any]) -> dict[str, str]:
+    """Optional Dev record values; a missing or unreadable record is not an error."""
+    state = _realm_dev_state(context)
+    return realms.dev_reference_from_state(state) if state else {}
+
+
+def _realm_admin_case(
+    context: dict[str, Any],
+    identity: dict[str, Any],
+) -> str:
+    """Decide from the recorded Dev lifecycle, never from the model."""
+    state = _realm_dev_state(context)
+    if state and realms.dev_admin_setup_complete(
+        state, tenant_id=identity.get("tenantId")
+    ):
+        return realms.ADMIN_CASE_REUSE
+    return realms.ADMIN_CASE_INDEPENDENT
+
+
+def _realm_servicenow_instruction(
+    context: dict[str, Any],
+    *,
+    client_id: str,
+    claim_name: str,
+    instance_name: str,
+) -> str:
+    _path, text, _sha = _identity_runtime_instruction_source("servicenow")
+    rendered = (
+        text.replace("<client ID>", client_id)
+        .replace(
+            "<tenant ID>",
+            _normalize_directory_tenant_id(context["environment"]["tenant_id"]),
+        )
+        .replace("<instance>", normalize_instance_name(instance_name))
+        .replace("<claim>", claim_name)
+    )
+    if ACTIVE_PROFILE.key != "hrsd":
+        rendered = re.sub(
+            r"(?m)^8\. \*\*HR agent only:\*\*.*(?:\n|$)",
+            "",
+            rendered,
+        ).rstrip()
+    if any(
+        placeholder in rendered
+        for placeholder in ("<client ID>", "<tenant ID>", "<instance>", "<claim>")
+    ):
+        raise ServiceNowConnectError(
+            "ServiceNow runtime instruction placeholders were not resolved."
+        )
+    return rendered
+
+
+def _realm_admin_instruction(
+    context: dict[str, Any],
+    target: dict[str, Any],
+) -> dict[str, str]:
+    """Reuse the Dev administrator messages for the one step still open."""
+    waiting = realms.independent_pending(target)
+    if waiting is None:
+        return {}
+    setup = target.get("adminSetup") or {}
+    if waiting == "instance":
+        return {
+            "instance": (
+                "What is your ServiceNow instance name, for example "
+                "`contoso`? We need it to prepare the message for your "
+                "Microsoft Entra administrator."
+            )
+        }
+    if waiting == "entra":
+        _path, text, _sha = _identity_runtime_instruction_source("entra")
+        lead_in = _identity_handoff_lead_in("entra").replace(
+            "The HR prerequisite is confirmed. Next, send", "Next, send"
+        )
+        return {"entra": f"{lead_in}\n\n{_ready_to_send_block(text)}"}
+    rendered = _realm_servicenow_instruction(
+        context,
+        client_id=setup["entra"]["clientId"],
+        claim_name=setup["entra"]["claimName"],
+        instance_name=setup["instanceName"],
+    )
+    return {
+        "servicenow": (
+            f"{_identity_handoff_lead_in('servicenow')}\n\n"
+            f"{_ready_to_send_block(rendered)}"
+        )
+    }
 
 
 def _realm_topic_states(components: dict[str, Any]) -> list[dict[str, Any]]:
@@ -12112,6 +12202,7 @@ def _realm_render_context(
             "copilotStudioAgent"
         ]["url"],
         "footer": footer,
+        "adminInstruction": _realm_admin_instruction(context, target),
     }
 
 
@@ -12193,18 +12284,38 @@ def _run_realm_command(
             account_hint=context.get("account"),
         )
         previous = registry["targets"].get(realm)
-        target = realms.record_target(
-            registry,
-            realm,
-            identity,
-            realms.resolve_expected(
+        same_target = (
+            isinstance(previous, dict)
+            and previous["identity"]["agentId"] == identity["agentId"]
+            and previous["identity"]["environmentId"] == identity["environmentId"]
+        )
+        admin_setup = previous.get("adminSetup") if same_target else None
+        if not isinstance(admin_setup, dict):
+            admin_setup = realms.new_admin_setup(_realm_admin_case(context, identity))
+        if admin_setup["case"] == realms.ADMIN_CASE_REUSE:
+            expected = realms.resolve_expected(
                 identity,
                 dev_reference=_realm_dev_reference(context),
                 previous=(previous or {}).get("expected"),
                 provided=_realm_expected_args(args),
                 admin_confirmed=args.admin_confirmed,
-            ),
+            )
+        else:
+            expected = (
+                previous["expected"]
+                if same_target
+                else {
+                    "values": {},
+                    "sources": {},
+                    "adminConfirmed": False,
+                    "devRecordDifferences": [],
+                }
+            )
+        target = realms.record_target(
+            registry, realm, identity, expected, admin_setup
         )
+        if admin_setup["case"] == realms.ADMIN_CASE_INDEPENDENT:
+            _realm_apply_independent_args(target, args)
         realms.save_registry(root, registry)
     else:
         realm = args.realm
@@ -12213,21 +12324,27 @@ def _run_realm_command(
             raise ServiceNowConnectError(
                 f"The {realm.title()} realm has not been discovered yet."
             )
-        if command == "check-realm":
-            target = realms.update_expected(
-                registry,
-                realm,
-                realms.resolve_expected(
-                    target["identity"],
-                    dev_reference=_realm_dev_reference(context),
-                    previous=target["expected"],
-                    provided=_realm_expected_args(args),
-                    admin_confirmed=args.admin_confirmed,
-                ),
-            )
+        if command == "record-realm-admin":
+            _record_realm_admin(context, target, args)
+        elif command == "check-realm":
+            if realms.admin_case(target) == realms.ADMIN_CASE_INDEPENDENT:
+                _realm_apply_independent_args(target, args)
+            else:
+                target = realms.update_expected(
+                    registry,
+                    realm,
+                    realms.resolve_expected(
+                        target["identity"],
+                        dev_reference=_realm_dev_reference(context),
+                        previous=target["expected"],
+                        provided=_realm_expected_args(args),
+                        admin_confirmed=args.admin_confirmed,
+                    ),
+                )
 
-    if command in {"discover-realm-target", "check-realm"}:
-        _realm_run_checks(context, target)
+    if command in {"discover-realm-target", "check-realm", "record-realm-admin"}:
+        if realms.independent_pending(target) is None:
+            _realm_run_checks(context, target)
     else:
         realms.record_validation(
             target,
@@ -12238,6 +12355,72 @@ def _run_realm_command(
         )
     realms.save_registry(root, registry)
     return _realm_check_result(context, registry, realm)
+
+
+def _realm_apply_independent_args(
+    target: dict[str, Any],
+    args: argparse.Namespace,
+) -> None:
+    if getattr(args, "expected_client_id", None) or getattr(
+        args, "admin_confirmed", False
+    ):
+        raise realms.ServiceNowRealmError(
+            "This destination runs its own administrator setup, so the "
+            "Client ID comes from the Microsoft Entra administrator's reply "
+            "and is never typed in by the maker."
+        )
+    if getattr(args, "expected_instance", None):
+        realms.set_independent_instance(target, args.expected_instance)
+
+
+def _record_realm_admin(
+    context: dict[str, Any],
+    target: dict[str, Any],
+    args: argparse.Namespace,
+) -> None:
+    if realms.admin_case(target) != realms.ADMIN_CASE_INDEPENDENT:
+        raise realms.ServiceNowRealmError(
+            "This destination reuses the administrator-confirmed setup from "
+            "Dev, so no administrator reply is needed."
+        )
+    if args.stage == "entra":
+        if not args.client_id or not args.claim_name:
+            raise ServiceNowConnectError(
+                "The Microsoft Entra administrator's reply needs the "
+                "Application (client) ID and one User Claim name."
+            )
+        claim = _safe_identity_name(args.claim_name, "user_claim")
+        if claim.casefold() == "aud":
+            raise ServiceNowConnectError(
+                "The aud audience claim cannot be selected as the "
+                "user-matching User Claim."
+            )
+        if args.directory_tenant_id is not None and (
+            _normalize_directory_tenant_id(args.directory_tenant_id)
+            != _normalize_directory_tenant_id(context["environment"]["tenant_id"])
+        ):
+            raise ServiceNowConnectError(
+                "The confirmed Directory tenant ID does not match the "
+                "current target tenant."
+            )
+        realms.record_admin_entra(
+            target,
+            client_id=normalize_client_id(args.client_id),
+            claim_name=claim,
+        )
+        return
+    if not args.user_field or not _SAFE_USER_FIELD.fullmatch(
+        str(args.user_field).strip()
+    ):
+        raise ServiceNowConnectError(
+            "The ServiceNow administrator's reply needs the actual internal "
+            "sys_user field name."
+        )
+    realms.record_admin_servicenow(
+        target,
+        user_field=str(args.user_field).strip(),
+        confirmed=bool(args.confirm_saved_mapping),
+    )
 
 
 def run_realm_command(
@@ -12772,6 +12955,26 @@ def build_parser() -> argparse.ArgumentParser:
             "connector",
             "unexpected",
         ),
+    )
+    realm_admin_parser = subparsers.add_parser(
+        "record-realm-admin",
+        help=(
+            "Record an administrator reply for a destination that runs its "
+            "own administrator setup, then run the checks."
+        ),
+    )
+    realm_admin_parser.add_argument(
+        "--realm", choices=("test", "prod"), required=True
+    )
+    realm_admin_parser.add_argument(
+        "--stage", choices=("entra", "servicenow"), required=True
+    )
+    realm_admin_parser.add_argument("--client-id")
+    realm_admin_parser.add_argument("--claim-name")
+    realm_admin_parser.add_argument("--user-field")
+    realm_admin_parser.add_argument("--directory-tenant-id")
+    realm_admin_parser.add_argument(
+        "--confirm-saved-mapping", action="store_true"
     )
     select_realm_parser = subparsers.add_parser(
         "select-realm",

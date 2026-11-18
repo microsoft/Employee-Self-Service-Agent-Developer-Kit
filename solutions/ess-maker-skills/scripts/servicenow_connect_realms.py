@@ -884,19 +884,235 @@ def foundation_reused(expected: Mapping[str, Any]) -> bool:
     return all(sources.get(key) == "dev-record" for key in EXPECTED_KEYS)
 
 
+ADMIN_CASE_REUSE = "dev-reuse"
+ADMIN_CASE_INDEPENDENT = "independent"
+ADMIN_EXPLANATIONS = {
+    ADMIN_CASE_REUSE: (
+        "We'll reuse the administrator-confirmed sign-in setup and employee "
+        "mapping from Dev for this ServiceNow instance. You don't need to ask "
+        "your administrators again. We'll only check the {label} connection, "
+        "topics, portal URL, and a real-data test."
+    ),
+    ADMIN_CASE_INDEPENDENT: (
+        "We couldn't find a completed Dev setup for this agent, so we'll run "
+        "the full ServiceNow setup for {label}. We'll start with your "
+        "administrators, then check the connection, topics, and portal."
+    ),
+}
+ADMIN_STEPS = ("instance", "entra", "servicenow")
+
+
+def _confirmed_handoff(
+    handoffs: Mapping[str, Any],
+    phase: str,
+) -> Mapping[str, Any]:
+    record = handoffs.get(phase)
+    if not isinstance(record, Mapping) or record.get("status") not in (
+        "completed",
+        "reused",
+    ):
+        return {}
+    evidence = record.get("evidence")
+    return evidence if isinstance(evidence, Mapping) else {}
+
+
+def dev_admin_setup_complete(
+    state: Mapping[str, Any],
+    tenant_id: str | None = None,
+) -> bool:
+    """True only when Dev holds every administrator-confirmed value.
+
+    The administrator-confirmed instance, the Entra Client ID with its User
+    Claim, and the ServiceNow employee mapping (User Field) must all be
+    recorded for the same tenant. Any gap means the full administrator flow.
+    """
+    if tenant_id is not None:
+        recorded_tenant = str(state.get("tenantId") or "").strip().casefold()
+        if recorded_tenant != str(tenant_id).strip().casefold():
+            return False
+    setup = state.get("adminSetup")
+    setup = setup if isinstance(setup, Mapping) else {}
+    preflight = setup.get("preflight")
+    preflight = preflight if isinstance(preflight, Mapping) else {}
+    handoffs = setup.get("phaseHandoffs")
+    handoffs = handoffs if isinstance(handoffs, Mapping) else {}
+    instance_confirmed = bool(_normalize_instance(preflight.get("instanceName"))) and (
+        (
+            preflight.get("instanceSource") == "maker-confirmed"
+            and bool(preflight.get("recordedAt"))
+        )
+        or bool(_confirmed_handoff(handoffs, "preflight"))
+    )
+    entra = _confirmed_handoff(handoffs, "entra-registration")
+    mapping = _confirmed_handoff(handoffs, "servicenow-oidc")
+    try:
+        _guid(entra.get("clientId"), "client ID")
+    except ServiceNowRealmError:
+        return False
+    return (
+        instance_confirmed
+        and bool(str(entra.get("selectedClaimName") or "").strip())
+        and bool(str(mapping.get("serviceNowUserField") or "").strip())
+    )
+
+
+def new_admin_setup(case: str) -> dict[str, Any]:
+    if case == ADMIN_CASE_REUSE:
+        return {"case": ADMIN_CASE_REUSE}
+    return {
+        "case": ADMIN_CASE_INDEPENDENT,
+        "entra": {"status": "pending"},
+        "servicenow": {"status": "pending"},
+    }
+
+
+def admin_case(target: Mapping[str, Any]) -> str:
+    setup = target.get("adminSetup")
+    if isinstance(setup, Mapping) and setup.get("case") in ADMIN_EXPLANATIONS:
+        return str(setup["case"])
+    return (
+        ADMIN_CASE_REUSE
+        if foundation_reused(target.get("expected", {}))
+        else ADMIN_CASE_INDEPENDENT
+    )
+
+
+def _admin_setup(target: dict[str, Any]) -> dict[str, Any]:
+    setup = target.get("adminSetup")
+    if not isinstance(setup, dict) or setup.get("case") != ADMIN_CASE_INDEPENDENT:
+        setup = new_admin_setup(ADMIN_CASE_INDEPENDENT)
+        target["adminSetup"] = setup
+    setup.setdefault("entra", {"status": "pending"})
+    setup.setdefault("servicenow", {"status": "pending"})
+    return setup
+
+
+def independent_pending(target: Mapping[str, Any]) -> str | None:
+    """First administrator step still open for an independent run."""
+    if admin_case(target) != ADMIN_CASE_INDEPENDENT:
+        return None
+    setup = target.get("adminSetup")
+    setup = setup if isinstance(setup, Mapping) else {}
+    entra = setup.get("entra") if isinstance(setup.get("entra"), Mapping) else {}
+    mapping = (
+        setup.get("servicenow") if isinstance(setup.get("servicenow"), Mapping) else {}
+    )
+    if not setup.get("instanceName"):
+        return "instance"
+    if entra.get("status") != "confirmed":
+        return "entra"
+    if mapping.get("status") != "confirmed":
+        return "servicenow"
+    return None
+
+
+def _reset_stages(target: dict[str, Any]) -> None:
+    target["stages"] = {stage_id: {"status": "pending"} for stage_id in STAGE_IDS}
+
+
+def sync_independent_expected(target: dict[str, Any]) -> None:
+    """Derive the expected values from the administrator replies only."""
+    setup = _admin_setup(target)
+    values: dict[str, str] = {}
+    sources: dict[str, str] = {}
+    if setup.get("instanceName"):
+        values["instanceName"] = str(setup["instanceName"])
+        sources["instanceName"] = "maker"
+    if setup["entra"].get("status") == "confirmed":
+        values["clientId"] = str(setup["entra"]["clientId"])
+        sources["clientId"] = "entra-administrator"
+    previous = target.get("expected", {}).get("values")
+    target["expected"] = {
+        "values": values,
+        "sources": sources,
+        "adminConfirmed": setup["servicenow"].get("status") == "confirmed",
+        "devRecordDifferences": [],
+    }
+    if previous != values:
+        _reset_stages(target)
+
+
+def set_independent_instance(target: dict[str, Any], instance: str) -> None:
+    setup = _admin_setup(target)
+    normalized = _normalize_provided({"instanceName": instance})["instanceName"]
+    if setup.get("instanceName") != normalized:
+        setup["instanceName"] = normalized
+        setup["entra"] = {"status": "pending"}
+        setup["servicenow"] = {"status": "pending"}
+    sync_independent_expected(target)
+
+
+def record_admin_entra(
+    target: dict[str, Any],
+    *,
+    client_id: str,
+    claim_name: str,
+) -> None:
+    setup = _admin_setup(target)
+    if not setup.get("instanceName"):
+        raise ServiceNowRealmError(
+            "We need the ServiceNow instance name before the Microsoft Entra "
+            "administrator's reply can be recorded."
+        )
+    normalized_id = _guid(client_id, "The Entra application (client) ID").casefold()
+    previous = setup["entra"]
+    if (
+        previous.get("status") != "confirmed"
+        or previous.get("clientId") != normalized_id
+        or previous.get("claimName") != claim_name
+    ):
+        setup["servicenow"] = {"status": "pending"}
+    setup["entra"] = {
+        "status": "confirmed",
+        "clientId": normalized_id,
+        "claimName": claim_name,
+        "recordedAt": _utc_now(),
+    }
+    sync_independent_expected(target)
+
+
+def record_admin_servicenow(
+    target: dict[str, Any],
+    *,
+    user_field: str,
+    confirmed: bool,
+) -> None:
+    setup = _admin_setup(target)
+    if setup["entra"].get("status") != "confirmed":
+        raise ServiceNowRealmError(
+            "The Microsoft Entra administrator's reply comes first; the "
+            "ServiceNow administrator's mapping depends on it."
+        )
+    if not confirmed:
+        raise ServiceNowRealmError(
+            "We still need your ServiceNow administrator to confirm that the "
+            "configuration is saved and that the User Field holds exactly "
+            "the same value as the User Claim."
+        )
+    setup["servicenow"] = {
+        "status": "confirmed",
+        "userField": user_field,
+        "recordedAt": _utc_now(),
+    }
+    sync_independent_expected(target)
+
+
 def record_target(
     registry: dict[str, Any],
     realm: str,
     identity: Mapping[str, str],
     expected: Mapping[str, Any],
+    admin_setup: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     previous = registry["targets"].get(realm)
-    same_target = (
+    same_identity = (
         isinstance(previous, dict)
         and previous.get("identity", {}).get("agentId") == identity["agentId"]
         and previous.get("identity", {}).get("environmentId")
         == identity["environmentId"]
-        and previous.get("expected", {}).get("values") == expected.get("values")
+    )
+    same_target = same_identity and (
+        previous.get("expected", {}).get("values") == expected.get("values")
     )
     target = {
         "identity": dict(identity),
@@ -908,6 +1124,10 @@ def record_target(
             else {stage_id: {"status": "pending"} for stage_id in STAGE_IDS}
         ),
     }
+    if admin_setup is not None:
+        target["adminSetup"] = copy.deepcopy(dict(admin_setup))
+    elif same_identity and isinstance(previous.get("adminSetup"), dict):
+        target["adminSetup"] = copy.deepcopy(previous["adminSetup"])
     registry["targets"][realm] = target
     registry["activeTargetRealm"] = realm
     return target
@@ -1425,6 +1645,24 @@ def _test_pane_request(label: str, context: Mapping[str, Any]) -> str:
     return "\n\n".join(paragraphs)
 
 
+def _admin_fallback(waiting: str) -> str:
+    if waiting == "instance":
+        return (
+            "What is your ServiceNow instance name, for example `contoso`? "
+            "We need it before we can prepare the Microsoft Entra "
+            "administrator's message."
+        )
+    if waiting == "entra":
+        return (
+            "Send the Microsoft Entra administrator message to your "
+            "administrator, then paste their reply here without secrets."
+        )
+    return (
+        "Send the ServiceNow administrator message to your administrator, "
+        "then paste their reply here without secrets."
+    )
+
+
 def render_realm_block(
     registry: Mapping[str, Any],
     realm: str,
@@ -1452,6 +1690,33 @@ def render_realm_block(
     portal = pending
     real_data = ("⬜", "Not started")
     instruction: str | None = None
+
+    case = admin_case(target)
+    admin_rows: list[tuple[str, tuple[str, str]]] = []
+    if case == ADMIN_CASE_INDEPENDENT:
+        waiting = independent_pending(target)
+        entra = ("✅", "Confirmed")
+        mapping = ("✅", "Confirmed")
+        if waiting == "instance":
+            entra = ("⏳", "Waiting for the ServiceNow instance name")
+            mapping = ("⬜", "Not started")
+        elif waiting == "entra":
+            entra = ("⏳", "Waiting for the administrator's reply")
+            mapping = ("⬜", "Not started")
+        elif waiting == "servicenow":
+            mapping = ("⏳", "Waiting for the administrator's reply")
+        admin_rows = [
+            ("Microsoft Entra administrator (Client ID and claim)", entra),
+            (
+                "ServiceNow administrator (employee mapping / User Field)",
+                mapping,
+            ),
+        ]
+        if waiting is not None:
+            instruction = str(
+                (context.get("adminInstruction") or {}).get(waiting)
+                or _admin_fallback(waiting)
+            )
 
     status = connections.get("status")
     if status == "done":
@@ -1514,12 +1779,18 @@ def render_realm_block(
 
     rows = [
         ("Permission to configure this agent", permission),
+        *admin_rows,
         ("ServiceNow connection", connection),
         ("Topics", topics),
         ("Portal URL", portal),
         ("Real-data test in the Test pane", real_data),
     ]
-    lines = [f"**ServiceNow validation: {agent} in {label}**", ""]
+    lines = [
+        f"**ServiceNow validation: {agent} in {label}**",
+        "",
+        ADMIN_EXPLANATIONS[case].format(label=label),
+        "",
+    ]
     lines += [f"{icon} {name} — {text}" for name, (icon, text) in rows]
     footer = instruction or context.get("footer")
     if footer:
@@ -1542,6 +1813,9 @@ def realm_status(
                 for key in ("environmentId", "agentId", "agentSchemaName")
             }
             targets[realm]["expected"] = expected_summary(recorded["expected"])
+            targets[realm]["adminCase"] = admin_case(recorded)
+            if admin_case(recorded) == ADMIN_CASE_INDEPENDENT:
+                targets[realm]["adminPending"] = independent_pending(recorded)
     phases: list[dict[str, Any]] = []
     next_phase = None
     recorded = registry["targets"].get(active)
@@ -1578,5 +1852,9 @@ def realm_status(
     if render is not None:
         text = render_realm_block(registry, active, render)
         if text is not None:
-            result["renderBlock"] = {"kind": "realm-checklist", "text": text}
+            result["renderBlock"] = {
+                "kind": "realm-checklist",
+                "case": admin_case(registry["targets"][active]),
+                "text": text,
+            }
     return result

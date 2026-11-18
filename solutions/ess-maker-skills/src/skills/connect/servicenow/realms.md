@@ -24,19 +24,57 @@ realm never change a realm's recorded state.
   its own agent, its own topics, and its own portal URL. Never suggest reusing
   the Dev connection.
 - Expected values are the ServiceNow instance and the Microsoft Entra
-  application (client) ID. Keep administrator-confirmed values only when they
-  are reliably associated with this agent and tenant and still apply to the
-  shared ServiceNow instance. When the Dev record holds such confirmed values
-  for the same tenant, the controller uses them as a reference and reports any
-  difference. Ask the maker only for what is missing or stale, then have the
-  ServiceNow administrator confirm it. Do not re-issue an administrator
-  handoff automatically.
+  application (client) ID. The controller decides from the recorded Dev
+  lifecycle, never from the model, which of two cases applies, and returns the
+  case in `renderBlock.case` and its explanation in `renderBlock.text`:
+  - **Dev reuse (`dev-reuse`):** the Dev record holds the
+    administrator-confirmed instance, Entra Client ID and User Claim, and the
+    employee mapping (User Field) for this agent and tenant. Do not run any
+    administrator handoff. The block explains that the setup is reused and then
+    shows the checklist.
+  - **Independent (`independent`):** there is no Dev record, or it lacks any one
+    of those confirmed values, for example a missing employee mapping or a
+    different tenant. Run the full administrator flow for the destination, then
+    the checks. Partial reuse is never offered. The block shows the two
+    administrator rows before the connection check and, for the one open step,
+    the question or the ready-to-send administrator message (see
+    [Independent administrator flow](#independent-administrator-flow)).
 - The required ServiceNow topics must be turned on in the promoted realm. They
   are not compared with Dev's topic states.
 - We do not promote or publish an agent. In Test and Production we only read
   topic states and the portal value and never change them. A fix belongs in
   Dev, followed by a new promotion through the maker's own deployment process
   and a new check.
+
+### Independent administrator flow
+
+Emit the block verbatim; it already carries the one open step. Do not write
+your own administrator message and never ask the maker for a tenant ID.
+
+1. **ServiceNow instance.** The block asks for the instance name. Rerun
+   `check-realm --realm {test|prod} --expected-instance "{INSTANCE}"` with the
+   maker's answer.
+2. **Microsoft Entra administrator.** The block carries the same message as Dev.
+   When the maker pastes the reply, run:
+
+   ```text
+   python scripts/connect_servicenow_da.py --provider {SELECTED_PROVIDER} --agent-slug {SELECTED_AGENT_SLUG} record-realm-admin --realm {test|prod} --stage entra --client-id "{CLIENT_ID}" --claim-name "{CLAIM_NAME}"
+   ```
+
+3. **ServiceNow administrator.** The block carries the same message as Dev,
+   filled with the recorded Client ID and User Claim. When the maker pastes the
+   reply, and only after the administrator confirmed that the configuration is
+   saved and that the User Field holds the same value as the User Claim, run:
+
+   ```text
+   python scripts/connect_servicenow_da.py --provider {SELECTED_PROVIDER} --agent-slug {SELECTED_AGENT_SLUG} record-realm-admin --realm {test|prod} --stage servicenow --user-field "{USER_FIELD}" --confirm-saved-mapping
+   ```
+
+The checks run once both replies are recorded. Never pass `--expected-client-id`
+or `--admin-confirmed` in an independent run; the Client ID comes only from the
+Entra administrator's reply. A claim named `aud` is rejected. When the maker
+replies "Done" for any step, run `check-realm --realm {test|prod}`; only that
+step is expected to change.
 
 ## Resolve the realm
 
@@ -132,9 +170,10 @@ waits for Dev to be Ready, and Production does not wait for Test.
   ```
 
 Both commands, and `check-realm`, also accept `--expected-instance
-"{INSTANCE}"`, `--expected-client-id "{CLIENT_ID}"` and `--admin-confirmed`.
-Pass them only for values the maker gave you, and pass `--admin-confirmed` only
-after the ServiceNow administrator confirmed those values.
+"{INSTANCE}"`. In the Dev reuse case they also accept `--expected-client-id
+"{CLIENT_ID}"` and `--admin-confirmed`; pass those only for values the maker
+gave you, and `--admin-confirmed` only after the ServiceNow administrator
+confirmed them. An independent run rejects both; use `record-realm-admin`.
 
 The controller reads the realm from the agent and proves the exact promoted
 sibling of the recorded Dev agent: same agent, ALM family, schema, deployed
@@ -160,25 +199,30 @@ After discovery succeeds, `discover-realm-target`, `check-realm`,
 `realm-status`, `select-realm`, and `record-realm-test` each return
 `renderBlock.text`: a step checklist for the active Test or Prod run. Emit it
 verbatim as an assistant message before any other tool call. Never write your
-own checklist, status table, or item list, and do not paraphrase its rows or
-its instruction. Use `phases` and `nextPhaseId` only to decide what to do next.
+own checklist, status table, or item list, and do not paraphrase its rows, its
+explanation, or its instruction. Use `phases` and `nextPhaseId` only to decide
+what to do next.
 
-The checklist uses the same icons as the Dev view: ✅ done, ⏳ waiting, ❌ needs
-attention, ⬜ not checked yet. Its steps are permission to configure the agent,
-the ServiceNow connection, topics, the portal URL, and the real-data test in the
-Test pane. The checks are read-only API reads. They stop at the first step that
-needs attention, so later steps stay ⬜. When a step needs attention, the block
-ends with that step's own instruction; emit it as part of the block. When the
-maker replies "Done", run `check-realm --realm {test|prod}` and emit the new
-block; only the step that needed attention is expected to change. When every
-check passes, the real-data row shows ⏳ Waiting for you, followed by the
+The block opens with a one-paragraph explanation of the case (Dev reuse or
+independent). The checklist uses the same icons as the Dev view: ✅ done, ⏳
+waiting, ❌ needs attention, ⬜ not checked yet. Its steps are permission to
+configure the agent, then, in an independent run only, the Microsoft Entra
+administrator and the ServiceNow administrator, then the ServiceNow connection,
+topics, the portal URL, and the real-data test in the Test pane. The
+administrator rows show ⏳ until the reply is recorded. The checks are
+read-only API reads. They stop at the first step that needs attention or is
+waiting, so later steps stay ⬜. When a step needs attention or is waiting, the
+block ends with that step's own instruction; emit it as part of the block.
+When the maker replies "Done", run `check-realm --realm {test|prod}` and emit
+the new block; only the step that needed attention is expected to change. When
+every check passes, the real-data row shows ⏳ Waiting for you, followed by the
 request to run in the Test pane.
 
 Test and Production use the same three stages, completed separately per realm.
 
 | Stage | Result |
 |---|---|
-| Connections | Read-only. Done when the connection exists in this environment, is Connected, is bound to this agent, uses Microsoft Entra ID User Login, and its instance and client ID match the expected values. When expected values are missing, ask only for the missing ones, then have the administrator confirm; do not check until confirmed. |
+| Connections | Read-only. Done when the connection exists in this environment, is Connected, is bound to this agent, uses Microsoft Entra ID User Login, and its instance and client ID match the expected values. In an independent run the checks start only after both administrator replies are recorded. |
 | Runtime configuration | Read-only. Done when the required ServiceNow topics are turned on and the portal URL is set. Otherwise the block says to go back to Dev, update the topics or portal URL, publish the agent in Dev, deploy (promote) it to the destination again through your own deployment process, and reply "Done". Nothing is edited in Test or Prod. |
 | Maker validation | The maker runs the ServiceNow scenario in this realm's Test pane. Record it with `record-realm-test --realm {test|prod} --prompt-category {CATEGORY} --result {pass|fail|untested}`. Use `untested` only when the maker chooses to finish without testing; it is never a pass, never completes validation, and a later pass or fail replaces it. |
 
@@ -462,7 +506,8 @@ what to do next.
 
 | Check | Expected result |
 |---|---|
-| Dev has no lifecycle record, then Test is checked | We ask only for the missing instance and client ID, wait for administrator confirmation, then check Test. |
+| Dev has no lifecycle record, or lacks any administrator-confirmed value, then Test is checked | The block explains that the full ServiceNow setup runs for Test, asks for the instance, then walks the Entra administrator and ServiceNow administrator steps (⏳ until each reply is recorded) before checking the connection, topics, and portal. |
+| Dev holds every administrator-confirmed value, then Test is checked | The block explains that the Dev sign-in setup and mapping are reused, shows no administrator step, and checks the Test connection, topics, portal URL, and real-data test. |
 | Connection is on in Dev but missing in Test | The checklist shows ❌ on the connection step with "Validation is paused", then Dev-style steps to create the connection in Test, ending with reply "Done". The Dev connection is never suggested. |
 | Connection exists in Test but is not bound to the agent | ❌ on the connection step; steps to select the connection under Connection Settings and save, then reply "Done". |
 | Connection in Test is disconnected | ❌ on the connection step; steps to reconnect until it shows Connected, then reply "Done". |
