@@ -41,7 +41,7 @@ Use **Push** for applying the deletion to the agent. Reserve **Publish** for the
 
 Bind the topic, agent and behavior to current evidence. Apply [Target context](experience-contract.md#target-context) to deletion and draft-discard reviews and standalone outcomes, including local-only, cancelled, failed and uncertain outcomes. Also removed lists contained content and affected local files beyond the selected topic. References needing attention identifies other topic references, evaluation dependencies and their practical consequences. Put known instruction-routing references in Routing Conflicts instead, without duplicating them in References needing attention. Inspect relevant current topics and agent instructions; local files alone do not prove there are no remote references. Omit genuinely empty sections and identify unresolved impact explicitly.
 
-Use the Create/Update heading treatment and one grouped SUGGESTED ACTIONS block after all routing conflicts. `{Deletion routing impact}` describes the dangling routing that deletion would leave, not a claim that the deleted topic should execute. Suggest the smallest instruction correction for review; do not promise to change instructions before that correction is selected and approved.
+Use the Create/Update heading treatment and [nested routing-conflict recommendations](authoring-experience.md#routing-conflicts), with one parent bullet per conflict and its recommendation in a sub-bullet. `{Deletion routing impact}` describes the dangling routing that deletion would leave, not a claim that the deleted topic should execute. Suggest the smallest instruction correction for review; do not promise to change instructions before that correction is selected and approved.
 
 > ##### DELETE TOPIC
 >
@@ -68,9 +68,7 @@ Use the Create/Update heading treatment and one grouped SUGGESTED ACTIONS block 
 > ##### ROUTING CONFLICTS
 >
 > - {Routing conflict}. {Deletion routing impact}.
->
->   ###### SUGGESTED ACTIONS
->   - {Concrete next action}.
+>   - I recommend we {Concrete next action} to resolve this.
 >
 > Pushing this deletion removes the topic from the agent and your local workspace.
 
@@ -166,7 +164,7 @@ Use the shared instruction preparation/save status definitions and instruction o
 
 ### Routing cleanup after deletion
 
-If a routing conflict is newly discovered or materially changed after deletion, report the actual deletion outcome first, then Routing Conflicts with the same grouped Suggested actions treatment. Describe the existing dangling reference rather than a future deletion consequence. Do not re-offer a correction already declined for the same unchanged conflict.
+If a routing conflict is newly discovered or materially changed after deletion, report the actual deletion outcome first, then Routing Conflicts with the same recommendation sub-bullet beneath each conflict. Describe the existing dangling reference rather than a future deletion consequence. Do not re-offer a correction already declined for the same unchanged conflict.
 
 Offer instruction-only cleanup with the separate control:
 
