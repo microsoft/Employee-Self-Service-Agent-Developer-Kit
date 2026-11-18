@@ -194,16 +194,17 @@ initiation includes the current run's Copilot Studio link.
 These flows use the existing push APIs. Dataverse push stores `review.json`
 metadata in the evaluation-parent description. New or changed native MinimalBot
 YAML uploads a **new copy with a new deployed ID**, retaining the old remote copy;
-unchanged YAML, including local review-only changes, reuses its verified copy. The preview explains
+unchanged YAML reuses its verified copy. Native review-only changes update the
+existing parent description without changing set or case IDs. The preview explains
 this before consent. Removing cases from a new native copy does not delete
 them from the old remote set.
 
-Native push uploads YAML only: review status is retained locally but is **not
-published as shared review metadata** or copied into the deployed baseline.
-Request Review and reviewer completion
-still perform the existing push in the same flow and report this limitation;
-they do not claim another user can discover the local review marker. New native
-in-place-update APIs and cross-user-review parity are not part of this change.
+Both backends publish requested/completed review status in the parent description,
+preserving human-authored text. They verify the marker before recording the
+deployed baseline or reporting shared review availability. Native review discovery
+retrieves shared sets and review status for another authorized reviewer while
+protecting unsynchronized local edits. Request Review and reviewer completion
+remain scoped push operations; neither sends notifications or starts a run.
 Files are retained when preparation or deployment cannot complete. Run
 `/evaluate` to create or manage sets and `/run` to prepare a selected set for
 execution or inspect its history/results.

@@ -1490,10 +1490,10 @@ def _minimalbot_push(
           f"{plan['componentCount']} component(s):")
     for entry in plan["sets"]:
         print(f"  • {entry['displayName']}  (cases: {entry['cases']})")
-    if plan["componentCount"]:
+    if plan["changes"]:
         print("Native Push creates a new deployed copy; existing remote copies are retained.")
-    if plan.get("reviewWarning"):
-        print(plan["reviewWarning"])
+    if plan.get("reviewChanges"):
+        print("Review-only changes update the existing set description; set and case IDs are retained.")
 
     if dry_run:
         print("\n(Dry run — no changes pushed)")

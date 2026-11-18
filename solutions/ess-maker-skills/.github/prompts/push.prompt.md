@@ -23,9 +23,9 @@ Preserve existing review state; do not create a review request, mark review
 complete, or start a run.
 Use the existing backend APIs. Explain native `new_copy`/`reuse` behavior before
 consent; a new copy gets a new deployed ID and retains the old remote copy.
-Native review sidecars remain local, not shared review metadata. Follow the
-shared guide's `reviewMetadataPersisted`/`reviewWarning` outcome rules rather
-than adding an in-place-update or remote-review prerequisite.
+Native review-only changes update the existing parent description in place.
+Follow the shared guide's readback and `reviewMetadataPersisted` outcome rules;
+do not claim shared status before verification.
 
 This branch supports standalone evaluation push even though the normal maker
 menu has no Push item. Method admission, target checks, selected-set scope,

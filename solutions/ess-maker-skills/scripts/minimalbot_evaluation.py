@@ -62,6 +62,12 @@ from evaluation_method_policy import (
     validate_evaluation_documents,
     validate_evaluation_folder,
 )
+from evaluation_review import (
+    REVIEW_REQUESTED,
+    metadata_description,
+    metadata_from_description,
+    parse_review_marker,
+)
 
 
 # Shared public client ID used across the ADK's MSAL flows (matches auth.py).
@@ -76,10 +82,6 @@ PPAPI_BASE = str(RING_CONFIG[DEFAULT_RING]["audience"])
 COMPONENTS_API_VERSION = "2022-03-01-preview"
 MAKEREVAL_API_VERSION = "2024-10-01"
 MCS_CONNECTOR = "shared_microsoftcopilotstudio"
-NATIVE_REVIEW_LOCAL_ONLY_WARNING = (
-    "Existing native Push uploads evaluation YAML only. review.json stays local "
-    "and is not published as shared review state."
-)
 _TOKEN_CACHE_PATH = os.path.join(".local", ".token_cache.bin")
 _EVAL_KINDS = {"EvaluationSet", "EvaluationData"}
 _REVIEWED_WORKDAY_TOPIC_SUFFIXES = {
@@ -135,8 +137,8 @@ def reviewed_workday_topic_schemas(
 # Shared session with bounded retry-with-backoff, mirroring auth.py /
 # powerplatform_client.py. Unlike those read-only clients this path also issues
 # mutating PUT (component insert) and POST (run) verbs, so retry safety matters:
-#   * status retries (429/5xx) are safe for every verb — the server returned a
-#     definitive "did not act" response, so replaying can't duplicate work.
+#   * status retries are limited to read-only requests: a 5xx response does not
+#     guarantee a mutation failed before committing.
 #   * connect retries are safe — the request never reached the server.
 #   * read retries are DISABLED (read=0): once a request is on the wire we must
 #     not replay it, because a lost response after a successful insert/run would
@@ -149,8 +151,9 @@ _RETRY = Retry(
     status=3,
     backoff_factor=1,
     status_forcelist=(429, 500, 502, 503, 504),
-    allowed_methods=None,  # apply the above to every verb, incl. POST/PUT
+    allowed_methods=frozenset({"GET", "HEAD", "OPTIONS"}),
     respect_retry_after_header=True,
+    raise_on_status=False,
 )
 _SESSION = requests.Session()
 _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
@@ -1295,8 +1298,8 @@ class MinimalBotEvaluationClient:
         """Push ``evaluations/<set>/`` folders under ``agent_folder``.
 
         New or changed sets use the existing fresh-copy insert contract.
-        Confirmed unchanged sets reuse their IDs. Review sidecars are retained
-        locally; this API uploads evaluation YAML, not shared review metadata.
+        Confirmed unchanged sets reuse their IDs. Review-only changes update
+        the existing parent's description without replacing the set or cases.
         """
         root = Path(agent_folder)
         eval_root = root / "evaluations"
@@ -1345,10 +1348,6 @@ class MinimalBotEvaluationClient:
                 files[f"evaluations/{folder.name}/{path.name}"] = path.read_text(
                     encoding="utf-8"
                 )
-        review_outcome: dict[str, Any] = {"reviewMetadataPersisted": False}
-        if any(path.endswith("/review.json") for path in files):
-            review_outcome["reviewWarning"] = NATIVE_REVIEW_LOCAL_ONLY_WARNING
-
         target = {
             "environmentId": self.environment_id,
             "botId": self.bot_id,
@@ -1392,6 +1391,7 @@ class MinimalBotEvaluationClient:
             )
         if plan is None:
             changes = []
+            review_changes = []
             entries = {}
             pushed_sets = []
             for folder in set_folders:
@@ -1425,7 +1425,7 @@ class MinimalBotEvaluationClient:
                             "parentBotComponentId": entry.get("parentbotcomponentid"),
                             "definition": entry["nativeDefinition"],
                         }})
-                        entries[relative] = entry
+                        entries[relative] = dict(entry)
                     parents = [
                         entry for entry in (component_map[path] for path in relative_paths)
                         if not entry.get("parentbotcomponentid")
@@ -1434,6 +1434,21 @@ class MinimalBotEvaluationClient:
                         raise MinimalBotEvaluationError("Native parent identity is ambiguous.")
                     parent_id = parents[0]["botcomponentid"]
                     display_name = parents[0]["name"]
+                    review_path = f"evaluations/{folder.name}/review.json"
+                    if review_path in files:
+                        description = metadata_description(files[review_path])
+                        parent_relative = next(
+                            path for path in relative_paths
+                            if component_map[path]["botcomponentid"] == parent_id
+                        )
+                        if description != (parents[0].get("description") or ""):
+                            review_changes.append({
+                                "componentId": parent_id,
+                                "schemaName": parents[0]["schemaname"],
+                                "expectedDescription": parents[0].get("description") or "",
+                                "description": description,
+                            })
+                        entries[parent_relative]["description"] = description
                 else:
                     folder_changes, parent_id, display_name = self._folder_changes(folder)
                     parents = [
@@ -1452,7 +1467,7 @@ class MinimalBotEvaluationClient:
                             "componenttype": 19,
                             "schemaname": component["schemaName"],
                             "name": display_name if path in parents else path.stem,
-                            "description": "",
+                            "description": component.get("description") or "",
                             "nativeDefinition": component["definition"],
                             "nativeTarget": target,
                         }
@@ -1466,20 +1481,44 @@ class MinimalBotEvaluationClient:
             plan = {
                 "target": target, "fingerprint": fingerprint, "files": files,
                 "changes": changes, "entries": entries, "sets": pushed_sets,
-                "componentCount": len(changes),
+                "reviewChanges": review_changes,
+                "componentCount": len(changes) + len(review_changes),
                 "tracking": tracking,
             }
         if set(plan.get("files", {})) != set(files) or plan.get("files") != files:
             raise MinimalBotEvaluationError("The native plan does not match selected files.")
         if dry_run:
-            return {**plan, "dryRun": True, "status": "ready", **review_outcome}
+            return {**plan, "dryRun": True, "status": "ready",
+                    "reviewMetadataPersisted": False}
 
         before = self.read_components()
         expected = self._expected_components(plan)
         inserted_ids = {_component_id(change) for change in plan["changes"]}
         actual = self._remote_components(before)
         existing_ids = set(expected) - inserted_ids
-        self._verify_components(expected, actual, existing_ids)
+        review_changes = plan.get("reviewChanges", [])
+        before_expected = copy.deepcopy(expected)
+        updates = []
+        for change in review_changes:
+            component_id = change["componentId"]
+            component = actual.get(component_id)
+            if (
+                component is None
+                or component.get("$kind") != "TestCaseComponent"
+                or component.get("schemaName") != change["schemaName"]
+            ):
+                raise MinimalBotEvaluationError("Native review parent identity changed.")
+            description = component.get("description") or ""
+            if description not in (change["expectedDescription"], change["description"]):
+                raise MinimalBotEvaluationError(
+                    "Remote review description changed. Refresh/reconcile before pushing."
+                )
+            before_expected[component_id]["description"] = description
+            if description != change["description"]:
+                updated = copy.deepcopy(component)
+                updated["description"] = change["description"]
+                updates.append({"$kind": "BotComponentUpdate", "component": updated})
+        self._verify_components(before_expected, actual, existing_ids)
         present_new = inserted_ids & set(actual)
         if present_new:
             self._verify_components(expected, actual, inserted_ids)
@@ -1488,7 +1527,13 @@ class MinimalBotEvaluationClient:
                 "The prior native write has an uncertain outcome and its IDs "
                 "are not visible. No automatic replay was performed."
             )
-        if inserted_ids and not present_new:
+        if pending and updates:
+            raise MinimalBotEvaluationError(
+                "The prior native review write has an uncertain outcome. "
+                "No automatic replay was performed; reconcile its description first."
+            )
+        writes = ([] if present_new else plan["changes"]) + updates
+        if writes:
             change_token = str(before.get("changeToken") or "")
             if not change_token:
                 raise MinimalBotEvaluationError(
@@ -1499,7 +1544,7 @@ class MinimalBotEvaluationClient:
                 "PUT", self._components_url,
                 body={
                     "changeToken": change_token,
-                    "botComponentChanges": plan["changes"],
+                    "botComponentChanges": writes,
                     "connectionReferenceChanges": [],
                     "connectorDefinitionChanges": [],
                 },
@@ -1532,7 +1577,7 @@ class MinimalBotEvaluationClient:
                 "committed; local synchronization was not recorded."
             )
         self._commit_tracking(root, plan)
-        if inserted_ids and pending_path.exists():
+        if (inserted_ids or review_changes) and pending_path.exists():
             saved_pending = self._read_tracking(pending_path)
             if saved_pending.get("fingerprint") != fingerprint or saved_pending.get("target") != target:
                 raise MinimalBotEvaluationError(
@@ -1541,11 +1586,11 @@ class MinimalBotEvaluationClient:
             pending_path.unlink()
         return {
             "dryRun": False,
-            "status": "pushed" if inserted_ids else "up_to_date",
+            "status": "pushed" if inserted_ids or review_changes else "up_to_date",
             "sets": plan["sets"],
-            "componentCount": len(plan["changes"]),
+            "componentCount": len(plan["changes"]) + len(review_changes),
             "verifiedComponents": len(expected),
-            **review_outcome,
+            "reviewMetadataPersisted": True,
         }
 
     @staticmethod
@@ -1601,6 +1646,8 @@ class MinimalBotEvaluationClient:
             entry["botcomponentid"]: {
                 "definition": entry["nativeDefinition"],
                 "parentBotComponentId": entry.get("parentbotcomponentid"),
+                **({"description": entry.get("description") or ""}
+                   if not entry.get("parentbotcomponentid") else {}),
             }
             for entry in entries.values()
         }
@@ -1633,10 +1680,12 @@ class MinimalBotEvaluationClient:
                 remote is None
                 or remote.get("definition") != wanted["definition"]
                 or remote.get("parentBotComponentId") != wanted.get("parentBotComponentId")
+                or ("description" in wanted and (remote.get("description") or "")
+                    != wanted["description"])
             ):
                 raise MinimalBotEvaluationError(
                     f"Native verification failed for component {component_id}: "
-                    "missing component, different definition, or parent mismatch."
+                    "missing component, different definition/description, or parent mismatch."
                 )
         for parent_id in ids:
             if expected[parent_id].get("parentBotComponentId"):
@@ -1670,19 +1719,20 @@ class MinimalBotEvaluationClient:
                     if (
                         path.is_file()
                         and (path.name.endswith(".mcs.yml") or path.name == "review.json")
-                        and (
-                            path.name == "review.json"
-                            or path.relative_to(root / ".baseline").as_posix() not in plan["files"]
-                        )
+                        and path.relative_to(root / ".baseline").as_posix() not in plan["files"]
                     ):
                         path.unlink()
-            # Only uploaded YAML belongs in the deployed baseline; sidecars stay local.
             for relative, content in plan["files"].items():
-                if relative.endswith("/review.json"):
-                    continue
                 path = root / ".baseline" / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 _atomic_write_text(str(path), content)
+            for relative, entry in plan["entries"].items():
+                if entry.get("parentbotcomponentid"):
+                    continue
+                metadata = metadata_from_description(entry.get("description"))
+                review_path = root / ".baseline" / Path(relative).parent / "review.json"
+                if metadata and not review_path.exists():
+                    _atomic_write_text(str(review_path), json.dumps(metadata, indent=2) + "\n")
             self._write_tracking(root / ".component-map.json", component_map)
         except OSError as exc:
             raise MinimalBotEvaluationError(
@@ -1772,6 +1822,11 @@ class MinimalBotEvaluationClient:
                 "extensionData": {"UseProvidedBotComponentId": True},
             },
         }]
+        review_path = folder / "review.json"
+        if review_path.is_file():
+            changes[0]["component"]["description"] = metadata_description(
+                review_path.read_text(encoding="utf-8")
+            )
 
         for case_path, case_document in cases:
             case_id = str(uuid.uuid4())
@@ -1816,6 +1871,7 @@ class MinimalBotEvaluationClient:
                 "id": str(component.get("id") or ""),
                 "displayName": _component_name(component),
                 "schemaName": str(component.get("schemaName") or ""),
+                "description": component.get("description") or "",
                 "runnable": True,
             })
         return sets
@@ -1912,6 +1968,11 @@ class MinimalBotEvaluationClient:
             raise MinimalBotEvaluationError(
                 "The selected deployed evaluation parent was not found on this agent."
             )
+        if (parse_review_marker(parent.get("description")) or {}).get("status") == REVIEW_REQUESTED:
+            raise MinimalBotEvaluationError(
+                "This test set is tagged for review and cannot run until "
+                "the review is explicitly completed and pushed."
+            )
         children = [
             component.get("definition")
             for component in deployed.values()
@@ -1953,10 +2014,14 @@ class MinimalBotEvaluationClient:
             response.headers.get("x-ms-service-request-id")
             or response.headers.get("x-ms-request-id")
         )
+        correlation_id = response.headers.get("x-ms-correlation-id")
         if response.status_code != 202:
             raise MinimalBotEvaluationError(
                 f"MinimalBot evaluation run failed (HTTP {response.status_code}): "
-                f"{result}"
+                f"{result}. Service request ID: {service_request_id or 'unavailable'}; "
+                f"correlation ID: {correlation_id or 'unavailable'}. "
+                "Check run history before retrying; the request may have reached "
+                "the service. Do not repeat the run blindly."
             )
         run_id = ""
         if isinstance(result, dict):
@@ -1976,7 +2041,7 @@ class MinimalBotEvaluationClient:
             "runName": body["evaluationRunName"],
             "status": response.status_code,
             "serviceRequestId": service_request_id,
-            "correlationId": response.headers.get("x-ms-correlation-id"),
+            "correlationId": correlation_id,
             "startedAt": now.isoformat(),
             "response": result,
         }

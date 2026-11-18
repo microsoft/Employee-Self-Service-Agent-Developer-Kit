@@ -71,13 +71,13 @@ def test_native_review_discovery_never_routes_to_dataverse():
         '`releaseLine: "da"`',
         "`powerPlatformApiEndpoint`",
         "no `dataverseEndpoint`",
-        "python scripts/evaluation_review.py --list-all",
-        "select rows whose `localStatus` is `review_requested`",
+        "python scripts/evaluation_review.py --list --status review_requested",
+        "refresh shared native evaluation definitions and review descriptions",
         "never invoke Dataverse MCP",
         "A Dataverse authentication prompt in this branch is a routing error",
     ):
         assert fragment in review_skill
-    assert "native DA agents use local-inclusive review discovery" in review_prompt
+    assert "native DA agents use native shared-review discovery" in review_prompt
     assert "must never trigger Dataverse MCP authentication" in review_prompt
 
 
@@ -119,7 +119,16 @@ def test_reviewer_recommendations_return_ownership_to_maker():
     assert "The reviewer does not edit the test-case source files" in normalized
     assert "The maker should apply the official test-case changes" in normalized
     assert "Recommendations alone do not modify the test-set files" in normalized
-    assert "Do not claim that conversational recommendations were automatically written" in normalized
+    assert '--add-feedback "{feedback checklist}"' in normalized
+    assert "Report feedback as saved in Copilot Studio only after its push is verified" in normalized
+    assert "**Reviewer feedback for {set name}**" in normalized
+    r1_menu = normalized.split("This has not run the evaluation or sent a reviewer notification.", 1)[1]
+    r1_menu = r1_menu.split("On failure/cancellation", 1)[0]
+    assert r1_menu.index("**Work on another test set**") < r1_menu.index("**Not now**")
+    assert "Continue editing a different test set that's still in progress." in r1_menu
+    assert "Come back when you're ready to run the tests." in r1_menu
+    assert "**Run this test set**" not in r1_menu
+    assert "Do not claim that recommendations were written to the test-case source files" in normalized
 
 
 def test_evaluation_push_is_scoped_and_warns_about_replacement_deletions():
@@ -139,6 +148,9 @@ def test_evaluation_push_is_scoped_and_warns_about_replacement_deletions():
     assert "On Dataverse, explain that pushing a replacement" in deployment
     assert "new-copy behavior and old-copy retention instead" in deployment
     assert "not case omissions in a native new copy" in deployment
+    assert "the **Mark review complete** choice is the consent" in deployment
+    assert '"publish the completed review status?"' in deployment
+    assert "Never raise it while the user works on a different set" in " ".join(update_skill.split())
 
 
 def test_review_requested_update_resolves_review_before_push():
@@ -155,9 +167,9 @@ def test_review_requested_update_resolves_review_before_push():
     assert "review is finished" in update_skill
     assert "When this push records `review_completed`" in update_skill
     assert "You can now run this test set" in update_skill
-    assert "on Dataverse and verifies it" in normalized
-    assert "For native success, report the actual deployed ID and local completion" in normalized
-    assert "Do not say completion was published to other users" in normalized
+    assert "on either backend and verifies it" in normalized
+    assert "For native success, report the actual deployed ID and verified shared completion" in normalized
+    assert "`reviewMetadataPersisted=true`" in normalized
 
 
 def test_review_requested_resume_does_not_imply_review_completion():
@@ -198,8 +210,8 @@ def test_review_tagging_explains_collaboration_meaning():
     assert "inspect and provide feedback, suggestions, or" in update_skill
     assert "The maker remains responsible for editing the test set" in update_skill
     assert "tag must be pushed to Copilot Studio before it is shared" in normalized
-    assert "Native push uploads the test-set YAML but retains review status" in normalized
-    assert "do not add a native review-persistence or in-place-update prerequisite" in normalized.lower()
+    assert "Both supported backends publish and verify that review status" in normalized
+    assert "Do not bypass remote review-marker verification" in normalized
 
 
 def test_named_update_filters_candidates_before_selection():
@@ -219,12 +231,20 @@ def test_run_prompt_and_skill_cover_start_history_and_results():
     assert "**run** / **execute test sets**" in evaluate_prompt
     assert "evaluation_runs.py list-sets" in run_skill
     assert "evaluation_runs.py run" in run_skill
-    assert "no local run mapping is" in run_skill
+    assert "Do not create a separate run mapping or results file" in run_skill
+    assert "list-runs --all" in run_skill
+    assert "`adkRunsNotReturned`" in run_skill
     assert "evaluation_runs.py list-runs" in run_skill
     assert "evaluation_runs.py results" in run_skill
     assert "joins each run's `testSetId`" in normalized_run_skill
     assert "Mandatory user-selection gate" in run_skill
     assert "two separate user turns" in run_skill
+    normalized_run = " ".join(run_skill.split())
+    assert "**Workflow handoff exception.** Skip the selection question only" in normalized_run
+    assert "keep the handoff's exact set folder" in normalized_run
+    assert "fall back to the ad hoc selection flow" in normalized_run
+    assert "never skips deployment approval or connection selection" in normalized_run
+    assert "Flow A's workflow handoff exception" in run_prompt
     assert "Stop after asking, even" in run_skill
     assert "candidate discovery and execution must occur in" in run_prompt
     assert "discovery and execution require separate user turns" in evaluate_prompt
@@ -320,7 +340,7 @@ def test_run_ux_sets_duration_and_evidence_based_result_analysis():
     normalized_run_skill = " ".join(run_skill.split())
 
     assert "This may take 10-15" in normalized_run_skill
-    assert "Return here to view the results" in normalized_run_skill
+    assert "Ask me for the run's status here at any time" in normalized_run_skill
     assert "you don't" in normalized_run_skill
     assert "need to open Copilot Studio" in normalized_run_skill
     assert "Copy `userGuidance` verbatim" in normalized_run_skill

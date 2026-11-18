@@ -203,7 +203,7 @@ def test_from_config_derives_prod_ring_and_no_cosmos_backend():
 @pytest.mark.parametrize(
     "endpoint,expected",
     [
-        (PROD_ENDPOINT, "https://copilotstudio.microsoft.com"),
+        (PROD_ENDPOINT, "https://copilotstudio.preview.microsoft.com"),
         (PREPROD_ENDPOINT, "https://copilotstudio.preprod.microsoft.com"),
         (TEST_ENDPOINT, "https://copilotstudio.test.microsoft.com"),
     ],
@@ -216,7 +216,7 @@ def test_studio_origin_for_config_is_ring_aware(endpoint, expected):
 def test_studio_origin_falls_back_to_prod_when_endpoint_absent():
     assert (
         evaluation_runs._studio_origin_for_config({})
-        == "https://copilotstudio.microsoft.com"
+        == "https://copilotstudio.preview.microsoft.com"
     )
 
 
@@ -232,7 +232,7 @@ def test_agent_studio_url_deep_link_appends_agent_backend():
     assert url == (
         "https://copilotstudio.test.microsoft.com"
         f"/environments/{ENV_ID}/copilots/{BOT_ID}"
-        "/evaluation/runsDetails/set-1/run-1?agentBackend=cosmos"
+        "/evaluation/runsDetails/run-1/set-1?agentBackend=cosmos"
     )
 
 
@@ -248,13 +248,30 @@ def test_agent_studio_url_deep_link_without_backend_has_no_query():
     assert "?agentBackend=" not in url
 
 
-def test_agent_studio_url_falls_back_to_overview_without_run_ids():
+def test_agent_studio_url_falls_back_to_evaluation_page_without_run_ids():
     url = evaluation_runs._agent_studio_url(
         "https://copilotstudio.microsoft.com", ENV_ID, BOT_ID)
     assert url == (
         f"https://copilotstudio.microsoft.com/environments/{ENV_ID}"
-        f"/bots/{BOT_ID}/overview"
+        f"/copilots/{BOT_ID}/evaluation"
     )
+
+
+def test_evaluation_page_url_keeps_native_backend_without_run_link():
+    url = evaluation_runs.evaluation_page_url(
+        {
+            "powerPlatformApiEndpoint": TEST_ENDPOINT,
+            "environmentId": ENV_ID,
+            "agent": {"botId": BOT_ID, "releaseLine": "da"},
+        },
+        ENV_ID,
+        BOT_ID,
+    )
+    assert url == (
+        f"https://copilotstudio.test.microsoft.com/environments/{ENV_ID}"
+        f"/copilots/{BOT_ID}/evaluation?agentBackend=cosmos"
+    )
+    assert "runsDetails" not in url
 
 
 def test_agent_studio_url_returns_none_when_ids_missing():
@@ -412,7 +429,8 @@ class _RecordingClient:
         if dry_run:
             return {"dryRun": True, "sets": [
                 {"folder": "compensation", "displayName": "compensation",
-                 "testSetId": "plan-id", "cases": "1"}], "componentCount": 2}
+                 "testSetId": "plan-id", "cases": "1"}], "componentCount": 2,
+                "changes": [{"component": {"id": "plan-id"}}], "reviewChanges": []}
         self.real_push = True
         assert plan["sets"][0]["testSetId"] == "plan-id"
         return {"dryRun": False, "status": "pushed", "sets": [

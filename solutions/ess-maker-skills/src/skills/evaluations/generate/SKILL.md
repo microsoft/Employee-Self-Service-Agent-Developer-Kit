@@ -134,12 +134,19 @@ generate cases so the set looks identical to any other Copilot Studio eval set.
 writable field, operation, or data topic the catalogue lists for the family,
 write one positive. Never collapse a multi-field family into a single row. If a
 family's full positive set exceeds **21**, split into multiple sets (each its own
-folder with its own 2 boundary + 2 negative) rather than trimming.
+folder with its own 2 boundary + 2 negative + 2 out-of-scope cases) rather than
+trimming.
 
-**Exactly 2 boundary + 2 negative per set** (distinct, not paraphrases):
+**Exactly 2 boundary + 2 negative + 2 out-of-scope cases per set** (distinct, not
+paraphrases). Follow **Required generation coverage** in the shared experience
+contract; negatives and out-of-scope cases are separately required:
 - **Boundary** — near-scope, typo'd, abbreviated, or very short input the agent
   should still handle (e.g. "empolyee ID", "comp ratio", "pto bal", "tkts").
-- **Negative** — use two distinct behaviors:
+- **Negative** — two distinct in-scenario failure behaviors grounded in the
+  catalogue, such as privacy restrictions, write-on-read-only requests, missing
+  required information, or conflicting inputs. Expect the supported refusal,
+  clarification, or safe handling. Do not invent restrictions.
+- **Out of scope** — use two distinct behaviors:
   - **Outside this scenario, valid ESS:** ground the prompt in a different
     catalogue scenario. The expected response should route to or support that
     capability, not refuse it merely because it is outside this evaluation goal.
@@ -147,12 +154,12 @@ folder with its own 2 boundary + 2 negative) rather than trimming.
     examples across sets (for example entertainment trivia, consumer shopping,
     recipe planning, personal investing, or schoolwork), and expect an
     appropriate limitation or redirection.
-  Privacy boundaries ("show me John's salary"), write-on-read-only requests
-  ("change my employee ID"), and cross-domain mixing remain separate negative
-  behaviors and must not be relabeled as out of scope.
+  Do not count these two cases toward the negative minimum. Privacy boundaries,
+  write-on-read-only requests, and in-scenario conflicting inputs are negative
+  behaviors, not substitutes for either out-of-scope case.
 
 Do not use travel booking as the default unsupported example: travel can be a
-valid employee-service scenario when configured. The two negatives must use
+valid employee-service scenario when configured. The two out-of-scope cases must use
 different behavior classes and different domains; never repeat one canned
 off-domain prompt across generated sets.
 
@@ -235,7 +242,8 @@ Prompt,Expected response,Test Method Type,Passing Score
 Validate proposed parent/case documents with `validate_evaluation_documents`
 from `evaluation_method_policy` before writing. Every row needs a meaningful
 input and expected response; a refusal/clarification is a valid expectation,
-not an excuse for a blank assertion. Generate BOTH artifacts for every set
+not an excuse for a blank assertion. Verify **Required generation coverage**
+for every set before export. Generate BOTH artifacts for every set
 from the same cases. Then run admission for each written folder:
 
 ```text

@@ -725,8 +725,8 @@ def test_start_run_returns_api_details_without_local_mapping(
     assert result["testSetName"] == "Compensation"
     assert result["testSetId"] == "set-comp"
     assert result["agentStudioUrl"] == (
-        "https://copilotstudio.microsoft.com/environments/environment-id"
-        "/copilots/bot-id/evaluation/runsDetails/set-comp/run-1"
+        "https://copilotstudio.preview.microsoft.com/environments/environment-id"
+        "/copilots/bot-id/evaluation/runsDetails/run-1/set-comp"
     )
     assert result["state"] == "Queued"
     assert result["executionState"] == "Initializing"
@@ -735,8 +735,9 @@ def test_start_run_returns_api_details_without_local_mapping(
     assert result["testCasesProcessed"] == 0
     assert result["userGuidance"] == (
         "I've started running your test set in Copilot Studio. This may take "
-        "10-15 minutes. Return here to view the results when the run is complete; "
-        "you don't need to open Copilot Studio."
+        "10-15 minutes. Ask me for the run's status here at any time to check its "
+        "progress and see the results when it's complete; you don't need to open "
+        "Copilot Studio."
     )
     assert client.started[0][3]["runOnPublishedBot"] is False
     assert client.started[0][3]["mcsConnectionId"] == "connection-1"
@@ -919,6 +920,9 @@ def test_start_and_completed_run_links_match(origin, deployed_dataverse, tmp_pat
     )
     assert started["agentStudioUrl"] == completed["agentStudioUrl"]
     assert started["agentStudioUrl"].startswith(origin)
+    assert completed["evaluationPageUrl"] == (
+        f"{origin}/environments/environment-id/copilots/bot-id/evaluation"
+    )
     assert len(client.started) == 1
     assert client.list_runs_calls == 0
 
@@ -929,7 +933,7 @@ def test_agent_studio_url_escapes_identifiers():
         "env/x", "bot ?x", "set/#", "run/?", "cosmos&other=true",
     ) == (
         "https://copilotstudio.test.microsoft.com/environments/env%2Fx"
-        "/copilots/bot%20%3Fx/evaluation/runsDetails/set%2F%23/run%2F%3F"
+        "/copilots/bot%20%3Fx/evaluation/runsDetails/run%2F%3F/set%2F%23"
         "?agentBackend=cosmos%26other%3Dtrue"
     )
 
@@ -1008,9 +1012,10 @@ def test_run_candidates_include_workspace_and_current_agent_without_deployment(
         ("review_requested", "review_requested", "review_completed", True, None),
     ],
 )
+@pytest.mark.parametrize("native", [False, True])
 def test_run_candidates_reconcile_review_and_deployed_identity(
     run_candidates_workspace, local_review, baseline_review, remote_review,
-    can_prepare, runnable,
+    can_prepare, runnable, native,
 ):
     workspace, agent, config = run_candidates_workspace
     folder = agent / "evaluations" / "pay"
@@ -1028,7 +1033,7 @@ def test_run_candidates_reconcile_review_and_deployed_identity(
         "runnable": True,
     }
     [candidate] = evaluation_runs.list_run_candidates(
-        workspace, config, remote_sets=[remote],
+        workspace, config, remote_sets=[remote], native=native,
     )
     assert candidate["canPrepare"] is can_prepare
     assert candidate["currentlyRunnable"] is runnable
@@ -1042,11 +1047,11 @@ def test_run_candidates_reconcile_review_and_deployed_identity(
 
 @pytest.mark.parametrize("local_status,baseline_status,can_prepare,runnable", [
     ("review_requested", None, False, False),
-    ("review_completed", None, True, None),
+    ("review_completed", None, True, False),
     ("review_completed", "review_completed", True, None),
-    (None, "review_completed", True, None),
+    (None, "review_completed", True, False),
 ])
-def test_native_candidates_preserve_local_review_without_new_backend_prerequisites(
+def test_native_candidates_track_shared_review_and_pending_local_changes(
     run_candidates_workspace, local_status, baseline_status, can_prepare, runnable,
 ):
     workspace, agent, config = run_candidates_workspace
@@ -1065,9 +1070,11 @@ def test_native_candidates_preserve_local_review_without_new_backend_prerequisit
     )
     assert candidate["canPrepare"] is can_prepare
     assert candidate["currentlyRunnable"] is runnable
-    assert candidate["deployedReviewStatus"] is None
+    assert candidate["deployedReviewStatus"] == (baseline_status or "untagged")
     assert candidate["blockedReason"] == (
-        None if can_prepare else evaluation_runs.REVIEW_PENDING_GUIDANCE
+        evaluation_runs.REVIEW_PENDING_GUIDANCE if not can_prepare
+        else evaluation_runs.REVIEW_COMPLETION_NOT_PUSHED_GUIDANCE
+        if local_status == "review_completed" and baseline_status is None else None
     )
 
 
@@ -1238,7 +1245,7 @@ def test_run_cli_starts_selected_confirmed_id_and_returns_new_link(
     result = json.loads(capsys.readouterr().out)
     assert result["testSetId"] == "set-comp"
     assert result["runId"] == "run-1"
-    assert "/set-comp/run-1" in result["agentStudioUrl"]
+    assert "/run-1/set-comp" in result["agentStudioUrl"]
     assert result["agentStudioUrl"].startswith("https://copilotstudio.test.microsoft.com")
     assert result["userGuidance"] == evaluation_runs.RUN_WAIT_GUIDANCE
     assert len(client.started) == 1
@@ -1340,7 +1347,7 @@ def test_prepared_run_consumes_verified_actual_id_once(prepared_run, capsys, sta
     assert result["deployment"] == deployment
     assert result["testSetId"] == "set-comp"
     assert result["runId"] == "run-1"
-    assert result["agentStudioUrl"].endswith("/set-comp/run-1")
+    assert result["agentStudioUrl"].endswith("/run-1/set-comp")
     assert result["userGuidance"] == evaluation_runs.RUN_WAIT_GUIDANCE
     assert len(client.started) == 1
     assert client.started[0][2] == "set-comp"
@@ -1419,6 +1426,9 @@ def test_prepared_run_refuses_ambiguous_or_changed_identity(prepared_run, capsys
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "run_failed"
     assert "agentStudioUrl" not in result
+    assert result["evaluationPageUrl"].endswith(
+        f"/copilots/{deployment['botId']}/evaluation"
+    )
     assert client.started == []
     assert len(calls) == 1
 
@@ -1875,7 +1885,6 @@ def test_get_results_enriches_local_test_case_and_set_names(tmp_path):
         "totalCases": 1,
         "passedCases": 1,
         "failedCases": 0,
-        "passRate": 100.0,
     }
     assert result["analysis"]["scenarioGroups"][0]["group"] == "Compensation"
 
@@ -1960,14 +1969,12 @@ def test_analyze_run_results_groups_ai_reason_and_general_quality_failures():
         "totalCases": 3,
         "passedCases": 1,
         "failedCases": 2,
-        "passRate": 33.3,
     }
     assert analysis["scenarioGroups"] == [{
         "group": "Compensation",
         "cases": 3,
         "passed": 1,
         "failed": 2,
-        "passRate": 33.3,
     }]
     assert {
         item["category"] for item in analysis["failureGroups"]
@@ -2009,7 +2016,6 @@ def test_analyze_run_results_treats_no_metrics_case_as_non_pass():
         "totalCases": 2,
         "passedCases": 1,
         "failedCases": 1,
-        "passRate": 50.0,
     }
     assert any(
         item["category"] == "Execution or metric failure"

@@ -2505,7 +2505,7 @@ def test_non_da_ga_setup_implementation_is_absent() -> None:
 def test_da_commands_degrade_by_operation() -> None:
     expected_text = {
         "push.prompt.md": "DA-GA agent is not yet available",
-        "delete.prompt.md": "DA-GA agent is not yet available",
+        "delete.prompt.md": "local-only",
         "troubleshoot.prompt.md": (
             "requires the corresponding product extension guidance"
         ),

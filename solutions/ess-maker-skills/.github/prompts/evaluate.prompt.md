@@ -5,6 +5,11 @@ description: "Generate or manage evaluation test sets"
 
 # Evaluate
 
+**Route local deletion first.** For a request to delete an evaluation test set
+or test case, read `src/skills/evaluations/delete/SKILL.md` and follow it before
+the setup-state check below. Deletion is local-only: no setup, authentication,
+API calls, or push is required, and Copilot Studio is unchanged.
+
 **Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
 Canonical runtime operations require `schema_version: 4` and an `agents` entry
 matching the active workspace slug with `connect_ready: true`. When that state is
@@ -13,9 +18,8 @@ instruction to push them, request remote review, or run them. Do not block local
 catalogue generation, editing, CSV synchronization, or quality review.
 
 **Workspace note.** Creating a fresh test set does not require a configured
-agent. Updating can also proceed without setup when workspace-level evaluation
-sets exist. Deleting deployed agent sets requires completed canonical setup and
-a configured agent.
+agent. Updating and local deletion can also proceed without setup when local
+evaluation sets exist. Local deletion never deletes a deployed set.
 
 Read `src/skills/evaluations/experience-contract.md` for the shared maker
 experience. Run and Request Review include required scoped deployment through
@@ -47,9 +51,11 @@ feature's only test method; incompatible multi-turn generation is not offered.
      Step 5 with the shared quality/run explanation, then return to four maker
      actions without deployment or runtime execution.
    - **run** / **execute test sets** -> read
-     `src/skills/evaluations/run/SKILL.md` and follow **Flow A**. Candidate
-     discovery and execution require separate user turns: list choices, ask
-     for selection, and STOP before running anything. After a selected run
+     `src/skills/evaluations/run/SKILL.md` and follow **Flow A**. For an ad hoc
+     run request, candidate discovery and execution require separate user turns: list choices, ask
+     for selection, and STOP before running anything. A run option chosen from
+     ADK's next-step menu for one exact set uses Flow A's workflow handoff
+     exception instead. After a selected run
      starts successfully, copy the command's `userGuidance` field verbatim;
      the 10-15-minute wait notice and direction to return to chat are mandatory.
      Show its returned `agentStudioUrl` as an optional link beside the newly started run using the run skill's
@@ -59,16 +65,18 @@ feature's only test method; incompatible multi-turn generation is not offered.
    - **explicitly push a test set** -> discover/select it through
      `src/skills/evaluations/update/SKILL.md`, then follow the shared deployment
      flow with helper action `push`. Do not tag or run it automatically.
-   - **delete** -> read `.local/setup/config.json` and `.local/config.json`. If
-     canonical state does not have `schema_version: 4` and an `agents` entry
-     matching the active workspace slug with `connect_ready: true`, show the message below and
-     STOP; otherwise read `src/skills/evaluations/delete/SKILL.md` and follow
-     it.
+   - **what next** / **where do things stand** / **status of my test sets** ->
+     show the **Evaluation overview** from
+     `src/skills/evaluations/experience-contract.md` (local only; no setup,
+     authentication, or API calls), then follow its **Workflow context** rules.
+   - **delete** -> read `src/skills/evaluations/delete/SKILL.md` and follow its
+     local-only confirmation, backup, deletion, and verification steps. Do not
+     require completed setup or invoke any remote operation.
 4. If the answer is ambiguous, ask once more before routing.
 
 The phrase **"review test sets"** means review sets tagged
 `review_requested`. It does not mean quality validation. Route to the review
 skill and list tagged sets before invoking any validator.
 
-> Creating and updating workspace-level test sets does not require setup.
-> Deleting or pushing configured-agent sets requires a connected agent.
+> Creating, updating, and deleting local test sets does not require setup.
+> Pushing configured-agent sets requires a connected agent.

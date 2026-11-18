@@ -192,8 +192,11 @@ testable — not vague like "agent should respond". It describes observable
 user-facing behavior, not implementation details.
 
 **Coverage** — The category covers a meaningful spread of sub-topics and
-scenario types (positive, boundary, negative) rather than clustering around
-one scenario.
+scenario types (positive, boundary, negative, out of scope) rather than clustering
+around one scenario. For newly generated sets, verify **Required generation
+coverage** in the shared experience contract: at least two in-scenario negative
+cases and two separate out-of-scope cases. Flag a missing group; never count a
+scope test as an in-scenario negative.
 
 **Diversity** — Utterances cover two distinct types: (1) natural-language —
 complete sentences a real employee would say, and (2) keyword-style — short,
@@ -243,8 +246,9 @@ Never repeat those case tables, rebuild them, quote them beneath findings, or
 create a new table during quality validation. Return only the compact scorecard;
 detailed case evidence remains internal unless the maker enters the fix flow.
 
-Derive positive, boundary, and negative counts by classifying each actual case,
-not from filenames. Retain flagged filenames, issues, recommendations, optional
+Derive positive, boundary, negative, and out-of-scope counts by classifying each
+actual case, not from filenames. Keep all four counts separate and ensure they
+sum to the total. Retain flagged filenames, issues, recommendations, optional
 Topic Alignment, and automated/manual evidence in the result returned to the
 parent, but do not append them to the compact maker-facing scorecard.
 
