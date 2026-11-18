@@ -61,6 +61,59 @@ def test_own_profile_uses_beta_and_never_reports_values_or_tenant_percentages(cl
     assert "Mock title" not in text and "maker@example.test" not in text
 
 
+@pytest.mark.parametrize("scope", ["me", "tenant"])
+@respx.mock
+def test_default_checks_ignore_properties_outside_the_profile_overlap(client, scope):
+    profile = profiles.profile()
+    detail = profile["positions"][0]["detail"]
+    detail.update(description={}, summary={})
+    detail["company"].update(pronunciation={}, webUrl={})
+    detail["company"]["address"]["postOfficeBox"] = {}
+    profile["responsibilities"] = {}
+    if scope == "me":
+        respx.get(f"{profiles.GRAPH_BASE}/me/profile").respond(json=profile)
+    else:
+        _tenant_routes(2, lambda: profile)
+    report = check.check_attributes(client, scope, list(check.ATTRIBUTES))
+    rows = {row["attribute"]: row for row in report["results"]}
+    assert not {
+        "description", "summary", "companyPronunciation", "companyWebUrl", "postOfficeBox", "responsibilities",
+    }.intersection(rows)
+    assert rows["jobTitle"].get("availability") == "Available" or rows["jobTitle"].get("coveragePercent") == 100
+
+
+@pytest.mark.parametrize("anniversaries,expected", [
+    ([{"type": "work", "date": "2020-01-01"}], "Available"),
+    ([{"type": kind, "date": "2020-01-01"} for kind in ("birthday", "wedding", "other")], "Empty"),
+    ([{"type": "work", "displayName": "A label without a date"}], "Unverified"),
+    ([{"type": "work", "date": None}], "Empty"),
+    ([{"type": "unknownFutureValue", "date": "2020-01-01"}], "Unverified"),
+    ([{"date": "2020-01-01"}], "Unverified"),
+    ([{"type": "work", "date": date} for date in ("2020-01-01", "2021-01-01")], "Available"),
+])
+@respx.mock
+def test_anniversary_coverage_counts_only_work_dates(client, anniversaries, expected):
+    profile = profiles.profile()
+    profile["anniversaries"] = anniversaries
+    _tenant_routes(2, lambda: profile)
+    report = check.check_attributes(client, "tenant", ["anniversaries"])
+    row = report["results"][0]
+    assert row["coveragePercent"] == {"Available": 100, "Empty": 0, "Unverified": None}[expected]
+    assert row[{"Available": "available", "Empty": "empty", "Unverified": "unverified"}[expected]] == 2
+    assert report["status"] == ("Passed" if expected == "Available" else "Warning")
+    assert "2020-01-01" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("field,value", [("type", 42), ("date", {})])
+@respx.mock
+def test_malformed_work_anniversary_properties_are_errors(client, field, value):
+    profile = profiles.profile()
+    profile["anniversaries"] = [{"type": "work", "date": "2020-01-01", field: value}]
+    respx.get(f"{profiles.GRAPH_BASE}/me/profile").respond(json=profile)
+    with pytest.raises(ValueError, match="invalid"):
+        check.check_attributes(client, "me", ["anniversaries"])
+
+
 @pytest.mark.parametrize("variant,expected", [
     ("null", "Empty"), ("blank", "Empty"), ("omitted", "Not returned"),
     ("zero", "Available"), ("empty_section", "Empty"), ("omitted_section", "Not returned"),

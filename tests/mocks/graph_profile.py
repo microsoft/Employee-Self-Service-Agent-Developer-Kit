@@ -24,6 +24,8 @@ def profile():
       positionDetail.layer: Edm.Int32; startMonthYear/endMonthYear: Edm.Date;
         remaining selected scalar detail/company/address fields: Edm.String.
       relatedPerson.userId: Edm.String; workPosition.colleagues: collection.
+      profile.anniversaries: Collection(personAnnualEvent); date: Edm.Date;
+        personAnnualEventType: birthday, wedding, work, other, unknownFutureValue.
       profile section types verified in the same schema.
     Docs/examples:
       https://learn.microsoft.com/en-us/graph/api/profile-get?view=graph-rest-beta#examples
@@ -60,7 +62,7 @@ def profile():
         "addresses": [], "anniversaries": [], "awards": [], "certifications": [],
         "educationalActivities": [], "emails": [], "interests": [], "languages": [],
         "notes": [], "patents": [], "phones": [], "projects": [], "publications": [],
-        "responsibilities": [], "skills": [], "webAccounts": [], "websites": [],
+        "skills": [], "webAccounts": [], "websites": [],
     }
 
 

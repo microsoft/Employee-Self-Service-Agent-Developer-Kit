@@ -29,7 +29,7 @@ FIELDS = {
         name: Attribute("positions", ("detail", name), "integer" if name == "layer" else "string")
         for name in (
             "jobTitle", "secondaryJobTitle", "role", "secondaryRole", "level", "layer",
-            "employeeId", "employeeType", "startMonthYear", "endMonthYear", "description", "summary",
+            "employeeId", "employeeType", "startMonthYear", "endMonthYear",
         )
     },
     **{
@@ -38,26 +38,25 @@ FIELDS = {
             ("companyName", "displayName"), ("companyCode", "companyCode"),
             ("costCenter", "costCenter"), ("division", "division"),
             ("department", "department"), ("secondaryDepartment", "secondaryDepartment"),
-            ("officeLocation", "officeLocation"), ("companyPronunciation", "pronunciation"),
-            ("companyWebUrl", "webUrl"),
+            ("officeLocation", "officeLocation"),
         )
     },
     **{
         name: Attribute("positions", ("detail", "company", "address", source))
         for name, source in (
             ("streetAddress", "street"), ("city", "city"), ("state", "state"),
-            ("postalCode", "postalCode"), ("postOfficeBox", "postOfficeBox"),
-            ("workCountry", "countryOrRegion"),
+            ("postalCode", "postalCode"), ("workCountry", "countryOrRegion"),
         )
     },
     "manager": Attribute("positions", ("manager",), "object"),
     "colleagues": Attribute("positions", ("colleagues",), "collection"),
+    "anniversaries": Attribute("anniversaries", ("date",), "work-anniversary"),
     **{
         name: Attribute(name, kind="section")
         for name in (
-            "addresses", "anniversaries", "awards", "certifications", "educationalActivities",
+            "addresses", "awards", "certifications", "educationalActivities",
             "emails", "interests", "languages", "notes", "patents", "phones", "projects",
-            "publications", "responsibilities", "skills", "webAccounts", "websites",
+            "publications", "skills", "webAccounts", "websites",
         )
     },
 }
@@ -154,6 +153,16 @@ def _availability(profile: dict, attribute: Attribute) -> str:
         raise ValueError("Graph returned an invalid profile section.")
     if "@odata.nextLink" in profile or f"{attribute.family}@odata.nextLink" in profile or _incomplete(family):
         return "Unverified"
+    if attribute.kind == "work-anniversary":
+        types = [row.get("type") for row in family]
+        if any(kind is not None and not isinstance(kind, str) for kind in types):
+            raise ValueError("Graph returned an invalid anniversary type.")
+        if any(kind not in ("birthday", "wedding", "work", "other") for kind in types):
+            return "Unverified"
+        dates = [_value(row, attribute)[0] for row in family if row["type"] == "work"]
+        if "Available" in dates:
+            return "Available"
+        return "Unverified" if "Not returned" in dates else "Empty"
     if attribute.kind == "section":
         return "Available" if _content(family) else "Unverified" if family else "Empty"
     if attribute.family == "positions":
