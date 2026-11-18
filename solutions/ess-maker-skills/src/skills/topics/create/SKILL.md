@@ -63,7 +63,7 @@ Assess alignment across:
 - Fallback.
 - Topic identity and existence.
 
-If the read fails, report alignment as unverified and pause advisably. Offer best-effort testing/browser collaboration through the topic-test owner only when `scripts/native_topic_test.py` is installed and its supported conditions hold; do not claim an automated browser instruction reader.
+If the read fails, report alignment as unverified and pause advisably. Offer best-effort testing/browser collaboration through the topic-test owner only when `scripts/topic_test.py` is installed and its supported conditions hold; do not claim an automated browser instruction reader.
 
 When the maker selects Resolve the routing conflict in the Agent Instructions, or the correction is already explicitly authorized, edit only the desired instruction section in `{agent.folder}/agent.mcs.yml`. Do not prepare it merely because a topic is being authored. Preview it separately:
 
@@ -117,6 +117,6 @@ Report through [Topic outcomes](../authoring-experience.md#topic-outcomes) and, 
 
 ## 6. Testing and evaluation handoff
 
-Read [Topic testing continuation](../testing-experience.md#topic-testing-continuation) when reaching this handoff. Carry the selected topic, latest intended behavior, actual save/state, existing authorization and declined corrections. Check `scripts/native_topic_test.py` before offering runnable testing; if unavailable, report conversation acceptance as pending. Enter [the testing owner](../test/SKILL.md) only within the shared consent rules. Do not activate or publish as a save side effect.
+Read [Topic testing continuation](../testing-experience.md#topic-testing-continuation) when reaching this handoff. Carry the selected topic, latest intended behavior, actual save/state, existing authorization and declined corrections. Check `scripts/topic_test.py` before offering runnable testing; if unavailable, report conversation acceptance as pending. Enter [the testing owner](../test/SKILL.md) only within the shared consent rules. Do not activate or publish as a save side effect.
 
 At the end of an authoring iteration, identify relevant existing evaluation cases across sets, including routing, negative, fallback, and cross-topic impact. Do not regenerate evaluations automatically or repeat this review after every edit. For separately requested evaluation work, use `src/skills/evaluations/dispatcher/SKILL.md`.

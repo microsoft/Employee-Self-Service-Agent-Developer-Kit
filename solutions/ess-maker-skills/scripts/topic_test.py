@@ -23,16 +23,30 @@ import requests
 
 from agentbuilder import AgentBuilderClient, AgentBuilderError, canonical_json
 from drive_surface import DriveResult, DriveSurface
-from minimalbot_evaluation import ComponentEditError, MinimalBotEvaluationError
+from minimalbot_evaluation import (
+    ComponentEditError, MinimalBotEvaluationError, _without_server_generated_fields,
+)
 from reply_signal import ReplySignal, classify_reply_signal, looks_like_error
 from setup_existing_da import _expanded_literal_activity, connect_selected_dev_workspace
-from topic_authoring import _native_client
+from topic_authoring import _native_client as _component_client
+
+
+_BROWSER_DEPENDENCY_ERROR = (
+    "The browser-testing dependency could not be loaded. Restore scripts/requirements.txt "
+    "in the Python environment running this command. No Playwright browser download is "
+    "required; testing attaches to the selected installed browser over CDP. "
+    "If browser automation remains unavailable, guide the maker through manual debugging "
+    "in the selected agent's Copilot Studio Test pane."
+)
 
 
 def _read(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid JSON test evidence.") from exc
     if not isinstance(value, dict):
-        raise ValueError("Expected an object in the saved test evidence.")
+        raise ValueError(f"{path}: expected an object in the saved test evidence.")
     return value
 
 
@@ -156,7 +170,10 @@ def _wait_for_browser(
 def _prepare_browser(
     args: argparse.Namespace, root: Path, target: dict[str, Any],
 ) -> tuple[dict[str, Any], int]:
-    from daga_chat_driver import validate_studio_url
+    try:
+        from daga_chat_driver import validate_studio_url
+    except ImportError as exc:
+        raise RuntimeError(_BROWSER_DEPENDENCY_ERROR) from exc
 
     url = validate_studio_url(args.url, target)
     output = _new_output(root, args.output, "prepare-browser")
@@ -308,18 +325,29 @@ def _inspection(component: dict[str, Any], target: dict[str, Any]) -> dict[str, 
         "response": response, "triggers": triggers,
         "exactMode": exact_mode,
         "inspectionEvidence": {
-            "source": "native-components", "componentHash": _hash(component),
+            "source": "agentbuilder-components", "componentHash": _hash(component),
             "triggerKind": begin.get("$kind") if isinstance(begin, dict) else None,
         },
     }
 
 
 def _load_inspection(root: Path, path: Path) -> dict[str, Any]:
-    inspection = _read(_evidence_path(root, path))
+    path = _evidence_path(root, path)
+    inspection = _read(path)
     if inspection.get("schemaVersion") != 1 or inspection.get("operation") != "inspect":
-        raise ValueError("Use an inspection produced by this topic test tool.")
-    if not isinstance(inspection.get("component"), dict):
-        raise ValueError("The inspection contains no saved topic component.")
+        raise ValueError(f"{path}: use an inspection produced by this topic test tool.")
+    component = inspection.get("component")
+    if not isinstance(component, dict):
+        raise ValueError(f"{path}: component must be a saved topic object.")
+    component_id = component.get("id")
+    if not isinstance(component_id, str) or not component_id.strip():
+        raise ValueError(f"{path}: component.id must be a non-empty GUID string.")
+    try:
+        uuid.UUID(component_id)
+    except ValueError as exc:
+        raise ValueError(f"{path}: component.id must be a valid GUID.") from exc
+    if not isinstance(inspection.get("target"), dict):
+        raise ValueError(f"{path}: target must be an object.")
     return inspection
 
 
@@ -365,7 +393,7 @@ def assess(
     capture: DriveResult | None,
     expected: str,
     selected_unchanged: bool | None,
-    native_drift: dict[str, list[str]] | None = None,
+    component_drift: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     signal = (
         classify_reply_signal(capture.reply_text, timed_out=capture.timed_out)
@@ -379,7 +407,7 @@ def assess(
     return {
         "signal": signal.value if signal is not None else None,
         "errorShaped": looks_like_error(capture.reply_text) if capture is not None else None,
-        "componentDrift": native_drift,
+        "componentDrift": component_drift,
         "checks": {
             "savedResponse": {
                 "requirementType": "requiredOutcome", "requirementId": "saved-response",
@@ -414,10 +442,7 @@ def _exercise(
     try:
         from daga_chat_driver import DagaChatDriver, PlaywrightError, validate_studio_url
     except ImportError as exc:
-        raise RuntimeError(
-            "Browser topic testing requires the optional Playwright runtime. "
-            "Basic-only installations do not support browser testing."
-        ) from exc
+        raise RuntimeError(_BROWSER_DEPENDENCY_ERROR) from exc
 
     if args.operation in {"run", "capture"}:
         inspection = _load_inspection(root, args.inspection)
@@ -429,17 +454,58 @@ def _exercise(
         require_empty_conversation = args.require_empty_conversation
     else:
         original = _evidence_path(root, args.previous)
-        execution = _read(original / "execution.json")
+        execution_path = original / "execution.json"
+        execution = _read(execution_path)
         if execution.get("schemaVersion") != 1 or execution.get("operation") not in {"run", "capture"}:
-            raise ValueError("Observe the original run or capture, not a replacement send or observation.")
+            raise ValueError(
+                f"{execution_path}: observe the original run or capture, "
+                "not a replacement send or observation."
+            )
+        for field in ("prompt", "cdp", "url"):
+            value = execution.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{execution_path}: {field} must be a non-empty string.")
+        for field in ("target", "boundary"):
+            if not isinstance(execution.get(field), dict):
+                raise ValueError(f"{execution_path}: {field} must be an object.")
+        boundary = dict(execution["boundary"])
+        page_id = boundary.get("pageTargetId")
+        if not isinstance(page_id, str) or not page_id.strip():
+            raise ValueError(f"{execution_path}: boundary.pageTargetId must be a non-empty string.")
+        turn_index = boundary.get("expectedTurnIndex")
+        if type(turn_index) is not int or turn_index < 0:
+            raise ValueError(f"{execution_path}: boundary.expectedTurnIndex must be a non-negative integer.")
+        if type(boundary.get("chatDocumentTimeOrigin")) not in (int, float):
+            raise ValueError(f"{execution_path}: boundary.chatDocumentTimeOrigin must be a number.")
+        if "requireEmptyConversation" in execution and type(execution["requireEmptyConversation"]) is not bool:
+            raise ValueError(f"{execution_path}: requireEmptyConversation must be a boolean.")
         exact_mode = execution["operation"] == "run"
         inspection = _load_inspection(root, original / "inspection.json")
         prompt = execution["prompt"]
         if execution["target"] != inspection["target"]:
             raise ValueError("The original execution and inspection target differ.")
         cdp, url = execution["cdp"], execution["url"]
-        original_baseline = _read(original / "native-before.json")
+        baseline_path = original / "components-before.json"
+        original_baseline = _read(baseline_path)
+        for field in ("component", "componentHashes"):
+            if not isinstance(original_baseline.get(field), dict):
+                raise ValueError(f"{baseline_path}: {field} must be an object.")
+        if any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in original_baseline["componentHashes"].items()
+        ):
+            raise ValueError(f"{baseline_path}: componentHashes must map identities to hash strings.")
         require_empty_conversation = execution.get("requireEmptyConversation", False)
+        capture_path = original / "capture.json"
+        observation_path = capture_path if capture_path.exists() else original / "result.json"
+        if observation_path.exists():
+            observation = _read(observation_path).get("observation")
+            if not isinstance(observation, dict):
+                raise ValueError(f"{observation_path}: observation must be an object.")
+            response_id = observation.get("responseId")
+            if response_id is not None and (not isinstance(response_id, str) or not response_id.strip()):
+                raise ValueError(f"{observation_path}: observation.responseId must be a non-empty string or null.")
+            boundary["expectedResponseId"] = response_id
     before = _components(client, target, payload=initial_components)
     component_id, component = _selected(inspection, target, before)
     if not isinstance(prompt, str) or not prompt.strip():
@@ -457,14 +523,19 @@ def _exercise(
         raise ValueError("The original response or selected-topic boundary no longer matches.")
     if component.get("state") != "Active" or component.get("status") != "Active":
         raise ValueError("The selected topic is inactive; testing does not activate or publish it.")
-    url = validate_studio_url(url, target)
-    driver = DagaChatDriver(cdp=cdp, expected_url=url)
+    try:
+        url = validate_studio_url(url, target)
+        driver = DagaChatDriver(cdp=cdp, expected_url=url)
+    except ValueError as exc:
+        if original is None:
+            raise
+        raise ValueError(f"{execution_path}: invalid url or cdp browser target.") from exc
     output = _new_output(root, args.output, args.operation)
     _write(output / "inspection.json", inspection)
     baseline = _snapshot(before, component_id)
-    _write(output / "native-before.json", baseline)
+    _write(output / "components-before.json", baseline)
     _write(output / "case.json", {
-        "testCaseId": "native-fixed-response",
+        "testCaseId": "fixed-response",
         "description": "The selected fixed-response topic returns its approved saved response.",
         "requiredOutcomes": [{
             "id": "saved-response",
@@ -527,14 +598,6 @@ def _exercise(
             submission_may_have_occurred = True
             capture = surface.drive(prompt, timeout_s=args.timeout)
         else:
-            boundary = dict(execution["boundary"])
-            capture_path = original / "capture.json"
-            if capture_path.exists():
-                boundary["expectedResponseId"] = _read(capture_path)["observation"].get("responseId")
-            elif (original / "result.json").exists():
-                boundary["expectedResponseId"] = (
-                    _read(original / "result.json").get("observation", {}).get("responseId")
-                )
             _write(output / "execution.json", {
                 "schemaVersion": 1, "operation": "observe",
                 "originalRun": str(original), "target": _identity(target),
@@ -576,9 +639,9 @@ def _exercise(
         comparison = original_baseline if original_baseline is not None else baseline
         drift = _drift(comparison["componentHashes"], after["componentHashes"])
         selected_unchanged = _topic_state(comparison["component"]) == _topic_state(after["component"])
-        record("native-after.json", after)
+        record("components-after.json", after)
     except (AgentBuilderError, requests.RequestException, ValueError) as exc:
-        errors["nativeReadbackError"] = _error_facts(exc)
+        errors["componentReadbackError"] = _error_facts(exc)
     assessment = assess(capture, expected, selected_unchanged, drift) if exact_mode else {
         "graded": False,
         "signal": (
@@ -604,7 +667,7 @@ def _exercise(
         "submissionMayHaveOccurred": submission_may_have_occurred,
         "requireEmptyConversation": require_empty_conversation,
         "capture": capture_facts,
-        "nativeReadback": after,
+        "componentReadback": after,
         **({"originalRun": str(original)} if original is not None else {}),
         **assessment,
         "limitations": [
@@ -651,14 +714,14 @@ def _activate(
     output = _new_output(root, args.output, "activate")
     baseline = _snapshot(before, component_id)
     _write(output / "inspection.json", inspection)
-    _write(output / "native-before.json", baseline)
+    _write(output / "components-before.json", baseline)
     result: dict[str, Any] = {
         "schemaVersion": 1, "operation": "activate",
         "target": _identity(target), "componentId": component_id,
         "evidenceDirectory": str(output), "before": baseline,
         "requestedState": {"state": "Active", "status": "Active"},
         "writeAttempted": False, "writeAccepted": None, "verified": False,
-        "nativeReadback": None, "stateMatchesRequest": None, "componentDrift": None,
+        "componentReadback": None, "stateMatchesRequest": None, "componentDrift": None,
         "published": False, "outcome": "preview",
     }
     errors = {}
@@ -679,13 +742,13 @@ def _activate(
             "requestedState": result["requestedState"], "writeMayHaveOccurred": True,
         })
         try:
-            saved = _native_client(client, target).update_dialog_components([{
+            saved = _component_client(client, target).update_dialog_components([{
                 "componentId": component["id"], "schemaName": component["schemaName"],
                 "expectedComponent": component,
                 "state": "Active", "status": "Active",
             }], _retry_on_conflict=False)
             result.update({
-                "nativeResult": saved, "writeAttempted": saved["writeAttempted"],
+                "saveResult": saved, "writeAttempted": saved["writeAttempted"],
                 "writeAccepted": True if saved["writeAttempted"] else None,
                 "verified": saved["verified"],
                 "outcome": "activated" if saved["writeAttempted"] else "unchanged",
@@ -705,16 +768,20 @@ def _activate(
         try:
             after = _snapshot(_components(client, target), component_id)
             desired = {**_topic_state(component), "state": "Active", "status": "Active"}
+            desired["dialog"] = _without_server_generated_fields(desired["dialog"])
+            actual = _topic_state(after["component"])
+            if actual is not None:
+                actual["dialog"] = _without_server_generated_fields(actual["dialog"])
             result.update({
-                "nativeReadback": after,
-                "stateMatchesRequest": _topic_state(after["component"]) == desired,
+                "componentReadback": after,
+                "stateMatchesRequest": actual == desired,
                 "componentDrift": _drift(baseline["componentHashes"], after["componentHashes"]),
             })
-            record("native-after.json", after)
+            record("components-after.json", after)
             if not result["stateMatchesRequest"]:
                 raise ValueError("AgentBuilder readback differs from the inspected topic with Active state.")
         except (AgentBuilderError, requests.RequestException, ValueError) as exc:
-            errors["nativeReadbackError"] = _error_facts(exc)
+            errors["componentReadbackError"] = _error_facts(exc)
     result["activationOutcome"] = result["outcome"]
     if errors:
         result["error"] = errors
@@ -730,7 +797,10 @@ def _activate(
 
 
 def _new_conversation(args, target: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    from daga_chat_driver import DagaChatDriver, PlaywrightError, validate_studio_url
+    try:
+        from daga_chat_driver import DagaChatDriver, PlaywrightError, validate_studio_url
+    except ImportError as exc:
+        raise RuntimeError(_BROWSER_DEPENDENCY_ERROR) from exc
 
     url = validate_studio_url(args.url, target)
     driver = DagaChatDriver(cdp=args.cdp, expected_url=url)
@@ -853,4 +923,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from adk_telemetry import script_error_boundary
+
+    with script_error_boundary("topic_test"):
+        raise SystemExit(main())
