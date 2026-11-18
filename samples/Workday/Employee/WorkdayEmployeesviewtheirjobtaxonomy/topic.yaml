@@ -24,18 +24,24 @@ beginDialog:
   actions:
     - kind: BeginDialog
       id: 7R6DUf
-      displayName: Redirect to Workday Get Common Execution
+      displayName: Read employee job taxonomy through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
           scenarioName: msdyn_WorkdayHCMRuntimeEmployeeGetJobTaxonomy
+          requestParametersJson: |-
+            =JSON({
+              Employee_ID: Global.ESS_UserContext_Employee_Id,
+              As_Of_Effective_Date: Text(Today(), "yyyy-MM-dd")
+            }, JSONFormat.Compact)
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.errorResponse
+          connectorStatus: Topic.connectorStatus
+          errorMessage: Topic.errorResponse
+          failureReason: Topic.failureReason
           isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
+          responseJson: Topic.workdayResponse
 
     - kind: ConditionGroup
       id: checkJobTaxonomySuccess
