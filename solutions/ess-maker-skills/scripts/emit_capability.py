@@ -26,12 +26,12 @@ The capability MUST be one of ``adk_telemetry.ADK_CAPABILITIES`` (the single
 canonical value-list). An unknown value is still emitted, but normalized to
 ``unknown`` by ``adk_telemetry`` so the dashboard dimension stays controlled.
 
-Use --help for lifecycle fields. Outcome strings pass through unchanged;
-acceptance by this adapter does not establish an approved outcome mapping.
+Use --help for lifecycle fields. Lifecycle emission supports Push only, with
+a GUID agent identity and event-specific outcomes. Error codes/categories are
+derived from the selected outcome; raw error fields are not accepted.
 Supply duration from actual clock observations, not conversation estimates.
 Select deploy_target from the environment SKU using the SDK's
-classify_deploy_target contract, not the agent's Dev/Prod realm. Error fields
-must be approved diagnostic codes/categories, never raw service responses.
+classify_deploy_target contract, not the agent's Dev/Prod realm.
 """
 
 import argparse
@@ -39,6 +39,7 @@ import os
 import subprocess
 import sys
 import threading
+import uuid
 
 # Add scripts/ to path so we can import adk_telemetry, mirroring the
 # sibling-import pattern used by discover.py / evaluate_evals.py.
@@ -85,12 +86,9 @@ def _parse_emission(args: list[str], connector: str) -> tuple[str, dict[str, str
     parser.add_argument("--outcome")
     parser.add_argument("--duration-ms", type=int)
     parser.add_argument("--deploy-target", choices=("sandbox", "production"))
-    parser.add_argument("--error-code")
-    parser.add_argument("--error-category")
     options = parser.parse_args(args)
     completion = (
         options.outcome, options.duration_ms, options.deploy_target,
-        options.error_code, options.error_category,
     )
     if options.event is None:
         if options.agent_id is not None or any(value is not None for value in completion):
@@ -100,12 +98,18 @@ def _parse_emission(args: list[str], connector: str) -> tuple[str, dict[str, str
         }
     if not options.agent_id or not options.agent_id.strip() or not options.capability.strip():
         parser.error("lifecycle emission requires non-empty --agent-id and capability")
+    if options.capability.strip() != "push":
+        parser.error("lifecycle emission supports only the push capability")
+    try:
+        agent_id = str(uuid.UUID(options.agent_id.strip()))
+    except ValueError:
+        parser.error("--agent-id must be a valid GUID")
     if connector:
         parser.error("--connector is supported only for capability usage")
 
     fields: dict[str, str | int | bool] = {
-        "agent_id": options.agent_id.strip(),
-        "adk_capability": options.capability.strip(),
+        "agent_id": agent_id,
+        "adk_capability": "push",
         "block": True,
     }
     if options.event == "build-start":
@@ -114,13 +118,22 @@ def _parse_emission(args: list[str], connector: str) -> tuple[str, dict[str, str
     else:
         if not options.outcome or not options.outcome.strip():
             parser.error("completion requires an explicit --outcome")
+        failure_outcome = "failure" if options.event == "build-complete" else "server_error"
+        if options.outcome not in ("success", failure_outcome):
+            parser.error(f"{options.event} --outcome must be success or {failure_outcome}")
         if options.duration_ms is None or options.duration_ms < 0:
             parser.error("completion requires a non-negative --duration-ms")
+        failure_code = (
+            "PUSH_PARTIAL_FAILURE"
+            if options.event == "build-complete"
+            else "DEPLOY_PARTIAL_FAILURE"
+        )
+        failed = options.outcome == failure_outcome
         fields.update(
             outcome=options.outcome,
             duration_ms=options.duration_ms,
-            error_code=options.error_code or "",
-            error_category=options.error_category or "",
+            error_code=failure_code if failed else "",
+            error_category="runtime" if failed else "",
         )
         if options.event == "agent-deploy":
             if options.deploy_target is None:
@@ -151,16 +164,18 @@ def main(argv: list[str]) -> int:
             "usage to the specific backend HR system (Workday vs ServiceNow) "
             "so PMs can report adoption / reliability by connector. Pass "
             "'legacy' for older events that predate connector attribution.\n\n"
-            "Lifecycle: <capability> --event "
+            "Lifecycle: push --event "
             "<build-start|build-complete|agent-deploy> --agent-id <id>\n"
-            "Completion additionally requires --outcome <approved-value> "
+            "Completion additionally requires --outcome <value> "
             "--duration-ms <observed-elapsed-ms> (zero or greater).\n"
+            "--agent-id must be a GUID. build-complete accepts success/failure; "
+            "agent-deploy accepts success/server_error.\n"
             "agent-deploy also requires --deploy-target <sandbox|production> "
             "from the environment SKU, not the agent realm.\n"
-            "Completion accepts --error-code <code> --error-category <category>; "
-            "do not pass raw errors or customer content.\n"
+            "Error codes/categories are derived from the selected outcome; "
+            "raw error fields are not accepted.\n"
             "Lifecycle calls do not accept --connector or add a capability count. "
-            "The session owns timing, sequencing and approved outcome mappings; "
+            "The session owns timing, sequencing and batch outcome interpretation; "
             "no outcomes or success are inferred. "
             "Exit 0 is not delivery confirmation; do not retry unknown delivery.\n\n"
             "Valid capabilities:\n  "

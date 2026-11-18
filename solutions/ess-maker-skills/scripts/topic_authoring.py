@@ -681,6 +681,27 @@ def main(argv: list[str] | None = None) -> int:
             )
         filename_stem = draft_path.name[: -len(".mcs.yml")]
         schema_name = f"{target['agent']['schemaName']}.topic.{filename_stem}"
+        schema_matches = [
+            {
+                "componentId": component.get("id"),
+                "schemaName": component.get("schemaName"),
+                "displayName": component.get("displayName"),
+            }
+            for component in live_components
+            if str(component.get("schemaName") or "").casefold()
+            == schema_name.casefold()
+        ]
+        if schema_matches:
+            raise ComponentEditError(
+                f"A topic with schema name {schema_name!r} already exists "
+                "in the selected agent. Choose a different draft filename "
+                "for a new topic.",
+                {
+                    **result,
+                    "sameSchemaMatches": schema_matches,
+                    "writeAttempted": False,
+                },
+            )
         display_name = str(args.display_name).strip()
         name_matches = [
             {

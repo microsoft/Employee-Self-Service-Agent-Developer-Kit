@@ -214,6 +214,36 @@ def _register_existing(topic_cli):
     return component
 
 
+def test_component_read_redacts_secrets_without_flattening_service_evidence(topic_cli):
+    client = native.MinimalBotEvaluationClient(
+        topic_cli.target["environment"]["id"], topic_cli.target["agent"]["id"],
+        topic_cli.target["environment"]["tenantId"],
+    )
+    body = {
+        "error": {"code": "Denied", "unfamiliar": {"keep": True}},
+        "access_token": "synthetic-credential",
+        "details": [{"authorization": "Bearer synthetic-auth", "reason": "denied"}],
+    }
+    client._request = Mock(return_value=(
+        SimpleNamespace(status_code=403, headers={"x-ms-request-id": "read-id"}), body,
+    ))
+
+    with pytest.raises(native.MinimalBotEvaluationError) as error:
+        client.read_components()
+
+    message = str(error.value)
+    assert "HTTP 403" in message
+    assert "requestId=read-id" in message
+    assert "synthetic-credential" not in message
+    assert "synthetic-auth" not in message
+    assert json.loads(message.split("response=", 1)[1]) == {
+        "error": body["error"],
+        "access_token": "[REDACTED]",
+        "details": [{"authorization": "[REDACTED]", "reason": "denied"}],
+    }
+    assert body["access_token"] == "synthetic-credential"
+
+
 @pytest.mark.parametrize("status", [403, 409, 412, 503])
 def test_scoped_update_returns_service_evidence_without_conflict_replay(
     topic_cli, monkeypatch, status,
@@ -397,7 +427,41 @@ def test_create_blocks_same_name_without_changing_workspace(
     assert not (topic_cli.agent_folder / ".baseline" / "topics" / topic_cli.draft.name).exists()
 
 
-def test_create_rechecks_same_name_after_preview(topic_cli):
+@pytest.mark.parametrize("schema_case", ["contoso_agent.topic.CaseSensitiveName",
+                                         "CONTOSO_AGENT.TOPIC.CASESENSITIVENAME"])
+@pytest.mark.parametrize("apply", [False, True])
+def test_create_blocks_unmapped_same_schema_without_writing(topic_cli, schema_case, apply):
+    component = {
+        "$kind": "DialogComponent",
+        "id": "unmapped-existing",
+        "schemaName": schema_case,
+        "displayName": "A different name",
+    }
+    topic_cli.components.append(component)
+    map_path = topic_cli.agent_folder / ".component-map.json"
+    map_before = map_path.read_bytes()
+    draft_before = topic_cli.draft.read_bytes()
+    args = ["create", "--draft", str(topic_cli.draft), "--display-name", "Approved answer"]
+    if apply:
+        args.append("--yes")
+
+    with pytest.raises(native.ComponentEditError, match="schema name.*already exists") as error:
+        authoring.main(args)
+
+    assert error.value.evidence["sameSchemaMatches"] == [{
+        "componentId": component["id"],
+        "schemaName": schema_case,
+        "displayName": component["displayName"],
+    }]
+    assert error.value.evidence["writeAttempted"] is False
+    topic_cli.transport.create_dialog_component.assert_not_called()
+    assert map_path.read_bytes() == map_before
+    assert topic_cli.draft.read_bytes() == draft_before
+    assert not (topic_cli.agent_folder / ".baseline" / "topics" / topic_cli.draft.name).exists()
+
+
+@pytest.mark.parametrize("collision", ["name", "schema"])
+def test_create_rechecks_identity_after_preview(topic_cli, collision):
     args = [
         "create",
         "--draft",
@@ -410,8 +474,11 @@ def test_create_rechecks_same_name_after_preview(topic_cli):
         {
             "$kind": "DialogComponent",
             "id": "created-after-preview",
-            "schemaName": "contoso_agent.topic.Other",
-            "displayName": "Approved answer",
+            "schemaName": (
+                "contoso_agent.topic.CaseSensitiveName"
+                if collision == "schema" else "contoso_agent.topic.Other"
+            ),
+            "displayName": "Other" if collision == "schema" else "Approved answer",
         }
     )
 

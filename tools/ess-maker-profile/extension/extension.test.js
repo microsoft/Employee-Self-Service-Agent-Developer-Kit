@@ -321,9 +321,9 @@ test('activates during startup so the guided layout is ready before startup sett
 });
 
 test('package version matches the current Maker artifact release', () => {
-    assert.strictEqual(pkg.version, '0.4.37');
+    assert.strictEqual(pkg.version, '0.4.38');
     assert.ok(fs.existsSync(path.join(__dirname, `ess-maker-profile-${pkg.version}.vsix`)));
-    assert.ok(!fs.existsSync(path.join(__dirname, 'ess-maker-profile-0.4.36.vsix')));
+    assert.ok(!fs.existsSync(path.join(__dirname, 'ess-maker-profile-0.4.37.vsix')));
 });
 
 test('updates layout settings concurrently during startup', () => {

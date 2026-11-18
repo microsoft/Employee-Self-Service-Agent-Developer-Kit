@@ -185,6 +185,40 @@ def test_retired_write_flags_stop_before_configuration_or_auth(monkeypatch, flag
     assert stopped.value.code == 2
 
 
+@pytest.mark.parametrize(("write_attempted", "updated_count", "verified_count"), [
+    (False, 0, 1), (True, 1, 1), (True, 1, 2), (True, 0, 1), (None, 0, 1),
+])
+def test_scoped_cli_reports_no_write_only_from_explicit_evidence(
+    tmp_path, monkeypatch, capsys, write_attempted, updated_count, verified_count,
+):
+    root = _topic_workspace(tmp_path / "agent")
+    client = Mock(signed_in_username="")
+    monkeypatch.setattr(push.MinimalBotEvaluationClient, "from_config", lambda config: client)
+    monkeypatch.setattr(push, "_minimalbot_topic_update_plan", lambda *args, **kwargs: [{
+        "displayName": "A", "path": "topics/A.mcs.yml",
+    }])
+    result = {
+        "verified": True, "verifiedComponents": verified_count,
+        "updatedComponents": updated_count,
+    }
+    if write_attempted is not None:
+        result["writeAttempted"] = write_attempted
+    monkeypatch.setattr(push, "save_workspace_topic_updates", Mock(return_value=result))
+
+    assert push._minimalbot_push(
+        {"agent": {"folder": str(root)}}, auto_yes=True,
+    ) == result
+
+    output = capsys.readouterr().out
+    if write_attempted is False:
+        assert "Already current: verified 1 topic component(s)." in output
+        assert "No remote write was needed." in output
+        assert "Updated " not in output
+    else:
+        assert f"Updated {updated_count} and verified {verified_count}" in output
+        assert "No remote write was needed." not in output
+
+
 def test_scoped_cli_retains_known_remote_result_when_acknowledgement_fails(
     tmp_path, monkeypatch, capsys,
 ):

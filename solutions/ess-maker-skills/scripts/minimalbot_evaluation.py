@@ -1074,7 +1074,7 @@ class MinimalBotEvaluationClient:
             raise MinimalBotEvaluationError(
                 f"MinimalBot component read failed (HTTP {response.status_code}); "
                 f"requestId={response.headers.get('x-ms-request-id')}; "
-                f"response={json.dumps(body, ensure_ascii=False)}"
+                f"response={json.dumps(_redact_evidence(body), ensure_ascii=False)}"
             )
         if not isinstance(body, dict):
             raise MinimalBotEvaluationError(

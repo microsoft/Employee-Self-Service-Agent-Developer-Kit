@@ -16,6 +16,9 @@ import emit_capability
 import pytest
 
 
+AGENT_ID = "abcdefab-0000-0000-0000-000000004444"
+
+
 def test_capability_emit_starts_detached_worker(monkeypatch) -> None:
     calls = []
     waits = []
@@ -242,10 +245,9 @@ def delivery(monkeypatch):
     ("build-start", [], {}),
     ("build-complete", [
         "--outcome", "failure", "--duration-ms", "1250",
-        "--error-code", "BUILD_FAILED", "--error-category", "runtime",
     ], {
         "outcome": "failure", "duration_ms": 1250,
-        "error_code": "BUILD_FAILED", "error_category": "runtime",
+        "error_code": "PUSH_PARTIAL_FAILURE", "error_category": "runtime",
     }),
     ("agent-deploy", [
         "--outcome", "success", "--duration-ms", "0", "--deploy-target", "production",
@@ -257,9 +259,9 @@ def delivery(monkeypatch):
 def lifecycle_emission(request):
     event, extra, fields = request.param
     return (
-        ["push", f"--event={event}", "--agent-id", "test-agent", *extra],
+        ["push", f"--event={event}", "--agent-id", AGENT_ID.upper(), *extra],
         "emit_" + event.replace("-", "_"),
-        {"agent_id": "test-agent", "adk_capability": "push", "block": True, **fields},
+        {"agent_id": AGENT_ID, "adk_capability": "push", "block": True, **fields},
     )
 
 
@@ -302,7 +304,7 @@ def test_documented_push_commands_compose_one_lifecycle(delivery, monkeypatch, r
     ).read_text(encoding="utf-8")
     telemetry = contract.split("## Push telemetry\n", 1)[1]
     substitutions = {
-        "AgentId": "test-agent",
+        "AgentId": AGENT_ID,
         "BuildOutcome": "failure" if failed else "success",
         "DeployOutcome": "server_error" if failed else "success",
         "BuildErrorCode": "PUSH_PARTIAL_FAILURE" if failed else "",
@@ -331,7 +333,7 @@ def test_documented_push_commands_compose_one_lifecycle(delivery, monkeypatch, r
         *(["emit_agent_deploy"] if emit_deploy else []),
         "emit_capability_use",
     ]
-    shared = {"agent_id": "test-agent", "adk_capability": "push", "block": True}
+    shared = {"agent_id": AGENT_ID, "adk_capability": "push", "block": True}
     emitters["emit_build_start"].assert_called_once_with(**shared)
     emitters["emit_build_complete"].assert_called_once_with(
         **shared, outcome=substitutions["BuildOutcome"], duration_ms=1250,
@@ -398,19 +400,38 @@ def test_lifecycle_failures_do_not_escape_or_retry(delivery, lifecycle_emission,
 @pytest.mark.parametrize("args", [
     ["--event", "build-start"],
     ["--event", "build-start", "--agent-id", " "],
-    ["--event", "build-complete", "--agent-id", "a", "--duration-ms", "1"],
-    ["--event", "build-complete", "--agent-id", "a", "--outcome", "success"],
-    ["--event", "build-complete", "--agent-id", "a", "--outcome", "success", "--duration-ms", "-1"],
-    ["--event", "build-complete", "--agent-id", "a", "--outcome", "success", "--duration-ms", "bad"],
-    ["--event", "agent-deploy", "--agent-id", "a", "--outcome", "success", "--duration-ms", "1"],
-    ["--event", "build-start", "--agent-id", "a", "--outcome", "success"],
-    ["--event", "build-start", "--agent-id", "a", "--connector", "workday"],
-    ["--agent-id", "a"],
-    ["--evnt", "build-start", "--agent-id", "a"],
+    ["--event", "build-start", "--agent-id", "not-an-agent-id"],
+    ["--event", "build-complete", "--agent-id", AGENT_ID, "--duration-ms", "1"],
+    ["--event", "build-complete", "--agent-id", AGENT_ID, "--outcome", "success"],
+    ["--event", "build-complete", "--agent-id", AGENT_ID, "--outcome", "success", "--duration-ms", "-1"],
+    ["--event", "build-complete", "--agent-id", AGENT_ID, "--outcome", "success", "--duration-ms", "bad"],
+    ["--event", "build-complete", "--agent-id", AGENT_ID, "--outcome", "server_error", "--duration-ms", "1"],
+    ["--event", "build-complete", "--agent-id", AGENT_ID, "--outcome", "diagnostic text", "--duration-ms", "1"],
+    ["--event", "build-complete", "--agent-id", AGENT_ID, "--outcome", "failure", "--duration-ms", "1", "--error-code", "diagnostic text"],
+    ["--event", "agent-deploy", "--agent-id", AGENT_ID, "--outcome", "server_error", "--duration-ms", "1", "--deploy-target", "production", "--error-category", "diagnostic text"],
+    ["--event", "agent-deploy", "--agent-id", AGENT_ID, "--outcome", "failure", "--duration-ms", "1", "--deploy-target", "production"],
+    ["--event", "agent-deploy", "--agent-id", AGENT_ID, "--outcome", "success", "--duration-ms", "1"],
+    ["--event", "build-start", "--agent-id", AGENT_ID, "--outcome", "success"],
+    ["--event", "build-start", "--agent-id", AGENT_ID, "--connector", "workday"],
+    ["--agent-id", AGENT_ID],
+    ["--evnt", "build-start", "--agent-id", AGENT_ID],
 ])
-def test_invalid_lifecycle_input_is_diagnosed_without_defaulting_to_usage(delivery, capsys, args):
+@pytest.mark.parametrize("worker", [False, True])
+def test_invalid_lifecycle_input_is_diagnosed_without_defaulting_to_usage(delivery, capsys, args, worker):
     emitters, popen = delivery
-    assert emit_capability.main(["emit_capability.py", "push", *args]) == 0
+    prefix = ["--worker"] if worker else []
+    assert emit_capability.main(["emit_capability.py", *prefix, "push", *args]) == 0
+    assert "error:" in capsys.readouterr().err
+    assert all(not emitter.called for emitter in emitters.values())
+    popen.assert_not_called()
+
+
+def test_lifecycle_rejects_non_push_capability(delivery, capsys):
+    emitters, popen = delivery
+    assert emit_capability.main([
+        "emit_capability.py", "topic_create", "--event", "build-start",
+        "--agent-id", AGENT_ID,
+    ]) == 0
     assert "error:" in capsys.readouterr().err
     assert all(not emitter.called for emitter in emitters.values())
     popen.assert_not_called()
