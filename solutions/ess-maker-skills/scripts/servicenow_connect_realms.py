@@ -899,7 +899,6 @@ ADMIN_EXPLANATIONS = {
         "administrators, then check the connection, topics, and portal."
     ),
 }
-ADMIN_STEPS = ("instance", "entra", "servicenow")
 
 
 def _confirmed_handoff(
