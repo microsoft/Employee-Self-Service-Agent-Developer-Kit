@@ -16,18 +16,18 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
-from topic_actions_components import normalize_state
-from topic_actions_discovery import (
+from manage_topics_components import normalize_state
+from manage_topics_discovery import (
     DiscoveryError, DiscoverySnapshot, DiscoveryTarget, SourceBinding, TopicEvidence, TopicSet,
     _fail, _identity, _key, _target, build_provisional_snapshot,
 )
-from topic_actions_flat_discovery import (
+from manage_topics_flat_discovery import (
     NativeInventory, _selection, _unique_object, inventory_from_response,
 )
-from topic_actions_planning import TopicChange, TopicPlan, TopicSkip, _digest
+from manage_topics_planning import TopicChange, TopicPlan, TopicSkip, _digest
 
 
-REFERENCE = Path(__file__).resolve().parents[1] / "src" / "reference" / "topic-actions"
+REFERENCE = Path(__file__).resolve().parents[1] / "src" / "reference" / "manage-topics"
 SCHEMA_PATH = REFERENCE / "catalog.schema.json"
 BUNDLED_CATALOG = REFERENCE / "catalog.provisional.json"
 

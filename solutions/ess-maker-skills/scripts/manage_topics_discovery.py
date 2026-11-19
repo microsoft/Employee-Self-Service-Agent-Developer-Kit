@@ -16,7 +16,7 @@ import uuid
 
 if TYPE_CHECKING:
     from agentbuilder import AgentBuilderClient
-    from topic_actions_flat_discovery import FlatCatalog, FlatDiscoveryResult
+    from manage_topics_flat_discovery import FlatCatalog, FlatDiscoveryResult
 
 
 class DiscoveryError(ValueError):
@@ -237,6 +237,6 @@ def discover_topic_sets(
     """Opt-in interim source; missing dependencies never use synthetic fallback."""
     if client is None or catalog is None:
         _fail("implementation_pending")
-    from topic_actions_flat_discovery import discover_flat_topic_sets
+    from manage_topics_flat_discovery import discover_flat_topic_sets
 
     return discover_flat_topic_sets(client, target, catalog, selected_keys)

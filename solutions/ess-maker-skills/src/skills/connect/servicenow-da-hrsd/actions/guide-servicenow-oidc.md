@@ -42,14 +42,18 @@ exact group ID and context hash.
 
 After that acknowledgement, return the canonical runtime instructions from
 [the shared ServiceNow administrator source](../../shared/runtime-instructions/servicenow-administrator.md)
-with the confirmed Client ID, tenant ID, and User Claim already locked:
+with the confirmed Client ID and User Claim already locked:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage servicenow
 ```
 
 Require `decision: instructions-required`. Render `ordinaryReply.text`
-verbatim, then pass the returned User Field `askUserArguments` object verbatim.
+verbatim; it already contains the plain-text lead-in before the
+Ready-to-send fenced block, so do not rewrap or edit either part. Then pass the returned User Field `askUserArguments` object verbatim. When the
+handoff is regenerated after a User Field was already captured, the returned
+`ordinaryReply.text` is only a short acknowledgement of the recorded field;
+render it verbatim and do not ask for the field again.
 The question list intentionally excludes availability because `resume-handoff`
 owns and deduplicates that gate. Record only the administrator-confirmed
 internal `sys_user` field; the command does not accept Client ID or User Claim

@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 
-from topic_actions_discovery import DiscoveryError, _key, _target
-from topic_actions_planning import TopicChange, TopicPlan, TopicSkip, _digest
+from manage_topics_discovery import DiscoveryError, _key, _target
+from manage_topics_planning import TopicChange, TopicPlan, TopicSkip, _digest
 
 
 class ReviewError(ValueError):
@@ -47,7 +47,7 @@ class ReviewDecision:
 
 
 def _fail(reason: str) -> None:
-    raise ReviewError(reason, "Topic-action review could not be established. No changes attempted.")
+    raise ReviewError(reason, "Manage topics review could not be established. No changes attempted.")
 
 
 def _account(value: str) -> str:
@@ -200,6 +200,6 @@ def record_synthetic_decision(
     )
 
 
-def review_topic_actions(plan: object, account_id: str) -> TopicReview:
+def review_manage_topics(plan: object, account_id: str) -> TopicReview:
     """Production consent remains unavailable; no synthetic fallback or writes."""
     _fail("implementation_pending")

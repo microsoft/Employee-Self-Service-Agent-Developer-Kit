@@ -11,12 +11,25 @@ python scripts/connect_servicenow_da.py \
 
 Parse the structured result. `verified-noop` with `actionResult: applied`
 returns `ACTION_RESULT = "applied"` without asking or mutating.
-`question-required` must be passed to the shared lifecycle runner exactly as
-returned.
+`question-required` carries two controller-built fields. Show
+`replyBeforeQuestion` verbatim as an ordinary agent reply (together with the
+current-task link below) before the card, and pass `question` to the shared
+lifecycle runner exactly as returned. Do not move the topic list into the
+card or rebuild either field.
 Any failure, unknown decision, malformed question or identity mismatch blocks
 the phase before checkpoint or mutation.
 Use the shared lifecycle runner's `adapt-question` path for that exact
 returned canonical question.
+
+The command-generated `replyBeforeQuestion` is an ordinary reply, not part of
+the card:
+
+```text
+Current topic inventory: {TOPIC_INVENTORY}
+
+Inactive {PRODUCT_NAME} topics:
+{INACTIVE_TOPIC_NAMES}
+```
 
 The command-generated question conforms to this visible contract:
 
@@ -25,7 +38,7 @@ The command-generated question conforms to this visible contract:
 [
   {
     "header": "ServiceNow topic states",
-    "question": "Selected agent: {AGENT_DISPLAY_NAME} (`{SELECTED_AGENT_SLUG}` / `{SELECTED_AGENT_ID}`)\nEnvironment: `{ENVIRONMENT_ID}`\nComponent hash: `{COMPONENT_HASH}`\n\nCurrent topic inventory: {TOPIC_INVENTORY}\n\nInactive HRSD topics:\n{INACTIVE_TOPIC_NAMES}\n\nDo you want to enable all listed inactive ServiceNow topics, or keep their current states? Only ServiceNow HRSD topics in this exact inventory are in scope; unrelated topics remain unchanged.",
+    "question": "Do you want to enable all listed inactive ServiceNow topics, or keep their current states? Only topics in the inventory listed above are in scope; unrelated topics remain unchanged.",
     "options": [
       { "label": "Enable all listed inactive ServiceNow topics" },
       { "label": "Keep the current topic states for this configuration" },

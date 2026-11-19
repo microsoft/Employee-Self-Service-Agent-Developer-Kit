@@ -20,7 +20,7 @@ command, and substitute it wherever a command shows `python`. If the launcher
 cannot import the kit's dependencies, stop and tell the maker to rerun
 `/setup`; do not repair the runtime from Connect.
 
-**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead. This overrides the Message-block silence rule above.
+**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead. At the start of a fresh run `renderBlock.text` begins with the connection opening ("We'll connect ... so employees can ..."); emit it verbatim as part of the same message, and never write your own opening or repeat it later. The Test-pane ready message in the current-task lead-in is controller-built: show it verbatim and never reword it, and when `record-test --result untested` or `--result empty` returns `message`, show that `message` verbatim (for `empty`, nothing is recorded and the Test step stays open; ask the result question again) and never claim the integration works. The portal URL confirmation question and options returned by `portal-url-confirmation` are controller-built: show them verbatim, and save nothing before the Maker selects Yes. This overrides the Message-block silence rule above.
 
 **Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
 
@@ -30,7 +30,9 @@ Check whether `.local/setup/config.json` exists before reading it, then read it
 together with `.local/config.json` when present. A missing `.local` directory
 or `Path does not exist` result is expected unprepared state, not a terminal
 Connect failure. Do not retry the missing read or show the global
-setup-required welcome message.
+setup-required welcome message. Unprepared state is handled by the automatic
+Setup handoff in **Choose the agent**; never ask the maker to type `/setup` or
+repeat their Connect request.
 
 ServiceNow Connect applies to Declarative Agents prepared in this workspace.
 It does not depend on `.local/config.json.activeAgent`, does not change it, and
@@ -46,18 +48,137 @@ environment evidence, then proceed to the router; do not gate ServiceNow on
 
 Read `src/skills/connect/servicenow-da/SKILL.md` and follow it. It offers the
 prepared HR and IT agents for this workspace, accepts one pasted Copilot Studio
-link, returns a typed `/setup` handoff for an agent that is new to this
-workspace, and dispatches to the selected HR or IT Dev lifecycle.
+link, hands off to Setup automatically when the workspace or the pasted agent
+is not prepared, and dispatches to the selected HR or IT Dev lifecycle.
 
 Before selecting an agent, run only
-`python scripts/connect_servicenow_da.py agent-chooser`. Do not call
-`list-agents` or scan the environment. Continue to the mandatory
-`resume-handoff` boundary only when the chooser returns `status: ready`.
-`setup-required` is a typed handoff to `/setup` for the exact pasted Copilot
-Studio link; it does not authorize setup, creation, environment switching, or
-state mutation.
+`python scripts/connect_servicenow_da.py agent-chooser`, adding
+`--selection-key "another-agent" --agent-link "{LINK}"` when the maker's
+request already includes a Copilot Studio link. Do not call `list-agents` or
+scan the environment. Continue to the mandatory `resume-handoff` boundary only
+when the chooser returns `status: ready`.
+
+`setup-required` (branch `workspace-not-prepared` or `explicit-agent-link`) and
+`setup-incomplete` (branch `setup-not-finished`: the agent is already in this
+workspace but its Setup steps are still pending) are automatic Setup
+handoffs, not stops. Show:
+
+**Message:**
+
+Before we can connect ServiceNow, we need to finish basic ADK setup. We'll
+complete that first, then return to the ServiceNow connection.
+
+**End message.**
+
+Then immediately read `src/skills/foundation-setup/SKILL.md` and follow
+**Prepare the workspace for an integration** in the same invocation. Preserve
+ServiceNow as the selected integration, the original request, and any supplied
+agent link; pass `setupHandoff.targetUrl` to Setup as the supplied target so it
+does not ask whether the maker already has an agent. Do not ask the maker to
+type `/setup`, ask for confirmation just to enter Setup, or ask them to repeat
+Connect. Setup's normal selection, sign-in, and environment/account
+confirmation controls still apply; do not choose or create an agent for the
+maker. The chooser itself changes no state. When Setup attaches the agent,
+pass the service-provided environment display name with
+`--environment-display-name "{ENVIRONMENT_DISPLAY_NAME}"` exactly as
+`foundation-setup/da-existing-dev.md` requires, and omit it when Setup has none;
+never derive a name from an ID, URL, or host.
+
+When the pasted link is in a different environment than this workspace, the
+handoff carries `workspaceEnvironmentDiffers: true`. Setup's existing
+conflicting-environment choice (**Shared workspace choices** in
+`foundation-setup/SKILL.md`) applies; do not make the choice for the maker or
+ask them to type `/setup`. Continue below only when Setup returns a
+materialized workspace for this agent; if it ends elsewhere (for example in a
+separate worktree), show its actual disposition and do not continue here.
+
+If Setup is blocked, cancelled, or exited, do not continue Connect or invoke
+Setup again in this invocation, and do not tell the maker to type `/setup`.
+Preserve the original request. When Setup reported a blocker the maker can
+fix, show:
+
+**Message:**
+
+Setup for **{AGENT_NAME}** didn't finish: {REASON}. ServiceNow wasn't
+connected, and nothing was changed. Please fix that first. When you're ready,
+just tell me to finish setup and connect ServiceNow, and I'll pick up from
+here.
+
+**End message.**
+
+When the maker simply cancelled, there is nothing to fix; show:
+
+**Message:**
+
+Setup for **{AGENT_NAME}** didn't finish: setup was cancelled. ServiceNow
+wasn't connected, and nothing was changed. When you're ready, just tell me to
+finish setup and connect ServiceNow, and I'll pick up from here.
+
+**End message.**
+
+`{REASON}` is a short plain clause with no trailing period that says what to
+fix, taken from what Setup reported, with no paths or error codes. Use the
+agent name from the pasted link or Setup's report, and omit " for
+**{AGENT_NAME}**" when none is known.
+
+When the maker later asks to finish setup and connect ServiceNow (or sends
+`/connect servicenow` again), treat it as a fresh request: rerun
+`agent-chooser` and follow this handoff again, without requiring `/setup`. The
+no-loop rule applies only within one invocation.
+
+When Setup returns a materialized workspace, continue directly: Setup's
+completion summary and post-setup choices are not shown, as in Workday's
+prepare-at-entry flow. Rerun the chooser instead of showing the full chooser
+again:
+
+- with a link: `agent-chooser --selection-key "another-agent" --agent-link "{LINK}"`
+- without a link: `agent-chooser --selection-key "prepared:{AGENT_ID}"`, using
+  the agent ID Setup reports for the agent it just prepared
+
+Continue only when the rerun returns `status: ready` for that agent. Do not
+say the agent is set up, show the "We'll continue" message, or start any
+Connect step before that result.
+
+If the rerun returns `setup-incomplete`, the agent is in the workspace but
+Setup's remaining steps are still pending (for example after **Checkpoint and
+refresh** reset them). Do not end with an error. Resume Setup once in this
+invocation for that exact agent, without repeating the first Message: run the
+setup-readiness FlightChecks `DA-AGENT-001` and `DA-CONTENT-001` and apply each
+result with `setup_existing_da.py maintain-flightcheck`, exactly as the
+readiness sequence in `foundation-setup/da-existing-dev.md` describes (same
+agent, environment, ring, and `--preferred-username "{SETUP_ACCOUNT}"`), then
+rerun the chooser once more. If it still does not return `ready`, or Setup
+reports a blocker, treat it as a blocked Setup: show the blocker Message above
+with the pending step in plain language as `{REASON}`, and do not resume again.
+Any other chooser error is shown as returned, without looping into Setup.
+
+After the rerun returns `ready`, show:
+
+**Message:**
+
+We'll continue with **{AGENT_NAME}**, the agent you just set up in
+**{ENVIRONMENT_NAME}**. You can select another supported ESS agent before we
+continue.
+
+**End message.**
+
+Use the canonical `environment.display_name` from `.local/setup/config.json`
+(the same optional field Setup uses as `{ENVIRONMENT_DISPLAY_NAME}`), and omit
+" in **{ENVIRONMENT_NAME}**" when it is not recorded; never infer a name. Offer only
+**Choose a different agent**; if the maker picks it, run
+`python scripts/connect_servicenow_da.py agent-chooser` and follow
+`servicenow-da/SKILL.md`. Otherwise continue without asking again. Do not change
+`.local/config.json.activeAgent` or persist the choice.
 
 Do not use the legacy `step*.md` files in this directory.
+
+## Test and Prod realms
+
+When the maker says the agent was promoted to Test or Production, chooses to
+configure either realm, or pastes a Test or Production agent link, read
+`src/skills/connect/servicenow/realms.md` and follow it. Test and Prod checks
+are independent of the Dev lifecycle and never reuse the Dev connection. It
+never changes Dev behavior.
 
 ## Fresh ServiceNow execution boundary
 
@@ -81,6 +202,35 @@ Immediately before consuming the result, read the current
 `src/skills/connect/shared/lifecycle-runner.md`. The executable decision routes
 the shared runner; it does not replace L.2 live re-verification, L.4a role and
 rollback gates, action-result handling, or L.5 completion.
+
+## ServiceNow additions to the shared runner
+
+These rules apply only to ServiceNow and extend `lifecycle-runner.md`; no other
+provider uses them.
+
+- **Role attestation.** For **Maker configuration and validation**, the **Yes**
+  answer to the availability question asked at the start of that group is also
+  the role attestation for every mutating phase in it (`credential`, `topics`,
+  `portal-url`). The controller records `roleAttestations.{requiredRole}` in
+  the same write as the group acknowledgement (and backfills it for an
+  already-acknowledged group on resume). Do not show `permission-gate.md`'s
+  **Confirm role** question for those phases, so those phases never show
+  **Confirm role**. If `roleAttestations.{requiredRole}` is missing or invalid
+  at a mutating phase, do not run the action or ask a role question there:
+  rerun `resume-handoff` so the phase-start question is asked first. A **No**
+  answer records nothing and mutates nothing.
+- **Administrator instructions.** Render `ordinaryReply.text` verbatim; it
+  already contains the plain-text lead-in and the Ready-to-send fenced block.
+- **Phase `renderBlock.text`.** After **Yes**, the newly returned
+  `renderBlock.text` is maker-facing wording only: a short lead-in that
+  connects to the previous step, the numbered steps or Ready-to-send message
+  when the phase has one, and nothing else. Show it verbatim. It never renders
+  the target, responsible role, runbook path, expected evidence, or completion
+  boundary; those stay in the controller JSON and the action docs for the
+  agent. The credential lead-in names the saved User Claim and User Field only
+  when both are recorded.
+- **Final `renderBlock.text`.** Its closing sentence states what the
+  Maker-reported Test pane result does and does not cover.
 
 ## Parse the handoff
 
@@ -154,7 +304,8 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   rollback gates, then read the exact returned action document in this
   invocation and follow it;
 - when that action calls `topic-action-handoff` and returns
-  `question-required`, require the supported
+  `question-required`, first show the returned `replyBeforeQuestion` verbatim
+  as an ordinary agent reply, then require the supported
   `header`/`question`/`options`/`allowFreeformInput` canonical shape, pass it
   through `adapt-question`, call `ask_user` with the generated arguments
   verbatim, and wait. After the maker answers, continue the matching branch in
@@ -184,6 +335,431 @@ Parse the returned `servicenow.resume-handoff.v1` object:
     returns typed `status: "existing-compatible-state"`;
 - any command failure, malformed result or identity mismatch blocks the
   invocation. Never fall back to a validate-only sequence.
+
+## Clarification and recovery Messages
+
+These replace the relevant point in the journey; they do not restart it. Use
+the agent and environment names already known (omit " in **{ENVIRONMENT_NAME}**"
+when no display name is recorded) and never add paths, IDs, or error codes.
+
+**Unsupported agent.** When `agent-chooser` returns `status:
+unsupported-agent`, show `message` verbatim, offer **Choose a different
+agent**, and do not enter Setup or any lifecycle for that agent:
+
+**Message:**
+
+We can connect **Employee Self-Service HR to ServiceNow HR Service Delivery**
+or **Employee Self-Service IT to ServiceNow IT Service Management**, one agent
+at a time. The selected agent isn't supported.
+
+Select Employee Self-Service HR or IT to continue.
+
+**End message.**
+
+**Permission denied.** When the target preflight read returns a permission
+denial (HTTP 401/403), show the following and stop without administrator work:
+
+**Message:**
+
+Your account doesn't have the required access to configure **{AGENT_NAME} in
+{ENVIRONMENT_NAME}**.
+
+Ask a maker with the Environment Maker role and permission to edit this agent
+to run `/connect servicenow` using their own account.
+
+**End message.**
+
+**Permission unavailable.** When the same read cannot complete (throttling,
+network, or service error), show the following. When the maker answers Retry,
+rerun the mandatory `resume-handoff`; an assurance from the maker or an
+administrator never replaces the check:
+
+**Message:**
+
+We couldn't verify whether your account can configure **{AGENT_NAME} in
+{ENVIRONMENT_NAME}**. Setup is paused; this doesn't mean your access was
+denied.
+
+Retry the permission check to continue.
+
+**End message.**
+
+**HR plugin not ready.** When the maker reports that the ServiceNow
+administrator says the HR plugin is not active yet, show the following. Do not
+install the plugin or describe this as a failed integration:
+
+**Message:**
+
+HR setup is waiting for your ServiceNow administrator to confirm that the HR
+Service Delivery Core plugin is installed and active.
+
+Bring back that confirmation when it's ready, and we'll continue with the
+Entra handoff. You won't need to restart.
+
+**End message.**
+
+**Maker pauses for an administrator.** When the maker says they will return
+later while an administrator reply is outstanding, show the first Message. When
+they return, show the second, rerun `resume-handoff` (which rechecks
+permission), and then continue with the next question it returns:
+
+**Message:**
+
+We're waiting for your ServiceNow administrator's saved-configuration
+confirmation and User Field.
+
+When you return, paste their non-sensitive reply or send those items
+individually. Don't include employee identifiers or secrets. You won't need to
+repeat the Entra values.
+
+**End message.**
+
+**Message:**
+
+We're continuing the ServiceNow setup for **{AGENT_NAME} in
+{ENVIRONMENT_NAME}**.
+
+We're rechecking your permission to configure this agent before we continue.
+Next, we'll need your ServiceNow administrator's reply.
+
+**End message.**
+
+**Conflicting Client IDs.** When the Entra reply contains more than one
+different Client ID, record nothing and show:
+
+**Message:**
+
+The reply contains more than one Client ID. Ask your Entra administrator which
+**Client ID** ServiceNow should use.
+
+Send that value here.
+
+**End message.**
+
+**Custom claim not confirmed.** When a custom claim (for example employee ID)
+is mentioned but the Entra administrator has not confirmed it, show the
+following. The maker is not asked to select an identity mapping or invent a
+claim name; a proposed name, a name alone, or a vague "done" does not establish
+readiness. When some items are already confirmed, ask only for the missing
+ones:
+
+**Message:**
+
+We need the Entra administrator to confirm the custom claim before ServiceNow
+can use it to identify employees.
+
+Ask them to complete the custom-claim work in Part 4 of their instructions.
+Bring back the exact configured claim name and confirmation that the setup is
+complete, including the appropriate format and populated source attribute for
+every intended employee.
+
+Then ask your ServiceNow administrator to confirm that the supported
+configuration is saved, with the matching User Field. Don't send employee
+identifiers or secrets.
+
+We'll keep the Client ID already supplied.
+
+**End message.**
+
+**Claim name omitted.** When the Entra reply gives a Client ID but only says a
+custom claim "is configured" without naming it, record nothing about the claim,
+never guess a name from the phrase, and show the first Message. When the reply
+contains two possible claim names, show the second. When an exact name is given
+without confirmation that its setup is complete, show the third, substituting
+the stated name:
+
+**Message:**
+
+We have the Client ID. Next, we need the **exact claim name** your Entra
+administrator configured for ServiceNow to use.
+
+Ask your Entra administrator for that name, or paste the rest of their
+non-sensitive reply. You don't need to resend the Client ID.
+
+**End message.**
+
+**Message:**
+
+The reply contains two claim names, and we can't tell which one the app emits
+for this setup.
+
+Ask your Entra administrator to confirm the exact one ServiceNow should use.
+The confirmed Client ID stays in place.
+
+**End message.**
+
+**Message:**
+
+We have the claim name `{CLAIM_NAME}`. Ask your Entra administrator to confirm
+that its setup is complete, including the appropriate format and populated
+source attribute for every intended employee, as requested in their message.
+
+Bring back their non-sensitive confirmation; you don't need to resend the name
+or the Client ID. Don't include employee identifiers or secrets.
+
+**End message.**
+
+**Claim attributes missing.** When the Entra administrator says the identifiers
+are not populated for every employee who will use this agent, pause the claim
+and show the following. Never populate directory attributes or audit employee
+records:
+
+**Message:**
+
+The custom-claim setup is paused until the identifiers are populated for the
+intended employees.
+
+Ask your Entra administrator to complete that work and return confirmation
+that the claim setup is complete. You don't need to send an employee list or
+anyone's identifier here.
+
+**End message.**
+
+**Claim still in email format.** When the Entra administrator says the custom
+claim still has the default email format, show the following. Never ask the
+maker to choose a claim transformation or edit the application:
+
+**Message:**
+
+The claim setup isn't ready yet.
+
+Ask your Entra administrator to review the format guidance in Part 4 of their
+message and confirm the completed claim setup. The Client ID stays in place.
+
+**End message.**
+
+**Entra error during claim configuration.** When the Entra administrator hits
+an error after adding the custom claim, show the following. Never claim that a
+particular setting will fix an error the available information does not
+establish:
+
+**Message:**
+
+Ask your Entra administrator to review the error using the claim-customization
+guidance in Part 4 of their message.
+
+Return with their confirmation that the claim setup is complete before we
+continue. Don't send tokens, signing keys, or certificate material here.
+
+**End message.**
+
+**Administrator replies contradict each other.** When the Entra and ServiceNow
+replies name different claims, record nothing new and never change either
+administrator's mapping. Treat optional email claims as no evidence that email
+is the intended identifier. Show the following with the two claim names
+substituted:
+
+**Message:**
+
+The administrator replies name different claims: Entra confirmed
+`{ENTRA_CLAIM}`, while ServiceNow reported `{SERVICENOW_CLAIM}`.
+
+Send both replies to the administrators and ask them to agree on a supported
+claim and matching ServiceNow field that accounts for any existing uses. Bring
+back their non-sensitive confirmation of the completed claim setup, saved
+mapping, and any changed registration or claim values.
+
+We'll recheck the affected setup before continuing. Don't include employee
+identifiers or secrets.
+
+The confirmed Client ID stays in place.
+
+**End message.**
+
+**Maker waits for the claim.** When the maker says they are waiting for the
+custom claim to be configured, show the first Message. When they return, show
+the second, rerun `resume-handoff` (which rechecks permission), and resume at
+that waiting action rather than restarting the administrator instructions:
+
+**Message:**
+
+We're waiting for your Entra administrator's confirmation of the configured
+claim.
+
+When they reply, paste their non-sensitive confirmation that the claim setup is
+complete, plus the exact configured claim name. Don't include employee
+identifiers or secrets. The confirmed Client ID is already recorded for this
+run.
+
+**End message.**
+
+**Message:**
+
+We're continuing the ServiceNow setup for **{AGENT_NAME} in
+{ENVIRONMENT_NAME}**.
+
+We're rechecking your permission before we continue. Then, bring back your
+Entra administrator's confirmation that the custom-claim setup is complete and
+its exact configured name.
+
+**End message.**
+
+**Resource URI holds the claim name.** When a supported connection check shows
+that the connection's Resource URI contains the claim name instead of the Entra
+app's Client ID, show the following with the claim name, the recorded Client
+ID, and the agent substituted. Never delete or silently replace a shared
+connection, and never return to Entra registration:
+
+**Message:**
+
+The connection's **Resource URI** is set to `{CLAIM_NAME}`. That field needs
+the Entra app's **Client ID**, not the claim name.
+
+If this connection is only used by this agent, correct it to `{CLIENT_ID}` in
+the supported connection setup. If it is shared, select or create a separate
+supported ESS connection for this agent rather than changing the shared
+connection.
+
+Return here and tell us which connection you used. We'll check this agent's
+connection and link before continuing. The administrator-confirmed mapping stays
+in place.
+
+**End message.**
+
+**Knowledge-only request.** When the maker asks to configure ServiceNow
+Knowledge instead of connecting an ESS agent, show the following and do not
+start or infer an ESS target from the existence of Knowledge:
+
+**Message:**
+
+We can connect Employee Self-Service HR or IT to ServiceNow, but we can't
+configure the ServiceNow Knowledge connector.
+
+Use the [ServiceNow Knowledge connector guidance](https://learn.microsoft.com/en-us/microsoftsearch/servicenow-knowledge-connector)
+for that setup.
+
+**End message.**
+
+**Unclear ServiceNow administrator return.** When the ServiceNow reply says
+the work is done but does not confirm the saved configuration or does not name
+both the **User Claim** and the **User Field**, never infer the missing value
+and never ask the maker to interpret settings. Record nothing, then show the
+Message that matches what is missing (the first when neither value is named,
+the second when the claim is named but the User Field is missing). Statements
+that an existing Knowledge or single sign-on setup "already works" use the
+next block instead:
+
+**Message:**
+
+Thanks. Please ask your ServiceNow administrator to confirm that the
+configuration is saved and name both the **User Claim** and **User Field**.
+
+That will clarify which settings identify the signed-in employee.
+
+**End message.**
+
+**Message:**
+
+We have the saved-configuration confirmation and User Claim `{CLAIM_NAME}`.
+Ask your administrator which **User Field** they selected.
+
+Send that value on its own.
+
+**End message.**
+
+**Administrator says only "already working".** A bare statement such as
+"Knowledge already works" or "we use email" never confirms the setup and never
+establishes the User Claim or User Field. Never infer `email` or **Email**.
+Show the first Message for the bare statement and the second for "we use
+email":
+
+**Message:**
+
+Ask your ServiceNow administrator to confirm that the configuration is saved
+and supports ESS, and name its **User Claim** and **User Field**.
+
+Paste their reply here without secrets, or send the missing items individually.
+You don't need to repeat the Entra values.
+
+**End message.**
+
+**Message:**
+
+Ask your ServiceNow administrator which **User Claim** and **User Field** they
+confirmed for ESS. Send those values here.
+
+**End message.**
+
+**Different registration returned.** When the administrators resolve a
+conflict manually and return a different Client ID, discard the earlier
+confirmations tied to the old Client ID, never reuse the old metadata URL,
+connection Resource URI, or mapping evidence, and show:
+
+**Message:**
+
+We'll check the setup information tied to the newly confirmed Client ID before
+continuing.
+
+Ask your ServiceNow administrator to confirm that the configuration for that
+registration is saved and supports ESS, and provide its **User Claim** and
+**User Field**. Bring back their non-sensitive reply and any other changed
+setup values. We won't carry forward confirmation tied to the earlier Client
+ID.
+
+**End message.**
+
+**Maker selects the Knowledge connector.** When the maker asks whether to
+select the ServiceNow Knowledge connection for the ESS agent, show the first
+Message, substituting the agent, the confirmed Client ID, and the ServiceNow
+instance name. When the maker already has a supported ESS ServiceNow
+connection, show the second. Reuse is never inferred merely because a
+connection is named "ServiceNow":
+
+**Message:**
+
+That is the Knowledge connector, not the ServiceNow connection used by
+**{AGENT_NAME}**.
+
+In **{AGENT_NAME} > Settings > Connection Settings > ServiceNow**, create the
+connection using **Microsoft Entra ID User Login**, `{CLIENT_ID}` as **Resource
+URI**, and `{INSTANCE_NAME}` as **Instance name**.
+
+Leave the Knowledge connector unchanged. Return here and tell us which ESS
+connection you used. We'll check this agent's connection and link before
+continuing.
+
+**End message.**
+
+**Message:**
+
+You can select that existing ESS ServiceNow connection instead of creating a
+duplicate.
+
+Return here and tell us which one you selected. We'll check that
+**{AGENT_NAME}** can use it.
+
+**End message.**
+
+**Knowledge not retested.** When the maker disclosed during this run that
+ServiceNow Knowledge shares the same sign-in configuration, append this
+sentence to the final success paragraph as the last sentence, after the
+statement that other requests and sign-in for other employees haven't been
+verified. Never add it when Knowledge was not mentioned:
+
+**Message:**
+
+ServiceNow Knowledge wasn't retested.
+
+**End message.**
+
+**Existing SSO or Graph configuration conflict.** When the maker reports that
+an existing OIDC configuration already serves SSO or the Microsoft Graph
+connector and cannot be changed, never change or troubleshoot it. Show:
+
+**Message:**
+
+Send the reported conflict to your Entra and ServiceNow administrators. Ask
+them to agree on a supported setup using the compatibility guidance in their
+messages.
+
+We won't change that configuration or troubleshoot the conflict. Bring back
+their non-sensitive compatibility confirmation, saved-configuration
+confirmation, User Field, and any changed registration or claim values.
+
+We'll recheck the affected setup before continuing. Don't include employee
+identifiers or secrets.
+
+**End message.**
 
 ## ServiceNow rules
 

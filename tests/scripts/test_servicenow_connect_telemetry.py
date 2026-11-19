@@ -375,7 +375,7 @@ def test_reopen_completed_phase_as_blocked_resets_old_duration() -> None:
 
 @pytest.mark.parametrize(
     ("profile", "phase_count"),
-    (("hrsd", 9), ("itsm", 8)),
+    (("hrsd", 8), ("itsm", 7)),
 )
 def test_all_contract_phases_done_emits_completed_once(
     profile: str,

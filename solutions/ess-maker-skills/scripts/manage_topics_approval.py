@@ -12,7 +12,7 @@ import sqlite3
 import time
 import uuid
 
-from topic_actions_planning import _digest
+from manage_topics_planning import _digest
 
 
 class TopicReviewError(ValueError):
@@ -24,7 +24,7 @@ class TopicReviewError(ValueError):
 class TopicReviewStore:
     def __init__(self, root: Path, *, clock=time.time, monotonic=time.monotonic):
         self.root = root.resolve()
-        self.path = self.root / ".local" / "topic-actions" / "reviews.sqlite3"
+        self.path = self.root / ".local" / "manage-topics" / "reviews.sqlite3"
         self.clock = clock
         self.monotonic = monotonic
 

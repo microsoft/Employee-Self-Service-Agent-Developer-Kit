@@ -7,15 +7,15 @@ from dataclasses import replace
 
 import pytest
 
-from topic_actions_discovery import (
+from manage_topics_discovery import (
     DiscoveryTarget, SourceBinding, TopicEvidence, TopicSet, build_provisional_snapshot,
 )
-from topic_actions_flat_discovery import (
+from manage_topics_flat_discovery import (
     FlatCatalog, FlatMember, FlatSet, InventoryTopic, NativeInventory, compare_flat_catalog,
 )
-from topic_actions_planning import TopicChange, TopicSkip, build_provisional_plan, plan_topic_actions
-from topic_actions_review import (
-    ReviewError, prepare_review, record_synthetic_decision, review_topic_actions,
+from manage_topics_planning import TopicChange, TopicSkip, build_provisional_plan, plan_manage_topics
+from manage_topics_review import (
+    ReviewError, prepare_review, record_synthetic_decision, review_manage_topics,
 )
 
 
@@ -249,7 +249,7 @@ def test_native_flat_preview_does_not_become_live_approval_with_true_permissions
         TARGET, "exact.hr", (InventoryTopic("topic-one", "exact.hr.topic.One", "Off"),), "read-r1",
     )
     discovery = replace(compare_flat_catalog(catalog, inventory, ("alpha",)), evidence_kind="native_read")
-    plan = plan_topic_actions(discovery, "enable")
+    plan = plan_manage_topics(discovery, "enable")
     review = prepare_review(plan, ACCOUNT)
     assert review.plan.state_differences == (TopicChange("topic-one", "Off", "On"),)
     assert review.plan.delta == ()
@@ -314,9 +314,9 @@ def test_production_review_never_invokes_synthetic_consent_or_live_inputs(monkey
         def __getattribute__(self, name):
             pytest.fail("Production approval is unavailable; do not access live inputs.")
 
-    monkeypatch.setattr("topic_actions_review.prepare_review", forbidden)
-    monkeypatch.setattr("topic_actions_review.record_synthetic_decision", forbidden)
+    monkeypatch.setattr("manage_topics_review.prepare_review", forbidden)
+    monkeypatch.setattr("manage_topics_review.record_synthetic_decision", forbidden)
     with pytest.raises(ReviewError) as error:
-        review_topic_actions(LiveInput(), ACCOUNT)
+        review_manage_topics(LiveInput(), ACCOUNT)
     assert error.value.reason == "implementation_pending"
     assert list(tmp_path.iterdir()) == []
