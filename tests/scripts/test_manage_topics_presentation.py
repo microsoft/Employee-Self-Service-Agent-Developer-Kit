@@ -7,10 +7,10 @@ from copy import deepcopy
 
 import pytest
 
-from topic_actions_execution import TopicActionSession, agent_set_overview
-from topic_actions_catalog import load_catalog
-from topic_actions_presentation import approval_question, result_text, review_text
-from tests.scripts.test_topic_actions_runtime import dev_native_backend
+from manage_topics_execution import ManageTopicsSession, agent_set_overview
+from manage_topics_catalog import load_catalog
+from manage_topics_presentation import approval_question, result_text, review_text
+from tests.scripts.test_manage_topics_runtime import dev_native_backend
 
 
 def _review():
@@ -427,7 +427,7 @@ def test_absent_topics_have_short_copy_without_approval_or_submission():
             if row["component"]["id"] not in {"a", "shared", "b"}
         ]
     backend.components.read_components.side_effect = packets
-    result = TopicActionSession(backend, "disable").run(
+    result = ManageTopicsSession(backend, "disable").run(
         lambda _: pytest.fail("Missing topics must not request approval."),
     )
     assert result["status"] == "blocked"
@@ -452,7 +452,7 @@ def test_absent_servicenow_it_has_friendly_copy_across_bundled_agent_families(
     body = deepcopy(next(backend.components.read_components.side_effect))
     body["bot"]["schemaName"] = agent_schema
     backend.components.read_components.side_effect = [body]
-    result = TopicActionSession(backend, action).run(
+    result = ManageTopicsSession(backend, action).run(
         lambda _: pytest.fail("An absent set must not request approval."),
         preview=preview, review_only=not preview,
     )
@@ -477,7 +477,7 @@ def test_unsupported_family_with_matching_topics_is_not_reported_as_absent(case_
     body["bot"]["schemaName"] = document["packages"][0]["agentSchemaNames"][0]
     body["botComponentChanges"][0]["component"]["schemaName"] = schema.upper() if case_alias else schema
     backend.components.read_components.side_effect = [body]
-    result = TopicActionSession(backend, "disable").run(
+    result = ManageTopicsSession(backend, "disable").run(
         lambda _: pytest.fail("An unsupported family cannot request approval."),
     )
     assert result["status"] == "blocked"
@@ -603,7 +603,7 @@ def test_remote_labels_cannot_break_the_review_table_or_inject_markup():
 def test_native_controller_attaches_fixed_copy_without_dropping_diagnostics_or_approval():
     backend = dev_native_backend(after={"a": "On", "shared": "On"})
     reviews = []
-    result = TopicActionSession(backend, "enable").run(
+    result = ManageTopicsSession(backend, "enable").run(
         lambda review: reviews.append(deepcopy(review)) or "approve",
     )
     assert result["completed"] and len(reviews) == 1
@@ -806,7 +806,7 @@ def test_native_no_change_report_keeps_full_grouped_results_without_approval(act
     backend = dev_native_backend(
         selected=("alpha", "beta"), before={"a": state, "shared": state, "b": state},
     )
-    result = TopicActionSession(backend, action).run(
+    result = ManageTopicsSession(backend, action).run(
         lambda _: pytest.fail("A no-change report must not introduce approval."),
         review_only=True,
     )

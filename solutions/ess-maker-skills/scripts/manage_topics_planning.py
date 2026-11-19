@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 
-from topic_actions_discovery import (
+from manage_topics_discovery import (
     DiscoveryError,
     DiscoverySnapshot,
     DiscoveryTarget,
@@ -69,7 +69,7 @@ class TopicPlan:
 
 
 def _fail(reason: str) -> None:
-    raise PlanningError(reason, "Topic-action planning could not be established. No changes attempted.")
+    raise PlanningError(reason, "Manage topics planning could not be established. No changes attempted.")
 
 
 def _digest(value: object) -> str:
@@ -220,7 +220,7 @@ def build_provisional_plan(
     return replace(plan, approval_basis="synthetic:" + _digest(asdict(plan)))
 
 
-def plan_topic_actions(snapshot: object, action: str) -> TopicPlan:
+def plan_manage_topics(snapshot: object, action: str) -> TopicPlan:
     """Preview observed flat-set states without creating an eligible delta.
 
     Input provenance is retained, not reauthenticated. Interim definitions
@@ -229,9 +229,9 @@ def plan_topic_actions(snapshot: object, action: str) -> TopicPlan:
     explicitly separate from eligible changes and satisfied eligible members.
     No client, native token, synthetic fallback, or mutation is used.
     """
-    from topic_actions_catalog import CatalogSnapshot, plan_catalog_actions
-    from topic_actions_discovery import _identity, _key, _target
-    from topic_actions_flat_discovery import (
+    from manage_topics_catalog import CatalogSnapshot, plan_catalog_actions
+    from manage_topics_discovery import _identity, _key, _target
+    from manage_topics_flat_discovery import (
         FlatCatalog,
         FlatDiscoveryResult,
         MemberMatch,

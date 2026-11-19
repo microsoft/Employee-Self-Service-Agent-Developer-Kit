@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Topic-action-owned native transport; no Connect or evaluation dependencies."""
+"""Manage topics native transport; no Connect or evaluation dependencies."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from agentbuilder import (
     AgentBuilderClient, AgentBuilderError, _response_error,
     environment_id_from_host, validate_environment_host,
 )
-from topic_actions_discovery import DiscoveryTarget, _identity, _target
+from manage_topics_discovery import DiscoveryTarget, _identity, _target
 
 
 COMPONENTS_API_VERSION = "2022-03-01-preview"
@@ -35,7 +35,7 @@ def verify_native_target(client: AgentBuilderClient, target: DiscoveryTarget) ->
     return agent
 
 
-class TopicActionsClient:
+class ManageTopicsClient:
     single_attempt = True
 
     def __init__(

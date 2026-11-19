@@ -26,19 +26,19 @@ from agentbuilder import (
     validate_environment_host,
 )
 from flightcheck.agent_scope import active_agent
-from topic_actions_client import TopicActionsClient
-from topic_actions_presentation import result_text
+from manage_topics_client import ManageTopicsClient
+from manage_topics_presentation import result_text
 
 
-RESULT_MARKER = "TOPIC_ACTIONS_RESULT_JSON:"
-REVIEW_MARKER = "TOPIC_ACTIONS_REVIEW_JSON:"
+RESULT_MARKER = "MANAGE_TOPICS_RESULT_JSON:"
+REVIEW_MARKER = "MANAGE_TOPICS_REVIEW_JSON:"
 TARGET_FIELDS = frozenset({"tenantId", "environmentId", "agentId"})
 REQUEST_FIELDS = frozenset(
     {"contractVersion", "target", "action", "setKeys", "entry", "callerContext"}
 )
 
 
-class TopicActionsError(ValueError):
+class ManageTopicsError(ValueError):
     """A safe, structured entry failure without raw input or service bodies."""
 
     def __init__(self, reason: str, message: str) -> None:
@@ -125,22 +125,22 @@ def _guid(value: Any) -> str:
 def validate_request(value: Any, *, list_sets: bool = False) -> dict[str, Any]:
     """Validate provisional logical inputs, not topic-set membership."""
     if not isinstance(value, dict) or set(value) - REQUEST_FIELDS:
-        raise TopicActionsError("invalid_request", "Unsupported request shape.")
+        raise ManageTopicsError("invalid_request", "Unsupported request shape.")
     version = value.get("contractVersion", 1)
     if type(version) is not int or version != 1:
-        raise TopicActionsError("invalid_request", "Unsupported request contract version.")
+        raise ManageTopicsError("invalid_request", "Unsupported request contract version.")
     target = value.get("target")
     try:
         if not isinstance(target, dict) or set(target) != TARGET_FIELDS:
             raise ValueError("Incomplete target.")
         target = {key: _guid(target[key]) for key in sorted(TARGET_FIELDS)}
     except ValueError as exc:
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "invalid_request", "Provide one tenant, environment and agent ID."
         ) from exc
     action = value.get("action", "list" if list_sets else None)
     if action not in (("list",) if list_sets else ("enable", "disable")):
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "invalid_request", "Choose one action: enable or disable. Restore is not supported."
         )
     keys = value.get("setKeys", [] if list_sets else None)
@@ -156,7 +156,7 @@ def validate_request(value: Any, *, list_sets: bool = False) -> dict[str, Any]:
         )
         or len(set(keys)) != len(keys)
     ):
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "invalid_request", "Provide distinct, nonempty topic-set keys."
         )
     entry = value.get("entry")
@@ -166,13 +166,13 @@ def validate_request(value: Any, *, list_sets: bool = False) -> dict[str, Any]:
         or not isinstance(context, dict)
         or (entry == "caller" and not context)
     ):
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "invalid_request", "Provide a valid entry and retained caller context."
         )
     try:
         json.dumps(context, allow_nan=False)
     except (TypeError, ValueError, RecursionError) as exc:
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "invalid_request", "Caller context must be a JSON object."
         ) from exc
     return {
@@ -189,15 +189,15 @@ def _read_object(path: Path, missing_reason: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8-sig"))
     except FileNotFoundError as exc:
-        raise TopicActionsError(
+        raise ManageTopicsError(
             missing_reason, "The active agent's workspace information is missing."
         ) from exc
     except (OSError, ValueError) as exc:
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "setup_broken", "The existing setup information could not be read."
         ) from exc
     if not isinstance(value, dict):
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "setup_broken", "The existing setup information is malformed."
         )
     return value
@@ -218,7 +218,7 @@ def _workspace_target(
         or any(not isinstance(agent, dict) for agent in agents)
         or not isinstance(setup.get("agents"), dict)
     ):
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "setup_broken", "The selected agent's saved setup information cannot be validated."
         )
     selected = active_agent(config, slug)
@@ -230,7 +230,7 @@ def _workspace_target(
         and record["agent"].get("workspace_slug") == slug
     ]
     if not selected or len(matches) != 1:
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "target_unverified", "One active agent could not be established."
         )
     key, record = matches[0]
@@ -265,18 +265,18 @@ def _workspace_target(
         if not isinstance(api_version, str) or not api_version.strip():
             raise ValueError("Missing API version.")
     except (TypeError, ValueError, AttributeError) as exc:
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "target_unverified", "The request does not match verified workspace identity."
         ) from exc
     workspace = record.get("workspace", {})
     steps = record.get("steps", {})
     if not isinstance(workspace, dict) or not isinstance(steps, dict):
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "setup_broken", "The selected agent's workspace preparation record is malformed.",
         )
     local_step = steps.get("SETUP-07", {})
     if not isinstance(local_step, dict):
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "setup_broken", "The selected agent's local workspace setup step is malformed.",
         )
     workspace_recorded = (
@@ -284,7 +284,7 @@ def _workspace_target(
         and isinstance(workspace.get("agent_path"), str) and bool(workspace["agent_path"].strip())
     )
     if not require_connect_ready and local_step.get("state") == "done" and not workspace_recorded:
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "setup_broken",
             "Local workspace setup is recorded as complete, but its workspace information is missing.",
         )
@@ -292,7 +292,7 @@ def _workspace_target(
     if (require_connect_ready and record.get("connect_ready") is not True) or (
         not require_connect_ready and not prepared
     ):
-        raise TopicActionsError(
+        raise ManageTopicsError(
             "setup_incomplete",
             "Selected-agent setup is incomplete." if require_connect_ready else
             "Setup has not finished preparing the selected agent's local workspace.",
@@ -374,7 +374,7 @@ def inspect_request(
                 and account.casefold() != account_hint.strip().casefold()
             )
         ):
-            raise TopicActionsError(
+            raise ManageTopicsError(
                 "account_mismatch", "The authenticated account or tenant could not be verified."
             )
         stage = "target_unverified"
@@ -390,10 +390,10 @@ def inspect_request(
         finally:
             client.session.close()
         if _guid(remote.get("botId")) != target["agentId"]:
-            raise TopicActionsError(
+            raise ManageTopicsError(
                 "target_unverified", "Direct lookup returned a different agent identity."
             )
-    except TopicActionsError as exc:
+    except ManageTopicsError as exc:
         return _result(exc.reason, str(exc), context, target=target)
     except AgentBuilderHTTPError as exc:
         reason = "authentication_failed" if stage == "authentication_failed" else {
@@ -414,13 +414,13 @@ def inspect_request(
     return _result(
         "inspection_only",
         "Account and selected-agent read access verified. This read-only inspection "
-        "does not execute topic actions; write authority and topic-set readiness "
+        "does not run Manage topics; write authority and topic-set readiness "
         "remain unverified. Use --preview or --execute for the topic-set flow.",
         context, target=target, verified=True,
     )
 
 
-def run_topic_actions(
+def run_manage_topics(
     value: Any, *, workspace_root: Path, confirm,
     account_hint: str | None = None, cancelled: bool = False, preview: bool = False,
     review_only: bool = False, approved_binding: str | None = None,
@@ -428,10 +428,10 @@ def run_topic_actions(
     list_sets: bool = False,
 ) -> dict[str, Any]:
     """Shared selected-agent entry; every write uses freshly verified evidence."""
-    from topic_actions_catalog import load_catalog
-    from topic_actions_discovery import DiscoveryError, DiscoveryTarget
-    from topic_actions_execution import TopicActionSession, agent_set_overview
-    from topic_actions_native import NativeActionBackend
+    from manage_topics_catalog import load_catalog
+    from manage_topics_discovery import DiscoveryError, DiscoveryTarget
+    from manage_topics_execution import ManageTopicsSession, agent_set_overview
+    from manage_topics_native import NativeActionBackend
 
     context = value.get("callerContext", {}) if isinstance(value, dict) else {}
     context = deepcopy(context) if isinstance(context, dict) else {}
@@ -464,8 +464,8 @@ def run_topic_actions(
             or not isinstance(account, str) or not account.strip()
             or (account_hint is not None and account.casefold() != account_hint.strip().casefold())
         ):
-            raise TopicActionsError("account_mismatch", "The authenticated account or tenant could not be verified.")
-        components = TopicActionsClient(
+            raise ManageTopicsError("account_mismatch", "The authenticated account or tenant could not be verified.")
+        components = ManageTopicsClient(
             target["environmentId"], target["agentId"], target["tenantId"],
             ring=connection["ring"], host=connection["host"],
             token=token, account=account, read_only=read_only,
@@ -483,7 +483,7 @@ def run_topic_actions(
                 result = agent_set_overview(backend.read(), catalog)
                 result["callerContext"] = deepcopy(request["callerContext"])
                 return result
-            result = TopicActionSession(
+            result = ManageTopicsSession(
                 backend, request["action"], caller_context=request["callerContext"],
             ).run(
                 confirm, preview=preview, review_only=review_only,
@@ -493,7 +493,7 @@ def run_topic_actions(
             return _entry_feedback(result)
         finally:
             client.session.close()
-    except (TopicActionsError, DiscoveryError) as error:
+    except (ManageTopicsError, DiscoveryError) as error:
         return _result(error.reason, str(error), context, target=target)
     except AgentBuilderHTTPError as error:
         reason = "authentication_failed" if stage == "authentication_failed" else {
@@ -512,12 +512,12 @@ def run_topic_actions(
         )
 
 
-def review_topic_actions(value: Any, *, workspace_root: Path, account_hint=None) -> dict:
-    from topic_actions_approval import TopicReviewError, TopicReviewStore
+def review_manage_topics(value: Any, *, workspace_root: Path, account_hint=None) -> dict:
+    from manage_topics_approval import TopicReviewError, TopicReviewStore
 
     try:
         request = validate_request(value)
-        result = run_topic_actions(
+        result = run_manage_topics(
             request, workspace_root=workspace_root, account_hint=account_hint,
             confirm=None, review_only=True,
         )
@@ -525,14 +525,14 @@ def review_topic_actions(value: Any, *, workspace_root: Path, account_hint=None)
         if result["status"] == "review_ready":
             result.update(TopicReviewStore(workspace_root).create(request, binding))
         return result
-    except (TopicActionsError, TopicReviewError) as error:
+    except (ManageTopicsError, TopicReviewError) as error:
         return _result(error.reason, str(error), {})
 
 
 def apply_topic_review(
     review_id: str, decision: str, *, workspace_root: Path, account_hint=None,
 ) -> dict:
-    from topic_actions_approval import TopicReviewError, TopicReviewStore
+    from manage_topics_approval import TopicReviewError, TopicReviewStore
 
     try:
         pending = TopicReviewStore(workspace_root).consume(review_id)
@@ -548,7 +548,7 @@ def apply_topic_review(
         deadline = min(
             pending["createdMonotonic"] + 300, time.monotonic() + pending["remainingSeconds"],
         )
-        return run_topic_actions(
+        return run_manage_topics(
             pending["request"], workspace_root=workspace_root, account_hint=account_hint,
             confirm=lambda _: decision, approved_binding=pending["binding"],
             approval_deadline=deadline,
@@ -610,8 +610,8 @@ def main(argv: list[str] | None = None) -> int:
     if bool(args.apply_review) != bool(args.decision) or (args.apply_review and args.cancel):
         parser.error("--apply-review requires --decision and cannot be combined with --cancel.")
     if args.list_sets:
-        from topic_actions_catalog import load_catalog
-        from topic_actions_discovery import DiscoveryError
+        from manage_topics_catalog import load_catalog
+        from manage_topics_discovery import DiscoveryError
 
         try:
             document = load_catalog().document()
@@ -654,16 +654,16 @@ def main(argv: list[str] | None = None) -> int:
                 account_hint=args.account,
             )
         elif args.review:
-            result = review_topic_actions(
+            result = review_manage_topics(
                 value, workspace_root=args.workspace_root, account_hint=args.account,
             )
         elif args.list_agent_sets:
-            result = run_topic_actions(
+            result = run_manage_topics(
                 value, workspace_root=args.workspace_root, confirm=None,
                 account_hint=args.account, list_sets=True,
             )
         elif args.preview or args.execute:
-            result = run_topic_actions(
+            result = run_manage_topics(
                 value, workspace_root=args.workspace_root, confirm=_confirm_stdin,
                 account_hint=args.account, cancelled=args.cancel, preview=args.preview,
             )

@@ -7,14 +7,14 @@ from dataclasses import replace
 
 import pytest
 
-from topic_actions_discovery import (
+from manage_topics_discovery import (
     DiscoveryTarget,
     SourceBinding,
     TopicEvidence,
     TopicSet,
     build_provisional_snapshot,
 )
-from topic_actions_flat_discovery import (
+from manage_topics_flat_discovery import (
     FlatCatalog,
     FlatMember,
     FlatSet,
@@ -22,12 +22,12 @@ from topic_actions_flat_discovery import (
     NativeInventory,
     compare_flat_catalog,
 )
-from topic_actions_planning import (
+from manage_topics_planning import (
     PlanningError,
     TopicChange,
     TopicSkip,
     build_provisional_plan,
-    plan_topic_actions,
+    plan_manage_topics,
 )
 
 
@@ -383,9 +383,9 @@ def test_production_entry_never_calls_synthetic_adapter_or_touches_live_input(mo
         def __getattribute__(self, name):
             pytest.fail("No live input, client, token, or mutation may be accessed.")
 
-    monkeypatch.setattr("topic_actions_planning.build_provisional_plan", forbidden)
+    monkeypatch.setattr("manage_topics_planning.build_provisional_plan", forbidden)
     with pytest.raises(PlanningError) as error:
-        plan_topic_actions(LiveInput(), "disable")
+        plan_manage_topics(LiveInput(), "disable")
     assert error.value.reason == "implementation_pending"
     assert list(tmp_path.iterdir()) == []
 
@@ -422,7 +422,7 @@ def test_whole_flat_set_produces_observations_not_an_eligible_delta(
     flat_catalog, flat_inventory, action, differences, matching,
 ):
     discovery = compare_flat_catalog(flat_catalog, flat_inventory, ("demo-hr",))
-    plan = plan_topic_actions(discovery, action)
+    plan = plan_manage_topics(discovery, action)
     assert plan.target == TARGET
     assert plan.selected_keys == ("demo-hr",)
     assert plan.state_differences == differences
@@ -437,7 +437,7 @@ def test_whole_flat_set_produces_observations_not_an_eligible_delta(
 
 def test_flat_overlap_is_deduplicated_without_individual_topic_selection(flat_catalog, flat_inventory):
     discovery = compare_flat_catalog(flat_catalog, flat_inventory, ("demo-hr", "demo-extra"))
-    plan = plan_topic_actions(discovery, "disable")
+    plan = plan_manage_topics(discovery, "disable")
     assert plan.selected_keys == ("demo-hr", "demo-extra")
     assert plan.state_differences == (TopicChange("installed-shared", "On", "Off"),)
     assert plan.observed_satisfied_member_ids == ("installed-one",)
@@ -454,7 +454,7 @@ def test_flat_source_variants_and_unrelated_topics_are_not_merged(flat_catalog, 
         InventoryTopic("foreign-prefix", "package.hr.topic.One", "Off"),
     ))
     discovery = compare_flat_catalog(catalog, inventory, ("demo-hr",))
-    plan = plan_topic_actions(discovery, "enable")
+    plan = plan_manage_topics(discovery, "enable")
     assert plan.state_differences == (TopicChange("installed-one", "Off", "On"),)
     assert plan.observed_satisfied_member_ids == ("installed-shared",)
     assert all(item.component_id != "foreign-prefix" for item in plan.state_differences)
@@ -468,7 +468,7 @@ def test_invalid_combined_flat_selection_is_not_silently_narrowed(
     flat_catalog, flat_inventory, keys, reason,
 ):
     discovery = compare_flat_catalog(flat_catalog, flat_inventory, keys)
-    plan = plan_topic_actions(discovery, "enable")
+    plan = plan_manage_topics(discovery, "enable")
     assert plan.selected_keys == keys
     assert reason in plan.blockers
     assert plan.state_differences == (TopicChange("installed-one", "Off", "On"),)
@@ -477,7 +477,7 @@ def test_invalid_combined_flat_selection_is_not_silently_narrowed(
 
 
 def test_unselected_inapplicable_set_does_not_add_a_selected_scope_blocker(flat_catalog, flat_inventory):
-    plan = plan_topic_actions(
+    plan = plan_manage_topics(
         compare_flat_catalog(flat_catalog, flat_inventory, ("demo-hr",)), "enable",
     )
     assert "set_not_applicable:demo-it" not in plan.blockers
@@ -495,7 +495,7 @@ def test_unselected_inapplicable_set_does_not_add_a_selected_scope_blocker(flat_
 ])
 def test_incomplete_flat_membership_cannot_create_an_eligible_delta(flat_catalog, flat_inventory, topics, reason):
     inventory = replace(flat_inventory, topics=topics)
-    plan = plan_topic_actions(compare_flat_catalog(flat_catalog, inventory, ("demo-hr",)), "disable")
+    plan = plan_manage_topics(compare_flat_catalog(flat_catalog, inventory, ("demo-hr",)), "disable")
     assert reason in plan.blockers
     assert plan.outcome == "blocked"
     assert plan.delta == ()
@@ -506,7 +506,7 @@ def test_unknown_flat_state_is_not_treated_as_on_off_or_already_correct(flat_cat
     inventory = replace(flat_inventory, topics=(
         replace(flat_inventory.topics[0], state="Unknown"), flat_inventory.topics[1],
     ))
-    plan = plan_topic_actions(compare_flat_catalog(flat_catalog, inventory, ("demo-hr",)), "disable")
+    plan = plan_manage_topics(compare_flat_catalog(flat_catalog, inventory, ("demo-hr",)), "disable")
     assert "unknown_state:installed-one" in plan.blockers
     assert plan.state_differences == (TopicChange("installed-shared", "On", "Off"),)
     assert plan.observed_satisfied_member_ids == ()
@@ -517,7 +517,7 @@ def test_all_observed_states_matching_does_not_prove_eligible_already_correct(fl
     inventory = replace(flat_inventory, topics=tuple(
         replace(topic, state="Off") for topic in flat_inventory.topics
     ))
-    plan = plan_topic_actions(compare_flat_catalog(flat_catalog, inventory, ("demo-hr",)), "disable")
+    plan = plan_manage_topics(compare_flat_catalog(flat_catalog, inventory, ("demo-hr",)), "disable")
     assert plan.state_differences == ()
     assert plan.observed_satisfied_member_ids == ("installed-one", "installed-shared")
     assert plan.outcome == "blocked"
@@ -533,7 +533,7 @@ def test_catalog_required_flags_do_not_become_verified_live_protection(flat_cata
     inventory = replace(flat_inventory, topics=(
         replace(flat_inventory.topics[0], state="On"), flat_inventory.topics[1],
     ))
-    plan = plan_topic_actions(compare_flat_catalog(catalog, inventory, ("demo-hr",)), "disable")
+    plan = plan_manage_topics(compare_flat_catalog(catalog, inventory, ("demo-hr",)), "disable")
     assert "protection_coverage_unverified" in plan.blockers
     assert plan.skips == plan.delta == ()
     assert plan.live_actions_available is False
@@ -541,14 +541,14 @@ def test_catalog_required_flags_do_not_become_verified_live_protection(flat_cata
 
 def test_missing_inventory_revision_stays_unverified(flat_catalog, flat_inventory):
     inventory = replace(flat_inventory, revision=None)
-    plan = plan_topic_actions(compare_flat_catalog(flat_catalog, inventory, ("demo-hr",)), "enable")
+    plan = plan_manage_topics(compare_flat_catalog(flat_catalog, inventory, ("demo-hr",)), "enable")
     assert "inventory_freshness_unverified" in plan.blockers
     assert plan.delta == ()
 
 
 def test_removed_discovery_blockers_do_not_unlock_flat_planning(flat_catalog, flat_inventory):
     discovery = replace(compare_flat_catalog(flat_catalog, flat_inventory, ("demo-hr",)), blockers=())
-    plan = plan_topic_actions(discovery, "enable")
+    plan = plan_manage_topics(discovery, "enable")
     assert "authoritative_planning_unavailable" in plan.blockers
     assert "unknown_protection:installed-one" in plan.blockers
     assert plan.outcome == "blocked"
@@ -567,10 +567,10 @@ def test_flat_preview_retains_declared_native_provenance_without_synthetic_fallb
     def forbidden(*args, **kwargs):
         pytest.fail("A flat preview must not discover, mutate, or use synthetic planning.")
 
-    monkeypatch.setattr("topic_actions_planning.build_provisional_plan", forbidden)
-    monkeypatch.setattr("topic_actions_discovery.discover_topic_sets", forbidden)
-    monkeypatch.setattr("topic_actions_flat_discovery.discover_flat_topic_sets", forbidden)
-    plan = plan_topic_actions(discovery, "enable")
+    monkeypatch.setattr("manage_topics_planning.build_provisional_plan", forbidden)
+    monkeypatch.setattr("manage_topics_discovery.discover_topic_sets", forbidden)
+    monkeypatch.setattr("manage_topics_flat_discovery.discover_flat_topic_sets", forbidden)
+    plan = plan_manage_topics(discovery, "enable")
     assert plan.evidence_kind == "native_read"
     assert not plan.approval_basis.startswith("synthetic:")
     assert plan.live_actions_available is False
@@ -581,8 +581,8 @@ def test_flat_preview_retains_declared_native_provenance_without_synthetic_fallb
 
 def test_flat_review_fingerprint_tracks_source_read_state_action_and_selection(flat_catalog, flat_inventory):
     discovery = compare_flat_catalog(flat_catalog, flat_inventory, ("demo-hr",))
-    initial = plan_topic_actions(discovery, "enable")
-    assert initial == plan_topic_actions(discovery, "enable")
+    initial = plan_manage_topics(discovery, "enable")
+    assert initial == plan_manage_topics(discovery, "enable")
     changes = (
         replace(discovery, catalog_revision="catalog-r2"),
         replace(discovery, inventory_revision="read-r2"),
@@ -592,10 +592,10 @@ def test_flat_review_fingerprint_tracks_source_read_state_action_and_selection(f
         compare_flat_catalog(flat_catalog, flat_inventory, ("demo-hr", "demo-extra")),
     )
     for changed in changes:
-        revised = plan_topic_actions(changed, "enable")
+        revised = plan_manage_topics(changed, "enable")
         assert revised.evidence_revision != initial.evidence_revision
         assert revised.approval_basis != initial.approval_basis
-    disabled = plan_topic_actions(discovery, "disable")
+    disabled = plan_manage_topics(discovery, "disable")
     assert disabled.evidence_revision == initial.evidence_revision
     assert disabled.approval_basis != initial.approval_basis
 
@@ -607,7 +607,7 @@ def test_flat_listing_never_implicitly_plans_all_sets(flat_catalog, flat_invento
     else:
         discovery = compare_flat_catalog(flat_catalog, flat_inventory)
     with pytest.raises(PlanningError) as error:
-        plan_topic_actions(discovery, "enable")
+        plan_manage_topics(discovery, "enable")
     assert error.value.reason == "invalid_selection"
 
 
@@ -622,7 +622,7 @@ def test_flat_listing_never_implicitly_plans_all_sets(flat_catalog, flat_invento
 def test_malformed_flat_contracts_fail_without_disclosure_or_fallback(flat_catalog, flat_inventory, change):
     discovery = compare_flat_catalog(flat_catalog, flat_inventory, ("demo-hr",))
     with pytest.raises(PlanningError) as error:
-        plan_topic_actions(replace(discovery, **change), "enable")
+        plan_manage_topics(replace(discovery, **change), "enable")
     assert "foreign-id" not in str(error.value)
     assert "private" not in str(error.value)
 
@@ -635,7 +635,7 @@ def test_flat_availability_must_agree_with_its_definition_and_matches(flat_catal
     discovery = compare_flat_catalog(flat_catalog, flat_inventory, ("demo-hr",))
     forged = replace(discovery, sets=(replace(discovery.sets[0], **field), *discovery.sets[1:]))
     with pytest.raises(PlanningError) as error:
-        plan_topic_actions(forged, "enable")
+        plan_manage_topics(forged, "enable")
     assert error.value.reason == "invalid_discovery"
 
 
@@ -648,7 +648,7 @@ def test_conflicting_shared_states_fail_instead_of_choosing_a_favorable_state(fl
         *discovery.sets[2:],
     ))
     with pytest.raises(PlanningError) as error:
-        plan_topic_actions(forged, "disable")
+        plan_manage_topics(forged, "disable")
     assert error.value.reason == "conflicting_evidence"
 
 
@@ -656,5 +656,5 @@ def test_conflicting_shared_states_fail_instead_of_choosing_a_favorable_state(fl
 def test_invalid_flat_action_does_not_create_a_preview(flat_catalog, flat_inventory, action):
     discovery = compare_flat_catalog(flat_catalog, flat_inventory, ("demo-hr",))
     with pytest.raises(PlanningError) as error:
-        plan_topic_actions(discovery, action)
+        plan_manage_topics(discovery, action)
     assert error.value.reason == "invalid_action"

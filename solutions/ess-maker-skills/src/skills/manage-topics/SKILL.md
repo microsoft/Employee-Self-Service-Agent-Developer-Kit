@@ -1,4 +1,4 @@
-# Topic actions
+# Manage topics
 
 Enable or disable whole source-defined ESS topic sets on one verified selected native
 agent using the computed planner, short-lived review, single-attempt executor
@@ -15,6 +15,19 @@ operation. Removing the realm gate does not qualify those targets or make
 changes safe for published conversations.
 This is not a qualified customer release. Never describe a preview as a
 completed enable/disable or promise draft/published isolation.
+
+## Naming and compatibility
+
+The skill is **Manage topics** and its canonical command is `/manage-topics`.
+`/topic-actions` remains a compatibility alias for this same experience. Preserve
+the original request and caller context; do not add a rename confirmation or
+ask the maker to switch commands.
+
+Use the renamed `scripts/manage_topics.py` helper and the `MANAGE_TOPICS_*`
+output markers documented below. New pending reviews use `.local/manage-topics`.
+Pre-rename review IDs are not migrated or accepted: request a fresh review and
+explicit approval. Leave legacy review databases and original-state files
+untouched; never copy approvals into the new store.
 
 ## Interaction and output
 
@@ -100,7 +113,7 @@ result into success. For multiple independent previews, render each returned
 `userMessage`; do not combine them into a newly interpreted successful scope.
 
 The deterministic presentation is owned by
-`scripts/topic_actions_presentation.py`. Do not show a "Before you approve"
+`scripts/manage_topics_presentation.py`. Do not show a "Before you approve"
 section, its notes, or a replacement warning section. Limitations and dependency
 impact remain available in structured diagnostics for technical questions.
 Read-only previews show the topic inventory, not an execution plan,
@@ -276,7 +289,7 @@ with the host's "Enter custom answer" fourth:
 ```
 
 Put the actual question in both `header` and `question`, not a generic
-"Topic actions", "Topic sets" or "Topic changes" heading. The native card
+"Manage topics", "Topic sets" or "Topic changes" heading. The native card
 uses `header` for the pinned top row and suppresses matching body text.
 Do not add a separate copy of the question or an option-summary paragraph.
 Read the tool answer under the exact supplied `header`, not a hard-coded
@@ -289,13 +302,13 @@ After the action is chosen, if the request
 is a set listing or enable/disable without established sets, read the
 selected agent's inventory using:
 
-`python scripts/topic_actions.py --list-agent-sets --chat-output`
+`python scripts/manage_topics.py --list-agent-sets --chat-output`
 
 Pass one JSON request on standard input containing `contractVersion: 1`,
 `target: {tenantId, environmentId, agentId}` and `entry: "direct"`.
 Omit `action` and `setKeys`; do not invent an enable/disable request to list
 sets. Keep private caller context in the calling conversation as below.
-Parse `TOPIC_ACTIONS_RESULT_JSON:` and render `userMessage` verbatim.
+Parse `MANAGE_TOPICS_RESULT_JSON:` and render `userMessage` verbatim.
 
 Run this fresh for the current invocation and selected target. Earlier chat
 lists, cached questions and source catalog definitions are not availability
@@ -334,15 +347,15 @@ and go directly to that fresh review.
 
 ### Proposed source catalog
 
-Read `src/reference/topic-actions/catalog.provisional.json` or run
-`python scripts/topic_actions.py --list-sets` to list **source definitions**.
+Read `src/reference/manage-topics/catalog.provisional.json` or run
+`python scripts/manage_topics.py --list-sets` to list **source definitions**.
 This is not installed availability. The catalog deliberately retains unknown
 required-topic classifications, package IDs and coverage, and provisional
 approval. Do not change those labels to make a plan pass.
 
 For changes, establish exactly one action (`enable` or `disable`) and use
 the canonical selected target with the selected whole-set keys internally.
-Restore and undo of previous Topic Actions changes are not supported.
+Restore and undo of previous Manage topics changes are not supported.
 Do not translate an undo request into the opposite action, since earlier
 topic states may have been mixed. Explain the limitation and ask for the
 desired action only when it is not established, then use live set selection
@@ -359,7 +372,7 @@ Ambiguous identities still block. Legacy flat definitions remain read-only.
 
 Pass one JSON request on standard input to:
 
-`python scripts/topic_actions.py --preview --chat-output`
+`python scripts/manage_topics.py --preview --chat-output`
 
 The request contains `contractVersion: 1`,
 `target: {tenantId, environmentId, agentId}`, `action`,
@@ -367,11 +380,11 @@ The request contains `contractVersion: 1`,
 Only enable/disable is accepted; `initializeBaseline` is no longer an input.
 Do not save an input file. For terminal execution omit private caller context; retain it with the
 calling conversation. An in-process caller can use
-`run_topic_actions(..., confirm=..., preview=True)` with `entry: "caller"` and
+`run_manage_topics(..., confirm=..., preview=True)` with `entry: "caller"` and
 a nonempty `callerContext` JSON object. Never put context, tokens or component
 bodies in terminal commands, chat output or files.
 
-Parse `TOPIC_ACTIONS_RESULT_JSON:` and render its `userMessage`.
+Parse `MANAGE_TOPICS_RESULT_JSON:` and render its `userMessage`.
 For preview, it presents the selected topics and observed
 current states in fixed plain language, plus any blocker preventing resolution.
 Execution reviews additionally present proposed changes, no-change topics
@@ -385,10 +398,10 @@ does not acquire write scopes or collect executable consent.
 
 For the normal write flow, pass the request on standard input to:
 
-`python scripts/topic_actions.py --review --chat-output`
+`python scripts/manage_topics.py --review --chat-output`
 
 This command finishes; it does not wait for terminal input. Parse
-`TOPIC_ACTIONS_RESULT_JSON:`. Only `status: "review_ready"` supplies a
+`MANAGE_TOPICS_RESULT_JSON:`. Only `status: "review_ready"` supplies a
 `reviewId` and permits asking for approval. Display its complete `userMessage`,
 including account, target, every selected set/member, proposed changes,
 no-change topics and protections. Do not append approval notes. Keep `reviewId` and
@@ -431,7 +444,7 @@ absent/null, do not invent one or collect approval.
 After the answer,
 run the fixed command with the returned ID and the actual decision:
 
-`python scripts/topic_actions.py --apply-review "{REVIEW_ID}" --decision "{DECISION}" --chat-output`
+`python scripts/manage_topics.py --apply-review "{REVIEW_ID}" --decision "{DECISION}" --chat-output`
 
 This consumes the pending review exactly once, including denial or cancellation.
 It needs no stdin continuation, background terminal, named pipe, computer
@@ -463,11 +476,11 @@ do not change editor settings or promise to suppress them.
 If a structured question tool is genuinely unavailable, report that specific
 blocker. Only then offer the existing interactive-terminal alternative, or use
 it when the maker explicitly requests terminal commands:
-`python scripts/topic_actions.py --execute`. That alternative reads one request
-line, emits `TOPIC_ACTIONS_REVIEW_JSON:`, and requires the actual decision as
+`python scripts/manage_topics.py --execute`. That alternative reads one request
+line, emits `MANAGE_TOPICS_REVIEW_JSON:`, and requires the actual decision as
 the next line in the same process. EOF cancels. It is not the normal chat route.
 
-An in-process host uses `run_topic_actions(..., confirm=...)` without
+An in-process host uses `run_manage_topics(..., confirm=...)` without
 `preview=True`; its callback owns displaying the review and collecting the
 maker's explicit answer. All entry types use this same controller.
 Authentication uses neutral ADK authentication utilities and the existing
@@ -518,11 +531,11 @@ previous operation.
 ## Execution and truthful return
 
 The executor can submit at most one full-component, state-only changeset.
-Component reads and writes use the skill-owned `TopicActionsClient` in
-`scripts/topic_actions_client.py`. It sends the exact state-only changeset
+Component reads and writes use the skill-owned `ManageTopicsClient` in
+`scripts/manage_topics_client.py`. It sends the exact state-only changeset
 computed from the freshly revalidated inventory, without a second payload
 builder, content merging or automatic conflict handling. Retries and redirects
-are disabled. Preservation normalization is owned by topic actions as well.
+are disabled. Preservation normalization is owned by Manage topics as well.
 There is no runtime import of Connect Workday or `minimalbot_evaluation`.
 Neutral ADK authentication, host validation and HTTP error utilities remain
 shared dependencies; this skill is not a standalone copy of the whole ADK.
@@ -562,7 +575,7 @@ completed, completed-with-protections, partial and unverified outcomes.
 Protected topics are never reported as disabled. Partial, protected or
 uncertain scope must not complete the caller's whole-set request.
 
-Only short-lived pending reviews are persisted under `.local/topic-actions`.
+Only short-lived pending reviews are persisted under `.local/manage-topics`.
 Pending reviews contain only the non-secret target/request, evidence/review fingerprint and
 expiry metadata; they never contain an approval, caller context, token or full
 component inventory. A pending review is not permission to write. Its ID is

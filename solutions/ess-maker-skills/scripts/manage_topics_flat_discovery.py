@@ -23,8 +23,8 @@ from agentbuilder import (
     AgentBuilderHTTPError,
     environment_id_from_host,
 )
-from topic_actions_client import verify_native_target
-from topic_actions_discovery import (
+from manage_topics_client import verify_native_target
+from manage_topics_discovery import (
     DiscoveryError,
     DiscoveryTarget,
     _fail,

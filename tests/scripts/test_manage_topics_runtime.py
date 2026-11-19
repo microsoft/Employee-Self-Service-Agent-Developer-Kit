@@ -12,18 +12,18 @@ import pytest
 import requests
 
 from agentbuilder import AgentBuilderClient, AgentBuilderError, AgentBuilderHTTPError
-from topic_actions_client import TopicActionsClient
-from topic_actions_catalog import (
+from manage_topics_client import ManageTopicsClient
+from manage_topics_catalog import (
     InstalledPackage, compare_catalog, load_catalog, parse_catalog, plan_catalog_actions,
     snapshot_from_response,
 )
-from topic_actions_discovery import DiscoveryError, DiscoveryTarget
-from topic_actions_execution import (
-    OperationEvidence, TopicActionSession, build_state_payload,
+from manage_topics_discovery import DiscoveryError, DiscoveryTarget
+from manage_topics_execution import (
+    OperationEvidence, ManageTopicsSession, build_state_payload,
 )
-from topic_actions_flat_discovery import InventoryTopic, NativeInventory
-from topic_actions_native import NativeActionBackend
-from topic_actions_planning import plan_topic_actions
+from manage_topics_flat_discovery import InventoryTopic, NativeInventory
+from manage_topics_native import NativeActionBackend
+from manage_topics_planning import plan_manage_topics
 
 
 TARGET = DiscoveryTarget(
@@ -130,7 +130,7 @@ def test_bundled_proposal_remains_blocked_even_when_every_member_is_present():
     ), "synthetic-read")
     selected = (document["sets"][0]["key"],)
     snapshot = compare_catalog(catalog, inventory, selected)
-    plan = plan_topic_actions(snapshot, "disable")
+    plan = plan_manage_topics(snapshot, "disable")
     assert plan.outcome == "blocked"
     assert plan.delta == ()
     assert plan.selected_keys == selected
@@ -288,7 +288,7 @@ def test_required_runtime_defense_and_all_protected_are_not_noop():
     assert plan.outcome == "all_protected"
     assert not plan.delta and not plan.satisfied_member_ids
     backend = SyntheticBackend([replace(packet, snapshot=snapshot)])
-    result = TopicActionSession(backend, "disable").run(lambda _: pytest.fail("No approvable scope"))
+    result = ManageTopicsSession(backend, "disable").run(lambda _: pytest.fail("No approvable scope"))
     assert result["status"] == "blocked"
     assert not result["completed"]
     assert not backend.submissions
@@ -299,7 +299,7 @@ def test_approval_then_fresh_read_one_dispatch_and_verified_content_preservation
     after = operation_evidence({"a": "On", "shared": "On"}, revision="r2")
     backend = SyntheticBackend([before, before, after])
     context = {"progress": {"connection": "done"}, "private": "do-not-emit"}
-    session = TopicActionSession(backend, "enable", caller_context=context)
+    session = ManageTopicsSession(backend, "enable", caller_context=context)
     shown = []
 
     def confirm(plan):
@@ -370,7 +370,7 @@ def test_server_generated_readback_does_not_hide_verified_state_success(action):
     originals = deepcopy((before.body, after.body))
     backend = SyntheticBackend([before, before, after])
 
-    result = TopicActionSession(backend, action).run(lambda _: "approve")
+    result = ManageTopicsSession(backend, action).run(lambda _: "approve")
 
     assert result["status"] == "completed" and result["completed"]
     assert {topic["status"] for topic in result["topics"]} == {"changed"}
@@ -407,7 +407,7 @@ def test_generated_readback_does_not_mask_authored_identity_or_unselected_revisi
     parent[path[-1]] = value
     backend = SyntheticBackend([before, before, after])
 
-    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    result = ManageTopicsSession(backend, "enable").run(lambda _: "approve")
 
     assert result["status"] == "partial" and not result["completed"]
     assert result["preservationStatus"] == "violated"
@@ -428,7 +428,7 @@ def test_server_generated_drift_before_dispatch_still_requires_fresh_approval(fi
         component["dialog"]["beginDialog"]["actions"][0]["diagnostics"] = []
     backend = SyntheticBackend([before, fresh])
 
-    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    result = ManageTopicsSession(backend, "enable").run(lambda _: "approve")
 
     assert result["status"] == "review_required"
     assert "evidence_changed" in result["blockers"]
@@ -450,7 +450,7 @@ def test_parsed_record_expression_readback_preserves_authored_expression(action)
     originals = deepcopy((before.body, after.body))
     backend = SyntheticBackend([before, before, after])
 
-    result = TopicActionSession(backend, action).run(lambda _: "approve")
+    result = ManageTopicsSession(backend, action).run(lambda _: "approve")
 
     assert result["completed"], result
     assert len(backend.submissions) == 1
@@ -480,7 +480,7 @@ def test_parsed_record_normalization_does_not_hide_authored_or_unknown_fields(ch
         value["expressionText"] = "{ worker: Global.Other }"
     backend = SyntheticBackend([before, before, after])
 
-    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    result = ManageTopicsSession(backend, "enable").run(lambda _: "approve")
 
     assert result["status"] == "partial" and not result["completed"]
     assert "verification_incomplete" in result["blockers"]
@@ -492,7 +492,7 @@ def test_parsed_record_normalization_does_not_hide_authored_or_unknown_fields(ch
 ])
 def test_denial_cancellation_and_unrecognized_consent_never_dispatch(decision, status):
     backend = SyntheticBackend([operation_evidence()])
-    result = TopicActionSession(backend, "enable").run(lambda _: decision)
+    result = ManageTopicsSession(backend, "enable").run(lambda _: decision)
     assert result["status"] == status
     assert backend.reads == 1 and not backend.submissions
 
@@ -502,7 +502,7 @@ def test_expired_review_cannot_dispatch(clock_values):
     before = operation_evidence()
     backend = SyntheticBackend([before, before])
     times = iter(clock_values)
-    result = TopicActionSession(backend, "enable", clock=lambda: next(times)).run(lambda _: "approve")
+    result = ManageTopicsSession(backend, "enable", clock=lambda: next(times)).run(lambda _: "approve")
     assert result["status"] == "review_required"
     assert result["blockers"] == ["approval_expired"]
     assert not backend.submissions
@@ -527,7 +527,7 @@ def test_any_relevant_drift_requires_new_review(drift):
         changed = tuple(replace(topic, required=True) if topic.component_id == "a" else topic for topic in evidence.topics)
         fresh = replace(fresh, snapshot=replace(fresh.snapshot, evidence=replace(evidence, topics=changed)))
     backend = SyntheticBackend([before, fresh])
-    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    result = ManageTopicsSession(backend, "enable").run(lambda _: "approve")
     assert result["status"] == "review_required"
     assert not backend.submissions
 
@@ -540,7 +540,7 @@ def test_uncertain_submission_is_not_replayed_or_attributed_even_if_readback_is_
     before = operation_evidence()
     after = operation_evidence({"a": "On", "shared": "On"}, revision="r2")
     backend = SyntheticBackend([before, before, after], error=error)
-    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    result = ManageTopicsSession(backend, "enable").run(lambda _: "approve")
     assert result["status"] == "unverified" and not result["completed"]
     assert len(backend.submissions) == 1 and backend.reads == 3
     assert {topic["status"] for topic in result["topics"]} == {"observed_desired"}
@@ -562,7 +562,7 @@ def test_partial_or_out_of_scope_readback_is_not_success(change):
     else:
         after = RuntimeError("private-response")
     backend = SyntheticBackend([before, before, after])
-    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    result = ManageTopicsSession(backend, "enable").run(lambda _: "approve")
     assert result["status"] == ("unverified" if change == "read_failure" else "partial")
     assert result["preservationStatus"] == (
         "unverified" if change == "read_failure" else "verified" if change == "partial" else "violated"
@@ -576,7 +576,7 @@ def test_protected_topic_is_not_reported_as_disabled_or_whole_set_complete():
     before = operation_evidence({"a": "On", "shared": "On", "b": "On"})
     after = operation_evidence({"a": "Off", "shared": "On", "b": "On"}, revision="r2")
     backend = SyntheticBackend([before, before, after])
-    result = TopicActionSession(backend, "disable").run(lambda _: "approve")
+    result = ManageTopicsSession(backend, "disable").run(lambda _: "approve")
     assert result["status"] == "completed_with_protections"
     assert result["preservationStatus"] == "verified"
     assert not result["completed"]
@@ -587,7 +587,7 @@ def test_protected_topic_is_not_reported_as_disabled_or_whole_set_complete():
 def test_noop_is_rechecked_without_approval_or_submission():
     before = operation_evidence({"a": "On", "shared": "On"})
     backend = SyntheticBackend([before, before])
-    result = TopicActionSession(backend, "enable").run(
+    result = ManageTopicsSession(backend, "enable").run(
         lambda _: pytest.fail("No changes must not ask for approval."),
     )
     assert result["status"] == "already_correct" and result["completed"]
@@ -604,11 +604,11 @@ def test_in_process_same_target_dispatch_is_serialized_and_other_session_needs_f
     original_submit = first.submit_once
 
     def submit(agent, payload):
-        results.append(TopicActionSession(second, "enable").run(lambda _: "approve"))
+        results.append(ManageTopicsSession(second, "enable").run(lambda _: "approve"))
         original_submit(agent, payload)
 
     first.submit_once = submit
-    result = TopicActionSession(first, "enable").run(lambda _: "approve")
+    result = ManageTopicsSession(first, "enable").run(lambda _: "approve")
     assert result["status"] == "completed"
     assert results[0]["status"] == "review_required"
     assert results[0]["blockers"] == ["operation_in_progress"]
@@ -620,7 +620,7 @@ def test_release_control_is_rechecked_immediately_before_submission():
     backend = SyntheticBackend([before, before])
     gates = iter([(), (), ("release_disabled",)])
     backend.admission_blockers = lambda _: next(gates)
-    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    result = ManageTopicsSession(backend, "enable").run(lambda _: "approve")
     assert result["status"] == "review_required"
     assert result["blockers"] == ["release_disabled"]
     assert not backend.submissions
@@ -629,10 +629,10 @@ def test_release_control_is_rechecked_immediately_before_submission():
 def test_native_gate_denies_even_a_direct_submission_and_never_asks_for_consent():
     packet = operation_evidence()
     backend = SyntheticBackend([packet], gates=("release_control_unavailable",))
-    result = TopicActionSession(backend, "enable").run(lambda _: pytest.fail("Blocked plan cannot request consent"))
+    result = ManageTopicsSession(backend, "enable").run(lambda _: pytest.fail("Blocked plan cannot request consent"))
     assert result["status"] == "blocked" and not backend.submissions
     client = Mock(spec=AgentBuilderClient)
-    components = Mock(spec=TopicActionsClient)
+    components = Mock(spec=ManageTopicsClient)
     native = NativeActionBackend(client, TARGET, ("alpha",), parse_catalog(catalog_document()), "maker", components)
     with pytest.raises(ValueError, match="not admitted"):
         native.submit_once(TARGET.agent_id, {})
@@ -672,7 +672,7 @@ def dev_native_backend(*, selected=("alpha",), before=None, after=None, realm="d
     client.ring = "test"
     client.api_version = "2024-10-01"
     client.get_agent.return_value = {"botId": TARGET.agent_id, "realm": realm}
-    components = Mock(spec=TopicActionsClient)
+    components = Mock(spec=ManageTopicsClient)
     components.tenant_id = TARGET.tenant_id
     components.environment_id = TARGET.environment_id
     components.bot_id = TARGET.agent_id
@@ -715,7 +715,7 @@ def test_native_dev_execution_uses_full_computed_union_and_verifies_readback(act
         reviews.append(deepcopy(plan))
         return "approve"
 
-    result = TopicActionSession(backend, action).run(confirm)
+    result = ManageTopicsSession(backend, action).run(confirm)
     assert result["completed"] and result["status"] == "completed"
     assert backend.components.submit_state_payload.call_count == 1
     assert backend.components.read_components.call_count == 3
@@ -755,7 +755,7 @@ def test_native_execution_preserves_unparented_bot_settings_without_submitting_t
         packet["botComponentChanges"].append(deepcopy(settings))
     backend.components.read_components.side_effect = packets
 
-    result = TopicActionSession(backend, action).run(lambda _: "approve")
+    result = ManageTopicsSession(backend, action).run(lambda _: "approve")
 
     assert result["status"] == "completed" and result["completed"]
     backend.components.submit_state_payload.assert_called_once()
@@ -793,7 +793,7 @@ def test_native_dev_noop_rereads_without_approval_or_submission():
         reviews.append(plan)
         return "approve"
 
-    result = TopicActionSession(backend, "disable").run(confirm)
+    result = ManageTopicsSession(backend, "disable").run(confirm)
     assert result["status"] == "already_correct" and result["completed"]
     assert not reviews
     assert backend.components.read_components.call_count == 2
@@ -804,7 +804,7 @@ def test_noop_state_drift_requires_new_review_and_never_automatically_writes():
     before = operation_evidence({"a": "On", "shared": "On"})
     drifted = operation_evidence({"a": "Off", "shared": "On"}, revision="r2")
     backend = SyntheticBackend([before, drifted])
-    result = TopicActionSession(backend, "enable").run(
+    result = ManageTopicsSession(backend, "enable").run(
         lambda _: pytest.fail("Drift must not trigger automatic approval."),
         review_only=True,
     )
@@ -819,7 +819,7 @@ def test_noop_state_drift_requires_new_review_and_never_automatically_writes():
 def test_native_realm_does_not_block_approved_exact_target_execution(realm):
     backend = dev_native_backend(realm=realm, after={"a": "On", "shared": "On"})
     reviews = []
-    result = TopicActionSession(backend, "enable").run(
+    result = ManageTopicsSession(backend, "enable").run(
         lambda review: reviews.append(review) or "approve",
     )
     assert result["status"] == "completed" and result["completed"]
@@ -832,7 +832,7 @@ def test_native_realm_does_not_block_approved_exact_target_execution(realm):
 def test_native_direct_lookup_still_must_identify_the_selected_agent(returned_id):
     backend = dev_native_backend(realm="prod")
     backend.client.get_agent.return_value = {"botId": returned_id, "realm": "prod"}
-    result = TopicActionSession(backend, "enable").run(
+    result = ManageTopicsSession(backend, "enable").run(
         lambda _: pytest.fail("A mismatched agent cannot request approval."),
     )
     assert result["status"] == "blocked"
@@ -849,7 +849,7 @@ def test_dev_policy_does_not_waive_identity_membership_or_state_failures(change)
     else:
         body["botComponentChanges"][0]["component"]["parentBotId"] = TARGET.tenant_id
     backend.components.read_components.side_effect = [body]
-    result = TopicActionSession(backend, "enable").run(
+    result = ManageTopicsSession(backend, "enable").run(
         lambda _: pytest.fail("Unresolved topics cannot request approval."),
     )
     assert result["status"] == "blocked"
@@ -874,7 +874,7 @@ def test_native_actions_use_all_present_set_members_regardless_of_template_count
         ]
     backend.components.read_components.side_effect = packets
     reviews = []
-    result = TopicActionSession(backend, action).run(
+    result = ManageTopicsSession(backend, action).run(
         lambda review: reviews.append(deepcopy(review)) or "approve",
     )
     assert result["status"] == "completed"
@@ -896,7 +896,7 @@ def test_absent_outside_members_do_not_remove_shared_topic_protection():
         row for row in body["botComponentChanges"] if row["component"]["id"] not in {"a", "b"}
     ]
     backend.components.read_components.side_effect = [body]
-    result = TopicActionSession(backend, "disable").run(
+    result = ManageTopicsSession(backend, "disable").run(
         lambda _: pytest.fail("A shared topic used by another enabled set stays protected."),
     )
     assert result["status"] == "blocked"
@@ -917,7 +917,7 @@ def test_fewer_present_topics_already_matching_need_no_approval(action):
             row for row in packet["botComponentChanges"] if row["component"]["id"] != "a"
         ]
     backend.components.read_components.side_effect = packets
-    result = TopicActionSession(backend, action).run(
+    result = ManageTopicsSession(backend, action).run(
         lambda _: pytest.fail("Already matching present topics do not need approval."),
     )
     assert result["status"] == "already_correct"
@@ -934,7 +934,7 @@ def test_present_member_selection_is_rechecked_after_approval():
         row for row in packets[0]["botComponentChanges"] if row["component"]["id"] != "a"
     ]
     backend.components.read_components.side_effect = packets
-    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    result = ManageTopicsSession(backend, "enable").run(lambda _: "approve")
     assert result["status"] == "review_required"
     assert "evidence_changed" in result["blockers"]
     backend.components.submit_state_payload.assert_not_called()
@@ -968,7 +968,7 @@ def test_native_submission_independently_rejects_payload_outside_computed_plan(c
 def test_native_http_failures_keep_safe_status_and_stop_without_replay(status, reason):
     backend = dev_native_backend()
     backend.components.submit_state_payload.side_effect = AgentBuilderHTTPError("private", status)
-    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    result = ManageTopicsSession(backend, "enable").run(lambda _: "approve")
     assert result["status"] == "unverified" and not result["completed"]
     assert reason in result["blockers"]
     assert result["submissionHttpStatus"] == status
@@ -987,7 +987,7 @@ def test_native_http_failures_keep_safe_status_and_stop_without_replay(status, r
 def test_submission_failures_are_classified_without_disclosing_details_or_replaying(failure, reason):
     backend = dev_native_backend()
     backend.components.submit_state_payload.side_effect = failure
-    result = TopicActionSession(backend, "enable").run(lambda _: "approve")
+    result = ManageTopicsSession(backend, "enable").run(lambda _: "approve")
     assert result["status"] == "unverified" and not result["completed"]
     assert result["submissionHttpStatus"] is None
     assert reason in result["blockers"]
@@ -1042,7 +1042,7 @@ def test_isolated_transport_disables_retries_and_redirects_without_changing_shar
 
 @pytest.mark.parametrize("status", [200, 307, 400, 409, 429, 500])
 def test_topic_client_preserves_http_status_without_replay(monkeypatch, status):
-    client = TopicActionsClient(
+    client = ManageTopicsClient(
         TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
         host=dev_native_backend().client.host, ring="test",
         token="private-token", account="synthetic-maker",
@@ -1053,7 +1053,7 @@ def test_topic_client_preserves_http_status_without_replay(monkeypatch, status):
     isolated.__exit__ = Mock(return_value=False)
     isolated.request.return_value.status_code = status
     isolated.request.return_value.json.return_value = {}
-    monkeypatch.setattr("topic_actions_client.requests.Session", Mock(return_value=isolated))
+    monkeypatch.setattr("manage_topics_client.requests.Session", Mock(return_value=isolated))
     if status == 200:
         client.submit_state_payload(expected)
     else:
@@ -1070,7 +1070,7 @@ def test_topic_client_preserves_http_status_without_replay(monkeypatch, status):
 
 
 def test_topic_client_sends_reviewed_payload_without_extra_reads_or_mutation(monkeypatch):
-    client = TopicActionsClient(
+    client = ManageTopicsClient(
         TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
         host=dev_native_backend().client.host, ring="test",
         token="private-token", account="synthetic-maker",
@@ -1092,7 +1092,7 @@ def test_topic_client_sends_reviewed_payload_without_extra_reads_or_mutation(mon
 
 @pytest.mark.parametrize("failure", [requests.Timeout("private"), requests.ConnectionError("private")])
 def test_topic_client_does_not_wrap_or_replay_transport_failure(monkeypatch, failure):
-    client = TopicActionsClient(
+    client = ManageTopicsClient(
         TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
         host=dev_native_backend().client.host, ring="test",
         token="private-token", account="synthetic-maker",
@@ -1101,7 +1101,7 @@ def test_topic_client_does_not_wrap_or_replay_transport_failure(monkeypatch, fai
     isolated.__enter__ = Mock(return_value=isolated)
     isolated.__exit__ = Mock(return_value=False)
     isolated.request.side_effect = failure
-    monkeypatch.setattr("topic_actions_client.requests.Session", Mock(return_value=isolated))
+    monkeypatch.setattr("manage_topics_client.requests.Session", Mock(return_value=isolated))
     with pytest.raises(type(failure)):
         client.submit_state_payload({"changeToken": "synthetic"})
     with pytest.raises(ValueError, match="already consumed"):
@@ -1110,7 +1110,7 @@ def test_topic_client_does_not_wrap_or_replay_transport_failure(monkeypatch, fai
 
 
 def test_read_only_topic_client_refuses_submission_without_network(monkeypatch):
-    client = TopicActionsClient(
+    client = ManageTopicsClient(
         TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
         host=dev_native_backend().client.host, ring="test",
         token="private-token", account="synthetic-maker", read_only=True,
@@ -1124,7 +1124,7 @@ def test_read_only_topic_client_refuses_submission_without_network(monkeypatch):
 
 @pytest.mark.parametrize("body", [None, [], "private-response"])
 def test_topic_client_rejects_non_object_component_reads(monkeypatch, body):
-    client = TopicActionsClient(
+    client = ManageTopicsClient(
         TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
         host=dev_native_backend().client.host, ring="test",
         token="private-token", account="synthetic-maker",
@@ -1136,7 +1136,7 @@ def test_topic_client_rejects_non_object_component_reads(monkeypatch, body):
 
 @pytest.mark.parametrize("status", [200, 307, 403])
 def test_topic_client_read_uses_native_post_and_does_not_follow_redirects(monkeypatch, status):
-    client = TopicActionsClient(
+    client = ManageTopicsClient(
         TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
         host=dev_native_backend().client.host, ring="test",
         token="private-token", account="synthetic-maker",
@@ -1147,7 +1147,7 @@ def test_topic_client_read_uses_native_post_and_does_not_follow_redirects(monkey
     isolated.request.return_value.status_code = status
     body = operation_evidence().body
     isolated.request.return_value.json.return_value = body
-    monkeypatch.setattr("topic_actions_client.requests.Session", Mock(return_value=isolated))
+    monkeypatch.setattr("manage_topics_client.requests.Session", Mock(return_value=isolated))
     if status == 200:
         assert client.read_components() == body
     else:
@@ -1170,7 +1170,7 @@ def test_native_controller_executes_through_topic_owned_client(monkeypatch, acti
     if generated_changes:
         before, after = server_generated_readback(action)
         remote["botComponentChanges"] = deepcopy(before.body["botComponentChanges"])
-    components = TopicActionsClient(
+    components = ManageTopicsClient(
         TARGET.environment_id, TARGET.agent_id, TARGET.tenant_id,
         ring=backend.client.ring, host=backend.client.host,
         token="private-token", account=backend.account_id,
@@ -1195,7 +1195,7 @@ def test_native_controller_executes_through_topic_owned_client(monkeypatch, acti
         assert method == "POST"
         return Mock(status_code=200), deepcopy(remote)
     monkeypatch.setattr(components, "_request", request)
-    result = TopicActionSession(backend, action).run(lambda _: "approve")
+    result = ManageTopicsSession(backend, action).run(lambda _: "approve")
     assert result["completed"] and result["status"] == "completed"
     assert len(writes) == 1
     assert {row["component"]["id"] for row in writes[0]["botComponentChanges"]} == {"a", "shared"}

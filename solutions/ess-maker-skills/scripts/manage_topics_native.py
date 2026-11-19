@@ -10,10 +10,10 @@ from copy import deepcopy
 import time
 
 from agentbuilder import AgentBuilderClient, environment_id_from_host
-from topic_actions_client import TopicActionsClient, verify_native_target
-from topic_actions_catalog import Catalog, plan_catalog_actions, snapshot_from_response
-from topic_actions_discovery import DiscoveryTarget, _identity, _target
-from topic_actions_execution import OperationEvidence, build_state_payload
+from manage_topics_client import ManageTopicsClient, verify_native_target
+from manage_topics_catalog import Catalog, plan_catalog_actions, snapshot_from_response
+from manage_topics_discovery import DiscoveryTarget, _identity, _target
+from manage_topics_execution import OperationEvidence, build_state_payload
 
 
 @dataclass
@@ -23,7 +23,7 @@ class NativeActionBackend:
     selected_keys: tuple[str, ...]
     catalog: Catalog
     account_id: str
-    components: TopicActionsClient
+    components: ManageTopicsClient
     _last_evidence: OperationEvidence | None = field(default=None, init=False, repr=False)
     _last_read_at: float = field(default=0, init=False, repr=False)
     _submitted: bool = field(default=False, init=False, repr=False)

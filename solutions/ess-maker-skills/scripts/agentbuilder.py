@@ -1460,7 +1460,7 @@ class AgentBuilderClient:
     ) -> None:
         """One isolated submission, without redirects or any transport replay.
 
-        This is a transport primitive, not topic-action release admission. It
+        This is a transport primitive, not Manage topics release admission. It
         deliberately leaves existing Workday and shared-client defaults intact.
         """
         agent_id = str(uuid.UUID(agent_id))
